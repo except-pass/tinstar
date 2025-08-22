@@ -1,0 +1,112 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "/home/ubuntu/.ctrltower/worktrees/"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "{\"tool_name\":\"TodoWrite\"}",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"TodoWrite\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' | curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d @- http://localhost:3002/api/events/todowrite || echo 'Failed to send TodoWrite event' #TINSTAR"
+          },
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"TodoWrite\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl #TINSTAR"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"PreToolUse\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' | curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d @- http://localhost:3002/api/events/pre_tool_use || echo 'Failed to send PreToolUse event'  #TINSTAR"
+          },
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"PreToolUse\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl  #TINSTAR"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"PostToolUse\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' | curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d @- http://localhost:3002/api/events/post_tool_use || echo 'Failed to send PostToolUse event' #TINSTAR"
+          },
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"PostToolUse\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl  #TINSTAR"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"Notification\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' | curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d @- http://localhost:3002/api/events/notification || echo 'Failed to send Notification event'  #TINSTAR"
+          },
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"Notification\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl  #TINSTAR"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"Stop\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' | curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d @- http://localhost:3002/api/events/stop || echo 'Failed to send Stop event'  #TINSTAR"
+          },
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"Stop\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl  #TINSTAR"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"SubagentStop\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' | curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d @- http://localhost:3002/api/events/subagent_stop || echo 'Failed to send SubagentStop event'  #TINSTAR"
+          },
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"SubagentStop\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl #TINSTAR"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"UserPromptSubmit\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' | curl -s --max-time 5 -X POST -H 'Content-Type: application/json' -d @- http://localhost:3002/api/events/user_prompt || echo 'Failed to send UserPromptSubmit event' #TINSTAR"
+          },
+          {
+            "type": "command",
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"UserPromptSubmit\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl #TINSTAR"
+          }
+        ]
+      }
+    ]
+  }
+}
