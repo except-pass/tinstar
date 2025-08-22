@@ -3,7 +3,7 @@ import typer
 from .installation import install_app
 from .worktrees.cli import app as worktrees_app
 from .session.cli import app as session_app
-from .test_cli import app as test_app
+from .testing import app as test_app
 
 app = typer.Typer(help="Tinstar command line interface")
 app.add_typer(install_app, name="install")

@@ -47,3 +47,7 @@ To install with development dependencies:
 ```bash
 pip install -e ".[dev]"
 ```
+
+## Testing
+
+`tinstar run all` or `tinstar run (directory)`. 
