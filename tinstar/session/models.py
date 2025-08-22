@@ -3,6 +3,7 @@ Session models for the Tinstar session management system.
 """
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from enum import Enum
 from pydantic import BaseModel, Field, field_validator
 import uuid
 import re
@@ -79,7 +80,7 @@ class SessionPeek(BaseModel):
             raise ValueError('session_id must be a valid UUID')
 
 
-class NotificationType(BaseModel):
+class NotificationType(str, Enum):
     """Notification type enumeration."""
     INFO = "info"
     WARNING = "warning"
@@ -91,7 +92,7 @@ class NotificationType(BaseModel):
     SYSTEM_STATUS = "system_status"
 
 
-class NotificationResponse(BaseModel):
+class NotificationResponse(str, Enum):
     """Notification response enumeration."""
     APPROVE_ONCE = "approve_once"
     APPROVE_ALWAYS = "approve_always"

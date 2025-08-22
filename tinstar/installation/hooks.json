@@ -1,7 +1,7 @@
 {
   "permissions": {
     "additionalDirectories": [
-      "/home/ubuntu/.ctrltower/worktrees/"
+      "/home/ubuntu/.tinstar/worktrees/"
     ]
   },
   "hooks": {
@@ -15,7 +15,7 @@
           },
           {
             "type": "command",
-            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"TodoWrite\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl #TINSTAR"
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"TodoWrite\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/.tinstar/logs/activity-log.jsonl #TINSTAR"
           }
         ]
       },
@@ -28,7 +28,7 @@
           },
           {
             "type": "command",
-            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"PreToolUse\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl  #TINSTAR"
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"PreToolUse\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/.tinstar/logs/activity-log.jsonl  #TINSTAR"
           }
         ]
       }
@@ -43,7 +43,7 @@
           },
           {
             "type": "command",
-            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"PostToolUse\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl  #TINSTAR"
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"PostToolUse\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/.tinstar/logs/activity-log.jsonl  #TINSTAR"
           }
         ]
       }
@@ -58,7 +58,7 @@
           },
           {
             "type": "command",
-            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"Notification\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl  #TINSTAR"
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"Notification\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/.tinstar/logs/activity-log.jsonl  #TINSTAR"
           }
         ]
       }
@@ -73,7 +73,7 @@
           },
           {
             "type": "command",
-            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"Stop\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl  #TINSTAR"
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"Stop\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/.tinstar/logs/activity-log.jsonl  #TINSTAR"
           }
         ]
       }
@@ -88,7 +88,7 @@
           },
           {
             "type": "command",
-            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"SubagentStop\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl #TINSTAR"
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"SubagentStop\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/.tinstar/logs/activity-log.jsonl #TINSTAR"
           }
         ]
       }
@@ -103,7 +103,7 @@
           },
           {
             "type": "command",
-            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"UserPromptSubmit\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/repo/ctrltower/logs/activity-log.jsonl #TINSTAR"
+            "command": "jq -c '. + {\"timestamp\": \"'$(date -Iseconds)'\", \"type\": \"UserPromptSubmit\", \"tinstar_term_name\": \"'${TINSTAR_TERM_NAME:-unknown}'\"}' >> /home/ubuntu/.tinstar/logs/activity-log.jsonl #TINSTAR"
           }
         ]
       }

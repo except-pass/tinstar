@@ -7,7 +7,7 @@ import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .database import EventsDatabase
 from .models import Event, EventFilter, EventResponse, FileEvent, TodoEvent
@@ -79,7 +79,7 @@ class EventProcessor:
         return file_event
     
     @staticmethod
-    def _calculate_line_changes(file_path: str) -> tuple[Optional[int], Optional[int]]:
+    def _calculate_line_changes(file_path: str) -> Tuple[Optional[int], Optional[int]]:
         """Calculate line changes using git diff."""
         try:
             # Check if we're in a git repository

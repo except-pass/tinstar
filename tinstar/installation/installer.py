@@ -109,12 +109,10 @@ def template_hooks_json(hooks_src: Path, logs_dir: Path) -> dict:
     worktree_path = str((logs_dir.parent / "worktrees").resolve()) + "/"
 
     hooks_content = hooks_src.read_text()
-    templated_content = (
-        hooks_content.replace(
-            "/home/ubuntu/repo/ctrltower/logs/activity-log.jsonl", log_path
-        ).replace(
-            "/home/ubuntu/.ctrltower/worktrees/", worktree_path
-        )
+    templated_content = hooks_content.replace(
+        "/home/ubuntu/repo/ctrltower/logs/activity-log.jsonl", log_path
+    ).replace(
+        "/home/ubuntu/.ctrltower/worktrees/", worktree_path
     )
 
     return json.loads(templated_content)
@@ -180,16 +178,40 @@ def merge_hooks(settings: dict, new_hooks: dict) -> None:
     for event_name, arr in new_hooks.get("hooks", {}).items():
         if not isinstance(arr, list):
             continue
-        settings_hooks.setdefault(event_name, [])
-        # Append all new entries
-        settings_hooks[event_name].extend(arr)
+        existing_hooks = settings_hooks.setdefault(event_name, [])
+        
+        # Only add hooks that don't already exist
+        for new_hook in arr:
+            matcher = new_hook.get("matcher", "")
+            new_commands = new_hook.get("hooks", [])
+            
+            # Check if a hook with the same matcher already exists
+            existing_hook = None
+            for hook in existing_hooks:
+                if hook.get("matcher", "") == matcher:
+                    existing_hook = hook
+                    break
+            
+            if existing_hook is None:
+                # No hook with this matcher exists, add the entire hook
+                existing_hooks.append(new_hook)
+            else:
+                # Hook with same matcher exists, merge commands avoiding duplicates
+                existing_commands = existing_hook.setdefault("hooks", [])
+                for new_cmd in new_commands:
+                    # Check if this exact command already exists
+                    cmd_exists = any(
+                        existing_cmd.get("command", "") == new_cmd.get("command", "")
+                        for existing_cmd in existing_commands
+                    )
+                    if not cmd_exists:
+                        existing_commands.append(new_cmd)
 
 
 def ensure_permissions(settings: dict, worktrees_dir: Path) -> None:
     perms = settings.setdefault("permissions", {})
     addl = perms.setdefault("additionalDirectories", [])
     worktrees_path = str(worktrees_dir.resolve()) + "/"
-    addl[:] = [p for p in addl if "ctrltower" not in p]
     if worktrees_path not in addl:
         addl.append(worktrees_path)
 
