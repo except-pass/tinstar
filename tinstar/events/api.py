@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from .models import Event, EventFilter, EventResponse, WebSocketMessage
@@ -159,3 +159,136 @@ def create_events_app(service: Optional[EventIngestionService] = None) -> FastAP
     """Factory function to create the events FastAPI application."""
     api = EventsAPI(service)
     return api.app
+
+
+def create_events_router(service: Optional[EventIngestionService] = None) -> APIRouter:
+    """Factory function to create the events APIRouter."""
+    router = APIRouter(prefix="/api/events", tags=["events"])
+    ingestion_service = service or EventIngestionService()
+    websocket_manager = WebSocketManager()
+    
+    # Register WebSocket callback
+    ingestion_service.add_websocket_callback(websocket_manager.broadcast)
+    
+    # Event ingestion endpoints
+    @router.post("/pre_tool_use", response_model=EventResponse)
+    async def pre_tool_use(raw_data: Dict[str, Any]):
+        """Handle PreToolUse hook events."""
+        return ingestion_service.ingest_event(raw_data)
+    
+    @router.post("/post_tool_use", response_model=EventResponse)
+    async def post_tool_use(raw_data: Dict[str, Any]):
+        """Handle PostToolUse hook events."""
+        return ingestion_service.ingest_event(raw_data)
+    
+    @router.post("/todowrite", response_model=EventResponse)
+    async def todowrite(raw_data: Dict[str, Any]):
+        """Handle TodoWrite tool events."""
+        return ingestion_service.ingest_event(raw_data)
+    
+    @router.post("/notification", response_model=EventResponse)
+    async def notification(raw_data: Dict[str, Any]):
+        """Handle Notification hook events."""
+        return ingestion_service.ingest_event(raw_data)
+    
+    @router.post("/stop", response_model=EventResponse)
+    async def stop(raw_data: Dict[str, Any]):
+        """Handle Stop hook events."""
+        return ingestion_service.ingest_event(raw_data)
+    
+    @router.post("/subagent_stop", response_model=EventResponse)
+    async def subagent_stop(raw_data: Dict[str, Any]):
+        """Handle SubagentStop hook events."""
+        return ingestion_service.ingest_event(raw_data)
+    
+    @router.post("/user_prompt", response_model=EventResponse)
+    async def user_prompt(raw_data: Dict[str, Any]):
+        """Handle UserPrompt hook events."""
+        return ingestion_service.ingest_event(raw_data)
+    
+    # Query endpoints
+    @router.get("/todos")
+    async def get_todos(
+        session_id: Optional[str] = Query(None),
+        start_time: Optional[str] = Query(None),
+        end_time: Optional[str] = Query(None),
+        tinstar_term_name: Optional[str] = Query(None)
+    ):
+        """Query todo events with filtering."""
+        try:
+            filter_params = EventFilter(
+                session_id=session_id,
+                start_time=start_time,
+                end_time=end_time,
+                tinstar_term_name=tinstar_term_name
+            )
+            return ingestion_service.query_todos(filter_params)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    
+    @router.get("/files")
+    async def get_files(
+        session_id: Optional[str] = Query(None),
+        start_time: Optional[str] = Query(None),
+        end_time: Optional[str] = Query(None),
+        tinstar_term_name: Optional[str] = Query(None)
+    ):
+        """Query file events with filtering."""
+        try:
+            filter_params = EventFilter(
+                session_id=session_id,
+                start_time=start_time,
+                end_time=end_time,
+                tinstar_term_name=tinstar_term_name
+            )
+            return ingestion_service.query_files(filter_params)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    
+    @router.get("")
+    async def get_events(
+        session_id: Optional[str] = Query(None),
+        start_time: Optional[str] = Query(None),
+        end_time: Optional[str] = Query(None),
+        tinstar_term_name: Optional[str] = Query(None),
+        type: Optional[str] = Query(None, alias="type")
+    ):
+        """Query events with filtering."""
+        try:
+            filter_params = EventFilter(
+                session_id=session_id,
+                start_time=start_time,
+                end_time=end_time,
+                tinstar_term_name=tinstar_term_name,
+                event_type=type
+            )
+            return ingestion_service.query_events(filter_params)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    
+    @router.post("/clear")
+    async def clear_events():
+        """Clear all events from database."""
+        return ingestion_service.clear_events()
+    
+    # WebSocket endpoint
+    @router.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket):
+        """WebSocket endpoint for real-time event streaming."""
+        await websocket_manager.connect(websocket)
+        try:
+            while True:
+                # Keep connection alive and handle any incoming messages
+                data = await websocket.receive_text()
+                # Echo back for connection testing
+                await websocket.send_text(f"Echo: {data}")
+        except WebSocketDisconnect:
+            await websocket_manager.disconnect(websocket)
+    
+    # Health check
+    @router.get("/health")
+    async def health_check():
+        """Health check endpoint."""
+        return {"status": "healthy", "service": "tinstar-events"}
+    
+    return router

@@ -5,7 +5,7 @@ import logging
 import uvicorn
 from fastapi import FastAPI
 
-from .events.api import create_events_app
+from .events.api import create_events_router
 from .worktrees.api import router as worktrees_router
 from .session.api import router as sessions_router
 from .filelist.api import router as filelist_router
@@ -20,21 +20,12 @@ def create_tinstar_app() -> FastAPI:
         description="Development environment management API"
     )
     
-    # Include events API at root level so endpoints are at /api/events/*
-    events_app = create_events_app()
-    # Mount at root - events app has its own /api/events/* routing
-    app.mount("", events_app)
-    
-    # Include worktrees router
+    # Include all routers
+    events_router = create_events_router()
+    app.include_router(events_router)
     app.include_router(worktrees_router)
-    
-    # Include sessions router
     app.include_router(sessions_router)
-    
-    # Include filelist router
     app.include_router(filelist_router)
-    
-    # Include projects router
     app.include_router(projects_router)
     
     # Health check

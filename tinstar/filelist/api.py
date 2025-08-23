@@ -11,7 +11,7 @@ from .service import FileListService, FileStats, DirectoryNode
 from ..projects.service import ProjectService
 
 
-router = APIRouter(prefix='/filelist', tags=['filelist'])
+router = APIRouter(prefix='/api/filelist', tags=['filelist'])
 
 
 class FileTreeRequest(BaseModel):
