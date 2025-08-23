@@ -79,14 +79,7 @@ class UpdateProjectRequest(BaseModel):
 
 class ProjectResponse(BaseModel):
     """Standard response wrapper for project operations."""
-    project: Project
-
-
-class ProjectListResponse(BaseModel):
-    """Response for listing projects."""
-    projects: List[Project]
-
-
-class DeleteProjectResponse(BaseModel):
-    """Response for project deletion."""
-    deleted: bool = True
+    success: bool = True
+    message: Optional[str] = None
+    project: Optional[Project] = None
+    projects: Optional[List[Project]] = None

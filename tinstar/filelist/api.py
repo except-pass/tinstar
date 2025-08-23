@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .service import FileListService, FileStats, DirectoryNode
+from ..projects.service import ProjectService
 
 
 router = APIRouter(prefix='/filelist', tags=['filelist'])
@@ -63,13 +64,14 @@ def get_file_tree(project_name: str, request: FileTreeRequest) -> FileTreeRespon
         HTTPException: For various error conditions
     """
     try:
-        # TODO: Get project path from projects database
-        # For now, assume projects are stored in a known location
-        # This would need to be integrated with the projects service
-        project_path = Path(f"/tmp/test_projects/{project_name}")  # Placeholder
+        # Get project path from projects database
+        projects_service = ProjectService()
+        project = projects_service.get_project(project_name)
         
-        if not project_path.exists():
+        if not project:
             raise HTTPException(status_code=404, detail=f'Project not found: {project_name}')
+        
+        project_path = Path(project.path)
         
         # Create service and get tree
         service = FileListService()

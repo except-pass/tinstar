@@ -8,6 +8,8 @@ from fastapi import FastAPI
 from .events.api import create_events_app
 from .worktrees.api import router as worktrees_router
 from .session.api import router as sessions_router
+from .filelist.api import router as filelist_router
+from .projects.api import router as projects_router
 
 
 def create_tinstar_app() -> FastAPI:
@@ -28,6 +30,12 @@ def create_tinstar_app() -> FastAPI:
     
     # Include sessions router
     app.include_router(sessions_router)
+    
+    # Include filelist router
+    app.include_router(filelist_router)
+    
+    # Include projects router
+    app.include_router(projects_router)
     
     # Health check
     @app.get("/api/health")
