@@ -484,6 +484,11 @@ def attach_session(
         if read_only:
             attach_cmd.extend(["-r"])  # Read-only mode
         
+        # Ensure proper terminal handling
+        if not read_only and os.isatty(0):
+            # We're in an interactive terminal, ensure tmux gets control
+            os.environ["TERM"] = os.environ.get("TERM", "xterm-256color")
+        
         # Replace current process with tmux attach
         try:
             os.execvp("tmux", attach_cmd)

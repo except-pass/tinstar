@@ -171,6 +171,144 @@ interface FileTreeState {
 
 ## Testing Strategy
 
-- **Unit tests**: Stats formatting, tree traversal
-- **Integration tests**: API calls, editor integration
-- **Visual tests**: Icon rendering, layout consistency
+### Playwright E2E Tests
+
+Create a test UI that renders ONLY the FileTree component with controlled test data:
+
+```typescript
+// test-data.ts
+export const mockTreeData = {
+  tree: {
+    type: 'directory',
+    path: 'src',
+    children: [
+      {
+        type: 'directory',
+        path: 'src/components',
+        children: [
+          {
+            type: 'file',
+            path: 'src/components/Button.tsx',
+            size: 1024,
+            modified: '2024-01-15T10:30:00Z',
+            stats: { lines_added: 15, lines_removed: 3, is_tracked: true }
+          },
+          {
+            type: 'file', 
+            path: 'src/components/Input.tsx',
+            size: 2048,
+            modified: '2024-01-15T11:00:00Z',
+            stats: { lines_added: 20, lines_removed: 5, is_tracked: true }
+          }
+        ],
+        stats: { lines_added: 35, lines_removed: 8 }
+      },
+      {
+        type: 'file',
+        path: 'src/App.tsx',
+        size: 1536,
+        modified: '2024-01-15T09:15:00Z',
+        stats: { lines_added: 20, lines_removed: 3, is_tracked: true }
+      },
+      {
+        type: 'file',
+        path: 'src/index.ts',
+        size: 512,
+        modified: '2024-01-15T12:00:00Z',
+        stats: { is_tracked: false } // New file
+      }
+    ],
+    stats: { lines_added: 55, lines_removed: 11 }
+  }
+}
+```
+
+### High-Value Test Scenarios
+
+```typescript
+// filetree.spec.ts
+import { test, expect } from '@playwright/test'
+
+test.describe('FileTree Component', () => {
+  test.beforeEach(async ({ page }) => {
+    // Mock API responses
+    await page.route('/filelist/test-project/tree**', async route => {
+      await route.fulfill({ 
+        status: 200, 
+        contentType: 'application/json',
+        body: JSON.stringify(mockTreeData)
+      })
+    })
+    
+    await page.goto('/test-filetree')
+  })
+
+  test('displays root directory with aggregated stats', async ({ page }) => {
+    await expect(page.locator('text=src')).toBeVisible()
+    await expect(page.locator('text=[+55/-11]')).toBeVisible()
+  })
+
+  test('expands directory and shows children with individual stats', async ({ page }) => {
+    // Click expander for components directory
+    await page.locator('[data-testid="expand-components"]').click()
+    
+    // Verify children are visible
+    await expect(page.locator('text=Button.tsx')).toBeVisible()
+    await expect(page.locator('text=Input.tsx')).toBeVisible()
+    
+    // Verify individual file stats
+    await expect(page.locator('text=[+15/-3]')).toBeVisible() // Button.tsx
+    await expect(page.locator('text=[+20/-5]')).toBeVisible() // Input.tsx
+    
+    // Verify directory shows aggregated stats
+    await expect(page.locator('text=[+35/-8]')).toBeVisible() // components dir
+  })
+
+  test('shows correct icons for different file types', async ({ page }) => {
+    await page.locator('[data-testid="expand-components"]').click()
+    
+    // Check for folder icon on directory
+    await expect(page.locator('[data-testid="folder-icon"]')).toBeVisible()
+    
+    // Check for file icons
+    await expect(page.locator('[data-testid="tsx-file-icon"]')).toBeVisible()
+  })
+
+  test('opens file in editor when edit button clicked', async ({ page }) => {
+    await page.locator('[data-testid="expand-components"]').click()
+    
+    // Mock editor API call
+    let editorCallCount = 0
+    await page.route('/api/editor/open', async route => {
+      editorCallCount++
+      await route.fulfill({ status: 200 })
+    })
+    
+    // Click edit button on Button.tsx
+    await page.locator('[data-testid="edit-Button.tsx"]').click()
+    
+    expect(editorCallCount).toBe(1)
+  })
+
+  test('handles new/untracked files correctly', async ({ page }) => {
+    await expect(page.locator('text=index.ts')).toBeVisible()
+    await expect(page.locator('text=[New]')).toBeVisible()
+  })
+
+  test('collapses directory and hides children', async ({ page }) => {
+    // Expand then collapse
+    await page.locator('[data-testid="expand-components"]').click()
+    await expect(page.locator('text=Button.tsx')).toBeVisible()
+    
+    await page.locator('[data-testid="expand-components"]').click()
+    await expect(page.locator('text=Button.tsx')).not.toBeVisible()
+  })
+})
+```
+
+### Test Data Requirements
+
+- **Mixed file types**: .tsx, .ts, .js, .css, .md
+- **Various stats combinations**: Added/removed lines, new files, binary files
+- **Nested directory structure**: At least 3 levels deep
+- **Edge cases**: Empty directories, very long filenames, special characters

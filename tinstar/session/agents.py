@@ -49,9 +49,9 @@ class ClaudeAgent(Agent):
         base_command = f"cd {worktree_path} && TINSTAR_TERM_NAME={session_name} claude"
         
         if initial_prompt:
-            # Escape single quotes in the prompt
+            # Escape single quotes in the prompt and add as positional argument
             escaped_prompt = initial_prompt.replace("'", "'\"'\"'")
-            base_command += f" --session-prompt '{escaped_prompt}'"
+            base_command += f" '{escaped_prompt}'"
         
         return base_command
     

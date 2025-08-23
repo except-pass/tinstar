@@ -202,6 +202,9 @@ class SessionService:
             
             if not success:
                 raise RuntimeError(f"Failed to start {session.agent_type} agent")
+            
+            # Give the agent a moment to initialize
+            await asyncio.sleep(2)
                 
         except Exception as e:
             raise RuntimeError(f"Error starting agent: {e}")
