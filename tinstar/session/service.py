@@ -15,6 +15,8 @@ from .models import Session, SessionPeek
 from ..config import get_config
 from .agents import AgentManager
 from .editors import EditorManager
+from ..worktrees.service import WorktreeService
+from ..worktrees.models import WorktreeCreateRequest
 
 
 class SessionService:
@@ -25,6 +27,7 @@ class SessionService:
         self.config = get_config()
         self.agent_manager = AgentManager()
         self.editor_manager = EditorManager()
+        self.worktree_service = WorktreeService()
     
     def validate_session_creation(self, project: str, agent_type: str) -> None:
         """Validate session creation parameters."""
@@ -36,8 +39,28 @@ class SessionService:
         if agent_type not in available_agents and agent_type != "claude":
             raise ValueError(f"Unknown agent type '{agent_type}'. Available: {list(available_agents)}")
         
-        # Check if project exists (this would integrate with Projects module)
-        # For now, assume project validation is done elsewhere
+        # Check if project exists
+        from ..projects.service import ProjectService
+        project_service = ProjectService()
+        if not project_service.get_project(project):
+            # Get list of available projects to show in error
+            available_projects = project_service.list_projects()
+            
+            error_msg = f"❌ Project '{project}' not found.\n\n"
+            
+            if available_projects:
+                error_msg += "📋 Available projects:\n"
+                for proj in available_projects:
+                    error_msg += f"  • {proj.name} ({proj.path})\n"
+                error_msg += f"\n💡 Use an existing project or register a new one:\n"
+            else:
+                error_msg += "📋 No projects registered yet.\n\n💡 Register a project first:\n"
+            
+            error_msg += f"   tinstar project register <path> --name {project}\n"
+            error_msg += f"   tinstar project register /path/to/your/repo\n\n"
+            error_msg += f"📚 View all projects: tinstar project list"
+            
+            raise ValueError(error_msg)
     
     def _generate_old_west_name(self) -> str:
         """Generate old west themed session name."""
@@ -126,11 +149,15 @@ class SessionService:
     
     async def _create_worktree(self, project: str, worktree_name: str) -> Path:
         """Create worktree via worktrees module."""
-        # This would integrate with the worktrees module
-        # For now, simulate the worktree creation
-        worktree_path = Path.home() / ".tinstar" / "worktrees" / worktree_name
-        worktree_path.mkdir(parents=True, exist_ok=True)
-        return worktree_path
+        try:
+            request = WorktreeCreateRequest(
+                project=project,
+                name=worktree_name
+            )
+            worktree = self.worktree_service.create_worktree(request)
+            return Path(worktree.path)
+        except Exception as e:
+            raise ValueError(f"Failed to create worktree: {e}")
     
     async def _create_tmux_session(self, session: Session):
         """Create and configure tmux session."""

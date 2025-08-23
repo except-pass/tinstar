@@ -246,3 +246,7 @@ class WorktreeService:
             print(f"Warning: Git worktree removal failed: {output}")
         
         return deleted
+    
+    def find_worktrees_by_partial_name(self, partial_name: str) -> List[Worktree]:
+        """Find worktrees by partial name across all projects."""
+        return self.db.find_worktrees_by_partial_name(partial_name)

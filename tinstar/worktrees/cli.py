@@ -6,7 +6,7 @@ from typing import Optional
 from rich.console import Console
 from rich.table import Table
 
-from .models import WorktreeCreateRequest, WorktreeDeleteRequest
+from .models import WorktreeCreateRequest, WorktreeDeleteRequest, Worktree
 from .service import WorktreeService
 
 app = typer.Typer(help="Manage git worktrees for projects")
@@ -97,28 +97,68 @@ def create_worktree(
 
 @app.command("remove")
 def remove_worktree(
-    project: str = typer.Option(..., "--project", "-p", help="Project name"),
-    name: str = typer.Option(..., "--name", "-n", help="Worktree name"),
-    force: bool = typer.Option(False, "--force", "-f", help="Force removal even with uncommitted changes")
+    partial_name: str = typer.Argument(..., help="Worktree name or partial UUID"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force removal even with uncommitted changes"),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Project name (optional, for disambiguation)")
 ):
-    """Remove a worktree."""
+    """Remove a worktree by name or partial UUID."""
     try:
-        request = WorktreeDeleteRequest(project=project, name=name, force=force)
         service = WorktreeService()
         
-        # Confirm deletion unless forcing
+        # Find matching worktrees
+        matches = service.find_worktrees_by_partial_name(partial_name)
+        
+        if not matches:
+            console.print(f"[red]❌ No worktrees found matching '{partial_name}'[/red]")
+            console.print("[dim]💡 Use 'tinstar worktrees list -p <project>' to see available worktrees[/dim]")
+            raise typer.Exit(1)
+        
+        # Filter by project if specified
+        if project:
+            matches = [w for w in matches if w.project == project]
+            if not matches:
+                console.print(f"[red]❌ No worktrees found matching '{partial_name}' in project '{project}'[/red]")
+                raise typer.Exit(1)
+        
+        # Handle multiple matches
+        if len(matches) > 1:
+            console.print(f"[red]❌ Multiple worktrees match '{partial_name}':[/red]")
+            for worktree in matches:
+                short_name = worktree.name[:8] + "..." if len(worktree.name) > 8 else worktree.name
+                console.print(f"  • {short_name} (project: {worktree.project})")
+            console.print("[dim]💡 Use a longer partial name or specify --project to disambiguate[/dim]")
+            raise typer.Exit(1)
+        
+        # Single match - proceed with removal
+        worktree = matches[0]
+        
+        # Show what will be removed
+        console.print(f"🗑️  Removing worktree:", style="yellow")
+        console.print(f"   Name: {worktree.name}")
+        console.print(f"   Project: {worktree.project}")
+        console.print(f"   Path: {worktree.path}")
+        console.print(f"   Branch: {worktree.branch}")
+        
+        # Confirm if not forced
         if not force:
-            confirm = typer.confirm(f"Are you sure you want to remove worktree '{name}' from project '{project}'?")
+            confirm = typer.confirm("Are you sure you want to remove this worktree?")
             if not confirm:
-                console.print("[yellow]Operation cancelled[/yellow]")
+                console.print("Operation cancelled.", style="yellow")
                 return
         
+        # Create delete request
+        request = WorktreeDeleteRequest(
+            project=worktree.project, 
+            name=worktree.name, 
+            force=force
+        )
+        # Delete the worktree
         deleted = service.delete_worktree(request)
         
         if deleted:
-            console.print(f"[green]✓[/green] Worktree '{name}' removed successfully")
+            console.print(f"[green]✅ Worktree '{worktree.name}' removed successfully[/green]")
         else:
-            console.print(f"[red]Error: Worktree '{name}' not found[/red]")
+            console.print(f"[red]❌ Failed to remove worktree '{worktree.name}'[/red]")
             raise typer.Exit(1)
             
     except ValueError as e:

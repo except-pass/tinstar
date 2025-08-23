@@ -78,12 +78,38 @@ def list_sessions(
 
 @app.command("create")
 def create_session(
-    project: str = typer.Argument(..., help="Project name"),
+    project: Optional[str] = typer.Argument(None, help="Project name"),
     prompt: Optional[str] = typer.Option(None, "--prompt", help="Initial prompt for agent"),
     agent: str = typer.Option("claude", "--agent", help="Agent type to use")
 ):
     """Create a new session."""
     try:
+        # Check if project was provided
+        if not project:
+            from ..projects.service import ProjectService
+            project_service = ProjectService()
+            available_projects = project_service.list_projects()
+            
+            console.print("❌ No project specified.", style="red")
+            console.print()
+            
+            if available_projects:
+                console.print("📋 Available projects:", style="cyan")
+                for proj in available_projects:
+                    console.print(f"  • {proj.name} ({proj.path})", style="white")
+                console.print()
+                console.print("💡 Create a session with:", style="green")
+                console.print(f"   tinstar session create {available_projects[0].name}", style="dim")
+            else:
+                console.print("📋 No projects registered yet.", style="yellow")
+                console.print()
+                console.print("💡 Register a project first:", style="green")
+                console.print("   tinstar project register /path/to/your/repo", style="dim")
+            
+            console.print()
+            console.print("📚 Learn more: tinstar session create --help", style="dim")
+            raise typer.Exit(1)
+        
         service = get_service()
         
         # Run async function

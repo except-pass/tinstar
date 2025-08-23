@@ -134,6 +134,30 @@ class WorktreeDatabase:
                 )
             return None
     
+    def find_worktrees_by_partial_name(self, partial_name: str) -> List[Worktree]:
+        """Find worktrees that start with the given partial name across all projects."""
+        with self.get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT name, project, path, branch, head, detached, created_at
+                FROM worktrees
+                WHERE name LIKE ?
+                ORDER BY created_at DESC
+            """, (f"{partial_name}%",))
+            
+            worktrees = []
+            for row in cursor.fetchall():
+                worktrees.append(Worktree(
+                    name=row['name'],
+                    project=row['project'],
+                    path=row['path'],
+                    branch=row['branch'],
+                    head=row['head'],
+                    detached=bool(row['detached']),
+                    created_at=row['created_at']
+                ))
+            
+            return worktrees
+    
     def list_worktrees(self, project: str) -> List[Worktree]:
         """List all worktrees for a project."""
         with self.get_connection() as conn:
