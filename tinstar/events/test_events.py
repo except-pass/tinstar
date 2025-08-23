@@ -56,6 +56,25 @@ class TestEventModels:
                 hook_event_name="InvalidEvent"
             )
     
+    def test_event_validation_user_prompt_submit(self):
+        """Test UserPromptSubmit hook event name validation."""
+        event = Event(
+            session_id=str(uuid.uuid4()),
+            timestamp=datetime.now().isoformat(),
+            hook_event_name="UserPromptSubmit"
+        )
+        assert event.hook_event_name == "UserPromptSubmit"
+    
+    def test_todo_auto_id_generation(self):
+        """Test Todo auto-generates ID when not provided."""
+        todo = Todo(content="Test todo", status="pending")
+        assert todo.id is not None
+        assert len(todo.id) == 8  # Short UUID format
+        
+        # Test explicit ID is preserved
+        todo_with_id = Todo(id="explicit123", content="Test todo", status="pending")
+        assert todo_with_id.id == "explicit123"
+    
     def test_todo_event_properties(self):
         """Test TodoEvent property extraction."""
         session_id = str(uuid.uuid4())
@@ -431,6 +450,46 @@ class TestEventIngestionService:
         assert len(todos) == 1
         assert todos[0]['todo_id'] == "1"
     
+    def test_todo_logging(self, temp_service, caplog):
+        """Test that todo processing generates appropriate log messages."""
+        import logging
+        caplog.set_level(logging.INFO)
+        
+        raw_data = {
+            "session_id": str(uuid.uuid4()),
+            "timestamp": datetime.now().isoformat(),
+            "hook_event_name": "PreToolUse",
+            "tool_name": "TodoWrite",
+            "tool_input": {
+                "todos": [
+                    {"content": "Short todo", "status": "pending"},
+                    {"content": "This is a very long todo that should be truncated in the log output", "status": "in_progress"}
+                ]
+            }
+        }
+        
+        response = temp_service.ingest_event(raw_data)
+        assert response.success is True
+        
+        # Check that appropriate log messages were generated
+        log_messages = [record.message for record in caplog.records if record.levelno >= logging.INFO]
+        
+        # Should have processing message
+        processing_logs = [msg for msg in log_messages if "Processing TodoEvent" in msg]
+        assert len(processing_logs) == 1
+        assert "type=new, hook=PreToolUse" in processing_logs[0]
+        
+        # Should have storage message
+        storage_logs = [msg for msg in log_messages if "Storing" in msg and "todo(s) from PreToolUse" in msg]
+        assert len(storage_logs) == 1
+        assert "Storing 2 todo(s)" in storage_logs[0]
+        
+        # Should have individual todo messages
+        todo_logs = [msg for msg in log_messages if msg.strip().startswith("[")]
+        assert len(todo_logs) == 2
+        assert "[1] pending: Short todo" in todo_logs[0]
+        assert "[2] in_progress: This is a very long todo that should be truncated in the log..." in todo_logs[1]
+    
     def test_ingest_file_event(self, temp_service):
         """Test ingesting file operation events."""
         raw_data = {
@@ -475,6 +534,32 @@ class TestEventIngestionService:
         # Should have received one callback for the event
         assert len(callback_calls) == 1
         assert callback_calls[0][0] == "event"
+    
+    def test_async_websocket_callback(self, temp_service):
+        """Test async WebSocket callback handling."""
+        # Mock async callback function
+        callback_calls = []
+        
+        async def mock_async_callback(event_type, event_data):
+            callback_calls.append((event_type, event_data))
+        
+        # Add async callback
+        temp_service.add_websocket_callback(mock_async_callback)
+        
+        # Test with no event loop (should handle gracefully)
+        raw_data = {
+            "session_id": str(uuid.uuid4()),
+            "timestamp": datetime.now().isoformat(),
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read"
+        }
+        
+        response = temp_service.ingest_event(raw_data)
+        assert response.success is True
+        
+        # In test environment without running event loop, 
+        # async callback should be skipped but not cause errors
+        # (callback_calls would be empty since the async task can't run)
     
     def test_query_with_time_range(self, temp_service):
         """Test querying events with time range filters."""

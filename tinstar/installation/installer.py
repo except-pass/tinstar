@@ -59,14 +59,11 @@ def get_install_paths() -> Dict[str, Path]:
     paths: Dict[str, Path] = {
         "home_dir": home_dir,
         "tinstar_root": tinstar_root,
-        "config_dir": tinstar_root / "config",
         "db_dir": tinstar_root / "db",
         "logs_dir": tinstar_root / "logs",
         "worktrees_dir": tinstar_root / "worktrees",
         "sessions_dir": tinstar_root / "sessions",
-        "default_config_src": Path(__file__).parent / "tinstar.config.json",
         "default_hooks_src": Path(__file__).parent / "hooks.json",
-        "config_target": tinstar_root / "config" / "tinstar.config.json",
         "db_file": tinstar_root / "db" / "tinstar.db",
         "claude_settings": home_dir / ".claude" / "settings.json",
         "claude_settings_backup": home_dir
@@ -80,7 +77,6 @@ def bootstrap_directories(paths: dict) -> None:
     """Create required Tinstar and Claude settings directories."""
     for directory in [
         paths["tinstar_root"],
-        paths["config_dir"],
         paths["db_dir"],
         paths["logs_dir"],
         paths["worktrees_dir"],
@@ -101,18 +97,25 @@ def backup_existing_settings(claude_settings: Path, backup_file: Path) -> bool:
 
 
 def template_hooks_json(hooks_src: Path, logs_dir: Path) -> dict:
-    """Template the hooks.json with user-specific paths."""
+    """Template the hooks.json with user-specific paths and server configuration."""
     if not hooks_src.exists():
         raise FileNotFoundError(f"hooks.json not found at {hooks_src}")
 
+    # Import here to avoid circular dependency
+    from ..config import get_config
+    config = get_config()
+
     log_path = str((logs_dir / "activity-log.jsonl").resolve())
     worktree_path = str((logs_dir.parent / "worktrees").resolve()) + "/"
+    server_base_url = config.get_server_base_url()
 
     hooks_content = hooks_src.read_text()
     templated_content = hooks_content.replace(
         "/home/ubuntu/repo/ctrltower/logs/activity-log.jsonl", log_path
     ).replace(
         "/home/ubuntu/.ctrltower/worktrees/", worktree_path
+    ).replace(
+        "{{SERVER_BASE_URL}}", server_base_url
     )
 
     return json.loads(templated_content)
@@ -120,8 +123,9 @@ def template_hooks_json(hooks_src: Path, logs_dir: Path) -> dict:
 
 def copy_default_config_if_missing(paths: dict) -> None:
     """Copy default Tinstar config if it doesn't already exist."""
-    if not paths["config_target"].exists():
-        shutil.copy2(paths["default_config_src"], paths["config_target"])
+    # Configuration is now handled by the TinstarConfig class
+    # which creates ~/.tinstar/config.json automatically
+    pass
 
 
 def initialize_sqlite_db(paths: dict) -> None:

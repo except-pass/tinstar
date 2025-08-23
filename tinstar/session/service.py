@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from .database import SessionDatabase
 from .models import Session, SessionPeek
-from .config import get_config
+from ..config import get_config
 from .agents import AgentManager
 from .editors import EditorManager
 

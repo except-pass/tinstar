@@ -202,24 +202,60 @@ The notification response system handles structured responses to agent prompts a
 
 ### Configuration
 
+Configuration is stored in `~/.tinstar/config.json` and includes:
+
 ```json
 {
+  "database": {
+    "url": "sqlite:///tinstar.db"
+  },
+  "server": {
+    "host": "localhost",
+    "port": 3002
+  },
+  "workdir": "~/.tinstar",
+  "logs": {
+    "level": "info"
+  },
   "agents": {
     "claude": {
-      "command_template": "cd {worktree_path} && claude-code --session-prompt '{initial_prompt}'",
-      "health_check_interval": 30
+      "command_template": "cd {worktree_path} && TINSTAR_TERM_NAME={session_name} claude-code",
+      "health_check_interval": 30,
+      "response_mappings": {
+        "approve_once": ["Enter"],
+        "approve_always": ["Down", "Enter"],
+        "deny": ["Down", "Down", "Enter"]
+      }
     }
   },
   "editors": {
     "cursor": {
       "command_template": "cursor {worktree_path} && cursor -a {file_path}:{line_number}",
-      "supports_line_numbers": true
+      "supports_line_numbers": true,
+      "background": true
     }
   },
-  "agent": "claude",
-  "editor": "cursor",
-  "session_timeout_hours": 24,
-  "max_peek_lines": 1000
+  "defaults": {
+    "agent": "claude",
+    "editor": "cursor"
+  },
+  "session": {
+    "timeout_hours": 24,
+    "max_peek_lines": 1000,
+    "health_check_interval": 300,
+    "auto_cleanup_stopped": true,
+    "naming_theme": "old_west",
+    "auto_cleanup": true
+  },
+  "worktree": {
+    "base_path": "~/.tinstar/worktrees",
+    "branch_prefix": "worktree/"
+  },
+  "logging": {
+    "terminal_logs_enabled": true,
+    "log_retention_days": 30,
+    "max_log_file_size_mb": 100
+  }
 }
 ```
 

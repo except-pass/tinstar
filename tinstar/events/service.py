@@ -201,9 +201,28 @@ class EventIngestionService:
     
     def _broadcast_event(self, event_type: str, event_data: Any):
         """Broadcast event to WebSocket clients."""
+        import asyncio
+        
         for callback in self._websocket_callbacks:
             try:
-                callback(event_type, event_data)
+                # Handle both sync and async callbacks
+                if asyncio.iscoroutinefunction(callback):
+                    # For async callbacks, create a task but don't await
+                    # This prevents blocking the main event processing
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # Create task without awaiting to avoid blocking
+                            loop.create_task(callback(event_type, event_data))
+                        else:
+                            # If no loop is running, we can't handle async callbacks
+                            logger.debug("No running event loop, skipping async callback")
+                    except RuntimeError:
+                        # No event loop, can't handle async callbacks
+                        logger.debug("No event loop available, skipping async callback")
+                else:
+                    # Synchronous callback
+                    callback(event_type, event_data)
             except Exception as e:
                 logger.warning(f"WebSocket callback failed: {e}")
     
@@ -235,6 +254,7 @@ class EventIngestionService:
         # Process TodoWrite events
         todo_event = self.processor.process_todo_event(event)
         if todo_event:
+            logger.debug(f"Detected TodoWrite event: {event.hook_event_name} for session {event.session_id[:8]}...")
             self._store_todo_event(todo_event)
             self._broadcast_event("todo", todo_event)
         
@@ -246,10 +266,16 @@ class EventIngestionService:
     
     def _store_todo_event(self, todo_event: TodoEvent):
         """Store todos from a TodoEvent."""
+        logger.info(f"Processing TodoEvent: type={todo_event.type}, hook={todo_event.hook_event_name}, session={todo_event.session_id[:8]}...")
+        
         # For PreToolUse events, store todos from tool_input
         if todo_event.hook_event_name == "PreToolUse":
             todos = todo_event.todos_from_input
             if todos:
+                logger.info(f"Storing {len(todos)} todo(s) from PreToolUse event:")
+                for i, todo in enumerate(todos, 1):
+                    logger.info(f"  [{i}] {todo.status}: {todo.content[:60]}{'...' if len(todo.content) > 60 else ''} (id: {todo.id})")
+                
                 self.database.store_todo_events(
                     todo_event.session_id,
                     todo_event.timestamp,
@@ -257,11 +283,19 @@ class EventIngestionService:
                     todo_event.type,
                     [todo.model_dump() for todo in todos]
                 )
+            else:
+                logger.debug("PreToolUse TodoEvent had no todos in tool_input")
         
         # For PostToolUse events, store both old and new todos if present
         elif todo_event.hook_event_name == "PostToolUse":
             new_todos = todo_event.new_todos
+            old_todos = todo_event.old_todos
+            
             if new_todos:
+                logger.info(f"Storing {len(new_todos)} todo(s) from PostToolUse event (had {len(old_todos)} old todos):")
+                for i, todo in enumerate(new_todos, 1):
+                    logger.info(f"  [{i}] {todo.status}: {todo.content[:60]}{'...' if len(todo.content) > 60 else ''} (id: {todo.id})")
+                
                 self.database.store_todo_events(
                     todo_event.session_id,
                     todo_event.timestamp,
@@ -269,6 +303,8 @@ class EventIngestionService:
                     todo_event.type,
                     [todo.model_dump() for todo in new_todos]
                 )
+            else:
+                logger.debug("PostToolUse TodoEvent had no new todos in tool_response")
     
     def _store_file_event(self, file_event: FileEvent):
         """Store a file event."""

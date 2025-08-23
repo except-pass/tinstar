@@ -8,13 +8,12 @@ N/A.
 
 ### Bootstrap directory structure
 - `mkdir -p ~/.tinstar` and required subdirs:
-  - `~/.tinstar/config` - Configuration files
   - `~/.tinstar/db` - SQLite database files
   - `~/.tinstar/logs` - Application logs
   - `~/.tinstar/worktrees` - Git worktree storage
   - `~/.tinstar/sessions` - Session metadata
 
-- If no config exists, copy `tinstar/installation/tinstar.config.json` → `~/.tinstar/config/tinstar.config.json`
+- Configuration is handled by the TinstarConfig class which creates `~/.tinstar/config.json` automatically
 
 ### Dependencies
 - Hard deps to check: `jq`, `npm`, `tmux`, `ttyd`
@@ -56,9 +55,9 @@ N/A.
   - Then: all subdirs exist with correct permissions; rerun is idempotent
 
 - Config file creation
-  - Given: `~/.tinstar/config/tinstar.config.json` is missing
-  - When: `tinstar install run`
-  - Then: file is copied from `tinstar/installation/tinstar.config.json` with identical contents
+  - Given: `~/.tinstar/config.json` is missing
+  - When: TinstarConfig is initialized
+  - Then: file is created with default configuration
 
 - Doctor checks
   - Given: one or more of `jq`, `npm`, `tmux`, `ttyd` are missing

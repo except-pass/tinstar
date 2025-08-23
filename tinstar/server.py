@@ -1,6 +1,7 @@
 """
 Main server for the Tinstar system.
 """
+import logging
 import uvicorn
 from fastapi import FastAPI
 
@@ -17,9 +18,10 @@ def create_tinstar_app() -> FastAPI:
         description="Development environment management API"
     )
     
-    # Include events API
+    # Include events API at root level so endpoints are at /api/events/*
     events_app = create_events_app()
-    app.mount("/events", events_app)
+    # Mount at root - events app has its own /api/events/* routing
+    app.mount("", events_app)
     
     # Include worktrees router
     app.include_router(worktrees_router)
@@ -36,10 +38,29 @@ def create_tinstar_app() -> FastAPI:
     return app
 
 
-def run_server(host: str = "0.0.0.0", port: int = 8000, debug: bool = False):
+def run_server(host: str = None, port: int = None, debug: bool = False):
     """Run the main Tinstar server."""
-    app = create_tinstar_app()
-    uvicorn.run(app, host=host, port=port, debug=debug)
+    from .config import get_config
+    
+    # Configure logging
+    if debug:
+        logging.basicConfig(level=logging.DEBUG)
+        logging.getLogger("tinstar").setLevel(logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    
+    config = get_config()
+    host = host or config.get_server_host()
+    port = port or config.get_server_port()
+    
+    if debug:
+        # Use import string for reload mode
+        uvicorn.run("tinstar.server:create_tinstar_app", 
+                   host=host, port=port, reload=True, factory=True, log_level="debug")
+    else:
+        # Use app object for production
+        app = create_tinstar_app()
+        uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

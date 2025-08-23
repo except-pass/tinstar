@@ -9,10 +9,16 @@ import uuid
 
 class Todo(BaseModel):
     """Todo item within a todo list."""
-    id: str
+    id: Optional[str] = None
     content: str
     status: str = Field(..., pattern="^(pending|in_progress|completed)$")
     priority: Optional[str] = Field(None, pattern="^(high|medium|low)$")
+    
+    def __init__(self, **data):
+        # Auto-generate ID if not provided
+        if 'id' not in data or data['id'] is None:
+            data['id'] = str(uuid.uuid4())[:8]  # Short UUID for readability
+        super().__init__(**data)
 
 
 class Event(BaseModel):
@@ -50,7 +56,7 @@ class Event(BaseModel):
     def validate_hook_event_name(cls, v):
         allowed_events = {
             'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop', 
-            'UserPrompt', 'Notification'
+            'UserPrompt', 'UserPromptSubmit', 'Notification'
         }
         if v not in allowed_events:
             raise ValueError(f'hook_event_name must be one of: {allowed_events}')

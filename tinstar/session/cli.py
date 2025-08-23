@@ -2,7 +2,9 @@
 CLI commands for the Tinstar session management system.
 """
 import asyncio
-from typing import Optional
+import os
+import subprocess
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -18,6 +20,13 @@ app = typer.Typer(name="session", help="Manage Tinstar sessions")
 def get_service() -> SessionService:
     """Get the session service instance."""
     return SessionService()
+
+
+def _find_matching_sessions(service: SessionService, partial_id: str) -> List[str]:
+    """Find session IDs that match the partial ID."""
+    sessions = service.list_sessions()
+    matches = [s.id for s in sessions if s.id.startswith(partial_id)]
+    return matches
 
 
 @app.command("list")
@@ -129,12 +138,33 @@ def peek_session(
 
 @app.command("send")
 def send_to_session(
-    session_id: str = typer.Argument(..., help="Session ID"),
+    partial_session_id: str = typer.Argument(..., help="Partial or full session ID"),
     text: str = typer.Argument(..., help="Text to send to session")
 ):
     """Send text to session terminal."""
     try:
         service = get_service()
+        
+        # Find matching sessions
+        matches = _find_matching_sessions(service, partial_session_id)
+        
+        if not matches:
+            console.print(f"❌ No sessions found matching '{partial_session_id}'", style="red")
+            console.print("💡 Use 'tinstar session list' to see available sessions", style="dim")
+            raise typer.Exit(1)
+        
+        if len(matches) > 1:
+            console.print(f"❌ Multiple sessions match '{partial_session_id}':", style="red")
+            for match in matches:
+                session = service.get_session(match)
+                if session:
+                    short_id = match[:8] + "..."
+                    console.print(f"  {short_id} - {session.name} ({session.project})", style="yellow")
+            console.print("💡 Use a longer partial ID to be more specific", style="dim")
+            raise typer.Exit(1)
+        
+        # Get the matched session ID
+        session_id = matches[0]
         
         # Run async function
         success = asyncio.run(service.send_to_session(session_id, text))
@@ -152,16 +182,37 @@ def send_to_session(
 
 @app.command("stop")
 def terminate_session(
-    session_id: str = typer.Argument(..., help="Session ID"),
+    partial_session_id: str = typer.Argument(..., help="Partial or full session ID"),
     confirm: bool = typer.Option(False, "--confirm", help="Skip confirmation prompt")
 ):
     """Terminate a session."""
     try:
         service = get_service()
+        
+        # Find matching sessions
+        matches = _find_matching_sessions(service, partial_session_id)
+        
+        if not matches:
+            console.print(f"❌ No sessions found matching '{partial_session_id}'", style="red")
+            console.print("💡 Use 'tinstar session list' to see available sessions", style="dim")
+            raise typer.Exit(1)
+        
+        if len(matches) > 1:
+            console.print(f"❌ Multiple sessions match '{partial_session_id}':", style="red")
+            for match in matches:
+                session = service.get_session(match)
+                if session:
+                    short_id = match[:8] + "..."
+                    console.print(f"  {short_id} - {session.name} ({session.project})", style="yellow")
+            console.print("💡 Use a longer partial ID to be more specific", style="dim")
+            raise typer.Exit(1)
+        
+        # Get the matched session
+        session_id = matches[0]
         session = service.get_session(session_id)
         
         if not session:
-            console.print("Session not found.", style="red")
+            console.print("❌ Session not found", style="red")
             raise typer.Exit(1)
         
         if not confirm:
@@ -330,6 +381,93 @@ def show_session_info(
         
     except Exception as e:
         console.print(f"Error showing session info: {e}", style="red")
+        raise typer.Exit(1)
+
+
+@app.command("attach")
+def attach_session(
+    partial_session_id: str = typer.Argument(..., help="Partial or full session ID to attach to"),
+    read_only: bool = typer.Option(False, "--read-only", "-r", help="Attach in read-only mode")
+):
+    """Attach to an existing session terminal."""
+    try:
+        service = get_service()
+        
+        # Find matching sessions
+        matches = _find_matching_sessions(service, partial_session_id)
+        
+        if not matches:
+            console.print(f"❌ No sessions found matching '{partial_session_id}'", style="red")
+            console.print("💡 Use 'tinstar session list' to see available sessions", style="dim")
+            raise typer.Exit(1)
+        
+        if len(matches) > 1:
+            console.print(f"❌ Multiple sessions match '{partial_session_id}':", style="red")
+            for match in matches:
+                session = service.get_session(match)
+                if session:
+                    short_id = match[:8] + "..."
+                    console.print(f"  {short_id} - {session.name} ({session.project})", style="yellow")
+            console.print("💡 Use a longer partial ID to be more specific", style="dim")
+            raise typer.Exit(1)
+        
+        # Get the matched session
+        session_id = matches[0]
+        session = service.get_session(session_id)
+        
+        if not session:
+            console.print("❌ Session not found", style="red")
+            raise typer.Exit(1)
+        
+        if session.status != "active":
+            console.print(f"⚠️  Session '{session.name}' is not active (status: {session.status})", style="yellow")
+            if not typer.confirm("Do you want to attach anyway?"):
+                console.print("Operation cancelled.", style="yellow")
+                return
+        
+        # Check if tmux session exists
+        check_cmd = ["tmux", "has-session", "-t", session.tmux_session_name]
+        try:
+            subprocess.run(check_cmd, check=True, capture_output=True)
+        except subprocess.CalledProcessError:
+            console.print(f"❌ Tmux session '{session.tmux_session_name}' not found", style="red")
+            console.print("The session may have been terminated outside of Tinstar", style="yellow")
+            raise typer.Exit(1)
+        
+        # Show session info before attaching
+        console.print(f"🔗 Attaching to session: {session.name}", style="green")
+        console.print(f"   ID: {session.id[:8]}...", style="cyan")
+        console.print(f"   Project: {session.project}", style="blue")
+        console.print(f"   Worktree: {session.worktree_path}", style="yellow")
+        
+        if read_only:
+            console.print(f"   Mode: Read-only", style="magenta")
+        else:
+            console.print(f"   Mode: Interactive", style="green")
+        
+        console.print("\n📋 Press Ctrl+B, D to detach from the session", style="dim")
+        console.print("🚪 Use 'tinstar session list' to see all sessions when detached", style="dim")
+        
+        # Wait a moment for user to read
+        import time
+        time.sleep(1)
+        
+        # Attach to tmux session
+        attach_cmd = ["tmux", "attach-session", "-t", session.tmux_session_name]
+        
+        if read_only:
+            attach_cmd.extend(["-r"])  # Read-only mode
+        
+        # Replace current process with tmux attach
+        try:
+            os.execvp("tmux", attach_cmd)
+        except OSError as e:
+            console.print(f"❌ Failed to attach to session: {e}", style="red")
+            console.print("Make sure tmux is installed and available in PATH", style="yellow")
+            raise typer.Exit(1)
+        
+    except Exception as e:
+        console.print(f"❌ Error attaching to session: {e}", style="red")
         raise typer.Exit(1)
 
 

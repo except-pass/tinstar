@@ -35,7 +35,7 @@ class ClaudeAgent(Agent):
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {
-            "command_template": "cd {worktree_path} && TINSTAR_TERM_NAME={session_name} claude-code",
+            "command_template": "cd {worktree_path} && TINSTAR_TERM_NAME={session_name} claude",
             "health_check_interval": 30,
             "response_mappings": {
                 "approve_once": ["Enter"],
@@ -46,7 +46,7 @@ class ClaudeAgent(Agent):
     
     def get_start_command(self, worktree_path: str, session_name: str, initial_prompt: Optional[str]) -> str:
         """Generate command to start Claude in the worktree."""
-        base_command = f"cd {worktree_path} && TINSTAR_TERM_NAME={session_name} claude-code"
+        base_command = f"cd {worktree_path} && TINSTAR_TERM_NAME={session_name} claude"
         
         if initial_prompt:
             # Escape single quotes in the prompt

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from .database import SessionDatabase
 from .service import SessionService
 from .models import Session, SessionCreateRequest
-from .config import SessionConfig
+from ..config import TinstarConfig
 
 
 class TestSessionDatabase:
@@ -140,14 +140,14 @@ class TestSessionDatabase:
         assert retrieved is None
 
 
-class TestSessionConfig:
-    """Test session configuration."""
+class TestTinstarConfig:
+    """Test Tinstar configuration."""
     
     def setup_method(self):
         """Set up test configuration."""
         self.temp_dir = Path(tempfile.mkdtemp())
-        self.config_path = self.temp_dir / "test_config.json"
-        self.config = SessionConfig(self.config_path)
+        self.config_path = self.temp_dir / "config.json"
+        self.config = TinstarConfig(self.config_path)
     
     def teardown_method(self):
         """Clean up test configuration."""
