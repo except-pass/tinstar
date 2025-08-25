@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simple FileTree Test</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: #f5f5f5;
+    }
+    
+    .test-container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    
+    h1 {
+      margin-top: 0;
+      color: #333;
+    }
+    
+    .controls {
+      margin-bottom: 20px;
+      padding: 10px;
+      background-color: #f8f9fa;
+      border-radius: 4px;
+    }
+    
+    button {
+      margin-right: 10px;
+      padding: 8px 16px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: white;
+      cursor: pointer;
+    }
+    
+    button:hover {
+      background-color: #f5f5f5;
+    }
+    
+    .status {
+      margin-top: 20px;
+      padding: 10px;
+      border-radius: 4px;
+      background-color: #e8f4f8;
+    }
+    
+    /* FileTree CSS */
+    .file-entry {
+      display: flex;
+      align-items: center;
+      padding: 2px 0;
+      cursor: pointer;
+    }
+    
+    .filename {
+      flex: 1;
+    }
+    
+    .stats {
+      font-size: 0.8em;
+      color: #666;
+      margin-right: 8px;
+    }
+    
+    .edit-button {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="test-container">
+    <h1>FileTree Component Test (Manual)</h1>
+    
+    <div class="controls">
+      <button id="test-basic" data-testid="test-basic">Test Basic Rendering</button>
+      <button id="test-stats" data-testid="test-stats">Test Stats Formatting</button>
+      <button id="test-clicks" data-testid="test-clicks">Test File Clicks</button>
+      <button id="run-all" data-testid="run-all">Run All Tests</button>
+    </div>
+    
+    <div id="filetree-container" data-testid="filetree-container"></div>
+    
+    <div class="status">
+      <div>Status: <span id="status" data-testid="status">Ready</span></div>
+      <div>Last file opened: <span id="last-file" data-testid="last-file">None</span></div>
+      <div>Test Results: <span id="test-results" data-testid="test-results">No tests run</span></div>
+    </div>
+  </div>
+
+  <script>
+    // Mock data matching the spec
+    const mockTreeData = {
+      tree: {
+        type: 'directory',
+        path: '',
+        children: [
+          {
+            type: 'directory',
+            path: 'src',
+            children: [
+              {
+                type: 'directory',
+                path: 'src/components',
+                children: [
+                  {
+                    type: 'file',
+                    path: 'src/components/Button.tsx',
+                    size: 1024,
+                    modified: '2024-01-15T10:30:00Z',
+                    stats: { lines_added: 15, lines_removed: 3, is_tracked: true }
+                  },
+                  {
+                    type: 'file', 
+                    path: 'src/components/Input.tsx',
+                    size: 2048,
+                    modified: '2024-01-15T11:00:00Z',
+                    stats: { lines_added: 20, lines_removed: 5, is_tracked: true }
+                  }
+                ],
+                stats: { lines_added: 35, lines_removed: 8 }
+              },
+              {
+                type: 'file',
+                path: 'src/App.tsx',
+                size: 1536,
+                modified: '2024-01-15T09:15:00Z',
+                stats: { lines_added: 20, lines_removed: 3, is_tracked: true }
+              },
+              {
+                type: 'file',
+                path: 'src/index.ts',
+                size: 512,
+                modified: '2024-01-15T12:00:00Z',
+                stats: { is_tracked: false } // New file
+              }
+            ],
+            stats: { lines_added: 55, lines_removed: 11 }
+          },
+          {
+            type: 'file',
+            path: 'README.md',
+            size: 800,
+            modified: '2024-01-15T08:00:00Z',
+            stats: { lines_added: 10, lines_removed: 0, is_tracked: true }
+          },
+          {
+            type: 'file',
+            path: 'package.json',
+            size: 600,
+            modified: '2024-01-15T07:30:00Z',
+            stats: { lines_added: 0, lines_removed: 0, is_tracked: true }
+          }
+        ],
+        stats: { lines_added: 65, lines_removed: 11 }
+      }
+    };
+
+    // Simple FileTree implementation for testing
+    function formatStats(stats) {
+      const parts = [];
+      
+      if (stats.lines_added !== undefined && stats.lines_added > 0) {
+        parts.push(`+${stats.lines_added}`);
+      }
+      if (stats.lines_removed !== undefined && stats.lines_removed > 0) {
+        parts.push(`-${stats.lines_removed}`);
+      }
+      if (stats.binary) {
+        parts.push('Binary');
+      }
+      if (stats.is_tracked === false) {
+        parts.push('New');
+      }
+      
+      return parts.length > 0 ? `[${parts.join('/')}]` : '';
+    }
+
+    function renderFileEntry(node, level = 0) {
+      const indent = '  '.repeat(level);
+      let html = '';
+      
+      if (node.type === 'file') {
+        const stats = formatStats(node.stats);
+        const filename = node.path.split('/').pop();
+        html += `
+          <div class="file-entry" style="margin-left: ${level * 20}px;" data-path="${node.path}">
+            <span class="filename">${filename}</span>
+            <span class="stats">${stats}</span>
+            <button class="edit-button" onclick="openFile('${node.path}')">✏️</button>
+          </div>
+        `;
+      } else if (node.type === 'directory') {
+        const stats = formatStats(node.stats);
+        const dirname = node.path.split('/').pop() || 'root';
+        html += `
+          <div class="file-entry" style="margin-left: ${level * 20}px;" data-path="${node.path}">
+            <span class="filename">📁 ${dirname}</span>
+            <span class="stats">${stats}</span>
+          </div>
+        `;
+        
+        // Render children
+        for (const child of node.children) {
+          html += renderFileEntry(child, level + 1);
+        }
+      }
+      
+      return html;
+    }
+
+    function openFile(path) {
+      document.getElementById('last-file').textContent = path;
+      console.log('File opened:', path);
+    }
+
+    function renderTree() {
+      const container = document.getElementById('filetree-container');
+      container.innerHTML = renderFileEntry(mockTreeData.tree);
+      document.getElementById('status').textContent = 'Tree rendered';
+    }
+
+    // Test functions
+    function testBasicRendering() {
+      renderTree();
+      
+      const results = [];
+      
+      // Check if basic elements exist
+      const fileEntries = document.querySelectorAll('.file-entry');
+      results.push(`✓ Found ${fileEntries.length} file entries`);
+      
+      // Check for specific files
+      const readmeFile = document.querySelector('[data-path="README.md"]');
+      results.push(readmeFile ? '✓ README.md found' : '❌ README.md not found');
+      
+      const srcDir = document.querySelector('[data-path="src"]');
+      results.push(srcDir ? '✓ src directory found' : '❌ src directory not found');
+      
+      return results;
+    }
+
+    function testStatsFormatting() {
+      renderTree();
+      
+      const results = [];
+      
+      // Check for different stat formats
+      const statsElements = document.querySelectorAll('.stats');
+      const statsText = Array.from(statsElements).map(el => el.textContent);
+      
+      // Look for specific patterns
+      const hasAddedRemoved = statsText.some(text => text.includes('+') && text.includes('-'));
+      results.push(hasAddedRemoved ? '✓ Added/removed stats found' : '❌ Added/removed stats not found');
+      
+      const hasNewFile = statsText.some(text => text.includes('New'));
+      results.push(hasNewFile ? '✓ New file indicator found' : '❌ New file indicator not found');
+      
+      const hasNoStats = statsText.some(text => text === '');
+      results.push(hasNoStats ? '✓ Empty stats found' : '❌ Empty stats not found');
+      
+      return results;
+    }
+
+    function testFileClicks() {
+      renderTree();
+      
+      const results = [];
+      
+      // Test clicking on edit buttons
+      const editButtons = document.querySelectorAll('.edit-button');
+      results.push(`✓ Found ${editButtons.length} edit buttons`);
+      
+      if (editButtons.length > 0) {
+        // Simulate clicking first edit button
+        const firstButton = editButtons[0];
+        firstButton.click();
+        
+        const lastFile = document.getElementById('last-file').textContent;
+        results.push(lastFile !== 'None' ? `✓ File click worked: ${lastFile}` : '❌ File click failed');
+      }
+      
+      return results;
+    }
+
+    function runAllTests() {
+      const allResults = [];
+      
+      allResults.push('=== Basic Rendering Test ===');
+      allResults.push(...testBasicRendering());
+      
+      allResults.push('=== Stats Formatting Test ===');
+      allResults.push(...testStatsFormatting());
+      
+      allResults.push('=== File Clicks Test ===');
+      allResults.push(...testFileClicks());
+      
+      document.getElementById('test-results').innerHTML = allResults.join('<br>');
+      document.getElementById('status').textContent = 'All tests completed';
+      
+      return allResults;
+    }
+
+    // Event listeners
+    document.getElementById('test-basic').addEventListener('click', () => {
+      const results = testBasicRendering();
+      document.getElementById('test-results').innerHTML = results.join('<br>');
+      document.getElementById('status').textContent = 'Basic test completed';
+    });
+
+    document.getElementById('test-stats').addEventListener('click', () => {
+      const results = testStatsFormatting();
+      document.getElementById('test-results').innerHTML = results.join('<br>');
+      document.getElementById('status').textContent = 'Stats test completed';
+    });
+
+    document.getElementById('test-clicks').addEventListener('click', () => {
+      const results = testFileClicks();
+      document.getElementById('test-results').innerHTML = results.join('<br>');
+      document.getElementById('status').textContent = 'Click test completed';
+    });
+
+    document.getElementById('run-all').addEventListener('click', runAllTests);
+
+    // Run basic test on load
+    document.addEventListener('DOMContentLoaded', () => {
+      renderTree();
+    });
+  </script>
+</body>
+</html>

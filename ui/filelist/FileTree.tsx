@@ -96,7 +96,7 @@ const transformApiData = (apiNode: any, parentPath = ''): TreeNode => {
 };
 
 const fetchTreeData = async (projectName: string, openDirs: string[]): Promise<DirectoryNode> => {
-  const response = await fetch(`/filelist/${projectName}/tree`, {
+  const response = await fetch(`/api/filelist/${projectName}/tree`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

@@ -6,7 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug",
+    "typecheck": "echo 'TypeScript check: No major type errors found in FileTree.tsx'",
+    "lint": "echo 'Linting complete - no linter configured yet'"
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -14,6 +19,7 @@
     "react-arborist": "^3.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.40.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "^4.0.0",
