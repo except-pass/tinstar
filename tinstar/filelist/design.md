@@ -56,10 +56,13 @@ N/A
 
 ## Logic
 
-### File Discovery
-- Use full directory listing (filesystem traversal)
+### File Discovery (Optimized)
+- **Changed files**: Use `git diff --name-only HEAD` to find files with uncommitted changes
+- **Files in expanded directories**: Use `git ls-files` with directory patterns for only expanded dirs
+- **Untracked files**: Use `git ls-files --others --exclude-standard` scoped to expanded directories
+- **Fallback**: When git unavailable, scan only expanded directories via filesystem
 - Do not follow symlinks
-- Include all files for both project directories and worktrees (with unignored files copied)
+- Include both tracked and untracked files for expanded directories only
 
 
 ### Statistics Collection

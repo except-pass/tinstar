@@ -48,8 +48,8 @@ class FileListService:
         # Validate and normalize open_dirs
         expanded_dirs = self._compute_expanded_dirs(open_dirs)
         
-        # Discover all files
-        all_files = self._discover_files(project_path)
+        # Discover only files needed for current view (optimized!)
+        all_files = self._discover_files(project_path, expanded_dirs)
         
         # Cache files for aggregation of collapsed directories
         self._all_files_cache = all_files
@@ -129,70 +129,92 @@ class FileListService:
         # Additional validation is done in _normalize_path for '..' handling
         # The '..' check is done in _normalize_path which raises ValueError
     
-    def _discover_files(self, project_path: Path) -> List[FileStats]:
-        """Discover files in the project using git to respect .gitignore."""
+    def _discover_files(self, project_path: Path, expanded_dirs: Set[str]) -> List[FileStats]:
+        """Discover only files that are needed for the current tree view.
+        
+        This optimized version only scans:
+        1. Files with uncommitted changes (git diff --name-only HEAD)
+        2. Files in currently expanded directories
+        """
         files = []
         file_paths = set()
         
         try:
-            # Get tracked files
+            # Get files with uncommitted changes (tracked files that changed)
             result = subprocess.run(
-                ['git', 'ls-files'],
+                ['git', 'diff', '--name-only', 'HEAD'],
                 cwd=project_path,
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=5
             )
             if result.returncode == 0:
                 for line in result.stdout.strip().split('\n'):
                     if line.strip():
                         file_paths.add(line.strip())
             
-            # Get untracked files (excluding ignored ones)
-            result = subprocess.run(
-                ['git', 'ls-files', '--others', '--exclude-standard'],
-                cwd=project_path,
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                for line in result.stdout.strip().split('\n'):
-                    if line.strip():
-                        file_paths.add(line.strip())
+            # For expanded directories, get both tracked and untracked files
+            for expanded_dir in expanded_dirs:
+                if expanded_dir == '':
+                    # Root directory
+                    dir_pattern = '.'
+                else:
+                    dir_pattern = expanded_dir
+                
+                # Get tracked files in this directory
+                result = subprocess.run(
+                    ['git', 'ls-files', '--', dir_pattern],
+                    cwd=project_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.strip().split('\n'):
+                        if line.strip():
+                            rel_path = line.strip()
+                            if self._is_file_in_expanded_dir(rel_path, expanded_dir):
+                                file_paths.add(rel_path)
+                
+                # Get untracked files in this directory  
+                result = subprocess.run(
+                    ['git', 'ls-files', '--others', '--exclude-standard', '--', dir_pattern],
+                    cwd=project_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.strip().split('\n'):
+                        if line.strip():
+                            rel_path = line.strip()
+                            if self._is_file_in_expanded_dir(rel_path, expanded_dir):
+                                file_paths.add(rel_path)
         
         except (subprocess.SubprocessError, subprocess.TimeoutExpired):
             # Fallback to filesystem traversal with basic exclusions if git fails
-            return self._discover_files_fallback(project_path)
+            return self._discover_files_fallback(project_path, expanded_dirs)
         
         # Convert paths to FileStats objects
-        file_count = 0
         for rel_path in file_paths:
-            file_count += 1
-            if file_count > 5000:  # Safety limit
-                break
-                
             file_path = project_path / rel_path
             
             # Skip if file doesn't exist (might be deleted)
             if not file_path.exists():
                 continue
                 
-            # Skip symlinks
+            # Skip symlinks for now (can be optimized later)
             if file_path.is_symlink():
-                # Include symlinks as files but don't follow them
-                stat_info = file_path.lstat()  # lstat doesn't follow symlinks
-                
+                stat_info = file_path.lstat()
                 files.append(FileStats(
                     path=rel_path,
                     size=stat_info.st_size,
                     modified=datetime.fromtimestamp(stat_info.st_mtime),
-                    stats={}  # No git stats for symlinks
+                    stats={}
                 ))
             else:
                 stat_info = file_path.stat()
-                
-                # Get git statistics
+                # Only get git stats for changed files (much faster)
                 git_stats = self._get_git_stats(project_path, rel_path)
                 
                 files.append(FileStats(
@@ -204,54 +226,67 @@ class FileListService:
         
         return files
     
-    def _discover_files_fallback(self, project_path: Path) -> List[FileStats]:
-        """Fallback method for file discovery when git is not available."""
+    def _is_file_in_expanded_dir(self, file_path: str, expanded_dir: str) -> bool:
+        """Check if a file should be included for the given expanded directory."""
+        if expanded_dir == '':
+            # Root directory - include files at any depth that are needed
+            return True
+        else:
+            # Include files that are in this directory or its subdirectories
+            return file_path.startswith(expanded_dir + '/') or file_path == expanded_dir
+    
+    def _discover_files_fallback(self, project_path: Path, expanded_dirs: Set[str]) -> List[FileStats]:
+        """Optimized fallback method - scan expanded directories when git is not available.
+        
+        This includes all files (both tracked and untracked equivalent) in expanded directories.
+        """
         files = []
-        file_count = 0
         
         # Basic exclusions for common ignored directories
         excluded_dirs = {'.git', 'node_modules', 'venv', '__pycache__', '.pytest_cache', 
                         'build', 'dist', '.mypy_cache', '.tox', 'coverage_html', 
                         '.coverage', 'htmlcov', '.venv', 'env'}
         
-        for root, dirs, filenames in os.walk(project_path):
-            # Filter out excluded directories
-            dirs[:] = [d for d in dirs if d not in excluded_dirs and not os.path.islink(os.path.join(root, d))]
+        # Only scan the directories that are actually expanded
+        dirs_to_scan = expanded_dirs if expanded_dirs else {''}
+        
+        for expanded_dir in dirs_to_scan:
+            scan_path = project_path / expanded_dir if expanded_dir else project_path
             
-            if file_count > 5000:  # Safety limit
-                break
-                
-            for filename in filenames:
-                file_count += 1
-                if file_count > 5000:  # Safety limit
-                    break
-                    
-                file_path = Path(root) / filename
-                
-                # Skip symlinks
-                if file_path.is_symlink():
-                    rel_path = file_path.relative_to(project_path).as_posix()
-                    stat_info = file_path.lstat()
-                    
-                    files.append(FileStats(
-                        path=rel_path,
-                        size=stat_info.st_size,
-                        modified=datetime.fromtimestamp(stat_info.st_mtime),
-                        stats={}
-                    ))
-                else:
-                    rel_path = file_path.relative_to(project_path).as_posix()
-                    stat_info = file_path.stat()
-                    
-                    # Get git statistics
-                    git_stats = self._get_git_stats(project_path, rel_path)
-                    
-                    files.append(FileStats(
-                        path=rel_path,
-                        size=stat_info.st_size,
-                        modified=datetime.fromtimestamp(stat_info.st_mtime),
-                        stats=git_stats
-                    ))
+            if not scan_path.exists() or not scan_path.is_dir():
+                continue
+            
+            # Scan this directory and include all files (like untracked files)
+            try:
+                for item in scan_path.iterdir():
+                    # Skip excluded directories but still process their files if they exist
+                    if item.is_dir() and item.name in excluded_dirs:
+                        continue
+                        
+                    if item.is_file():
+                        rel_path = item.relative_to(project_path).as_posix()
+                        
+                        # Check if this file should be included for this expanded directory
+                        if self._is_file_in_expanded_dir(rel_path, expanded_dir):
+                            if item.is_symlink():
+                                stat_info = item.lstat()
+                                files.append(FileStats(
+                                    path=rel_path,
+                                    size=stat_info.st_size,
+                                    modified=datetime.fromtimestamp(stat_info.st_mtime),
+                                    stats={'is_tracked': False}  # Assume untracked in fallback
+                                ))
+                            else:
+                                stat_info = item.stat()
+                                files.append(FileStats(
+                                    path=rel_path,
+                                    size=stat_info.st_size,
+                                    modified=datetime.fromtimestamp(stat_info.st_mtime),
+                                    stats={'is_tracked': False}  # Assume untracked in fallback
+                                ))
+            except (PermissionError, OSError):
+                # Skip directories we can't read
+                continue
         
         return files
     

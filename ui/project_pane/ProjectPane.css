@@ -370,3 +370,25 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* FileTree vertical resizing */
+.project-widget__filetree-container {
+  position: relative;
+}
+
+.project-widget__resize-handle {
+  height: 4px;
+  background-color: #dee2e6;
+  cursor: row-resize;
+  transition: background-color 0.2s ease;
+  border-top: 1px solid #e9ecef;
+}
+
+.project-widget__resize-handle:hover,
+.project-widget__resize-handle.resizing {
+  background-color: #007bff;
+}
+
+.project-widget__resize-handle.resizing {
+  user-select: none;
+}

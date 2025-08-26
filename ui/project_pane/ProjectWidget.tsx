@@ -22,6 +22,8 @@ export const ProjectWidget: React.FC<ProjectWidgetProps> = ({
     showingSettings: false,
     updatingSettings: false,
   });
+  const [treeHeight, setTreeHeight] = useState<number>(300);
+  const [isResizingHeight, setIsResizingHeight] = useState<boolean>(false);
 
   const backgroundColor = COLOR_PALETTE[colorIndex % COLOR_PALETTE.length];
 
@@ -78,6 +80,37 @@ export const ProjectWidget: React.FC<ProjectWidgetProps> = ({
     }
   };
 
+  // Vertical resizing handlers
+  const handleResizeMouseDown = (e: React.MouseEvent) => {
+    setIsResizingHeight(true);
+    e.preventDefault();
+  };
+
+  const handleResizeMouseMove = React.useCallback((e: MouseEvent) => {
+    if (!isResizingHeight) return;
+    
+    const minHeight = 150;
+    const maxHeight = 600;
+    const newHeight = Math.max(minHeight, Math.min(maxHeight, treeHeight + e.movementY));
+    setTreeHeight(newHeight);
+  }, [isResizingHeight, treeHeight]);
+
+  const handleResizeMouseUp = React.useCallback(() => {
+    setIsResizingHeight(false);
+  }, []);
+
+  React.useEffect(() => {
+    if (isResizingHeight) {
+      document.addEventListener('mousemove', handleResizeMouseMove);
+      document.addEventListener('mouseup', handleResizeMouseUp);
+      
+      return () => {
+        document.removeEventListener('mousemove', handleResizeMouseMove);
+        document.removeEventListener('mouseup', handleResizeMouseUp);
+      };
+    }
+  }, [isResizingHeight, handleResizeMouseMove, handleResizeMouseUp]);
+
   return (
     <>
       <div 
@@ -118,11 +151,17 @@ export const ProjectWidget: React.FC<ProjectWidgetProps> = ({
         </div>
         
         <div className="project-widget__content">
-          <FileTree
-            projectName={project.name}
-            height={300}
-            onFileOpen={handleFileOpen}
-          />
+          <div className="project-widget__filetree-container">
+            <FileTree
+              projectName={project.name}
+              height={treeHeight}
+              onFileOpen={handleFileOpen}
+            />
+            <div 
+              className={`project-widget__resize-handle ${isResizingHeight ? 'resizing' : ''}`}
+              onMouseDown={handleResizeMouseDown}
+            />
+          </div>
         </div>
       </div>
       

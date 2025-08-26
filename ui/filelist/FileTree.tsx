@@ -292,6 +292,10 @@ export const FileTree: React.FC<FileTreeProps> = ({
     toggleDir(id, state.openDirs.includes(id));
   };
 
+  const handleCollapseAll = () => {
+    setState(prev => ({ ...prev, openDirs: [''] })); // Keep only root directory open
+  };
+
   if (state.loading) {
     return <div style={{ padding: '20px' }}>Loading file tree...</div>;
   }
@@ -309,10 +313,21 @@ export const FileTree: React.FC<FileTreeProps> = ({
 
   return (
     <div className="file-tree-container">
+      <div className="file-tree-header">
+        <span className="file-tree-title">Files</span>
+        <button 
+          className="file-tree-collapse-all"
+          onClick={handleCollapseAll}
+          disabled={state.loading}
+          title="Collapse all directories"
+        >
+          ⊟
+        </button>
+      </div>
       <Tree<TreeNode>
         data={treeData}
         onToggle={handleToggle}
-        height={height}
+        height={height - 32} // Subtract header height
         indent={20}
         rowHeight={24}
       >
