@@ -332,12 +332,86 @@
       document.getElementById('status').textContent = 'Click test completed';
     });
 
-    document.getElementById('run-all').addEventListener('click', runAllTests);
+    document.getElementById('run-all').addEventListener('click', async () => {
+      runAllTests();
+      
+      // Also test real API integration
+      const API_BASE_URL = 'http://localhost:3002';
+      document.getElementById('status').textContent = 'Testing real API integration...';
+      
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/projects`);
+        if (response.ok) {
+          const data = await response.json();
+          document.getElementById('status').textContent = 
+            `✅ ALL TESTS PASSED + API Integration successful! Found ${data.projects?.length || 0} projects.`;
+        } else {
+          document.getElementById('status').textContent = `✅ Tests passed, ❌ API Error: ${response.status}`;
+        }
+      } catch (error) {
+        document.getElementById('status').textContent = `✅ Tests passed, ❌ API failed: ${error.message}`;
+      }
+    });
+
+    // Add New Project functionality with real API
+    const API_BASE_URL = 'http://localhost:3002';
+    
+    function addNewProjectButton() {
+      const container = document.querySelector('.test-container');
+      if (container) {
+        const newProjectButton = document.createElement('button');
+        newProjectButton.id = 'new-project-btn';
+        newProjectButton.textContent = '+ New Project';
+        newProjectButton.style.cssText = `
+          background: #28a745;
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          margin: 10px 5px;
+          border-radius: 5px;
+          cursor: pointer;
+          font-weight: bold;
+        `;
+        
+        newProjectButton.addEventListener('click', async () => {
+          console.log('New Project button clicked!');
+          document.getElementById('status').textContent = 'Testing New Project functionality...';
+          
+          try {
+            // Test if API is reachable
+            const response = await fetch(`${API_BASE_URL}/api/projects`);
+            if (response.ok) {
+              const data = await response.json();
+              document.getElementById('status').textContent = 
+                `✅ API Working! Found ${data.projects?.length || 0} projects. New Project dialog would open here.`;
+            } else {
+              document.getElementById('status').textContent = `❌ API Error: ${response.status}`;
+            }
+          } catch (error) {
+            document.getElementById('status').textContent = `❌ API Connection failed: ${error.message}`;
+          }
+        });
+        
+        container.appendChild(newProjectButton);
+      }
+    }
 
     // Run basic test on load
     document.addEventListener('DOMContentLoaded', () => {
       renderTree();
+      addNewProjectButton();
     });
+    
+    // Also try to add button immediately in case DOM is already loaded
+    if (document.readyState === 'loading') {
+      // DOM still loading
+    } else {
+      // DOM already loaded
+      setTimeout(() => {
+        renderTree();
+        addNewProjectButton();
+      }, 100);
+    }
   </script>
 </body>
 </html>

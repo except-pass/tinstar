@@ -122,7 +122,14 @@ const openInEditor = async (filePath: string, sessionId?: string): Promise<void>
       body: JSON.stringify({ file_path: filePath }),
     });
   } else {
-    console.warn('No session ID provided for editor opening');
+    // Use generic editor endpoint when no session ID is provided
+    await fetch('/api/editor/open', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ file_path: filePath }),
+    });
   }
 };
 

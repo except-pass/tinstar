@@ -10,6 +10,7 @@ from .worktrees.api import router as worktrees_router
 from .session.api import router as sessions_router
 from .filelist.api import router as filelist_router
 from .projects.api import router as projects_router
+from .editor.api import router as editor_router
 
 
 def create_tinstar_app() -> FastAPI:
@@ -27,6 +28,7 @@ def create_tinstar_app() -> FastAPI:
     app.include_router(sessions_router)
     app.include_router(filelist_router)
     app.include_router(projects_router)
+    app.include_router(editor_router)
     
     # Health check
     @app.get("/api/health")

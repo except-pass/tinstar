@@ -1,11 +1,1 @@
-- I want the agents pane on the right and the projects pane on the left.  
-- the panes should be resizable by click/dragging the spacer between them
-- the projects pane should have the title of projects just like the agents pane has "agents".
-
-- everytime the agents pane refreshes it "flickers".  all the agents dissipear and it shows the loading pane, then they all reappear.  thats annoying behavior.   make it more smooth
-
-
-- are you using the correct filelist widget?  it doesnt seem up to spec.  there are no icons to show the filetype or dirs.  There are no expansion handles (> or V) on the dirs.  there are no edit buttons.  basically it is not up to the spec.
-
-- where do the lines changed numbers come from?  lines changed should only be calculated for text files not binary or images.
-    
+fix filelist widget bugs

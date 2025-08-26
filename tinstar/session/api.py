@@ -20,6 +20,8 @@ from .service import SessionService
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
+
+
 @router.get("", response_model=SessionResponse)
 async def list_sessions(project: Optional[str] = Query(None, description="Filter by project name")):
     """List all active sessions."""

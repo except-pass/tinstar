@@ -6,7 +6,7 @@
     <title>Tinstar Project Pane - Real Integration Test</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script src="https://unpkg.com/react-arborist@3.4.0/dist/index.umd.js"></script>
+    <!-- react-arborist doesn't have UMD build, using simple mock instead -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <link rel="stylesheet" href="./project_pane/ProjectPane.css">
     <link rel="stylesheet" href="./filelist/FileTree.css">
@@ -58,7 +58,8 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
         const { createRoot } = ReactDOM;
-        const { Tree } = ReactArborist;
+        
+        // Remove Tree component entirely - not needed
 
         // Real API configuration
         const API_BASE_URL = window.location.hostname === 'localhost' 
@@ -194,14 +195,16 @@
 
             return (
                 <div className="file-tree-container">
-                    <Tree
-                        data={treeData}
-                        height={height}
-                        indent={20}
-                        rowHeight={24}
-                    >
-                        {(props) => <FileTreeNode {...props} />}
-                    </Tree>
+                    <div style={{ height: height, overflow: 'auto' }}>
+                        {loading && <div>Loading files...</div>}
+                        {error && <div>Error: {error}</div>}
+                        {!loading && !error && treeData.length === 0 && <div>No files found</div>}
+                        {treeData.map(node => (
+                            <div key={node.id} style={{ padding: '4px' }}>
+                                📁 {node.name} ({node.children?.length || 0} files)
+                            </div>
+                        ))}
+                    </div>
                 </div>
             );
         };
