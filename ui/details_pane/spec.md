@@ -1,44 +1,15 @@
-# Details Pane
-
-The details pane is the main pane on the screen.  It shows details for the selected Agent in the Agents Pane.  
-
-It has the following sections
-
-## Info
-Show the agent name, project, and session id.  
-Show the agent status (active, idle, or needs attention)
-
-## Controls
-
-- Save.  Sends a request to the session to git commit all changes with  a helpful commit message.
-- Pause.  Sends the escape key to the session to stop the agent.
-- Attach.  Opens a ttymd session
-- Quit.  Attempts to terminate the agent.
-
-If the underlying API of the controls, display the appropriate error message to the user.
-
-## Peek
-Shows the last 50 lines of the session's output.
-
-## Filelist
-Show the filelist widget for the agent's worktree.
-
-
-## Prompt
-show the latest prompt of the agent.
-
-## To do
-Show the current todo list of the agent
-
-## Event stats
-Show the number and type of each event that has occured for this agent.
-
-
 # Details Pane API Specification
 
 This document outlines the API endpoints that the Details Pane UI components will interact with.
 
 ## Session Management
+
+### Get Session Details
+
+Retrieves the full session object, including the initial prompt.
+
+- **Endpoint:** `GET /api/sessions/{session_id}`
+- **`session_id`** (string, required): The ID of the session.
 
 ### Send Keys to Session
 
@@ -55,17 +26,6 @@ Sends a string of text to the session's interactive terminal. This is used for s
 }
 ```
 
-**Example:**
-
-```http
-POST /api/sessions/claude-20240726-120000/send
-Content-Type: application/json
-
-{
-  "text": "npm install\n"
-}
-```
-
 ### Terminate Session
 
 Terminates a running session. This will kill the associated agent and cleanup any session-specific resources.
@@ -73,11 +33,18 @@ Terminates a running session. This will kill the associated agent and cleanup an
 - **Endpoint:** `DELETE /api/sessions/{session_id}`
 - **`session_id`** (string, required): The ID of the session to terminate.
 
-**Example:**
+## Terminal Output
 
-```http
-DELETE /api/sessions/claude-20240726-120000
-```
+### Peek at Terminal
+
+Retrieves the most recent lines of output from the session's terminal.
+
+- **Endpoint:** `GET /api/sessions/{session_id}/peek`
+- **`session_id`** (string, required): The ID of the session.
+
+**Query Parameters:**
+
+- **`lines`** (integer, optional): The number of lines to retrieve. Defaults to 50.
 
 ## Worktree Management
 
@@ -93,8 +60,23 @@ Deletes a worktree. This is typically done after the associated session has been
 - **`project`** (string, required): The name of the project the worktree belongs to.
 - **`force`** (boolean, optional): If `true`, the worktree will be deleted even if it has uncommitted changes. Defaults to `false`.
 
-**Example:**
+## Todos
 
-```http
-DELETE /api/worktrees/feature-branch-xyz?project=my-cool-app&force=true
-```
+### Get Todos
+
+Retrieves a list of "todo" events for a session.
+
+- **Endpoint:** `GET /api/events/todos`
+
+**Query Parameters:**
+
+- **`session_id`** (string, optional): Filter todos by a specific session.
+- **`start_time`** (string, optional): ISO 8601 timestamp to filter events after this time.
+- **`end_time`** (string, optional): ISO 8601 timestamp to filter events before this time.
+- **`tinstar_term_name`** (string, optional): Filter by a specific terminal name.
+
+## Event Stats
+
+There is no dedicated endpoint for event statistics. The frontend should fetch the raw event data from the `GET /api/events` endpoint and compute the stats client-side.
+
+Display the count and type of each event.
