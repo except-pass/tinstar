@@ -1,0 +1,355 @@
+/* Project Pane Container */
+.project-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 280px;
+  background-color: #f8f9fa;
+  border-right: 1px solid #dee2e6;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+/* Loading State */
+.project-pane__loading {
+  padding: 16px;
+  text-align: center;
+  color: #6c757d;
+  font-style: italic;
+}
+
+/* Error Banner */
+.project-pane__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+  margin: 8px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.project-pane__error-dismiss {
+  background: none;
+  border: none;
+  color: #721c24;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0;
+  margin-left: 8px;
+}
+
+.project-pane__error-dismiss:hover {
+  color: #491217;
+}
+
+/* Projects Container */
+.project-pane__projects {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+/* New Project Button */
+.project-pane__new-project {
+  margin: 8px;
+  padding: 12px 16px;
+  background-color: #28a745;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+.project-pane__new-project:hover:not(:disabled) {
+  background-color: #218838;
+}
+
+.project-pane__new-project:disabled {
+  background-color: #6c757d;
+  cursor: not-allowed;
+}
+
+/* Project Widget */
+.project-widget {
+  margin-bottom: 12px;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.project-widget__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.project-widget__name {
+  font-weight: 600;
+  font-size: 14px;
+  color: #2E1B0F; /* Charred Wood for contrast */
+  flex: 1;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.project-widget__controls {
+  display: flex;
+  gap: 4px;
+}
+
+.project-widget__button {
+  background: rgba(255, 255, 255, 0.3);
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+  padding: 4px 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #2E1B0F;
+  transition: all 0.2s;
+  min-width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.project-widget__button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.5);
+  border-color: rgba(0, 0, 0, 0.3);
+}
+
+.project-widget__button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.project-widget__refresh:disabled {
+  animation: spin 1s linear infinite;
+}
+
+.project-widget__close:disabled {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.project-widget__content {
+  background: rgba(255, 255, 255, 0.2);
+  padding: 8px;
+}
+
+/* FileTree Integration */
+.project-widget .file-tree-container {
+  background: transparent;
+}
+
+.project-widget .file-entry {
+  padding: 2px 4px;
+  border-radius: 2px;
+  transition: background-color 0.15s;
+}
+
+.project-widget .file-entry:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+.project-widget .filename {
+  color: #2E1B0F;
+  font-size: 13px;
+}
+
+.project-widget .stats {
+  color: rgba(46, 27, 15, 0.7) !important;
+  font-size: 11px !important;
+}
+
+/* Project Settings Dialog */
+.project-settings-dialog__overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.project-settings-dialog {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+  width: 500px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.project-settings-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #dee2e6;
+  background-color: #f8f9fa;
+}
+
+.project-settings-dialog__header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #2E1B0F;
+}
+
+.project-settings-dialog__close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: #6c757d;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.project-settings-dialog__close:hover:not(:disabled) {
+  color: #495057;
+}
+
+.project-settings-dialog__close:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.project-settings-dialog__content {
+  padding: 20px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.project-settings-dialog__field {
+  margin-bottom: 20px;
+}
+
+.project-settings-dialog__label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+  color: #2E1B0F;
+  font-size: 14px;
+}
+
+.project-settings-dialog__hint {
+  font-weight: 400;
+  color: #6c757d;
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.project-settings-dialog__input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.project-settings-dialog__input--readonly {
+  background-color: #e9ecef;
+  color: #6c757d;
+  cursor: not-allowed;
+}
+
+.project-settings-dialog__textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  resize: vertical;
+  box-sizing: border-box;
+  min-height: 120px;
+}
+
+.project-settings-dialog__textarea:focus {
+  outline: none;
+  border-color: #80bdff;
+  box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+.project-settings-dialog__textarea:disabled {
+  background-color: #e9ecef;
+  color: #6c757d;
+  cursor: not-allowed;
+}
+
+.project-settings-dialog__error {
+  background-color: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 14px;
+  margin-top: 12px;
+}
+
+.project-settings-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 20px;
+  border-top: 1px solid #dee2e6;
+  background-color: #f8f9fa;
+}
+
+.project-settings-dialog__button {
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.project-settings-dialog__button--cancel {
+  background-color: #6c757d;
+  color: white;
+}
+
+.project-settings-dialog__button--cancel:hover:not(:disabled) {
+  background-color: #5a6268;
+}
+
+.project-settings-dialog__button--save {
+  background-color: #28a745;
+  color: white;
+}
+
+.project-settings-dialog__button--save:hover:not(:disabled) {
+  background-color: #218838;
+}
+
+.project-settings-dialog__button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
