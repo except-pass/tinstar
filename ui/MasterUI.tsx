@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AgentPane } from './agent_pane';
 import { ProjectPane } from './project_pane';
+import { DetailsPane } from './details_pane';
 import './MasterUI.css';
 
 interface MasterUIProps {
@@ -117,20 +118,7 @@ export const MasterUI: React.FC<MasterUIProps> = ({
         
         <div className="master-ui-main">
           {selectedAgentId ? (
-            <div className="content-section">
-              <h2>Agent Details</h2>
-              <div className="agent-details-placeholder">
-                <p>Selected agent: <strong>{selectedAgentId}</strong></p>
-                <p>This is where agent details, terminal output, or other agent-specific UI would go.</p>
-                
-                <div className="placeholder-actions">
-                  <button className="action-btn">View Terminal</button>
-                  <button className="action-btn">Send Command</button>
-                  <button className="action-btn">Open Editor</button>
-                  <button className="action-btn danger">Terminate</button>
-                </div>
-              </div>
-            </div>
+            <DetailsPane sessionId={selectedAgentId} />
           ) : selectedProjectName ? (
             <div className="content-section">
               <h2>Project Details</h2>
