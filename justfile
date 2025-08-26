@@ -10,7 +10,7 @@ start:
     
     # Start backend server in background with nohup on port 3003 (avoiding Docker test container on 3002)
     echo "Starting backend server..."
-    nohup tinstar server --port 3003 > .backend.log 2>&1 &
+    nohup tinstar server --port 3003 --debug > .backend.log 2>&1 &
     BACKEND_PID=$!
     echo $BACKEND_PID > .backend.pid
     

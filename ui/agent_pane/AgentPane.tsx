@@ -3,6 +3,7 @@ import { Session, Project, ProjectGroup, CreateSessionRequest } from './types';
 import { SmallAgentWidget } from './SmallAgentWidget';
 import { useSessions } from './hooks/useSessions';
 import { useProjects } from './hooks/useProjects';
+import { ProjectBucket } from './ProjectBucket';
 import { useEvents } from './hooks/useEvents';
 import { groupSessionsByProject } from './utils';
 import './AgentPane.css';
@@ -17,7 +18,7 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
   selectedAgentId,
 }) => {
   const { sessions, loading: sessionsLoading, error: sessionsError, fetchSessions, createSession } = useSessions();
-  const { projects, loading: projectsLoading, error: projectsError } = useProjects();
+  const { projects, loading: projectsLoading, error: projectsError, fetchProjects } = useProjects();
   const { connectWebSocket, disconnectWebSocket, isWebSocketConnected } = useEvents();
   
   const [projectGroups, setProjectGroups] = useState<ProjectGroup[]>([]);
@@ -97,6 +98,26 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
   const loading = sessionsLoading || projectsLoading;
   const error = sessionsError || projectsError;
 
+  const handleOpenProjectSettings = (projectName: string) => {
+    // Reuse existing Project Pane settings? For now, navigate or emit event.
+    window.dispatchEvent(new CustomEvent('tinstar', { detail: { type: 'open-project-settings', payload: { projectName } } }));
+  };
+
+  const handleDeleteProject = async (projectName: string) => {
+    try {
+      await fetch(`/api/projects/${projectName}`, { method: 'DELETE' });
+      await fetchProjects();
+      await fetchSessions();
+    } catch (e) {
+      console.error('Failed to delete project', e);
+    }
+  };
+
+  const handleNewAgentForProject = (projectName: string) => {
+    setShowNewAgentDialog(true);
+    setNewAgentProject(projectName);
+  };
+
   return (
     <div className="agent-pane">
       <div className="agent-pane-header">
@@ -120,27 +141,19 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
 
       <div className="agent-groups">
         {projectGroups.map(group => (
-            <div 
-              key={group.projectName} 
-              className="project-group"
-              style={{ backgroundColor: group.backgroundColor }}
-            >
-              <div className="project-header">
-                <span className="project-name">{group.projectName}</span>
-              </div>
-              <div className="project-agents">
-                {group.sessions.map(session => (
-                  <SmallAgentWidget
-                    key={session.id}
-                    session={session}
-                    onAgentClick={onAgentClick}
-                    isSelected={selectedAgentId === session.id}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-          
+          <ProjectBucket
+            key={group.projectName}
+            project={{ name: group.projectName, path: '', created_at: '', unignore_paths: [] }}
+            backgroundColor={group.backgroundColor}
+            sessions={group.sessions}
+            selectedAgentId={selectedAgentId}
+            onAgentClick={onAgentClick}
+            onOpenSettings={handleOpenProjectSettings}
+            onDeleteProject={handleDeleteProject}
+            onNewAgent={handleNewAgentForProject}
+          />
+        ))}
+
         {projectGroups.length === 0 && !loading && (
           <div className="empty-state">
             No active agents. Create one below to get started.
@@ -150,11 +163,41 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
 
       <div className="new-agent-section">
         <button 
-          className="new-agent-button"
-          onClick={() => setShowNewAgentDialog(true)}
+          className="new-project-button"
+          onClick={async () => {
+            try {
+              // Directory picker via input trick
+              const input = document.createElement('input');
+              input.type = 'file';
+              // @ts-ignore
+              input.webkitdirectory = true;
+              input.multiple = false;
+              input.onchange = async (event) => {
+                const target = event.target as HTMLInputElement;
+                const files = target.files;
+                if (files && files.length > 0) {
+                  const firstFile = files[0];
+                  const pathParts = (firstFile as any).webkitRelativePath?.split('/') || [];
+                  const directoryName = pathParts[0] || 'project';
+                  const fullPath = (firstFile as any).path ?
+                    (firstFile as any).path.replace('/' + (firstFile as any).webkitRelativePath, '') + '/' + directoryName :
+                    directoryName;
+                  await fetch('/api/projects', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: fullPath })
+                  });
+                  await fetchProjects();
+                }
+              };
+              input.click();
+            } catch (e) {
+              console.error('Failed to create project', e);
+            }
+          }}
           disabled={creating}
         >
-          + New Agent
+          + New Project
         </button>
       </div>
 

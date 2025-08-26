@@ -8,7 +8,7 @@ import subprocess
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .database import SessionDatabase
 from .models import Session, SessionPeek
@@ -16,7 +16,7 @@ from ..config import get_config
 from .agents import AgentManager
 from .editors import EditorManager
 from ..worktrees.service import WorktreeService
-from ..worktrees.models import WorktreeCreateRequest
+from ..worktrees.models import WorktreeCreateRequest, WorktreeDeleteRequest
 
 
 class SessionService:
@@ -341,11 +341,11 @@ class SessionService:
             else:
                 raise RuntimeError(f"Error responding to notification: {e}")
     
-    async def terminate_session(self, session_id: str) -> bool:
-        """Terminate session and cleanup resources."""
+    async def terminate_session(self, session_id: str) -> Tuple[bool, Optional[str]]:
+        """Terminate session and cleanup resources. Returns (success, worktree_error)."""
         session = self.db.get_session(session_id)
         if not session:
-            return False
+            return False, None
         
         # Kill tmux session
         cmd = ["tmux", "kill-session", "-t", session.tmux_session_name]
@@ -361,22 +361,32 @@ class SessionService:
         except Exception:
             pass
         
-        # Remove worktree (would integrate with worktrees module)
-        await self._remove_worktree(session.worktree_name)
+        # Remove worktree via service, but don't block termination on failure
+        worktree_error: Optional[str] = None
+        try:
+            await self._remove_worktree(session.worktree_name)
+        except Exception as e:
+            worktree_error = str(e)
         
         # Update database
         self.db.update_session_status(session_id, "stopped")
         
-        return True
+        return True, worktree_error
     
     async def _remove_worktree(self, worktree_name: str):
-        """Remove worktree via worktrees module."""
-        # This would integrate with the worktrees module
-        # For now, simulate worktree removal
-        worktree_path = Path.home() / ".tinstar" / "worktrees" / worktree_name
-        if worktree_path.exists():
-            import shutil
-            shutil.rmtree(worktree_path, ignore_errors=True)
+        """Remove worktree via the WorktreeService module. Raises on failure."""
+        # We need the associated project to delete the worktree correctly
+        session = self.db.get_session(worktree_name)  # worktree name equals session id
+        if not session:
+            raise ValueError(f"Session {worktree_name} not found for worktree removal")
+        request = WorktreeDeleteRequest(
+            project=session.project,
+            name=worktree_name,
+            force=True
+        )
+        deleted = self.worktree_service.delete_worktree(request)
+        if not deleted:
+            raise RuntimeError("Failed to delete worktree via WorktreeService")
     
     async def health_check(self, session_id: str) -> bool:
         """Check if session and agent are healthy."""

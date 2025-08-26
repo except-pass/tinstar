@@ -13,7 +13,7 @@ interface MasterUIProps {
 }
 
 export const MasterUI: React.FC<MasterUIProps> = ({
-  showProjectPane = true,
+  showProjectPane = false,
   showAgentPane = true,
   onAgentSelect,
   onProjectSelect,
@@ -22,6 +22,7 @@ export const MasterUI: React.FC<MasterUIProps> = ({
   const [selectedProjectName, setSelectedProjectName] = useState<string>('');
   const [leftPaneWidth, setLeftPaneWidth] = useState<number>(280); // Initial width for project pane
   const [isResizing, setIsResizing] = useState<boolean>(false);
+  const [refreshKey, setRefreshKey] = useState<number>(0);
 
   const handleAgentClick = (sessionId: string) => {
     setSelectedAgentId(sessionId);
@@ -29,6 +30,35 @@ export const MasterUI: React.FC<MasterUIProps> = ({
       onAgentSelect(sessionId);
     }
   };
+
+  // Listen for termination events from DetailsPane to auto-select top agent
+  React.useEffect(() => {
+    const handler: EventListener = async (evt: Event) => {
+      const ce = evt as CustomEvent;
+      const detail = (ce && ce.detail) || {};
+      const type = detail.type;
+      if (type === 'session-terminated') {
+        // Refresh agent list and select the top agent if available
+        try {
+          setSelectedAgentId('');
+          setRefreshKey((k) => k + 1);
+          const res = await fetch('/api/sessions');
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.sessions && data.sessions.length > 0) {
+              const top = data.sessions[0];
+              setSelectedAgentId(top.id);
+              if (onAgentSelect) onAgentSelect(top.id);
+            }
+          }
+        } catch {
+          // ignore fetch errors; user can manually select
+        }
+      }
+    };
+    window.addEventListener('tinstar', handler);
+    return () => window.removeEventListener('tinstar', handler);
+  }, [onAgentSelect]);
 
   const handleProjectClick = (projectName: string) => {
     setSelectedProjectName(projectName);
@@ -93,6 +123,7 @@ export const MasterUI: React.FC<MasterUIProps> = ({
           <AgentPane 
             onAgentClick={handleAgentClick}
             selectedAgentId={selectedAgentId}
+            key={refreshKey}
           />
         </div>
       )}

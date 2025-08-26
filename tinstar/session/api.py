@@ -2,6 +2,7 @@
 HTTP API endpoints for the Tinstar session management system.
 """
 from typing import List, Optional
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import ValidationError
@@ -89,19 +90,22 @@ async def terminate_session(session_id: str):
     """Terminate a session and cleanup resources."""
     try:
         service = SessionService()
-        success = await service.terminate_session(session_id)
-        
+        success, worktree_error = await service.terminate_session(session_id)
         if success:
-            return SessionResponse(
-                success=True,
-                message=f"Session terminated successfully"
-            )
+            msg = "Session terminated successfully"
+            if worktree_error:
+                msg += f" (worktree cleanup error: {worktree_error})"
+            return SessionResponse(success=True, message=msg)
         else:
             raise HTTPException(status_code=404, detail="Session not found")
             
     except HTTPException:
         raise
+    except ValueError as e:
+        # Surface worktree/session errors directly to client
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        # Bubble up worktree removal errors
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -113,11 +117,24 @@ async def peek_session(
     """Get recent terminal output from session."""
     try:
         service = SessionService()
-        peek_result = await service.peek_session(session_id, lines)
-        
-        if not peek_result:
+        # First, verify the session exists
+        session = service.get_session(session_id)
+        if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        
+
+        # Then attempt to capture output
+        peek_result = await service.peek_session(session_id, lines)
+
+        # If no output available yet, return an empty peek payload instead of 404
+        if not peek_result:
+            empty_peek = {
+                "session_id": session_id,
+                "lines": [],
+                "timestamp": datetime.now().isoformat(),
+                "line_count": 0
+            }
+            return {"peek": empty_peek}
+
         return {"peek": peek_result}
         
     except HTTPException:

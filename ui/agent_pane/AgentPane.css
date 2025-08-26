@@ -83,6 +83,108 @@
   padding: 8px;
 }
 
+.project-bucket {
+  margin: 8px 0;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.project-bucket__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.project-bucket__name {
+  font-weight: 600;
+}
+
+.project-bucket__controls button {
+  margin-left: 6px;
+}
+
+.project-bucket__button {
+  background: rgba(255, 255, 255, 0.3);
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+  padding: 4px 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #2E1B0F;
+  transition: all 0.2s;
+  min-width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.project-bucket__button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.5);
+  border-color: rgba(0, 0, 0, 0.3);
+}
+
+.project-bucket__button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.project-bucket__agents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.project-bucket__footer {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.project-bucket__new-agent {
+  font-size: 12px;
+  padding: 8px 12px;
+  background-color: #007bff;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.project-bucket__new-agent:hover:not(:disabled) {
+  background-color: #0056b3;
+}
+
+.project-bucket__new-agent:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.agent-pane .new-project-button {
+  margin: 10px 8px;
+  width: calc(100% - 16px);
+  padding: 10px;
+  background-color: #28a745;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.agent-pane .new-project-button:hover:not(:disabled) {
+  background-color: #218838;
+}
+
+.agent-pane .new-project-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .project-group {
   margin-bottom: 12px;
   border-radius: 8px;

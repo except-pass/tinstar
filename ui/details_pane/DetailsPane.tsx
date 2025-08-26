@@ -28,32 +28,43 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const [todos, setTodos] = useState<TodoEvent[]>([]);
   const [eventStats, setEventStats] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
+  const [terminated, setTerminated] = useState<boolean>(false);
 
   // Fetch session details
   useEffect(() => {
+    if (terminated) return;
     const fetchSession = async () => {
       try {
         const res = await fetch(`/api/sessions/${sessionId}`);
         if (!res.ok) throw new Error('Failed to fetch session');
         const data = await res.json();
-        setSession(data);
+        setSession(data.session || null);
       } catch (err: any) {
         setError(err.message);
       }
     };
     fetchSession();
-  }, [sessionId]);
+  }, [sessionId, terminated]);
 
   // Poll terminal output
   useEffect(() => {
+    if (terminated) {
+      setTerminalLines([]);
+      return;
+    }
     let isMounted = true;
     const fetchPeek = async () => {
       try {
         const res = await fetch(`/api/sessions/${sessionId}/peek?lines=50`);
+        if (res.status === 404) {
+          if (isMounted) setTerminalLines([]);
+          return;
+        }
         if (!res.ok) throw new Error('Failed to fetch terminal output');
-        const text = await res.text();
+        const data = await res.json();
+        const lines: string[] = (data && data.peek && Array.isArray(data.peek.lines)) ? data.peek.lines : [];
         if (isMounted) {
-          setTerminalLines(text.split('\n'));
+          setTerminalLines(lines);
         }
       } catch (err: any) {
         if (isMounted) setError(err.message);
@@ -65,7 +76,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [sessionId]);
+  }, [sessionId, terminated]);
 
   // Fetch todos
   useEffect(() => {
@@ -118,7 +129,25 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
 
   const handleTerminate = async () => {
     try {
-      await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+      if (res.ok) {
+        setTerminated(true);
+        setSession((prev) => prev ? { ...prev, status: 'stopped' } : prev);
+        setTerminalLines(["Session terminated."]);
+        // Notify MasterUI to auto-select next agent
+        window.dispatchEvent(new CustomEvent('tinstar', { detail: { type: 'session-terminated', payload: { sessionId } } }));
+      } else {
+        // Try to parse JSON detail to show worktree removal errors
+        let message = 'Failed to terminate session';
+        try {
+          const errorData = await res.json();
+          message = errorData.detail || errorData.message || message;
+        } catch {
+          const txt = await res.text();
+          if (txt) message = txt;
+        }
+        throw new Error(message);
+      }
     } catch (err: any) {
       setError(err.message);
     }
