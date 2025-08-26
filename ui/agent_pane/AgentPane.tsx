@@ -7,6 +7,9 @@ import { ProjectBucket } from './ProjectBucket';
 import { useEvents } from './hooks/useEvents';
 import { groupSessionsByProject } from './utils';
 import './AgentPane.css';
+import '../project_pane/ProjectPane.css';
+import { ProjectSettingsDialog } from '../project_pane/ProjectSettingsDialog';
+import type { Project as FullProject, ProjectResponse as FullProjectResponse } from '../project_pane/types';
 
 interface AgentPaneProps {
   onAgentClick?: (sessionId: string) => void;
@@ -26,6 +29,8 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
   const [newAgentProject, setNewAgentProject] = useState('');
   const [newAgentPrompt, setNewAgentPrompt] = useState('');
   const [creating, setCreating] = useState(false);
+  const [settingsProject, setSettingsProject] = useState<FullProject | null>(null);
+  const [settingsSaving, setSettingsSaving] = useState(false);
 
   // Update project groups when sessions or projects change
   useEffect(() => {
@@ -98,9 +103,17 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
   const loading = sessionsLoading || projectsLoading;
   const error = sessionsError || projectsError;
 
-  const handleOpenProjectSettings = (projectName: string) => {
-    // Reuse existing Project Pane settings? For now, navigate or emit event.
-    window.dispatchEvent(new CustomEvent('tinstar', { detail: { type: 'open-project-settings', payload: { projectName } } }));
+  const handleOpenProjectSettings = async (projectName: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectName}`);
+      if (!res.ok) throw new Error('Failed to load project');
+      const data: FullProjectResponse = await res.json();
+      if (data && data.project) {
+        setSettingsProject(data.project);
+      }
+    } catch (e) {
+      console.error('Failed to open project settings', e);
+    }
   };
 
   const handleDeleteProject = async (projectName: string) => {
@@ -250,6 +263,23 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {settingsProject && (
+        <ProjectSettingsDialog
+          project={settingsProject}
+          onClose={() => setSettingsProject(null)}
+          onSave={async () => {
+            try {
+              setSettingsSaving(true);
+              await fetchProjects();
+            } finally {
+              setSettingsSaving(false);
+              setSettingsProject(null);
+            }
+          }}
+          saving={settingsSaving}
+        />
       )}
     </div>
   );

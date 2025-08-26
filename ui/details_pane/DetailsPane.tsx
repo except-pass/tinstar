@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AnsiUp } from 'ansi_up';
 import './DetailsPane.css';
 
 interface DetailsPaneProps {
@@ -29,6 +30,8 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const [eventStats, setEventStats] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [terminated, setTerminated] = useState<boolean>(false);
+
+  const ansiUp = useMemo(() => new (AnsiUp as any)(), []);
 
   // Fetch session details
   useEffect(() => {
@@ -82,7 +85,10 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   useEffect(() => {
     const fetchTodos = async () => {
       try {
-        const res = await fetch(`/api/events/todos?session_id=${sessionId}`);
+        const query = session?.name
+          ? `/api/events/todos?tinstar_term_name=${encodeURIComponent(session.name)}`
+          : `/api/events/todos?session_id=${sessionId}`;
+        const res = await fetch(query);
         if (res.ok) {
           const data = await res.json();
           setTodos(data);
@@ -92,13 +98,16 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
       }
     };
     fetchTodos();
-  }, [sessionId]);
+  }, [sessionId, session?.name]);
 
   // Fetch event stats
   useEffect(() => {
     const fetchEvents = async () => {
       try {
-        const res = await fetch(`/api/events?session_id=${sessionId}`);
+        const query = session?.name
+          ? `/api/events?tinstar_term_name=${encodeURIComponent(session.name)}`
+          : `/api/events?session_id=${sessionId}`;
+        const res = await fetch(query);
         if (res.ok) {
           const data: Event[] = await res.json();
           const counts: Record<string, number> = {};
@@ -112,7 +121,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
       }
     };
     fetchEvents();
-  }, [sessionId]);
+  }, [sessionId, session?.name]);
 
   const handleSend = async () => {
     try {
@@ -183,15 +192,20 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
         <h3>Terminal Output</h3>
         <pre className="terminal-output">
           {terminalLines.map((line, idx) => (
-            <div key={idx}>{line}</div>
+            <div key={idx} dangerouslySetInnerHTML={{ __html: ansiUp.ansi_to_html(line) }} />
           ))}
         </pre>
         <div className="command-input">
-          <input
-            type="text"
+          <textarea
             value={commandText}
             onChange={(e) => setCommandText(e.target.value)}
-            placeholder="Send command"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder="Send command (Enter to send, Shift+Enter for newline)"
           />
           <button onClick={handleSend}>Send</button>
         </div>

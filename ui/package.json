@@ -19,7 +19,8 @@
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-arborist": "^3.4.0"
+    "react-arborist": "^3.4.0",
+    "ansi_up": "^6.0.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.40.0",

@@ -26,7 +26,9 @@ export const SmallAgentWidget: React.FC<SmallAgentWidgetProps> = ({
   useEffect(() => {
     const updateStatus = async () => {
       try {
-        const eventStatus: EventStatus = await getEventStatus(session.id);
+        // Prefer terminal name for accuracy when available
+        const termName = (session as any).name || '';
+        const eventStatus: EventStatus = await getEventStatus(termName || session.id, !!termName);
         const status = getSessionStatus(session, eventStatus);
         setSessionStatus(status);
       } catch (err) {

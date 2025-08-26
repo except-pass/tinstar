@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { Event, EventStatus } from '../types';
 
 interface UseEventsReturn {
-  getEventStatus: (sessionId: string) => Promise<EventStatus>;
+  getEventStatus: (termNameOrSessionId: string, useTermName?: boolean) => Promise<EventStatus>;
   eventsLoading: boolean;
   eventsError: string | null;
   connectWebSocket: () => void;
@@ -16,21 +16,24 @@ export const useEvents = (onEventReceived?: (event: any) => void): UseEventsRetu
   const [isWebSocketConnected, setIsWebSocketConnected] = useState(false);
   const websocketRef = useRef<WebSocket | null>(null);
 
-  const getEventStatus = useCallback(async (sessionId: string): Promise<EventStatus> => {
+  const getEventStatus = useCallback(async (termNameOrSessionId: string, useTermName: boolean = true): Promise<EventStatus> => {
     try {
       setEventsLoading(true);
       setEventsError(null);
       
-      const response = await fetch(`/api/events?session_id=${sessionId}&limit=50`);
+      const query = useTermName 
+        ? `/api/events?tinstar_term_name=${encodeURIComponent(termNameOrSessionId)}`
+        : `/api/events?session_id=${encodeURIComponent(termNameOrSessionId)}`;
+      const response = await fetch(query);
       if (!response.ok) {
         throw new Error(`Failed to fetch events: ${response.statusText}`);
       }
       
       const events: Event[] = await response.json();
-      
-      const hasNotifyEvent = events.some(e => e.hook_event_name === 'notification');
+      // Events are returned ascending by timestamp; use the last item as most recent
+      const hasNotifyEvent = events.some(e => e.hook_event_name === 'Notification');
       const hasStopEvent = events.some(e => e.hook_event_name === 'Stop');
-      const lastEventTime = events.length > 0 ? new Date(events[0].timestamp) : new Date(0);
+      const lastEventTime = events.length > 0 ? new Date(events[events.length - 1].timestamp) : new Date(0);
       
       return { hasNotifyEvent, hasStopEvent, lastEventTime };
     } catch (err) {

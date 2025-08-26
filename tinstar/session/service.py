@@ -265,18 +265,29 @@ class SessionService:
         # Update last activity
         self.db.update_session_activity(session_id)
         
-        # Send text to tmux session
-        cmd = ["tmux", "send-keys", "-t", session.tmux_session_name, text, "Enter"]
-        
+        # Send text literally, then press Enter
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
+            send_literal_cmd = [
+                "tmux", "send-keys", "-t", session.tmux_session_name, "-l", text
+            ]
+            process1 = await asyncio.create_subprocess_exec(
+                *send_literal_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
-            await process.wait()
-            return process.returncode == 0
+            await process1.wait()
+
+            send_enter_cmd = [
+                "tmux", "send-keys", "-t", session.tmux_session_name, "Enter"
+            ]
+            process2 = await asyncio.create_subprocess_exec(
+                *send_enter_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await process2.wait()
+
+            return process1.returncode == 0 and process2.returncode == 0
         except Exception:
             return False
     
