@@ -138,6 +138,10 @@ export const ProjectPane: React.FC<ProjectPaneProps> = ({ className }) => {
 
   return (
     <div className={`project-pane ${className || ''}`}>
+      <div className="project-pane-header">
+        <h3>Projects</h3>
+      </div>
+      
       {state.loading && (
         <div className="project-pane__loading">Loading projects...</div>
       )}

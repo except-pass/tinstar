@@ -126,51 +126,107 @@ const openInEditor = async (filePath: string, sessionId?: string): Promise<void>
   }
 };
 
+const getFileIcon = (fileName: string): string => {
+  const extension = fileName.split('.').pop()?.toLowerCase();
+  switch (extension) {
+    case 'tsx':
+    case 'ts':
+      return '⚛️';
+    case 'js':
+    case 'jsx':
+      return '📄';
+    case 'css':
+    case 'scss':
+      return '🎨';
+    case 'html':
+      return '🌐';
+    case 'json':
+      return '📋';
+    case 'md':
+      return '📝';
+    case 'py':
+      return '🐍';
+    case 'java':
+      return '☕';
+    case 'cpp':
+    case 'c':
+      return '⚙️';
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'gif':
+    case 'svg':
+      return '🖼️';
+    default:
+      return '📄';
+  }
+};
+
 const FileTreeNode: React.FC<{ node: NodeApi<TreeNode>; onFileOpen?: (path: string) => void }> = ({ node, onFileOpen }) => {
-  const handleOpenFile = () => {
+  const handleOpenFile = (e: React.MouseEvent) => {
+    e.stopPropagation();
     if (node.data.type === 'file' && onFileOpen) {
       onFileOpen(node.data.path);
     }
   };
 
+  const handleEditClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (node.data.type === 'file' && onFileOpen) {
+      onFileOpen(node.data.path);
+    }
+  };
+
+  const handleToggleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    node.toggle();
+  };
+
   return (
-    <div 
-      className="file-entry"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        padding: '2px 0',
-        cursor: node.data.type === 'file' ? 'pointer' : 'default'
-      }}
-      onClick={node.data.type === 'file' ? handleOpenFile : undefined}
-    >
-      <span className="filename" style={{ flex: 1 }}>
-        {node.data.name}
-      </span>
-      <span className="stats" style={{ 
-        fontSize: '0.8em', 
-        color: '#666',
-        marginRight: '8px'
-      }}>
-        {formatStats(node.data.stats)}
-      </span>
-      {node.data.type === 'file' && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            handleOpenFile();
-          }}
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            fontSize: '14px'
-          }}
-          title="Open in editor"
+    <div className="file-entry">
+      <div className="file-entry-content">
+        {/* Expander for directories */}
+        {node.data.type === 'directory' && (
+          <button 
+            className="expander-button"
+            onClick={handleToggleClick}
+          >
+            {node.isOpen ? '▼' : '▶'}
+          </button>
+        )}
+        {node.data.type === 'file' && (
+          <div className="expander-placeholder"></div>
+        )}
+        
+        {/* Icon */}
+        <span className="file-icon">
+          {node.data.type === 'directory' ? '📁' : getFileIcon(node.data.name)}
+        </span>
+        
+        {/* Name */}
+        <span 
+          className="filename" 
+          onClick={node.data.type === 'file' ? handleOpenFile : handleToggleClick}
         >
-          ✏️
-        </button>
-      )}
+          {node.data.name}
+        </span>
+        
+        {/* Stats */}
+        <span className="stats">
+          {formatStats(node.data.stats)}
+        </span>
+        
+        {/* Edit button for files */}
+        {node.data.type === 'file' && (
+          <button 
+            className="edit-button"
+            onClick={handleEditClick}
+            title={`Open ${node.data.name} in editor`}
+          >
+            ✏️
+          </button>
+        )}
+      </div>
     </div>
   );
 };

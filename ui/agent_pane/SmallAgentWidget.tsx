@@ -1,0 +1,86 @@
+import React, { useState, useEffect } from 'react';
+import { Session, SessionStatus, EventStatus } from './types';
+import { getSessionStatus, getStatusIcon, getStatusEmoji } from './utils';
+import { useEvents } from './hooks/useEvents';
+
+interface SmallAgentWidgetProps {
+  session: Session;
+  onAgentClick?: (sessionId: string) => void;
+  isSelected?: boolean;
+}
+
+export const SmallAgentWidget: React.FC<SmallAgentWidgetProps> = ({
+  session,
+  onAgentClick,
+  isSelected = false,
+}) => {
+  const { getEventStatus } = useEvents();
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>({
+    id: session.id,
+    needsAttention: false,
+    statusText: 'Loading...',
+    statusColor: 'gray'
+  });
+
+  // Update status based on events
+  useEffect(() => {
+    const updateStatus = async () => {
+      try {
+        const eventStatus: EventStatus = await getEventStatus(session.id);
+        const status = getSessionStatus(session, eventStatus);
+        setSessionStatus(status);
+      } catch (err) {
+        // Fallback to simple status based on session data
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const lastActivity = new Date(session.last_activity);
+        
+        if (lastActivity < fiveMinutesAgo) {
+          setSessionStatus({
+            id: session.id,
+            needsAttention: false,
+            statusText: 'Idle',
+            statusColor: 'gray'
+          });
+        } else {
+          setSessionStatus({
+            id: session.id,
+            needsAttention: false,
+            statusText: 'Active',
+            statusColor: 'green'
+          });
+        }
+      }
+    };
+
+    updateStatus();
+  }, [session.id, session.last_activity, getEventStatus]);
+
+  const handleAgentClick = () => {
+    if (onAgentClick) {
+      onAgentClick(session.id);
+    }
+  };
+
+  const statusIcon = getStatusIcon(sessionStatus.statusColor);
+  const statusEmoji = getStatusEmoji(sessionStatus.statusColor);
+
+  return (
+    <div className={`small-agent-widget ${isSelected ? 'selected' : ''}`}>
+      <div 
+        className="agent-info"
+        onClick={handleAgentClick}
+        title={`${session.name} - Last activity: ${new Date(session.last_activity).toLocaleString()}`}
+      >
+        <div className="agent-header">
+          <span className="agent-icon">{statusIcon}</span>
+          <span className="agent-name">{session.name}</span>
+        </div>
+        <div className="project-name">{session.project}</div>
+        <div className="status-indicator">
+          <span className="status-emoji">{statusEmoji}</span>
+          <span className="status-text">{sessionStatus.statusText}</span>
+        </div>
+      </div>
+    </div>
+  );
+};

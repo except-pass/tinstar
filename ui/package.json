@@ -11,7 +11,10 @@
     "test:ui": "playwright test --ui",
     "test:debug": "playwright test --debug",
     "typecheck": "echo 'TypeScript check: No major type errors found in FileTree.tsx'",
-    "lint": "echo 'Linting complete - no linter configured yet'"
+    "lint": "echo 'Linting complete - no linter configured yet'",
+    "master": "vite --open /master.html",
+    "demo": "vite --open /demo-page.html", 
+    "agent-pane": "vite --open /agent_pane/test-page.html"
   },
   "dependencies": {
     "react": "^18.2.0",

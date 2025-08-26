@@ -130,34 +130,114 @@ class FileListService:
         # The '..' check is done in _normalize_path which raises ValueError
     
     def _discover_files(self, project_path: Path) -> List[FileStats]:
-        """Discover all files in the project using filesystem traversal."""
+        """Discover files in the project using git to respect .gitignore."""
+        files = []
+        file_paths = set()
+        
+        try:
+            # Get tracked files
+            result = subprocess.run(
+                ['git', 'ls-files'],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line.strip():
+                        file_paths.add(line.strip())
+            
+            # Get untracked files (excluding ignored ones)
+            result = subprocess.run(
+                ['git', 'ls-files', '--others', '--exclude-standard'],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line.strip():
+                        file_paths.add(line.strip())
+        
+        except (subprocess.SubprocessError, subprocess.TimeoutExpired):
+            # Fallback to filesystem traversal with basic exclusions if git fails
+            return self._discover_files_fallback(project_path)
+        
+        # Convert paths to FileStats objects
+        file_count = 0
+        for rel_path in file_paths:
+            file_count += 1
+            if file_count > 5000:  # Safety limit
+                break
+                
+            file_path = project_path / rel_path
+            
+            # Skip if file doesn't exist (might be deleted)
+            if not file_path.exists():
+                continue
+                
+            # Skip symlinks
+            if file_path.is_symlink():
+                # Include symlinks as files but don't follow them
+                stat_info = file_path.lstat()  # lstat doesn't follow symlinks
+                
+                files.append(FileStats(
+                    path=rel_path,
+                    size=stat_info.st_size,
+                    modified=datetime.fromtimestamp(stat_info.st_mtime),
+                    stats={}  # No git stats for symlinks
+                ))
+            else:
+                stat_info = file_path.stat()
+                
+                # Get git statistics
+                git_stats = self._get_git_stats(project_path, rel_path)
+                
+                files.append(FileStats(
+                    path=rel_path,
+                    size=stat_info.st_size,
+                    modified=datetime.fromtimestamp(stat_info.st_mtime),
+                    stats=git_stats
+                ))
+        
+        return files
+    
+    def _discover_files_fallback(self, project_path: Path) -> List[FileStats]:
+        """Fallback method for file discovery when git is not available."""
         files = []
         file_count = 0
         
+        # Basic exclusions for common ignored directories
+        excluded_dirs = {'.git', 'node_modules', 'venv', '__pycache__', '.pytest_cache', 
+                        'build', 'dist', '.mypy_cache', '.tox', 'coverage_html', 
+                        '.coverage', 'htmlcov', '.venv', 'env'}
+        
         for root, dirs, filenames in os.walk(project_path):
-            # Don't follow symlinks and skip .git directory
-            dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d)) and d != '.git']
+            # Filter out excluded directories
+            dirs[:] = [d for d in dirs if d not in excluded_dirs and not os.path.islink(os.path.join(root, d))]
             
-            if file_count > 5000:  # Safety limit - check before inner loop
+            if file_count > 5000:  # Safety limit
                 break
                 
             for filename in filenames:
                 file_count += 1
                 if file_count > 5000:  # Safety limit
                     break
+                    
                 file_path = Path(root) / filename
                 
                 # Skip symlinks
                 if file_path.is_symlink():
-                    # Include symlinks as files but don't follow them
                     rel_path = file_path.relative_to(project_path).as_posix()
-                    stat_info = file_path.lstat()  # lstat doesn't follow symlinks
+                    stat_info = file_path.lstat()
                     
                     files.append(FileStats(
                         path=rel_path,
                         size=stat_info.st_size,
                         modified=datetime.fromtimestamp(stat_info.st_mtime),
-                        stats={}  # No git stats for symlinks
+                        stats={}
                     ))
                 else:
                     rel_path = file_path.relative_to(project_path).as_posix()
@@ -190,7 +270,12 @@ class FileListService:
             is_tracked = bool(result.stdout.strip())
             
             if is_tracked:
-                # Get diff stats for tracked files
+                # Check if file is binary first
+                file_path = project_path / rel_path
+                if self._is_binary_file(file_path):
+                    return {'is_tracked': True, 'binary': True}
+                
+                # Get diff stats for tracked text files only
                 result = subprocess.run(
                     ['git', 'diff', '--numstat', 'HEAD', '--', rel_path],
                     cwd=project_path,
@@ -204,8 +289,12 @@ class FileListService:
                     lines = result.stdout.strip().split('\t')
                     if len(lines) >= 2:
                         try:
-                            added = int(lines[0]) if lines[0] != '-' else 0
-                            removed = int(lines[1]) if lines[1] != '-' else 0
+                            # If git reports '-' it usually means binary file
+                            if lines[0] == '-' or lines[1] == '-':
+                                return {'is_tracked': True, 'binary': True}
+                            
+                            added = int(lines[0])
+                            removed = int(lines[1])
                             return {
                                 'lines_added': added,
                                 'lines_removed': removed,
