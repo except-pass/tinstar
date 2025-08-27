@@ -22,10 +22,19 @@ def get_service() -> SessionService:
     return SessionService()
 
 
-def _find_matching_sessions(service: SessionService, partial_id: str) -> List[str]:
-    """Find session IDs that match the partial ID."""
+def _find_matching_sessions(service: SessionService, partial_id_or_name: str) -> List[str]:
+    """Find session IDs that match the partial ID or friendly name."""
     sessions = service.list_sessions()
-    matches = [s.id for s in sessions if s.id.startswith(partial_id)]
+    matches = []
+    
+    for session in sessions:
+        # Match partial session ID (case-insensitive)
+        if session.id.lower().startswith(partial_id_or_name.lower()):
+            matches.append(session.id)
+        # Match friendly name (case-insensitive, partial match)
+        elif partial_id_or_name.lower() in session.name.lower():
+            matches.append(session.id)
+    
     return matches
 
 
@@ -164,29 +173,29 @@ def peek_session(
 
 @app.command("send")
 def send_to_session(
-    partial_session_id: str = typer.Argument(..., help="Partial or full session ID"),
+    session_identifier: str = typer.Argument(..., help="Partial session ID or friendly name"),
     text: str = typer.Argument(..., help="Text to send to session")
 ):
-    """Send text to session terminal."""
+    """Send text to session terminal using partial ID or friendly name."""
     try:
         service = get_service()
         
         # Find matching sessions
-        matches = _find_matching_sessions(service, partial_session_id)
+        matches = _find_matching_sessions(service, session_identifier)
         
         if not matches:
-            console.print(f"❌ No sessions found matching '{partial_session_id}'", style="red")
+            console.print(f"❌ No sessions found matching '{session_identifier}'", style="red")
             console.print("💡 Use 'tinstar session list' to see available sessions", style="dim")
             raise typer.Exit(1)
         
         if len(matches) > 1:
-            console.print(f"❌ Multiple sessions match '{partial_session_id}':", style="red")
+            console.print(f"❌ Multiple sessions match '{session_identifier}':", style="red")
             for match in matches:
                 session = service.get_session(match)
                 if session:
                     short_id = match[:8] + "..."
                     console.print(f"  {short_id} - {session.name} ({session.project})", style="yellow")
-            console.print("💡 Use a longer partial ID to be more specific", style="dim")
+            console.print("💡 Use a longer partial ID or more specific name to be more specific", style="dim")
             raise typer.Exit(1)
         
         # Get the matched session ID
@@ -208,29 +217,29 @@ def send_to_session(
 
 @app.command("stop")
 def terminate_session(
-    partial_session_id: str = typer.Argument(..., help="Partial or full session ID"),
+    session_identifier: str = typer.Argument(..., help="Partial session ID or friendly name"),
     confirm: bool = typer.Option(False, "--confirm", help="Skip confirmation prompt")
 ):
-    """Terminate a session."""
+    """Terminate a session using partial ID or friendly name."""
     try:
         service = get_service()
         
         # Find matching sessions
-        matches = _find_matching_sessions(service, partial_session_id)
+        matches = _find_matching_sessions(service, session_identifier)
         
         if not matches:
-            console.print(f"❌ No sessions found matching '{partial_session_id}'", style="red")
+            console.print(f"❌ No sessions found matching '{session_identifier}'", style="red")
             console.print("💡 Use 'tinstar session list' to see available sessions", style="dim")
             raise typer.Exit(1)
         
         if len(matches) > 1:
-            console.print(f"❌ Multiple sessions match '{partial_session_id}':", style="red")
+            console.print(f"❌ Multiple sessions match '{session_identifier}':", style="red")
             for match in matches:
                 session = service.get_session(match)
                 if session:
                     short_id = match[:8] + "..."
                     console.print(f"  {short_id} - {session.name} ({session.project})", style="yellow")
-            console.print("💡 Use a longer partial ID to be more specific", style="dim")
+            console.print("💡 Use a longer partial ID or more specific name to be more specific", style="dim")
             raise typer.Exit(1)
         
         # Get the matched session
@@ -412,29 +421,29 @@ def show_session_info(
 
 @app.command("attach")
 def attach_session(
-    partial_session_id: str = typer.Argument(..., help="Partial or full session ID to attach to"),
+    session_identifier: str = typer.Argument(..., help="Partial session ID or friendly name to attach to"),
     read_only: bool = typer.Option(False, "--read-only", "-r", help="Attach in read-only mode")
 ):
-    """Attach to an existing session terminal."""
+    """Attach to an existing session terminal using partial ID or friendly name."""
     try:
         service = get_service()
         
         # Find matching sessions
-        matches = _find_matching_sessions(service, partial_session_id)
+        matches = _find_matching_sessions(service, session_identifier)
         
         if not matches:
-            console.print(f"❌ No sessions found matching '{partial_session_id}'", style="red")
+            console.print(f"❌ No sessions found matching '{session_identifier}'", style="red")
             console.print("💡 Use 'tinstar session list' to see available sessions", style="dim")
             raise typer.Exit(1)
         
         if len(matches) > 1:
-            console.print(f"❌ Multiple sessions match '{partial_session_id}':", style="red")
+            console.print(f"❌ Multiple sessions match '{session_identifier}':", style="red")
             for match in matches:
                 session = service.get_session(match)
                 if session:
                     short_id = match[:8] + "..."
                     console.print(f"  {short_id} - {session.name} ({session.project})", style="yellow")
-            console.print("💡 Use a longer partial ID to be more specific", style="dim")
+            console.print("💡 Use a longer partial ID or more specific name to be more specific", style="dim")
             raise typer.Exit(1)
         
         # Get the matched session

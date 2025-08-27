@@ -4,14 +4,14 @@ export const groupSessionsByProject = (
   sessions: Session[], 
   projects: Project[]
 ): ProjectGroup[] => {
-  const projectMap = new Map<string, Session[]>();
+  const sessionMap = new Map<string, Session[]>();
   
   // Group sessions by project
   sessions.forEach(session => {
-    if (!projectMap.has(session.project)) {
-      projectMap.set(session.project, []);
+    if (!sessionMap.has(session.project)) {
+      sessionMap.set(session.project, []);
     }
-    projectMap.get(session.project)!.push(session);
+    sessionMap.get(session.project)!.push(session);
   });
   
   // Create project groups with consistent color assignment
@@ -23,11 +23,12 @@ export const groupSessionsByProject = (
     projectColorMap.set(project.name, index % PROJECT_COLORS.length);
   });
   
-  return Array.from(projectMap.entries()).map(([projectName, sessions]) => ({
-    projectName,
-    sessions,
-    colorIndex: projectColorMap.get(projectName) || 0,
-    backgroundColor: PROJECT_COLORS[projectColorMap.get(projectName) || 0]
+  // Return all projects, even those without active sessions
+  return sortedProjects.map(project => ({
+    projectName: project.name,
+    sessions: sessionMap.get(project.name) || [],
+    colorIndex: projectColorMap.get(project.name) || 0,
+    backgroundColor: PROJECT_COLORS[projectColorMap.get(project.name) || 0]
   }));
 };
 
