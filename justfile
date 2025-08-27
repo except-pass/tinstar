@@ -8,9 +8,9 @@ start:
     # Kill any existing servers first
     just stop
     
-    # Start backend server in background with nohup on port 3003 (avoiding Docker test container on 3002)
+    # Start backend server in background on standard port 3002
     echo "Starting backend server..."
-    nohup tinstar server --port 3003 --debug > .backend.log 2>&1 &
+    nohup tinstar server --port 3002 --debug > .backend.log 2>&1 &
     BACKEND_PID=$!
     echo $BACKEND_PID > .backend.pid
     
@@ -42,7 +42,7 @@ start:
     echo "Frontend PID: $FRONTEND_PID"
     echo ""
     echo "URLs:"
-    echo "  Backend:  http://localhost:3003"
+    echo "  Backend:  http://localhost:3002"
     echo "  Frontend: http://localhost:3001 (check .frontend.log for actual port)"
     echo ""
     echo "Logs:"

@@ -34,13 +34,13 @@ export const FileList: React.FC<FileListProps> = ({ sessionId, project }) => {
   const [error, setError] = useState<string | null>(null);
 
   const fetchFileTree = async () => {
-    if (!project) return;
+    if (!sessionId) return;
     
     setLoading(true);
     setError(null);
     
     try {
-      const response = await fetch(`/api/filelist/${encodeURIComponent(project)}/tree`, {
+      const response = await fetch(`/api/filelist/worktree/${sessionId}/tree`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -66,7 +66,7 @@ export const FileList: React.FC<FileListProps> = ({ sessionId, project }) => {
 
   useEffect(() => {
     fetchFileTree();
-  }, [project, expandedDirs]);
+  }, [sessionId, expandedDirs]);
 
   const toggleDirectory = (dirPath: string) => {
     const newExpanded = new Set(expandedDirs);
@@ -108,7 +108,7 @@ export const FileList: React.FC<FileListProps> = ({ sessionId, project }) => {
     // Directory
     const isExpanded = expandedDirs.has(item.path);
     const hasChildren = item.children && item.children.length > 0;
-    const dirName = item.path === '' ? project : item.path.split('/').pop();
+    const dirName = item.path === '' ? 'Worktree' : item.path.split('/').pop();
     
     return (
       <div key={item.path} className="directory-item">

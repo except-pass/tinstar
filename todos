@@ -7,3 +7,11 @@ do not show idle as a default.  show "no data"
 add the edit button the the detail pane filelist
 
 project holder should not go away when the last agent is closed.
+
+enter should send the prompt on create agent dialog.  escape should close install
+
+condense the agent widget.  dont show the status light twice.  
+
+make todos look more like they did in ctrltower.
+
+filelist shows line change number in the  project dir, not the worktree dir.

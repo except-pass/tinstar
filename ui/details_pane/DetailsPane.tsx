@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnsiUp } from 'ansi_up';
 import './DetailsPane.css';
 import FileList from './FileList';
+import { ControlBoard } from '../control_board';
 
 interface DetailsPaneProps {
   sessionId: string;
@@ -30,7 +31,27 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const [todos, setTodos] = useState<TodoEvent[]>([]);
   const [eventStats, setEventStats] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [terminated, setTerminated] = useState<boolean>(false);
+
+  const terminalRef = useRef<HTMLPreElement | null>(null);
+  const hasAutoScrolled = useRef(false);
+  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error') => {
+    setToast({ message, type });
+    
+    // Clear existing timeout
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    
+    // Auto-hide after 4 seconds
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimeoutRef.current = null;
+    }, 4000);
+  };
 
   const ansiUp = useMemo(() => {
     const ansi = new (AnsiUp as any)();
@@ -85,6 +106,19 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
       clearInterval(interval);
     };
   }, [sessionId, terminated]);
+
+  // On first load of terminal lines, scroll to bottom so newest output is visible
+  useEffect(() => {
+    if (!hasAutoScrolled.current && terminalLines.length > 0) {
+      hasAutoScrolled.current = true;
+      requestAnimationFrame(() => {
+        const el = terminalRef.current;
+        if (el) {
+          el.scrollTop = el.scrollHeight;
+        }
+      });
+    }
+  }, [terminalLines]);
 
   // Fetch todos
   useEffect(() => {
@@ -201,19 +235,33 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
       });
       if (res.ok) {
         const data = await res.json();
-        setError(`Merge session created: ${data.session_name}. Use 'tmux attach -t ${data.session_name}' to connect.`);
+        showToast(data.message + (data.details ? `\n${data.details}` : ''), 'success');
       } else {
         const errorData = await res.json();
-        throw new Error(errorData.detail || 'Failed to create merge session');
+        throw new Error(errorData.detail || 'Failed to merge worktree');
       }
     } catch (err: any) {
-      setError(err.message);
+      showToast(err.message, 'error');
     }
   };
 
   return (
     <div className="details-pane content-section">
       {error && <div className="error">{error}</div>}
+      {toast && (
+        <div className={`toast toast-${toast.type}`}>
+          <div className="toast-content">
+            {toast.message}
+            <button 
+              className="toast-close" 
+              onClick={() => setToast(null)}
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
       {session ? (
         <div className="session-info">
           <h2>{session.name}</h2>
@@ -230,7 +278,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
         <div className="details-main">
           <div className="terminal-section">
             <h3>Terminal Output</h3>
-            <pre className="terminal-output">
+            <pre className="terminal-output" ref={terminalRef}>
               {terminalLines.map((line, idx) => (
                 <div key={idx} dangerouslySetInnerHTML={{ __html: ansiUp.ansi_to_html(line) }} />
               ))}
@@ -286,6 +334,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
         </div>
 
         <div className="details-sidebar">
+          <ControlBoard sessionId={sessionId} />
           {session && (
             <FileList sessionId={sessionId} project={session.project} />
           )}

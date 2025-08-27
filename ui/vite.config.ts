@@ -6,8 +6,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        main: 'index.html',
-        test: 'test-page.html'
+        main: 'index.html'
       }
     }
   },
@@ -15,11 +14,11 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api/filelist': {
-        target: 'http://localhost:3003',
+        target: 'http://localhost:3002',
         changeOrigin: true,
       },
       '/api': {
-        target: 'http://localhost:3003',
+        target: 'http://localhost:3002',
         changeOrigin: true,
       },
     },

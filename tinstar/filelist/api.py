@@ -91,3 +91,51 @@ def get_file_tree(project_name: str, request: FileTreeRequest) -> FileTreeRespon
     except Exception as e:
         # Internal server error
         raise HTTPException(status_code=500, detail=f'Internal server error: {str(e)}')
+
+
+@router.post('/worktree/{session_id}/tree')
+def get_worktree_file_tree(session_id: str, request: FileTreeRequest) -> FileTreeResponse:
+    """Get directory tree with file statistics for a session's worktree.
+    
+    Args:
+        session_id: ID of the session
+        request: Request body containing open_dirs list
+        
+    Returns:
+        Directory tree with statistics from the session's worktree
+        
+    Raises:
+        HTTPException: For various error conditions
+    """
+    try:
+        # Get session to retrieve worktree path
+        from ..session.service import SessionService
+        session_service = SessionService()
+        session = session_service.get_session(session_id)
+        
+        if not session:
+            raise HTTPException(status_code=404, detail=f'Session not found: {session_id}')
+        
+        worktree_path = Path(session.worktree_path)
+        
+        if not worktree_path.exists():
+            raise HTTPException(status_code=404, detail=f'Worktree path not found: {session.worktree_path}')
+        
+        # Create service and get tree
+        service = FileListService()
+        tree = service.get_tree(worktree_path, request.open_dirs)
+        
+        # Serialize and return
+        return FileTreeResponse(tree=serialize_node(tree))
+        
+    except ValueError as e:
+        # Invalid paths or other validation errors
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    except FileNotFoundError as e:
+        # Worktree path doesn't exist
+        raise HTTPException(status_code=404, detail=str(e))
+    
+    except Exception as e:
+        # Internal server error
+        raise HTTPException(status_code=500, detail=f'Internal server error: {str(e)}')

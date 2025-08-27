@@ -265,31 +265,33 @@ async def create_merge_session(session_id: str):
         # Create unique tmux session name for merge
         merge_session_name = f"merge-{session.project}-{session_id[:8]}"
         
-        # Get worktree branch name from the session's worktree name
-        worktree_branch = session.worktree_name
+        # Get worktree branch name - it's prefixed with 'worktree/'
+        worktree_branch = f"worktree/{session.worktree_name}"
         
         import subprocess
         
-        # Create new tmux session in project directory
-        cmd = [
-            "tmux", "new-session", "-d", "-s", merge_session_name,
-            "-c", project.path,
-            f"git merge {worktree_branch}"
-        ]
+        # Run the merge directly and capture output, then clean up
+        merge_cmd = ["git", "merge", worktree_branch]
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Run merge in project directory
+        merge_result = subprocess.run(
+            merge_cmd, 
+            cwd=project.path,
+            capture_output=True, 
+            text=True
+        )
         
-        if result.returncode == 0:
+        if merge_result.returncode == 0:
             return {
                 "success": True,
-                "session_name": merge_session_name,
-                "message": f"Merge session '{merge_session_name}' created in {project.path}",
+                "message": f"Successfully merged worktree '{worktree_branch}' into main branch",
+                "details": merge_result.stdout,
                 "command": f"git merge {worktree_branch}"
             }
         else:
             raise HTTPException(
-                status_code=500, 
-                detail=f"Failed to create merge session: {result.stderr}"
+                status_code=400, 
+                detail=f"Merge failed: {merge_result.stderr or merge_result.stdout}"
             )
             
     except HTTPException:

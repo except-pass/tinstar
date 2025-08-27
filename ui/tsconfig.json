@@ -17,6 +17,6 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["vite.config.ts"],
+  "exclude": ["vite.config.ts", "playwright.container.config.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
