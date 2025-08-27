@@ -3,6 +3,29 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  height: 100%;
+}
+
+.details-content {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.details-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.details-sidebar {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .session-info h2 {
@@ -102,3 +125,102 @@
 .terminal-output .ansi-dim { opacity: 0.7; }
 .terminal-output .ansi-italic { font-style: italic; }
 .terminal-output .ansi-underline { text-decoration: underline; }
+
+/* File List Styles */
+.file-list {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fafafa;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.file-list h4 {
+  margin: 0 0 8px 0;
+  padding: 8px 12px;
+  background: #f0f0f0;
+  border-bottom: 1px solid #ddd;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.file-tree {
+  padding: 4px 0;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 13px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  cursor: pointer;
+}
+
+.file-item:hover {
+  background: #e8e8e8;
+}
+
+.directory-item {
+  font-size: 13px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+}
+
+.directory-header {
+  display: flex;
+  align-items: center;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.directory-header:hover {
+  background: #e8e8e8;
+}
+
+.directory-toggle {
+  width: 14px;
+  text-align: center;
+  margin-right: 4px;
+  font-size: 10px;
+}
+
+.file-icon,
+.directory-icon {
+  margin-right: 6px;
+  font-size: 12px;
+}
+
+.file-name,
+.directory-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-stats {
+  margin-left: 8px;
+  font-size: 11px;
+}
+
+.file-stats .added {
+  color: #28a745;
+  margin-right: 4px;
+}
+
+.file-stats .removed {
+  color: #dc3545;
+}
+
+.file-list-loading,
+.file-list-error,
+.file-list-empty {
+  padding: 16px;
+  text-align: center;
+  color: #666;
+  font-style: italic;
+}
+
+.file-list-error {
+  color: #a04020;
+}

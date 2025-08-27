@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnsiUp } from 'ansi_up';
 import './DetailsPane.css';
+import FileList from './FileList';
 
 interface DetailsPaneProps {
   sessionId: string;
@@ -192,58 +193,68 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
         <p>Loading session...</p>
       )}
 
-      <div className="terminal-section">
-        <h3>Terminal Output</h3>
-        <pre className="terminal-output">
-          {terminalLines.map((line, idx) => (
-            <div key={idx} dangerouslySetInnerHTML={{ __html: ansiUp.ansi_to_html(line) }} />
-          ))}
-        </pre>
-        <div className="command-input">
-          <textarea
-            value={commandText}
-            onChange={(e) => setCommandText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Send command (Enter to send, Shift+Enter for newline)"
-          />
-          <button onClick={handleSend}>Send</button>
+      <div className="details-content">
+        <div className="details-main">
+          <div className="terminal-section">
+            <h3>Terminal Output</h3>
+            <pre className="terminal-output">
+              {terminalLines.map((line, idx) => (
+                <div key={idx} dangerouslySetInnerHTML={{ __html: ansiUp.ansi_to_html(line) }} />
+              ))}
+            </pre>
+            <div className="command-input">
+              <textarea
+                value={commandText}
+                onChange={(e) => setCommandText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                placeholder="Send command (Enter to send, Shift+Enter for newline)"
+              />
+              <button onClick={handleSend}>Send</button>
+            </div>
+          </div>
+
+          <div className="actions">
+            <button onClick={handleTerminate} className="danger">Terminate Session</button>
+            <button onClick={handleDeleteWorktree}>Delete Worktree</button>
+          </div>
+
+          <div className="todos-section">
+            <h3>Todos</h3>
+            {todos.length ? (
+              <ul>
+                {todos.map((todo, idx) => (
+                  <li key={idx}>{todo.message || JSON.stringify(todo)}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>No todos</p>
+            )}
+          </div>
+
+          <div className="event-stats">
+            <h3>Event Stats</h3>
+            {Object.keys(eventStats).length ? (
+              <ul>
+                {Object.entries(eventStats).map(([type, count]) => (
+                  <li key={type}>{type}: {count}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>No events</p>
+            )}
+          </div>
         </div>
-      </div>
 
-      <div className="actions">
-        <button onClick={handleTerminate} className="danger">Terminate Session</button>
-        <button onClick={handleDeleteWorktree}>Delete Worktree</button>
-      </div>
-
-      <div className="todos-section">
-        <h3>Todos</h3>
-        {todos.length ? (
-          <ul>
-            {todos.map((todo, idx) => (
-              <li key={idx}>{todo.message || JSON.stringify(todo)}</li>
-            ))}
-          </ul>
-        ) : (
-          <p>No todos</p>
-        )}
-      </div>
-
-      <div className="event-stats">
-        <h3>Event Stats</h3>
-        {Object.keys(eventStats).length ? (
-          <ul>
-            {Object.entries(eventStats).map(([type, count]) => (
-              <li key={type}>{type}: {count}</li>
-            ))}
-          </ul>
-        ) : (
-          <p>No events</p>
-        )}
+        <div className="details-sidebar">
+          {session && (
+            <FileList sessionId={sessionId} project={session.project} />
+          )}
+        </div>
       </div>
     </div>
   );
