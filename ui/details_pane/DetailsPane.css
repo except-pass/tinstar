@@ -92,7 +92,133 @@
   color: white;
 }
 
-.todos-section ul,
+/* Todo Widget Styles */
+.todos-section {
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  background: #fafafa;
+  padding: 12px;
+}
+
+.todo-header {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-left: 4px solid #007bff;
+  border-radius: 4px;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  color: #495057;
+  font-family: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  letter-spacing: 0.3px;
+  line-height: 1.4;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.todo-widget {
+  background: white;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.todo-lists-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.todo-item-container {
+  margin-bottom: 4px;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid #f0f0f0;
+  border-radius: 4px;
+  background: #fdfdfd;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.todo-item:hover {
+  background: #f8f9fa;
+  border-color: #e9ecef;
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-completed {
+  background: #4CAF50;
+}
+
+.status-in_progress {
+  background: #FF9800;
+}
+
+.status-pending {
+  background: #9E9E9E;
+}
+
+.todo-content {
+  flex: 1;
+  font-size: 13px;
+  color: #333;
+  line-height: 1.4;
+}
+
+.status-completed .todo-content {
+  text-decoration: line-through;
+  color: #888;
+}
+
+.priority-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  color: white;
+  font-weight: bold;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.priority-high {
+  background: #F44336;
+}
+
+.priority-medium {
+  background: #FF9800;
+}
+
+.priority-low {
+  background: #4CAF50;
+}
+
+.todo-active-form {
+  margin-left: 20px;
+  margin-top: 4px;
+  padding: 8px;
+  background: #f0f8ff;
+  border-left: 3px solid #007bff;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #0066cc;
+  font-style: italic;
+}
+
+.no-todos {
+  text-align: center;
+  color: #666;
+  font-style: italic;
+  padding: 20px;
+}
+
 .event-stats ul {
   list-style: disc;
   padding-left: 20px;

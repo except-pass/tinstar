@@ -307,15 +307,38 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
           </div>
 
           <div className="todos-section">
-            <h3>Todos</h3>
+            <div className="todo-header">
+              <h3>Todo Lists</h3>
+            </div>
             {todos.length ? (
-              <ul>
-                {todos.map((todo, idx) => (
-                  <li key={idx}>{todo.message || JSON.stringify(todo)}</li>
-                ))}
-              </ul>
+              <div className="todo-widget">
+                <div className="todo-lists-container">
+                  {todos.map((todo, idx) => (
+                    <div key={idx} className="todo-item-container">
+                      <div className="todo-item">
+                        <span className={`status-indicator status-${todo.status || 'pending'}`}></span>
+                        <span className="todo-content">
+                          {todo.content || todo.message || 'Todo item'}
+                        </span>
+                        {todo.status && (
+                          <span className={`priority-badge priority-${todo.priority || 'medium'}`}>
+                            {todo.priority || 'med'}
+                          </span>
+                        )}
+                      </div>
+                      {todo.activeForm && todo.status === 'in_progress' && (
+                        <div className="todo-active-form">
+                          {todo.activeForm}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
             ) : (
-              <p>No todos</p>
+              <div className="no-todos">
+                <p>No todo lists found</p>
+              </div>
             )}
           </div>
 
