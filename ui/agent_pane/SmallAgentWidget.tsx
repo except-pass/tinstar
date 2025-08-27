@@ -47,7 +47,6 @@ export const SmallAgentWidget: React.FC<SmallAgentWidgetProps> = ({
     }
   };
 
-  const statusIcon = getStatusIcon(sessionStatus.statusColor);
   const statusEmoji = getStatusEmoji(sessionStatus.statusColor);
 
   return (
@@ -58,10 +57,8 @@ export const SmallAgentWidget: React.FC<SmallAgentWidgetProps> = ({
         title={`${session.name} - Last activity: ${new Date(session.last_activity).toLocaleString()}`}
       >
         <div className="agent-header">
-          <span className="agent-icon">{statusIcon}</span>
           <span className="agent-name">{session.name}</span>
         </div>
-        <div className="project-name">{session.project}</div>
         <div className="status-indicator">
           <span className="status-emoji">{statusEmoji}</span>
           <span className="status-text">{sessionStatus.statusText}</span>
