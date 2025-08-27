@@ -143,12 +143,33 @@ def create_session(
 
 @app.command("peek")
 def peek_session(
-    session_id: str = typer.Argument(..., help="Session ID"),
+    session_identifier: str = typer.Argument(..., help="Partial session ID or friendly name"),
     lines: int = typer.Option(50, "--lines", "-l", help="Number of lines to show")
 ):
     """View session terminal output."""
     try:
         service = get_service()
+        
+        # Find matching sessions
+        matches = _find_matching_sessions(service, session_identifier)
+        
+        if not matches:
+            console.print(f"❌ No sessions found matching '{session_identifier}'", style="red")
+            console.print("💡 Use 'tinstar session list' to see available sessions", style="dim")
+            raise typer.Exit(1)
+        
+        if len(matches) > 1:
+            console.print(f"❌ Multiple sessions match '{session_identifier}':", style="red")
+            for match in matches:
+                session = service.get_session(match)
+                if session:
+                    short_id = match[:8] + "..."
+                    console.print(f"  {short_id} - {session.name} ({session.project})", style="yellow")
+            console.print("💡 Use a longer partial ID or more specific name to be more specific", style="dim")
+            raise typer.Exit(1)
+        
+        # Get the matched session ID
+        session_id = matches[0]
         
         # Run async function
         peek_result = asyncio.run(service.peek_session(session_id, lines))
@@ -272,13 +293,34 @@ def terminate_session(
 
 @app.command("editor")
 def open_in_editor(
-    session_id: str = typer.Argument(..., help="Session ID"),
+    session_identifier: str = typer.Argument(..., help="Partial session ID or friendly name"),
     file_path: str = typer.Argument(..., help="File path to open"),
     line: Optional[int] = typer.Option(None, "--line", help="Line number to jump to")
 ):
     """Open file in configured editor."""
     try:
         service = get_service()
+        
+        # Find matching sessions
+        matches = _find_matching_sessions(service, session_identifier)
+        
+        if not matches:
+            console.print(f"❌ No sessions found matching '{session_identifier}'", style="red")
+            console.print("💡 Use 'tinstar session list' to see available sessions", style="dim")
+            raise typer.Exit(1)
+        
+        if len(matches) > 1:
+            console.print(f"❌ Multiple sessions match '{session_identifier}':", style="red")
+            for match in matches:
+                session = service.get_session(match)
+                if session:
+                    short_id = match[:8] + "..."
+                    console.print(f"  {short_id} - {session.name} ({session.project})", style="yellow")
+            console.print("💡 Use a longer partial ID or more specific name to be more specific", style="dim")
+            raise typer.Exit(1)
+        
+        # Get the matched session ID
+        session_id = matches[0]
         
         # Run async function
         success = asyncio.run(service.open_in_editor(session_id, file_path, line))
@@ -298,7 +340,7 @@ def open_in_editor(
 
 @app.command("respond")
 def respond_to_notification(
-    session_id: str = typer.Argument(..., help="Session ID"),
+    session_identifier: str = typer.Argument(..., help="Partial session ID or friendly name"),
     response: str = typer.Argument(..., help="Response type: approve_once, approve_always, deny")
 ):
     """Respond to agent notification."""
@@ -310,6 +352,27 @@ def respond_to_notification(
     
     try:
         service = get_service()
+        
+        # Find matching sessions
+        matches = _find_matching_sessions(service, session_identifier)
+        
+        if not matches:
+            console.print(f"❌ No sessions found matching '{session_identifier}'", style="red")
+            console.print("💡 Use 'tinstar session list' to see available sessions", style="dim")
+            raise typer.Exit(1)
+        
+        if len(matches) > 1:
+            console.print(f"❌ Multiple sessions match '{session_identifier}':", style="red")
+            for match in matches:
+                session = service.get_session(match)
+                if session:
+                    short_id = match[:8] + "..."
+                    console.print(f"  {short_id} - {session.name} ({session.project})", style="yellow")
+            console.print("💡 Use a longer partial ID or more specific name to be more specific", style="dim")
+            raise typer.Exit(1)
+        
+        # Get the matched session ID
+        session_id = matches[0]
         
         # Run async function
         success = asyncio.run(service.respond_to_notification(session_id, response))
@@ -327,13 +390,34 @@ def respond_to_notification(
 
 @app.command("health")
 def check_health(
-    session_id: Optional[str] = typer.Argument(None, help="Session ID (optional, checks all if not provided)")
+    session_identifier: Optional[str] = typer.Argument(None, help="Partial session ID or friendly name (optional, checks all if not provided)")
 ):
     """Check session health."""
     try:
         service = get_service()
         
-        if session_id:
+        if session_identifier:
+            # Find matching sessions
+            matches = _find_matching_sessions(service, session_identifier)
+            
+            if not matches:
+                console.print(f"❌ No sessions found matching '{session_identifier}'", style="red")
+                console.print("💡 Use 'tinstar session list' to see available sessions", style="dim")
+                raise typer.Exit(1)
+            
+            if len(matches) > 1:
+                console.print(f"❌ Multiple sessions match '{session_identifier}':", style="red")
+                for match in matches:
+                    session = service.get_session(match)
+                    if session:
+                        short_id = match[:8] + "..."
+                        console.print(f"  {short_id} - {session.name} ({session.project})", style="yellow")
+                console.print("💡 Use a longer partial ID or more specific name to be more specific", style="dim")
+                raise typer.Exit(1)
+            
+            # Get the matched session ID
+            session_id = matches[0]
+            
             # Check specific session
             healthy = asyncio.run(service.health_check(session_id))
             status = "healthy" if healthy else "unhealthy"
@@ -374,11 +458,32 @@ def check_health(
 
 @app.command("info")
 def show_session_info(
-    session_id: str = typer.Argument(..., help="Session ID")
+    session_identifier: str = typer.Argument(..., help="Partial session ID or friendly name")
 ):
     """Show detailed session information."""
     try:
         service = get_service()
+        
+        # Find matching sessions
+        matches = _find_matching_sessions(service, session_identifier)
+        
+        if not matches:
+            console.print(f"❌ No sessions found matching '{session_identifier}'", style="red")
+            console.print("💡 Use 'tinstar session list' to see available sessions", style="dim")
+            raise typer.Exit(1)
+        
+        if len(matches) > 1:
+            console.print(f"❌ Multiple sessions match '{session_identifier}':", style="red")
+            for match in matches:
+                session = service.get_session(match)
+                if session:
+                    short_id = match[:8] + "..."
+                    console.print(f"  {short_id} - {session.name} ({session.project})", style="yellow")
+            console.print("💡 Use a longer partial ID or more specific name to be more specific", style="dim")
+            raise typer.Exit(1)
+        
+        # Get the matched session
+        session_id = matches[0]
         session = service.get_session(session_id)
         
         if not session:
