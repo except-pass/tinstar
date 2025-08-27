@@ -31,8 +31,22 @@ export const useEvents = (onEventReceived?: (event: any) => void): UseEventsRetu
       
       const events: Event[] = await response.json();
       // Events are returned ascending by timestamp; use the last item as most recent
-      const hasNotifyEvent = events.some(e => e.hook_event_name === 'Notification');
-      const hasStopEvent = events.some(e => e.hook_event_name === 'Stop');
+      
+      // Find the most recent Notification or Stop event to determine current status
+      const notificationEvents = events.filter(e => e.hook_event_name === 'Notification');
+      const stopEvents = events.filter(e => e.hook_event_name === 'Stop');
+      
+      const lastNotificationTime = notificationEvents.length > 0 
+        ? new Date(notificationEvents[notificationEvents.length - 1].timestamp)
+        : new Date(0);
+      const lastStopTime = stopEvents.length > 0
+        ? new Date(stopEvents[stopEvents.length - 1].timestamp)
+        : new Date(0);
+      
+      // Status should be "needs attention" only if the most recent relevant event was a Notification
+      const hasNotifyEvent = lastNotificationTime > lastStopTime && notificationEvents.length > 0;
+      const hasStopEvent = lastStopTime > lastNotificationTime && stopEvents.length > 0;
+      
       const lastEventTime = events.length > 0 ? new Date(events[events.length - 1].timestamp) : new Date(0);
       
       return { hasNotifyEvent, hasStopEvent, lastEventTime };
