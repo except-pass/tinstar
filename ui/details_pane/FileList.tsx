@@ -32,6 +32,7 @@ export const FileList: React.FC<FileListProps> = ({ sessionId, project }) => {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set([''])); // Start with root expanded
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [showChangedOnly, setShowChangedOnly] = useState<boolean>(true);
 
   const fetchFileTree = async () => {
     if (!sessionId) return;
@@ -46,7 +47,8 @@ export const FileList: React.FC<FileListProps> = ({ sessionId, project }) => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          open_dirs: Array.from(expandedDirs)
+          open_dirs: Array.from(expandedDirs),
+          show_changed_only: showChangedOnly
         }),
       });
 
@@ -66,7 +68,7 @@ export const FileList: React.FC<FileListProps> = ({ sessionId, project }) => {
 
   useEffect(() => {
     fetchFileTree();
-  }, [sessionId, expandedDirs]);
+  }, [sessionId, expandedDirs, showChangedOnly]);
 
   const toggleDirectory = (dirPath: string) => {
     const newExpanded = new Set(expandedDirs);
@@ -182,7 +184,17 @@ export const FileList: React.FC<FileListProps> = ({ sessionId, project }) => {
 
   return (
     <div className="file-list">
-      <h4>Files</h4>
+      <div className="file-list-header">
+        <h4>Files</h4>
+        <label className="file-list-filter">
+          <input
+            type="checkbox"
+            checked={showChangedOnly}
+            onChange={(e) => setShowChangedOnly(e.target.checked)}
+          />
+          Show changed files only
+        </label>
+      </div>
       <div className="file-tree">
         {renderTreeItem(fileTree)}
       </div>

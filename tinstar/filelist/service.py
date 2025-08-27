@@ -28,12 +28,13 @@ class DirectoryNode:
 class FileListService:
     """Service for building directory trees with file statistics."""
     
-    def get_tree(self, project_path: Path, open_dirs: List[str]) -> DirectoryNode:
+    def get_tree(self, project_path: Path, open_dirs: List[str], show_changed_only: bool = False) -> DirectoryNode:
         """Build directory tree with statistics for the given open directories.
         
         Args:
             project_path: Absolute path to the project/worktree
             open_dirs: List of relative directory paths to expand
+            show_changed_only: If True, only show files with changes and expand all directories
             
         Returns:
             Directory tree with statistics
@@ -46,10 +47,17 @@ class FileListService:
             raise FileNotFoundError(f"Project path does not exist: {project_path}")
         
         # Validate and normalize open_dirs
-        expanded_dirs = self._compute_expanded_dirs(open_dirs)
-        
-        # Discover only files needed for current view (optimized!)
-        all_files = self._discover_files(project_path, expanded_dirs)
+        if show_changed_only:
+            # When showing changed files only, we need to expand all directories
+            # to find changed files everywhere, then filter
+            all_files = self._discover_all_files(project_path)
+            changed_files = self._filter_changed_files(all_files)
+            expanded_dirs = self._compute_dirs_for_changed_files(changed_files)
+            all_files = changed_files
+        else:
+            expanded_dirs = self._compute_expanded_dirs(open_dirs)
+            # Discover only files needed for current view (optimized!)
+            all_files = self._discover_files(project_path, expanded_dirs)
         
         # Cache files for aggregation of collapsed directories
         self._all_files_cache = all_files
@@ -498,3 +506,92 @@ class FileListService:
                 # File is under this directory
                 stats_list.append(file_stat.stats)
         return stats_list
+
+    def _discover_all_files(self, project_path: Path) -> List[FileStats]:
+        """Discover all files in the project/worktree."""
+        files = []
+        file_paths = set()
+        
+        try:
+            # Get all tracked files
+            result = subprocess.run(
+                ['git', 'ls-tree', '-r', '--name-only', 'HEAD'],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line.strip():
+                        file_paths.add(line.strip())
+            
+            # Get all files with changes (staged, unstaged, and untracked)
+            result = subprocess.run(
+                ['git', 'status', '--porcelain'],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line.strip():
+                        # Parse git status format (first 2 chars are status codes)
+                        filename = line[3:].strip()
+                        file_paths.add(filename)
+            
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            # Fallback to filesystem discovery
+            return self._discover_files_fallback(project_path, set(['']))
+        
+        # Convert paths to FileStats
+        for file_path in file_paths:
+            abs_file_path = project_path / file_path
+            if abs_file_path.exists() and abs_file_path.is_file():
+                # Skip symlinks for now
+                if abs_file_path.is_symlink():
+                    stat_info = abs_file_path.lstat()
+                    files.append(FileStats(
+                        path=file_path,
+                        size=stat_info.st_size,
+                        modified=datetime.fromtimestamp(stat_info.st_mtime),
+                        stats={}
+                    ))
+                else:
+                    stat_info = abs_file_path.stat()
+                    # Get git stats for the file
+                    git_stats = self._get_git_stats(project_path, file_path)
+                    
+                    files.append(FileStats(
+                        path=file_path,
+                        size=stat_info.st_size,
+                        modified=datetime.fromtimestamp(stat_info.st_mtime),
+                        stats=git_stats
+                    ))
+        
+        return files
+
+    def _filter_changed_files(self, all_files: List[FileStats]) -> List[FileStats]:
+        """Filter to only files that have changes (lines_added > 0 or lines_removed > 0)."""
+        changed_files = []
+        for file_stat in all_files:
+            lines_added = file_stat.stats.get('lines_added', 0)
+            lines_removed = file_stat.stats.get('lines_removed', 0)
+            # Include files with changes or new/untracked files
+            if lines_added > 0 or lines_removed > 0 or not file_stat.stats.get('is_tracked', True):
+                changed_files.append(file_stat)
+        return changed_files
+
+    def _compute_dirs_for_changed_files(self, changed_files: List[FileStats]) -> Set[str]:
+        """Compute all directories that need to be expanded to show changed files."""
+        expanded_dirs = set([''])  # Always include root
+        
+        for file_stat in changed_files:
+            # Add all parent directories of this file
+            parts = file_stat.path.split('/')
+            for i in range(len(parts)):
+                dir_path = '/'.join(parts[:i])
+                expanded_dirs.add(dir_path)
+        
+        return expanded_dirs

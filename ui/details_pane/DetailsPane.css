@@ -218,13 +218,33 @@
   overflow-y: auto;
 }
 
-.file-list h4 {
-  margin: 0 0 8px 0;
+.file-list-header {
   padding: 8px 12px;
   background: #f0f0f0;
   border-bottom: 1px solid #ddd;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.file-list h4 {
+  margin: 0;
   font-size: 14px;
   font-weight: 600;
+}
+
+.file-list-filter {
+  font-size: 12px;
+  color: #666;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.file-list-filter input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
 }
 
 .file-tree {
@@ -242,6 +262,22 @@
 
 .file-item:hover {
   background: #e8e8e8;
+}
+
+.edit-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  margin-left: 8px;
+  font-size: 12px;
+  opacity: 0.6;
+  border-radius: 2px;
+}
+
+.edit-button:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.1);
 }
 
 .directory-item {

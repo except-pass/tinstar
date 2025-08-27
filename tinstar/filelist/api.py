@@ -17,6 +17,7 @@ router = APIRouter(prefix='/api/filelist', tags=['filelist'])
 class FileTreeRequest(BaseModel):
     """Request model for file tree endpoint."""
     open_dirs: List[str]
+    show_changed_only: bool = False
 
 
 class FileTreeResponse(BaseModel):
@@ -75,7 +76,7 @@ def get_file_tree(project_name: str, request: FileTreeRequest) -> FileTreeRespon
         
         # Create service and get tree
         service = FileListService()
-        tree = service.get_tree(project_path, request.open_dirs)
+        tree = service.get_tree(project_path, request.open_dirs, request.show_changed_only)
         
         # Serialize and return
         return FileTreeResponse(tree=serialize_node(tree))
@@ -123,7 +124,7 @@ def get_worktree_file_tree(session_id: str, request: FileTreeRequest) -> FileTre
         
         # Create service and get tree
         service = FileListService()
-        tree = service.get_tree(worktree_path, request.open_dirs)
+        tree = service.get_tree(worktree_path, request.open_dirs, request.show_changed_only)
         
         # Serialize and return
         return FileTreeResponse(tree=serialize_node(tree))

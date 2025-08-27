@@ -209,7 +209,6 @@ logs/
 # Configuration files with sensitive data
 config.ini
 secrets.json
-.env.local
 .env.production
 
 # Backup files
