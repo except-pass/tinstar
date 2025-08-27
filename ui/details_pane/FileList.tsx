@@ -92,6 +92,31 @@ export const FileList: React.FC<FileListProps> = ({ sessionId, project }) => {
     );
   };
 
+  const handleEditClick = async (filePath: string) => {
+    try {
+      if (sessionId) {
+        await fetch(`/api/sessions/${sessionId}/editor`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ file_path: filePath }),
+        });
+      } else {
+        // Use generic editor endpoint when no session ID is provided
+        await fetch('/api/editor/open', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ file_path: filePath }),
+        });
+      }
+    } catch (error) {
+      console.error('Failed to open file in editor:', error);
+    }
+  };
+
   const renderTreeItem = (item: FileTreeItem, depth: number = 0): React.ReactNode => {
     const indentStyle = { paddingLeft: `${depth * 16}px` };
     
@@ -101,6 +126,16 @@ export const FileList: React.FC<FileListProps> = ({ sessionId, project }) => {
           <span className="file-icon">📄</span>
           <span className="file-name">{item.path.split('/').pop()}</span>
           {renderStats(item.stats || {})}
+          <button 
+            className="edit-button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleEditClick(item.path);
+            }}
+            title={`Edit ${item.path.split('/').pop()}`}
+          >
+            ✏️
+          </button>
         </div>
       );
     }
