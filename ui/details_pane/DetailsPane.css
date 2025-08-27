@@ -69,6 +69,24 @@
   margin-right: 8px;
 }
 
+.actions .save {
+  background-color: #28a745;
+  color: white;
+}
+
+.actions .save:hover {
+  background-color: #218838;
+}
+
+.actions .merge {
+  background-color: #17a2b8;
+  color: white;
+}
+
+.actions .merge:hover {
+  background-color: #138496;
+}
+
 .actions .danger {
   background-color: #a04020;
   color: white;

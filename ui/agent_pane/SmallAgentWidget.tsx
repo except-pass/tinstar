@@ -32,25 +32,9 @@ export const SmallAgentWidget: React.FC<SmallAgentWidgetProps> = ({
         const status = getSessionStatus(session, eventStatus);
         setSessionStatus(status);
       } catch (err) {
-        // Fallback to simple status based on session data
-        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-        const lastActivity = new Date(session.last_activity);
-        
-        if (lastActivity < fiveMinutesAgo) {
-          setSessionStatus({
-            id: session.id,
-            needsAttention: false,
-            statusText: 'Idle',
-            statusColor: 'gray'
-          });
-        } else {
-          setSessionStatus({
-            id: session.id,
-            needsAttention: false,
-            statusText: 'Active',
-            statusColor: 'green'
-          });
-        }
+        // When we can't get event status, show "No data" instead of fallback
+        const status = getSessionStatus(session, null);
+        setSessionStatus(status);
       }
     };
 

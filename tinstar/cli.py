@@ -24,6 +24,13 @@ def server(
     debug: bool = typer.Option(False, help="Enable debug mode")
 ):
     """Start the Tinstar API server."""
+    # Enforce port 3002 requirement
+    if port != 3002:
+        typer.echo(f"❌ Error: Tinstar server MUST run on port 3002 for hook compatibility.", err=True)
+        typer.echo(f"   Attempted to start on port {port}, but hooks are configured for port 3002.", err=True)
+        typer.echo(f"   Please use: tinstar server --port 3002", err=True)
+        raise typer.Exit(1)
+    
     typer.echo(f"Starting Tinstar server on {host}:{port}")
     run_server(host=host, port=port, debug=debug)
 

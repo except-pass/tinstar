@@ -178,6 +178,39 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     }
   };
 
+  const handleSaveChanges = async () => {
+    if (!session) return;
+    try {
+      const commitPrompt = "Please create a git commit with all staged and unstaged files in the current worktree. Use a helpful commit message that describes the changes.";
+      await fetch(`/api/sessions/${sessionId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: commitPrompt })
+      });
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleMergeWorktree = async () => {
+    if (!session) return;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setError(`Merge session created: ${data.session_name}. Use 'tmux attach -t ${data.session_name}' to connect.`);
+      } else {
+        const errorData = await res.json();
+        throw new Error(errorData.detail || 'Failed to create merge session');
+      }
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   return (
     <div className="details-pane content-section">
       {error && <div className="error">{error}</div>}
@@ -219,6 +252,8 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
           </div>
 
           <div className="actions">
+            <button onClick={handleSaveChanges} className="save">Save Changes</button>
+            <button onClick={handleMergeWorktree} className="merge">Merge Worktree</button>
             <button onClick={handleTerminate} className="danger">Terminate Session</button>
             <button onClick={handleDeleteWorktree}>Delete Worktree</button>
           </div>

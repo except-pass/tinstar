@@ -244,6 +244,60 @@ async def check_session_health(session_id: str):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+@router.post("/{session_id}/merge")
+async def create_merge_session(session_id: str):
+    """Create a new tmux session in project dir to merge the worktree."""
+    try:
+        service = SessionService()
+        session = service.get_session(session_id)
+        
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Get project service to get project path
+        from ..projects.service import ProjectService
+        project_service = ProjectService()
+        project = project_service.get_project(session.project)
+        
+        if not project:
+            raise HTTPException(status_code=404, detail=f"Project '{session.project}' not found")
+        
+        # Create unique tmux session name for merge
+        merge_session_name = f"merge-{session.project}-{session_id[:8]}"
+        
+        # Get worktree branch name from the session's worktree name
+        worktree_branch = session.worktree_name
+        
+        import subprocess
+        
+        # Create new tmux session in project directory
+        cmd = [
+            "tmux", "new-session", "-d", "-s", merge_session_name,
+            "-c", project.path,
+            f"git merge {worktree_branch}"
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            return {
+                "success": True,
+                "session_name": merge_session_name,
+                "message": f"Merge session '{merge_session_name}' created in {project.path}",
+                "command": f"git merge {worktree_branch}"
+            }
+        else:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to create merge session: {result.stderr}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 # Health check for the sessions API
 @router.get("/health")
 async def health_check():

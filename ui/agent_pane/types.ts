@@ -55,7 +55,7 @@ export interface SessionStatus {
   id: string;
   needsAttention: boolean;
   statusText: string;
-  statusColor: 'green' | 'yellow' | 'gray';
+  statusColor: 'green' | 'yellow' | 'gray' | 'empty';
 }
 
 export interface ProjectGroup {

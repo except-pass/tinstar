@@ -1,3 +1,9 @@
-fix filelist widget bugs
+deal with notifications
+save 
+merge back to project dir
 
-collapse
+do not show idle as a default.  show "no data"
+
+add the edit button the the detail pane filelist
+
+project holder should not go away when the last agent is closed.

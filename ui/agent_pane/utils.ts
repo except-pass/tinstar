@@ -32,7 +32,17 @@ export const groupSessionsByProject = (
   }));
 };
 
-export const getSessionStatus = (session: Session, eventStatus: EventStatus): SessionStatus => {
+export const getSessionStatus = (session: Session, eventStatus: EventStatus | null): SessionStatus => {
+  // Check if we have no event data at all
+  if (!eventStatus) {
+    return { 
+      id: session.id,
+      needsAttention: false, 
+      statusText: 'No data', 
+      statusColor: 'empty' 
+    };
+  }
+
   // Check for "needs attention" via notification events
   if (eventStatus.hasNotifyEvent) {
     return { 
@@ -62,20 +72,22 @@ export const getSessionStatus = (session: Session, eventStatus: EventStatus): Se
   };
 };
 
-export const getStatusIcon = (statusColor: 'green' | 'yellow' | 'gray'): string => {
+export const getStatusIcon = (statusColor: 'green' | 'yellow' | 'gray' | 'empty'): string => {
   switch (statusColor) {
     case 'green': return '⚡';
     case 'yellow': return '⚠️';
     case 'gray': return '⚫';
+    case 'empty': return '⚪';
     default: return '⚫';
   }
 };
 
-export const getStatusEmoji = (statusColor: 'green' | 'yellow' | 'gray'): string => {
+export const getStatusEmoji = (statusColor: 'green' | 'yellow' | 'gray' | 'empty'): string => {
   switch (statusColor) {
     case 'green': return '🟢';
     case 'yellow': return '🟡';
     case 'gray': return '⚫';
+    case 'empty': return '⚪';
     default: return '⚫';
   }
 };

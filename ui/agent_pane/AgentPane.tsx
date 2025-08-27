@@ -34,7 +34,7 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
 
   // Update project groups when sessions or projects change
   useEffect(() => {
-    if (sessions.length > 0 && projects.length > 0) {
+    if (projects.length > 0) {
       const groups = groupSessionsByProject(sessions, projects);
       setProjectGroups(groups);
     } else {
