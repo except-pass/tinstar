@@ -31,7 +31,11 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const [error, setError] = useState<string | null>(null);
   const [terminated, setTerminated] = useState<boolean>(false);
 
-  const ansiUp = useMemo(() => new (AnsiUp as any)(), []);
+  const ansiUp = useMemo(() => {
+    const ansi = new (AnsiUp as any)();
+    ansi.use_classes = true;
+    return ansi;
+  }, []);
 
   // Fetch session details
   useEffect(() => {
