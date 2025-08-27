@@ -130,7 +130,24 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
         const res = await fetch(query);
         if (res.ok) {
           const data = await res.json();
-          setTodos(data);
+          
+          // Find the most recent todo list (the one with the latest timestamp)
+          if (data && data.length > 0) {
+            // Sort by timestamp descending and take the first (most recent) todo list
+            const sortedTodos = data.sort((a: any, b: any) => 
+              new Date(b.timestamp || b.created_at || 0).getTime() - 
+              new Date(a.timestamp || a.created_at || 0).getTime()
+            );
+            
+            // Get the most recent todo list
+            const latestTodoList = sortedTodos[0];
+            
+            // Extract individual todos from the latest list
+            const todos = latestTodoList.todos || [];
+            setTodos(Array.isArray(todos) ? todos : []);
+          } else {
+            setTodos([]);
+          }
         }
       } catch (err: any) {
         setError(err.message);
