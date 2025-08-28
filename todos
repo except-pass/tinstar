@@ -1,13 +1,9 @@
 
-enter should send the prompt on create agent dialog.  escape should close the dialog
-
-timeline.  selectable prompt to show.  
+timeline.  selectable prompt to show.  design is done
 
 animations for 
     - terminate session
     - create new agent
     - needs attention
-
-quick draw
 
 make the whole ui more responsive.  how should we handle refreshes?  e.g. the filelist doesnt refresh, and the status updates are not snappy.
