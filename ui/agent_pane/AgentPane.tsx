@@ -33,6 +33,7 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
   const [settingsProject, setSettingsProject] = useState<FullProject | null>(null);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const projectSelectRef = useRef<HTMLSelectElement>(null);
 
   // Update project groups when sessions or projects change
   useEffect(() => {
@@ -77,10 +78,11 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
     return () => clearInterval(interval);
   }, [fetchSessions]);
 
-  // Focus dialog when it opens
+  // Focus project select when dialog opens
   useEffect(() => {
-    if (showNewAgentDialog && dialogRef.current) {
-      dialogRef.current.focus();
+    if (showNewAgentDialog && projectSelectRef.current) {
+      projectSelectRef.current.focus();
+      projectSelectRef.current.select();
     }
   }, [showNewAgentDialog]);
 
@@ -264,6 +266,7 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
             <div className="form-group">
               <label htmlFor="project-select">Project:</label>
               <select
+                ref={projectSelectRef}
                 id="project-select"
                 value={newAgentProject}
                 onChange={(e) => setNewAgentProject(e.target.value)}
