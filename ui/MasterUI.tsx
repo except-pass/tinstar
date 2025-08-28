@@ -170,25 +170,44 @@ export const MasterUI: React.FC<MasterUIProps> = ({
             </div>
           ) : (
             <div className="content-section">
-              <h2>Welcome to Tinstar</h2>
-              <div className="welcome-content">
-                <p>Select an agent from the left pane to view its details and interact with it.</p>
-                <p>Or browse projects to manage your development environments.</p>
+              <div className="intro-header">
+                <img src="/logo.png" alt="Tinstar Logo" className="intro-logo" />
+                <h2>Welcome to Tinstar</h2>
+                <p className="intro-subtitle">Development environment management for Claude Code</p>
+                <p className="intro-description">
+                  Tinstar organizes your agents and projects, providing keyboard shortcuts for rapid navigation.
+                </p>
+              </div>
+
+              <div className="getting-started">
+                <h3>Getting Started</h3>
                 
-                <div className="welcome-features">
-                  <h3>Features:</h3>
+                <div className="intro-section">
+                  <h4>Projects & Agents</h4>
                   <ul>
-                    <li><strong>Agent Management</strong>: View and control active Claude Code agents</li>
-                    <li><strong>Project Organization</strong>: Manage multiple development projects</li>
-                    <li><strong>Real-time Status</strong>: Live updates on agent activity</li>
-                    <li><strong>Color Coding</strong>: Visual organization by project</li>
+                    <li>Add projects to organize your development work</li>
+                    <li>Create agents that automatically get isolated workspaces</li>
+                    <li>Each project gets color coding for easy identification</li>
                   </ul>
                 </div>
-                
-                <div className="quick-actions">
-                  <h3>Quick Start:</h3>
-                  <button className="action-btn primary">Create New Agent</button>
-                  <button className="action-btn">Add Project</button>
+
+                <div className="intro-section">
+                  <h4>Quick Draw Navigation</h4>
+                  <ul>
+                    <li>Use ⚡🤠 Quick Draw for keyboard shortcuts</li>
+                    <li>Press <code>a</code> then another key to select agents</li>
+                    <li>Hover the Quick Draw badge to see all available shortcuts</li>
+                  </ul>
+                </div>
+
+                <div className="intro-section">
+                  <h4>Key Features</h4>
+                  <ul>
+                    <li>Multi-project agent management</li>
+                    <li>Real-time session tracking</li>
+                    <li>Keyboard-driven workflow</li>
+                    <li>Isolated worktrees per agent</li>
+                  </ul>
                 </div>
               </div>
             </div>

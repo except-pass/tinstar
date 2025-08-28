@@ -34,6 +34,7 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
   const [settingsSaving, setSettingsSaving] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const projectSelectRef = useRef<HTMLSelectElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   // Update project groups when sessions or projects change
   useEffect(() => {
@@ -78,11 +79,10 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
     return () => clearInterval(interval);
   }, [fetchSessions]);
 
-  // Focus project select when dialog opens
+  // Focus prompt textarea when dialog opens
   useEffect(() => {
-    if (showNewAgentDialog && projectSelectRef.current) {
-      projectSelectRef.current.focus();
-      projectSelectRef.current.select();
+    if (showNewAgentDialog && promptRef.current) {
+      promptRef.current.focus();
     }
   }, [showNewAgentDialog]);
 
@@ -143,6 +143,10 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
   };
 
   const handleNewAgentClick = () => {
+    // Auto-select project if there's only one
+    if (projects.length === 1) {
+      setNewAgentProject(projects[0].name);
+    }
     setShowNewAgentDialog(true);
   };
 
@@ -283,6 +287,7 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
             <div className="form-group">
               <label htmlFor="initial-prompt">Initial Prompt (optional):</label>
               <textarea
+                ref={promptRef}
                 id="initial-prompt"
                 value={newAgentPrompt}
                 onChange={(e) => setNewAgentPrompt(e.target.value)}

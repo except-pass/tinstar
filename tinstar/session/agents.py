@@ -64,7 +64,7 @@ class ClaudeAgent(Agent):
         """Check if Claude process is running in the tmux session."""
         try:
             # Check if tmux session exists
-            cmd = ["tmux", "has-session", "-t", tmux_session_name]
+            cmd = ["tmux", "-L", "tinstar", "has-session", "-t", tmux_session_name]
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -76,7 +76,7 @@ class ClaudeAgent(Agent):
                 return False
             
             # Check if Claude process is running in the session
-            cmd = ["tmux", "list-panes", "-t", tmux_session_name, "-F", "#{pane_current_command}"]
+            cmd = ["tmux", "-L", "tinstar", "list-panes", "-t", tmux_session_name, "-F", "#{pane_current_command}"]
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -153,7 +153,7 @@ class AgentManager:
             command = agent.get_start_command(worktree_path, session_name, initial_prompt)
             
             # Send command to tmux session
-            cmd = ["tmux", "send-keys", "-t", tmux_session_name, command, "Enter"]
+            cmd = ["tmux", "-L", "tinstar", "send-keys", "-t", tmux_session_name, command, "Enter"]
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -178,7 +178,7 @@ class AgentManager:
             
             # Send key sequences to tmux session
             for key in keys:
-                cmd = ["tmux", "send-keys", "-t", tmux_session_name, key]
+                cmd = ["tmux", "-L", "tinstar", "send-keys", "-t", tmux_session_name, key]
                 
                 process = await asyncio.create_subprocess_exec(
                     *cmd,

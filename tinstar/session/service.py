@@ -163,7 +163,8 @@ class SessionService:
         """Create and configure tmux session."""
         # Create new tmux session
         cmd = [
-            "tmux", "new-session", "-d", "-s", session.tmux_session_name,
+            "tmux", "-L", "tinstar", "-f", str(Path(__file__).resolve().parents[2] / "tmux.tinstar.conf"),
+            "new-session", "-d", "-s", session.tmux_session_name,
             "-c", session.worktree_path
         ]
         
@@ -177,7 +178,7 @@ class SessionService:
         
         # Set environment variable for events integration
         env_cmd = [
-            "tmux", "send-keys", "-t", session.tmux_session_name,
+            "tmux", "-L", "tinstar", "send-keys", "-t", session.tmux_session_name,
             f"export TINSTAR_TERM_NAME={session.name}", "Enter"
         ]
         
@@ -225,7 +226,7 @@ class SessionService:
         
         # Capture tmux session output
         cmd = [
-            "tmux", "capture-pane", "-t", session.tmux_session_name,
+            "tmux", "-L", "tinstar", "capture-pane", "-t", session.tmux_session_name,
             "-p", "-S", f"-{lines}"
         ]
         
@@ -268,7 +269,7 @@ class SessionService:
         # Send text literally, then press Enter
         try:
             send_literal_cmd = [
-                "tmux", "send-keys", "-t", session.tmux_session_name, "-l", text
+                "tmux", "-L", "tinstar", "send-keys", "-t", session.tmux_session_name, "-l", text
             ]
             process1 = await asyncio.create_subprocess_exec(
                 *send_literal_cmd,
@@ -278,7 +279,7 @@ class SessionService:
             await process1.wait()
 
             send_enter_cmd = [
-                "tmux", "send-keys", "-t", session.tmux_session_name, "Enter"
+                "tmux", "-L", "tinstar", "send-keys", "-t", session.tmux_session_name, "Enter"
             ]
             process2 = await asyncio.create_subprocess_exec(
                 *send_enter_cmd,
@@ -359,7 +360,7 @@ class SessionService:
             return False, None
         
         # Kill tmux session
-        cmd = ["tmux", "kill-session", "-t", session.tmux_session_name]
+        cmd = ["tmux", "-L", "tinstar", "kill-session", "-t", session.tmux_session_name]
         
         try:
             process = await asyncio.create_subprocess_exec(
@@ -407,7 +408,7 @@ class SessionService:
                 return False
             
             # Check tmux session health first
-            cmd = ["tmux", "has-session", "-t", session.tmux_session_name]
+            cmd = ["tmux", "-L", "tinstar", "has-session", "-t", session.tmux_session_name]
             
             process = await asyncio.create_subprocess_exec(
                 *cmd,

@@ -566,7 +566,7 @@ def attach_session(
                 return
         
         # Check if tmux session exists
-        check_cmd = ["tmux", "has-session", "-t", session.tmux_session_name]
+        check_cmd = ["tmux", "-L", "tinstar", "has-session", "-t", session.tmux_session_name]
         try:
             subprocess.run(check_cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError:
@@ -593,7 +593,7 @@ def attach_session(
         time.sleep(1)
         
         # Attach to tmux session
-        attach_cmd = ["tmux", "attach-session", "-t", session.tmux_session_name]
+        attach_cmd = ["tmux", "-L", "tinstar", "attach-session", "-t", session.tmux_session_name]
         
         if read_only:
             attach_cmd.extend(["-r"])  # Read-only mode

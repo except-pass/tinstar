@@ -133,6 +133,93 @@
   flex-wrap: wrap;
 }
 
+/* Intro page styles */
+.intro-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.intro-logo {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 16px;
+}
+
+.intro-header h2 {
+  margin: 0 0 8px 0;
+  font-size: 28px;
+  font-weight: 700;
+  color: #2c3e50;
+}
+
+.intro-subtitle {
+  margin: 0 0 12px 0;
+  font-size: 18px;
+  font-weight: 500;
+  color: #6c757d;
+}
+
+.intro-description {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #2c3e50;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.getting-started {
+  background-color: #fff;
+  padding: 32px;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+  max-width: 800px;
+}
+
+.getting-started h3 {
+  margin: 0 0 24px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.intro-section {
+  margin-bottom: 24px;
+}
+
+.intro-section:last-child {
+  margin-bottom: 0;
+}
+
+.intro-section h4 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.intro-section ul {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.6;
+}
+
+.intro-section li {
+  margin-bottom: 6px;
+  color: #2c3e50;
+}
+
+.intro-section code {
+  background-color: #f8f9fa;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: 'SF Mono', Monaco, 'Inconsolata', 'Roboto Mono', Consolas, 'Courier New', monospace;
+  font-size: 14px;
+  color: #e83e8c;
+}
+
 .welcome-content {
   background-color: #fff;
   padding: 32px;

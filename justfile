@@ -5,9 +5,6 @@ start:
     #!/usr/bin/env bash
     echo "Starting Tinstar backend and frontend..."
     
-    # Kill any existing servers first
-    just stop
-    
     # Start backend server in background on standard port 3002
     echo "Starting backend server..."
     nohup tinstar server --port 3002 --debug > .backend.log 2>&1 &
@@ -20,7 +17,8 @@ start:
     
     # Check if backend is running
     if ! kill -0 $BACKEND_PID 2>/dev/null; then
-        echo "❌ Backend failed to start. Check .backend.log for details."
+        echo "❌ Backend failed to start. Checking .backend.log for details."
+        echo "--------- .backend.log ----------------------"
         cat .backend.log
         exit 1
     fi
@@ -43,7 +41,8 @@ start:
     echo ""
     echo "URLs:"
     echo "  Backend:  http://localhost:3002"
-    echo "  Frontend: http://localhost:3001 (check .frontend.log for actual port)"
+    echo "--------- .frontend.log ----------------------"
+    cat .frontend.log
     echo ""
     echo "Logs:"
     echo "  Backend:  tail -f .backend.log"
