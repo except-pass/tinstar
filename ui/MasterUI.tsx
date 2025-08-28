@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AgentPane } from './agent_pane';
 import { ProjectPane } from './project_pane';
 import { DetailsPane } from './details_pane';
+import { QuickDraw } from './quick_draw/QuickDraw';
 import './MasterUI.css';
 
 interface MasterUIProps {
@@ -130,7 +131,10 @@ export const MasterUI: React.FC<MasterUIProps> = ({
       
       <div className="master-ui-content">
         <div className="master-ui-header">
-          <h1>Tinstar</h1>
+          <div className="header-left">
+            <QuickDraw />
+            <h1>Tinstar</h1>
+          </div>
           <div className="master-ui-status">
             {selectedAgentId && (
               <div className="selected-info">

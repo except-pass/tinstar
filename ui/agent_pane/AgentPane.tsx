@@ -10,6 +10,7 @@ import './AgentPane.css';
 import '../project_pane/ProjectPane.css';
 import { ProjectSettingsDialog } from '../project_pane/ProjectSettingsDialog';
 import type { Project as FullProject, ProjectResponse as FullProjectResponse } from '../project_pane/types';
+import { useQuickDrawActions } from '../quick_draw/useQuickDrawActions';
 
 interface AgentPaneProps {
   onAgentClick?: (sessionId: string) => void;
@@ -139,6 +140,18 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
     setNewAgentProject(projectName);
   };
 
+  const handleNewAgentClick = () => {
+    setShowNewAgentDialog(true);
+  };
+
+  // Setup QuickDraw actions for agent selection
+  const allAgents = sessions.map(session => ({ id: session.id, name: session.name }));
+  useQuickDrawActions({
+    agents: allAgents,
+    onAgentClick,
+    onNewAgent: handleNewAgentClick
+  });
+
   return (
     <div className="agent-pane">
       <div className="agent-pane-header">
@@ -219,6 +232,14 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
           disabled={creating}
         >
           + New Project
+        </button>
+        <button 
+          className="new-agent-button"
+          onClick={handleNewAgentClick}
+          disabled={creating}
+          data-testid="new-agent-button"
+        >
+          + New Agent
         </button>
       </div>
 

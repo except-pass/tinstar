@@ -50,7 +50,7 @@ export const SmallAgentWidget: React.FC<SmallAgentWidgetProps> = ({
   const statusEmoji = getStatusEmoji(sessionStatus.statusColor);
 
   return (
-    <div className={`small-agent-widget ${isSelected ? 'selected' : ''}`}>
+    <div className={`small-agent-widget ${isSelected ? 'selected' : ''}`} data-testid={`agent-${session.id}`}>
       <div 
         className="agent-info"
         onClick={handleAgentClick}

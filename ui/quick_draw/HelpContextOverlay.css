@@ -1,0 +1,125 @@
+.help-context-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.overlay-background {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(1px);
+}
+
+.help-hint {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: white;
+  border: 2px solid #007acc;
+  border-radius: 6px;
+  padding: 6px 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  font-size: 13px;
+  white-space: nowrap;
+  pointer-events: auto;
+  animation: fadeIn 0.2s ease-out;
+  transform: translateY(-50%);
+}
+
+.help-hint-key {
+  background: #007acc;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-weight: bold;
+  font-size: 12px;
+  min-width: 16px;
+  text-align: center;
+}
+
+.help-hint-description {
+  color: #333;
+  font-weight: 500;
+}
+
+.overlay-instructions {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+
+.instructions-content {
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 12px 20px;
+  border-radius: 8px;
+  text-align: center;
+  font-size: 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  animation: slideUp 0.3s ease-out;
+}
+
+.namespace-name {
+  display: block;
+  font-weight: bold;
+  margin-bottom: 4px;
+  color: #00ccff;
+}
+
+.instruction-text {
+  opacity: 0.9;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* Handle hints that would go off-screen */
+.help-hint {
+  max-width: 300px;
+}
+
+/* Adjust positioning for hints near screen edges */
+@media (max-width: 768px) {
+  .help-hint {
+    position: fixed;
+    max-width: calc(100vw - 40px);
+    word-wrap: break-word;
+    white-space: normal;
+  }
+  
+  .instructions-content {
+    margin: 0 20px;
+    max-width: calc(100vw - 40px);
+  }
+}
