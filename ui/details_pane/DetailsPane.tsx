@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnsiUp } from 'ansi_up';
 import './DetailsPane.css';
 import FileList from './FileList';
 import { ControlBoard } from '../control_board';
+import { useQuickDrawDetailsActions } from '../quick_draw/useQuickDrawDetailsActions';
 
 interface DetailsPaneProps {
   sessionId: string;
@@ -35,6 +36,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const [terminated, setTerminated] = useState<boolean>(false);
 
   const terminalRef = useRef<HTMLPreElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const hasAutoScrolled = useRef(false);
   const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -262,6 +264,33 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     }
   };
 
+  // QuickDraw callbacks
+  const handleTodoSelect = useCallback((index: number) => {
+    if (index < todos.length) {
+      const todoElement = document.querySelector(`[data-testid="todo-item-${index}"]`);
+      if (todoElement) {
+        todoElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Add a temporary highlight effect
+        todoElement.classList.add('highlight');
+        setTimeout(() => todoElement.classList.remove('highlight'), 2000);
+      }
+    }
+  }, [todos]);
+
+  const handleFocusPrompt = useCallback(() => {
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, []);
+
+  // Register QuickDraw actions
+  useQuickDrawDetailsActions({
+    todos,
+    onTodoSelect: handleTodoSelect,
+    onSave: handleSaveChanges,
+    onFocusPrompt: handleFocusPrompt
+  });
+
   return (
     <div className="details-pane content-section">
       {error && <div className="error">{error}</div>}
@@ -302,6 +331,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
             </pre>
             <div className="command-input">
               <textarea
+                ref={textareaRef}
                 value={commandText}
                 onChange={(e) => setCommandText(e.target.value)}
                 onKeyDown={(e) => {
@@ -317,7 +347,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
           </div>
 
           <div className="actions">
-            <button onClick={handleSaveChanges} className="save">Save Changes</button>
+            <button onClick={handleSaveChanges} className="save" data-testid="save-button">Save Changes</button>
             <button onClick={handleMergeWorktree} className="merge">Merge Worktree</button>
             <button onClick={handleTerminate} className="danger">Terminate Session</button>
             <button onClick={handleDeleteWorktree}>Delete Worktree</button>
@@ -331,7 +361,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
               <div className="todo-widget">
                 <div className="todo-lists-container">
                   {todos.map((todo, idx) => (
-                    <div key={idx} className="todo-item-container">
+                    <div key={idx} className="todo-item-container" data-testid={`todo-item-${idx}`}>
                       <div className="todo-item">
                         <span className={`status-indicator status-${todo.status || 'pending'}`}></span>
                         <span className="todo-content">
