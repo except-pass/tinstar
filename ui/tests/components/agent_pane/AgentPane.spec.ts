@@ -154,7 +154,7 @@ test.describe('AgentPane Component', () => {
       });
     });
 
-    await page.goto('/test-agent-pane');
+    await page.goto('/harness/agent_pane.html');
   });
 
   test('displays project groups with correct background colors', async ({ page }) => {
@@ -240,6 +240,35 @@ test.describe('AgentPane Component', () => {
     await createButton.click();
     
     // Dialog should close
+    await expect(page.locator('.new-agent-dialog')).not.toBeVisible();
+  });
+
+  test('new agent dialog keyboard shortcuts work', async ({ page }) => {
+    await expect(page.locator('.agent-pane')).toBeVisible();
+    
+    // Click new agent button
+    await page.locator('text=+ New Agent').click();
+    
+    // Dialog should appear
+    await expect(page.locator('.new-agent-dialog')).toBeVisible();
+    
+    // Select a project first
+    await page.selectOption('#project-select', 'tinstar');
+    
+    // Test Enter key to create agent
+    await page.locator('.dialog-content').press('Enter');
+    
+    // Dialog should close after Enter
+    await expect(page.locator('.new-agent-dialog')).not.toBeVisible();
+    
+    // Open dialog again
+    await page.locator('text=+ New Agent').click();
+    await expect(page.locator('.new-agent-dialog')).toBeVisible();
+    
+    // Test Escape key to close dialog
+    await page.locator('.dialog-content').press('Escape');
+    
+    // Dialog should close after Escape
     await expect(page.locator('.new-agent-dialog')).not.toBeVisible();
   });
 

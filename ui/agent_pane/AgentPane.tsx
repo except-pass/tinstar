@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Session, Project, ProjectGroup, CreateSessionRequest } from './types';
 import { SmallAgentWidget } from './SmallAgentWidget';
 import { useSessions } from './hooks/useSessions';
@@ -31,6 +31,7 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
   const [creating, setCreating] = useState(false);
   const [settingsProject, setSettingsProject] = useState<FullProject | null>(null);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Update project groups when sessions or projects change
   useEffect(() => {
@@ -74,6 +75,13 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
 
     return () => clearInterval(interval);
   }, [fetchSessions]);
+
+  // Focus dialog when it opens
+  useEffect(() => {
+    if (showNewAgentDialog && dialogRef.current) {
+      dialogRef.current.focus();
+    }
+  }, [showNewAgentDialog]);
 
   const handleNewAgent = async () => {
     if (!newAgentProject.trim()) {
@@ -217,7 +225,20 @@ export const AgentPane: React.FC<AgentPaneProps> = ({
       {showNewAgentDialog && (
         <div className="new-agent-dialog">
           <div className="dialog-overlay" onClick={() => setShowNewAgentDialog(false)} />
-          <div className="dialog-content">
+          <div 
+            ref={dialogRef}
+            className="dialog-content"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && newAgentProject.trim() && !creating) {
+                e.preventDefault();
+                handleNewAgent();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                setShowNewAgentDialog(false);
+              }
+            }}
+            tabIndex={0}
+          >
             <h4>Create New Agent</h4>
             <div className="form-group">
               <label htmlFor="project-select">Project:</label>

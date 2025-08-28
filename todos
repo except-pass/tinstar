@@ -1,17 +1,13 @@
-deal with notifications
-save 
-merge back to project dir
 
-do not show idle as a default.  show "no data"
+enter should send the prompt on create agent dialog.  escape should close the dialog
 
-add the edit button the the detail pane filelist
+timeline.  selectable prompt to show.  
 
-project holder should not go away when the last agent is closed.
+animations for 
+    - terminate session
+    - create new agent
+    - needs attention
 
-enter should send the prompt on create agent dialog.  escape should close install
+quick draw
 
-condense the agent widget.  dont show the status light twice.  
-
-make todos look more like they did in ctrltower.
-
-filelist shows line change number in the  project dir, not the worktree dir.
+make the whole ui more responsive.  how should we handle refreshes?  e.g. the filelist doesnt refresh, and the status updates are not snappy.
