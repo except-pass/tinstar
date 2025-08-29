@@ -9,7 +9,7 @@ interface UseTimelineEventsReturn {
   wsConnected: boolean;
 }
 
-export const useTimelineEvents = (sessionId: string): UseTimelineEventsReturn => {
+export const useTimelineEvents = (sessionId: string, sessionName?: string): UseTimelineEventsReturn => {
   const [events, setEvents] = useState<Event[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [loading, setLoading] = useState(false);
@@ -22,7 +22,10 @@ export const useTimelineEvents = (sessionId: string): UseTimelineEventsReturn =>
       setLoading(true);
       setError(null);
       
-      const response = await fetch(`/api/events?session_id=${encodeURIComponent(sessionId)}`);
+      const query = sessionName
+        ? `/api/events?tinstar_term_name=${encodeURIComponent(sessionName)}`
+        : `/api/events?session_id=${encodeURIComponent(sessionId)}`;
+      const response = await fetch(query);
       if (!response.ok) {
         throw new Error(`Failed to fetch events: ${response.statusText}`);
       }
@@ -34,7 +37,7 @@ export const useTimelineEvents = (sessionId: string): UseTimelineEventsReturn =>
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, sessionName]);
 
   const fetchCommits = useCallback(async () => {
     try {
@@ -49,7 +52,7 @@ export const useTimelineEvents = (sessionId: string): UseTimelineEventsReturn =>
       console.warn('Failed to fetch commits:', err);
       setCommits([]);
     }
-  }, [sessionId]);
+  }, [sessionId, sessionName]);
 
   const connectWebSocket = useCallback(() => {
     if (websocketRef.current?.readyState === WebSocket.OPEN) {
@@ -71,7 +74,7 @@ export const useTimelineEvents = (sessionId: string): UseTimelineEventsReturn =>
       websocketRef.current.onmessage = (event) => {
         try {
           const newEvent = JSON.parse(event.data);
-          if (newEvent.session_id === sessionId) {
+          if (sessionName ? newEvent.tinstar_term_name === sessionName : newEvent.session_id === sessionId) {
             setEvents(prev => [...prev, newEvent]);
           }
         } catch (err) {
@@ -92,7 +95,7 @@ export const useTimelineEvents = (sessionId: string): UseTimelineEventsReturn =>
       setError('Failed to connect to WebSocket');
       setWsConnected(false);
     }
-  }, [sessionId]);
+  }, [sessionId, sessionName]);
 
   const disconnectWebSocket = useCallback(() => {
     if (websocketRef.current) {

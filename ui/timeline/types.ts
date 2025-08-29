@@ -39,6 +39,7 @@ export interface TimelineState {
 
 export interface TimelineProps {
   sessionId: string
+  sessionName?: string
   onEventSelect: (event: TimelineEvent) => void
   selectedEventId?: string
 }
