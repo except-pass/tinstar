@@ -75,11 +75,30 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const extractPromptFromEvent = useCallback((event: any): string | null => {
     if (!event) return null;
     
+    console.log('DetailsPane Debug - Extracting from event:', event);
+    
     // Check various places where prompt content might be stored
     if (event.message) return event.message;
     if (event.tool_input?.text) return event.tool_input.text;
     if (event.tool_input?.prompt) return event.tool_input.prompt;
     if (event.prompt) return event.prompt;
+    if (event.text) return event.text;  // Sometimes it might be in a text field
+    
+    // Check if it's in the raw data structure
+    if (typeof event.raw_data === 'string') {
+      try {
+        const parsed = JSON.parse(event.raw_data);
+        if (parsed.message) return parsed.message;
+        if (parsed.text) return parsed.text;
+        if (parsed.prompt) return parsed.prompt;
+      } catch (e) {
+        // Ignore parse errors
+      }
+    } else if (event.raw_data && typeof event.raw_data === 'object') {
+      if (event.raw_data.message) return event.raw_data.message;
+      if (event.raw_data.text) return event.raw_data.text;
+      if (event.raw_data.prompt) return event.raw_data.prompt;
+    }
     
     return null;
   }, []);
@@ -87,6 +106,11 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   // Determine which prompts to show (up to 3: initial, latest if different, selected if different)
   const promptsToShow = useMemo(() => {
     const prompts: Array<{label: string, content: string}> = [];
+    
+    // Debug logging
+    console.log('DetailsPane Debug - Events:', events.length);
+    console.log('DetailsPane Debug - Event types:', events.map(e => e.hook_event_name));
+    console.log('DetailsPane Debug - Selected prompt:', selectedPrompt);
     
     // Always show initial prompt if available
     if (session?.initial_prompt) {
@@ -98,14 +122,20 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     
     // Find all user prompt events and get the latest one
     const userPromptEvents = events.filter(event => 
-      event.hook_event_name?.toLowerCase() === 'userpromptsubmit' || 
-      event.hook_event_name?.toLowerCase() === 'user_prompt'
+      event.hook_event_name === 'UserPromptSubmit'
     );
+    
+    console.log('DetailsPane Debug - User prompt events found:', userPromptEvents.length);
+    if (userPromptEvents.length > 0) {
+      console.log('DetailsPane Debug - Sample user prompt event:', userPromptEvents[0]);
+    }
     
     if (userPromptEvents.length > 0) {
       // Get the latest prompt
       const latestPromptEvent = userPromptEvents[userPromptEvents.length - 1];
       const latestPromptContent = extractPromptFromEvent(latestPromptEvent);
+      
+      console.log('DetailsPane Debug - Latest prompt content:', latestPromptContent);
       
       // Only show latest if it's different from initial
       if (latestPromptContent && latestPromptContent !== session?.initial_prompt) {
@@ -129,6 +159,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
       }
     }
     
+    console.log('DetailsPane Debug - Final prompts to show:', prompts);
     return prompts;
   }, [session?.initial_prompt, events, selectedPrompt, extractPromptFromEvent]);
 
