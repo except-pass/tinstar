@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .database import WorktreeDatabase
-from .models import Worktree, WorktreeCreateRequest, WorktreeDeleteRequest
+from .models import Worktree, WorktreeCreateRequest, WorktreeDeleteRequest, Commit
 
 
 class WorktreeService:
@@ -250,3 +250,122 @@ class WorktreeService:
     def find_worktrees_by_partial_name(self, partial_name: str) -> List[Worktree]:
         """Find worktrees by partial name across all projects."""
         return self.db.find_worktrees_by_partial_name(partial_name)
+    
+    def _parse_git_log_output(self, output: str, worktree_path: str) -> List[Commit]:
+        """Parse git log output into Commit objects."""
+        if not output.strip():
+            return []
+        
+        commits = []
+        lines = output.strip().split('\n')
+        
+        for line in lines:
+            if not line.strip():
+                continue
+            
+            # Parse format: "hash|author|timestamp|message"
+            parts = line.split('|', 3)
+            if len(parts) != 4:
+                continue
+            
+            hash_short, author, timestamp_str, message = parts
+            
+            # Get full hash
+            success, full_hash_output = self._run_git_command(
+                ["git", "rev-parse", hash_short],
+                worktree_path
+            )
+            full_hash = full_hash_output.strip() if success else hash_short
+            
+            # Get files changed count
+            success, files_output = self._run_git_command(
+                ["git", "show", "--name-only", "--format=", hash_short],
+                worktree_path
+            )
+            files_changed = len([f for f in files_output.strip().split('\n') if f.strip()]) if success else 0
+            
+            # Convert timestamp to ISO format
+            try:
+                # Git log timestamp format: "2025-08-29 14:32:15 -0700"
+                dt = datetime.strptime(timestamp_str.split(' ')[0] + ' ' + timestamp_str.split(' ')[1], 
+                                     '%Y-%m-%d %H:%M:%S')
+                iso_timestamp = dt.isoformat()
+            except:
+                iso_timestamp = timestamp_str
+            
+            commits.append(Commit(
+                hash=full_hash,
+                message=message.strip(),
+                author=author.strip(),
+                timestamp=iso_timestamp,
+                files_changed=files_changed
+            ))
+        
+        return commits
+    
+    def get_commits_for_worktree(self, worktree_name: str, project: str) -> List[Commit]:
+        """Get commits made in a specific worktree that aren't in the main project."""
+        # Get worktree from database
+        worktree = self.db.get_worktree(worktree_name, project)
+        if not worktree:
+            return []
+        
+        # Get project path
+        project_path = self.db.get_project_path(project)
+        if not project_path:
+            return []
+        
+        worktree_path = Path(worktree.path)
+        if not worktree_path.exists():
+            return []
+        
+        # Get project HEAD commit
+        project_head_success, project_head_output = self._run_git_command(
+            ["git", "rev-parse", "HEAD"],
+            project_path
+        )
+        
+        if not project_head_success:
+            return []
+        
+        project_head = project_head_output.strip()
+        
+        # Use the git command: git log --oneline "$(git -C "$PROJECT" rev-parse HEAD)"..HEAD
+        # But with more detailed format for parsing
+        git_log_command = [
+            "git", "log", 
+            "--format=%h|%an|%ai|%s",  # hash|author|timestamp|message
+            f"{project_head}..HEAD"
+        ]
+        
+        success, output = self._run_git_command(git_log_command, str(worktree_path))
+        
+        if not success:
+            return []
+        
+        return self._parse_git_log_output(output, str(worktree_path))
+    
+    def get_commits_by_session(self, session_id: Optional[str] = None, tinstar_term_name: Optional[str] = None) -> List[Commit]:
+        """Get commits for a session identified by session_id or tinstar_term_name."""
+        if not session_id and not tinstar_term_name:
+            return []
+        
+        # Find worktrees that match the session criteria
+        # This is a simplified approach - in a real implementation we'd need
+        # to track session-to-worktree mapping more explicitly
+        
+        if tinstar_term_name:
+            # Use the partial name search to find matching worktrees
+            worktrees = self.db.find_worktrees_by_partial_name(tinstar_term_name)
+            
+            all_commits = []
+            for worktree in worktrees:
+                if worktree.name == tinstar_term_name:  # Exact match
+                    commits = self.get_commits_for_worktree(worktree.name, worktree.project)
+                    all_commits.extend(commits)
+            
+            return all_commits
+        
+        # For session_id, we'd need additional mapping logic
+        # For now, return empty list as this requires more complex session tracking
+        return []

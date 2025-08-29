@@ -129,13 +129,6 @@ export const isActiveNotification = (event: Event, allEvents: Event[]): boolean 
 };
 
 export const processEvents = (events: Event[], commits: Commit[]): TimelineEvent[] => {
-  console.log('Processing events:', events.length, 'raw events');
-  console.log('Event types:', events.map(e => e.hook_event_name).slice(0, 10));
-  
-  // Show all unique event types
-  const uniqueEventTypes = [...new Set(events.map(e => e.hook_event_name))];
-  console.log('All unique hook_event_name values:', uniqueEventTypes);
-  
   const groupedEvents = groupToolUsesByMessage(events);
   
   const eventTimelines: TimelineEvent[] = groupedEvents.map((event, index) => {
@@ -161,7 +154,6 @@ export const processEvents = (events: Event[], commits: Commit[]): TimelineEvent
     data: commit
   }));
   
-  console.log('Processed commit timelines:', commitTimelines.length);
   
   const allTimelines = [...eventTimelines, ...commitTimelines];
   

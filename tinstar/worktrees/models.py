@@ -70,3 +70,19 @@ class WorktreeDeleteRequest(BaseModel):
 class WorktreeListRequest(BaseModel):
     """Request model for listing worktrees."""
     project: str = Field(..., description="Project name to filter by")
+
+
+class Commit(BaseModel):
+    """Git commit model for timeline integration."""
+    hash: str = Field(..., description="Full commit SHA")
+    message: str = Field(..., description="Commit message")
+    author: str = Field(..., description="Commit author name")
+    timestamp: str = Field(..., description="ISO 8601 commit timestamp")
+    files_changed: int = Field(..., description="Number of files changed in commit")
+
+
+class CommitResponse(BaseModel):
+    """Response model for commit queries."""
+    success: bool
+    commits: List[Commit] = Field(default_factory=list)
+    message: Optional[str] = None

@@ -1,7 +1,7 @@
 """
 HTTP API endpoints for the Tinstar worktrees system.
 """
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import ValidationError
@@ -11,7 +11,8 @@ from .models import (
     WorktreeCreateRequest,
     WorktreeDeleteRequest,
     WorktreeListRequest,
-    WorktreeResponse
+    WorktreeResponse,
+    CommitResponse
 )
 from .service import WorktreeService
 
@@ -92,4 +93,35 @@ async def delete_worktree(
                 success=True,
                 message=f"Worktree '{name}' removed from database (git removal failed)"
             )
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/commits", response_model=CommitResponse)
+async def get_commits(
+    session_id: Optional[str] = Query(None, description="Session ID"),
+    tinstar_term_name: Optional[str] = Query(None, description="Terminal session name")
+):
+    """Get commits for a session identified by session_id or tinstar_term_name."""
+    try:
+        if not session_id and not tinstar_term_name:
+            raise HTTPException(
+                status_code=400, 
+                detail="Either session_id or tinstar_term_name must be provided"
+            )
+        
+        service = WorktreeService()
+        commits = service.get_commits_by_session(
+            session_id=session_id,
+            tinstar_term_name=tinstar_term_name
+        )
+        
+        return CommitResponse(
+            success=True,
+            commits=commits,
+            message=f"Found {len(commits)} commits"
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

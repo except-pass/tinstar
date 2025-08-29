@@ -31,8 +31,6 @@ export const useTimelineEvents = (sessionId: string, sessionName?: string): UseT
       }
       
       const eventsData: Event[] = await response.json();
-      console.log('Timeline events received:', eventsData.length, 'events');
-      console.log('Sample events:', eventsData.slice(0, 3).map(e => ({ hook_event_name: e.hook_event_name, timestamp: e.timestamp })));
       setEvents(eventsData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch events');
@@ -46,15 +44,13 @@ export const useTimelineEvents = (sessionId: string, sessionName?: string): UseT
       const query = sessionName 
         ? `/api/worktrees/commits?tinstar_term_name=${encodeURIComponent(sessionName)}`
         : `/api/worktrees/commits?session_id=${encodeURIComponent(sessionId)}`;
-      console.log('Fetching commits from:', query);
       const response = await fetch(query);
       if (!response.ok) {
         throw new Error(`Failed to fetch commits: ${response.statusText}`);
       }
       
-      const commitsData: Commit[] = await response.json();
-      console.log('Timeline commits received:', commitsData.length, 'commits');
-      console.log('Sample commits:', commitsData.slice(0, 3).map(c => ({ hash: c.hash.slice(0, 8), message: c.message.slice(0, 50), timestamp: c.timestamp })));
+      const commitsResponse = await response.json();
+      const commitsData: Commit[] = commitsResponse.commits || [];
       setCommits(commitsData);
     } catch (err) {
       console.warn('Failed to fetch commits:', err);
