@@ -33,9 +33,9 @@ export const getEventIcon = (event: Event | { type: 'commit' }, isActive?: boole
   
   switch (type) {
     case 'prompt':
-      return '💬';
+      return '📝';
     case 'notification':
-      return isActive ? '🟠' : '⚪';
+      return isActive ? '🔔' : '◽';
     case 'stop':
       return '🛑';
     case 'tool':
