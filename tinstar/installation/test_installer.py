@@ -11,6 +11,7 @@ from tinstar.installation.installer import (
     merge_hooks,
     purge_tinstar_hooks,
     template_hooks_json,
+    ensure_permissions,
 )
 
 
@@ -265,6 +266,135 @@ class TestTemplateHooksJson:
             expected_path = str((logs_dir / "activity-log.jsonl").resolve())
             assert expected_path in command
             assert "/home/ubuntu/repo/ctrltower/logs/activity-log.jsonl" not in command
+
+
+class TestEnsurePermissions:
+    """Test the ensure_permissions function."""
+
+    def test_ensure_permissions_adds_both_directories(self):
+        """Test that ensure_permissions adds both tinstar root and worktrees directories."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tinstar_dir = temp_path / ".tinstar"
+            worktrees_dir = tinstar_dir / "worktrees"
+            
+            # Create the directory structure
+            worktrees_dir.mkdir(parents=True)
+            
+            settings = {}
+            ensure_permissions(settings, worktrees_dir)
+            
+            additional_dirs = settings["permissions"]["additionalDirectories"]
+            
+            # Should have both paths
+            assert len(additional_dirs) == 2
+            
+            # Resolve expected paths
+            expected_tinstar = str(tinstar_dir.resolve()) + "/"
+            expected_worktrees = str(worktrees_dir.resolve()) + "/"
+            
+            assert expected_tinstar in additional_dirs
+            assert expected_worktrees in additional_dirs
+
+    def test_ensure_permissions_no_duplicates_on_multiple_calls(self):
+        """Test that multiple calls don't create duplicate directory entries."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tinstar_dir = temp_path / ".tinstar"
+            worktrees_dir = tinstar_dir / "worktrees"
+            
+            worktrees_dir.mkdir(parents=True)
+            
+            settings = {}
+            
+            # Call multiple times
+            ensure_permissions(settings, worktrees_dir)
+            ensure_permissions(settings, worktrees_dir)
+            ensure_permissions(settings, worktrees_dir)
+            
+            additional_dirs = settings["permissions"]["additionalDirectories"]
+            
+            # Should still have only 2 unique entries
+            assert len(additional_dirs) == 2
+            assert len(set(additional_dirs)) == 2  # All unique
+
+    def test_ensure_permissions_preserves_existing_directories(self):
+        """Test that existing additional directories are preserved."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tinstar_dir = temp_path / ".tinstar"
+            worktrees_dir = tinstar_dir / "worktrees"
+            
+            worktrees_dir.mkdir(parents=True)
+            
+            # Pre-populate settings with existing directories
+            settings = {
+                "permissions": {
+                    "additionalDirectories": [
+                        "/some/existing/path/",
+                        "/another/existing/path/"
+                    ]
+                }
+            }
+            
+            original_count = len(settings["permissions"]["additionalDirectories"])
+            ensure_permissions(settings, worktrees_dir)
+            
+            additional_dirs = settings["permissions"]["additionalDirectories"]
+            
+            # Should have original + 2 new directories
+            assert len(additional_dirs) == original_count + 2
+            
+            # Original paths should still be there
+            assert "/some/existing/path/" in additional_dirs
+            assert "/another/existing/path/" in additional_dirs
+            
+            # New paths should be added
+            expected_tinstar = str(tinstar_dir.resolve()) + "/"
+            expected_worktrees = str(worktrees_dir.resolve()) + "/"
+            assert expected_tinstar in additional_dirs
+            assert expected_worktrees in additional_dirs
+
+    def test_template_hooks_json_includes_both_paths(self):
+        """Test that templated hooks.json includes both tinstar root and worktrees paths."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            hooks_file = temp_path / "hooks.json"
+            logs_dir = temp_path / "logs"
+            logs_dir.mkdir()
+            
+            # Create test hooks file with both template paths
+            test_hooks = {
+                "permissions": {
+                    "additionalDirectories": [
+                        "/home/ubuntu/.tinstar/",
+                        "/home/ubuntu/.tinstar/worktrees/"
+                    ]
+                },
+                "hooks": {}
+            }
+            
+            hooks_file.write_text(json.dumps(test_hooks))
+            
+            with patch('tinstar.config.get_config') as mock_config:
+                mock_config.return_value.get_server_base_url.return_value = "http://localhost:8000"
+                
+                result = template_hooks_json(hooks_file, logs_dir)
+                
+                additional_dirs = result["permissions"]["additionalDirectories"]
+                
+                # Should have both templated paths
+                assert len(additional_dirs) == 2
+                
+                expected_tinstar = str(logs_dir.parent.resolve()) + "/"
+                expected_worktrees = str((logs_dir.parent / "worktrees").resolve()) + "/"
+                
+                assert expected_tinstar in additional_dirs
+                assert expected_worktrees in additional_dirs
+                
+                # Should not contain hardcoded paths
+                assert "/home/ubuntu/.tinstar/" not in additional_dirs
+                assert "/home/ubuntu/.tinstar/worktrees/" not in additional_dirs
 
 
 def test_install_regression_multiple_runs():

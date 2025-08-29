@@ -1,6 +1,7 @@
 {
   "permissions": {
     "additionalDirectories": [
+      "/home/ubuntu/.tinstar/",
       "/home/ubuntu/.tinstar/worktrees/"
     ]
   },

@@ -106,6 +106,7 @@ def template_hooks_json(hooks_src: Path, logs_dir: Path) -> dict:
     config = get_config()
 
     log_path = str((logs_dir / "activity-log.jsonl").resolve())
+    tinstar_root_path = str(logs_dir.parent.resolve()) + "/"
     worktree_path = str((logs_dir.parent / "worktrees").resolve()) + "/"
     server_base_url = config.get_server_base_url()
 
@@ -113,7 +114,9 @@ def template_hooks_json(hooks_src: Path, logs_dir: Path) -> dict:
     templated_content = hooks_content.replace(
         "/home/ubuntu/repo/ctrltower/logs/activity-log.jsonl", log_path
     ).replace(
-        "/home/ubuntu/.ctrltower/worktrees/", worktree_path
+        "/home/ubuntu/.tinstar/", tinstar_root_path
+    ).replace(
+        "/home/ubuntu/.tinstar/worktrees/", worktree_path
     ).replace(
         "{{SERVER_BASE_URL}}", server_base_url
     )
@@ -215,6 +218,13 @@ def merge_hooks(settings: dict, new_hooks: dict) -> None:
 def ensure_permissions(settings: dict, worktrees_dir: Path) -> None:
     perms = settings.setdefault("permissions", {})
     addl = perms.setdefault("additionalDirectories", [])
+    
+    # Add the main tinstar directory for trust
+    tinstar_root_path = str(worktrees_dir.parent.resolve()) + "/"
+    if tinstar_root_path not in addl:
+        addl.append(tinstar_root_path)
+        
+    # Add the worktrees directory
     worktrees_path = str(worktrees_dir.resolve()) + "/"
     if worktrees_path not in addl:
         addl.append(worktrees_path)
