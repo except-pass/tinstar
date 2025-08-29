@@ -383,6 +383,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
         <div className="timeline-section">
           <Timeline 
             sessionId={sessionId}
+            sessionName={session?.name}
             onEventSelect={handleTimelineEventSelect}
             selectedEventId={selectedTimelineEvent?.id}
           />

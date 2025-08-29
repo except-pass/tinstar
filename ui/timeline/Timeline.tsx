@@ -6,10 +6,11 @@ import './Timeline.css';
 
 export const Timeline: React.FC<TimelineProps> = ({
   sessionId,
+  sessionName,
   onEventSelect,
   selectedEventId,
 }) => {
-  const { events, commits, loading, error, wsConnected } = useTimelineEvents(sessionId);
+  const { events, commits, loading, error, wsConnected } = useTimelineEvents(sessionId, sessionName);
   const [autoScroll, setAutoScroll] = useState(true);
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
   const timelineRef = useRef<HTMLDivElement>(null);
