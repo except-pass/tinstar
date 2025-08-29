@@ -3,13 +3,18 @@ import { Event, Commit, TimelineEvent } from './types';
 export const mapEventType = (hookEventName: string): TimelineEvent['type'] => {
   switch (hookEventName.toLowerCase()) {
     case 'user_prompt':
+    case 'userprompt':
+    case 'userpromptsubmit':
       return 'prompt';
     case 'notification':
       return 'notification';
     case 'stop':
+    case 'subagent_stop':
       return 'stop';
     case 'pre_tool_use':
     case 'post_tool_use':
+    case 'pretooluse':
+    case 'posttooluse':
       return 'tool';
     case 'todowrite':
       return 'todo';
@@ -18,7 +23,7 @@ export const mapEventType = (hookEventName: string): TimelineEvent['type'] => {
   }
 };
 
-export const getEventIcon = (event: Event | { type: 'commit' }): TimelineEvent['icon'] => {
+export const getEventIcon = (event: Event | { type: 'commit' }, isActive?: boolean): TimelineEvent['icon'] => {
   if ('type' in event && event.type === 'commit') {
     return '💾';
   }
@@ -30,7 +35,7 @@ export const getEventIcon = (event: Event | { type: 'commit' }): TimelineEvent['
     case 'prompt':
       return '💬';
     case 'notification':
-      return '🟠';
+      return isActive ? '🟠' : '⚪';
     case 'stop':
       return '🛑';
     case 'tool':
@@ -52,39 +57,61 @@ export const generateEventId = (event: Event | Commit, index: number): string =>
 };
 
 export const isToolEvent = (event: Event): boolean => {
-  return event.hook_event_name === 'pre_tool_use' || event.hook_event_name === 'post_tool_use';
+  return event.hook_event_name === 'pre_tool_use' || 
+         event.hook_event_name === 'post_tool_use' ||
+         event.hook_event_name === 'tool_use';
 };
 
-export const groupConsecutiveToolUses = (events: Event[]): Array<Event & { toolCount?: number }> => {
+export const groupToolUsesByMessage = (events: Event[]): Array<Event & { toolCount?: number }> => {
   if (events.length === 0) return [];
   
   const grouped: Array<Event & { toolCount?: number }> = [];
-  let currentGroup: Event[] = [];
+  let skipUntil = -1;
   
   for (let i = 0; i < events.length; i++) {
+    if (i <= skipUntil) continue; // Skip events that were already grouped
+    
     const event = events[i];
     
     if (isToolEvent(event)) {
-      currentGroup.push(event);
-    } else {
-      if (currentGroup.length > 0) {
-        const representativeEvent = currentGroup[0];
-        grouped.push({
-          ...representativeEvent,
-          toolCount: currentGroup.length > 1 ? currentGroup.length : undefined
-        });
-        currentGroup = [];
+      // Count all tool events in this message burst
+      let toolCount = 1;
+      let lastToolIndex = i;
+      
+      // Look ahead to count tool events until next user prompt or significant time gap
+      for (let j = i + 1; j < events.length; j++) {
+        const nextEvent = events[j];
+        
+        // Stop at user prompt (new message)
+        if (nextEvent.hook_event_name === 'user_prompt') {
+          break;
+        }
+        
+        // Count tool events
+        if (isToolEvent(nextEvent)) {
+          toolCount++;
+          lastToolIndex = j;
+        }
+        
+        // Stop if too much time has passed since the first tool
+        const timeSinceFirst = new Date(nextEvent.timestamp).getTime() - new Date(event.timestamp).getTime();
+        if (timeSinceFirst > 300000) { // 5 minutes
+          break;
+        }
       }
+      
+      // Add the grouped tool event
+      grouped.push({
+        ...event,
+        toolCount: toolCount > 1 ? toolCount : undefined
+      });
+      
+      // Skip all the tool events we just counted
+      skipUntil = lastToolIndex;
+    } else {
+      // Non-tool event, add as-is
       grouped.push(event);
     }
-  }
-  
-  if (currentGroup.length > 0) {
-    const representativeEvent = currentGroup[0];
-    grouped.push({
-      ...representativeEvent,
-      toolCount: currentGroup.length > 1 ? currentGroup.length : undefined
-    });
   }
   
   return grouped;
@@ -102,18 +129,28 @@ export const isActiveNotification = (event: Event, allEvents: Event[]): boolean 
 };
 
 export const processEvents = (events: Event[], commits: Commit[]): TimelineEvent[] => {
-  const groupedEvents = groupConsecutiveToolUses(events);
+  console.log('Processing events:', events.length, 'raw events');
+  console.log('Event types:', events.map(e => e.hook_event_name).slice(0, 10));
   
-  const eventTimelines: TimelineEvent[] = groupedEvents.map((event, index) => ({
-    id: generateEventId(event, index),
-    type: mapEventType(event.hook_event_name),
-    timestamp: new Date(event.timestamp),
-    icon: getEventIcon(event),
-    count: event.toolCount,
-    selected: false,
-    active: event.hook_event_name === 'notification' && isActiveNotification(event, events),
-    data: event
-  }));
+  // Show all unique event types
+  const uniqueEventTypes = [...new Set(events.map(e => e.hook_event_name))];
+  console.log('All unique hook_event_name values:', uniqueEventTypes);
+  
+  const groupedEvents = groupToolUsesByMessage(events);
+  
+  const eventTimelines: TimelineEvent[] = groupedEvents.map((event, index) => {
+    const active = event.hook_event_name === 'notification' && isActiveNotification(event, events);
+    return {
+      id: generateEventId(event, index),
+      type: mapEventType(event.hook_event_name),
+      timestamp: new Date(event.timestamp),
+      icon: getEventIcon(event, active),
+      count: event.toolCount,
+      selected: false,
+      active,
+      data: event
+    };
+  });
   
   const commitTimelines: TimelineEvent[] = commits.map((commit, index) => ({
     id: generateEventId(commit, index),
@@ -123,6 +160,8 @@ export const processEvents = (events: Event[], commits: Commit[]): TimelineEvent
     selected: false,
     data: commit
   }));
+  
+  console.log('Processed commit timelines:', commitTimelines.length);
   
   const allTimelines = [...eventTimelines, ...commitTimelines];
   
