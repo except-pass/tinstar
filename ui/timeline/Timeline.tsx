@@ -75,6 +75,10 @@ export const Timeline: React.FC<TimelineProps> = ({
   const systemEvents = timelineEvents.filter(event => 
     ['tool', 'todo'].includes(event.type)
   );
+  
+  console.log('Timeline events:', timelineEvents.length, 'total');
+  console.log('User events:', userEvents.length, userEvents.map(e => e.type));
+  console.log('System events:', systemEvents.length, systemEvents.map(e => e.type));
 
   const getEventPosition = (event: TimelineEvent) => {
     if (timelineEvents.length === 0) return 0;

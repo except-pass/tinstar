@@ -195,8 +195,7 @@ export const MasterUI: React.FC<MasterUIProps> = ({
                   <h4>Quick Draw Navigation</h4>
                   <ul>
                     <li>Use ⚡🤠 Quick Draw for keyboard shortcuts</li>
-                    <li>Press <code>a</code> then another key to select agents</li>
-                    <li>Hover the Quick Draw badge to see all available shortcuts</li>
+                    <li>Press <code>q</code> to see all available shortcuts and namespaces</li>
                   </ul>
                 </div>
 

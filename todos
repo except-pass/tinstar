@@ -7,3 +7,5 @@ animations for
     - needs attention
 
 make the whole ui more responsive.  how should we handle refreshes?  e.g. the filelist doesnt refresh, and the status updates are not snappy.
+
+permissions pre-management.  make sure the .tinstar/worktrees is trusted on install.  put a list of common tools with check boxes so users dont have to do so many notifiactions

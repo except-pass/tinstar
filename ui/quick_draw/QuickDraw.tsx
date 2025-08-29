@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { quickDrawRegistry } from './QuickDrawRegistry';
 import { HelpContextOverlay } from './HelpContextOverlay';
+import { QuickDrawHelpOverlay } from './QuickDrawHelpOverlay';
 import './QuickDraw.css';
 
 interface QuickDrawState {
   isActive: boolean
   activeNamespace: string | null
   showHelpContext: boolean
+  showGlobalHelp: boolean
   helpTimeout: number | null
 }
 
@@ -15,6 +17,7 @@ export const QuickDraw: React.FC = () => {
     isActive: false,
     activeNamespace: null,
     showHelpContext: false,
+    showGlobalHelp: false,
     helpTimeout: null
   });
   
@@ -34,6 +37,7 @@ export const QuickDraw: React.FC = () => {
       isActive: false,
       activeNamespace: null,
       showHelpContext: false,
+      showGlobalHelp: false,
       helpTimeout: null
     });
   }, [clearHelpTimeout]);
@@ -57,6 +61,15 @@ export const QuickDraw: React.FC = () => {
 
   // Handle namespace key press
   const handleNamespaceKey = useCallback((key: string) => {
+    // Special handling for 'q' namespace - show global help overlay
+    if (key === 'q') {
+      setState(prev => ({
+        ...prev,
+        showGlobalHelp: true
+      }));
+      return true;
+    }
+
     if (!quickDrawRegistry.hasNamespace(key)) {
       return false; // Not handled
     }
@@ -137,6 +150,11 @@ export const QuickDraw: React.FC = () => {
     };
   }, [state.isActive, state.activeNamespace, handleNamespaceKey, handleActionKey, resetState, clearHelpTimeout]);
 
+  // Register the 'q' namespace for help
+  useEffect(() => {
+    quickDrawRegistry.registerNamespace('q', 'Help', 'Show quickdraw help with all namespaces and actions');
+  }, []);
+
   // Get current namespace info
   const currentNamespace = state.activeNamespace ? quickDrawRegistry.getNamespace(state.activeNamespace) : null;
 
@@ -185,6 +203,13 @@ export const QuickDraw: React.FC = () => {
       {state.showHelpContext && state.activeNamespace && (
         <HelpContextOverlay
           namespace={state.activeNamespace}
+          onClose={resetState}
+        />
+      )}
+      
+      {/* Global Help Overlay */}
+      {state.showGlobalHelp && (
+        <QuickDrawHelpOverlay
           onClose={resetState}
         />
       )}
