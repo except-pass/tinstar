@@ -94,12 +94,17 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({
       const newWidth = startWidth + (e.clientX - startX);
       const newHeight = startHeight + (e.clientY - startY);
       
-      // Set minimum dimensions
-      const minWidth = 200;
-      const minHeight = 120;
+      // Set minimum and maximum dimensions
+      const minWidth = 280;
+      const minHeight = 180;
+      const maxWidth = 500;
+      const maxHeight = 400;
       
-      controlBoardRef.current.style.width = `${Math.max(newWidth, minWidth)}px`;
-      controlBoardRef.current.style.height = `${Math.max(newHeight, minHeight)}px`;
+      const constrainedWidth = Math.max(minWidth, Math.min(newWidth, maxWidth));
+      const constrainedHeight = Math.max(minHeight, Math.min(newHeight, maxHeight));
+      
+      controlBoardRef.current.style.width = `${constrainedWidth}px`;
+      controlBoardRef.current.style.height = `${constrainedHeight}px`;
     };
     
     const handleMouseUp = () => {
@@ -125,51 +130,53 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({
       )}
       
       <div className="control-board-content">
-        <div className="control-board-main-actions">
-          <button 
-            className="control-button pause-button" 
-            onClick={handlePause}
-            title="Send escape key to pause agent"
-          >
-            ⏸️ Pause
-          </button>
+        <div className="control-board-actions">
+          <div className="control-board-primary-actions">
+            <button 
+              className="control-button pause-button" 
+              onClick={handlePause}
+              title="Send escape key (Ctrl+C equivalent) to pause the currently running agent command"
+            >
+              ⏸️ Pause
+            </button>
+            
+            <button 
+              className="control-button save-button" 
+              onClick={onSaveChanges}
+              disabled={!session || !onSaveChanges}
+              title="Create a git commit with all staged and unstaged files in the current worktree"
+            >
+              💾 Save
+            </button>
+            
+            <button 
+              className="control-button merge-button" 
+              onClick={onMergeWorktree}
+              disabled={!session || !onMergeWorktree}
+              title="Merge the current worktree changes back to the main branch"
+            >
+              ↪️ Merge
+            </button>
+            
+            <button 
+              className="control-button terminate-button danger" 
+              onClick={onTerminate}
+              disabled={!session || !onTerminate}
+              title="Terminate the current session and clean up resources"
+            >
+              ❌ Exit
+            </button>
+          </div>
           
-          <button 
-            className="control-board-attach-button" 
-            onClick={handleAttach}
-            title="Attach to tmux session"
-          >
-            Attach
-          </button>
-        </div>
-        
-        <div className="control-board-session-actions">
-          <button 
-            className="control-button save-button" 
-            onClick={onSaveChanges}
-            disabled={!session || !onSaveChanges}
-            title="Save changes with git commit"
-          >
-            💾 Save Changes
-          </button>
-          
-          <button 
-            className="control-button merge-button" 
-            onClick={onMergeWorktree}
-            disabled={!session || !onMergeWorktree}
-            title="Merge worktree to main branch"
-          >
-            ↪️ Merge Worktree
-          </button>
-          
-          <button 
-            className="control-button terminate-button danger" 
-            onClick={onTerminate}
-            disabled={!session || !onTerminate}
-            title="Terminate session"
-          >
-            ❌ Terminate Session
-          </button>
+          <div className="control-board-secondary-actions">
+            <button 
+              className="control-button attach-button" 
+              onClick={handleAttach}
+              title="Instructions for attaching to the tmux session directly via terminal"
+            >
+              🔗 Attach
+            </button>
+          </div>
         </div>
         
         <div className="control-board-notifications">
