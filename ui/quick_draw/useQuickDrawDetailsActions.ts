@@ -12,42 +12,116 @@ interface DetailsActionsProps {
   onTodoSelect?: (index: number) => void;
   onSave?: () => void;
   onFocusPrompt?: () => void;
+  onPause?: () => void;
+  onNotification?: (number: string) => void;
+  onScrollToBottom?: () => void;
+  onScrollToTop?: () => void;
+  sessionId: string;
 }
 
 export const useQuickDrawDetailsActions = ({
   todos,
   onTodoSelect,
   onSave,
-  onFocusPrompt
+  onFocusPrompt,
+  onPause,
+  onNotification,
+  onScrollToBottom,
+  onScrollToTop,
+  sessionId
 }: DetailsActionsProps) => {
   
   // Register details namespace and actions
   useEffect(() => {
     // Register the details namespace
-    quickDrawRegistry.registerNamespace('d', 'Details', 'Interact with details pane, todos, and prompt');
+    quickDrawRegistry.registerNamespace('d', 'Details', 'Interact with details pane, notifications, and controls');
     
-    // Register todo selection actions (1,2,3,4) - only for first 4 todos
-    const todoKeys = ['1', '2', '3', '4'];
-    
-    todos.forEach((todo, index) => {
-      if (index < todoKeys.length) {
-        const key = todoKeys[index];
-        const todoDescription = todo.content.length > 30 
-          ? `${todo.content.substring(0, 30)}...` 
-          : todo.content;
-        
-        quickDrawRegistry.registerAction('d', key, {
-          namespace: 'd',
-          key,
-          action: () => {
-            if (onTodoSelect) {
-              onTodoSelect(index);
+    // Register notification actions (1,2,3,4) - activate notifications
+    ['1', '2', '3', '4'].forEach(num => {
+      quickDrawRegistry.registerAction('d', num, {
+        namespace: 'd',
+        key: num,
+        action: async () => {
+          if (onNotification) {
+            onNotification(num);
+          } else {
+            // Fallback to direct API call if callback not provided
+            try {
+              await fetch(`/api/sessions/${sessionId}/send`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: num })
+              });
+            } catch (err) {
+              console.error(`Failed to send notification ${num}:`, err);
             }
-          },
-          description: `Select todo: ${todoDescription}`,
-          targetSelector: `[data-testid="todo-item-${index}"]`
-        });
-      }
+          }
+        },
+        description: `Activate notification ${num}`,
+        targetSelector: `.notification-button:nth-child(${num})`
+      });
+    });
+    
+    // Register pause action
+    quickDrawRegistry.registerAction('d', 'p', {
+      namespace: 'd',
+      key: 'p',
+      action: async () => {
+        if (onPause) {
+          onPause();
+        } else {
+          // Fallback to direct API call if callback not provided
+          try {
+            await fetch(`/api/sessions/${sessionId}/send`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: '\x1b' }) // Escape key
+            });
+          } catch (err) {
+            console.error('Failed to pause session:', err);
+          }
+        }
+      },
+      description: 'Pause session',
+      targetSelector: '.pause-button'
+    });
+    
+    // Register scroll to bottom action
+    quickDrawRegistry.registerAction('d', 'd', {
+      namespace: 'd',
+      key: 'd',
+      action: () => {
+        if (onScrollToBottom) {
+          onScrollToBottom();
+        } else {
+          // Fallback to direct terminal scrolling
+          const terminalEl = document.querySelector('.terminal-output') as HTMLElement;
+          if (terminalEl) {
+            terminalEl.scrollTop = terminalEl.scrollHeight;
+          }
+        }
+      },
+      description: 'Scroll terminal to bottom',
+      targetSelector: '.terminal-output'
+    });
+    
+    // Register scroll to top action  
+    quickDrawRegistry.registerAction('d', 'u', {
+      namespace: 'd',
+      key: 'u',
+      action: () => {
+        if (onScrollToTop) {
+          onScrollToTop();
+        } else {
+          // Fallback to direct terminal scrolling
+          const terminalEl = document.querySelector('.terminal-output') as HTMLElement;
+          if (terminalEl) {
+            terminalEl.scrollTop = 0;
+          }
+        }
+      },
+      description: 'Scroll terminal to top',
+      targetSelector: '.terminal-output'
     });
     
     // Register save action
@@ -61,11 +135,11 @@ export const useQuickDrawDetailsActions = ({
       });
     }
     
-    // Register focus prompt action
+    // Register focus prompt action (moved to 'f' key)
     if (onFocusPrompt) {
-      quickDrawRegistry.registerAction('d', 'p', {
+      quickDrawRegistry.registerAction('d', 'f', {
         namespace: 'd',
-        key: 'p',
+        key: 'f',
         action: onFocusPrompt,
         description: 'Focus prompt input',
         targetSelector: '.command-input textarea'
@@ -82,5 +156,5 @@ export const useQuickDrawDetailsActions = ({
         });
       }
     };
-  }, [todos, onTodoSelect, onSave, onFocusPrompt]);
+  }, [todos, onTodoSelect, onSave, onFocusPrompt, onPause, onNotification, onScrollToBottom, onScrollToTop, sessionId]);
 };

@@ -19,6 +19,9 @@ interface Session {
 }
 
 interface TodoEvent {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  activeForm: string;
   [key: string]: any;
 }
 
@@ -41,7 +44,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const terminalRef = useRef<HTMLPreElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const hasAutoScrolled = useRef(false);
-  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const toastTimeoutRef = useRef<number | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type });
@@ -301,12 +304,55 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     }
   }, []);
 
+  const handlePause = useCallback(async () => {
+    try {
+      await fetch(`/api/sessions/${sessionId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: '\x1b' }) // Escape key
+      });
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }, [sessionId]);
+
+  const handleNotification = useCallback(async (number: string) => {
+    try {
+      await fetch(`/api/sessions/${sessionId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: number })
+      });
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }, [sessionId]);
+
+  const handleScrollToBottom = useCallback(() => {
+    const el = terminalRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
+
+  const handleScrollToTop = useCallback(() => {
+    const el = terminalRef.current;
+    if (el) {
+      el.scrollTop = 0;
+    }
+  }, []);
+
   // Register QuickDraw actions
   useQuickDrawDetailsActions({
     todos,
     onTodoSelect: handleTodoSelect,
     onSave: handleSaveChanges,
-    onFocusPrompt: handleFocusPrompt
+    onFocusPrompt: handleFocusPrompt,
+    onPause: handlePause,
+    onNotification: handleNotification,
+    onScrollToBottom: handleScrollToBottom,
+    onScrollToTop: handleScrollToTop,
+    sessionId
   });
 
   return (
