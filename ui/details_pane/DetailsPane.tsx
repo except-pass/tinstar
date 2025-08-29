@@ -5,6 +5,7 @@ import FileList from './FileList';
 import { ControlBoard } from '../control_board';
 import { useQuickDrawDetailsActions } from '../quick_draw/useQuickDrawDetailsActions';
 import { Timeline, TimelineEvent } from '../timeline';
+import { useTimelineEvents } from '../timeline/useTimelineEvents';
 
 interface DetailsPaneProps {
   sessionId: string;
@@ -46,6 +47,9 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const hasAutoScrolled = useRef(false);
   const toastTimeoutRef = useRef<number | null>(null);
 
+  // Get timeline events for prompt extraction
+  const { events } = useTimelineEvents(sessionId, session?.name);
+
   const showToast = (message: string, type: 'success' | 'error') => {
     setToast({ message, type });
     
@@ -66,6 +70,67 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     ansi.use_classes = true;
     return ansi;
   }, []);
+
+  // Extract prompt content from an event
+  const extractPromptFromEvent = useCallback((event: any): string | null => {
+    if (!event) return null;
+    
+    // Check various places where prompt content might be stored
+    if (event.message) return event.message;
+    if (event.tool_input?.text) return event.tool_input.text;
+    if (event.tool_input?.prompt) return event.tool_input.prompt;
+    if (event.prompt) return event.prompt;
+    
+    return null;
+  }, []);
+
+  // Determine which prompts to show (up to 3: initial, latest if different, selected if different)
+  const promptsToShow = useMemo(() => {
+    const prompts: Array<{label: string, content: string}> = [];
+    
+    // Always show initial prompt if available
+    if (session?.initial_prompt) {
+      prompts.push({
+        label: 'Initial Prompt',
+        content: session.initial_prompt
+      });
+    }
+    
+    // Find all user prompt events and get the latest one
+    const userPromptEvents = events.filter(event => 
+      event.hook_event_name?.toLowerCase() === 'userpromptsubmit' || 
+      event.hook_event_name?.toLowerCase() === 'user_prompt'
+    );
+    
+    if (userPromptEvents.length > 0) {
+      // Get the latest prompt
+      const latestPromptEvent = userPromptEvents[userPromptEvents.length - 1];
+      const latestPromptContent = extractPromptFromEvent(latestPromptEvent);
+      
+      // Only show latest if it's different from initial
+      if (latestPromptContent && latestPromptContent !== session?.initial_prompt) {
+        prompts.push({
+          label: 'Latest Prompt',
+          content: latestPromptContent
+        });
+      }
+    }
+    
+    // Show selected prompt if it's different from initial and latest
+    if (selectedPrompt && selectedPrompt !== session?.initial_prompt) {
+      const latestPromptEvent = userPromptEvents.length > 0 ? userPromptEvents[userPromptEvents.length - 1] : null;
+      const latestPromptContent = latestPromptEvent ? extractPromptFromEvent(latestPromptEvent) : null;
+      
+      if (selectedPrompt !== latestPromptContent) {
+        prompts.push({
+          label: 'Selected Prompt',
+          content: selectedPrompt
+        });
+      }
+    }
+    
+    return prompts;
+  }, [session?.initial_prompt, events, selectedPrompt, extractPromptFromEvent]);
 
   // Fetch session details
   useEffect(() => {
@@ -366,14 +431,13 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
         <div className="session-info">
           <h2>{session.name}</h2>
           <p><strong>Project:</strong> {session.project}</p>
-          {session.initial_prompt && (
-            <p><strong>Initial Prompt:</strong> {session.initial_prompt}</p>
-          )}
-          {selectedPrompt && selectedPrompt !== session.initial_prompt && (
-            <div className="selected-prompt">
-              <p><strong>Selected Prompt:</strong> {selectedPrompt}</p>
+          
+          {/* Display up to 3 prompts */}
+          {promptsToShow.map((prompt, index) => (
+            <div key={index} className="prompt-section">
+              <p><strong>{prompt.label}:</strong> {prompt.content}</p>
             </div>
-          )}
+          ))}
         </div>
       ) : (
         <p>Loading session...</p>
