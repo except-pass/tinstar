@@ -22,24 +22,6 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({ sessionId }) => {
     }, 5000);
   };
 
-  const handleStop = async () => {
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
-      if (!res.ok) {
-        let message = 'Failed to stop session';
-        try {
-          const errorData = await res.json();
-          message = errorData.detail || errorData.message || message;
-        } catch {
-          const txt = await res.text();
-          if (txt) message = txt;
-        }
-        throw new Error(message);
-      }
-    } catch (err: any) {
-      showError(err.message);
-    }
-  };
 
   const handlePause = async () => {
     try {
@@ -130,14 +112,6 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({ sessionId }) => {
       <div className="control-board-content">
         <div className="control-board-main-actions">
           <button 
-            className="control-button stop-button" 
-            onClick={handleStop}
-            title="Stop the session"
-          >
-            Stop
-          </button>
-          
-          <button 
             className="control-button pause-button" 
             onClick={handlePause}
             title="Send escape key to pause agent"
@@ -146,7 +120,7 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({ sessionId }) => {
           </button>
           
           <button 
-            className="control-button attach-button" 
+            className="control-board-attach-button" 
             onClick={handleAttach}
             title="Attach to tmux session"
           >
