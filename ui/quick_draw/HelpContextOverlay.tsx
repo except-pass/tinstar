@@ -32,14 +32,25 @@ export const HelpContextOverlay: React.FC<HelpContextOverlayProps> = ({
       if (!element) return;
 
       const rect = element.getBoundingClientRect();
+      
+      // Calculate optimal positioning to avoid overlaps
+      let x = rect.right + 8;
+      let y = rect.top + (rect.height / 2) - 12;
+      
+      // Check if position would be too close to the right edge
+      if (x + 250 > window.innerWidth) { // Estimated hint width
+        x = rect.left - 258; // Position to the left instead
+      }
+      
+      // Ensure hint stays within viewport bounds
+      x = Math.max(8, Math.min(x, window.innerWidth - 258));
+      y = Math.max(8, Math.min(y, window.innerHeight - 50));
+      
       hints.push({
         key: action.key,
         description: action.description,
         targetElement: element,
-        position: { 
-          x: rect.right + 8, 
-          y: rect.top + (rect.height / 2) - 12
-        }
+        position: { x, y }
       });
     });
 
