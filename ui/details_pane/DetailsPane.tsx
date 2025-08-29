@@ -4,6 +4,7 @@ import './DetailsPane.css';
 import FileList from './FileList';
 import { ControlBoard } from '../control_board';
 import { useQuickDrawDetailsActions } from '../quick_draw/useQuickDrawDetailsActions';
+import { Timeline, TimelineEvent } from '../timeline';
 
 interface DetailsPaneProps {
   sessionId: string;
@@ -34,6 +35,8 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [terminated, setTerminated] = useState<boolean>(false);
+  const [selectedTimelineEvent, setSelectedTimelineEvent] = useState<TimelineEvent | null>(null);
+  const [selectedPrompt, setSelectedPrompt] = useState<string | null>(null);
 
   const terminalRef = useRef<HTMLPreElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -264,6 +267,21 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     }
   };
 
+  // Timeline event selection handler
+  const handleTimelineEventSelect = useCallback((event: TimelineEvent) => {
+    setSelectedTimelineEvent(event);
+    
+    // If it's a prompt event, extract and display the prompt message
+    if (event.type === 'prompt' && event.data && 'message' in event.data) {
+      setSelectedPrompt(event.data.message || null);
+    } else if (event.type === 'prompt' && event.data && 'tool_input' in event.data && event.data.tool_input) {
+      // For user_prompt events, the prompt might be in tool_input
+      setSelectedPrompt(event.data.tool_input.text || event.data.tool_input.prompt || null);
+    } else {
+      setSelectedPrompt(null);
+    }
+  }, []);
+
   // QuickDraw callbacks
   const handleTodoSelect = useCallback((index: number) => {
     if (index < todos.length) {
@@ -315,9 +333,24 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
           {session.initial_prompt && (
             <p><strong>Initial Prompt:</strong> {session.initial_prompt}</p>
           )}
+          {selectedPrompt && selectedPrompt !== session.initial_prompt && (
+            <div className="selected-prompt">
+              <p><strong>Selected Prompt:</strong> {selectedPrompt}</p>
+            </div>
+          )}
         </div>
       ) : (
         <p>Loading session...</p>
+      )}
+
+      {session && (
+        <div className="timeline-section">
+          <Timeline 
+            sessionId={sessionId}
+            onEventSelect={handleTimelineEventSelect}
+            selectedEventId={selectedTimelineEvent?.id}
+          />
+        </div>
       )}
 
       <div className="details-content">
