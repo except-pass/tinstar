@@ -226,16 +226,6 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     }
   };
 
-  const handleDeleteWorktree = async () => {
-    if (!session) return;
-    try {
-      await fetch(`/api/worktrees/${session.id}?project=${session.project}`, {
-        method: 'DELETE'
-      });
-    } catch (err: any) {
-      setError(err.message);
-    }
-  };
 
   const handleSaveChanges = async () => {
     if (!session) return;
@@ -425,12 +415,6 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
             </div>
           </div>
 
-          <div className="actions">
-            <button onClick={handleSaveChanges} className="save" data-testid="save-button">Save Changes</button>
-            <button onClick={handleMergeWorktree} className="merge">Merge Worktree</button>
-            <button onClick={handleTerminate} className="danger">Terminate Session</button>
-            <button onClick={handleDeleteWorktree}>Delete Worktree</button>
-          </div>
 
           <div className="todos-section">
             <div className="todo-header">
@@ -483,7 +467,13 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
         </div>
 
         <div className="details-sidebar">
-          <ControlBoard sessionId={sessionId} />
+          <ControlBoard 
+            sessionId={sessionId} 
+            session={session}
+            onSaveChanges={handleSaveChanges}
+            onMergeWorktree={handleMergeWorktree}
+            onTerminate={handleTerminate}
+          />
           {session && (
             <FileList sessionId={sessionId} project={session.project} />
           )}

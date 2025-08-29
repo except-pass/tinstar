@@ -3,6 +3,15 @@ import './ControlBoard.css';
 
 interface ControlBoardProps {
   sessionId: string;
+  session?: {
+    id: string;
+    name: string;
+    project: string;
+    status?: string;
+  } | null;
+  onSaveChanges?: () => void;
+  onMergeWorktree?: () => void;
+  onTerminate?: () => void;
 }
 
 interface ControlBoardError {
@@ -10,7 +19,13 @@ interface ControlBoardError {
   timestamp: number;
 }
 
-export const ControlBoard: React.FC<ControlBoardProps> = ({ sessionId }) => {
+export const ControlBoard: React.FC<ControlBoardProps> = ({ 
+  sessionId, 
+  session, 
+  onSaveChanges, 
+  onMergeWorktree, 
+  onTerminate 
+}) => {
   const [error, setError] = useState<ControlBoardError | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const controlBoardRef = useRef<HTMLDivElement>(null);
@@ -116,7 +131,7 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({ sessionId }) => {
             onClick={handlePause}
             title="Send escape key to pause agent"
           >
-            Pause
+            ⏸️ Pause
           </button>
           
           <button 
@@ -125,6 +140,35 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({ sessionId }) => {
             title="Attach to tmux session"
           >
             Attach
+          </button>
+        </div>
+        
+        <div className="control-board-session-actions">
+          <button 
+            className="control-button save-button" 
+            onClick={onSaveChanges}
+            disabled={!session || !onSaveChanges}
+            title="Save changes with git commit"
+          >
+            💾 Save Changes
+          </button>
+          
+          <button 
+            className="control-button merge-button" 
+            onClick={onMergeWorktree}
+            disabled={!session || !onMergeWorktree}
+            title="Merge worktree to main branch"
+          >
+            ↪️ Merge Worktree
+          </button>
+          
+          <button 
+            className="control-button terminate-button danger" 
+            onClick={onTerminate}
+            disabled={!session || !onTerminate}
+            title="Terminate session"
+          >
+            ❌ Terminate Session
           </button>
         </div>
         
