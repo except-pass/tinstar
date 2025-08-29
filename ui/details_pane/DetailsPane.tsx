@@ -122,6 +122,8 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     
     // Find all user prompt events and get the latest one
     const userPromptEvents = events.filter(event => 
+      event.hook_event_name?.toLowerCase() === 'userpromptsubmit' ||
+      event.hook_event_name?.toLowerCase() === 'user_prompt' ||
       event.hook_event_name === 'UserPromptSubmit'
     );
     
