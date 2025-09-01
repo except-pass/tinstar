@@ -1,11 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AnsiUp } from 'ansi_up';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './DetailsPane.css';
+import 'xterm/css/xterm.css';
 import FileList from './FileList';
 import { ControlBoard } from '../control_board';
 import { useQuickDrawDetailsActions } from '../quick_draw/useQuickDrawDetailsActions';
 import { Timeline, TimelineEvent } from '../timeline';
 import { useTimelineEvents } from '../timeline/useTimelineEvents';
+import { useTerminalOutput } from '../useTerminalOutput';
 
 interface DetailsPaneProps {
   sessionId: string;
@@ -32,7 +33,6 @@ interface Event {
 
 export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const [session, setSession] = useState<Session | null>(null);
-  const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const [commandText, setCommandText] = useState('');
   const [todos, setTodos] = useState<TodoEvent[]>([]);
   const [eventStats, setEventStats] = useState<Record<string, number>>({});
@@ -42,10 +42,11 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const [selectedTimelineEvent, setSelectedTimelineEvent] = useState<TimelineEvent | null>(null);
   const [selectedPrompt, setSelectedPrompt] = useState<string | null>(null);
 
-  const terminalRef = useRef<HTMLPreElement | null>(null);
+  const terminalRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const hasAutoScrolled = useRef(false);
   const toastTimeoutRef = useRef<number | null>(null);
+
+  useTerminalOutput(sessionId, terminalRef);
 
   // Get timeline events for prompt extraction
   const { events } = useTimelineEvents(sessionId, session?.name);
@@ -64,12 +65,6 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
       toastTimeoutRef.current = null;
     }, 4000);
   };
-
-  const ansiUp = useMemo(() => {
-    const ansi = new (AnsiUp as any)();
-    ansi.use_classes = true;
-    return ansi;
-  }, []);
 
   // Extract prompt content from an event
   const extractPromptFromEvent = useCallback((event: any): string | null => {
@@ -181,50 +176,6 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     fetchSession();
   }, [sessionId, terminated]);
 
-  // Poll terminal output
-  useEffect(() => {
-    if (terminated) {
-      setTerminalLines([]);
-      return;
-    }
-    let isMounted = true;
-    const fetchPeek = async () => {
-      try {
-        const res = await fetch(`/api/sessions/${sessionId}/peek?lines=50`);
-        if (res.status === 404) {
-          if (isMounted) setTerminalLines([]);
-          return;
-        }
-        if (!res.ok) throw new Error('Failed to fetch terminal output');
-        const data = await res.json();
-        const lines: string[] = (data && data.peek && Array.isArray(data.peek.lines)) ? data.peek.lines : [];
-        if (isMounted) {
-          setTerminalLines(lines);
-        }
-      } catch (err: any) {
-        if (isMounted) setError(err.message);
-      }
-    };
-    fetchPeek();
-    const interval = setInterval(fetchPeek, 3000);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [sessionId, terminated]);
-
-  // On first load of terminal lines, scroll to bottom so newest output is visible
-  useEffect(() => {
-    if (!hasAutoScrolled.current && terminalLines.length > 0) {
-      hasAutoScrolled.current = true;
-      requestAnimationFrame(() => {
-        const el = terminalRef.current;
-        if (el) {
-          el.scrollTop = el.scrollHeight;
-        }
-      });
-    }
-  }, [terminalLines]);
 
   // Fetch todos
   useEffect(() => {
@@ -491,11 +442,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
         <div className="details-main">
           <div className="terminal-section">
             <h3>Terminal Output</h3>
-            <pre className="terminal-output" ref={terminalRef}>
-              {terminalLines.map((line, idx) => (
-                <div key={idx} dangerouslySetInnerHTML={{ __html: ansiUp.ansi_to_html(line) }} />
-              ))}
-            </pre>
+            <div className="terminal-output" ref={terminalRef}></div>
             <div className="command-input">
               <textarea
                 ref={textareaRef}

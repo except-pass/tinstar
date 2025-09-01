@@ -3,6 +3,7 @@ Session service for managing session lifecycle, terminal management, and agent o
 """
 import asyncio
 import os
+import base64
 import random
 import subprocess
 import uuid
@@ -17,6 +18,7 @@ from .agents import AgentManager
 from .editors import EditorManager
 from ..worktrees.service import WorktreeService
 from ..worktrees.models import WorktreeCreateRequest, WorktreeDeleteRequest
+from ..events.websocket import websocket_manager
 
 
 class SessionService:
@@ -132,6 +134,9 @@ class SessionService:
                 
                 # Start agent process
                 await self._start_agent(session)
+
+                # Begin streaming terminal output
+                await self._setup_terminal_stream(session)
                 
             except Exception as e:
                 # Cleanup on failure
@@ -209,6 +214,52 @@ class SessionService:
                 
         except Exception as e:
             raise RuntimeError(f"Error starting agent: {e}")
+
+    async def _setup_terminal_stream(self, session: Session) -> None:
+        """Configure tmux pipe and start streaming terminal data."""
+        try:
+            fifo_dir = Path("/tmp/tinstar_fifos")
+            fifo_dir.mkdir(parents=True, exist_ok=True)
+            fifo_path = fifo_dir / f"{session.id}.fifo"
+            if fifo_path.exists():
+                fifo_path.unlink()
+            os.mkfifo(fifo_path)
+
+            cmd = [
+                "tmux", "-L", "tinstar", "pipe-pane", "-t", session.tmux_session_name,
+                f"cat > {fifo_path}"
+            ]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await process.wait()
+
+            asyncio.create_task(self._stream_terminal_data(session.id, fifo_path))
+            await websocket_manager.broadcast("terminal_cleared", {"sessionId": session.id})
+        except Exception as e:
+            raise RuntimeError(f"Failed to setup terminal stream: {e}")
+
+    async def _stream_terminal_data(self, session_id: str, fifo_path: Path) -> None:
+        """Read raw byte chunks from FIFO and broadcast as terminal_data events."""
+        loop = asyncio.get_event_loop()
+        while True:
+            try:
+                with open(fifo_path, "rb") as fifo:
+                    while True:
+                        chunk = await loop.run_in_executor(None, fifo.read, 1024)
+                        if not chunk:
+                            await asyncio.sleep(0.05)
+                            continue
+                        data = base64.b64encode(chunk).decode("ascii")
+                        await websocket_manager.broadcast(
+                            "terminal_data", {"sessionId": session_id, "data": data}
+                        )
+            except FileNotFoundError:
+                break
+            except Exception:
+                await asyncio.sleep(0.1)
     
     def get_session(self, session_id: str) -> Optional[Session]:
         """Get session by ID."""

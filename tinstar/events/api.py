@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from .models import Event, EventFilter, EventResponse, WebSocketMessage
 from .service import EventIngestionService
-from .websocket import WebSocketManager
+from .websocket import websocket_manager
 
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class EventsAPI:
     
     def __init__(self, service: Optional[EventIngestionService] = None):
         self.service = service or EventIngestionService()
-        self.websocket_manager = WebSocketManager()
+        self.websocket_manager = websocket_manager
         self.app = FastAPI(title="Tinstar Events API", version="1.0.0")
         
         # Register WebSocket callback
@@ -165,8 +165,6 @@ def create_events_router(service: Optional[EventIngestionService] = None) -> API
     """Factory function to create the events APIRouter."""
     router = APIRouter(prefix="/api/events", tags=["events"])
     ingestion_service = service or EventIngestionService()
-    websocket_manager = WebSocketManager()
-    
     # Register WebSocket callback
     ingestion_service.add_websocket_callback(websocket_manager.broadcast)
     

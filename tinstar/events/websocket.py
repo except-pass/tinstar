@@ -69,3 +69,7 @@ class WebSocketManager:
     def get_connection_count(self) -> int:
         """Get the number of active connections."""
         return len(self.active_connections)
+
+
+# Global manager instance for reuse across modules
+websocket_manager = WebSocketManager()

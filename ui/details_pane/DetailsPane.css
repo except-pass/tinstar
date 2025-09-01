@@ -90,13 +90,8 @@
 
 .terminal-output {
   background-color: #1e1e1e;
-  color: #d0d0d0;
   height: 420px;
-  overflow-y: auto;
-  padding: 8px;
   border: 1px solid #444;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
-  white-space: pre-wrap;
 }
 
 .command-input {
@@ -343,48 +338,6 @@
     opacity: 1;
   }
 }
-
-/* ANSI color support for terminal output */
-.terminal-output .ansi-black-fg { color: #000000; }
-.terminal-output .ansi-red-fg { color: #cd0000; }
-.terminal-output .ansi-green-fg { color: #00cd00; }
-.terminal-output .ansi-yellow-fg { color: #cdcd00; }
-.terminal-output .ansi-blue-fg { color: #0000ee; }
-.terminal-output .ansi-magenta-fg { color: #cd00cd; }
-.terminal-output .ansi-cyan-fg { color: #00cdcd; }
-.terminal-output .ansi-white-fg { color: #e5e5e5; }
-
-.terminal-output .ansi-bright-black-fg { color: #7f7f7f; }
-.terminal-output .ansi-bright-red-fg { color: #ff0000; }
-.terminal-output .ansi-bright-green-fg { color: #00ff00; }
-.terminal-output .ansi-bright-yellow-fg { color: #ffff00; }
-.terminal-output .ansi-bright-blue-fg { color: #5c5cff; }
-.terminal-output .ansi-bright-magenta-fg { color: #ff00ff; }
-.terminal-output .ansi-bright-cyan-fg { color: #00ffff; }
-.terminal-output .ansi-bright-white-fg { color: #ffffff; }
-
-.terminal-output .ansi-black-bg { background-color: #000000; }
-.terminal-output .ansi-red-bg { background-color: #cd0000; }
-.terminal-output .ansi-green-bg { background-color: #00cd00; }
-.terminal-output .ansi-yellow-bg { background-color: #cdcd00; }
-.terminal-output .ansi-blue-bg { background-color: #0000ee; }
-.terminal-output .ansi-magenta-bg { background-color: #cd00cd; }
-.terminal-output .ansi-cyan-bg { background-color: #00cdcd; }
-.terminal-output .ansi-white-bg { background-color: #e5e5e5; }
-
-.terminal-output .ansi-bright-black-bg { background-color: #7f7f7f; }
-.terminal-output .ansi-bright-red-bg { background-color: #ff0000; }
-.terminal-output .ansi-bright-green-bg { background-color: #00ff00; }
-.terminal-output .ansi-bright-yellow-bg { background-color: #ffff00; }
-.terminal-output .ansi-bright-blue-bg { background-color: #5c5cff; }
-.terminal-output .ansi-bright-magenta-bg { background-color: #ff00ff; }
-.terminal-output .ansi-bright-cyan-bg { background-color: #00ffff; }
-.terminal-output .ansi-bright-white-bg { background-color: #ffffff; }
-
-.terminal-output .ansi-bold { font-weight: bold; }
-.terminal-output .ansi-dim { opacity: 0.7; }
-.terminal-output .ansi-italic { font-style: italic; }
-.terminal-output .ansi-underline { text-decoration: underline; }
 
 /* File List Styles */
 .file-list {
