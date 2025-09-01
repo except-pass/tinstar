@@ -56,7 +56,7 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({
   const handleAttach = async () => {
     try {
       // Since attach requires tmux, we'll show instructions to the user
-      showError('Use "tmux attach -t <session_name>" in terminal to attach to this session');
+      showError('Use a terminal in your IDE and type `tinstar attach <session id>`.  The session id can be either the name or the first few characters of the "Selected Agent" UUID.');
     } catch (err: any) {
       showError(err.message);
     }
@@ -77,9 +77,12 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({
     }
   };
 
-  // Resize handling
+  // Resize handling (both horizontal and vertical)
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (!controlBoardRef.current) return;
+
+    e.preventDefault();
+    e.stopPropagation();
     
     const startX = e.clientX;
     const startY = e.clientY;
@@ -87,18 +90,21 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({
     const startHeight = controlBoardRef.current.offsetHeight;
     
     setIsResizing(true);
+    document.body.style.cursor = 'nw-resize';
+    document.body.style.userSelect = 'none';
     
     const handleMouseMove = (e: MouseEvent) => {
       if (!controlBoardRef.current) return;
       
+      // Adjust both width and height
       const newWidth = startWidth + (e.clientX - startX);
       const newHeight = startHeight + (e.clientY - startY);
       
       // Set minimum and maximum dimensions
-      const minWidth = 280;
-      const minHeight = 180;
+      const minWidth = 220; // enough for 4 notification buttons
       const maxWidth = 500;
-      const maxHeight = 400;
+      const minHeight = 250; // enough to show all content
+      const maxHeight = 1400; // allow tall board
       
       const constrainedWidth = Math.max(minWidth, Math.min(newWidth, maxWidth));
       const constrainedHeight = Math.max(minHeight, Math.min(newHeight, maxHeight));
@@ -111,6 +117,8 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({
       setIsResizing(false);
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     };
     
     document.addEventListener('mousemove', handleMouseMove);

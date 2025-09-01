@@ -284,13 +284,35 @@ class WorktreeService:
             )
             files_changed = len([f for f in files_output.strip().split('\n') if f.strip()]) if success else 0
             
-            # Convert timestamp to ISO format
+            # Convert timestamp to ISO format with timezone
             try:
                 # Git log timestamp format: "2025-08-29 14:32:15 -0700"
-                dt = datetime.strptime(timestamp_str.split(' ')[0] + ' ' + timestamp_str.split(' ')[1], 
-                                     '%Y-%m-%d %H:%M:%S')
-                iso_timestamp = dt.isoformat()
-            except:
+                from datetime import timezone, timedelta
+                parts = timestamp_str.split(' ')
+                if len(parts) >= 3:
+                    date_part = parts[0]
+                    time_part = parts[1] 
+                    tz_part = parts[2]  # e.g., "+0000" or "-0700"
+                    
+                    # Parse the datetime part
+                    dt_naive = datetime.strptime(f"{date_part} {time_part}", '%Y-%m-%d %H:%M:%S')
+                    
+                    # Parse timezone offset
+                    if tz_part.startswith(('+', '-')):
+                        sign = 1 if tz_part[0] == '+' else -1
+                        hours = int(tz_part[1:3])
+                        minutes = int(tz_part[3:5]) 
+                        offset = timedelta(hours=sign * hours, minutes=sign * minutes)
+                        tz = timezone(offset)
+                        dt_aware = dt_naive.replace(tzinfo=tz)
+                        iso_timestamp = dt_aware.isoformat()
+                    else:
+                        # Fallback if timezone format is unexpected
+                        iso_timestamp = dt_naive.isoformat()
+                else:
+                    # Fallback for unexpected format
+                    iso_timestamp = timestamp_str
+            except Exception:
                 iso_timestamp = timestamp_str
             
             commits.append(Commit(

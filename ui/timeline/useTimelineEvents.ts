@@ -41,9 +41,8 @@ export const useTimelineEvents = (sessionId: string, sessionName?: string): UseT
 
   const fetchCommits = useCallback(async () => {
     try {
-      const query = sessionName 
-        ? `/api/worktrees/commits?tinstar_term_name=${encodeURIComponent(sessionName)}`
-        : `/api/worktrees/commits?session_id=${encodeURIComponent(sessionId)}`;
+      // Always use sessionId for commits since it matches the worktree name
+      const query = `/api/worktrees/commits?tinstar_term_name=${encodeURIComponent(sessionId)}`;
       const response = await fetch(query);
       if (!response.ok) {
         throw new Error(`Failed to fetch commits: ${response.statusText}`);

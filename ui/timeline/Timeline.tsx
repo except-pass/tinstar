@@ -11,7 +11,6 @@ export const Timeline: React.FC<TimelineProps> = ({
   selectedEventId,
 }) => {
   const { events, commits, loading, error, wsConnected } = useTimelineEvents(sessionId, sessionName);
-  const [autoScroll, setAutoScroll] = useState(true);
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
   const timelineRef = useRef<HTMLDivElement>(null);
   const userScrolling = useRef(false);
@@ -34,10 +33,10 @@ export const Timeline: React.FC<TimelineProps> = ({
   }, [timelineEvents, onEventSelect]);
 
   const scrollToLatest = useCallback(() => {
-    if (timelineRef.current && autoScroll && !userScrolling.current) {
+    if (timelineRef.current && !userScrolling.current) {
       timelineRef.current.scrollLeft = timelineRef.current.scrollWidth;
     }
-  }, [autoScroll]);
+  }, []);
 
   useEffect(() => {
     scrollToLatest();
@@ -51,7 +50,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       }));
       setTimelineEvents(updatedEvents);
     }
-  }, [selectedEventId, timelineEvents]);
+  }, [selectedEventId]);
 
   const handleScroll = useCallback(() => {
     userScrolling.current = true;
@@ -118,14 +117,6 @@ export const Timeline: React.FC<TimelineProps> = ({
           </span>
         </div>
         <div className="timeline-controls">
-          <label className="auto-scroll-toggle">
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(e) => setAutoScroll(e.target.checked)}
-            />
-            Auto-scroll
-          </label>
           {wsConnected && <span className="websocket-indicator">🟢</span>}
         </div>
       </div>

@@ -41,6 +41,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
   const [terminated, setTerminated] = useState<boolean>(false);
   const [selectedTimelineEvent, setSelectedTimelineEvent] = useState<TimelineEvent | null>(null);
   const [selectedPrompt, setSelectedPrompt] = useState<string | null>(null);
+  const [extractedPrompts, setExtractedPrompts] = useState<Record<number, string>>({});
 
   const terminalRef = useRef<HTMLPreElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -71,11 +72,31 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     return ansi;
   }, []);
 
-  // Extract prompt content from an event
+  // Extract prompt content from an event synchronously first, then async if needed
   const extractPromptFromEvent = useCallback((event: any): string | null => {
     if (!event) return null;
     
     console.log('DetailsPane Debug - Extracting from event:', event);
+    
+    // For UserPromptSubmit events, check hook_data first (this is where the actual prompt text is stored)
+    if (event.hook_event_name === 'UserPromptSubmit' && event.hook_data) {
+      console.log('DetailsPane Debug - Found UserPromptSubmit with hook_data:', event.hook_data);
+      if (typeof event.hook_data === 'string') {
+        try {
+          const parsed = JSON.parse(event.hook_data);
+          if (parsed.text) return parsed.text;
+          if (parsed.message) return parsed.message;
+          if (parsed.prompt) return parsed.prompt;
+        } catch (e) {
+          // If it's not JSON, maybe it's the raw text
+          return event.hook_data;
+        }
+      } else if (event.hook_data && typeof event.hook_data === 'object') {
+        if (event.hook_data.text) return event.hook_data.text;
+        if (event.hook_data.message) return event.hook_data.message;
+        if (event.hook_data.prompt) return event.hook_data.prompt;
+      }
+    }
     
     // Check various places where prompt content might be stored
     if (event.message) return event.message;
@@ -103,6 +124,75 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     return null;
   }, []);
 
+  // Extract prompts from events and sessions  
+  useEffect(() => {
+    const extractPromptsFromEvents = async () => {
+      if (!events.length) return;
+      
+      const userPromptEvents = events.filter(event => 
+        event.hook_event_name?.toLowerCase() === 'userpromptsubmit' ||
+        event.hook_event_name?.toLowerCase() === 'user_prompt' ||
+        event.hook_event_name === 'UserPromptSubmit'
+      );
+      
+      const newExtractedPrompts: Record<number, string> = {};
+      
+      for (const event of userPromptEvents) {
+        // Skip if we already have the content extracted
+        if (extractedPrompts[event.id]) continue;
+        
+        // Try to get content synchronously first
+        const syncContent = extractPromptFromEvent(event);
+        if (syncContent) {
+          newExtractedPrompts[event.id] = syncContent;
+          continue;
+        }
+        
+        // For UserPromptSubmit events without content, fetch from transcript
+        if (event.transcript_path) {
+          // For the first event, use the session's initial_prompt if available
+          const isFirstEvent = userPromptEvents.findIndex(e => e.id === event.id) === 0;
+          if (isFirstEvent && session?.initial_prompt) {
+            newExtractedPrompts[event.id] = session.initial_prompt;
+          } else {
+            // For subsequent events, fetch from the transcript API
+            try {
+              console.log('Fetching transcript for event:', event.id, 'from:', event.transcript_path);
+              const response = await fetch(`/api/events/transcript?transcript_path=${encodeURIComponent(event.transcript_path)}&timestamp=${encodeURIComponent(event.timestamp)}`);
+              
+              if (response.ok) {
+                const data = await response.json();
+                if (data.content) {
+                  newExtractedPrompts[event.id] = data.content;
+                  console.log('Successfully extracted prompt for event:', event.id, 'content length:', data.content.length);
+                } else {
+                  console.warn('No content found in transcript for event:', event.id, data.error || 'Unknown error');
+                  newExtractedPrompts[event.id] = `[Prompt from ${new Date(event.timestamp).toLocaleString()}]`;
+                }
+              } else {
+                console.warn('Failed to fetch transcript for event:', event.id, 'status:', response.status);
+                newExtractedPrompts[event.id] = `[Prompt from ${new Date(event.timestamp).toLocaleString()}]`;
+              }
+            } catch (error) {
+              console.error('Failed to read transcript for event:', event.id, error);
+              newExtractedPrompts[event.id] = `[Prompt from ${new Date(event.timestamp).toLocaleString()}]`;
+            }
+          }
+        } else {
+          // Fallback if no transcript path
+          const eventDate = new Date(event.timestamp).toLocaleString();
+          newExtractedPrompts[event.id] = `[User prompt submitted at ${eventDate}]`;
+        }
+      }
+      
+      if (Object.keys(newExtractedPrompts).length > 0) {
+        setExtractedPrompts(prev => ({ ...prev, ...newExtractedPrompts }));
+      }
+    };
+    
+    extractPromptsFromEvents();
+  }, [events, session?.initial_prompt, extractedPrompts, extractPromptFromEvent]);
+
   // Determine which prompts to show (up to 3: initial, latest if different, selected if different)
   const promptsToShow = useMemo(() => {
     const prompts: Array<{label: string, content: string}> = [];
@@ -111,6 +201,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     console.log('DetailsPane Debug - Events:', events.length);
     console.log('DetailsPane Debug - Event types:', events.map(e => e.hook_event_name));
     console.log('DetailsPane Debug - Selected prompt:', selectedPrompt);
+    console.log('DetailsPane Debug - Extracted prompts:', extractedPrompts);
     
     // Always show initial prompt if available
     if (session?.initial_prompt) {
@@ -133,9 +224,9 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
     }
     
     if (userPromptEvents.length > 0) {
-      // Get the latest prompt
+      // Get the latest prompt - try extracted prompts first, then sync extraction
       const latestPromptEvent = userPromptEvents[userPromptEvents.length - 1];
-      const latestPromptContent = extractPromptFromEvent(latestPromptEvent);
+      const latestPromptContent = extractedPrompts[latestPromptEvent.id] || extractPromptFromEvent(latestPromptEvent);
       
       console.log('DetailsPane Debug - Latest prompt content:', latestPromptContent);
       
@@ -146,24 +237,34 @@ export const DetailsPane: React.FC<DetailsPaneProps> = ({ sessionId }) => {
           content: latestPromptContent
         });
       }
+      
+      // If there are multiple prompts, show all unique ones
+      if (userPromptEvents.length > 1) {
+        for (let i = userPromptEvents.length - 2; i >= 0 && prompts.length < 3; i--) {
+          const event = userPromptEvents[i];
+          const content = extractedPrompts[event.id] || extractPromptFromEvent(event);
+          
+          if (content && !prompts.some(p => p.content === content)) {
+            prompts.push({
+              label: `Prompt ${userPromptEvents.length - i}`,
+              content: content
+            });
+          }
+        }
+      }
     }
     
-    // Show selected prompt if it's different from initial and latest
-    if (selectedPrompt && selectedPrompt !== session?.initial_prompt) {
-      const latestPromptEvent = userPromptEvents.length > 0 ? userPromptEvents[userPromptEvents.length - 1] : null;
-      const latestPromptContent = latestPromptEvent ? extractPromptFromEvent(latestPromptEvent) : null;
-      
-      if (selectedPrompt !== latestPromptContent) {
-        prompts.push({
-          label: 'Selected Prompt',
-          content: selectedPrompt
-        });
-      }
+    // Show selected prompt if it's different from all shown prompts
+    if (selectedPrompt && !prompts.some(p => p.content === selectedPrompt)) {
+      prompts.push({
+        label: 'Selected Prompt',
+        content: selectedPrompt
+      });
     }
     
     console.log('DetailsPane Debug - Final prompts to show:', prompts);
     return prompts;
-  }, [session?.initial_prompt, events, selectedPrompt, extractPromptFromEvent]);
+  }, [session?.initial_prompt, events, selectedPrompt, extractedPrompts, extractPromptFromEvent]);
 
   // Fetch session details
   useEffect(() => {

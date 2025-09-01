@@ -3,16 +3,18 @@
   background: #f8f9fa;
   border: 1px solid #dee2e6;
   border-radius: 6px;
-  min-width: 280px;
-  min-height: 180px;
-  max-width: 500px;
-  max-height: 400px;
-  width: 320px;
-  height: 220px;
+  min-width: 220px; /* Enough for 4 notification buttons + padding */
+  min-height: 250px;
+  max-height: 60vh;
+  width: 100%;
+  height: auto;
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   user-select: none;
+  resize: both;
+  overflow: hidden;
 }
 
 .control-board.resizing {
@@ -43,8 +45,10 @@
 }
 
 .control-board-content {
+  /* Allow the content to size to its children so the card height expands */
   flex: 1;
   padding: 12px;
+  padding-bottom: 16px; /* room for resize handle */
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -82,6 +86,7 @@
 
 .notification-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
 
@@ -95,6 +100,9 @@
   cursor: pointer;
   transition: all 0.2s ease;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .control-button:hover {
@@ -210,14 +218,15 @@
     135deg,
     transparent 0%,
     transparent 46%,
-    #adb5bd 46%,
-    #adb5bd 50%,
+    #dee2e6 46%,
+    #dee2e6 50%,
     transparent 50%,
     transparent 54%,
-    #adb5bd 54%,
-    #adb5bd 58%,
+    #dee2e6 54%,
+    #dee2e6 58%,
     transparent 58%
   );
+  border-bottom-right-radius: 6px;
 }
 
 .control-board-resize-handle:hover {
@@ -235,18 +244,31 @@
   );
 }
 
-/* Responsive adjustments */
+/* Responsive adjustments for narrow control boards */
+.control-board[style*="width"] .control-button {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.control-board[style*="width"] .control-board-primary-actions {
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.control-board[style*="width"] .attach-button {
+  font-size: 11px;
+  padding: 3px 6px;
+}
+
+/* When very narrow, stack main buttons vertically */
+@media (max-width: 250px), .control-board[style*="width: 2"] {
+  .control-board-primary-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 600px) {
   .control-board {
     width: 100%;
-    max-width: 280px;
-  }
-  
-  .control-board-main-actions {
-    flex-direction: column;
-  }
-  
-  .control-button {
-    flex: 1;
   }
 }

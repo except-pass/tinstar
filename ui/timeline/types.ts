@@ -1,4 +1,5 @@
 export interface Event {
+  id: number
   session_id: string
   timestamp: string
   hook_event_name: string
@@ -7,6 +8,9 @@ export interface Event {
   tool_response?: any
   message?: string
   tinstar_term_name?: string
+  transcript_path?: string
+  raw_data?: string | object
+  created_at?: string
 }
 
 export interface Commit {
@@ -21,7 +25,7 @@ export interface TimelineEvent {
   id: string
   type: 'prompt' | 'notification' | 'stop' | 'tool' | 'todo' | 'commit'
   timestamp: Date
-  icon: '💬' | '🟠' | '⚪' | '🛑' | '🔧' | '✅' | '💾'
+  icon: '📝' | '🔔' | '◽' | '🛑' | '🔧' | '✅' | '💾'
   count?: number
   selected: boolean
   active?: boolean

@@ -3,6 +3,8 @@ HTTP API endpoints for the Tinstar events system.
 """
 import json
 import logging
+import os
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -285,6 +287,70 @@ def create_events_router(service: Optional[EventIngestionService] = None) -> API
         except WebSocketDisconnect:
             await websocket_manager.disconnect(websocket)
     
+    # Transcript reading endpoint
+    @router.get("/transcript")
+    async def read_transcript(
+        transcript_path: str = Query(..., description="Path to the transcript file"),
+        timestamp: str = Query(..., description="Timestamp to find the corresponding prompt")
+    ):
+        """Read transcript content and extract prompt for a specific timestamp."""
+        try:
+            if not os.path.exists(transcript_path):
+                raise HTTPException(status_code=404, detail="Transcript file not found")
+            
+            # Parse the target timestamp - handle various formats
+            timestamp_clean = timestamp.replace('Z', '+00:00').replace(' ', '+')
+            if not timestamp_clean.endswith('+00:00') and '+' not in timestamp_clean[-6:]:
+                timestamp_clean += '+00:00'
+            target_time = datetime.fromisoformat(timestamp_clean)
+            
+            # Read the transcript file and find the user prompt near the timestamp
+            with open(transcript_path, 'r', encoding='utf-8') as f:
+                found_prompt = None
+                best_match_time_diff = float('inf')
+                
+                for line in f:
+                    try:
+                        entry = json.loads(line.strip())
+                        
+                        # Look for user type entries with message content
+                        if entry.get('type') == 'user' and 'message' in entry:
+                            entry_time = datetime.fromisoformat(entry['timestamp'].replace('Z', '+00:00'))
+                            time_diff = abs((entry_time - target_time).total_seconds())
+                            
+                            # Find the closest user prompt to our target timestamp
+                            if time_diff < best_match_time_diff:
+                                best_match_time_diff = time_diff
+                                message = entry['message']
+                                
+                                # Extract content from the message
+                                if isinstance(message, dict) and 'content' in message:
+                                    content = message['content']
+                                    # If content is a string, use it directly
+                                    if isinstance(content, str):
+                                        found_prompt = content
+                                    # If content is a list (like tool calls), try to find text content
+                                    elif isinstance(content, list):
+                                        for item in content:
+                                            if isinstance(item, dict) and item.get('type') == 'text':
+                                                found_prompt = item.get('text', '')
+                                                break
+                                elif isinstance(message, str):
+                                    found_prompt = message
+                                    
+                    except (json.JSONDecodeError, KeyError, ValueError) as e:
+                        # Skip malformed lines
+                        continue
+                
+                if found_prompt:
+                    return {"content": found_prompt, "time_diff_seconds": best_match_time_diff}
+                else:
+                    return {"content": None, "error": "No user prompt found near the specified timestamp"}
+                    
+        except Exception as e:
+            logger.error(f"Error reading transcript {transcript_path}: {e}")
+            raise HTTPException(status_code=500, detail=f"Error reading transcript: {str(e)}")
+
     # Health check
     @router.get("/health")
     async def health_check():
