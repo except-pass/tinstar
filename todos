@@ -12,3 +12,10 @@ permissions pre-management.  make sure the .tinstar/worktrees is trusted on inst
 bug fixes:
 - showing prompts.  make sure the text of multi prompts are displayed
 - tmux server blocking the port if the server is killed before all sessions are over.
+
+
+hide the terminal (with peeking). 
+summarize the work.  suggest what I need to do to QA the work.
+
+
+UI design: timeline, multi-agent conflict checking view
