@@ -60,9 +60,10 @@ class WorktreeDatabase:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS projects (
                     name TEXT PRIMARY KEY,
-                    path TEXT NOT NULL,
-                    unignore_paths TEXT,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    path TEXT UNIQUE NOT NULL,
+                    default_branch TEXT,
+                    unignore_paths TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL
                 )
             """)
             
