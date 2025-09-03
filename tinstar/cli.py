@@ -1,4 +1,5 @@
 import typer
+import click
 
 from .installation import install_app
 from .worktrees.cli import app as worktrees_app
@@ -8,7 +9,10 @@ from .events.cli import app as events_app
 from .testing import app as test_app
 from .server import run_server
 
-app = typer.Typer(help="Tinstar command line interface")
+app = typer.Typer(
+    help="Tinstar command line interface",
+    context_settings={"help_option_names": ["-h", "--help"]}
+)
 app.add_typer(install_app, name="install")
 app.add_typer(projects_app, name="project")
 app.add_typer(worktrees_app, name="worktrees")
