@@ -56,7 +56,7 @@ export const ControlBoard: React.FC<ControlBoardProps> = ({
   const handleAttach = async () => {
     try {
       // Since attach requires tmux, we'll show instructions to the user
-      showError('Use a terminal in your IDE and type `tinstar attach <session id>`.  The session id can be either the name or the first few characters of the "Selected Agent" UUID.');
+      showError('Use a terminal in your IDE and type `tinstar session attach <session id>`.  The session id can be either the name or the first few characters of the "Selected Agent" UUID.');
     } catch (err: any) {
       showError(err.message);
     }
