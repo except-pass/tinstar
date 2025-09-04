@@ -10,6 +10,20 @@ Install tinstar using pip:
 pip install tinstar
 ```
 
+Install the required Python dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Install the UI dependencies:
+
+```bash
+cd ui/
+npm install
+cd ..
+```
+
 ## Usage
 
 After installation, use the `tinstar` command:
@@ -20,6 +34,9 @@ tinstar install doctor
 
 # Run installer
 tinstar install run
+
+# Start the application
+just start
 ```
 
 ## Features

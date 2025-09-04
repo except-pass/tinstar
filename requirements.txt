@@ -4,3 +4,4 @@ uvicorn
 rich
 pydantic
 pytest
+requests
