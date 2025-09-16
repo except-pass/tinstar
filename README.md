@@ -1,8 +1,7 @@
 # Tinstar
+> The inbox for your AI coding agents.
 
 A full-featured web-based Claude Code client that provides complete interactive functionality for managing Claude Code projects. Start new conversations, resume existing sessions, monitor running tasks in real-time, and browse your conversation history - all through a modern web interface.
-
-![demo](./docs/assets/claude-code-viewer-demo-min.gif)
 
 ## Overview
 
@@ -120,6 +119,49 @@ The worktree feature allows you to create isolated development environments for 
 - Your project must be a git repository
 - Git worktree support (available in Git 2.5+)
 - Write permissions in your home directory for worktree storage
+
+### 5. Smart UI Features
+
+#### Auto-scroll Behavior
+The conversation view includes intelligent auto-scrolling that enhances the user experience:
+
+- **Automatic Following**: When viewing active conversations, the interface automatically scrolls to show new messages
+- **User Control**: If you manually scroll up to read earlier messages, auto-scroll is disabled to prevent interruption
+- **Re-engagement**: Scrolling back to the bottom re-enables automatic scrolling for new content
+- **Session Switching**: Automatically scrolls to the bottom when switching between sessions
+
+#### Session Age Filtering
+Control which sessions are visible in the sidebar:
+
+- **"Show Old Sessions" Toggle**: Located in the Sessions tab header
+- **24-Hour Filter**: By default, only sessions modified within the last 24 hours are shown
+- **Dynamic Counts**: Session counts update automatically based on the current filter
+- **Sorting Priority**: Running and paused sessions always appear first, regardless of age
+
+#### Collapsible Response Groups
+The conversation view organizes Claude's responses for better readability:
+
+- **Grouped Responses**: All assistant messages following a user prompt are grouped together under "Response"
+- **Smart Defaults**: The most recent response group is expanded by default; older groups are collapsed
+- **Tool Indicators**: Response headers show which tools were used (e.g., "Response (Edit, Bash-git)")
+- **Status Indicators**: Color-coded dots show success (green) or errors (red) in tool usage
+- **Auto-expand**: Edit operations automatically expand their response groups to show file changes
+- **Preserved Content**: File diffs and final assistant messages remain visible even when collapsed
+- **Editor Integration**: Edit buttons on file diffs open files directly in your code editor
+
+#### Code Editor Integration
+File diff widgets include seamless integration with your preferred code editor:
+
+- **Edit Buttons**: Each file in diff views displays a small edit icon (📝) next to the filename
+- **One-Click Opening**: Click the edit button to instantly open the file in your code editor
+- **Cursor Support**: Currently supports Cursor editor via the `cursor` command
+- **Contextual Access**: Available in both conversation diffs and the dedicated diff modal
+- **Quick Navigation**: Jump directly from viewing changes to editing the actual file
+
+**Requirements for Editor Integration**:
+- Cursor editor must be installed and available in your system PATH
+- The `cursor` command should be accessible from the terminal
+- File paths must be accessible from your current working directory
 
 ## Configuration
 

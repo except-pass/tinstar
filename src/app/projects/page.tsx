@@ -19,7 +19,7 @@ export default async function ProjectsPage() {
       <header className="mb-8">
         <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
           <HistoryIcon className="w-8 h-8" />
-          Claude Code Viewer
+          Tinstar
         </h1>
         <p className="text-muted-foreground">
           Browse your Claude Code conversation history and project interactions
