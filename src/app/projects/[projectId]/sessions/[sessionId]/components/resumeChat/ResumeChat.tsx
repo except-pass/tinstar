@@ -45,15 +45,13 @@ export const ResumeChat: FC<{
       setSelectedButton("lets-go");
     }
   }, [hasLatestExitPlan]);
-  
   // Reset plan approval UI when a new plan arrives
   useEffect(() => {
     if (hasExitPlanMode) {
       setShowPlanApproval(true);
       setSelectedButton("lets-go");
     }
-  }, [hasExitPlanMode, plan]);
->>>>>>> feat!: implement plan mode for code sessions 🎯
+  }, [hasExitPlanMode]);
 
   const letsGoButtonRef = useRef<HTMLButtonElement>(null);
   const modifyButtonRef = useRef<HTMLButtonElement>(null);

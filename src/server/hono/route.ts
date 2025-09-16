@@ -532,11 +532,12 @@ export const routes = (app: HonoAppType) => {
           z.object({
             resumeMessage: z.string(),
             model: z.string().optional(),
+            fallbackModel: z.string().optional(),
           }),
         ),
         async (c) => {
           const { projectId, sessionId } = c.req.param();
-          const { resumeMessage, model } = c.req.valid("json");
+          const { resumeMessage, model, fallbackModel } = c.req.valid("json");
           const { project } = await getProject(projectId);
 
           if (project.meta.projectPath === null) {
@@ -630,16 +631,6 @@ export const routes = (app: HonoAppType) => {
           return c.json({ mode });
         },
       )
-        const mode = sessionPermissionModeStorage.getMode(sessionId) ?? "acceptEdits";
-        
-        // Store the default if it wasn't already stored
-        if (!sessionPermissionModeStorage.getMode(sessionId)) {
-          sessionPermissionModeStorage.setMode(sessionId, mode);
-        }
-        
-        return c.json({ mode });
-      })
->>>>>>> feat!: implement plan mode for code sessions 🎯
 
       .patch(
         "/projects/:projectId/sessions/:sessionId/permission-mode",

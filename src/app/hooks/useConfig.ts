@@ -35,7 +35,7 @@ export const useConfig = () => {
       queryClient.setQueryData(configQueryConfig.queryKey, { config: newConfig });
       return { previousConfig };
     },
-    onError: (_err, _newConfig, context) => {
+    onError: (err, newConfig, context) => {
       // Rollback on error
       if (context?.previousConfig) {
         queryClient.setQueryData(configQueryConfig.queryKey, context.previousConfig);

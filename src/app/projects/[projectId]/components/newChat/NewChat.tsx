@@ -1,5 +1,5 @@
 import { Code, Map } from "lucide-react";
-import { type FC, useState } from "react";
+import { type FC, useEffect, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ModelBadge } from "@/components/ui/model-selector";
 import {
@@ -18,7 +18,7 @@ export const NewChat: FC<{
   const { config } = useConfig();
   const [createWorktree, setCreateWorktree] = useState(false);
   const [planMode, setPlanMode] = useState(config?.defaultPlanMode ?? true);
-  const [model] = useState<string | undefined>(config?.defaultModel || "default");
+  const [model, setModel] = useState<string | undefined>(config?.defaultModel || "default");
   const startNewChat = useNewChatMutation(projectId, onSuccess);
 
 
