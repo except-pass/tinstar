@@ -13,6 +13,7 @@ export const useNewChatMutation = (
       message: string;
       createWorktree?: boolean;
       planMode?: boolean;
+      model?: string;
     }) => {
       const response = await honoClient.api.projects[":projectId"][
         "new-session"
@@ -23,6 +24,7 @@ export const useNewChatMutation = (
             message: options.message,
             createWorktree: options.createWorktree ?? false,
             planMode: options.planMode,
+            model: options.model,
           },
         },
         {
@@ -56,13 +58,21 @@ export const useResumeChatMutation = (projectId: string, sessionId: string) => {
   const router = useRouter();
 
   return useMutation({
-    mutationFn: async (options: { message: string }) => {
+    mutationFn: async (options: {
+      message: string;
+      model?: string;
+      fallbackModel?: string;
+    }) => {
       const response = await honoClient.api.projects[":projectId"].sessions[
         ":sessionId"
       ].resume.$post(
         {
           param: { projectId, sessionId },
-          json: { resumeMessage: options.message },
+          json: {
+            resumeMessage: options.message,
+            model: options.model,
+            fallbackModel: options.fallbackModel,
+          },
         },
         {
           init: {
@@ -97,7 +107,7 @@ export const useSetPermissionModeMutation = (
   sessionId: string,
 ) => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: async (mode: "plan" | "acceptEdits") => {
       const response = await honoClient.api.projects[":projectId"].sessions[

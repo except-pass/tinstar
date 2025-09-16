@@ -7,6 +7,8 @@ export type PermissionMode =
   | "bypassPermissions"
   | "plan";
 
+export type ModelType = "default" | "sonnet" | "opus" | "opusplan";
+
 type BaseClaudeCodeTask = {
   id: string;
   projectId: string;
@@ -20,6 +22,7 @@ type BaseClaudeCodeTask = {
   onMessageHandlers: OnMessage[];
   query?: Query;
   currentPermissionMode?: PermissionMode;
+  model?: ModelType;
 };
 
 export type PendingClaudeCodeTask = BaseClaudeCodeTask & {
@@ -65,5 +68,10 @@ export type AliveClaudeCodeTask = RunningClaudeCodeTask | PausedClaudeCodeTask;
 
 export type SerializableAliveTask = Pick<
   AliveClaudeCodeTask,
-  "id" | "status" | "sessionId" | "userMessageId" | "currentPermissionMode"
+  | "id"
+  | "status"
+  | "sessionId"
+  | "userMessageId"
+  | "currentPermissionMode"
+  | "model"
 >;

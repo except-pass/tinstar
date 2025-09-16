@@ -1,6 +1,6 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
 import type { PermissionMode } from "../claude-code/types";
 
 interface SessionPermissionModes {

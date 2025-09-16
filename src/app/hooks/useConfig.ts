@@ -28,10 +28,22 @@ export const useConfig = () => {
       });
       return await response.json();
     },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: configQueryConfig.queryKey,
-      });
+    onMutate: async (newConfig) => {
+      // Optimistically update the cache immediately
+      await queryClient.cancelQueries({ queryKey: configQueryConfig.queryKey });
+      const previousConfig = queryClient.getQueryData(configQueryConfig.queryKey);
+      queryClient.setQueryData(configQueryConfig.queryKey, { config: newConfig });
+      return { previousConfig };
+    },
+    onError: (err, newConfig, context) => {
+      // Rollback on error
+      if (context?.previousConfig) {
+        queryClient.setQueryData(configQueryConfig.queryKey, context.previousConfig);
+      }
+    },
+    onSettled: () => {
+      // Invalidate to ensure we're in sync with server
+      queryClient.invalidateQueries({ queryKey: configQueryConfig.queryKey });
     },
   });
 

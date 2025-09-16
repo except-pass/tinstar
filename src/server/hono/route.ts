@@ -443,11 +443,13 @@ export const routes = (app: HonoAppType) => {
             message: z.string(),
             createWorktree: z.boolean().optional().default(false),
             planMode: z.boolean().optional(),
+            model: z.string().optional(),
           }),
         ),
         async (c) => {
           const { projectId } = c.req.param();
-          const { message, createWorktree, planMode } = c.req.valid("json");
+          const { message, createWorktree, planMode, model } =
+            c.req.valid("json");
           const { project } = await getProject(projectId);
           const config = c.get("config");
 
@@ -496,6 +498,7 @@ export const routes = (app: HonoAppType) => {
               },
               message,
               planMode ?? config.defaultPlanMode,
+              model,
             );
 
             return c.json({
@@ -525,11 +528,12 @@ export const routes = (app: HonoAppType) => {
           "json",
           z.object({
             resumeMessage: z.string(),
+            model: z.string().optional(),
           }),
         ),
         async (c) => {
           const { projectId, sessionId } = c.req.param();
-          const { resumeMessage } = c.req.valid("json");
+          const { resumeMessage, model } = c.req.valid("json");
           const { project } = await getProject(projectId);
 
           if (project.meta.projectPath === null) {
@@ -547,6 +551,8 @@ export const routes = (app: HonoAppType) => {
                 cwd: sessionCwd,
               },
               resumeMessage,
+              undefined, // planMode not needed for resume
+              model,
             );
 
             return c.json({
@@ -578,6 +584,7 @@ export const routes = (app: HonoAppType) => {
               sessionId: task.sessionId,
               userMessageId: task.userMessageId,
               currentPermissionMode: task.currentPermissionMode,
+              model: task.model,
             }),
           ),
         });
@@ -597,20 +604,26 @@ export const routes = (app: HonoAppType) => {
         },
       )
 
-      .get("/projects/:projectId/sessions/:sessionId/permission-mode", async (c) => {
-        const { sessionId } = c.req.param();
-        const { sessionPermissionModeStorage } = await import("../service/sessionPermissionModes/storage");
-        
-        // Get stored mode or default to acceptEdits
-        const mode = sessionPermissionModeStorage.getMode(sessionId) ?? "acceptEdits";
-        
-        // Store the default if it wasn't already stored
-        if (!sessionPermissionModeStorage.getMode(sessionId)) {
-          sessionPermissionModeStorage.setMode(sessionId, mode);
-        }
-        
-        return c.json({ mode });
-      })
+      .get(
+        "/projects/:projectId/sessions/:sessionId/permission-mode",
+        async (c) => {
+          const { sessionId } = c.req.param();
+          const { sessionPermissionModeStorage } = await import(
+            "../service/sessionPermissionModes/storage"
+          );
+
+          // Get stored mode or default to acceptEdits
+          const mode =
+            sessionPermissionModeStorage.getMode(sessionId) ?? "acceptEdits";
+
+          // Store the default if it wasn't already stored
+          if (!sessionPermissionModeStorage.getMode(sessionId)) {
+            sessionPermissionModeStorage.setMode(sessionId, mode);
+          }
+
+          return c.json({ mode });
+        },
+      )
 
       .patch(
         "/projects/:projectId/sessions/:sessionId/permission-mode",

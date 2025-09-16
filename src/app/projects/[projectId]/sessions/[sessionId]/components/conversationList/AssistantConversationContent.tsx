@@ -4,6 +4,7 @@ import parseGitDiff from "parse-git-diff";
 import type { FC } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -23,7 +24,6 @@ import {
   generateMultiEditDiff,
   generateSyntheticGitDiff,
 } from "@/lib/synthetic-diff";
-import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { DiffViewer } from "../diffModal/DiffViewer";
 import type { FileDiff } from "../diffModal/types";
 
@@ -169,7 +169,7 @@ export const AssistantConversationContent: FC<{
     if (content.name === "ExitPlanMode") {
       const input = content.input as { plan?: string };
       const plan = input?.plan || "No plan details available";
-      
+
       return (
         <Card className="border-amber-200 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20 mb-2">
           <CardHeader className="py-3 px-4">
