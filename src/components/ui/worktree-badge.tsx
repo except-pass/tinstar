@@ -18,7 +18,7 @@ export function WorktreeBadge({
         variant="secondary"
         className={cn(
           className,
-          "bg-gray-50/60 border-gray-400/60 text-gray-700",
+          "bg-gray-50/60 border-gray-400/60 text-gray-700 cursor-default select-none",
         )}
         title="Worktree directory has been removed. Git operations and new messages are disabled for this session."
       >
@@ -36,6 +36,7 @@ export function WorktreeBadge({
       variant="secondary"
       className={cn(
         className,
+        "cursor-default select-none",
         isDirty && "bg-red-50/60 border-red-300/60 text-red-700",
       )}
       title={title}

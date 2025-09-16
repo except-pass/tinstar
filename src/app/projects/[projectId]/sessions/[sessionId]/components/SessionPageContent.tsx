@@ -3,21 +3,21 @@
 import { useMutation } from "@tanstack/react-query";
 import {
   CopyIcon,
-  ExternalLinkIcon,
   GitCompareIcon,
   LoaderIcon,
   MenuIcon,
   PauseIcon,
   XIcon,
+  CodeIcon,
+  InfoIcon,
 } from "lucide-react";
-import Link from "next/link";
 import type { FC } from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { useTaskNotifications } from "@/hooks/useTaskNotifications";
 import { cn } from "@/lib/utils";
-import { Badge } from "../../../../../../components/ui/badge";
 import { WorktreeBadge } from "../../../../../../components/ui/worktree-badge";
 import { honoClient } from "../../../../../../lib/api/client";
 import { isWorktreeSession } from "../../../../../../lib/worktree-utils";
@@ -40,7 +40,9 @@ export const SessionPageContent: FC<{
     sessionId,
   );
   const { data: project } = useProject(projectId);
+  project; // Used in worktree detection below
   const { data: sessionCwd } = useSessionCwd(projectId, sessionId);
+  const { openInEditor } = useOpenInEditor();
 
   const abortTask = useMutation({
     mutationFn: async (sessionId: string) => {
@@ -238,33 +240,50 @@ export const SessionPageContent: FC<{
             </div>
 
             <div className="px-1 sm:px-5 flex flex-wrap items-center gap-1 sm:gap-2">
-              {project?.project.claudeProjectPath && (
-                <Link
-                  href={`/projects/${projectId}`}
-                  target="_blank"
-                  className="transition-all duration-200"
-                >
-                  <Badge
+              {sessionCwd && (
+                <div className="relative group">
+                  <Button
                     variant="secondary"
-                    className="h-6 sm:h-8 text-xs sm:text-sm flex items-center hover:bg-blue-50/60 hover:border-blue-300/60 hover:shadow-sm transition-all duration-200 cursor-pointer"
+                    size="sm"
+                    onClick={() => openInEditor(sessionCwd)}
+                    className="h-6 sm:h-8 text-xs sm:text-sm flex items-center gap-1 px-2 sm:px-3 hover:bg-blue-50/60 hover:border-blue-300/60 hover:shadow-sm transition-all duration-200"
                   >
-                    <ExternalLinkIcon className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
-                    {project.project.meta.projectPath ??
-                      project.project.claudeProjectPath}
-                  </Badge>
-                </Link>
+                    <CodeIcon className="w-3 h-3 sm:w-4 sm:h-4" />
+                    Open in Code Editor
+                  </Button>
+                  <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 text-xs text-white bg-gray-900 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
+                    Open current directory in code editor
+                  </div>
+                </div>
               )}
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={copyResumeCommand}
-                disabled={!sessionCwd}
-                className="h-6 sm:h-8 text-xs sm:text-sm flex items-center gap-1 px-2 sm:px-3 hover:bg-blue-50/60 hover:border-blue-300/60 hover:shadow-sm transition-all duration-200"
-                title="Click to copy resume command"
-              >
-                <span>💻 Session: {sessionId}</span>
-                <CopyIcon className="w-3 h-3 opacity-70" />
-              </Button>
+              <div className="flex items-center gap-1">
+                <div className="relative group">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={copyResumeCommand}
+                    disabled={!sessionCwd}
+                    className="h-6 sm:h-8 text-xs sm:text-sm flex items-center gap-1 px-2 sm:px-3 hover:bg-blue-50/60 hover:border-blue-300/60 hover:shadow-sm transition-all duration-200"
+                  >
+                    <CopyIcon className="w-3 h-3 sm:w-4 sm:h-4" />
+                    Claude Code link
+                  </Button>
+                  <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 text-xs text-white bg-gray-900 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
+                    Copies claude code command to clipboard
+                  </div>
+                </div>
+                <div className="relative group">
+                  <button
+                    className="h-6 sm:h-8 px-1 flex items-center text-xs text-sidebar-foreground/60 hover:text-sidebar-foreground transition-colors"
+                    type="button"
+                  >
+                    <InfoIcon className="w-3 h-3 sm:w-4 sm:h-4" />
+                  </button>
+                  <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 text-xs text-white bg-gray-900 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
+                    Session ID: {sessionId}
+                  </div>
+                </div>
+              </div>
 
               {/* Auto-scroll toggle */}
               <div className="flex items-center gap-2">

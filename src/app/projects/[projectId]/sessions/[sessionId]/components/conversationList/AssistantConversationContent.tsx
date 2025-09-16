@@ -24,6 +24,7 @@ import {
   generateSyntheticGitDiff,
 } from "@/lib/synthetic-diff";
 import { MarkdownContent } from "../../../../../../components/MarkdownContent";
+import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { DiffViewer } from "../diffModal/DiffViewer";
 import type { FileDiff } from "../diffModal/types";
 
@@ -129,6 +130,7 @@ export const AssistantConversationContent: FC<{
   content: AssistantMessageContent;
   getToolResult: (toolUseId: string) => ToolResultContent | undefined;
 }> = ({ content, getToolResult }) => {
+  const { openInEditor } = useOpenInEditor();
   if (content.type === "text") {
     return (
       <div className="w-full mx-1 sm:mx-2 my-4 sm:my-6">
@@ -175,26 +177,18 @@ export const AssistantConversationContent: FC<{
         ? (content.input as { file_path: string }).file_path
         : null;
 
-    const handleOpenInCursor = async () => {
+    const handleOpenInEditor = async () => {
       if (filePath) {
         try {
-          // Execute cursor command as child process
-          const response = await fetch("/api/cursor-open", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ filePath }),
-          });
-
-          if (!response.ok) {
+          const result = await openInEditor(filePath);
+          if (!result.success) {
             console.error(
-              "Failed to open file in Cursor:",
-              await response.text(),
+              "Failed to open file in editor:",
+              result.error,
             );
           }
         } catch (error) {
-          console.error("Error opening file in Cursor:", error);
+          console.error("Error opening file in editor:", error);
         }
       }
     };
@@ -300,7 +294,7 @@ export const AssistantConversationContent: FC<{
                     <div className="mt-2">
                       <DiffViewer
                         fileDiff={fileDiff}
-                        onEditFile={handleOpenInCursor}
+                        onEditFile={handleOpenInEditor}
                         showEditButton={true}
                       />
                     </div>

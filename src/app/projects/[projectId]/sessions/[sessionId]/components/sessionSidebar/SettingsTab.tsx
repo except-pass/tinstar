@@ -1,6 +1,7 @@
 "use client";
 
 import type { FC } from "react";
+import { EditorSettings } from "@/components/EditorSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { SettingsControls } from "@/components/SettingsControls";
 
@@ -24,6 +25,15 @@ export const SettingsTab: FC<{
           </h3>
 
           <SettingsControls openingProjectId={openingProjectId} />
+        </div>
+
+        {/* Editor Integration Settings */}
+        <div className="space-y-4">
+          <h3 className="font-medium text-sm text-sidebar-foreground">
+            Editor Integration
+          </h3>
+
+          <EditorSettings />
         </div>
 
         {/* Notification Settings */}
