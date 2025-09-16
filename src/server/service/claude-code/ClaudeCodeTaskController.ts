@@ -3,11 +3,13 @@ import { query } from "@anthropic-ai/claude-code";
 import prexit from "prexit";
 import { ulid } from "ulid";
 import { type EventBus, getEventBus } from "../events/EventBus";
+import { sessionPermissionModeStorage } from "../sessionPermissionModes/storage";
 import { createMessageGenerator } from "./createMessageGenerator";
 import type {
   AliveClaudeCodeTask,
   ClaudeCodeTask,
   PendingClaudeCodeTask,
+  PermissionMode,
   RunningClaudeCodeTask,
 } from "./types";
 
@@ -42,6 +44,7 @@ export class ClaudeCodeTaskController {
       sessionId?: string;
     },
     message: string,
+    planMode?: boolean,
   ): Promise<AliveClaudeCodeTask> {
     const existingTask = this.aliveTasks.find(
       (task) => task.sessionId === currentSession.sessionId,
@@ -50,7 +53,7 @@ export class ClaudeCodeTaskController {
     if (existingTask) {
       return await this.continueTask(existingTask, message);
     } else {
-      return await this.startTask(currentSession, message);
+      return await this.startTask(currentSession, message, planMode);
     }
   }
 
@@ -67,6 +70,7 @@ export class ClaudeCodeTaskController {
       sessionId?: string;
     },
     message: string,
+    planMode?: boolean,
   ) {
     const {
       generateMessages,
@@ -108,16 +112,34 @@ export class ClaudeCodeTaskController {
 
         let currentTask: AliveClaudeCodeTask | undefined;
 
-        for await (const message of query({
+        // Check if we have a stored permission mode for this session (for resumes)
+        // If baseSessionId exists (resuming), use the stored mode
+        // Otherwise use the planMode parameter
+        let permissionMode: PermissionMode;
+        if (task.baseSessionId) {
+          // Resuming an existing session - use stored mode or default to acceptEdits
+          const storedMode = sessionPermissionModeStorage.getMode(task.baseSessionId);
+          permissionMode = storedMode ?? "acceptEdits";
+          // Store the default if it wasn't already stored
+          if (!storedMode) {
+            sessionPermissionModeStorage.setMode(task.baseSessionId, permissionMode);
+          }
+        } else {
+          // New session - use the planMode parameter (defaults to acceptEdits if not specified)
+          permissionMode = planMode ? "plan" : "acceptEdits";
+        }
+        const queryInstance = query({
           prompt: task.generateMessages(),
           options: {
             resume: task.baseSessionId,
             cwd: task.cwd,
             pathToClaudeCodeExecutable: this.pathToClaudeCodeExecutable,
-            permissionMode: "bypassPermissions",
+            permissionMode: permissionMode,
             abortController: abortController,
           },
-        })) {
+        });
+
+        for await (const message of queryInstance) {
           currentTask ??= this.aliveTasks.find((t) => t.id === task.id);
 
           if (currentTask !== undefined && currentTask.status === "paused") {
@@ -147,8 +169,12 @@ export class ClaudeCodeTaskController {
                 userMessageId: message.uuid,
                 sessionId: message.session_id,
                 abortController: abortController,
+                query: queryInstance,
+                currentPermissionMode: permissionMode,
               };
               this.tasks.push(runningTask);
+              // Store the permission mode for this session
+              sessionPermissionModeStorage.setMode(message.session_id, permissionMode);
               aliveTaskResolve(runningTask);
               resolved = true;
             }
@@ -229,6 +255,27 @@ export class ClaudeCodeTaskController {
     void handleTask();
 
     return aliveTaskPromise;
+  }
+
+  public async setTaskPermissionMode(
+    sessionId: string,
+    mode: PermissionMode,
+  ): Promise<boolean> {
+    const task = this.aliveTasks.find((task) => task.sessionId === sessionId);
+    if (!task || !task.query) {
+      return false;
+    }
+
+    try {
+      await task.query.setPermissionMode(mode);
+      task.currentPermissionMode = mode;
+      // Update stored permission mode
+      sessionPermissionModeStorage.setMode(sessionId, mode);
+      return true;
+    } catch (error) {
+      console.error("Failed to set permission mode:", error);
+      return false;
+    }
   }
 
   public abortTask(sessionId: string): boolean {

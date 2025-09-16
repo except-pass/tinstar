@@ -5,6 +5,7 @@ import z from "zod";
 export const configSchema = z.object({
   hideNoUserMessageSession: z.boolean().optional().default(true),
   unifySameTitleSession: z.boolean().optional().default(true),
+  defaultPlanMode: z.boolean().optional().default(true),
   worktreesPath: z
     .string()
     .optional()
