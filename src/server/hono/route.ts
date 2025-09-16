@@ -630,6 +630,16 @@ export const routes = (app: HonoAppType) => {
           return c.json({ mode });
         },
       )
+        const mode = sessionPermissionModeStorage.getMode(sessionId) ?? "acceptEdits";
+        
+        // Store the default if it wasn't already stored
+        if (!sessionPermissionModeStorage.getMode(sessionId)) {
+          sessionPermissionModeStorage.setMode(sessionId, mode);
+        }
+        
+        return c.json({ mode });
+      })
+>>>>>>> feat!: implement plan mode for code sessions 🎯
 
       .patch(
         "/projects/:projectId/sessions/:sessionId/permission-mode",

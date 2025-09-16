@@ -45,6 +45,15 @@ export const ResumeChat: FC<{
       setSelectedButton("lets-go");
     }
   }, [hasLatestExitPlan]);
+  
+  // Reset plan approval UI when a new plan arrives
+  useEffect(() => {
+    if (hasExitPlanMode) {
+      setShowPlanApproval(true);
+      setSelectedButton("lets-go");
+    }
+  }, [hasExitPlanMode, plan]);
+>>>>>>> feat!: implement plan mode for code sessions 🎯
 
   const letsGoButtonRef = useRef<HTMLButtonElement>(null);
   const modifyButtonRef = useRef<HTMLButtonElement>(null);
@@ -79,7 +88,6 @@ export const ResumeChat: FC<{
       console.error("Failed to switch to plan mode:", error);
     }
   };
-
   // Auto-focus the first button when plan approval is shown
   useEffect(() => {
     if (showPlanApproval && plan) {

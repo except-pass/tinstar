@@ -81,7 +81,6 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
     // Don't await - let it save in background for faster UI response
     onConfigChanged().catch(console.error);
   };
-
   return (
     <div className={`space-y-4 ${className}`}>
       <div className="flex items-center space-x-2">

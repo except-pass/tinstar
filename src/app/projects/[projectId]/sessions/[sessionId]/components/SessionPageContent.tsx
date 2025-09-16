@@ -147,7 +147,6 @@ export const SessionPageContent: FC<{
 
     return lastExitPlanMode || { hasExitPlanMode: false, plan: null };
   }, [conversations]);
-
   // Set up task completion notifications - only notify when task truly completes
   // (not when it pauses or during brief state changes)
   useTaskNotifications(isRunningTask || isPausedTask);
