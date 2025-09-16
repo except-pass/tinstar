@@ -1,1 +1,0 @@
-"""Projects module for Tinstar project management."""

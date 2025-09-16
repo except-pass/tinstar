@@ -1,7 +1,0 @@
-typer
-fastapi>=0.104.0
-uvicorn
-rich
-pydantic
-pytest
-requests
