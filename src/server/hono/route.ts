@@ -442,11 +442,12 @@ export const routes = (app: HonoAppType) => {
           z.object({
             message: z.string(),
             createWorktree: z.boolean().optional().default(false),
+            planMode: z.boolean().optional(),
           }),
         ),
         async (c) => {
           const { projectId } = c.req.param();
-          const { message, createWorktree } = c.req.valid("json");
+          const { message, createWorktree, planMode } = c.req.valid("json");
           const { project } = await getProject(projectId);
           const config = c.get("config");
 
@@ -494,6 +495,7 @@ export const routes = (app: HonoAppType) => {
                 cwd,
               },
               message,
+              planMode ?? config.defaultPlanMode,
             );
 
             return c.json({
@@ -575,6 +577,7 @@ export const routes = (app: HonoAppType) => {
               status: task.status,
               sessionId: task.sessionId,
               userMessageId: task.userMessageId,
+              currentPermissionMode: task.currentPermissionMode,
             }),
           ),
         });
@@ -591,6 +594,46 @@ export const routes = (app: HonoAppType) => {
               ? "Task aborted"
               : "No alive task for given session; nothing to abort",
           });
+        },
+      )
+
+      .get("/projects/:projectId/sessions/:sessionId/permission-mode", async (c) => {
+        const { sessionId } = c.req.param();
+        const { sessionPermissionModeStorage } = await import("../service/sessionPermissionModes/storage");
+        
+        // Get stored mode or default to acceptEdits
+        const mode = sessionPermissionModeStorage.getMode(sessionId) ?? "acceptEdits";
+        
+        // Store the default if it wasn't already stored
+        if (!sessionPermissionModeStorage.getMode(sessionId)) {
+          sessionPermissionModeStorage.setMode(sessionId, mode);
+        }
+        
+        return c.json({ mode });
+      })
+
+      .patch(
+        "/projects/:projectId/sessions/:sessionId/permission-mode",
+        zValidator(
+          "json",
+          z.object({
+            mode: z.enum(["plan", "acceptEdits"]),
+          }),
+        ),
+        async (c) => {
+          const { sessionId } = c.req.param();
+          const { mode } = c.req.valid("json");
+
+          const success = await taskController.setTaskPermissionMode(
+            sessionId,
+            mode,
+          );
+
+          if (!success) {
+            return c.json({ error: "Session not found or not active" }, 404);
+          }
+
+          return c.json({ success: true, mode });
         },
       )
 

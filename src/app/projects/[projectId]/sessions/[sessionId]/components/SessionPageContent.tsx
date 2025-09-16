@@ -12,20 +12,24 @@ import {
   InfoIcon,
 } from "lucide-react";
 import type { FC } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { useTaskNotifications } from "@/hooks/useTaskNotifications";
 import { cn } from "@/lib/utils";
-import { WorktreeBadge } from "../../../../../../components/ui/worktree-badge";
-import { honoClient } from "../../../../../../lib/api/client";
-import { isWorktreeSession } from "../../../../../../lib/worktree-utils";
-import { useProject } from "../../../hooks/useProject";
-import { firstCommandToTitle } from "../../../services/firstCommandToTitle";
+import { Badge } from "@/components/ui/badge";
+import { ModeBadge } from "@/components/ui/mode-badge";
+import { WorktreeBadge } from "@/components/ui/worktree-badge";
+import { honoClient } from "@/lib/api/client";
+import { isWorktreeSession } from "@/lib/worktree-utils";
+import { useProject } from "@/app/projects/[projectId]/hooks/useProject";
+import { firstCommandToTitle } from "@/app/projects/[projectId]/services/firstCommandToTitle";
 import { useAliveTask } from "../hooks/useAliveTask";
 import { useSession } from "../hooks/useSession";
 import { useSessionCwd } from "../hooks/useSessionCwd";
+import { useSessionPermissionMode } from "../hooks/useSessionPermissionMode";
+import { useSetPermissionModeMutation } from "@/app/projects/[projectId]/components/chatForm/useChatMutations";
 import { ConversationList } from "./conversationList/ConversationList";
 import { DiffModal } from "./diffModal";
 import { ResumeChat } from "./resumeChat/ResumeChat";
@@ -58,10 +62,62 @@ export const SessionPageContent: FC<{
     },
   });
 
-  const { isRunningTask, isPausedTask } = useAliveTask(sessionId);
+  const { isRunningTask, isPausedTask, currentPermissionMode } =
+    useAliveTask(sessionId);
+  
+  // Get stored permission mode if there's no active task
+  const { data: storedPermissionMode } = useSessionPermissionMode(projectId, sessionId);
+  
+  // Use active task mode if available, otherwise use stored mode
+  const displayPermissionMode = currentPermissionMode ?? storedPermissionMode;
+  
+  // Mutation for toggling permission mode
+  const setPermissionMode = useSetPermissionModeMutation(projectId, sessionId);
+  
+  // Handler for toggling between plan and code mode
+  const handleModeToggle = async () => {
+    if (!displayPermissionMode) return;
+    
+    // Toggle between plan and code mode
+    const newMode = displayPermissionMode === "plan" ? "acceptEdits" : "plan";
+    
+    try {
+      await setPermissionMode.mutateAsync(newMode);
+      // The query will automatically refetch and update the UI
+    } catch (error) {
+      console.error("Failed to toggle permission mode:", error);
+      toast.error("Failed to switch mode");
+    }
+  };
 
-  // Set up task completion notifications
-  useTaskNotifications(isRunningTask);
+  // Check if ExitPlanMode tool was used and extract the LAST plan
+  const exitPlanModeData = useMemo(() => {
+    if (!conversations) return { hasExitPlanMode: false, plan: null };
+
+    let lastExitPlanMode = null;
+    
+    // Iterate through all conversations to find the LAST ExitPlanMode
+    for (const conversation of conversations) {
+      if (conversation.type === "assistant") {
+        for (const content of conversation.message.content) {
+          if (content.type === "tool_use" && content.name === "ExitPlanMode") {
+            // Extract the plan from the tool input
+            const input = content.input as { plan?: string };
+            lastExitPlanMode = {
+              hasExitPlanMode: true,
+              plan: input.plan || "No plan details available",
+            };
+          }
+        }
+      }
+    }
+    
+    return lastExitPlanMode || { hasExitPlanMode: false, plan: null };
+  }, [conversations]);
+
+  // Set up task completion notifications - only notify when task truly completes
+  // (not when it pauses or during brief state changes)
+  useTaskNotifications(isRunningTask || isPausedTask);
 
   // Copy resume command to clipboard
   const copyResumeCommand = async () => {
@@ -325,6 +381,14 @@ export const SessionPageContent: FC<{
                   />
                 </button>
               </div>
+              {displayPermissionMode && (
+                <ModeBadge
+                  mode={displayPermissionMode}
+                  className="h-6 sm:h-8 text-xs sm:text-sm"
+                  onClick={handleModeToggle}
+                  disabled={setPermissionMode.isPending || isRunningTask}
+                />
+              )}
               {isWorktreeSession(session.jsonlFilePath) && (
                 <WorktreeBadge
                   className="h-6 sm:h-8 text-xs sm:text-sm"
@@ -411,6 +475,9 @@ export const SessionPageContent: FC<{
               isPausedTask={isPausedTask}
               isRunningTask={isRunningTask}
               isOrphaned={session.meta.isOrphaned}
+              hasExitPlanMode={exitPlanModeData.hasExitPlanMode}
+              plan={exitPlanModeData.plan}
+              currentPermissionMode={displayPermissionMode}
             />
           </main>
         </div>

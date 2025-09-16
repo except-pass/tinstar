@@ -59,6 +59,14 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
     onConfigChanged();
   };
 
+  const handleDefaultPlanModeChange = async () => {
+    const newConfig = {
+      ...config,
+      defaultPlanMode: !config?.defaultPlanMode,
+    };
+    updateConfig(newConfig);
+    await onConfigChanged();
+  };
 
   return (
     <div className={`space-y-4 ${className}`}>
@@ -102,6 +110,28 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
         <p className="text-xs text-muted-foreground mt-1 ml-6">
           Show only the latest session when multiple sessions have the same
           title
+        </p>
+      )}
+
+      <div className="flex items-center space-x-2">
+        <Checkbox
+          id={`${checkboxId}-planmode`}
+          checked={config?.defaultPlanMode}
+          onCheckedChange={handleDefaultPlanModeChange}
+        />
+        {showLabels && (
+          <label
+            htmlFor={`${checkboxId}-planmode`}
+            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+          >
+            Default to plan mode for new sessions
+          </label>
+        )}
+      </div>
+      {showDescriptions && (
+        <p className="text-xs text-muted-foreground mt-1 ml-6">
+          Start new conversations in plan mode where Claude plans changes before
+          executing
         </p>
       )}
     </div>

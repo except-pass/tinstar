@@ -1,4 +1,4 @@
-import { ChevronRight, Lightbulb, Settings } from "lucide-react";
+import { ChevronRight, Lightbulb, Map, Settings } from "lucide-react";
 import Image from "next/image";
 import parseGitDiff from "parse-git-diff";
 import type { FC } from "react";
@@ -23,7 +23,7 @@ import {
   generateMultiEditDiff,
   generateSyntheticGitDiff,
 } from "@/lib/synthetic-diff";
-import { MarkdownContent } from "../../../../../../components/MarkdownContent";
+import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { DiffViewer } from "../diffModal/DiffViewer";
 import type { FileDiff } from "../diffModal/types";
@@ -169,6 +169,34 @@ export const AssistantConversationContent: FC<{
 
   if (content.type === "tool_use") {
     const toolResult = getToolResult(content.id);
+
+    // Special handling for ExitPlanMode - display the plan content
+    if (content.name === "ExitPlanMode") {
+      const input = content.input as { plan?: string };
+      const plan = input?.plan || "No plan details available";
+      
+      return (
+        <Card className="border-amber-200 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20 mb-2">
+          <CardHeader className="py-3 px-4">
+            <div className="flex items-center gap-2">
+              <Map className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <CardTitle className="text-sm font-medium">Plan Ready</CardTitle>
+              <Badge
+                variant="outline"
+                className="border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-300"
+              >
+                ExitPlanMode
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="py-3 px-4">
+            <div className="prose prose-sm dark:prose-invert max-w-none">
+              <MarkdownContent content={plan} />
+            </div>
+          </CardContent>
+        </Card>
+      );
+    }
 
     // Check if this is an Edit or MultiEdit tool and extract file_path
     const isEditTool = content.name === "Edit" || content.name === "MultiEdit";
