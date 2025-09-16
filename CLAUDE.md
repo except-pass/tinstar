@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a web-based viewer for Claude Code conversation history files. The application provides a UI to browse and view JSONL conversation files from Claude Code projects stored in `~/.claude/projects/`.
+Tinstar is a web-based viewer for Claude Code conversation history files. The application provides a UI to browse and view JSONL conversation files from Claude Code projects stored in `~/.claude/projects/`.
 
 ## Development Commands
 
@@ -116,8 +116,8 @@ The application reads Claude Code history from:
 - Proper cleanup and abort handling on client disconnection
 
 **CLI Installation**:
-- Can be installed via `PORT=3400 npx @kimuson/claude-code-viewer@latest`
-- Published as `@kimuson/claude-code-viewer` (v0.1.0) on npm
+- Can be installed via `PORT=3400 npx tinstar@latest`
+- Published as `tinstar` on npm
 - Standalone Next.js build with embedded dependencies
 - Binary entry point at `dist/index.js`
 
