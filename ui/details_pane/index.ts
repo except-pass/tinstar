@@ -1,1 +1,0 @@
-export { DetailsPane } from './DetailsPane';

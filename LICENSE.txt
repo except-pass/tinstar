@@ -1,0 +1,1 @@
+This is a fork of the project https://github.com/d-kimuson/claude-code-viewer, which is available under an MIT license.  The project was forked at release 0.3.0 (commit 1e6030bd52cb27f782dfb44c8408f93cd7540d99)
