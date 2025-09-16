@@ -1,12 +1,12 @@
 import { Edit3, Rocket } from "lucide-react";
-import { type FC, useState, useEffect, useRef } from "react";
-import { Button } from "@/components/ui/button";
+import { type FC, useEffect, useRef, useState } from "react";
 import {
   ChatInput,
   useResumeChatMutation,
 } from "@/app/projects/[projectId]/components/chatForm";
 import { useSetPermissionModeMutation } from "@/app/projects/[projectId]/components/chatForm/useChatMutations";
 import { useConfig } from "@/app/hooks/useConfig";
+import { Button } from "@/components/ui/button";
 import type { PermissionMode } from "@/server/service/claude-code/types";
 
 export const ResumeChat: FC<{
@@ -35,17 +35,48 @@ export const ResumeChat: FC<{
   const [selectedButton, setSelectedButton] = useState<"lets-go" | "modify">(
     "lets-go",
   );
-  
+
   // Reset plan approval UI when a new plan arrives
   useEffect(() => {
     if (hasExitPlanMode) {
       setShowPlanApproval(true);
       setSelectedButton("lets-go");
     }
-  }, [hasExitPlanMode, plan]);
+  }, [hasExitPlanMode]);
 
   const letsGoButtonRef = useRef<HTMLButtonElement>(null);
   const modifyButtonRef = useRef<HTMLButtonElement>(null);
+
+  const handleLetsGo = async () => {
+    try {
+      // Only switch to acceptEdits/code mode if not already in it
+      if (
+        currentPermissionMode !== "acceptEdits" &&
+        currentPermissionMode !== "bypassPermissions"
+      ) {
+        await setPermissionMode.mutateAsync("acceptEdits");
+      }
+      setShowPlanApproval(false);
+      // Send a message to continue with the plan
+      await resumeChat.mutateAsync({ message: "Continue with the plan" });
+    } catch (error) {
+      console.error("Failed to switch permission mode:", error);
+    }
+  };
+
+  const handleModifyPlan = async () => {
+    try {
+      // Only switch to plan mode if not already in it
+      if (currentPermissionMode !== "plan") {
+        await setPermissionMode.mutateAsync("plan");
+      }
+      // Hide plan approval UI and show normal chat input for user to type modifications
+      setShowPlanApproval(false);
+      // Note: Would be nice to focus the input here, but ChatInput doesn't expose a ref yet
+    } catch (error) {
+      console.error("Failed to switch to plan mode:", error);
+    }
+  };
 
   // Auto-focus the first button when plan approval is shown
   useEffect(() => {
@@ -79,38 +110,10 @@ export const ResumeChat: FC<{
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [showPlanApproval, plan, selectedButton]);
+  }, [showPlanApproval, plan, selectedButton, handleLetsGo, handleModifyPlan]);
 
   const handleSubmit = async (message: string) => {
     await resumeChat.mutateAsync({ message });
-  };
-
-  const handleLetsGo = async () => {
-    try {
-      // Only switch to acceptEdits/code mode if not already in it
-      if (currentPermissionMode !== "acceptEdits" && currentPermissionMode !== "bypassPermissions") {
-        await setPermissionMode.mutateAsync("acceptEdits");
-      }
-      setShowPlanApproval(false);
-      // Send a message to continue with the plan
-      await resumeChat.mutateAsync({ message: "Continue with the plan" });
-    } catch (error) {
-      console.error("Failed to switch permission mode:", error);
-    }
-  };
-
-  const handleModifyPlan = async () => {
-    try {
-      // Only switch to plan mode if not already in it
-      if (currentPermissionMode !== "plan") {
-        await setPermissionMode.mutateAsync("plan");
-      }
-      // Hide plan approval UI and show normal chat input for user to type modifications
-      setShowPlanApproval(false);
-      // Note: Would be nice to focus the input here, but ChatInput doesn't expose a ref yet
-    } catch (error) {
-      console.error("Failed to switch to plan mode:", error);
-    }
   };
 
   const getButtonText = () => {

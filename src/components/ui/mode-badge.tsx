@@ -1,7 +1,7 @@
-import { Map, Code } from "lucide-react";
+import { Code, Map } from "lucide-react";
 import type { FC } from "react";
-import { Badge } from "./badge";
 import { cn } from "@/lib/utils";
+import { Badge } from "./badge";
 
 interface ModeBadgeProps {
   mode?: "plan" | "acceptEdits" | "bypassPermissions" | "default";
@@ -10,7 +10,12 @@ interface ModeBadgeProps {
   disabled?: boolean;
 }
 
-export const ModeBadge: FC<ModeBadgeProps> = ({ mode, className, onClick, disabled }) => {
+export const ModeBadge: FC<ModeBadgeProps> = ({
+  mode,
+  className,
+  onClick,
+  disabled,
+}) => {
   if (!mode) return null;
 
   const isPlanMode = mode === "plan";
@@ -26,7 +31,9 @@ export const ModeBadge: FC<ModeBadgeProps> = ({ mode, className, onClick, disabl
         isPlanMode
           ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-400 dark:border-amber-800"
           : "bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-400 dark:border-green-800",
-        onClick && !disabled && "cursor-pointer hover:opacity-80 transition-opacity",
+        onClick &&
+          !disabled &&
+          "cursor-pointer hover:opacity-80 transition-opacity",
         disabled && "opacity-50 cursor-not-allowed",
         className,
       )}

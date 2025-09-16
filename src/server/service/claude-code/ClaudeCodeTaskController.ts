@@ -45,6 +45,7 @@ export class ClaudeCodeTaskController {
     },
     message: string,
     planMode?: boolean,
+    model?: string,
   ): Promise<AliveClaudeCodeTask> {
     const existingTask = this.aliveTasks.find(
       (task) => task.sessionId === currentSession.sessionId,
@@ -53,7 +54,12 @@ export class ClaudeCodeTaskController {
     if (existingTask) {
       return await this.continueTask(existingTask, message);
     } else {
-      return await this.startTask(currentSession, message, planMode);
+      return await this.startTask(
+        currentSession,
+        message,
+        planMode,
+        model,
+      );
     }
   }
 
@@ -71,6 +77,7 @@ export class ClaudeCodeTaskController {
     },
     message: string,
     planMode?: boolean,
+    model?: string,
   ) {
     const {
       generateMessages,
@@ -118,11 +125,16 @@ export class ClaudeCodeTaskController {
         let permissionMode: PermissionMode;
         if (task.baseSessionId) {
           // Resuming an existing session - use stored mode or default to acceptEdits
-          const storedMode = sessionPermissionModeStorage.getMode(task.baseSessionId);
+          const storedMode = sessionPermissionModeStorage.getMode(
+            task.baseSessionId,
+          );
           permissionMode = storedMode ?? "acceptEdits";
           // Store the default if it wasn't already stored
           if (!storedMode) {
-            sessionPermissionModeStorage.setMode(task.baseSessionId, permissionMode);
+            sessionPermissionModeStorage.setMode(
+              task.baseSessionId,
+              permissionMode,
+            );
           }
         } else {
           // New session - use the planMode parameter (defaults to acceptEdits if not specified)
@@ -135,6 +147,7 @@ export class ClaudeCodeTaskController {
             cwd: task.cwd,
             pathToClaudeCodeExecutable: this.pathToClaudeCodeExecutable,
             permissionMode: permissionMode,
+            model: model,
             abortController: abortController,
           },
         });
@@ -171,10 +184,14 @@ export class ClaudeCodeTaskController {
                 abortController: abortController,
                 query: queryInstance,
                 currentPermissionMode: permissionMode,
+                model: model as any,
               };
               this.tasks.push(runningTask);
               // Store the permission mode for this session
-              sessionPermissionModeStorage.setMode(message.session_id, permissionMode);
+              sessionPermissionModeStorage.setMode(
+                message.session_id,
+                permissionMode,
+              );
               aliveTaskResolve(runningTask);
               resolved = true;
             }

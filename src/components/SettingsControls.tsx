@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { type FC, useCallback, useId } from "react";
 import { configQueryConfig, useConfig } from "@/app/hooks/useConfig";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ModelSelector } from "@/components/ui/model-selector";
 import { projectQueryConfig } from "../app/projects/[projectId]/hooks/useProject";
 
 interface SettingsControlsProps {
@@ -66,6 +67,16 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
     };
     updateConfig(newConfig);
     await onConfigChanged();
+  };
+
+  const handleDefaultModelChange = (model: string | undefined) => {
+    const newConfig = {
+      ...config,
+      defaultModel: model,
+    };
+    updateConfig(newConfig);
+    // Don't await - let it save in background for faster UI response
+    onConfigChanged().catch(console.error);
   };
 
   return (
@@ -134,6 +145,22 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
           executing
         </p>
       )}
+
+      <div className="space-y-2">
+        {showLabels && (
+          <label className="text-sm font-medium">Default Model</label>
+        )}
+        <ModelSelector
+          model={config?.defaultModel}
+          onModelChange={handleDefaultModelChange}
+          size="sm"
+        />
+        {showDescriptions && (
+          <p className="text-xs text-muted-foreground">
+            Default model for new conversations
+          </p>
+        )}
+      </div>
     </div>
   );
 };

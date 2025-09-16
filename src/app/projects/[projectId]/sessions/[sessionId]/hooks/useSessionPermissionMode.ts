@@ -2,7 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { honoClient } from "@/lib/api/client";
 import type { PermissionMode } from "@/server/service/claude-code/types";
 
-export const useSessionPermissionMode = (projectId: string, sessionId: string) => {
+export const useSessionPermissionMode = (
+  projectId: string,
+  sessionId: string,
+) => {
   return useQuery({
     queryKey: ["sessionPermissionMode", projectId, sessionId],
     queryFn: async () => {
