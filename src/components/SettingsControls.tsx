@@ -150,18 +150,13 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
 
       <div className="space-y-2">
         {showLabels && (
-          <label className="text-sm font-medium">Default Model</label>
+          <label className="text-sm font-medium">Current Model Option</label>
         )}
         <ModelSelector
           model={config?.defaultModel}
           onModelChange={handleDefaultModelChange}
           size="sm"
         />
-        {showDescriptions && (
-          <p className="text-xs text-muted-foreground">
-            Default model for new conversations
-          </p>
-        )}
       </div>
     </div>
   );
