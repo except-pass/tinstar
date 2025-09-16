@@ -1,0 +1,85 @@
+import { type FSWatcher, watch } from "node:fs";
+import z from "zod";
+import { claudeProjectPath } from "../paths";
+import { type EventBus, getEventBus } from "./EventBus";
+
+const fileRegExp = /(?<projectId>.*?)\/(?<sessionId>.*?)\.jsonl/;
+const fileRegExpGroupSchema = z.object({
+  projectId: z.string(),
+  sessionId: z.string(),
+});
+
+export class FileWatcherService {
+  private watcher: FSWatcher | null = null;
+  private projectWatchers: Map<string, FSWatcher> = new Map();
+  private eventBus: EventBus;
+
+  constructor() {
+    this.eventBus = getEventBus();
+  }
+
+  public startWatching(): void {
+    try {
+      console.log("Starting file watcher on:", claudeProjectPath);
+      // メインプロジェクトディレクトリを監視
+      this.watcher = watch(
+        claudeProjectPath,
+        { persistent: false, recursive: true },
+        (eventType, filename) => {
+          if (!filename) return;
+
+          const groups = fileRegExpGroupSchema.safeParse(
+            filename.match(fileRegExp)?.groups,
+          );
+
+          if (!groups.success) return;
+
+          const { projectId, sessionId } = groups.data;
+
+          this.eventBus.emit("project_changed", {
+            type: "project_changed",
+            data: {
+              fileEventType: eventType,
+              projectId,
+            },
+          });
+
+          this.eventBus.emit("session_changed", {
+            type: "session_changed",
+            data: {
+              projectId,
+              sessionId,
+              fileEventType: eventType,
+            },
+          });
+        },
+      );
+      console.log("File watcher initialization completed");
+    } catch (error) {
+      console.error("Failed to start file watching:", error);
+    }
+  }
+
+  public stop(): void {
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = null;
+    }
+
+    for (const [, watcher] of this.projectWatchers) {
+      watcher.close();
+    }
+    this.projectWatchers.clear();
+  }
+}
+
+// シングルトンインスタンス
+let watcherInstance: FileWatcherService | null = null;
+
+export const getFileWatcher = (): FileWatcherService => {
+  if (!watcherInstance) {
+    console.log("Creating new FileWatcher instance");
+    watcherInstance = new FileWatcherService();
+  }
+  return watcherInstance;
+};
