@@ -491,6 +491,9 @@ export const routes = (app: HonoAppType) => {
           }
 
           try {
+            // Resolve "default" model to "sonnet" for the API
+            const resolvedModel = model === "default" ? "sonnet" : model;
+            
             const task = await taskController.startOrContinueTask(
               {
                 projectId,
@@ -498,7 +501,7 @@ export const routes = (app: HonoAppType) => {
               },
               message,
               planMode ?? config.defaultPlanMode,
-              model,
+              resolvedModel,
             );
 
             return c.json({
@@ -543,6 +546,9 @@ export const routes = (app: HonoAppType) => {
           try {
             // Resolve the correct cwd for this session (handles worktree sessions)
             const sessionCwd = await getSessionCwd(projectId, sessionId);
+            
+            // Resolve "default" model to "sonnet" for the API
+            const resolvedModel = model === "default" ? "sonnet" : model;
 
             const task = await taskController.startOrContinueTask(
               {
@@ -552,7 +558,7 @@ export const routes = (app: HonoAppType) => {
               },
               resumeMessage,
               undefined, // planMode not needed for resume
-              model,
+              resolvedModel,
             );
 
             return c.json({
