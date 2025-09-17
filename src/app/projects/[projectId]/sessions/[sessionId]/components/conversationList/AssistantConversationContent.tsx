@@ -133,8 +133,11 @@ export const AssistantConversationContent: FC<{
   const { openInEditor } = useOpenInEditor();
   if (content.type === "text") {
     return (
-      <div className="w-full mx-1 sm:mx-2 my-4 sm:my-6">
-        <MarkdownContent content={content.text} />
+      <div className="w-full mx-1 sm:mx-2 my-2">
+        <MarkdownContent
+          className="w-full text-sm [&_p]:mb-1 [&_h1]:mb-2 [&_h1]:mt-2 [&_h2]:mb-2 [&_h2]:mt-2 [&_h3]:mb-1 [&_h3]:mt-2 [&_h4]:mb-1 [&_h4]:mt-1 [&_h5]:mb-1 [&_h5]:mt-1 [&_h6]:mb-1 [&_h6]:mt-1 [&_ul]:mb-2 [&_ol]:mb-2 [&_blockquote]:my-2 [&_pre]:my-2"
+          content={content.text}
+        />
       </div>
     );
   }
