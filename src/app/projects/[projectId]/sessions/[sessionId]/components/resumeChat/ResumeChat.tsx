@@ -58,13 +58,8 @@ export const ResumeChat: FC<{
 
   const handleLetsGo = async () => {
     try {
-      // Only switch to acceptEdits/code mode if not already in it
-      if (
-        currentPermissionMode !== "acceptEdits" &&
-        currentPermissionMode !== "bypassPermissions"
-      ) {
-        await setPermissionMode.mutateAsync("acceptEdits");
-      }
+      // Set permission mode to acceptEdits/code mode
+      await setPermissionMode.mutateAsync("acceptEdits");
       setShowPlanApproval(false);
       // Send a message to continue with the plan
       await resumeChat.mutateAsync({ message: "Continue with the plan" });
@@ -75,10 +70,8 @@ export const ResumeChat: FC<{
 
   const handleModifyPlan = async () => {
     try {
-      // Only switch to plan mode if not already in it
-      if (currentPermissionMode !== "plan") {
-        await setPermissionMode.mutateAsync("plan");
-      }
+      // Set permission mode to plan mode
+      await setPermissionMode.mutateAsync("plan");
       // Hide plan approval UI and show normal chat input for user to type modifications
       setShowPlanApproval(false);
       // Note: Would be nice to focus the input here, but ChatInput doesn't expose a ref yet
@@ -210,7 +203,7 @@ export const ResumeChat: FC<{
         isPending={resumeChat.isPending}
         error={resumeChat.error}
         placeholder={
-          hasExitPlanMode
+          currentPermissionMode === "plan"
             ? "Suggest changes to the plan..."
             : "Type your message... (Start with / for commands, Ctrl+Enter to send)"
         }
