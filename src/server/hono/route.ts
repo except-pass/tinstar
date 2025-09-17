@@ -637,16 +637,19 @@ export const routes = (app: HonoAppType) => {
           const { sessionId } = c.req.param();
           const { mode } = c.req.valid("json");
 
-          const success = await taskController.setTaskPermissionMode(
+          // Persist the requested mode regardless of task activity so the UI stays in sync
+          const { sessionPermissionModeStorage } = await import(
+            "../service/sessionPermissionModes/storage"
+          );
+          sessionPermissionModeStorage.setMode(sessionId, mode);
+
+          // Attempt to apply to a currently running task if one exists
+          const appliedToActiveTask = await taskController.setTaskPermissionMode(
             sessionId,
             mode,
           );
 
-          if (!success) {
-            return c.json({ error: "Session not found or not active" }, 404);
-          }
-
-          return c.json({ success: true, mode });
+          return c.json({ success: true, mode, appliedToActiveTask });
         },
       )
 
