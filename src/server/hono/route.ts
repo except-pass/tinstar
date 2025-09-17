@@ -1,10 +1,10 @@
+import { zValidator } from "@hono/zod-validator";
+import { setCookie } from "hono/cookie";
+import { streamSSE } from "hono/streaming";
 import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { zValidator } from "@hono/zod-validator";
-import { setCookie } from "hono/cookie";
-import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { configSchema } from "../config/config";
 import { ClaudeCodeTaskController } from "../service/claude-code/ClaudeCodeTaskController";
@@ -23,6 +23,7 @@ import { getProjects } from "../service/project/getProjects";
 import { getSession } from "../service/session/getSession";
 import { getSessionCwd } from "../service/session/getSessionCwd";
 import { getSessions } from "../service/session/getSessions";
+import { sessionPermissionModeStorage } from "../service/sessionPermissionModes/storage";
 import type { HonoAppType } from "./app";
 import { configMiddleware } from "./middleware/config.middleware";
 
@@ -608,9 +609,6 @@ export const routes = (app: HonoAppType) => {
         "/projects/:projectId/sessions/:sessionId/permission-mode",
         async (c) => {
           const { sessionId } = c.req.param();
-          const { sessionPermissionModeStorage } = await import(
-            "../service/sessionPermissionModes/storage"
-          );
 
           // Get stored mode or default to acceptEdits
           const mode =
@@ -637,16 +635,18 @@ export const routes = (app: HonoAppType) => {
           const { sessionId } = c.req.param();
           const { mode } = c.req.valid("json");
 
-          const success = await taskController.setTaskPermissionMode(
+          // Always update the persistent storage first
+          sessionPermissionModeStorage.setMode(sessionId, mode);
+
+          // Also update the active task if one exists
+          const taskUpdated = await taskController.setTaskPermissionMode(
             sessionId,
             mode,
           );
 
-          if (!success) {
-            return c.json({ error: "Session not found or not active" }, 404);
-          }
-
-          return c.json({ success: true, mode });
+          // Return success regardless of whether there's an active task
+          // because we successfully updated the stored permission mode
+          return c.json({ success: true, mode, taskUpdated });
         },
       )
 
