@@ -18,7 +18,7 @@ export const NewChat: FC<{
   const { config } = useConfig();
   const [createWorktree, setCreateWorktree] = useState(false);
   const [planMode, setPlanMode] = useState(config?.defaultPlanMode ?? true);
-  const [model, setModel] = useState<string | undefined>(config?.defaultModel || "default");
+  const [model] = useState<string | undefined>(config?.defaultModel || "default");
   const startNewChat = useNewChatMutation(projectId, onSuccess);
 
 
