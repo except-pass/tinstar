@@ -61,7 +61,6 @@ export const useResumeChatMutation = (projectId: string, sessionId: string) => {
     mutationFn: async (options: {
       message: string;
       model?: string;
-      fallbackModel?: string;
     }) => {
       const response = await honoClient.api.projects[":projectId"].sessions[
         ":sessionId"
@@ -71,7 +70,6 @@ export const useResumeChatMutation = (projectId: string, sessionId: string) => {
           json: {
             resumeMessage: options.message,
             model: options.model,
-            fallbackModel: options.fallbackModel,
           },
         },
         {
