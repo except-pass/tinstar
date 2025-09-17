@@ -2,6 +2,8 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { type FC, useCallback, useId } from "react";
+import type { ModelType } from "@/server/service/claude-code/types";
+import type { Config } from "@/server/config/config";
 import { configQueryConfig, useConfig } from "@/app/hooks/useConfig";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ModelSelector } from "@/components/ui/model-selector";
@@ -70,9 +72,10 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
   };
 
   const handleDefaultModelChange = (model: string | undefined) => {
-    const newConfig = {
-      ...config,
-      defaultModel: model,
+    const resolvedModel: ModelType = (model ?? "default") as ModelType;
+    const newConfig: Config = {
+      ...(config as Config),
+      defaultModel: resolvedModel,
     };
     updateConfig(newConfig);
     // Don't await - let it save in background for faster UI response
