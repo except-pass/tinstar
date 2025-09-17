@@ -538,7 +538,7 @@ export const routes = (app: HonoAppType) => {
         ),
         async (c) => {
           const { projectId, sessionId } = c.req.param();
-          const { resumeMessage, model, fallbackModel } = c.req.valid("json");
+          const { resumeMessage, model, fallbackModel: _fallbackModel } = c.req.valid("json");
           const { project } = await getProject(projectId);
 
           if (project.meta.projectPath === null) {
