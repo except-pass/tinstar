@@ -59,6 +59,20 @@ The application reads Claude Code conversation files from:
 - **Format**: JSONL files containing conversation entries
 - **Auto-detection**: Automatically discovers new projects and sessions
 
+### How Projects Are Added
+
+Projects appear in Tinstar automatically - there's no manual "add project" process:
+
+1. **Use Claude Code CLI**: When you run `claude` command in any git repository, Claude Code automatically creates a project folder
+2. **Automatic Discovery**: Tinstar scans `~/.claude/projects/` and displays all projects found there
+3. **Real-time Updates**: New projects appear instantly in the UI via Server-Sent Events monitoring
+
+**Project Naming**: Claude Code encodes repository paths into project folder names:
+- Repository: `/Users/whw/src/tinstar` 
+- Project folder: `-Users-whw-src-tinstar`
+
+**Key Point**: Tinstar is a viewer/client for Claude Code projects - projects are created by the Claude Code CLI, not by Tinstar itself
+
 ## Usage Guide
 
 ### 1. Project List
