@@ -1,4 +1,4 @@
-import { Brain, Sparkles, Zap } from "lucide-react";
+import { Brain, Sparkles } from "lucide-react";
 import type { FC } from "react";
 import { cn } from "@/lib/utils";
 import type { ModelType } from "@/server/service/claude-code/types";
