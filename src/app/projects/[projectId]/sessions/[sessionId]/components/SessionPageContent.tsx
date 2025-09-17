@@ -26,10 +26,11 @@ import { firstCommandToTitle } from "../../../services/firstCommandToTitle";
 import { useAliveTask } from "../hooks/useAliveTask";
 import { useSession } from "../hooks/useSession";
 import { useSessionCwd } from "../hooks/useSessionCwd";
+import { useGlobalKeyboardShortcuts } from "@/hooks/useGlobalKeyboardShortcuts";
 import { ConversationList } from "./conversationList/ConversationList";
 import { DiffModal } from "./diffModal";
-import { ResumeChat } from "./resumeChat/ResumeChat";
-import { SessionSidebar } from "./sessionSidebar/SessionSidebar";
+import { ResumeChat, type ResumeChatRef } from "./resumeChat/ResumeChat";
+import { SessionSidebar, type SessionsTabRef } from "./sessionSidebar/SessionSidebar";
 
 export const SessionPageContent: FC<{
   projectId: string;
@@ -63,6 +64,30 @@ export const SessionPageContent: FC<{
   // Set up task completion notifications
   useTaskNotifications(isRunningTask);
 
+  // Handle keyboard shortcuts
+  useGlobalKeyboardShortcuts({
+    onNavigateUp: () => {
+      sessionSidebarRef.current?.navigateUp();
+    },
+    onNavigateDown: () => {
+      sessionSidebarRef.current?.navigateDown();
+    },
+    onCreateNew: () => {
+      sessionSidebarRef.current?.createNew();
+    },
+    onOpenEditor: () => {
+      if (sessionCwd) {
+        openInEditor(sessionCwd);
+      }
+    },
+    onFocusInput: () => {
+      resumeChatRef.current?.focusInput();
+    },
+    onBlurInput: () => {
+      resumeChatRef.current?.blurInput();
+    }
+  });
+
   // Copy resume command to clipboard
   const copyResumeCommand = async () => {
     if (!sessionCwd) {
@@ -92,6 +117,8 @@ export const SessionPageContent: FC<{
   const hasAutoScrolledRef = useRef(false);
   const isUserScrollingRef = useRef(false);
   const isContentUpdatingRef = useRef(false);
+  const resumeChatRef = useRef<ResumeChatRef>(null);
+  const sessionSidebarRef = useRef<SessionsTabRef>(null);
 
   // Reset auto-scroll state when session changes
   useEffect(() => {
@@ -214,6 +241,7 @@ export const SessionPageContent: FC<{
   return (
     <div className="flex h-screen max-h-screen overflow-hidden">
       <SessionSidebar
+        ref={sessionSidebarRef}
         currentSessionId={sessionId}
         projectId={projectId}
         isMobileOpen={isMobileSidebarOpen}
@@ -406,6 +434,7 @@ export const SessionPageContent: FC<{
             )}
 
             <ResumeChat
+              ref={resumeChatRef}
               projectId={projectId}
               sessionId={sessionId}
               isPausedTask={isPausedTask}

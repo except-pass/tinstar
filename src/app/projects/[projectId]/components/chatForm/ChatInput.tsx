@@ -1,5 +1,5 @@
 import { AlertCircleIcon, LoaderIcon, SendIcon } from "lucide-react";
-import { type FC, useCallback, useId, useRef, useState } from "react";
+import { type FC, useCallback, useId, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import { Button } from "../../../../../components/ui/button";
 import { Textarea } from "../../../../../components/ui/textarea";
 import type { CommandCompletionRef } from "./CommandCompletion";
@@ -20,7 +20,12 @@ export interface ChatInputProps {
   sendKeys?: ("enter" | "shift" | "ctrl" | "cmd")[];
 }
 
-export const ChatInput: FC<ChatInputProps> = ({
+export interface ChatInputRef {
+  focus: () => void;
+  blur: () => void;
+}
+
+export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
   projectId,
   onSubmit,
   isPending,
@@ -32,7 +37,7 @@ export const ChatInput: FC<ChatInputProps> = ({
   disabled = false,
   buttonSize = "lg",
   sendKeys = ["ctrl", "cmd"],
-}) => {
+}, ref) => {
   const [message, setMessage] = useState("");
   const [cursorPosition, setCursorPosition] = useState<{
     relative: { top: number; left: number };
@@ -44,6 +49,16 @@ export const ChatInput: FC<ChatInputProps> = ({
   const commandCompletionRef = useRef<CommandCompletionRef>(null);
   const fileCompletionRef = useRef<FileCompletionRef>(null);
   const helpId = useId();
+
+  // Expose focus and blur methods through ref
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      textareaRef.current?.focus();
+    },
+    blur: () => {
+      textareaRef.current?.blur();
+    }
+  }), []);
 
   const handleSubmit = async () => {
     if (!message.trim()) return;
@@ -227,4 +242,6 @@ export const ChatInput: FC<ChatInputProps> = ({
       </div>
     </div>
   );
-};
+});
+
+ChatInput.displayName = 'ChatInput';

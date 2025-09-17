@@ -13,8 +13,12 @@ import { NewChat } from "./NewChat";
 export const NewChatModal: FC<{
   projectId: string;
   trigger?: ReactNode;
-}> = ({ projectId, trigger }) => {
-  const [open, setOpen] = useState(false);
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}> = ({ projectId, trigger, isOpen, onOpenChange }) => {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = isOpen !== undefined ? isOpen : internalOpen;
+  const setOpen = onOpenChange || setInternalOpen;
 
   const handleSuccess = () => {
     setOpen(false);

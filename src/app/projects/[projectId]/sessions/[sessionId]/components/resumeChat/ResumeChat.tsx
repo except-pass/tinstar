@@ -1,19 +1,37 @@
 import type { FC } from "react";
+import { useRef, forwardRef, useImperativeHandle } from "react";
 import {
   ChatInput,
   useResumeChatMutation,
+  type ChatInputRef,
 } from "../../../../components/chatForm";
 import { useConfig } from "@/app/hooks/useConfig";
 
-export const ResumeChat: FC<{
+export interface ResumeChatRef {
+  focusInput: () => void;
+  blurInput: () => void;
+}
+
+export const ResumeChat = forwardRef<ResumeChatRef, {
   projectId: string;
   sessionId: string;
   isPausedTask: boolean;
   isRunningTask: boolean;
   isOrphaned?: boolean;
-}> = ({ projectId, sessionId, isPausedTask, isRunningTask, isOrphaned }) => {
+}>(({ projectId, sessionId, isPausedTask, isRunningTask, isOrphaned }, ref) => {
   const resumeChat = useResumeChatMutation(projectId, sessionId);
   const { config } = useConfig();
+  const chatInputRef = useRef<ChatInputRef>(null);
+
+  // Expose focus and blur methods
+  useImperativeHandle(ref, () => ({
+    focusInput: () => {
+      chatInputRef.current?.focus();
+    },
+    blurInput: () => {
+      chatInputRef.current?.blur();
+    }
+  }), []);
 
   const handleSubmit = async (message: string) => {
     await resumeChat.mutateAsync({ message });
@@ -48,6 +66,7 @@ export const ResumeChat: FC<{
   return (
     <div className="border-t border-border/50 bg-muted/20 p-4 mt-6">
       <ChatInput
+        ref={chatInputRef}
         projectId={projectId}
         onSubmit={handleSubmit}
         isPending={resumeChat.isPending}
@@ -61,4 +80,6 @@ export const ResumeChat: FC<{
       />
     </div>
   );
-};
+});
+
+ResumeChat.displayName = 'ResumeChat';

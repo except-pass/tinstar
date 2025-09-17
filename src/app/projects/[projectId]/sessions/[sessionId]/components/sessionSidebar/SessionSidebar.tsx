@@ -7,27 +7,27 @@ import {
   Undo2Icon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { type FC, useState } from "react";
+import { type FC, useState, forwardRef, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { useProject } from "../../../../hooks/useProject";
 import { McpTab } from "./McpTab";
 import { MobileSidebar } from "./MobileSidebar";
-import { SessionsTab } from "./SessionsTab";
+import { SessionsTab, type SessionsTabRef } from "./SessionsTab";
 import { SettingsTab } from "./SettingsTab";
 
-export const SessionSidebar: FC<{
+export const SessionSidebar = forwardRef<SessionsTabRef, {
   currentSessionId: string;
   projectId: string;
   className?: string;
   isMobileOpen?: boolean;
   onMobileOpenChange?: (open: boolean) => void;
-}> = ({
+}>(({
   currentSessionId,
   projectId,
   className,
   isMobileOpen = false,
   onMobileOpenChange,
-}) => {
+}, ref) => {
   const router = useRouter();
   const {
     data: { sessions },
@@ -53,6 +53,7 @@ export const SessionSidebar: FC<{
       case "sessions":
         return (
           <SessionsTab
+            ref={ref}
             sessions={sessions}
             currentSessionId={currentSessionId}
             projectId={projectId}
@@ -164,4 +165,6 @@ export const SessionSidebar: FC<{
       />
     </>
   );
-};
+});
+
+SessionSidebar.displayName = 'SessionSidebar';
