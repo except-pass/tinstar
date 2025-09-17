@@ -595,40 +595,109 @@ export const routes = (app: HonoAppType) => {
       )
 
       .post(
-        "/cursor-open",
-        zValidator("json", z.object({ filePath: z.string() })),
+        "/editor-open",
+        zValidator(
+          "json",
+          z.object({
+            path: z.string(),
+            command: z.string().optional(),
+          }),
+        ),
         async (c) => {
-          const { filePath } = c.req.valid("json");
+          const { path, command } = c.req.valid("json");
+
+          // Command resolution order:
+          // 1. Command from request
+          // 2. Command from cookie/localStorage (via header)
+          // 3. $EDITOR environment variable
+          // 4. Fallback to cursor
+          let editorCommand = command;
+
+          if (!editorCommand) {
+            // Try to get from cookie/localStorage via header
+            const editorSettings = c.req.header("X-Editor-Settings");
+            if (editorSettings) {
+              try {
+                const settings = JSON.parse(editorSettings);
+                if (settings.editorCommand) {
+                  editorCommand = settings.editorCommand;
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
+          }
+
+          if (!editorCommand) {
+            // Try $EDITOR environment variable
+            const envEditor = process.env["EDITOR"];
+            if (envEditor) {
+              editorCommand = `${envEditor} {{path}}`;
+            }
+          }
+
+          if (!editorCommand) {
+            // Fallback to cursor
+            editorCommand = "cursor {{path}}";
+          }
+
+          // Replace {{path}} placeholder with actual path
+          const finalCommand = editorCommand.replace("{{path}}", path);
+          const parts = finalCommand.split(" ");
+          const cmd = parts[0];
+          const args = parts.slice(1);
+
+          if (!cmd) {
+            return c.json({ error: "Invalid editor command" }, 400);
+          }
 
           try {
             return new Promise((resolve, reject) => {
-              const childProcess = spawn("cursor", ["-a", filePath], {
+              const childProcess = spawn(cmd, args, {
                 stdio: "ignore",
                 detached: true,
               });
 
               childProcess.on("error", (error) => {
-                console.error("Failed to start cursor:", error);
-                reject(c.json({ error: "Failed to start cursor" }, 500));
+                console.error(`Failed to start editor (${cmd}):`, error);
+                reject(
+                  c.json(
+                    { error: `Failed to start editor: ${cmd}` },
+                    500,
+                  ),
+                );
               });
 
               childProcess.on("spawn", () => {
                 // Process started successfully, unref so it doesn't keep the parent alive
                 childProcess.unref();
-                resolve(c.json({ message: "File opened in cursor" }));
+                resolve(
+                  c.json({
+                    message: `Opened in editor: ${cmd}`,
+                    command: finalCommand,
+                  }),
+                );
               });
 
               // Timeout after 5 seconds
               setTimeout(() => {
                 if (!childProcess.killed) {
                   childProcess.kill();
-                  reject(c.json({ error: "Cursor command timed out" }, 500));
+                  reject(
+                    c.json(
+                      { error: `Editor command timed out: ${cmd}` },
+                      500,
+                    ),
+                  );
                 }
               }, 5000);
             });
           } catch (error) {
-            console.error("Error executing cursor command:", error);
-            return c.json({ error: "Failed to execute cursor command" }, 500);
+            console.error("Error executing editor command:", error);
+            return c.json(
+              { error: "Failed to execute editor command" },
+              500,
+            );
           }
         },
       )

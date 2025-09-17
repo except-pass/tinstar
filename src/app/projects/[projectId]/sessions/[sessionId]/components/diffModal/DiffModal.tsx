@@ -27,6 +27,7 @@ import {
 import { WorktreeBadge } from "@/components/ui/worktree-badge";
 import { cn } from "@/lib/utils";
 import { isWorktreeSession } from "@/lib/worktree";
+import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import {
   useGitBranches,
   useGitCommit,
@@ -152,6 +153,7 @@ export const DiffModal: FC<DiffModalProps> = ({
   const [compareTo, setCompareTo] = useState(defaultCompareTo);
   const [showCommitInput, setShowCommitInput] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
+  const { openInEditor } = useOpenInEditor();
 
   // Since we're in a session route, we always have sessionId from route params
   // But the modal prop sessionId might be optional for backward compatibility
@@ -496,16 +498,9 @@ export const DiffModal: FC<DiffModalProps> = ({
                       }}
                       showEditButton={true}
                       onEditFile={(filePath) => {
-                        // Open file in cursor editor
-                        fetch("/api/cursor-open", {
-                          method: "POST",
-                          headers: {
-                            "Content-Type": "application/json",
-                          },
-                          body: JSON.stringify({ filePath }),
-                        }).catch((error) => {
+                        openInEditor(filePath).catch((error) => {
                           console.error(
-                            "Failed to open file in cursor:",
+                            "Failed to open file in editor:",
                             error,
                           );
                         });
