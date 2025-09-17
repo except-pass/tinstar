@@ -53,6 +53,9 @@ pnpm test:watch # Run tests in watch mode
 - `/api/projects` - List all Claude projects
 - `/api/projects/:projectId` - Get project details and sessions
 - `/api/projects/:projectId/sessions/:sessionId` - Get session conversations
+- `/api/projects/:projectId/new-session` - Start new session with task
+- `/api/projects/:projectId/sessions/:sessionId/resume` - Resume session with task
+- `/api/tasks/alive` - Monitor live tasks
 - `/api/events/state_changes` - Server-Sent Events for real-time file monitoring
 
 **Data Flow**:
@@ -65,6 +68,48 @@ pnpm test:watch # Run tests in watch mode
 - Zod schemas for conversation data validation (`src/lib/conversation-schema/`)
 - Type-safe API client with Hono and Zod validation
 - Strict TypeScript configuration extending `@tsconfig/strictest`
+
+### Core Concepts: Projects, Sessions, and Tasks
+
+**Projects** (`src/server/service/types.ts:4-15`):
+- Represent Claude Code projects stored in `~/.claude/projects/`
+- Each project has an ID (encoded path), name, and project path on disk
+- Contains metadata like last modified date and session count
+
+**Sessions** (`src/server/service/types.ts:17-29`):
+- JSONL files within a project folder containing conversation history
+- Each session represents a single conversation thread with Claude
+- Has metadata including message count, first command, and last modified date
+- Can be associated with git worktrees for isolated development branches
+
+**Tasks** (`src/server/service/claude-code/`):
+- Live interaction instances with Claude Code CLI via `@anthropic-ai/claude-code` package
+- Managed by `ClaudeCodeTaskController` (`ClaudeCodeTaskController.ts`)
+- States: `pending` → `running` ↔ `paused` → `completed/failed`
+- Can start new sessions or resume existing ones
+- Each task tracks its session ID, user message ID, and working directory
+
+**Relationships**:
+- **Project → Sessions**: A project contains multiple session files (1-to-many)
+- **Session → Task**: Tasks execute Claude commands within a session context
+- **Task → Session**: Tasks can create new sessions or continue existing ones
+
+Tasks enable real-time interaction with Claude Code, while projects and sessions provide the persistent storage and organization of conversation history.
+
+### Projects vs Repositories
+
+**A Project is Claude Code's workspace for a git repository**:
+- Each git repository worked on with Claude Code gets a corresponding project folder in `~/.claude/projects/`
+- The project ID is an encoded version of the repository path (e.g., `/home/ubuntu/repo/tinstar` → `-home-ubuntu-repo-tinstar`)
+- The `projectPath` property points to the actual git repository directory on disk
+- One repository maps to one Claude project (1:1 relationship)
+
+**Git Integration**:
+- Projects extract repository paths from session JSONL files (stored as `cwd` in conversations)
+- Git operations (branches, commits, diffs) are performed on the repository via `projectPath`
+- Projects can spawn git worktrees for isolated development (`src/server/service/worktree/management.ts`)
+- Sessions can be tied to specific worktrees, enabling parallel development on different branches
+- Each conversation/session records its working directory, typically the repository root or a worktree path
 
 ### File Structure Patterns
 
