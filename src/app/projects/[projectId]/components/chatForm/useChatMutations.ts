@@ -71,7 +71,6 @@ export const useResumeChatMutation = (projectId: string, sessionId: string) => {
           json: {
             resumeMessage: options.message,
             model: options.model,
-            fallbackModel: options.fallbackModel,
           },
         },
         {

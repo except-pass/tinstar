@@ -17,7 +17,6 @@ import { toast } from "sonner";
 import { useSetPermissionModeMutation } from "@/app/projects/[projectId]/components/chatForm/useChatMutations";
 import { useProject } from "@/app/projects/[projectId]/hooks/useProject";
 import { firstCommandToTitle } from "@/app/projects/[projectId]/services/firstCommandToTitle";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { ModeBadge } from "@/components/ui/mode-badge";

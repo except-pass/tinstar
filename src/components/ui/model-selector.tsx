@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 import { Brain, Sparkles } from "lucide-react";
-=======
-import { Brain, Sparkles, Zap } from "lucide-react";
->>>>>>> 997b9b1342a932b1d2e9cae68dd27a83466fc2fe
 import type { FC } from "react";
 import { cn } from "@/lib/utils";
 import type { ModelType } from "@/server/service/claude-code/types";
@@ -12,10 +8,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-<<<<<<< HEAD
-=======
-  SelectValue,
->>>>>>> 997b9b1342a932b1d2e9cae68dd27a83466fc2fe
 } from "./select";
 
 export interface ModelSelectorProps {

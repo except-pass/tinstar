@@ -502,11 +502,7 @@ export const routes = (app: HonoAppType) => {
               },
               message,
               planMode ?? config.defaultPlanMode,
-<<<<<<< HEAD
               resolvedModel,
-=======
-              model,
->>>>>>> 997b9b1342a932b1d2e9cae68dd27a83466fc2fe
             );
 
             return c.json({
@@ -537,19 +533,11 @@ export const routes = (app: HonoAppType) => {
           z.object({
             resumeMessage: z.string(),
             model: z.string().optional(),
-<<<<<<< HEAD
-            fallbackModel: z.string().optional(),
-=======
->>>>>>> 997b9b1342a932b1d2e9cae68dd27a83466fc2fe
           }),
         ),
         async (c) => {
           const { projectId, sessionId } = c.req.param();
-<<<<<<< HEAD
-          const { resumeMessage, model, fallbackModel: _fallbackModel } = c.req.valid("json");
-=======
           const { resumeMessage, model } = c.req.valid("json");
->>>>>>> 997b9b1342a932b1d2e9cae68dd27a83466fc2fe
           const { project } = await getProject(projectId);
 
           if (project.meta.projectPath === null) {
@@ -571,11 +559,7 @@ export const routes = (app: HonoAppType) => {
               },
               resumeMessage,
               undefined, // planMode not needed for resume
-<<<<<<< HEAD
               resolvedModel,
-=======
-              model,
->>>>>>> 997b9b1342a932b1d2e9cae68dd27a83466fc2fe
             );
 
             return c.json({
