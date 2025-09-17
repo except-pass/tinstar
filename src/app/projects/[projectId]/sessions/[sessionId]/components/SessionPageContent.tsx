@@ -14,15 +14,12 @@ import {
 import type { FC } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { useOpenInEditor } from "@/hooks/useOpenInEditor";
-import { useTaskNotifications } from "@/hooks/useTaskNotifications";
-import { cn } from "@/lib/utils";
 import { useSetPermissionModeMutation } from "@/app/projects/[projectId]/components/chatForm/useChatMutations";
 import { useProject } from "@/app/projects/[projectId]/hooks/useProject";
 import { firstCommandToTitle } from "@/app/projects/[projectId]/services/firstCommandToTitle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { ModeBadge } from "@/components/ui/mode-badge";
 import { ModelBadge } from "@/components/ui/model-selector";
 import { WorktreeBadge } from "@/components/ui/worktree-badge";

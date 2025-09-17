@@ -8,6 +8,10 @@ export type PermissionMode =
   | "plan";
 
 export type ModelType = "default" | "sonnet" | "opus" | "opusplan";
+<<<<<<< HEAD
+=======
+
+>>>>>>> 997b9b1342a932b1d2e9cae68dd27a83466fc2fe
 type BaseClaudeCodeTask = {
   id: string;
   projectId: string;
