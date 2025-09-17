@@ -625,17 +625,17 @@ export const ConversationList: FC<ConversationListProps> = ({
               <div className="w-full">
                 <Collapsible defaultOpen={group.isAfterLastUser}>
                   <CollapsibleTrigger asChild>
-                    <div className="flex items-center justify-between cursor-pointer hover:bg-muted/50 rounded p-2 -mx-2 mb-2">
-                      <div className="flex items-center">
+                    <div className="flex items-center cursor-pointer hover:bg-muted/50 rounded p-2 -mx-2 mb-2">
+                      <div className="flex items-center gap-2">
+                        <ChevronRight className="h-4 w-4 text-green-600 dark:text-green-400 transition-transform group-data-[state=open]:rotate-90" />
                         <StatusDot
                           status={hasErrors ? "error" : "success"}
-                          className="mr-2"
+                          className=""
                         />
                         <h4 className="text-sm font-medium text-muted-foreground">
                           Edit
                         </h4>
                       </div>
-                      <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
                     </div>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
