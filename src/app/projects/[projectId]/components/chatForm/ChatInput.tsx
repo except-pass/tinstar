@@ -17,6 +17,7 @@ export interface ChatInputProps {
   containerClassName?: string;
   disabled?: boolean;
   buttonSize?: "sm" | "default" | "lg";
+  sendKeys?: ("enter" | "shift" | "ctrl" | "cmd")[];
 }
 
 export const ChatInput: FC<ChatInputProps> = ({
@@ -30,6 +31,7 @@ export const ChatInput: FC<ChatInputProps> = ({
   containerClassName = "",
   disabled = false,
   buttonSize = "lg",
+  sendKeys = ["ctrl", "cmd"],
 }) => {
   const [message, setMessage] = useState("");
   const [cursorPosition, setCursorPosition] = useState<{
@@ -58,7 +60,14 @@ export const ChatInput: FC<ChatInputProps> = ({
       return;
     }
 
-    if (e.key === "Enter" && (e.shiftKey || e.ctrlKey)) {
+    const shouldSend = e.key === "Enter" && (
+      (sendKeys.includes("enter") && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
+      (sendKeys.includes("shift") && e.shiftKey) ||
+      (sendKeys.includes("ctrl") && e.ctrlKey) ||
+      (sendKeys.includes("cmd") && e.metaKey)
+    );
+
+    if (shouldSend) {
       e.preventDefault();
       handleSubmit();
     }
@@ -186,7 +195,14 @@ export const ChatInput: FC<ChatInputProps> = ({
         <div className="flex items-center justify-between">
           <span className="text-xs text-muted-foreground" id={helpId}>
             {message.length}/4000 characters • Use arrow keys to navigate
-            completions • Ctrl+Enter to send
+            completions • {(() => {
+              const combinations = [];
+              if (sendKeys.includes("enter")) combinations.push("Enter");
+              if (sendKeys.includes("shift")) combinations.push("Shift+Enter");
+              if (sendKeys.includes("ctrl")) combinations.push("Ctrl+Enter");
+              if (sendKeys.includes("cmd") && navigator.platform.includes("Mac")) combinations.push("Cmd+Enter");
+              return combinations.length > 0 ? `${combinations.join("/")} to send` : "No send keys configured";
+            })()}
           </span>
 
           <Button

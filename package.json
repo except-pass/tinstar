@@ -1,13 +1,13 @@
 {
-  "name": "@kimuson/claude-code-viewer",
+  "name": "tinstar",
   "version": "0.3.0",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/d-kimuson/claude-code-viewer.git"
+    "url": "https://github.com/except-pass/tinstar.git"
   },
-  "homepage": "https://github.com/d-kimuson/claude-code-viewer",
+  "homepage": "https://github.com/except-pass/tinstar",
   "files": [
     "dist"
   ],
@@ -19,7 +19,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "claude-code-viewer": "./dist/index.js"
+    "tinstar": "./dist/index.js"
   },
   "scripts": {
     "dev": "run-p 'dev:*'",

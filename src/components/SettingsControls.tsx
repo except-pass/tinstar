@@ -35,23 +35,30 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
     });
   }, [queryClient, openingProjectId]);
 
-  const handleHideNoUserMessageChange = async () => {
+  const handleHideNoUserMessageChange = () => {
     const newConfig = {
       ...config,
       hideNoUserMessageSession: !config?.hideNoUserMessageSession,
     };
+    
+    // Update config - optimistic update handled by mutation
     updateConfig(newConfig);
-    await onConfigChanged();
+    // Only invalidate project queries since these settings affect project display
+    onConfigChanged();
   };
 
-  const handleUnifySameTitleChange = async () => {
+  const handleUnifySameTitleChange = () => {
     const newConfig = {
       ...config,
       unifySameTitleSession: !config?.unifySameTitleSession,
     };
+    
+    // Update config - optimistic update handled by mutation
     updateConfig(newConfig);
-    await onConfigChanged();
+    // Only invalidate project queries since these settings affect project display
+    onConfigChanged();
   };
+
 
   return (
     <div className={`space-y-4 ${className}`}>

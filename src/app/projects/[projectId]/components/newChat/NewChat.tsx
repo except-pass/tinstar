@@ -1,6 +1,7 @@
 import { type FC, useState } from "react";
 import { Checkbox } from "../../../../../components/ui/checkbox";
 import { ChatInput, useNewChatMutation } from "../chatForm";
+import { useConfig } from "@/app/hooks/useConfig";
 
 export const NewChat: FC<{
   projectId: string;
@@ -8,6 +9,7 @@ export const NewChat: FC<{
 }> = ({ projectId, onSuccess }) => {
   const [createWorktree, setCreateWorktree] = useState(false);
   const startNewChat = useNewChatMutation(projectId, onSuccess);
+  const { config } = useConfig();
 
   const handleSubmit = async (message: string) => {
     await startNewChat.mutateAsync({ message, createWorktree });
@@ -46,7 +48,7 @@ export const NewChat: FC<{
         onSubmit={handleSubmit}
         isPending={startNewChat.isPending}
         error={startNewChat.error}
-        placeholder="Type your message here... (Start with / for commands, @ for files, Ctrl+Enter to send)"
+        placeholder="Type your message here... (Start with / for commands, @ for files)"
         buttonText={
           startNewChat.isPending && createWorktree
             ? "Creating Worktree..."
@@ -56,6 +58,7 @@ export const NewChat: FC<{
         }
         minHeight="min-h-[200px]"
         containerClassName="space-y-4"
+        sendKeys={config?.sendKeys}
       />
     </div>
   );
