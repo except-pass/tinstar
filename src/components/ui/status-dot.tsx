@@ -11,8 +11,8 @@ export const StatusDot: FC<StatusDotProps> = ({ status, className }) => {
     <div
       className={cn(
         "w-2 h-2 rounded-full flex-shrink-0",
-        status === "success" && "bg-green-500",
-        status === "error" && "bg-red-500",
+        status === "success" && "bg-green-600 dark:bg-green-400",
+        status === "error" && "bg-red-600 dark:bg-red-400",
         className,
       )}
     />

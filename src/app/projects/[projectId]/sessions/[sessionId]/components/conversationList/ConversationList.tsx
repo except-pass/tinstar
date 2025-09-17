@@ -116,38 +116,168 @@ export const ConversationList: FC<ConversationListProps> = ({
     const groups: (
       | Conversation
       | ErrorJsonl
-      | { type: "assistant-group"; conversations: Conversation[] }
+      | { type: "assistant-group"; conversations: Conversation[]; isOngoing?: boolean }
+      | { type: "response-group"; conversations: Conversation[]; isOngoing?: boolean; isTrulyFinal?: boolean; isAfterLastUser?: boolean }
+      | { type: "edit-group"; conversations: Conversation[]; isOngoing?: boolean; isAfterLastUser?: boolean }
     )[] = [];
     let currentAssistantGroup: Conversation[] = [];
     let hasSeenUserMessage = false;
+    let lastUserIndex = -1;
 
-    for (const conversation of conversations) {
+
+    // Find the index of the last user message
+    for (let i = conversations.length - 1; i >= 0; i--) {
+      const conv = conversations[i];
+      if (conv && conv.type === "user") {
+        lastUserIndex = i;
+        break;
+      }
+    }
+
+    for (let i = 0; i < conversations.length; i++) {
+      const conversation = conversations[i];
+      if (!conversation) continue;
+      const isAfterLastUser = lastUserIndex >= 0 && i > lastUserIndex;
+
+
       if (conversation.type === "x-error") {
         // Flush any pending assistant group only if we have content
         if (currentAssistantGroup.length > 0 && hasSeenUserMessage) {
           groups.push({
             type: "assistant-group",
             conversations: [...currentAssistantGroup],
+            isOngoing: isAfterLastUser,
           });
           currentAssistantGroup = [];
           hasSeenUserMessage = false;
         }
         groups.push(conversation);
       } else if (conversation.type === "user") {
-        // User message always flushes assistant group if we have responses
-        if (currentAssistantGroup.length > 0 && hasSeenUserMessage) {
-          groups.push({
-            type: "assistant-group",
-            conversations: [...currentAssistantGroup],
-          });
-          currentAssistantGroup = [];
+        // Check if this is a real user message or just a tool result
+        const isToolResultOnly = conversation.message &&
+          (typeof conversation.message.content === "object") &&
+          Array.isArray(conversation.message.content) &&
+          conversation.message.content.every((c: any) => c.type === "tool_result");
+
+        if (!isToolResultOnly) {
+          // Real user message - flush assistant group if we have responses
+          if (currentAssistantGroup.length > 0 && hasSeenUserMessage) {
+            groups.push({
+              type: "assistant-group",
+              conversations: [...currentAssistantGroup],
+              isOngoing: false,
+            });
+            currentAssistantGroup = [];
+          }
+          groups.push(conversation);
+          hasSeenUserMessage = true;
+        } else {
+          // Tool result only - add to current group, don't flush
+          currentAssistantGroup.push(conversation);
         }
-        groups.push(conversation);
-        hasSeenUserMessage = true;
       } else {
-        // Everything else (assistant, system, summary) goes into the assistant group
-        // Only create groups if we've seen a user message first
-        if (hasSeenUserMessage) {
+        // Handle assistant, system, summary conversations
+        if (conversation.type === "assistant") {
+          const hasEditTool = conversation.message.content.some(
+            (content: any) =>
+              content.type === "tool_use" &&
+              (content.name === "Edit" || content.name === "MultiEdit")
+          );
+
+          // Check if this is the final response message (has text content and is the last assistant message before next user)
+          const hasTextContent = conversation.message.content.some(
+            (content: any) => content.type === "text"
+          );
+
+          // Check if this is the last assistant message before the next user message
+          let isLastAssistantBeforeUser = false;
+          for (let j = i + 1; j < conversations.length; j++) {
+            const nextConv = conversations[j];
+            if (!nextConv) continue;
+
+            // Check if it's a real user message (not just tool result)
+            if (nextConv.type === "user") {
+              const isRealUserMessage = !(
+                nextConv.message &&
+                typeof nextConv.message.content === "object" &&
+                Array.isArray(nextConv.message.content) &&
+                nextConv.message.content.every((c: any) => c.type === "tool_result")
+              );
+              if (isRealUserMessage) {
+                isLastAssistantBeforeUser = true;
+                break;
+              }
+            }
+
+            // If we hit another assistant message with text, this isn't the last one
+            if (nextConv.type === "assistant") {
+              const hasText = nextConv.message.content.some((c: any) => c.type === "text");
+              if (hasText) {
+                break;
+              }
+            }
+          }
+
+          // Also check if it's the very last assistant message in the conversation
+          const isVeryLastAssistant = i === conversations.length - 1 ||
+            !conversations.slice(i + 1).some(c => c && c.type === "assistant" &&
+              c.message.content.some((content: any) => content.type === "text"));
+
+          const isFinalResponse = hasTextContent && (isLastAssistantBeforeUser || isVeryLastAssistant);
+
+          if (hasEditTool) {
+            // Flush current group if any
+            if (currentAssistantGroup.length > 0 && hasSeenUserMessage) {
+              groups.push({
+                type: "assistant-group",
+                conversations: [...currentAssistantGroup],
+                isOngoing: isAfterLastUser,
+              });
+              currentAssistantGroup = [];
+            }
+            // Add the edit conversation as its own group
+            groups.push({
+              type: "edit-group",
+              conversations: [conversation],
+              isOngoing: false,
+              isAfterLastUser: isAfterLastUser,
+            });
+          } else if (isFinalResponse && hasSeenUserMessage) {
+            // This is the final response message - flush current group WITHOUT this message
+            if (currentAssistantGroup.length > 0) {
+              groups.push({
+                type: "assistant-group",
+                conversations: [...currentAssistantGroup],
+                isOngoing: isAfterLastUser,
+              });
+              currentAssistantGroup = [];
+            }
+
+            // Check if this is truly the final message (no user messages after it)
+            const isTrulyFinal = !conversations.slice(i + 1).some(c => c && c.type === "user" && !(
+              c.message &&
+              (typeof c.message.content === "object") &&
+              Array.isArray(c.message.content) &&
+              c.message.content.every((content: any) => content.type === "tool_result")
+            ));
+
+            // Add response as its own separate group
+            groups.push({
+              type: "response-group",
+              conversations: [conversation],
+              isOngoing: false,
+              isTrulyFinal: isTrulyFinal,
+              isAfterLastUser: isAfterLastUser,
+            });
+          } else if (hasSeenUserMessage) {
+            // Add to current group only if we've seen a user message
+            currentAssistantGroup.push(conversation);
+          } else {
+            // If no user message yet, treat as individual conversation
+            groups.push(conversation);
+          }
+        } else if (hasSeenUserMessage) {
+          // Non-assistant conversations (system, summary) go into the group
           currentAssistantGroup.push(conversation);
         } else {
           // If no user message yet, treat as individual conversation
@@ -158,20 +288,25 @@ export const ConversationList: FC<ConversationListProps> = ({
 
     // Flush final assistant group if any and we have seen a user message
     if (currentAssistantGroup.length > 0 && hasSeenUserMessage) {
+      const isAfterLastUser = lastUserIndex >= 0 && conversations.length > lastUserIndex + 1;
       groups.push({
         type: "assistant-group",
         conversations: [...currentAssistantGroup],
+        isOngoing: isAfterLastUser,
       });
     }
 
     return groups;
   }, [conversations]);
 
-  // Identify the last assistant-group index to expand it by default
-  const lastAssistantGroupIndex = useMemo(() => {
+
+  // Find the last visible message (either standalone edit or final assistant message)
+  const lastVisibleMessageIndex = useMemo(() => {
     for (let i = groupedConversations.length - 1; i >= 0; i--) {
-      const g = groupedConversations[i] as any;
-      if (g && g.type === "assistant-group") return i;
+      const g = groupedConversations[i];
+      if (g && g.type !== "assistant-group") {
+        return i;
+      }
     }
     return -1;
   }, [groupedConversations]);
@@ -272,21 +407,133 @@ export const ConversationList: FC<ConversationListProps> = ({
               }
             }
           });
-          // If this is the last assistant-group in the list, expand it by default
-          const isLastAssistantGroup = groupIndex === lastAssistantGroupIndex;
-
-          const toolNamesText =
-            toolNames.size > 0 ? ` (${Array.from(toolNames).join(", ")})` : "";
-
-          // Determine status dot
-          const statusDot = hasToolUse ? (
-            <StatusDot
-              status={hasErrors ? "error" : "success"}
-              className="mr-2"
-            />
-          ) : null;
 
           // Render grouped assistant messages in a collapsible
+          const assistantContent = (
+            <ul className="w-full">
+              {group.conversations.map((conversation) => (
+                <li key={getConversationKey(conversation)}>
+                  <ConversationItem
+                    conversation={conversation}
+                    getToolResult={getToolResult}
+                    isRootSidechain={isRootSidechain}
+                    getSidechainConversations={getSidechainConversations}
+                  />
+                </li>
+              ))}
+            </ul>
+          );
+
+          // For ongoing messages (after last user message), show dot visualization
+          const isOngoing = group.isOngoing;
+          const messageCount = group.conversations.length;
+
+
+          // Extract tool uses and their statuses for dot visualization
+          const toolUsesWithStatus: Array<{ id: string; hasError: boolean; hasResult: boolean }> = [];
+
+          group.conversations.forEach((conversation) => {
+            if (conversation.type === "assistant") {
+              conversation.message.content.forEach((content) => {
+                if (content.type === "tool_use") {
+                  toolUsesWithStatus.push({
+                    id: content.id,
+                    hasError: false,
+                    hasResult: false,
+                  });
+                }
+              });
+            }
+          });
+
+          // Check tool results to determine status of each tool use
+          group.conversations.forEach((conversation) => {
+            if ("message" in conversation && conversation.message && conversation.message.content) {
+              const content = Array.isArray(conversation.message.content)
+                ? conversation.message.content
+                : [conversation.message.content];
+
+              content.forEach((item) => {
+                if (
+                  typeof item === "object" &&
+                  item !== null &&
+                  "type" in item &&
+                  item.type === "tool_result" &&
+                  "tool_use_id" in item
+                ) {
+                  const toolUse = toolUsesWithStatus.find(t => t.id === item.tool_use_id);
+                  if (toolUse) {
+                    toolUse.hasResult = true;
+                    if ("is_error" in item && item.is_error) {
+                      toolUse.hasError = true;
+                    }
+                  }
+                }
+              });
+            }
+          });
+
+          // Create colored dots based on tool status
+          const dots = toolUsesWithStatus.slice(0, 10).map((toolUse, i) => {
+            let dotColor;
+            if (!toolUse.hasResult) {
+              // No result yet - blue (ongoing)
+              dotColor = "bg-blue-600 dark:bg-blue-400";
+            } else if (toolUse.hasError) {
+              // Error - red
+              dotColor = "bg-red-600 dark:bg-red-400";
+            } else {
+              // Success - green
+              dotColor = "bg-green-600 dark:bg-green-400";
+            }
+
+            return (
+              <div
+                key={i}
+                className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`}
+              />
+            );
+          });
+
+          const toolUseCount = toolUsesWithStatus.length;
+
+          const triggerContent = (
+            <div className="flex items-center gap-2">
+              <ChevronRight className="h-4 w-4 text-green-600 dark:text-green-400 transition-transform group-data-[state=open]:rotate-90" />
+              <div className="flex items-center gap-0.5">
+                {dots}
+              </div>
+              <span className="text-sm font-medium text-green-600 dark:text-green-400 ml-1">
+                ({toolUseCount})
+              </span>
+            </div>
+          );
+
+          return (
+            <li
+              className="w-full flex justify-start"
+              key={`assistant-group-${groupIndex}`}
+            >
+              <div className="w-full">
+                <Collapsible defaultOpen={isOngoing ? shouldExpand : false}>
+                  <CollapsibleTrigger asChild>
+                    <div className="flex items-center cursor-pointer hover:bg-muted/50 rounded p-2 -mx-2 mb-2">
+                      {triggerContent}
+                    </div>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div className="bg-background rounded border p-3 mt-2">
+                      {assistantContent}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              </div>
+            </li>
+          );
+        }
+
+        if (group.type === "response-group") {
+          // Render response in its own accordion
           const assistantContent = (
             <ul className="w-full">
               {group.conversations.map((conversation) => (
@@ -305,16 +552,87 @@ export const ConversationList: FC<ConversationListProps> = ({
           return (
             <li
               className="w-full flex justify-start"
-              key={`assistant-group-${groupIndex}`}
+              key={`response-group-${groupIndex}`}
             >
-              <div className="w-full max-w-3xl lg:max-w-4xl sm:w-[90%] md:w-[85%]">
-                <Collapsible defaultOpen={shouldExpand || isLastAssistantGroup}>
+              <div className="w-full">
+                <Collapsible defaultOpen={group.isTrulyFinal && group.isAfterLastUser}>
+                  <CollapsibleTrigger asChild>
+                    <div className="flex items-center cursor-pointer hover:bg-muted/50 rounded p-2 -mx-2 mb-2">
+                      <div className="flex items-center gap-2">
+                        <ChevronRight className="h-4 w-4 text-orange-600 dark:text-orange-400 transition-transform group-data-[state=open]:rotate-90" />
+                        <h4 className="text-sm font-medium text-orange-600 dark:text-orange-400">
+                          Response
+                        </h4>
+                      </div>
+                    </div>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div className="bg-orange-50 dark:bg-orange-950/30 rounded border-2 border-orange-200 dark:border-orange-800 p-3 mt-2">
+                      {assistantContent}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              </div>
+            </li>
+          );
+        }
+
+        if (group.type === "edit-group") {
+          // Check for errors in edit tool results
+          let hasErrors = false;
+          group.conversations.forEach((conversation) => {
+            if ("message" in conversation && conversation.message && conversation.message.content) {
+              const content = Array.isArray(conversation.message.content)
+                ? conversation.message.content
+                : [conversation.message.content];
+
+              content.forEach((item) => {
+                if (
+                  typeof item === "object" &&
+                  item !== null &&
+                  "type" in item &&
+                  item.type === "tool_result"
+                ) {
+                  if ("is_error" in item && item.is_error) {
+                    hasErrors = true;
+                  }
+                }
+              });
+            }
+          });
+
+          // Render edit tool in its own accordion
+          const assistantContent = (
+            <ul className="w-full">
+              {group.conversations.map((conversation) => (
+                <li key={getConversationKey(conversation)}>
+                  <ConversationItem
+                    conversation={conversation}
+                    getToolResult={getToolResult}
+                    isRootSidechain={isRootSidechain}
+                    getSidechainConversations={getSidechainConversations}
+                  />
+                </li>
+              ))}
+            </ul>
+          );
+
+          return (
+            <li
+              className="w-full flex justify-start"
+              key={`edit-group-${groupIndex}`}
+            >
+              <div className="w-full">
+                <Collapsible defaultOpen={group.isAfterLastUser}>
                   <CollapsibleTrigger asChild>
                     <div className="flex items-center justify-between cursor-pointer hover:bg-muted/50 rounded p-2 -mx-2 mb-2">
                       <div className="flex items-center">
-                        {statusDot}
+                        <StatusDot
+                          status={hasErrors ? "error" : "success"}
+                          className="mr-2"
+                        />
                         <h4 className="text-sm font-medium text-muted-foreground">
-                          Response{toolNamesText}
+                          Edit
                         </h4>
                       </div>
                       <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
@@ -343,22 +661,12 @@ export const ConversationList: FC<ConversationListProps> = ({
           />
         );
 
-        const isSidechain =
-          conversation.type !== "summary" && conversation.isSidechain;
-
         return [
           <li
-            className={`w-full flex ${
-              isSidechain ||
-              conversation.type === "assistant" ||
-              conversation.type === "system" ||
-              conversation.type === "summary"
-                ? "justify-start"
-                : "justify-end"
-            }`}
+            className="w-full flex justify-start"
             key={getConversationKey(conversation)}
           >
-            <div className="w-full max-w-3xl lg:max-w-4xl sm:w-[90%] md:w-[85%]">
+            <div className="w-full">
               {elm}
             </div>
           </li>,
