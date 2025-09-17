@@ -36,13 +36,15 @@ export const ResumeChat: FC<{
     "lets-go",
   );
 
+  const hasLatestExitPlan = Boolean(hasExitPlanMode && plan);
+
   // Reset plan approval UI when a new plan arrives
   useEffect(() => {
-    if (hasExitPlanMode) {
+    if (hasLatestExitPlan) {
       setShowPlanApproval(true);
       setSelectedButton("lets-go");
     }
-  }, [hasExitPlanMode]);
+  }, [hasLatestExitPlan]);
 
   const letsGoButtonRef = useRef<HTMLButtonElement>(null);
   const modifyButtonRef = useRef<HTMLButtonElement>(null);
@@ -142,8 +144,8 @@ export const ResumeChat: FC<{
     );
   }
 
-  // Show plan approval UI if there's an exit plan mode
-  if (showPlanApproval && plan) {
+  // Show plan approval UI only when latest assistant returned a plan and we are in plan mode
+  if (showPlanApproval && plan && currentPermissionMode === "plan") {
     return (
       <div className="border-t border-border/50 bg-muted/20 p-4 mt-6">
         <div className="space-y-3">
