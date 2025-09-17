@@ -3,6 +3,7 @@ import {
   ChatInput,
   useResumeChatMutation,
 } from "../../../../components/chatForm";
+import { useConfig } from "@/app/hooks/useConfig";
 
 export const ResumeChat: FC<{
   projectId: string;
@@ -12,6 +13,7 @@ export const ResumeChat: FC<{
   isOrphaned?: boolean;
 }> = ({ projectId, sessionId, isPausedTask, isRunningTask, isOrphaned }) => {
   const resumeChat = useResumeChatMutation(projectId, sessionId);
+  const { config } = useConfig();
 
   const handleSubmit = async (message: string) => {
     await resumeChat.mutateAsync({ message });
@@ -50,11 +52,12 @@ export const ResumeChat: FC<{
         onSubmit={handleSubmit}
         isPending={resumeChat.isPending}
         error={resumeChat.error}
-        placeholder="Type your message... (Start with / for commands, Ctrl+Enter to send)"
+        placeholder="Type your message... (Start with / for commands)"
         buttonText={getButtonText()}
         minHeight="min-h-[100px]"
         containerClassName="space-y-2"
         buttonSize="default"
+        sendKeys={config?.sendKeys}
       />
     </div>
   );
