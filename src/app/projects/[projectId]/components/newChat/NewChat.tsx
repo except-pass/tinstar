@@ -1,5 +1,5 @@
 import { Code, Map } from "lucide-react";
-import { type FC, useEffect, useState } from "react";
+import { type FC, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ModelBadge } from "@/components/ui/model-selector";
 import {
