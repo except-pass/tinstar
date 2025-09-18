@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAtom } from "jotai";
 import { useMemo } from "react";
-import { honoClient } from "../../../../../../lib/api/client";
+import { honoClient } from "@/lib/api/client";
 import { aliveTasksAtom } from "../store/aliveTasksAtom";
 
 export const useAliveTask = (sessionId: string) => {
@@ -30,6 +30,7 @@ export const useAliveTask = (sessionId: string) => {
       aliveTask: aliveTasks.find((task) => task.sessionId === sessionId),
       isRunningTask: aliveTask?.status === "running",
       isPausedTask: aliveTask?.status === "paused",
+      currentPermissionMode: aliveTask?.currentPermissionMode,
     } as const;
   }, [aliveTasks, sessionId]);
 

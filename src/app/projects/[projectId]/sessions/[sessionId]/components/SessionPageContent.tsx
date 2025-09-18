@@ -12,20 +12,25 @@ import {
   InfoIcon,
 } from "lucide-react";
 import type { FC } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useSetPermissionModeMutation } from "@/app/projects/[projectId]/components/chatForm/useChatMutations";
+import { useProject } from "@/app/projects/[projectId]/hooks/useProject";
+import { firstCommandToTitle } from "@/app/projects/[projectId]/services/firstCommandToTitle";
 import { Button } from "@/components/ui/button";
 import { useOpenInEditor } from "@/hooks/useOpenInEditor";
+import { ModeBadge } from "@/components/ui/mode-badge";
+import { ModelBadge } from "@/components/ui/model-selector";
+import { WorktreeBadge } from "@/components/ui/worktree-badge";
 import { useTaskNotifications } from "@/hooks/useTaskNotifications";
+import { useConfig } from "@/app/hooks/useConfig";
+import { honoClient } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
-import { WorktreeBadge } from "../../../../../../components/ui/worktree-badge";
-import { honoClient } from "../../../../../../lib/api/client";
-import { isWorktreeSession } from "../../../../../../lib/worktree-utils";
-import { useProject } from "../../../hooks/useProject";
-import { firstCommandToTitle } from "../../../services/firstCommandToTitle";
+import { isWorktreeSession } from "@/lib/worktree-utils";
 import { useAliveTask } from "../hooks/useAliveTask";
 import { useSession } from "../hooks/useSession";
 import { useSessionCwd } from "../hooks/useSessionCwd";
+import { useSessionPermissionMode } from "../hooks/useSessionPermissionMode";
 import { ConversationList } from "./conversationList/ConversationList";
 import { DiffModal } from "./diffModal";
 import { ResumeChat } from "./resumeChat/ResumeChat";
@@ -43,6 +48,7 @@ export const SessionPageContent: FC<{
   project; // Used in worktree detection below
   const { data: sessionCwd } = useSessionCwd(projectId, sessionId);
   const { openInEditor } = useOpenInEditor();
+  const { config } = useConfig();
 
   const abortTask = useMutation({
     mutationFn: async (sessionId: string) => {
@@ -58,10 +64,88 @@ export const SessionPageContent: FC<{
     },
   });
 
-  const { isRunningTask, isPausedTask } = useAliveTask(sessionId);
+  const { isRunningTask, isPausedTask, currentPermissionMode, aliveTask } =
+    useAliveTask(sessionId);
 
-  // Set up task completion notifications
-  useTaskNotifications(isRunningTask);
+  // Get stored permission mode if there's no active task
+  const { data: storedPermissionMode } = useSessionPermissionMode(
+    projectId,
+    sessionId,
+  );
+
+  // Use active task mode if available, otherwise use stored mode
+  const displayPermissionMode = currentPermissionMode ?? storedPermissionMode;
+
+  // Determine what model will be used for the next message
+  const effectiveModel = useMemo(() => {
+    // If there's an active task, use its model
+    if (aliveTask?.model) {
+      return aliveTask.model;
+    }
+    
+    // Otherwise use the default model from config
+    const defaultModel = config?.defaultModel || "default";
+    
+    // If using opusplan, determine the actual model based on permission mode
+    if (defaultModel === "opusplan") {
+      // In plan mode, opusplan uses opus for planning
+      if (displayPermissionMode === "plan") {
+        return "opus";
+      }
+      // In other modes, opusplan uses sonnet for execution
+      return "sonnet";
+    }
+    
+    // For other models, return as-is
+    return defaultModel;
+  }, [aliveTask?.model, config?.defaultModel, displayPermissionMode]);
+
+  // Mutation for toggling permission mode
+  const setPermissionMode = useSetPermissionModeMutation(projectId, sessionId);
+
+  // Handler for toggling between plan and code mode
+  const handleModeToggle = async () => {
+    if (!displayPermissionMode) return;
+
+    // Toggle between plan and code mode
+    const newMode = displayPermissionMode === "plan" ? "acceptEdits" : "plan";
+
+    try {
+      await setPermissionMode.mutateAsync(newMode);
+      // The query will automatically refetch and update the UI
+    } catch (error) {
+      console.error("Failed to toggle permission mode:", error);
+      toast.error("Failed to switch mode");
+    }
+  };
+
+  // Check if ExitPlanMode tool was used and extract the LAST plan
+  const exitPlanModeData = useMemo(() => {
+    if (!conversations) return { hasExitPlanMode: false, plan: null };
+
+    let lastExitPlanMode = null;
+
+    // Iterate through all conversations to find the LAST ExitPlanMode
+    for (const conversation of conversations) {
+      if (conversation.type === "assistant") {
+        for (const content of conversation.message.content) {
+          if (content.type === "tool_use" && content.name === "ExitPlanMode") {
+            // Extract the plan from the tool input
+            const input = content.input as { plan?: string };
+            lastExitPlanMode = {
+              hasExitPlanMode: true,
+              plan: input.plan || "No plan details available",
+            };
+          }
+        }
+      }
+    }
+
+    return lastExitPlanMode || { hasExitPlanMode: false, plan: null };
+  }, [conversations]);
+  // Set up task completion notifications - only notify when task truly completes
+  // (not when it pauses or during brief state changes)
+  useTaskNotifications(isRunningTask || isPausedTask);
 
   // Copy resume command to clipboard
   const copyResumeCommand = async () => {
@@ -325,6 +409,20 @@ export const SessionPageContent: FC<{
                   />
                 </button>
               </div>
+              {displayPermissionMode && (
+                <ModeBadge
+                  mode={displayPermissionMode}
+                  className="h-6 sm:h-8 text-xs sm:text-sm"
+                  onClick={handleModeToggle}
+                  disabled={setPermissionMode.isPending || isRunningTask}
+                />
+              )}
+              {effectiveModel && (
+                <ModelBadge
+                  model={effectiveModel}
+                  className="h-6 sm:h-8 text-xs sm:text-sm"
+                />
+              )}
               {isWorktreeSession(session.jsonlFilePath) && (
                 <WorktreeBadge
                   className="h-6 sm:h-8 text-xs sm:text-sm"
@@ -370,6 +468,9 @@ export const SessionPageContent: FC<{
               isPausedTask={isPausedTask}
               isRunningTask={isRunningTask}
               isOrphaned={session.meta.isOrphaned}
+              hasExitPlanMode={exitPlanModeData.hasExitPlanMode}
+              plan={exitPlanModeData.plan}
+              currentPermissionMode={displayPermissionMode}
             />
           </main>
         </div>

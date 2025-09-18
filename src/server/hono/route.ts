@@ -1,10 +1,10 @@
+import { zValidator } from "@hono/zod-validator";
+import { setCookie } from "hono/cookie";
+import { streamSSE } from "hono/streaming";
 import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { zValidator } from "@hono/zod-validator";
-import { setCookie } from "hono/cookie";
-import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { configSchema } from "../config/config";
 import { ClaudeCodeTaskController } from "../service/claude-code/ClaudeCodeTaskController";
@@ -23,6 +23,7 @@ import { getProjects } from "../service/project/getProjects";
 import { getSession } from "../service/session/getSession";
 import { getSessionCwd } from "../service/session/getSessionCwd";
 import { getSessions } from "../service/session/getSessions";
+import { sessionPermissionModeStorage } from "../service/sessionPermissionModes/storage";
 import type { HonoAppType } from "./app";
 import { configMiddleware } from "./middleware/config.middleware";
 
@@ -442,11 +443,14 @@ export const routes = (app: HonoAppType) => {
           z.object({
             message: z.string(),
             createWorktree: z.boolean().optional().default(false),
+            planMode: z.boolean().optional(),
+            model: z.string().optional(),
           }),
         ),
         async (c) => {
           const { projectId } = c.req.param();
-          const { message, createWorktree } = c.req.valid("json");
+          const { message, createWorktree, planMode, model } =
+            c.req.valid("json");
           const { project } = await getProject(projectId);
           const config = c.get("config");
 
@@ -488,12 +492,17 @@ export const routes = (app: HonoAppType) => {
           }
 
           try {
+            // Resolve "default" model to "sonnet" for the API
+            const resolvedModel = model === "default" ? "sonnet" : model;
+            
             const task = await taskController.startOrContinueTask(
               {
                 projectId,
                 cwd,
               },
               message,
+              planMode ?? config.defaultPlanMode,
+              resolvedModel,
             );
 
             return c.json({
@@ -523,11 +532,12 @@ export const routes = (app: HonoAppType) => {
           "json",
           z.object({
             resumeMessage: z.string(),
+            model: z.string().optional(),
           }),
         ),
         async (c) => {
           const { projectId, sessionId } = c.req.param();
-          const { resumeMessage } = c.req.valid("json");
+          const { resumeMessage, model } = c.req.valid("json");
           const { project } = await getProject(projectId);
 
           if (project.meta.projectPath === null) {
@@ -537,6 +547,9 @@ export const routes = (app: HonoAppType) => {
           try {
             // Resolve the correct cwd for this session (handles worktree sessions)
             const sessionCwd = await getSessionCwd(projectId, sessionId);
+            
+            // Resolve "default" model to "sonnet" for the API
+            const resolvedModel = model === "default" ? "sonnet" : model;
 
             const task = await taskController.startOrContinueTask(
               {
@@ -545,6 +558,8 @@ export const routes = (app: HonoAppType) => {
                 cwd: sessionCwd,
               },
               resumeMessage,
+              undefined, // planMode not needed for resume
+              resolvedModel,
             );
 
             return c.json({
@@ -575,6 +590,8 @@ export const routes = (app: HonoAppType) => {
               status: task.status,
               sessionId: task.sessionId,
               userMessageId: task.userMessageId,
+              currentPermissionMode: task.currentPermissionMode,
+              model: task.model,
             }),
           ),
         });
@@ -591,6 +608,51 @@ export const routes = (app: HonoAppType) => {
               ? "Task aborted"
               : "No alive task for given session; nothing to abort",
           });
+        },
+      )
+
+      .get(
+        "/projects/:projectId/sessions/:sessionId/permission-mode",
+        async (c) => {
+          const { sessionId } = c.req.param();
+
+          // Get stored mode or default to acceptEdits
+          const mode =
+            sessionPermissionModeStorage.getMode(sessionId) ?? "acceptEdits";
+
+          // Store the default if it wasn't already stored
+          if (!sessionPermissionModeStorage.getMode(sessionId)) {
+            sessionPermissionModeStorage.setMode(sessionId, mode);
+          }
+
+          return c.json({ mode });
+        },
+      )
+
+      .patch(
+        "/projects/:projectId/sessions/:sessionId/permission-mode",
+        zValidator(
+          "json",
+          z.object({
+            mode: z.enum(["plan", "acceptEdits"]),
+          }),
+        ),
+        async (c) => {
+          const { sessionId } = c.req.param();
+          const { mode } = c.req.valid("json");
+
+          // Always update the persistent storage first
+          sessionPermissionModeStorage.setMode(sessionId, mode);
+
+          // Also update the active task if one exists
+          const taskUpdated = await taskController.setTaskPermissionMode(
+            sessionId,
+            mode,
+          );
+
+          // Return success regardless of whether there's an active task
+          // because we successfully updated the stored permission mode
+          return c.json({ success: true, mode, taskUpdated });
         },
       )
 

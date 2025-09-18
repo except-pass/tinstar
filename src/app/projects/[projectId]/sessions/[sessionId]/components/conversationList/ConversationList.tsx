@@ -301,15 +301,15 @@ export const ConversationList: FC<ConversationListProps> = ({
 
 
   // Find the last visible message (either standalone edit or final assistant message)
-  const lastVisibleMessageIndex = useMemo(() => {
-    for (let i = groupedConversations.length - 1; i >= 0; i--) {
-      const g = groupedConversations[i];
-      if (g && g.type !== "assistant-group") {
-        return i;
-      }
-    }
-    return -1;
-  }, [groupedConversations]);
+  // const _lastVisibleMessageIndex = useMemo(() => {
+  //   for (let i = groupedConversations.length - 1; i >= 0; i--) {
+  //     const g = groupedConversations[i];
+  //     if (g && g.type !== "assistant-group") {
+  //       return i;
+  //     }
+  //   }
+  //   return -1;
+  // }, [groupedConversations]);
 
   return (
     <ul>
@@ -327,8 +327,8 @@ export const ConversationList: FC<ConversationListProps> = ({
           // Extract tool names and determine status from all conversations in the group
           const toolNames = new Set<string>();
           let shouldExpand = false;
-          let hasToolUse = false;
-          let hasErrors = false;
+          // let _hasToolUse = false;
+          // let _hasErrors = false;
 
           // Helper function to enhance tool names (similar to AssistantConversationContent)
           const getEnhancedToolName = (content: any): string => {
@@ -357,7 +357,7 @@ export const ConversationList: FC<ConversationListProps> = ({
             if (conversation.type === "assistant") {
               conversation.message.content.forEach((content) => {
                 if (content.type === "tool_use") {
-                  hasToolUse = true;
+                  // _hasToolUse = true;
                   toolNames.add(getEnhancedToolName(content));
                   // Auto-expand the Response group if this is an edit-related tool
                   if (content.name === "Edit" || content.name === "MultiEdit") {
@@ -385,7 +385,7 @@ export const ConversationList: FC<ConversationListProps> = ({
                   item.type === "tool_result"
                 ) {
                   if ("is_error" in item && item.is_error) {
-                    hasErrors = true;
+                    // _hasErrors = true;
                   }
                 }
               });
@@ -403,7 +403,7 @@ export const ConversationList: FC<ConversationListProps> = ({
                 "interrupted" in conversation.toolUseResult &&
                 conversation.toolUseResult.interrupted
               ) {
-                hasErrors = true;
+                // _hasErrors = true;
               }
             }
           });
@@ -426,7 +426,7 @@ export const ConversationList: FC<ConversationListProps> = ({
 
           // For ongoing messages (after last user message), show dot visualization
           const isOngoing = group.isOngoing;
-          const messageCount = group.conversations.length;
+          // const _messageCount = group.conversations.length;
 
 
           // Extract tool uses and their statuses for dot visualization
@@ -594,7 +594,7 @@ export const ConversationList: FC<ConversationListProps> = ({
                   item.type === "tool_result"
                 ) {
                   if ("is_error" in item && item.is_error) {
-                    hasErrors = true;
+                    // _hasErrors = true;
                   }
                 }
               });
