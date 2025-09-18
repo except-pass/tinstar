@@ -334,47 +334,6 @@ export const SessionPageContent: FC<{
               )}
             </div>
 
-            {isRunningTask && (
-              <div className="flex items-center gap-1 sm:gap-2 p-1 bg-primary/10 border border-primary/20 rounded-lg mx-1 sm:mx-5">
-                <LoaderIcon className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
-                <div className="flex-1">
-                  <p className="text-xs sm:text-sm font-medium">
-                    Conversation is in progress...
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    abortTask.mutate(sessionId);
-                  }}
-                >
-                  <XIcon className="w-3 h-3 sm:w-4 sm:h-4" />
-                  <span className="hidden sm:inline">Abort</span>
-                </Button>
-              </div>
-            )}
-
-            {isPausedTask && (
-              <div className="flex items-center gap-1 sm:gap-2 p-1 bg-primary/10 border border-primary/20 rounded-lg mx-1 sm:mx-5">
-                <PauseIcon className="w-3 h-3 sm:w-4 sm:h-4" />
-                <div className="flex-1">
-                  <p className="text-xs sm:text-sm font-medium">
-                    Conversation is paused...
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    abortTask.mutate(sessionId);
-                  }}
-                >
-                  <XIcon className="w-3 h-3 sm:w-4 sm:h-4" />
-                  <span className="hidden sm:inline">Abort</span>
-                </Button>
-              </div>
-            )}
           </div>
         </header>
 
