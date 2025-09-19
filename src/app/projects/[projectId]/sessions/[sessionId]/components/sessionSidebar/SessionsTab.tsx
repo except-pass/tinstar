@@ -4,7 +4,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { MessageSquareIcon, PlusIcon } from "lucide-react";
 import Link from "next/link";
 import type { FC } from "react";
-import { useId, useState, useRef, useEffect, forwardRef, useImperativeHandle, useCallback } from "react";
+import { useEffect, useId, useState, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,11 @@ export const SessionsTab = forwardRef<SessionsTabRef, {
   currentSessionId: string;
   projectId: string;
 }>(({ sessions, currentSessionId, projectId }, ref) => {
+  // Defer hydration-variant values (like Date.now and live counts) until after mount
+  const [isHydrated, setIsHydrated] = useState(false);
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
   const aliveTasks = useAtomValue(aliveTasksAtom);
   const [showOldSessions, setShowOldSessions] = useAtom(showOldSessionsAtom);
   const checkboxId = useId();
@@ -40,12 +45,14 @@ export const SessionsTab = forwardRef<SessionsTabRef, {
   // Filter sessions based on 24-hour cutoff if showOldSessions is false
   const filteredSessions = showOldSessions
     ? sessions
-    : sessions.filter((session) => {
-        if (!session.meta.lastModifiedAt) return false;
-        const sessionTime = new Date(session.meta.lastModifiedAt).getTime();
-        const cutoffTime = Date.now() - 24 * 60 * 60 * 1000; // 24 hours ago
-        return sessionTime > cutoffTime;
-      });
+    : isHydrated
+      ? sessions.filter((session) => {
+          if (!session.meta.lastModifiedAt) return false;
+          const sessionTime = new Date(session.meta.lastModifiedAt).getTime();
+          const cutoffTime = Date.now() - 24 * 60 * 60 * 1000; // 24 hours ago
+          return sessionTime > cutoffTime;
+        })
+      : sessions; // Before hydration, avoid Date.now()-based filtering to prevent SSR mismatches
 
   // Sort sessions: Running > Paused > Others, then by lastModifiedAt (newest first)
   const sortedSessions = [...filteredSessions].sort((a, b) => {
@@ -140,7 +147,7 @@ export const SessionsTab = forwardRef<SessionsTabRef, {
           />
         </div>
         <div className="flex items-center justify-between text-xs text-sidebar-foreground/70">
-          <span>{sortedSessions.length} total</span>
+          <span>{isHydrated ? `${sortedSessions.length} total` : ""}</span>
           <div className="flex items-center gap-2">
             <Checkbox
               id={checkboxId}
@@ -214,7 +221,7 @@ export const SessionsTab = forwardRef<SessionsTabRef, {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1 text-xs text-sidebar-foreground/70">
                     <MessageSquareIcon className="w-3 h-3" />
-                    <span>{session.meta.messageCount}</span>
+                    <span>{isHydrated ? session.meta.messageCount : ""}</span>
                   </div>
                   {session.meta.lastModifiedAt && (
                     <span className="text-xs text-sidebar-foreground/60">

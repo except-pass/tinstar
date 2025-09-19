@@ -1,6 +1,6 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { honoClient } from "../../../../../lib/api/client";
+import { honoClient } from "@/lib/api/client";
 
 export const useNewChatMutation = (
   projectId: string,
@@ -12,6 +12,8 @@ export const useNewChatMutation = (
     mutationFn: async (options: {
       message: string;
       createWorktree?: boolean;
+      planMode?: boolean;
+      model?: string;
     }) => {
       const response = await honoClient.api.projects[":projectId"][
         "new-session"
@@ -21,6 +23,8 @@ export const useNewChatMutation = (
           json: {
             message: options.message,
             createWorktree: options.createWorktree ?? false,
+            planMode: options.planMode,
+            model: options.model,
           },
         },
         {
@@ -54,13 +58,20 @@ export const useResumeChatMutation = (projectId: string, sessionId: string) => {
   const router = useRouter();
 
   return useMutation({
-    mutationFn: async (options: { message: string }) => {
+    mutationFn: async (options: {
+      message: string;
+      model?: string;
+      fallbackModel?: string;
+    }) => {
       const response = await honoClient.api.projects[":projectId"].sessions[
         ":sessionId"
       ].resume.$post(
         {
           param: { projectId, sessionId },
-          json: { resumeMessage: options.message },
+          json: {
+            resumeMessage: options.message,
+            model: options.model,
+          },
         },
         {
           init: {
@@ -86,6 +97,45 @@ export const useResumeChatMutation = (projectId: string, sessionId: string) => {
           `/projects/${projectId}/sessions/${response.sessionId}#message-${response.userMessageId}`,
         );
       }
+    },
+  });
+};
+
+export const useSetPermissionModeMutation = (
+  projectId: string,
+  sessionId: string,
+) => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (mode: "plan" | "acceptEdits") => {
+      const response = await honoClient.api.projects[":projectId"].sessions[
+        ":sessionId"
+      ]["permission-mode"].$patch({
+        param: { projectId, sessionId },
+        json: { mode },
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => undefined);
+        const message =
+          body && "error" in body && typeof body.error === "string"
+            ? body.error
+            : response.statusText;
+        throw new Error(message);
+      }
+
+      return response.json();
+    },
+    onSuccess: () => {
+      // Invalidate the session permission mode query to refetch the updated mode
+      queryClient.invalidateQueries({
+        queryKey: ["sessionPermissionMode", projectId, sessionId],
+      });
+      // Also invalidate alive tasks to get the updated mode if task is running
+      queryClient.invalidateQueries({
+        queryKey: ["aliveTasks"],
+      });
     },
   });
 };

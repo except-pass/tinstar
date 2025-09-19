@@ -2,8 +2,11 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { type FC, useCallback, useId } from "react";
+import type { ModelType } from "@/server/service/claude-code/types";
+import type { Config } from "@/server/config/config";
 import { configQueryConfig, useConfig } from "@/app/hooks/useConfig";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ModelSelector } from "@/components/ui/model-selector";
 import { projectQueryConfig } from "../app/projects/[projectId]/hooks/useProject";
 
 interface SettingsControlsProps {
@@ -59,7 +62,25 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
     onConfigChanged();
   };
 
+  const handleDefaultPlanModeChange = async () => {
+    const newConfig = {
+      ...config,
+      defaultPlanMode: !config?.defaultPlanMode,
+    };
+    updateConfig(newConfig);
+    await onConfigChanged();
+  };
 
+  const handleDefaultModelChange = (model: string | undefined) => {
+    const resolvedModel: ModelType = (model ?? "default") as ModelType;
+    const newConfig: Config = {
+      ...(config as Config),
+      defaultModel: resolvedModel,
+    };
+    updateConfig(newConfig);
+    // Don't await - let it save in background for faster UI response
+    onConfigChanged().catch(console.error);
+  };
   return (
     <div className={`space-y-4 ${className}`}>
       <div className="flex items-center space-x-2">
@@ -104,6 +125,39 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
           title
         </p>
       )}
+
+      <div className="flex items-center space-x-2">
+        <Checkbox
+          id={`${checkboxId}-planmode`}
+          checked={config?.defaultPlanMode}
+          onCheckedChange={handleDefaultPlanModeChange}
+        />
+        {showLabels && (
+          <label
+            htmlFor={`${checkboxId}-planmode`}
+            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+          >
+            Default to plan mode for new sessions
+          </label>
+        )}
+      </div>
+      {showDescriptions && (
+        <p className="text-xs text-muted-foreground mt-1 ml-6">
+          Start new conversations in plan mode where Claude plans changes before
+          executing
+        </p>
+      )}
+
+      <div className="space-y-2">
+        {showLabels && (
+          <label className="text-sm font-medium">Current Model Option</label>
+        )}
+        <ModelSelector
+          model={config?.defaultModel}
+          onModelChange={handleDefaultModelChange}
+          size="sm"
+        />
+      </div>
     </div>
   );
 };

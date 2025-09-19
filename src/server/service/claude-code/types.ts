@@ -1,5 +1,13 @@
+import type { Query } from "@anthropic-ai/claude-code";
 import type { MessageGenerator, OnMessage } from "./createMessageGenerator";
 
+export type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "bypassPermissions"
+  | "plan";
+
+export type ModelType = "default" | "sonnet" | "opus" | "opusplan";
 type BaseClaudeCodeTask = {
   id: string;
   projectId: string;
@@ -11,6 +19,9 @@ type BaseClaudeCodeTask = {
   setFirstMessagePromise: () => void;
   awaitFirstMessage: () => Promise<void>;
   onMessageHandlers: OnMessage[];
+  query?: Query;
+  currentPermissionMode?: PermissionMode;
+  model?: ModelType;
 };
 
 export type PendingClaudeCodeTask = BaseClaudeCodeTask & {
@@ -56,5 +67,10 @@ export type AliveClaudeCodeTask = RunningClaudeCodeTask | PausedClaudeCodeTask;
 
 export type SerializableAliveTask = Pick<
   AliveClaudeCodeTask,
-  "id" | "status" | "sessionId" | "userMessageId"
+  | "id"
+  | "status"
+  | "sessionId"
+  | "userMessageId"
+  | "currentPermissionMode"
+  | "model"
 >;

@@ -6,21 +6,17 @@ import { NotificationSettings } from "@/components/NotificationSettings";
 import { SettingsControls } from "@/components/SettingsControls";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useConfig } from "@/app/hooks/useConfig";
-import { useQueryClient } from "@tanstack/react-query";
-import { configQueryConfig } from "@/app/hooks/useConfig";
-import { useCallback } from "react";
 
 export const SettingsTab: FC<{
   openingProjectId: string;
 }> = ({ openingProjectId }) => {
   const { config, updateConfig, isUpdating } = useConfig();
-  const queryClient = useQueryClient();
 
-  const onConfigChanged = useCallback(async () => {
-    await queryClient.invalidateQueries({
-      queryKey: configQueryConfig.queryKey,
-    });
-  }, [queryClient]);
+  // const _onConfigChanged = useCallback(async () => {
+  //   await queryClient.invalidateQueries({
+  //     queryKey: configQueryConfig.queryKey,
+  //   });
+  // }, [queryClient]);
 
   const handleSendKeyChange = (key: "enter" | "shift" | "ctrl" | "cmd") => {
     const currentKeys = config?.sendKeys || ["ctrl", "cmd"];
