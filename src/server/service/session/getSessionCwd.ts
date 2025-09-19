@@ -25,13 +25,13 @@ export const isOrphanedWorktreeSession = async (
       if (
         conversation === undefined ||
         conversation === null ||
-        (conversation as any).type === "summary" ||
-        (conversation as any).type === "x-error"
+        conversation.type === "summary" ||
+        conversation.type === "x-error"
       ) {
         continue;
       }
 
-      const cwd = (conversation as any).cwd as string | undefined;
+      const cwd = "cwd" in conversation ? conversation.cwd : undefined;
       if (cwd && cwd.length > 0) {
         // Check if the worktree directory still exists
         try {
@@ -73,13 +73,13 @@ export const getSessionCwd = async (
         conversation === undefined ||
         conversation === null ||
         // Skip meta-only entries
-        (conversation as any).type === "summary" ||
-        (conversation as any).type === "x-error"
+        conversation.type === "summary" ||
+        conversation.type === "x-error"
       ) {
         continue;
       }
 
-      const cwd = (conversation as any).cwd as string | undefined;
+      const cwd = "cwd" in conversation ? conversation.cwd : undefined;
       if (cwd && cwd.length > 0) {
         return cwd;
       }

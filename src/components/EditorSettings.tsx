@@ -2,11 +2,13 @@
 
 import { useAtom } from "jotai";
 import type { FC } from "react";
-import { editorSettingsAtom } from "@/lib/atoms/editorSettings";
+import { useId } from "react";
 import { Input } from "@/components/ui/input";
+import { editorSettingsAtom } from "@/lib/atoms/editorSettings";
 
 export const EditorSettings: FC = () => {
   const [settings, setSettings] = useAtom(editorSettingsAtom);
+  const editorCommandId = useId();
 
   const handleCommandChange = (value: string) => {
     setSettings({ ...settings, editorCommand: value });
@@ -28,7 +30,7 @@ export const EditorSettings: FC = () => {
           Editor Command
         </div>
         <Input
-          id="editor-command"
+          id={editorCommandId}
           type="text"
           value={settings.editorCommand}
           onChange={(e) => handleCommandChange(e.target.value)}

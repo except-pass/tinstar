@@ -1,10 +1,10 @@
-import { zValidator } from "@hono/zod-validator";
-import { setCookie } from "hono/cookie";
-import { streamSSE } from "hono/streaming";
 import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { zValidator } from "@hono/zod-validator";
+import { setCookie } from "hono/cookie";
+import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { configSchema } from "../config/config";
 import { ClaudeCodeTaskController } from "../service/claude-code/ClaudeCodeTaskController";
@@ -494,7 +494,7 @@ export const routes = (app: HonoAppType) => {
           try {
             // Resolve "default" model to "sonnet" for the API
             const resolvedModel = model === "default" ? "sonnet" : model;
-            
+
             const task = await taskController.startOrContinueTask(
               {
                 projectId,
@@ -547,7 +547,7 @@ export const routes = (app: HonoAppType) => {
           try {
             // Resolve the correct cwd for this session (handles worktree sessions)
             const sessionCwd = await getSessionCwd(projectId, sessionId);
-            
+
             // Resolve "default" model to "sonnet" for the API
             const resolvedModel = model === "default" ? "sonnet" : model;
 
@@ -692,6 +692,7 @@ export const routes = (app: HonoAppType) => {
 
           if (!editorCommand) {
             // Try $EDITOR environment variable
+            // biome-ignore lint/complexity/useLiteralKeys: Required for TypeScript strict mode
             const envEditor = process.env["EDITOR"];
             if (envEditor) {
               editorCommand = `${envEditor} {{path}}`;
@@ -723,10 +724,7 @@ export const routes = (app: HonoAppType) => {
               childProcess.on("error", (error) => {
                 console.error(`Failed to start editor (${cmd}):`, error);
                 reject(
-                  c.json(
-                    { error: `Failed to start editor: ${cmd}` },
-                    500,
-                  ),
+                  c.json({ error: `Failed to start editor: ${cmd}` }, 500),
                 );
               });
 
@@ -746,20 +744,14 @@ export const routes = (app: HonoAppType) => {
                 if (!childProcess.killed) {
                   childProcess.kill();
                   reject(
-                    c.json(
-                      { error: `Editor command timed out: ${cmd}` },
-                      500,
-                    ),
+                    c.json({ error: `Editor command timed out: ${cmd}` }, 500),
                   );
                 }
               }, 5000);
             });
           } catch (error) {
             console.error("Error executing editor command:", error);
-            return c.json(
-              { error: "Failed to execute editor command" },
-              500,
-            );
+            return c.json({ error: "Failed to execute editor command" }, 500);
           }
         },
       )

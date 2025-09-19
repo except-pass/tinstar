@@ -1,4 +1,9 @@
-import { ChevronRight, Lightbulb, Map, Settings } from "lucide-react";
+import {
+  ChevronRight,
+  Lightbulb,
+  Map as MapIcon,
+  Settings,
+} from "lucide-react";
 import Image from "next/image";
 import parseGitDiff from "parse-git-diff";
 import type { FC } from "react";
@@ -18,13 +23,13 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import type { ToolResultContent } from "@/lib/conversation-schema/content/ToolResultContentSchema";
 import type { AssistantMessageContent } from "@/lib/conversation-schema/message/AssistantMessageSchema";
 import {
   generateMultiEditDiff,
   generateSyntheticGitDiff,
 } from "@/lib/synthetic-diff";
-import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { DiffViewer } from "../diffModal/DiffViewer";
 import type { FileDiff } from "../diffModal/types";
 
@@ -178,7 +183,7 @@ export const AssistantConversationContent: FC<{
         <Card className="border-amber-200 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20 mb-2">
           <CardHeader className="py-3 px-4">
             <div className="flex items-center gap-2">
-              <Map className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <MapIcon className="h-4 w-4 text-amber-600 dark:text-amber-400" />
               <CardTitle className="text-sm font-medium">Plan Ready</CardTitle>
               <Badge
                 variant="outline"
@@ -212,10 +217,7 @@ export const AssistantConversationContent: FC<{
         try {
           const result = await openInEditor(filePath);
           if (!result.success) {
-            console.error(
-              "Failed to open file in editor:",
-              result.error,
-            );
+            console.error("Failed to open file in editor:", result.error);
           }
         } catch (error) {
           console.error("Error opening file in editor:", error);
@@ -278,10 +280,13 @@ export const AssistantConversationContent: FC<{
                 "edits" in content.input
               ) {
                 // Handle MultiEdit with multiple edits
-                const edits = (content.input as any).edits as Array<{
-                  old_string: string;
-                  new_string: string;
-                }>;
+                const multiEditInput = content.input as {
+                  edits: Array<{
+                    old_string: string;
+                    new_string: string;
+                  }>;
+                };
+                const edits = multiEditInput.edits;
                 syntheticDiff = generateMultiEditDiff(filePath, edits);
               } else if (
                 content.input &&

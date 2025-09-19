@@ -2,11 +2,11 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { type FC, useCallback, useId } from "react";
-import type { ModelType } from "@/server/service/claude-code/types";
-import type { Config } from "@/server/config/config";
 import { configQueryConfig, useConfig } from "@/app/hooks/useConfig";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ModelSelector } from "@/components/ui/model-selector";
+import type { Config } from "@/server/config/config";
+import type { ModelType } from "@/server/service/claude-code/types";
 import { projectQueryConfig } from "../app/projects/[projectId]/hooks/useProject";
 
 interface SettingsControlsProps {
@@ -43,7 +43,7 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
       ...config,
       hideNoUserMessageSession: !config?.hideNoUserMessageSession,
     };
-    
+
     // Update config - optimistic update handled by mutation
     updateConfig(newConfig);
     // Only invalidate project queries since these settings affect project display
@@ -55,7 +55,7 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
       ...config,
       unifySameTitleSession: !config?.unifySameTitleSession,
     };
-    
+
     // Update config - optimistic update handled by mutation
     updateConfig(newConfig);
     // Only invalidate project queries since these settings affect project display
@@ -150,7 +150,7 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
 
       <div className="space-y-2">
         {showLabels && (
-          <label className="text-sm font-medium">Current Model Option</label>
+          <div className="text-sm font-medium">Current Model Option</div>
         )}
         <ModelSelector
           model={config?.defaultModel}

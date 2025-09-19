@@ -8,6 +8,7 @@ import { createMessageGenerator } from "./createMessageGenerator";
 import type {
   AliveClaudeCodeTask,
   ClaudeCodeTask,
+  ModelType,
   PendingClaudeCodeTask,
   PermissionMode,
   RunningClaudeCodeTask,
@@ -54,12 +55,7 @@ export class ClaudeCodeTaskController {
     if (existingTask) {
       return await this.continueTask(existingTask, message);
     } else {
-      return await this.startTask(
-        currentSession,
-        message,
-        planMode,
-        model,
-      );
+      return await this.startTask(currentSession, message, planMode, model);
     }
   }
 
@@ -184,7 +180,7 @@ export class ClaudeCodeTaskController {
                 abortController: abortController,
                 query: queryInstance,
                 currentPermissionMode: permissionMode,
-                model: model as any,
+                model: model as ModelType,
               };
               this.tasks.push(runningTask);
               // Store the permission mode for this session
@@ -231,7 +227,7 @@ export class ClaudeCodeTaskController {
         });
       } catch (error) {
         // Build a more helpful error message to bubble up to the caller/UI
-        const err = error as any;
+        const err = error as Error & { code?: unknown; stderr?: string };
         const parts: string[] = [];
         parts.push(
           err instanceof Error && err.message ? err.message : String(err),

@@ -20,9 +20,10 @@ export const getSession = async (
 
   try {
     content = await readFile(sessionPath, "utf-8");
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const nodeError = error as { code?: string };
     // If not found in main project, search in worktree projects
-    if (error.code === "ENOENT") {
+    if (nodeError.code === "ENOENT") {
       const worktreeProjects = await getWorktreeProjects(projectPath);
 
       for (const worktreeProject of worktreeProjects) {

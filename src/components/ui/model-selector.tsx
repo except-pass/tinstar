@@ -1,14 +1,10 @@
 import { Brain, Sparkles } from "lucide-react";
 import type { FC } from "react";
+import { useId } from "react";
 import { cn } from "@/lib/utils";
 import type { ModelType } from "@/server/service/claude-code/types";
 import { Badge } from "./badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-} from "./select";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "./select";
 
 export interface ModelSelectorProps {
   model?: string;
@@ -57,6 +53,7 @@ export const ModelSelector: FC<ModelSelectorProps> = ({
   className,
   size = "md",
 }) => {
+  const selectId = useId();
   const sizeClasses = {
     sm: "text-xs",
     md: "text-sm",
@@ -65,7 +62,10 @@ export const ModelSelector: FC<ModelSelectorProps> = ({
 
   return (
     <div className={cn("space-y-2", className)}>
-      <label className={cn("font-medium text-foreground", sizeClasses[size])}>
+      <label
+        htmlFor={selectId}
+        className={cn("font-medium text-foreground", sizeClasses[size])}
+      >
         Model
       </label>
       <Select
@@ -73,10 +73,15 @@ export const ModelSelector: FC<ModelSelectorProps> = ({
         onValueChange={(value) => onModelChange?.(value)}
         disabled={disabled}
       >
-        <SelectTrigger className={cn("w-full", sizeClasses[size])}>
+        <SelectTrigger
+          id={selectId}
+          className={cn("w-full", sizeClasses[size])}
+        >
           <div className="flex items-center gap-2 w-full">
             {(() => {
-              const selectedModel = models.find(m => m.value === (model || "default"));
+              const selectedModel = models.find(
+                (m) => m.value === (model || "default"),
+              );
               if (selectedModel) {
                 const Icon = selectedModel.icon;
                 return (
@@ -119,10 +124,7 @@ export interface ModelBadgeProps {
   size?: "sm" | "md" | "lg";
 }
 
-export const ModelBadge: FC<ModelBadgeProps> = ({
-  model,
-  className,
-}) => {
+export const ModelBadge: FC<ModelBadgeProps> = ({ model, className }) => {
   const modelInfo = models.find((m) => m.value === model);
 
   if (!modelInfo) {

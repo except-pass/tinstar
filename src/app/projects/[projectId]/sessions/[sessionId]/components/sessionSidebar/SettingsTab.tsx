@@ -1,16 +1,21 @@
 "use client";
 
 import type { FC } from "react";
+import { useId } from "react";
+import { useConfig } from "@/app/hooks/useConfig";
 import { EditorSettings } from "@/components/EditorSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { SettingsControls } from "@/components/SettingsControls";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useConfig } from "@/app/hooks/useConfig";
 
 export const SettingsTab: FC<{
   openingProjectId: string;
 }> = ({ openingProjectId }) => {
   const { config, updateConfig, isUpdating } = useConfig();
+  const enterKeyId = useId();
+  const shiftKeyId = useId();
+  const ctrlKeyId = useId();
+  const cmdKeyId = useId();
 
   // const _onConfigChanged = useCallback(async () => {
   //   await queryClient.invalidateQueries({
@@ -21,14 +26,14 @@ export const SettingsTab: FC<{
   const handleSendKeyChange = (key: "enter" | "shift" | "ctrl" | "cmd") => {
     const currentKeys = config?.sendKeys || ["ctrl", "cmd"];
     const newKeys = currentKeys.includes(key)
-      ? currentKeys.filter(k => k !== key)
+      ? currentKeys.filter((k) => k !== key)
       : [...currentKeys, key];
-    
+
     const newConfig = {
       ...config,
       sendKeys: newKeys,
     };
-    
+
     // Update config - optimistic update handled by mutation
     updateConfig(newConfig);
   };
@@ -72,70 +77,78 @@ export const SettingsTab: FC<{
               <p className="text-xs text-muted-foreground">
                 Choose which key combinations send messages:
               </p>
-              
+
               <div className="space-y-2">
                 <div className="flex items-center space-x-2">
                   <Checkbox
-                    id="send-key-enter"
+                    id={enterKeyId}
                     checked={config?.sendKeys?.includes("enter")}
                     disabled={isUpdating}
                     onCheckedChange={() => handleSendKeyChange("enter")}
                   />
                   <label
-                    htmlFor="send-key-enter"
+                    htmlFor={enterKeyId}
                     className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                   >
                     Enter
                   </label>
-                  {isUpdating && <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />}
+                  {isUpdating && (
+                    <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
+                  )}
                 </div>
 
                 <div className="flex items-center space-x-2">
                   <Checkbox
-                    id="send-key-shift"
+                    id={shiftKeyId}
                     checked={config?.sendKeys?.includes("shift")}
                     disabled={isUpdating}
                     onCheckedChange={() => handleSendKeyChange("shift")}
                   />
                   <label
-                    htmlFor="send-key-shift"
+                    htmlFor={shiftKeyId}
                     className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                   >
                     Shift+Enter
                   </label>
-                  {isUpdating && <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />}
+                  {isUpdating && (
+                    <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
+                  )}
                 </div>
 
                 <div className="flex items-center space-x-2">
                   <Checkbox
-                    id="send-key-ctrl"
+                    id={ctrlKeyId}
                     checked={config?.sendKeys?.includes("ctrl")}
                     disabled={isUpdating}
                     onCheckedChange={() => handleSendKeyChange("ctrl")}
                   />
                   <label
-                    htmlFor="send-key-ctrl"
+                    htmlFor={ctrlKeyId}
                     className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                   >
                     Ctrl+Enter
                   </label>
-                  {isUpdating && <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />}
+                  {isUpdating && (
+                    <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
+                  )}
                 </div>
 
                 <div className="flex items-center space-x-2">
                   <Checkbox
-                    id="send-key-cmd"
+                    id={cmdKeyId}
                     checked={config?.sendKeys?.includes("cmd")}
                     disabled={isUpdating}
                     onCheckedChange={() => handleSendKeyChange("cmd")}
                   />
                   <label
-                    htmlFor="send-key-cmd"
+                    htmlFor={cmdKeyId}
                     className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                   >
                     Cmd+Enter (Mac)
                   </label>
-                  {isUpdating && <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />}
+                  {isUpdating && (
+                    <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
+                  )}
                 </div>
               </div>
             </div>

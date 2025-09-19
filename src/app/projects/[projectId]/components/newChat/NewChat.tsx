@@ -1,14 +1,9 @@
-import { Code, Map } from "lucide-react";
-import { type FC, useState } from "react";
+import { Code, Map as MapIcon } from "lucide-react";
+import { type FC, useId, useState } from "react";
+import { useConfig } from "@/app/hooks/useConfig";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ModelBadge } from "@/components/ui/model-selector";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
-import { useConfig } from "@/app/hooks/useConfig";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatInput, useNewChatMutation } from "../chatForm";
 
 export const NewChat: FC<{
@@ -16,11 +11,13 @@ export const NewChat: FC<{
   onSuccess?: () => void;
 }> = ({ projectId, onSuccess }) => {
   const { config } = useConfig();
+  const worktreeCheckboxId = useId();
   const [createWorktree, setCreateWorktree] = useState(false);
   const [planMode, setPlanMode] = useState(config?.defaultPlanMode ?? true);
-  const [model] = useState<string | undefined>(config?.defaultModel || "default");
+  const [model] = useState<string | undefined>(
+    config?.defaultModel || "default",
+  );
   const startNewChat = useNewChatMutation(projectId, onSuccess);
-
 
   const handleSubmit = async (message: string) => {
     await startNewChat.mutateAsync({
@@ -39,7 +36,7 @@ export const NewChat: FC<{
       >
         <TabsList className="grid grid-cols-2 w-fit">
           <TabsTrigger value="plan" disabled={startNewChat.isPending}>
-            <Map className="h-4 w-4" />
+            <MapIcon className="h-4 w-4" />
             Plan Mode
           </TabsTrigger>
           <TabsTrigger value="code" disabled={startNewChat.isPending}>
@@ -65,7 +62,7 @@ export const NewChat: FC<{
         <div className="space-y-2">
           <div className="inline-flex items-center space-x-2 p-3 bg-muted/50 rounded-lg">
             <Checkbox
-              id="create-worktree"
+              id={worktreeCheckboxId}
               checked={createWorktree}
               onCheckedChange={(checked) => {
                 if (typeof checked === "boolean") {
@@ -75,7 +72,7 @@ export const NewChat: FC<{
               disabled={startNewChat.isPending}
             />
             <label
-              htmlFor="create-worktree"
+              htmlFor={worktreeCheckboxId}
               className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
             >
               🌱 Start in new worktree
