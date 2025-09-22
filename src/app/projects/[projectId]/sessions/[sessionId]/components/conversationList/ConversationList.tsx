@@ -555,11 +555,11 @@ export const ConversationList: FC<ConversationListProps> = ({
           let lastResponseText = "";
           for (let i = group.conversations.length - 1; i >= 0; i--) {
             const conversation = group.conversations[i];
-            if (conversation.type === "assistant") {
+            if (conversation && conversation.type === "assistant") {
               const textContent = conversation.message.content.find(
                 (content: any) => content.type === "text"
               );
-              if (textContent && typeof textContent.text === "string" && textContent.text.trim()) {
+              if (textContent && textContent.type === "text" && typeof textContent.text === "string" && textContent.text.trim()) {
                 lastResponseText = textContent.text.trim();
                 break;
               }
@@ -574,7 +574,7 @@ export const ConversationList: FC<ConversationListProps> = ({
               <div className="w-full">
                 <Collapsible
                   defaultOpen={isOngoing ? shouldExpand : false}
-                  onOpenChange={(open) => {
+                  onOpenChange={() => {
                     // Track expansion state for this group to hide external response card when expanded
                     if (isOngoing && responseCount > 0) {
                       // This is the last group with responses - we need to manage external card visibility
@@ -650,6 +650,7 @@ export const ConversationList: FC<ConversationListProps> = ({
                     getToolResult={getToolResult}
                     isRootSidechain={isRootSidechain}
                     getSidechainConversations={getSidechainConversations}
+                    isInEditGroup={true}
                   />
                 </li>
               ))}
