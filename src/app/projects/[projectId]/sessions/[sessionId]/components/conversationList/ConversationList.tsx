@@ -1,7 +1,8 @@
 "use client";
 
 import { AlertTriangle, ChevronRight, ExternalLink } from "lucide-react";
-import { type FC, useMemo } from "react";
+import { type FC, useEffect, useMemo, useState } from "react";
+import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Collapsible,
@@ -102,6 +103,14 @@ export const ConversationList: FC<ConversationListProps> = ({
   conversations,
   getToolResult,
 }) => {
+  // TODO: Consider moving responsePositions to localStorage for persistence
+  // and even faster initial loads
+  const [responsePositions, setResponsePositions] = useState<Set<number>>(
+    new Set(),
+  );
+  const [lastScannedLength, setLastScannedLength] = useState(0);
+
+
   const validConversations = useMemo(
     () =>
       conversations.filter((conversation) => conversation.type !== "x-error"),
@@ -110,20 +119,51 @@ export const ConversationList: FC<ConversationListProps> = ({
   const { isRootSidechain, getSidechainConversations } =
     useSidechain(validConversations);
 
+  // Incremental scanning: only scan new conversations when array grows
+  useEffect(() => {
+    if (conversations.length > lastScannedLength) {
+      const newPositions = new Set(responsePositions);
+
+      // Only scan the new conversations (efficient!)
+      for (let i = lastScannedLength; i < conversations.length; i++) {
+        const conv = conversations[i];
+        if (conv && conv.type === "assistant") {
+          const hasTextContent = conv.message.content.some(
+            (content: any) => content.type === "text" && content.text && content.text.trim(),
+          );
+          if (hasTextContent) {
+            newPositions.add(i);
+          }
+        }
+      }
+
+      setResponsePositions(newPositions);
+      setLastScannedLength(conversations.length);
+    }
+  }, [conversations.length, lastScannedLength, responsePositions]);
+
+
   // Group conversations: each user message followed by all responses until the next user message
   // This ensures only one "Full output" section per user prompt
   const groupedConversations = useMemo(() => {
     const groups: (
       | Conversation
       | ErrorJsonl
-      | { type: "assistant-group"; conversations: Conversation[]; isOngoing?: boolean }
-      | { type: "response-group"; conversations: Conversation[]; isOngoing?: boolean; isTrulyFinal?: boolean; isAfterLastUser?: boolean }
-      | { type: "edit-group"; conversations: Conversation[]; isOngoing?: boolean; isAfterLastUser?: boolean }
+      | {
+          type: "assistant-group";
+          conversations: Conversation[];
+          isOngoing?: boolean;
+        }
+      | {
+          type: "edit-group";
+          conversations: Conversation[];
+          isOngoing?: boolean;
+          isAfterLastUser?: boolean;
+        }
     )[] = [];
     let currentAssistantGroup: Conversation[] = [];
     let hasSeenUserMessage = false;
     let lastUserIndex = -1;
-
 
     // Find the index of the last user message
     for (let i = conversations.length - 1; i >= 0; i--) {
@@ -134,11 +174,31 @@ export const ConversationList: FC<ConversationListProps> = ({
       }
     }
 
+    // Find the index of the last REAL user message (for edit group expansion)
+    let lastRealUserIndex = -1;
+    for (let i = conversations.length - 1; i >= 0; i--) {
+      const conv = conversations[i];
+      if (conv && conv.type === "user") {
+        // Check if this is a real user message or just a tool result
+        const isToolResultOnly =
+          conv.message &&
+          typeof conv.message.content === "object" &&
+          Array.isArray(conv.message.content) &&
+          conv.message.content.every(
+            (c: any) => c.type === "tool_result",
+          );
+
+        if (!isToolResultOnly) {
+          lastRealUserIndex = i;
+          break;
+        }
+      }
+    }
+
     for (let i = 0; i < conversations.length; i++) {
       const conversation = conversations[i];
       if (!conversation) continue;
       const isAfterLastUser = lastUserIndex >= 0 && i > lastUserIndex;
-
 
       if (conversation.type === "x-error") {
         // Flush any pending assistant group only if we have content
@@ -154,10 +214,13 @@ export const ConversationList: FC<ConversationListProps> = ({
         groups.push(conversation);
       } else if (conversation.type === "user") {
         // Check if this is a real user message or just a tool result
-        const isToolResultOnly = conversation.message &&
-          (typeof conversation.message.content === "object") &&
+        const isToolResultOnly =
+          conversation.message &&
+          typeof conversation.message.content === "object" &&
           Array.isArray(conversation.message.content) &&
-          conversation.message.content.every((c: any) => c.type === "tool_result");
+          conversation.message.content.every(
+            (c: any) => c.type === "tool_result",
+          );
 
         if (!isToolResultOnly) {
           // Real user message - flush assistant group if we have responses
@@ -181,49 +244,11 @@ export const ConversationList: FC<ConversationListProps> = ({
           const hasEditTool = conversation.message.content.some(
             (content: any) =>
               content.type === "tool_use" &&
-              (content.name === "Edit" || content.name === "MultiEdit")
+              (content.name === "Edit" || content.name === "MultiEdit"),
           );
 
-          // Check if this is the final response message (has text content and is the last assistant message before next user)
-          const hasTextContent = conversation.message.content.some(
-            (content: any) => content.type === "text"
-          );
-
-          // Check if this is the last assistant message before the next user message
-          let isLastAssistantBeforeUser = false;
-          for (let j = i + 1; j < conversations.length; j++) {
-            const nextConv = conversations[j];
-            if (!nextConv) continue;
-
-            // Check if it's a real user message (not just tool result)
-            if (nextConv.type === "user") {
-              const isRealUserMessage = !(
-                nextConv.message &&
-                typeof nextConv.message.content === "object" &&
-                Array.isArray(nextConv.message.content) &&
-                nextConv.message.content.every((c: any) => c.type === "tool_result")
-              );
-              if (isRealUserMessage) {
-                isLastAssistantBeforeUser = true;
-                break;
-              }
-            }
-
-            // If we hit another assistant message with text, this isn't the last one
-            if (nextConv.type === "assistant") {
-              const hasText = nextConv.message.content.some((c: any) => c.type === "text");
-              if (hasText) {
-                break;
-              }
-            }
-          }
-
-          // Also check if it's the very last assistant message in the conversation
-          const isVeryLastAssistant = i === conversations.length - 1 ||
-            !conversations.slice(i + 1).some(c => c && c.type === "assistant" &&
-              c.message.content.some((content: any) => content.type === "text"));
-
-          const isFinalResponse = hasTextContent && (isLastAssistantBeforeUser || isVeryLastAssistant);
+          // Use simple Set lookup for final response detection
+          const isFinalResponse = responsePositions.has(i);
 
           if (hasEditTool) {
             // Flush current group if any
@@ -236,39 +261,17 @@ export const ConversationList: FC<ConversationListProps> = ({
               currentAssistantGroup = [];
             }
             // Add the edit conversation as its own group
+            // For edit groups, use lastRealUserIndex to determine expansion
+            const isAfterLastRealUser = lastRealUserIndex >= 0 && i > lastRealUserIndex;
             groups.push({
               type: "edit-group",
               conversations: [conversation],
               isOngoing: false,
-              isAfterLastUser: isAfterLastUser,
+              isAfterLastUser: isAfterLastRealUser,
             });
           } else if (isFinalResponse && hasSeenUserMessage) {
-            // This is the final response message - flush current group WITHOUT this message
-            if (currentAssistantGroup.length > 0) {
-              groups.push({
-                type: "assistant-group",
-                conversations: [...currentAssistantGroup],
-                isOngoing: isAfterLastUser,
-              });
-              currentAssistantGroup = [];
-            }
-
-            // Check if this is truly the final message (no user messages after it)
-            const isTrulyFinal = !conversations.slice(i + 1).some(c => c && c.type === "user" && !(
-              c.message &&
-              (typeof c.message.content === "object") &&
-              Array.isArray(c.message.content) &&
-              c.message.content.every((content: any) => content.type === "tool_result")
-            ));
-
-            // Add response as its own separate group
-            groups.push({
-              type: "response-group",
-              conversations: [conversation],
-              isOngoing: false,
-              isTrulyFinal: isTrulyFinal,
-              isAfterLastUser: isAfterLastUser,
-            });
+            // Add response to current assistant group
+            currentAssistantGroup.push(conversation);
           } else if (hasSeenUserMessage) {
             // Add to current group only if we've seen a user message
             currentAssistantGroup.push(conversation);
@@ -288,7 +291,8 @@ export const ConversationList: FC<ConversationListProps> = ({
 
     // Flush final assistant group if any and we have seen a user message
     if (currentAssistantGroup.length > 0 && hasSeenUserMessage) {
-      const isAfterLastUser = lastUserIndex >= 0 && conversations.length > lastUserIndex + 1;
+      const isAfterLastUser =
+        lastUserIndex >= 0 && conversations.length > lastUserIndex + 1;
       groups.push({
         type: "assistant-group",
         conversations: [...currentAssistantGroup],
@@ -297,8 +301,7 @@ export const ConversationList: FC<ConversationListProps> = ({
     }
 
     return groups;
-  }, [conversations]);
-
+  }, [conversations, responsePositions]);
 
   // Find the last visible message (either standalone edit or final assistant message)
   // const _lastVisibleMessageIndex = useMemo(() => {
@@ -327,6 +330,7 @@ export const ConversationList: FC<ConversationListProps> = ({
           // Extract tool names and determine status from all conversations in the group
           const toolNames = new Set<string>();
           let shouldExpand = false;
+          let responseCount = 0;
           // let _hasToolUse = false;
           // let _hasErrors = false;
 
@@ -355,6 +359,14 @@ export const ConversationList: FC<ConversationListProps> = ({
 
           group.conversations.forEach((conversation) => {
             if (conversation.type === "assistant") {
+              // Check if this is a response message (has text content)
+              const hasTextContent = conversation.message.content.some(
+                (content: any) => content.type === "text" && content.text && content.text.trim()
+              );
+              if (hasTextContent) {
+                responseCount++;
+              }
+
               conversation.message.content.forEach((content) => {
                 if (content.type === "tool_use") {
                   // _hasToolUse = true;
@@ -428,9 +440,12 @@ export const ConversationList: FC<ConversationListProps> = ({
           const isOngoing = group.isOngoing;
           // const _messageCount = group.conversations.length;
 
-
           // Extract tool uses and their statuses for dot visualization
-          const toolUsesWithStatus: Array<{ id: string; hasError: boolean; hasResult: boolean }> = [];
+          const toolUsesWithStatus: Array<{
+            id: string;
+            hasError: boolean;
+            hasResult: boolean;
+          }> = [];
 
           group.conversations.forEach((conversation) => {
             if (conversation.type === "assistant") {
@@ -448,7 +463,11 @@ export const ConversationList: FC<ConversationListProps> = ({
 
           // Check tool results to determine status of each tool use
           group.conversations.forEach((conversation) => {
-            if ("message" in conversation && conversation.message && conversation.message.content) {
+            if (
+              "message" in conversation &&
+              conversation.message &&
+              conversation.message.content
+            ) {
               const content = Array.isArray(conversation.message.content)
                 ? conversation.message.content
                 : [conversation.message.content];
@@ -461,7 +480,9 @@ export const ConversationList: FC<ConversationListProps> = ({
                   item.type === "tool_result" &&
                   "tool_use_id" in item
                 ) {
-                  const toolUse = toolUsesWithStatus.find(t => t.id === item.tool_use_id);
+                  const toolUse = toolUsesWithStatus.find(
+                    (t) => t.id === item.tool_use_id,
+                  );
                   if (toolUse) {
                     toolUse.hasResult = true;
                     if ("is_error" in item && item.is_error) {
@@ -473,8 +494,11 @@ export const ConversationList: FC<ConversationListProps> = ({
             }
           });
 
-          // Create colored dots based on tool status
-          const dots = toolUsesWithStatus.slice(0, 10).map((toolUse, i) => {
+          // Create colored dots based on tool status and add orange dots for responses
+          const dots = [];
+
+          // Add dots for tool uses
+          toolUsesWithStatus.slice(0, 10).forEach((toolUse, i) => {
             let dotColor;
             if (!toolUse.hasResult) {
               // No result yet - blue (ongoing)
@@ -487,27 +511,51 @@ export const ConversationList: FC<ConversationListProps> = ({
               dotColor = "bg-green-600 dark:bg-green-400";
             }
 
-            return (
+            dots.push(
               <div
-                key={i}
+                key={`tool-${i}`}
                 className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`}
               />
             );
           });
 
+          // Add orange dots for responses
+          for (let i = 0; i < responseCount; i++) {
+            dots.push(
+              <div
+                key={`response-${i}`}
+                className="w-2 h-2 rounded-full flex-shrink-0 bg-orange-600 dark:bg-orange-400"
+              />
+            );
+          }
+
           const toolUseCount = toolUsesWithStatus.length;
+          const totalCount = toolUseCount + responseCount;
 
           const triggerContent = (
             <div className="flex items-center gap-2">
               <ChevronRight className="h-4 w-4 text-green-600 dark:text-green-400 transition-transform group-data-[state=open]:rotate-90" />
-              <div className="flex items-center gap-0.5">
-                {dots}
-              </div>
+              <div className="flex items-center gap-0.5">{dots}</div>
               <span className="text-sm font-medium text-green-600 dark:text-green-400 ml-1">
-                ({toolUseCount})
+                ({totalCount})
               </span>
             </div>
           );
+
+          // Find the last response text in this group for external display
+          let lastResponseText = "";
+          for (let i = group.conversations.length - 1; i >= 0; i--) {
+            const conversation = group.conversations[i];
+            if (conversation.type === "assistant") {
+              const textContent = conversation.message.content.find(
+                (content: any) => content.type === "text"
+              );
+              if (textContent && typeof textContent.text === "string" && textContent.text.trim()) {
+                lastResponseText = textContent.text.trim();
+                break;
+              }
+            }
+          }
 
           return (
             <li
@@ -515,7 +563,16 @@ export const ConversationList: FC<ConversationListProps> = ({
               key={`assistant-group-${groupIndex}`}
             >
               <div className="w-full">
-                <Collapsible defaultOpen={isOngoing ? shouldExpand : false}>
+                <Collapsible
+                  defaultOpen={isOngoing ? shouldExpand : false}
+                  onOpenChange={(open) => {
+                    // Track expansion state for this group to hide external response card when expanded
+                    if (isOngoing && responseCount > 0) {
+                      // This is the last group with responses - we need to manage external card visibility
+                      // The external card will be hidden when expanded via CSS/conditional rendering
+                    }
+                  }}
+                >
                   <CollapsibleTrigger asChild>
                     <div className="flex items-center cursor-pointer hover:bg-muted/50 rounded p-2 -mx-2 mb-2">
                       {triggerContent}
@@ -526,62 +583,35 @@ export const ConversationList: FC<ConversationListProps> = ({
                       {assistantContent}
                     </div>
                   </CollapsibleContent>
-                </Collapsible>
-              </div>
-            </li>
-          );
-        }
 
-        if (group.type === "response-group") {
-          // Render response in its own accordion
-          const assistantContent = (
-            <ul className="w-full">
-              {group.conversations.map((conversation) => (
-                <li key={getConversationKey(conversation)}>
-                  <ConversationItem
-                    conversation={conversation}
-                    getToolResult={getToolResult}
-                    isRootSidechain={isRootSidechain}
-                    getSidechainConversations={getSidechainConversations}
-                  />
-                </li>
-              ))}
-            </ul>
-          );
-
-          return (
-            <li
-              className="w-full flex justify-start"
-              key={`response-group-${groupIndex}`}
-            >
-              <div className="w-full">
-                <Collapsible defaultOpen={group.isTrulyFinal && group.isAfterLastUser}>
-                  <CollapsibleTrigger asChild>
-                    <div className="flex items-center cursor-pointer hover:bg-muted/50 rounded p-2 -mx-2 mb-2">
-                      <div className="flex items-center gap-2">
-                        <ChevronRight className="h-4 w-4 text-orange-600 dark:text-orange-400 transition-transform group-data-[state=open]:rotate-90" />
-                        <h4 className="text-sm font-medium text-orange-600 dark:text-orange-400">
-                          Response
-                        </h4>
+                  {/* External response card - only shown for the last assistant group with responses when collapsed */}
+                  {responseCount > 0 && lastResponseText && isOngoing && (
+                    <div className="mt-2 p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded group-data-[state=open]:hidden">
+                      <div className="text-sm font-medium text-orange-800 dark:text-orange-200 mb-2">
+                        Response:
                       </div>
+                      <MarkdownContent
+                        className="w-full text-sm text-orange-700 dark:text-orange-300 [&_p]:mb-1 [&_h1]:mb-2 [&_h1]:mt-2 [&_h2]:mb-2 [&_h2]:mt-2 [&_h3]:mb-1 [&_h3]:mt-2 [&_h4]:mb-1 [&_h4]:mt-1 [&_h5]:mb-1 [&_h5]:mt-1 [&_h6]:mb-1 [&_h6]:mt-1 [&_ul]:mb-2 [&_ol]:mb-2 [&_blockquote]:my-2 [&_pre]:my-2"
+                        content={lastResponseText}
+                      />
                     </div>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <div className="bg-orange-50 dark:bg-orange-950/30 rounded border-2 border-orange-200 dark:border-orange-800 p-3 mt-2">
-                      {assistantContent}
-                    </div>
-                  </CollapsibleContent>
+                  )}
                 </Collapsible>
               </div>
             </li>
           );
         }
+
 
         if (group.type === "edit-group") {
           // Check for errors in edit tool results
-          let hasErrors = false;
+          const hasErrors = false;
           group.conversations.forEach((conversation) => {
-            if ("message" in conversation && conversation.message && conversation.message.content) {
+            if (
+              "message" in conversation &&
+              conversation.message &&
+              conversation.message.content
+            ) {
               const content = Array.isArray(conversation.message.content)
                 ? conversation.message.content
                 : [conversation.message.content];
@@ -666,9 +696,7 @@ export const ConversationList: FC<ConversationListProps> = ({
             className="w-full flex justify-start"
             key={getConversationKey(conversation)}
           >
-            <div className="w-full">
-              {elm}
-            </div>
+            <div className="w-full">{elm}</div>
           </li>,
         ];
       })}
