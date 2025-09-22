@@ -423,16 +423,25 @@ export const ConversationList: FC<ConversationListProps> = ({
           // Render grouped assistant messages in a collapsible
           const assistantContent = (
             <ul className="w-full">
-              {group.conversations.map((conversation) => (
-                <li key={getConversationKey(conversation)}>
-                  <ConversationItem
-                    conversation={conversation}
-                    getToolResult={getToolResult}
-                    isRootSidechain={isRootSidechain}
-                    getSidechainConversations={getSidechainConversations}
-                  />
-                </li>
-              ))}
+              {group.conversations.map((conversation) => {
+                // Check if this conversation is a response (has text content)
+                const isResponseConversation = conversation.type === "assistant" &&
+                  conversation.message.content.some(
+                    (content: any) => content.type === "text" && content.text && content.text.trim()
+                  );
+
+                return (
+                  <li key={getConversationKey(conversation)}>
+                    <ConversationItem
+                      conversation={conversation}
+                      getToolResult={getToolResult}
+                      isRootSidechain={isRootSidechain}
+                      getSidechainConversations={getSidechainConversations}
+                      isResponse={isResponseConversation}
+                    />
+                  </li>
+                );
+              })}
             </ul>
           );
 
