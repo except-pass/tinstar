@@ -134,13 +134,19 @@ function getBashCommandName(input: unknown): string | null {
 export const AssistantConversationContent: FC<{
   content: AssistantMessageContent;
   getToolResult: (toolUseId: string) => ToolResultContent | undefined;
-}> = ({ content, getToolResult }) => {
+  isResponse?: boolean;
+}> = ({ content, getToolResult, isResponse = false }) => {
   const { openInEditor } = useOpenInEditor();
   if (content.type === "text") {
     return (
-      <div className="w-full mx-1 sm:mx-2 my-2">
+      <div className={`w-full mx-1 sm:mx-2 my-2 ${isResponse ? "p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded" : ""}`}>
+        {isResponse && (
+          <div className="text-sm font-medium text-orange-800 dark:text-orange-200 mb-2">
+            Response:
+          </div>
+        )}
         <MarkdownContent
-          className="w-full text-sm [&_p]:mb-1 [&_h1]:mb-2 [&_h1]:mt-2 [&_h2]:mb-2 [&_h2]:mt-2 [&_h3]:mb-1 [&_h3]:mt-2 [&_h4]:mb-1 [&_h4]:mt-1 [&_h5]:mb-1 [&_h5]:mt-1 [&_h6]:mb-1 [&_h6]:mt-1 [&_ul]:mb-2 [&_ol]:mb-2 [&_blockquote]:my-2 [&_pre]:my-2"
+          className={`w-full text-sm [&_p]:mb-1 [&_h1]:mb-2 [&_h1]:mt-2 [&_h2]:mb-2 [&_h2]:mt-2 [&_h3]:mb-1 [&_h3]:mt-2 [&_h4]:mb-1 [&_h4]:mt-1 [&_h5]:mb-1 [&_h5]:mt-1 [&_h6]:mb-1 [&_h6]:mt-1 [&_ul]:mb-2 [&_ol]:mb-2 [&_blockquote]:my-2 [&_pre]:my-2 ${isResponse ? "text-orange-700 dark:text-orange-300" : ""}`}
           content={content.text}
         />
       </div>

@@ -62,11 +62,13 @@ export const ConversationItem: FC<{
   getToolResult: (toolUseId: string) => ToolResultContent | undefined;
   isRootSidechain: (conversation: Conversation) => boolean;
   getSidechainConversations: (rootUuid: string) => Conversation[];
+  isResponse?: boolean;
 }> = ({
   conversation,
   getToolResult,
   isRootSidechain,
   getSidechainConversations,
+  isResponse = false,
 }) => {
   if (conversation.type === "summary") {
     return (
@@ -159,6 +161,7 @@ export const ConversationItem: FC<{
             <AssistantConversationContent
               content={content}
               getToolResult={getToolResult}
+              isResponse={isResponse && content.type === "text"}
             />
           </li>
         ))}
