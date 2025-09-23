@@ -96,11 +96,11 @@ export function playNotificationSound(soundType: NotificationSoundType) {
  */
 export function getSoundDisplayName(soundType: NotificationSoundType): string {
   const displayNames: Record<NotificationSoundType, string> = {
-    none: "なし",
-    beep: "ビープ",
-    chime: "チャイム",
-    ping: "ピン",
-    pop: "ポップ",
+    none: "None",
+    beep: "Beep",
+    chime: "Chime",
+    ping: "Ping",
+    pop: "Pop",
   };
 
   return displayNames[soundType];
