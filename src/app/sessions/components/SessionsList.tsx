@@ -26,7 +26,7 @@ export function SessionsList() {
     setIsHydrated(true);
   }, []);
 
-  const sessions = useCombinedSessions();
+  const { data: sessions } = useCombinedSessions();
   const projects = useProjects();
   const aliveTasks = useAtomValue(aliveTasksAtom);
   const [timeFilter, setTimeFilter] = useAtom(sessionTimeFilterAtom);

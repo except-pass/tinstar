@@ -16,8 +16,8 @@ export const NewChat: FC<{
   const worktreeCheckboxId = useId();
   const setAsDefaultCheckboxId = useId();
   
-  // Only fetch projects if we don't have a projectId (global mode)
-  const projects = !projectId ? useProjects() : undefined;
+  // Always fetch projects; only used in global mode (no projectId)
+  const { data: projects } = useProjects();
   
   const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>(
     projectId || config?.defaultProjectId || projects?.[0]?.id
