@@ -63,12 +63,14 @@ export const ConversationItem: FC<{
   isRootSidechain: (conversation: Conversation) => boolean;
   getSidechainConversations: (rootUuid: string) => Conversation[];
   isResponse?: boolean;
+  isInEditGroup?: boolean;
 }> = ({
   conversation,
   getToolResult,
   isRootSidechain,
   getSidechainConversations,
   isResponse = false,
+  isInEditGroup = false,
 }) => {
   if (conversation.type === "summary") {
     return (
@@ -162,6 +164,7 @@ export const ConversationItem: FC<{
               content={content}
               getToolResult={getToolResult}
               isResponse={isResponse && content.type === "text"}
+              isInEditGroup={isInEditGroup}
             />
           </li>
         ))}
