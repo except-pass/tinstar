@@ -81,7 +81,7 @@ export const UserConversationContent: FC<{
   }
 
   if (content.type === "tool_result") {
-    // ツール結果は Assistant の呼び出し側に添えるので
+    // Tool results are attached to the Assistant's calling side
     return null;
   }
 

@@ -70,7 +70,7 @@ export const NotificationSettings: FC<NotificationSettingsProps> = ({
             onValueChange={handleSoundTypeChange}
           >
             <SelectTrigger id={selectId} className="w-[180px]">
-              <SelectValue placeholder="音を選択" />
+              <SelectValue placeholder="Select sound" />
             </SelectTrigger>
             <SelectContent>
               {availableSoundTypes.map((soundType) => (
@@ -88,14 +88,14 @@ export const NotificationSettings: FC<NotificationSettingsProps> = ({
               onClick={handleTestSound}
               className="px-3"
             >
-              テスト
+              Test
             </Button>
           )}
         </div>
 
         {showDescriptions && (
           <p className="text-xs text-muted-foreground">
-            Claude Code のタスクが完了した時に再生する音を選択してください
+            Select the sound to play when Claude Code tasks are completed
           </p>
         )}
       </div>
