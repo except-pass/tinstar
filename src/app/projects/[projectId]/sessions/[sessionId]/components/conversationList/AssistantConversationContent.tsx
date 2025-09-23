@@ -1,13 +1,4 @@
-<<<<<<< HEAD
-import {
-  ChevronRight,
-  Lightbulb,
-  Map as MapIcon,
-  Settings,
-} from "lucide-react";
-=======
-import { ChevronRight, Lightbulb, Map } from "lucide-react";
->>>>>>> feat(ui): 🎨 streamline tool use display with toggleable sections
+import { ChevronRight, Lightbulb, Map as MapIcon } from "lucide-react";
 import Image from "next/image";
 import parseGitDiff from "parse-git-diff";
 import type { FC } from "react";
