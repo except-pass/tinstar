@@ -13,7 +13,6 @@ import { StatusDot } from "@/components/ui/status-dot";
 import type { Conversation } from "@/lib/conversation-schema";
 import type { ToolResultContent } from "@/lib/conversation-schema/content/ToolResultContentSchema";
 import type { AssistantMessageContent } from "@/lib/conversation-schema/message/AssistantMessageSchema";
-import type { UserMessageContent } from "@/lib/conversation-schema/message/UserMessageSchema";
 import type { ErrorJsonl } from "../../../../../../../server/service/types";
 import { useSidechain } from "../../hooks/useSidechain";
 import { ConversationItem } from "./ConversationItem";
@@ -399,7 +398,7 @@ export const ConversationList: FC<ConversationListProps> = ({
           // No user message yet, add individually
           groups.push(group);
         }
-      } else {
+      } else if (group) {
         // Other types (errors, system messages before first user, etc.)
         groups.push(group);
       }
@@ -454,7 +453,7 @@ export const ConversationList: FC<ConversationListProps> = ({
       conversations: Conversation[];
       isOngoing?: boolean;
     },
-    groupIndex: number
+    _groupIndex: number
   ) => {
     // Extract tool names and determine status from all conversations in the group
     const toolNames = new Set<string>();
@@ -680,11 +679,11 @@ export const ConversationList: FC<ConversationListProps> = ({
     let lastResponseText = "";
     for (let i = group.conversations.length - 1; i >= 0; i--) {
       const conversation = group.conversations[i];
-      if (conversation.type === "assistant") {
+      if (conversation && conversation.type === "assistant") {
         const textContent = conversation.message.content.find(
           (content: any) => content.type === "text"
         );
-        if (textContent && typeof textContent.text === "string" && textContent.text.trim()) {
+        if (textContent && textContent.type === "text" && typeof textContent.text === "string" && textContent.text.trim()) {
           lastResponseText = textContent.text.trim();
           break;
         }
@@ -695,7 +694,7 @@ export const ConversationList: FC<ConversationListProps> = ({
       <div className="w-full">
         <Collapsible
           defaultOpen={isOngoing ? shouldExpand : false}
-          onOpenChange={(open) => {
+          onOpenChange={(_open) => {
             // Track expansion state for this group to hide external response card when expanded
             if (isOngoing && responseCount > 0) {
               // This is the last group with responses - we need to manage external card visibility
@@ -739,7 +738,7 @@ export const ConversationList: FC<ConversationListProps> = ({
       isOngoing?: boolean;
       isAfterLastUser?: boolean;
     },
-    groupIndex: number
+    _groupIndex: number
   ) => {
     // Check for errors in edit tool results
     const hasErrors = false;

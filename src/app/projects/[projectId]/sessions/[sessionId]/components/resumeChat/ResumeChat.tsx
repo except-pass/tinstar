@@ -1,5 +1,5 @@
 import { Edit3, Rocket } from "lucide-react";
-import { type FC, useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
+import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import { useConfig } from "@/app/hooks/useConfig";
 import {
   ChatInput,

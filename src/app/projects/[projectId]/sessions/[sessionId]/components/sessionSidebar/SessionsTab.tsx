@@ -3,7 +3,6 @@
 import { useAtom, useAtomValue } from "jotai";
 import { MessageSquareIcon, PlusIcon } from "lucide-react";
 import Link from "next/link";
-import type { FC } from "react";
 import { useEffect, useId, useState, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";

@@ -7,7 +7,7 @@ import {
   Undo2Icon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { type FC, useState, forwardRef, useRef } from "react";
+import { useState, forwardRef } from "react";
 import { cn } from "@/lib/utils";
 import { useProject } from "../../../../hooks/useProject";
 import { McpTab } from "./McpTab";
