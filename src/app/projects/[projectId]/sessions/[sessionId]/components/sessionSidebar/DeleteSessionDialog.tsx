@@ -49,7 +49,7 @@ export function DeleteSessionDialog({
           size="sm"
           className={`p-1 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:text-destructive hover:bg-destructive/10 z-10 ${className}`}
           onClick={(e) => {
-            e.preventDefault();
+            // Prevent parent link navigation while allowing DialogTrigger to open
             e.stopPropagation();
           }}
         >
@@ -64,6 +64,10 @@ export function DeleteSessionDialog({
             session file to your .tinstar folder for recovery.
           </DialogDescription>
         </DialogHeader>
+        <div className="mt-2 text-sm text-muted-foreground">
+          <span className="">Claude session ID:</span>
+          <code className="ml-2 font-mono">{sessionId}</code>
+        </div>
         <div className="py-4">
           <p className="text-sm text-muted-foreground">
             The session will be moved to ~/.tinstar/projects/ and can be restored

@@ -1,7 +1,8 @@
 import { mkdir, rename, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { claudeProjectPath } from "../paths";
+import { decodeProjectId } from "../project/id";
 
 export interface DeleteSessionResult {
   success: boolean;
@@ -14,11 +15,14 @@ export async function deleteSession(
   sessionId: string,
 ): Promise<DeleteSessionResult> {
   const sessionFileName = `${sessionId}.jsonl`;
-  const sourcePath = resolve(claudeProjectPath, projectId, sessionFileName);
+  // projectId is a base64url-encoded full path (see encodeProjectId)
+  const decodedProjectPath = decodeProjectId(projectId);
+  const sourcePath = resolve(decodedProjectPath, sessionFileName);
   
   // Create .tinstar path - mirrors .claude structure
   const tinstarProjectPath = resolve(homedir(), ".tinstar", "projects");
-  const targetDir = resolve(tinstarProjectPath, projectId);
+  // Mirror the visible project directory name, not the encoded ID
+  const targetDir = resolve(tinstarProjectPath, basename(decodedProjectPath));
   const targetPath = resolve(targetDir, sessionFileName);
 
   try {
