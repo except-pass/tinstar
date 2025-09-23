@@ -139,7 +139,7 @@ export const routes = (app: HonoAppType) => {
             for (const session of filteredSessions) {
               allSessions.push({
                 projectId: project.id,
-                projectName: project.meta.name,
+                projectName: project.meta.projectName || project.id,
                 session,
               });
             }
