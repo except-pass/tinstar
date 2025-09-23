@@ -44,7 +44,7 @@ export async function deleteSession(
 
     return {
       success: true,
-      message: `Session ${sessionId} moved to .tinstar folder. To restore, move the file back to .claude/projects/${projectId}/`,
+      message: `Session ${sessionId} moved to .tinstar folder. To restore, move the file back to ~/.claude/projects/${basename(decodedProjectPath)}/`,
       recoveryPath: targetPath,
     };
   } catch (error) {
