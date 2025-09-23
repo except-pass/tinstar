@@ -7,12 +7,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Collapsible,
   CollapsibleContent,
@@ -131,11 +126,18 @@ export const AssistantConversationContent: FC<{
   getToolResult: (toolUseId: string) => ToolResultContent | undefined;
   isResponse?: boolean;
   isInEditGroup?: boolean;
-}> = ({ content, getToolResult, isResponse = false, isInEditGroup = false }) => {
+}> = ({
+  content,
+  getToolResult,
+  isResponse = false,
+  isInEditGroup = false,
+}) => {
   const { openInEditor } = useOpenInEditor();
   if (content.type === "text") {
     return (
-      <div className={`w-full mx-1 sm:mx-2 my-2 ${isResponse ? "p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded" : ""}`}>
+      <div
+        className={`w-full mx-1 sm:mx-2 my-2 ${isResponse ? "p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded" : ""}`}
+      >
         {isResponse && (
           <div className="text-sm font-medium text-orange-800 dark:text-orange-200 mb-2">
             Response:
@@ -194,10 +196,7 @@ export const AssistantConversationContent: FC<{
           try {
             const result = await openInEditor(filePath);
             if (!result.success) {
-              console.error(
-                "Failed to open file in editor:",
-                result.error,
-              );
+              console.error("Failed to open file in editor:", result.error);
             }
           } catch (error) {
             console.error("Error opening file in editor:", error);
@@ -239,10 +238,7 @@ export const AssistantConversationContent: FC<{
         return null;
       }
 
-      const fileDiff = convertSyntheticDiffToFileDiff(
-        syntheticDiff,
-        filePath,
-      );
+      const fileDiff = convertSyntheticDiffToFileDiff(syntheticDiff, filePath);
 
       if (!fileDiff) {
         return null;
@@ -285,7 +281,6 @@ export const AssistantConversationContent: FC<{
         </Card>
       );
     }
-
 
     // State for button-style toggles
     const [showInputs, setShowInputs] = useState(false);

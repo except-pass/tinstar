@@ -88,9 +88,9 @@ export const ConversationItem: FC<{
     );
   }
 
-  // sidechain = サブタスクのこと
+  // sidechain = subtasks
   if (conversation.isSidechain) {
-    // Root 以外はモーダルで中身を表示するのでここでは描画しない
+    // Non-root items display content in modal, so don't render here
     if (!isRootSidechain(conversation)) {
       return null;
     }
@@ -142,7 +142,7 @@ export const ConversationItem: FC<{
       );
 
     return conversation.isMeta === true ? (
-      // 展開可能にしてデフォで非展開
+      // Make expandable with default collapsed state
       <MetaConversationContent>{userConversationJsx}</MetaConversationContent>
     ) : (
       userConversationJsx
