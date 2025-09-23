@@ -597,7 +597,8 @@ export const ConversationList: FC<ConversationListProps> = ({
     const isOngoing = group.isOngoing;
 
     // Build chronological list of events (tools and responses in order)
-    const events: Array<{ type: "tool"; id: string } | { type: "response" }> = [];
+    const events: Array<{ type: "tool"; id: string } | { type: "response" }> =
+      [];
     const toolUsesWithStatus: Array<{
       id: string;
       hasError: boolean;

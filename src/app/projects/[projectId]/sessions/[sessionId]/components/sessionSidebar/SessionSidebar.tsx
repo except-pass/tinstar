@@ -15,6 +15,7 @@ import { MobileSidebar } from "./MobileSidebar";
 import { SessionsTab, type SessionsTabRef } from "./SessionsTab";
 
 export type { SessionsTabRef };
+
 import { SettingsTab } from "./SettingsTab";
 
 export const SessionSidebar = forwardRef<
