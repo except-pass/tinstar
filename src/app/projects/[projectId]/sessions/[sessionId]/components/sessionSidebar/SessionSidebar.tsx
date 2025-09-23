@@ -168,3 +168,5 @@ export const SessionSidebar = forwardRef<SessionsTabRef, {
 });
 
 SessionSidebar.displayName = 'SessionSidebar';
+
+export type { SessionsTabRef } from "./SessionsTab";

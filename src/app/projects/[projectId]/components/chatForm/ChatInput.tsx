@@ -1,5 +1,5 @@
 import { AlertCircleIcon, LoaderIcon, SendIcon } from "lucide-react";
-import { type FC, useCallback, useId, useRef, useState, forwardRef, useImperativeHandle } from "react";
+import { useCallback, useId, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import { Button } from "../../../../../components/ui/button";
 import { Textarea } from "../../../../../components/ui/textarea";
 import type { CommandCompletionRef } from "./CommandCompletion";
