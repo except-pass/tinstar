@@ -20,6 +20,7 @@ import { getDiff } from "../service/git/getDiff";
 import { getMcpList } from "../service/mcp/getMcpList";
 import { getProject } from "../service/project/getProject";
 import { getProjects } from "../service/project/getProjects";
+import { deleteSession } from "../service/session/deleteSession";
 import { getSession } from "../service/session/getSession";
 import { getSessionCwd } from "../service/session/getSessionCwd";
 import { getSessions } from "../service/session/getSessions";
@@ -243,6 +244,34 @@ export const routes = (app: HonoAppType) => {
         const { projectId, sessionId } = c.req.param();
         const { session } = await getSession(projectId, sessionId);
         return c.json({ session });
+      })
+
+      .delete("/projects/:projectId/sessions/:sessionId", async (c) => {
+        const { projectId, sessionId } = c.req.param();
+        
+        try {
+          const result = await deleteSession(projectId, sessionId);
+          
+          if (result.success) {
+            return c.json({
+              success: true,
+              message: result.message,
+              recoveryPath: result.recoveryPath,
+            });
+          } else {
+            return c.json({ error: result.message }, 400);
+          }
+        } catch (error) {
+          console.error("Session deletion error:", error);
+          return c.json(
+            { 
+              error: error instanceof Error 
+                ? error.message 
+                : "Failed to delete session" 
+            }, 
+            500
+          );
+        }
       })
 
       .get("/projects/:projectId/sessions/:sessionId/cwd", async (c) => {

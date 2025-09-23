@@ -105,7 +105,8 @@ export const useServerEvents = () => {
             }
 
             if (event.data.type === "session_changed") {
-              await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+              // Sessions list lives under the project query; refresh those
+              await queryClient.invalidateQueries({ queryKey: projetsQueryConfig.queryKey });
             }
 
             if (event.data.type === "task_changed") {
