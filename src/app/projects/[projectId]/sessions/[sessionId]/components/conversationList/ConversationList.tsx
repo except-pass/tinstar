@@ -596,7 +596,8 @@ export const ConversationList: FC<ConversationListProps> = ({
     // For ongoing messages (after last user message), show dot visualization
     const isOngoing = group.isOngoing;
 
-    // Extract tool uses and their statuses for dot visualization
+    // Build chronological list of events (tools and responses in order)
+    const events: Array<{ type: "tool"; id: string } | { type: "response" }> = [];
     const toolUsesWithStatus: Array<{
       id: string;
       hasError: boolean;
@@ -607,11 +608,14 @@ export const ConversationList: FC<ConversationListProps> = ({
       if (conversation.type === "assistant") {
         conversation.message.content.forEach((content) => {
           if (content.type === "tool_use") {
+            events.push({ type: "tool", id: content.id });
             toolUsesWithStatus.push({
               id: content.id,
               hasError: false,
               hasResult: false,
             });
+          } else if (content.type === "text" && content.text?.trim()) {
+            events.push({ type: "response" });
           }
         });
       }
@@ -650,43 +654,34 @@ export const ConversationList: FC<ConversationListProps> = ({
       }
     });
 
-    // Create colored dots based on tool status and add orange dots for responses
-    const dots = [];
-
-    // Add dots for tool uses
-    toolUsesWithStatus.slice(0, 10).forEach((toolUse, i) => {
-      let dotColor;
-      if (!toolUse.hasResult) {
-        // No result yet - blue (ongoing)
-        dotColor = "bg-blue-600 dark:bg-blue-400";
-      } else if (toolUse.hasError) {
-        // Error - red
-        dotColor = "bg-red-600 dark:bg-red-400";
+    // Create dots in chronological order
+    const dots = events.slice(0, 15).map((event, i) => {
+      if (event.type === "tool") {
+        const toolUse = toolUsesWithStatus.find((t) => t.id === event.id);
+        let dotColor = "bg-blue-600 dark:bg-blue-400"; // ongoing
+        if (toolUse?.hasResult) {
+          dotColor = toolUse.hasError
+            ? "bg-red-600 dark:bg-red-400"
+            : "bg-green-600 dark:bg-green-400";
+        }
+        return (
+          <div
+            key={`event-${i}`}
+            className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`}
+          />
+        );
       } else {
-        // Success - green
-        dotColor = "bg-green-600 dark:bg-green-400";
+        // Response
+        return (
+          <div
+            key={`event-${i}`}
+            className="w-2 h-2 rounded-full flex-shrink-0 bg-orange-600 dark:bg-orange-400"
+          />
+        );
       }
-
-      dots.push(
-        <div
-          key={`tool-${i}`}
-          className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`}
-        />,
-      );
     });
 
-    // Add orange dots for responses
-    for (let i = 0; i < responseCount; i++) {
-      dots.push(
-        <div
-          key={`response-${i}`}
-          className="w-2 h-2 rounded-full flex-shrink-0 bg-orange-600 dark:bg-orange-400"
-        />,
-      );
-    }
-
-    const toolUseCount = toolUsesWithStatus.length;
-    const totalCount = toolUseCount + responseCount;
+    const totalCount = events.length;
 
     const triggerContent = (
       <div className="flex items-center gap-2">
