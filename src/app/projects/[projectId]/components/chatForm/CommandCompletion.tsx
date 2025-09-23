@@ -38,7 +38,7 @@ export const CommandCompletion = forwardRef<
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // コマンドリストを取得
+  // Fetch command list
   const { data: commandData } = useQuery({
     queryKey: ["claude-commands", projectId],
     queryFn: async () => {
@@ -52,10 +52,10 @@ export const CommandCompletion = forwardRef<
       }
       return response.json();
     },
-    staleTime: 1000 * 60 * 5, // 5分間キャッシュ
+    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
   });
 
-  // メモ化されたコマンドフィルタリング
+  // Memoized command filtering
   const { shouldShowCompletion, filteredCommands } = useMemo(() => {
     const allCommands = [
       ...(commandData?.defaultCommands || []),
@@ -73,16 +73,16 @@ export const CommandCompletion = forwardRef<
     return { shouldShowCompletion: shouldShow, filteredCommands: filtered };
   }, [commandData, inputValue]);
 
-  // 表示状態の導出（useEffectを削除）
+  // Derive display state (removed useEffect)
   const shouldBeOpen = shouldShowCompletion && filteredCommands.length > 0;
 
-  // 状態が変更された時のリセット処理
+  // Reset handling when state changes
   if (isOpen !== shouldBeOpen) {
     setIsOpen(shouldBeOpen);
     setSelectedIndex(-1);
   }
 
-  // メモ化されたコマンド選択処理
+  // Memoized command selection handling
   const handleCommandSelect = useCallback(
     (command: string) => {
       onCommandSelect(`/${command} `);
@@ -92,10 +92,10 @@ export const CommandCompletion = forwardRef<
     [onCommandSelect],
   );
 
-  // スクロール処理
+  // Scroll handling
   const scrollToSelected = useCallback((index: number) => {
     if (index >= 0 && listRef.current) {
-      // ボタン要素を直接検索
+      // Search for button elements directly
       const buttons = listRef.current.querySelectorAll('button[role="option"]');
       const selectedButton = buttons[index] as HTMLElement;
       if (selectedButton) {
@@ -107,7 +107,7 @@ export const CommandCompletion = forwardRef<
     }
   }, []);
 
-  // メモ化されたキーボードナビゲーション処理
+  // Memoized keyboard navigation handling
   const handleKeyboardNavigation = useCallback(
     (e: React.KeyboardEvent): boolean => {
       if (!isOpen || filteredCommands.length === 0) return false;
@@ -117,7 +117,7 @@ export const CommandCompletion = forwardRef<
           e.preventDefault();
           setSelectedIndex((prev) => {
             const newIndex = prev < filteredCommands.length - 1 ? prev + 1 : 0;
-            // スクロールを次のフレームで実行
+            // Execute scroll on next frame
             requestAnimationFrame(() => scrollToSelected(newIndex));
             return newIndex;
           });
@@ -126,7 +126,7 @@ export const CommandCompletion = forwardRef<
           e.preventDefault();
           setSelectedIndex((prev) => {
             const newIndex = prev > 0 ? prev - 1 : filteredCommands.length - 1;
-            // スクロールを次のフレームで実行
+            // Execute scroll on next frame
             requestAnimationFrame(() => scrollToSelected(newIndex));
             return newIndex;
           });
@@ -160,7 +160,7 @@ export const CommandCompletion = forwardRef<
     ],
   );
 
-  // 外部クリック処理をuseEffectで設定
+  // Set up outside click handling with useEffect
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (
@@ -176,7 +176,7 @@ export const CommandCompletion = forwardRef<
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // useImperativeHandleでキーボードハンドラーを公開
+  // Expose keyboard handler with useImperativeHandle
   useImperativeHandle(
     ref,
     () => ({

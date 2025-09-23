@@ -162,7 +162,7 @@ export class ClaudeCodeTaskController {
             });
           }
 
-          // 初回の system message だとまだ history ファイルが作成されていないので
+          // History file is not yet created for the initial system message
           if (
             (message.type === "user" || message.type === "assistant") &&
             message.uuid !== undefined

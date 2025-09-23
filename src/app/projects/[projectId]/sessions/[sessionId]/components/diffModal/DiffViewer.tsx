@@ -27,9 +27,9 @@ interface DiffHunkProps {
 const DiffHunkComponent: FC<DiffHunkProps> = ({ hunk }) => {
   return (
     <div className="relative flex overflow-x-auto">
-      {/* 行番号列（固定） */}
+      {/* Line number column (fixed) */}
       <div className="flex-shrink-0 sticky left-0 z-10 bg-white dark:bg-gray-900">
-        {/* 旧行番号列 */}
+        {/* Old line number column */}
         <div className="float-left w-10 bg-gray-50 dark:bg-gray-800/50 border-r border-gray-200 dark:border-gray-700">
           {hunk.lines.map((line, index) => (
             <div
@@ -44,7 +44,7 @@ const DiffHunkComponent: FC<DiffHunkProps> = ({ hunk }) => {
             </div>
           ))}
         </div>
-        {/* 新行番号列 */}
+        {/* New line number column */}
         <div className="float-left w-10 bg-gray-50 dark:bg-gray-800/50 border-r border-gray-200 dark:border-gray-700">
           {hunk.lines.map((line, index) => (
             <div
@@ -61,7 +61,7 @@ const DiffHunkComponent: FC<DiffHunkProps> = ({ hunk }) => {
         </div>
       </div>
 
-      {/* コンテンツ列（スクロール可能） */}
+      {/* Content column (scrollable) */}
       <div className="flex-1 min-w-0">
         {hunk.lines.map((line, index) => (
           <div
@@ -143,10 +143,10 @@ const FileHeader: FC<FileHeaderProps> = ({
     e.stopPropagation();
     try {
       await navigator.clipboard.writeText(fileDiff.filename);
-      toast.success("ファイル名をコピーしました");
+      toast.success("Filename copied");
     } catch (err) {
       console.error("Failed to copy filename:", err);
-      toast.error("ファイル名のコピーに失敗しました");
+      toast.error("Failed to copy filename");
     }
   };
 

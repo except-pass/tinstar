@@ -15,7 +15,7 @@ export const BaseEntrySchema = z.object({
 
   // optional
   isMeta: z.boolean().optional(),
-  toolUseResult: z.unknown().optional(), // スキーマがツールごとに異なりすぎるし利用もしなそうなので unknown
+  toolUseResult: z.unknown().optional(), // Schema varies too much per tool and unlikely to be used, so using unknown
   gitBranch: z.string().optional(),
   isCompactSummary: z.boolean().optional(),
 });
