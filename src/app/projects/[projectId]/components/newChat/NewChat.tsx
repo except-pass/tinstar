@@ -3,23 +3,42 @@ import { type FC, useId, useState } from "react";
 import { useConfig } from "@/app/hooks/useConfig";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ModelBadge } from "@/components/ui/model-selector";
+import { ProjectSelector } from "@/components/ui/project-selector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useProjects } from "@/app/projects/hooks/useProjects";
 import { ChatInput, useNewChatMutation } from "../chatForm";
 
 export const NewChat: FC<{
-  projectId: string;
+  projectId?: string; // Made optional to support global modal
   onSuccess?: () => void;
 }> = ({ projectId, onSuccess }) => {
   const { config } = useConfig();
   const worktreeCheckboxId = useId();
+  const setAsDefaultCheckboxId = useId();
+  
+  // Only fetch projects if we don't have a projectId (global mode)
+  const projects = !projectId ? useProjects() : undefined;
+  
+  const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>(
+    projectId || config?.defaultProjectId || projects?.[0]?.id
+  );
   const [createWorktree, setCreateWorktree] = useState(false);
   const [planMode, setPlanMode] = useState(config?.defaultPlanMode ?? true);
+  const [setAsDefault, setSetAsDefault] = useState(false);
   const [model] = useState<string | undefined>(
     config?.defaultModel || "default",
   );
-  const startNewChat = useNewChatMutation(projectId, onSuccess);
+  
+  const finalProjectId = projectId || selectedProjectId;
+  const startNewChat = useNewChatMutation(finalProjectId, onSuccess);
 
   const handleSubmit = async (message: string) => {
+    // Update default project if requested and in global mode
+    if (!projectId && setAsDefault && selectedProjectId) {
+      // TODO: Add mutation to update config with defaultProjectId
+      // This would require adding a config update hook
+    }
+    
     await startNewChat.mutateAsync({
       message,
       createWorktree,
@@ -30,6 +49,40 @@ export const NewChat: FC<{
 
   return (
     <div className="space-y-4">
+      {/* Project Selection - only show in global mode */}
+      {!projectId && projects && (
+        <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Project</label>
+            <ProjectSelector
+              projects={projects}
+              value={selectedProjectId}
+              onValueChange={setSelectedProjectId}
+              placeholder="Select a project..."
+              className="w-full"
+            />
+          </div>
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id={setAsDefaultCheckboxId}
+              checked={setAsDefault}
+              onCheckedChange={(checked) => {
+                if (typeof checked === "boolean") {
+                  setSetAsDefault(checked);
+                }
+              }}
+              disabled={startNewChat.isPending}
+            />
+            <label
+              htmlFor={setAsDefaultCheckboxId}
+              className="text-sm leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+            >
+              Set as default project
+            </label>
+          </div>
+        </div>
+      )}
+
       <Tabs
         value={planMode ? "plan" : "code"}
         onValueChange={(value) => setPlanMode(value === "plan")}
@@ -92,9 +145,9 @@ export const NewChat: FC<{
       </div>
 
       <ChatInput
-        projectId={projectId}
+        projectId={finalProjectId}
         onSubmit={handleSubmit}
-        isPending={startNewChat.isPending}
+        isPending={startNewChat.isPending || (!projectId && !selectedProjectId)}
         error={startNewChat.error}
         placeholder={
           planMode

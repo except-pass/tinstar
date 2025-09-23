@@ -57,6 +57,108 @@ export const routes = (app: HonoAppType) => {
         return c.json({ projects });
       })
 
+      .get("/sessions/all", async (c) => {
+        const { projects } = await getProjects();
+        const config = c.get("config");
+        
+        const allSessions: Array<{
+          projectId: string;
+          projectName: string;
+          session: Awaited<ReturnType<typeof getSessions>>["sessions"][0];
+        }> = [];
+
+        for (const project of projects) {
+          try {
+            const { sessions } = await getSessions(project.id);
+            let filteredSessions = sessions;
+
+            // Filter sessions based on hideNoUserMessageSession setting
+            if (config.hideNoUserMessageSession) {
+              filteredSessions = filteredSessions.filter((session) => {
+                return session.meta.firstCommand !== null;
+              });
+            }
+
+            // Unify sessions with same title if unifySameTitleSession is enabled
+            if (config.unifySameTitleSession) {
+              const sessionMap = new Map<
+                string,
+                (typeof filteredSessions)[0]
+              >();
+
+              for (const session of filteredSessions) {
+                // Generate title for comparison
+                const title =
+                  session.meta.firstCommand !== null
+                    ? (() => {
+                        const cmd = session.meta.firstCommand;
+                        switch (cmd.kind) {
+                          case "command":
+                            return cmd.commandArgs === undefined
+                              ? cmd.commandName
+                              : `${cmd.commandName} ${cmd.commandArgs}`;
+                          case "local-command":
+                            return cmd.stdout;
+                          case "text":
+                            return cmd.content;
+                          default:
+                            return session.id;
+                        }
+                      })()
+                    : session.id;
+
+                const existingSession = sessionMap.get(title);
+                if (existingSession) {
+                  // Keep the session with the latest modification date
+                  if (
+                    session.meta.lastModifiedAt &&
+                    existingSession.meta.lastModifiedAt
+                  ) {
+                    if (
+                      new Date(session.meta.lastModifiedAt) >
+                      new Date(existingSession.meta.lastModifiedAt)
+                    ) {
+                      sessionMap.set(title, session);
+                    }
+                  } else if (
+                    session.meta.lastModifiedAt &&
+                    !existingSession.meta.lastModifiedAt
+                  ) {
+                    sessionMap.set(title, session);
+                  }
+                  // If no modification dates, keep the existing one
+                } else {
+                  sessionMap.set(title, session);
+                }
+              }
+
+              filteredSessions = Array.from(sessionMap.values());
+            }
+
+            // Add each session with project context
+            for (const session of filteredSessions) {
+              allSessions.push({
+                projectId: project.id,
+                projectName: project.meta.name,
+                session,
+              });
+            }
+          } catch (error) {
+            console.error(`Failed to get sessions for project ${project.id}:`, error);
+            // Continue with other projects
+          }
+        }
+
+        // Sort by last modified date, most recent first
+        allSessions.sort((a, b) => {
+          const aDate = a.session.meta.lastModifiedAt ? new Date(a.session.meta.lastModifiedAt) : new Date(0);
+          const bDate = b.session.meta.lastModifiedAt ? new Date(b.session.meta.lastModifiedAt) : new Date(0);
+          return bDate.getTime() - aDate.getTime();
+        });
+
+        return c.json({ sessions: allSessions });
+      })
+
       .get("/projects/:projectId", async (c) => {
         const { projectId } = c.req.param();
 
