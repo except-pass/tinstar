@@ -86,9 +86,10 @@ export const useServerEvents = () => {
 
       // Process complete events (separated by \n\n)
       const eventBoundary = "\n\n";
-      let boundaryIndex;
+      let boundaryIndex: number;
 
-      while ((boundaryIndex = buffer.indexOf(eventBoundary)) !== -1) {
+      boundaryIndex = buffer.indexOf(eventBoundary);
+      while (boundaryIndex !== -1) {
         const eventText = buffer.slice(0, boundaryIndex);
         buffer = buffer.slice(boundaryIndex + eventBoundary.length);
 
@@ -119,6 +120,7 @@ export const useServerEvents = () => {
             );
           }
         }
+        boundaryIndex = buffer.indexOf(eventBoundary);
       }
     }
   }, [queryClient, setAliveTasks]);

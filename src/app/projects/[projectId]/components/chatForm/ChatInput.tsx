@@ -75,12 +75,15 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
       return;
     }
 
-    const shouldSend = e.key === "Enter" && (
-      (sendKeys.includes("enter") && !e.shiftKey && !e.ctrlKey && !e.metaKey) ||
-      (sendKeys.includes("shift") && e.shiftKey) ||
-      (sendKeys.includes("ctrl") && e.ctrlKey) ||
-      (sendKeys.includes("cmd") && e.metaKey)
-    );
+    const shouldSend =
+      e.key === "Enter" &&
+      ((sendKeys.includes("enter") &&
+        !e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey) ||
+        (sendKeys.includes("shift") && e.shiftKey) ||
+        (sendKeys.includes("ctrl") && e.ctrlKey) ||
+        (sendKeys.includes("cmd") && e.metaKey));
 
     if (shouldSend) {
       e.preventDefault();
@@ -215,8 +218,14 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
               if (sendKeys.includes("enter")) combinations.push("Enter");
               if (sendKeys.includes("shift")) combinations.push("Shift+Enter");
               if (sendKeys.includes("ctrl")) combinations.push("Ctrl+Enter");
-              if (sendKeys.includes("cmd") && navigator.platform.includes("Mac")) combinations.push("Cmd+Enter");
-              return combinations.length > 0 ? `${combinations.join("/")} to send` : "No send keys configured";
+              if (
+                sendKeys.includes("cmd") &&
+                navigator.platform.includes("Mac")
+              )
+                combinations.push("Cmd+Enter");
+              return combinations.length > 0
+                ? `${combinations.join("/")} to send`
+                : "No send keys configured";
             })()}
           </span>
 

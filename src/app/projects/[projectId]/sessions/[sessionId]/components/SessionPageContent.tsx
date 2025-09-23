@@ -1,30 +1,24 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
 import {
+  CodeIcon,
   CopyIcon,
   GitCompareIcon,
-  LoaderIcon,
-  MenuIcon,
-  PauseIcon,
-  XIcon,
-  CodeIcon,
   InfoIcon,
+  MenuIcon,
 } from "lucide-react";
 import type { FC } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useConfig } from "@/app/hooks/useConfig";
 import { useSetPermissionModeMutation } from "@/app/projects/[projectId]/components/chatForm/useChatMutations";
-import { useProject } from "@/app/projects/[projectId]/hooks/useProject";
 import { firstCommandToTitle } from "@/app/projects/[projectId]/services/firstCommandToTitle";
 import { Button } from "@/components/ui/button";
-import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { ModeBadge } from "@/components/ui/mode-badge";
 import { ModelBadge } from "@/components/ui/model-selector";
 import { WorktreeBadge } from "@/components/ui/worktree-badge";
+import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { useTaskNotifications } from "@/hooks/useTaskNotifications";
-import { useConfig } from "@/app/hooks/useConfig";
-import { honoClient } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 import { isWorktreeSession } from "@/lib/worktree-utils";
 import { useAliveTask } from "../hooks/useAliveTask";
@@ -45,25 +39,11 @@ export const SessionPageContent: FC<{
     projectId,
     sessionId,
   );
-  const { data: project } = useProject(projectId);
-  project; // Used in worktree detection below
+  // Project data is fetched but not directly used in this component
+  // It's needed for cache warming and worktree detection in child components
   const { data: sessionCwd } = useSessionCwd(projectId, sessionId);
   const { openInEditor } = useOpenInEditor();
   const { config } = useConfig();
-
-  const abortTask = useMutation({
-    mutationFn: async (sessionId: string) => {
-      const response = await honoClient.api.tasks.abort.$post({
-        json: { sessionId },
-      });
-
-      if (!response.ok) {
-        throw new Error(response.statusText);
-      }
-
-      return response.json();
-    },
-  });
 
   const { isRunningTask, isPausedTask, currentPermissionMode, aliveTask } =
     useAliveTask(sessionId);
@@ -83,10 +63,10 @@ export const SessionPageContent: FC<{
     if (aliveTask?.model) {
       return aliveTask.model;
     }
-    
+
     // Otherwise use the default model from config
     const defaultModel = config?.defaultModel || "default";
-    
+
     // If using opusplan, determine the actual model based on permission mode
     if (defaultModel === "opusplan") {
       // In plan mode, opusplan uses opus for planning
@@ -96,7 +76,7 @@ export const SessionPageContent: FC<{
       // In other modes, opusplan uses sonnet for execution
       return "sonnet";
     }
-    
+
     // For other models, return as-is
     return defaultModel;
   }, [aliveTask?.model, config?.defaultModel, displayPermissionMode]);
@@ -211,16 +191,16 @@ export const SessionPageContent: FC<{
   }, []);
 
   // Utility functions for scroll detection
-  const isAtBottom = () => {
+  const isAtBottom = useCallback(() => {
     const scrollContainer = scrollContainerRef.current;
     if (!scrollContainer) return false;
     return (
       scrollContainer.scrollTop + scrollContainer.clientHeight >=
       scrollContainer.scrollHeight - 10
     );
-  };
+  }, []);
 
-  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const scrollContainer = scrollContainerRef.current;
     if (scrollContainer) {
       scrollContainer.scrollTo({
@@ -228,7 +208,7 @@ export const SessionPageContent: FC<{
         behavior,
       });
     }
-  };
+  }, []);
 
   // Scroll event listener to detect user scroll behavior
   useEffect(() => {
@@ -403,6 +383,7 @@ export const SessionPageContent: FC<{
                   Auto-scroll
                 </span>
                 <button
+                  type="button"
                   onClick={() => {
                     if (!isAutoScrollEnabled) {
                       setIsAutoScrollEnabled(true);
@@ -459,7 +440,6 @@ export const SessionPageContent: FC<{
                 />
               )}
             </div>
-
           </div>
         </header>
 

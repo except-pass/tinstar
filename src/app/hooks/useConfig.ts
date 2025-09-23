@@ -31,14 +31,21 @@ export const useConfig = () => {
     onMutate: async (newConfig: Config) => {
       // Optimistically update the cache immediately
       await queryClient.cancelQueries({ queryKey: configQueryConfig.queryKey });
-      const previousConfig = queryClient.getQueryData(configQueryConfig.queryKey);
-      queryClient.setQueryData(configQueryConfig.queryKey, { config: newConfig });
+      const previousConfig = queryClient.getQueryData(
+        configQueryConfig.queryKey,
+      );
+      queryClient.setQueryData(configQueryConfig.queryKey, {
+        config: newConfig,
+      });
       return { previousConfig };
     },
     onError: (_err, _newConfig, context) => {
       // Rollback on error
       if (context?.previousConfig) {
-        queryClient.setQueryData(configQueryConfig.queryKey, context.previousConfig);
+        queryClient.setQueryData(
+          configQueryConfig.queryKey,
+          context.previousConfig,
+        );
       }
     },
     onSettled: () => {

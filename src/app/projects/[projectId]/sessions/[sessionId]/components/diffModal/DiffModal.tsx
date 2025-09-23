@@ -25,9 +25,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { WorktreeBadge } from "@/components/ui/worktree-badge";
+import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { cn } from "@/lib/utils";
 import { isWorktreeSession } from "@/lib/worktree";
-import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import {
   useGitBranches,
   useGitCommit,
@@ -153,6 +153,7 @@ export const DiffModal: FC<DiffModalProps> = ({
   const [compareTo, setCompareTo] = useState(defaultCompareTo);
   const [showCommitInput, setShowCommitInput] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
+  const commitMessageId = useId();
   const { openInEditor } = useOpenInEditor();
 
   // Since we're in a session route, we always have sessionId from route params
@@ -403,13 +404,13 @@ export const DiffModal: FC<DiffModalProps> = ({
               <form onSubmit={handleCommitSubmit} className="space-y-3">
                 <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
                   <label
-                    htmlFor="commit-message"
+                    htmlFor={commitMessageId}
                     className="text-sm font-medium text-blue-900 dark:text-blue-100 block mb-2"
                   >
                     Commit Message
                   </label>
                   <Input
-                    id="commit-message"
+                    id={commitMessageId}
                     type="text"
                     value={commitMessage}
                     onChange={(e) => setCommitMessage(e.target.value)}

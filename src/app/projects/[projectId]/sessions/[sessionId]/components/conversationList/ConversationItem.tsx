@@ -18,7 +18,7 @@ const getUserContentKey = (
   }
 
   if (content && typeof content === "object" && "type" in content) {
-    const c = content as any;
+    const c = content as { type: string; tool_use_id?: string };
     if (c.type === "tool_result") {
       return `user_${conversationUuid}_tool_result_${c.tool_use_id}_${index}`;
     }
@@ -39,7 +39,7 @@ const getAssistantContentKey = (
   conversationUuid: string,
 ) => {
   if (content && typeof content === "object" && "type" in content) {
-    const c = content as any;
+    const c = content as { type: string; id?: string; tool_use_id?: string };
     if (c.type === "tool_use") {
       return `assistant_${conversationUuid}_tool_use_${c.id}`;
     }

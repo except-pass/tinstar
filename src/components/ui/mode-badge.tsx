@@ -1,4 +1,4 @@
-import { Code, Map } from "lucide-react";
+import { Code, Map as MapIcon } from "lucide-react";
 import type { FC } from "react";
 import { cn } from "@/lib/utils";
 import { Badge } from "./badge";
@@ -48,7 +48,7 @@ export const ModeBadge: FC<ModeBadgeProps> = ({
     >
       {isPlanMode ? (
         <>
-          <Map className="w-3 h-3" />
+          <MapIcon className="w-3 h-3" />
           <span>Plan Mode</span>
         </>
       ) : (

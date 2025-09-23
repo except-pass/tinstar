@@ -1,12 +1,12 @@
 import { Edit3, Rocket } from "lucide-react";
-import { type FC, useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
+import { type FC, useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
+import { useConfig } from "@/app/hooks/useConfig";
 import {
   ChatInput,
   useResumeChatMutation,
   type ChatInputRef,
 } from "@/app/projects/[projectId]/components/chatForm";
 import { useSetPermissionModeMutation } from "@/app/projects/[projectId]/components/chatForm/useChatMutations";
-import { useConfig } from "@/app/hooks/useConfig";
 import { Button } from "@/components/ui/button";
 import type { PermissionMode } from "@/server/service/claude-code/types";
 
@@ -73,7 +73,7 @@ export const ResumeChat = forwardRef<ResumeChatRef, {
   const letsGoButtonRef = useRef<HTMLButtonElement>(null);
   const modifyButtonRef = useRef<HTMLButtonElement>(null);
 
-  const handleLetsGo = async () => {
+  const handleLetsGo = useCallback(async () => {
     try {
       // Set permission mode to acceptEdits/code mode
       await setPermissionMode.mutateAsync("acceptEdits");
@@ -83,9 +83,9 @@ export const ResumeChat = forwardRef<ResumeChatRef, {
     } catch (error) {
       console.error("Failed to switch permission mode:", error);
     }
-  };
+  }, [setPermissionMode, resumeChat]);
 
-  const handleModifyPlan = async () => {
+  const handleModifyPlan = useCallback(async () => {
     try {
       // Set permission mode to plan mode
       await setPermissionMode.mutateAsync("plan");
@@ -95,7 +95,7 @@ export const ResumeChat = forwardRef<ResumeChatRef, {
     } catch (error) {
       console.error("Failed to switch to plan mode:", error);
     }
-  };
+  }, [setPermissionMode]);
   // Auto-focus the first button when plan approval is shown
   useEffect(() => {
     if (showPlanApproval && plan) {

@@ -204,9 +204,10 @@ const FileHeader: FC<FileHeaderProps> = ({
                 size="sm"
                 className="p-1 h-6 w-6 hover:bg-gray-200 dark:hover:bg-gray-600"
               >
-                <span role="button" aria-label="Edit file">
-                  <EditIcon className="w-3 h-3 text-gray-500 dark:text-gray-400" />
-                </span>
+                <EditIcon
+                  className="w-3 h-3 text-gray-500 dark:text-gray-400"
+                  aria-label="Edit file"
+                />
               </Button>
             )}
             <Button
@@ -216,9 +217,10 @@ const FileHeader: FC<FileHeaderProps> = ({
               size="sm"
               className="p-1 h-6 w-6 hover:bg-gray-200 dark:hover:bg-gray-600"
             >
-              <span role="button" aria-label="Copy filename">
-                <CopyIcon className="w-3 h-3 text-gray-500 dark:text-gray-400" />
-              </span>
+              <CopyIcon
+                className="w-3 h-3 text-gray-500 dark:text-gray-400"
+                aria-label="Copy filename"
+              />
             </Button>
           </div>
         </div>

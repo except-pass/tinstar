@@ -8,7 +8,7 @@ export const parseJsonl = (content: string) => {
     .filter((line) => line.trim() !== "");
 
   return lines.map((line) => {
-    let jsonData;
+    let jsonData: unknown;
     try {
       jsonData = JSON.parse(line);
     } catch (_error) {
@@ -24,7 +24,7 @@ export const parseJsonl = (content: string) => {
     if (!parsed.success) {
       console.warn(
         "Failed to parse jsonl, skipping. Entry type:",
-        jsonData.type,
+        (jsonData as { type?: unknown }).type,
         "Error:",
         parsed.error.message,
       );
