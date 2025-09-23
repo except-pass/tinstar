@@ -154,7 +154,7 @@ export const AssistantConversationContent: FC<{
       <Card className="bg-muted/50 border-dashed gap-2 py-3 mb-2">
         <Collapsible>
           <CollapsibleTrigger asChild>
-            <CardHeader className="cursor-pointer hover:bg-muted/80 rounded-t-lg transition-colors py-0 px-4">
+            <CardHeader className="cursor-pointer hover:bg-muted/80 rounded-t-lg transition-colors py-0 px-4 group">
               <div className="flex items-center gap-2">
                 <Lightbulb className="h-4 w-4 text-muted-foreground" />
                 <CardTitle className="text-sm font-medium">Thinking</CardTitle>
@@ -348,12 +348,24 @@ export const AssistantConversationContent: FC<{
 
         {showOutputs && toolResult && (
           <div className="bg-background rounded border p-2">
-            {typeof toolResult.content === "string" ? (
-              <pre className="text-xs overflow-x-auto whitespace-pre-wrap break-words">
-                {toolResult.content}
-              </pre>
-            ) : (
-              toolResult.content.map((item) => {
+            {(() => {
+              const c = toolResult.content;
+              // Handle string content
+              if (typeof c === "string") {
+                const trimmed = c.trim();
+                return (
+                  <pre className="text-xs overflow-x-auto whitespace-pre-wrap break-words">
+                    {trimmed.length === 0 ? "<no output>" : c}
+                  </pre>
+                );
+              }
+              // Handle array content
+              if (Array.isArray(c) && c.length === 0) {
+                return (
+                  <pre className="text-xs overflow-x-auto whitespace-pre-wrap break-words">{`<no output>`}</pre>
+                );
+              }
+              return c.map((item) => {
                 if (item.type === "image") {
                   return (
                     <Image
@@ -364,19 +376,20 @@ export const AssistantConversationContent: FC<{
                   );
                 }
                 if (item.type === "text") {
+                  const textTrimmed = item.text.trim();
                   return (
                     <pre
                       key={item.text}
                       className="text-xs overflow-x-auto whitespace-pre-wrap break-words"
                     >
-                      {item.text}
+                      {textTrimmed.length === 0 ? "<no output>" : item.text}
                     </pre>
                   );
                 }
                 item satisfies never;
                 throw new Error("Unexpected tool result content type");
-              })
-            )}
+              });
+            })()}
           </div>
         )}
       </div>

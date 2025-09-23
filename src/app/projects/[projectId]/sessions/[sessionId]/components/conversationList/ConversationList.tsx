@@ -646,7 +646,7 @@ export const ConversationList: FC<ConversationListProps> = ({
 
     const triggerContent = (
       <div className="flex items-center gap-2">
-        <ChevronRight className="h-4 w-4 text-green-600 dark:text-green-400 transition-transform data-[state=open]:rotate-90" />
+        <ChevronRight className="h-4 w-4 text-green-600 dark:text-green-400 transition-transform group-data-[state=open]:rotate-90" />
         <div className="flex items-center gap-0.5">{dots}</div>
         <span className="text-sm font-medium text-green-600 dark:text-green-400 ml-1">
           ({totalCount})
@@ -768,8 +768,8 @@ export const ConversationList: FC<ConversationListProps> = ({
         <Collapsible defaultOpen={true}>
           <CollapsibleTrigger asChild>
             <div className="flex items-center cursor-pointer hover:bg-muted/50 rounded p-2 -mx-2 mb-2">
-              <div className="flex items-center gap-2">
-                <ChevronRight className="h-4 w-4 text-green-600 dark:text-green-400 transition-transform data-[state=open]:rotate-90" />
+            <div className="flex items-center gap-2">
+              <ChevronRight className="h-4 w-4 text-green-600 dark:text-green-400 transition-transform group-data-[state=open]:rotate-90" />
                 <StatusDot
                   status={hasErrors ? "error" : "success"}
                   className=""
