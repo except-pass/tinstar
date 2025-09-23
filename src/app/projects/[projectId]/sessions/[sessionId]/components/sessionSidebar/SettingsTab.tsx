@@ -142,6 +142,36 @@ export const SettingsTab: FC<{
           </div>
         </div>
 
+        {/* Keyboard Shortcuts */}
+        <div className="space-y-4">
+          <h3 className="font-medium text-sm text-sidebar-foreground">
+            Keyboard Shortcuts
+          </h3>
+
+          <div className="space-y-2 text-xs text-sidebar-foreground/70">
+            <div className="flex justify-between">
+              <span><kbd className="px-1.5 py-0.5 bg-sidebar-border/40 rounded text-xs">j</kbd> / <kbd className="px-1.5 py-0.5 bg-sidebar-border/40 rounded text-xs">k</kbd></span>
+              <span>Navigate sessions up/down</span>
+            </div>
+            <div className="flex justify-between">
+              <span><kbd className="px-1.5 py-0.5 bg-sidebar-border/40 rounded text-xs">↑</kbd> / <kbd className="px-1.5 py-0.5 bg-sidebar-border/40 rounded text-xs">↓</kbd></span>
+              <span>Navigate sessions up/down</span>
+            </div>
+            <div className="flex justify-between">
+              <span><kbd className="px-1.5 py-0.5 bg-sidebar-border/40 rounded text-xs">c</kbd></span>
+              <span>Create new session</span>
+            </div>
+            <div className="flex justify-between">
+              <span><kbd className="px-1.5 py-0.5 bg-sidebar-border/40 rounded text-xs">o</kbd></span>
+              <span>Open in code editor</span>
+            </div>
+            <div className="flex justify-between">
+              <span><kbd className="px-1.5 py-0.5 bg-sidebar-border/40 rounded text-xs">f</kbd></span>
+              <span>Focus input area</span>
+            </div>
+          </div>
+        </div>
+
         {/* Notification Settings */}
         <div className="space-y-4">
           <h3 className="font-medium text-sm text-sidebar-foreground">
