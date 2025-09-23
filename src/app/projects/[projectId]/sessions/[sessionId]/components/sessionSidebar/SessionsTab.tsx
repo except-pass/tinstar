@@ -166,7 +166,7 @@ export const SessionsTab = forwardRef<
         // The SSE system will handle updating the sessions list
       } else {
         const error = await response.json();
-        toast.error(error.error || "Failed to delete session");
+        toast.error("error" in error ? error.error : "Failed to delete session");
       }
     } catch (error) {
       console.error("Delete session error:", error);
