@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { ModeBadge } from "@/components/ui/mode-badge";
 import { ModelBadge } from "@/components/ui/model-selector";
 import { WorktreeBadge } from "@/components/ui/worktree-badge";
+import { useGlobalKeyboardShortcuts } from "@/hooks/useGlobalKeyboardShortcuts";
 import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { useTaskNotifications } from "@/hooks/useTaskNotifications";
 import { cn } from "@/lib/utils";
@@ -24,12 +25,14 @@ import { isWorktreeSession } from "@/lib/worktree-utils";
 import { useAliveTask } from "../hooks/useAliveTask";
 import { useSession } from "../hooks/useSession";
 import { useSessionCwd } from "../hooks/useSessionCwd";
-import { useGlobalKeyboardShortcuts } from "@/hooks/useGlobalKeyboardShortcuts";
 import { useSessionPermissionMode } from "../hooks/useSessionPermissionMode";
 import { ConversationList } from "./conversationList/ConversationList";
 import { DiffModal } from "./diffModal";
 import { ResumeChat, type ResumeChatRef } from "./resumeChat/ResumeChat";
-import { SessionSidebar, type SessionsTabRef } from "./sessionSidebar/SessionSidebar";
+import {
+  SessionSidebar,
+  type SessionsTabRef,
+} from "./sessionSidebar/SessionSidebar";
 
 export const SessionPageContent: FC<{
   projectId: string;
@@ -149,7 +152,7 @@ export const SessionPageContent: FC<{
     },
     onBlurInput: () => {
       resumeChatRef.current?.blurInput();
-    }
+    },
   });
 
   // Copy resume command to clipboard

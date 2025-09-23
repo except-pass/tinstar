@@ -1,5 +1,12 @@
 import { AlertCircleIcon, LoaderIcon, SendIcon } from "lucide-react";
-import { type FC, useCallback, useId, useRef, useState, forwardRef, useImperativeHandle } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useId,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import { Button } from "../../../../../components/ui/button";
 import { Textarea } from "../../../../../components/ui/textarea";
 import type { CommandCompletionRef } from "./CommandCompletion";
@@ -25,232 +32,242 @@ export interface ChatInputRef {
   blur: () => void;
 }
 
-export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(({
-  projectId,
-  onSubmit,
-  isPending,
-  error,
-  placeholder,
-  buttonText,
-  minHeight = "min-h-[100px]",
-  containerClassName = "",
-  disabled = false,
-  buttonSize = "lg",
-  sendKeys = ["ctrl", "cmd"],
-}, ref) => {
-  const [message, setMessage] = useState("");
-  const [cursorPosition, setCursorPosition] = useState<{
-    relative: { top: number; left: number };
-    absolute: { top: number; left: number };
-  }>({ relative: { top: 0, left: 0 }, absolute: { top: 0, left: 0 } });
-
-  const containerRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const commandCompletionRef = useRef<CommandCompletionRef>(null);
-  const fileCompletionRef = useRef<FileCompletionRef>(null);
-  const helpId = useId();
-
-  // Expose focus and blur methods through ref
-  useImperativeHandle(ref, () => ({
-    focus: () => {
-      textareaRef.current?.focus();
+export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
+  (
+    {
+      projectId,
+      onSubmit,
+      isPending,
+      error,
+      placeholder,
+      buttonText,
+      minHeight = "min-h-[100px]",
+      containerClassName = "",
+      disabled = false,
+      buttonSize = "lg",
+      sendKeys = ["ctrl", "cmd"],
     },
-    blur: () => {
-      textareaRef.current?.blur();
-    }
-  }), []);
+    ref,
+  ) => {
+    const [message, setMessage] = useState("");
+    const [cursorPosition, setCursorPosition] = useState<{
+      relative: { top: number; left: number };
+      absolute: { top: number; left: number };
+    }>({ relative: { top: 0, left: 0 }, absolute: { top: 0, left: 0 } });
 
-  const handleSubmit = async () => {
-    if (!message.trim()) return;
-    await onSubmit(message.trim());
-    setMessage("");
-  };
+    const containerRef = useRef<HTMLDivElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const commandCompletionRef = useRef<CommandCompletionRef>(null);
+    const fileCompletionRef = useRef<FileCompletionRef>(null);
+    const helpId = useId();
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (fileCompletionRef.current?.handleKeyDown(e)) {
-      return;
-    }
+    // Expose focus and blur methods through ref
+    useImperativeHandle(
+      ref,
+      () => ({
+        focus: () => {
+          textareaRef.current?.focus();
+        },
+        blur: () => {
+          textareaRef.current?.blur();
+        },
+      }),
+      [],
+    );
 
-    if (commandCompletionRef.current?.handleKeyDown(e)) {
-      return;
-    }
-
-    const shouldSend =
-      e.key === "Enter" &&
-      ((sendKeys.includes("enter") &&
-        !e.shiftKey &&
-        !e.ctrlKey &&
-        !e.metaKey) ||
-        (sendKeys.includes("shift") && e.shiftKey) ||
-        (sendKeys.includes("ctrl") && e.ctrlKey) ||
-        (sendKeys.includes("cmd") && e.metaKey));
-
-    if (shouldSend) {
-      e.preventDefault();
-      handleSubmit();
-    }
-  };
-
-  const getCursorPosition = useCallback(() => {
-    const textarea = textareaRef.current;
-    const container = containerRef.current;
-    if (textarea === null || container === null) return undefined;
-
-    const cursorPos = textarea.selectionStart;
-    const textBeforeCursor = textarea.value.substring(0, cursorPos);
-    const textAfterCursor = textarea.value.substring(cursorPos);
-
-    const pre = document.createTextNode(textBeforeCursor);
-    const post = document.createTextNode(textAfterCursor);
-    const caret = document.createElement("span");
-    caret.innerHTML = "&nbsp;";
-
-    const mirrored = document.createElement("div");
-
-    mirrored.innerHTML = "";
-    mirrored.append(pre, caret, post);
-
-    const textareaStyles = window.getComputedStyle(textarea);
-    for (const property of [
-      "border",
-      "boxSizing",
-      "fontFamily",
-      "fontSize",
-      "fontWeight",
-      "letterSpacing",
-      "lineHeight",
-      "padding",
-      "textDecoration",
-      "textIndent",
-      "textTransform",
-      "whiteSpace",
-      "wordSpacing",
-      "wordWrap",
-    ] as const) {
-      mirrored.style[property] = textareaStyles[property];
-    }
-
-    mirrored.style.visibility = "hidden";
-    container.prepend(mirrored);
-
-    const caretRect = caret.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-
-    container.removeChild(mirrored);
-
-    return {
-      relative: {
-        top: caretRect.top - containerRect.top - textarea.scrollTop,
-        left: caretRect.left - containerRect.left - textarea.scrollLeft,
-      },
-      absolute: {
-        top: caretRect.top - textarea.scrollTop,
-        left: caretRect.left - textarea.scrollLeft,
-      },
+    const handleSubmit = async () => {
+      if (!message.trim()) return;
+      await onSubmit(message.trim());
+      setMessage("");
     };
-  }, []);
 
-  const handleCommandSelect = (command: string) => {
-    setMessage(command);
-    textareaRef.current?.focus();
-  };
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (fileCompletionRef.current?.handleKeyDown(e)) {
+        return;
+      }
 
-  const handleFileSelect = (filePath: string) => {
-    setMessage(filePath);
-    textareaRef.current?.focus();
-  };
+      if (commandCompletionRef.current?.handleKeyDown(e)) {
+        return;
+      }
 
-  return (
-    <div className={containerClassName}>
-      {error && (
-        <div className="flex items-center gap-2 p-3 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md mb-4">
-          <AlertCircleIcon className="w-4 h-4" />
-          <span>Failed to send message. Please try again.</span>
-        </div>
-      )}
+      const shouldSend =
+        e.key === "Enter" &&
+        ((sendKeys.includes("enter") &&
+          !e.shiftKey &&
+          !e.ctrlKey &&
+          !e.metaKey) ||
+          (sendKeys.includes("shift") && e.shiftKey) ||
+          (sendKeys.includes("ctrl") && e.ctrlKey) ||
+          (sendKeys.includes("cmd") && e.metaKey));
 
-      <div className="space-y-3">
-        <div className="relative" ref={containerRef}>
-          <Textarea
-            ref={textareaRef}
-            value={message}
-            onChange={(e) => {
-              if (
-                e.target.value.endsWith("@") ||
-                e.target.value.endsWith("/")
-              ) {
-                const position = getCursorPosition();
-                if (position) {
-                  setCursorPosition(position);
+      if (shouldSend) {
+        e.preventDefault();
+        handleSubmit();
+      }
+    };
+
+    const getCursorPosition = useCallback(() => {
+      const textarea = textareaRef.current;
+      const container = containerRef.current;
+      if (textarea === null || container === null) return undefined;
+
+      const cursorPos = textarea.selectionStart;
+      const textBeforeCursor = textarea.value.substring(0, cursorPos);
+      const textAfterCursor = textarea.value.substring(cursorPos);
+
+      const pre = document.createTextNode(textBeforeCursor);
+      const post = document.createTextNode(textAfterCursor);
+      const caret = document.createElement("span");
+      caret.innerHTML = "&nbsp;";
+
+      const mirrored = document.createElement("div");
+
+      mirrored.innerHTML = "";
+      mirrored.append(pre, caret, post);
+
+      const textareaStyles = window.getComputedStyle(textarea);
+      for (const property of [
+        "border",
+        "boxSizing",
+        "fontFamily",
+        "fontSize",
+        "fontWeight",
+        "letterSpacing",
+        "lineHeight",
+        "padding",
+        "textDecoration",
+        "textIndent",
+        "textTransform",
+        "whiteSpace",
+        "wordSpacing",
+        "wordWrap",
+      ] as const) {
+        mirrored.style[property] = textareaStyles[property];
+      }
+
+      mirrored.style.visibility = "hidden";
+      container.prepend(mirrored);
+
+      const caretRect = caret.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+
+      container.removeChild(mirrored);
+
+      return {
+        relative: {
+          top: caretRect.top - containerRect.top - textarea.scrollTop,
+          left: caretRect.left - containerRect.left - textarea.scrollLeft,
+        },
+        absolute: {
+          top: caretRect.top - textarea.scrollTop,
+          left: caretRect.left - textarea.scrollLeft,
+        },
+      };
+    }, []);
+
+    const handleCommandSelect = (command: string) => {
+      setMessage(command);
+      textareaRef.current?.focus();
+    };
+
+    const handleFileSelect = (filePath: string) => {
+      setMessage(filePath);
+      textareaRef.current?.focus();
+    };
+
+    return (
+      <div className={containerClassName}>
+        {error && (
+          <div className="flex items-center gap-2 p-3 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md mb-4">
+            <AlertCircleIcon className="w-4 h-4" />
+            <span>Failed to send message. Please try again.</span>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div className="relative" ref={containerRef}>
+            <Textarea
+              ref={textareaRef}
+              value={message}
+              onChange={(e) => {
+                if (
+                  e.target.value.endsWith("@") ||
+                  e.target.value.endsWith("/")
+                ) {
+                  const position = getCursorPosition();
+                  if (position) {
+                    setCursorPosition(position);
+                  }
                 }
-              }
 
-              setMessage(e.target.value);
-            }}
-            onKeyDown={handleKeyDown}
-            placeholder={placeholder}
-            className={`${minHeight} resize-none`}
-            disabled={isPending || disabled}
-            maxLength={4000}
-            aria-label="Message input with completion support"
-            aria-describedby={helpId}
-            aria-expanded={message.startsWith("/") || message.includes("@")}
-            aria-haspopup="listbox"
-            role="combobox"
-            aria-autocomplete="list"
-          />
-          <InlineCompletion
-            projectId={projectId}
-            message={message}
-            commandCompletionRef={commandCompletionRef}
-            fileCompletionRef={fileCompletionRef}
-            handleCommandSelect={handleCommandSelect}
-            handleFileSelect={handleFileSelect}
-            cursorPosition={cursorPosition}
-          />
-        </div>
+                setMessage(e.target.value);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder={placeholder}
+              className={`${minHeight} resize-none`}
+              disabled={isPending || disabled}
+              maxLength={4000}
+              aria-label="Message input with completion support"
+              aria-describedby={helpId}
+              aria-expanded={message.startsWith("/") || message.includes("@")}
+              aria-haspopup="listbox"
+              role="combobox"
+              aria-autocomplete="list"
+            />
+            <InlineCompletion
+              projectId={projectId}
+              message={message}
+              commandCompletionRef={commandCompletionRef}
+              fileCompletionRef={fileCompletionRef}
+              handleCommandSelect={handleCommandSelect}
+              handleFileSelect={handleFileSelect}
+              cursorPosition={cursorPosition}
+            />
+          </div>
 
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-muted-foreground" id={helpId}>
-            {message.length}/4000 characters • Use arrow keys to navigate
-            completions • {(() => {
-              const combinations = [];
-              if (sendKeys.includes("enter")) combinations.push("Enter");
-              if (sendKeys.includes("shift")) combinations.push("Shift+Enter");
-              if (sendKeys.includes("ctrl")) combinations.push("Ctrl+Enter");
-              if (
-                sendKeys.includes("cmd") &&
-                navigator.platform.includes("Mac")
-              )
-                combinations.push("Cmd+Enter");
-              return combinations.length > 0
-                ? `${combinations.join("/")} to send`
-                : "No send keys configured";
-            })()}
-          </span>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground" id={helpId}>
+              {message.length}/4000 characters • Use arrow keys to navigate
+              completions • {(() => {
+                const combinations = [];
+                if (sendKeys.includes("enter")) combinations.push("Enter");
+                if (sendKeys.includes("shift"))
+                  combinations.push("Shift+Enter");
+                if (sendKeys.includes("ctrl")) combinations.push("Ctrl+Enter");
+                if (
+                  sendKeys.includes("cmd") &&
+                  navigator.platform.includes("Mac")
+                )
+                  combinations.push("Cmd+Enter");
+                return combinations.length > 0
+                  ? `${combinations.join("/")} to send`
+                  : "No send keys configured";
+              })()}
+            </span>
 
-          <Button
-            onClick={handleSubmit}
-            disabled={!message.trim() || isPending || disabled}
-            size={buttonSize}
-            className="gap-2"
-          >
-            {isPending ? (
-              <>
-                <LoaderIcon className="w-4 h-4 animate-spin" />
-                Sending... This may take a while.
-              </>
-            ) : (
-              <>
-                <SendIcon className="w-4 h-4" />
-                {buttonText}
-              </>
-            )}
-          </Button>
+            <Button
+              onClick={handleSubmit}
+              disabled={!message.trim() || isPending || disabled}
+              size={buttonSize}
+              className="gap-2"
+            >
+              {isPending ? (
+                <>
+                  <LoaderIcon className="w-4 h-4 animate-spin" />
+                  Sending... This may take a while.
+                </>
+              ) : (
+                <>
+                  <SendIcon className="w-4 h-4" />
+                  {buttonText}
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
-  );
-});
+    );
+  },
+);
 
-ChatInput.displayName = 'ChatInput';
+ChatInput.displayName = "ChatInput";

@@ -13,7 +13,6 @@ import { StatusDot } from "@/components/ui/status-dot";
 import type { Conversation } from "@/lib/conversation-schema";
 import type { ToolResultContent } from "@/lib/conversation-schema/content/ToolResultContentSchema";
 import type { AssistantMessageContent } from "@/lib/conversation-schema/message/AssistantMessageSchema";
-import type { UserMessageContent } from "@/lib/conversation-schema/message/UserMessageSchema";
 import type { ErrorJsonl } from "../../../../../../../server/service/types";
 import { useSidechain } from "../../hooks/useSidechain";
 import { ConversationItem } from "./ConversationItem";
@@ -112,7 +111,6 @@ export const ConversationList: FC<ConversationListProps> = ({
   );
   const [lastScannedLength, setLastScannedLength] = useState(0);
 
-
   const validConversations = useMemo(
     () =>
       conversations.filter((conversation) => conversation.type !== "x-error"),
@@ -131,7 +129,8 @@ export const ConversationList: FC<ConversationListProps> = ({
         const conv = conversations[i];
         if (conv && conv.type === "assistant") {
           const hasTextContent = conv.message.content.some(
-            (content: any) => content.type === "text" && content.text && content.text.trim(),
+            (content: any) =>
+              content.type === "text" && content.text && content.text.trim(),
           );
           if (hasTextContent) {
             newPositions.add(i);
@@ -142,8 +141,12 @@ export const ConversationList: FC<ConversationListProps> = ({
       setResponsePositions(newPositions);
       setLastScannedLength(conversations.length);
     }
-  }, [conversations.length, lastScannedLength, responsePositions]);
-
+  }, [
+    conversations.length,
+    lastScannedLength,
+    responsePositions,
+    conversations,
+  ]);
 
   // Group conversations: each user message followed by all responses until the next user message
   // This ensures only one "Full output" section per user prompt
@@ -165,16 +168,19 @@ export const ConversationList: FC<ConversationListProps> = ({
       | {
           type: "user-section";
           userMessage: Conversation;
-          workGroups: Array<{
-            type: "assistant-group";
-            conversations: Conversation[];
-            isOngoing?: boolean;
-          } | {
-            type: "edit-group";
-            conversations: Conversation[];
-            isOngoing?: boolean;
-            isAfterLastUser?: boolean;
-          }>;
+          workGroups: Array<
+            | {
+                type: "assistant-group";
+                conversations: Conversation[];
+                isOngoing?: boolean;
+              }
+            | {
+                type: "edit-group";
+                conversations: Conversation[];
+                isOngoing?: boolean;
+                isAfterLastUser?: boolean;
+              }
+          >;
           isLast: boolean;
         }
     )[] = [];
@@ -219,9 +225,7 @@ export const ConversationList: FC<ConversationListProps> = ({
           conv.message &&
           typeof conv.message.content === "object" &&
           Array.isArray(conv.message.content) &&
-          conv.message.content.every(
-            (c: any) => c.type === "tool_result",
-          );
+          conv.message.content.every((c: any) => c.type === "tool_result");
 
         if (!isToolResultOnly) {
           lastRealUserIndex = i;
@@ -299,7 +303,8 @@ export const ConversationList: FC<ConversationListProps> = ({
             }
             // Add the edit conversation as its own group
             // For edit groups, use lastRealUserIndex to determine expansion
-            const isAfterLastRealUser = lastRealUserIndex >= 0 && i > lastRealUserIndex;
+            const isAfterLastRealUser =
+              lastRealUserIndex >= 0 && i > lastRealUserIndex;
             initialGroups.push({
               type: "edit-group",
               conversations: [conversation],
@@ -339,29 +344,36 @@ export const ConversationList: FC<ConversationListProps> = ({
 
     // Second pass: Group assistant-groups and edit-groups under user messages
     let currentUserMessage: Conversation | null = null;
-    let currentWorkGroups: Array<{
-      type: "assistant-group";
-      conversations: Conversation[];
-      isOngoing?: boolean;
-    } | {
-      type: "edit-group";
-      conversations: Conversation[];
-      isOngoing?: boolean;
-      isAfterLastUser?: boolean;
-    }> = [];
+    let currentWorkGroups: Array<
+      | {
+          type: "assistant-group";
+          conversations: Conversation[];
+          isOngoing?: boolean;
+        }
+      | {
+          type: "edit-group";
+          conversations: Conversation[];
+          isOngoing?: boolean;
+          isAfterLastUser?: boolean;
+        }
+    > = [];
 
     for (let i = 0; i < initialGroups.length; i++) {
       const group = initialGroups[i];
 
-      if (group && typeof group === "object" && "type" in group && group.type === "user" && !group.isSidechain) {
+      if (
+        group &&
+        typeof group === "object" &&
+        "type" in group &&
+        group.type === "user" &&
+        !group.isSidechain
+      ) {
         // Check if this is a real user message (not just tool results)
         const isToolResultOnly =
           group.message &&
           typeof group.message.content === "object" &&
           Array.isArray(group.message.content) &&
-          group.message.content.every(
-            (c: any) => c.type === "tool_result",
-          );
+          group.message.content.every((c: any) => c.type === "tool_result");
 
         if (!isToolResultOnly) {
           // Flush previous user section if we have one
@@ -390,8 +402,12 @@ export const ConversationList: FC<ConversationListProps> = ({
             groups.push(group);
           }
         }
-      } else if (group && typeof group === "object" && "type" in group &&
-                 (group.type === "assistant-group" || group.type === "edit-group")) {
+      } else if (
+        group &&
+        typeof group === "object" &&
+        "type" in group &&
+        (group.type === "assistant-group" || group.type === "edit-group")
+      ) {
         // Add to current work groups if we have a user message
         if (currentUserMessage) {
           currentWorkGroups.push(group);
@@ -399,7 +415,7 @@ export const ConversationList: FC<ConversationListProps> = ({
           // No user message yet, add individually
           groups.push(group);
         }
-      } else {
+      } else if (group) {
         // Other types (errors, system messages before first user, etc.)
         groups.push(group);
       }
@@ -431,9 +447,12 @@ export const ConversationList: FC<ConversationListProps> = ({
 
   // Helper function to generate stable keys for groups
   const getGroupKey = (
-    group: (typeof groupedConversations)[0],
+    group: (typeof groupedConversations)[0] | undefined,
     index: number,
   ) => {
+    if (!group) {
+      return `unknown_${index}`;
+    }
     if (group.type === "x-error") {
       return `error_${group.line}`;
     }
@@ -454,7 +473,7 @@ export const ConversationList: FC<ConversationListProps> = ({
       conversations: Conversation[];
       isOngoing?: boolean;
     },
-    groupIndex: number
+    _groupIndex: number,
   ) => {
     // Extract tool names and determine status from all conversations in the group
     const toolNames = new Set<string>();
@@ -488,7 +507,8 @@ export const ConversationList: FC<ConversationListProps> = ({
       if (conversation.type === "assistant") {
         // Check if this is a response message (has text content)
         const hasTextContent = conversation.message.content.some(
-          (content: any) => content.type === "text" && content.text && content.text.trim()
+          (content: any) =>
+            content.type === "text" && content.text && content.text.trim(),
         );
         if (hasTextContent) {
           responseCount++;
@@ -551,9 +571,11 @@ export const ConversationList: FC<ConversationListProps> = ({
       <ul className="w-full">
         {group.conversations.map((conversation) => {
           // Check if this conversation is a response (has text content)
-          const isResponseConversation = conversation.type === "assistant" &&
+          const isResponseConversation =
+            conversation.type === "assistant" &&
             conversation.message.content.some(
-              (content: any) => content.type === "text" && content.text && content.text.trim()
+              (content: any) =>
+                content.type === "text" && content.text && content.text.trim(),
             );
 
           return (
@@ -649,7 +671,7 @@ export const ConversationList: FC<ConversationListProps> = ({
         <div
           key={`tool-${i}`}
           className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`}
-        />
+        />,
       );
     });
 
@@ -659,7 +681,7 @@ export const ConversationList: FC<ConversationListProps> = ({
         <div
           key={`response-${i}`}
           className="w-2 h-2 rounded-full flex-shrink-0 bg-orange-600 dark:bg-orange-400"
-        />
+        />,
       );
     }
 
@@ -680,11 +702,16 @@ export const ConversationList: FC<ConversationListProps> = ({
     let lastResponseText = "";
     for (let i = group.conversations.length - 1; i >= 0; i--) {
       const conversation = group.conversations[i];
-      if (conversation.type === "assistant") {
+      if (conversation && conversation.type === "assistant") {
         const textContent = conversation.message.content.find(
-          (content: any) => content.type === "text"
+          (content: any) => content.type === "text",
         );
-        if (textContent && typeof textContent.text === "string" && textContent.text.trim()) {
+        if (
+          textContent &&
+          "text" in textContent &&
+          typeof textContent.text === "string" &&
+          textContent.text.trim()
+        ) {
           lastResponseText = textContent.text.trim();
           break;
         }
@@ -695,7 +722,7 @@ export const ConversationList: FC<ConversationListProps> = ({
       <div className="w-full">
         <Collapsible
           defaultOpen={isOngoing ? shouldExpand : false}
-          onOpenChange={(open) => {
+          onOpenChange={(_open) => {
             // Track expansion state for this group to hide external response card when expanded
             if (isOngoing && responseCount > 0) {
               // This is the last group with responses - we need to manage external card visibility
@@ -739,7 +766,7 @@ export const ConversationList: FC<ConversationListProps> = ({
       isOngoing?: boolean;
       isAfterLastUser?: boolean;
     },
-    groupIndex: number
+    _groupIndex: number,
   ) => {
     // Check for errors in edit tool results
     const hasErrors = false;
@@ -790,8 +817,8 @@ export const ConversationList: FC<ConversationListProps> = ({
         <Collapsible defaultOpen={true}>
           <CollapsibleTrigger asChild>
             <div className="flex items-center cursor-pointer hover:bg-muted/50 rounded p-2 -mx-2 mb-2">
-            <div className="flex items-center gap-2">
-              <ChevronRight className="h-4 w-4 text-green-600 dark:text-green-400 transition-transform group-data-[state=open]:rotate-90" />
+              <div className="flex items-center gap-2">
+                <ChevronRight className="h-4 w-4 text-green-600 dark:text-green-400 transition-transform group-data-[state=open]:rotate-90" />
                 <StatusDot
                   status={hasErrors ? "error" : "success"}
                   className=""
@@ -866,7 +893,7 @@ export const ConversationList: FC<ConversationListProps> = ({
                 >
                   <div className="w-full">{content}</div>
                 </li>
-              ))
+              )),
             ];
           } else {
             // Previous user section - render as collapsed accordion
@@ -887,9 +914,7 @@ export const ConversationList: FC<ConversationListProps> = ({
                       <div className="bg-background rounded border p-3 mt-2">
                         <ul className="w-full">
                           {workContent.map((content, workIndex) => (
-                            <li key={`work-${workIndex}`}>
-                              {content}
-                            </li>
+                            <li key={`work-${workIndex}`}>{content}</li>
                           ))}
                         </ul>
                       </div>
@@ -911,7 +936,6 @@ export const ConversationList: FC<ConversationListProps> = ({
             </li>
           );
         }
-
 
         if (group.type === "edit-group") {
           return (

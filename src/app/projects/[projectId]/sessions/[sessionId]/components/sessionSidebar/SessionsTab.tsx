@@ -3,8 +3,15 @@
 import { useAtom, useAtomValue } from "jotai";
 import { MessageSquareIcon, PlusIcon } from "lucide-react";
 import Link from "next/link";
-import type { FC } from "react";
-import { useEffect, useId, useState, useRef, forwardRef, useImperativeHandle, useCallback } from "react";
+import {
+  useEffect,
+  useId,
+  useState,
+  useRef,
+  forwardRef,
+  useImperativeHandle,
+  useCallback,
+} from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,11 +31,14 @@ export interface SessionsTabRef {
   createNew: () => void;
 }
 
-export const SessionsTab = forwardRef<SessionsTabRef, {
-  sessions: Session[];
-  currentSessionId: string;
-  projectId: string;
-}>(({ sessions, currentSessionId, projectId }, ref) => {
+export const SessionsTab = forwardRef<
+  SessionsTabRef,
+  {
+    sessions: Session[];
+    currentSessionId: string;
+    projectId: string;
+  }
+>(({ sessions, currentSessionId, projectId }, ref) => {
   // Defer hydration-variant values (like Date.now and live counts) until after mount
   const [isHydrated, setIsHydrated] = useState(false);
   useEffect(() => {
@@ -89,32 +99,46 @@ export const SessionsTab = forwardRef<SessionsTabRef, {
 
   // Find current session index in sorted list
   useEffect(() => {
-    const currentIndex = sortedSessions.findIndex(session => session.id === currentSessionId);
+    const currentIndex = sortedSessions.findIndex(
+      (session) => session.id === currentSessionId,
+    );
     setSelectedSessionIndex(currentIndex);
   }, [sortedSessions, currentSessionId]);
 
   // Navigation functions with immediate feedback
   const navigateUp = useCallback(() => {
     if (sortedSessions.length === 0) return;
-    const newIndex = selectedSessionIndex > 0 ? selectedSessionIndex - 1 : sortedSessions.length - 1;
+    const newIndex =
+      selectedSessionIndex > 0
+        ? selectedSessionIndex - 1
+        : sortedSessions.length - 1;
     const targetSession = sortedSessions[newIndex];
     if (targetSession) {
       // Update state immediately for responsive UI
       setSelectedSessionIndex(newIndex);
       // Navigate without adding to history for faster transitions
-      router.replace(`/projects/${projectId}/sessions/${encodeURIComponent(targetSession.id)}`, { scroll: false });
+      router.replace(
+        `/projects/${projectId}/sessions/${encodeURIComponent(targetSession.id)}`,
+        { scroll: false },
+      );
     }
   }, [sortedSessions, selectedSessionIndex, projectId, router]);
 
   const navigateDown = useCallback(() => {
     if (sortedSessions.length === 0) return;
-    const newIndex = selectedSessionIndex < sortedSessions.length - 1 ? selectedSessionIndex + 1 : 0;
+    const newIndex =
+      selectedSessionIndex < sortedSessions.length - 1
+        ? selectedSessionIndex + 1
+        : 0;
     const targetSession = sortedSessions[newIndex];
     if (targetSession) {
       // Update state immediately for responsive UI
       setSelectedSessionIndex(newIndex);
       // Navigate without adding to history for faster transitions
-      router.replace(`/projects/${projectId}/sessions/${encodeURIComponent(targetSession.id)}`, { scroll: false });
+      router.replace(
+        `/projects/${projectId}/sessions/${encodeURIComponent(targetSession.id)}`,
+        { scroll: false },
+      );
     }
   }, [sortedSessions, selectedSessionIndex, projectId, router]);
 
@@ -123,11 +147,15 @@ export const SessionsTab = forwardRef<SessionsTabRef, {
   };
 
   // Expose methods through ref
-  useImperativeHandle(ref, () => ({
-    navigateUp,
-    navigateDown,
-    createNew
-  }), [navigateUp, navigateDown]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      navigateUp,
+      navigateDown,
+      createNew,
+    }),
+    [navigateUp, navigateDown],
+  );
 
   return (
     <div className="h-full flex flex-col">
@@ -139,7 +167,12 @@ export const SessionsTab = forwardRef<SessionsTabRef, {
             isOpen={isNewChatModalOpen}
             onOpenChange={setIsNewChatModalOpen}
             trigger={
-              <Button ref={newChatButtonRef} size="sm" variant="outline" className="gap-1.5">
+              <Button
+                ref={newChatButtonRef}
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+              >
                 <PlusIcon className="w-3.5 h-3.5" />
                 New
               </Button>
@@ -245,4 +278,4 @@ export const SessionsTab = forwardRef<SessionsTabRef, {
   );
 });
 
-SessionsTab.displayName = 'SessionsTab';
+SessionsTab.displayName = "SessionsTab";
