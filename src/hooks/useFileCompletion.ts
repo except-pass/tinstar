@@ -35,6 +35,6 @@ export const useFileCompletion = (
       return response.json();
     },
     enabled: enabled && !!projectId,
-    staleTime: 1000 * 60 * 5, // 5分間キャッシュ
+    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
   });
 };

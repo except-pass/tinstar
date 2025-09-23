@@ -21,7 +21,7 @@ export class FileWatcherService {
   public startWatching(): void {
     try {
       console.log("Starting file watcher on:", claudeProjectPath);
-      // メインプロジェクトディレクトリを監視
+      // Monitor main project directory
       this.watcher = watch(
         claudeProjectPath,
         { persistent: false, recursive: true },
@@ -73,7 +73,7 @@ export class FileWatcherService {
   }
 }
 
-// シングルトンインスタンス
+// Singleton instance
 let watcherInstance: FileWatcherService | null = null;
 
 export const getFileWatcher = (): FileWatcherService => {

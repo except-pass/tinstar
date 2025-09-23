@@ -453,7 +453,7 @@ export const ConversationList: FC<ConversationListProps> = ({
       conversations: Conversation[];
       isOngoing?: boolean;
     },
-    _groupIndex: number
+    groupIndex: number
   ) => {
     // Extract tool names and determine status from all conversations in the group
     const toolNames = new Set<string>();
@@ -683,7 +683,7 @@ export const ConversationList: FC<ConversationListProps> = ({
         const textContent = conversation.message.content.find(
           (content: any) => content.type === "text"
         );
-        if (textContent && textContent.type === "text" && typeof textContent.text === "string" && textContent.text.trim()) {
+        if (textContent && typeof textContent.text === "string" && textContent.text.trim()) {
           lastResponseText = textContent.text.trim();
           break;
         }
@@ -694,7 +694,7 @@ export const ConversationList: FC<ConversationListProps> = ({
       <div className="w-full">
         <Collapsible
           defaultOpen={isOngoing ? shouldExpand : false}
-          onOpenChange={(_open) => {
+          onOpenChange={(open) => {
             // Track expansion state for this group to hide external response card when expanded
             if (isOngoing && responseCount > 0) {
               // This is the last group with responses - we need to manage external card visibility
@@ -738,7 +738,7 @@ export const ConversationList: FC<ConversationListProps> = ({
       isOngoing?: boolean;
       isAfterLastUser?: boolean;
     },
-    _groupIndex: number
+    groupIndex: number
   ) => {
     // Check for errors in edit tool results
     const hasErrors = false;
