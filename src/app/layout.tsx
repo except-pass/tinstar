@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "../components/ui/sonner";
 import { QueryClientProviderWrapper } from "../lib/api/QueryClientProviderWrapper";
+import { JotaiProvider } from "../lib/atoms/JotaiProvider";
 import { RootErrorBoundary } from "./components/RootErrorBoundary";
 import { ServerEventsProvider } from "./components/ServerEventsProvider";
 
@@ -44,9 +45,11 @@ export default async function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <RootErrorBoundary>
-          <QueryClientProviderWrapper>
-            <ServerEventsProvider>{children}</ServerEventsProvider>
-          </QueryClientProviderWrapper>
+          <JotaiProvider>
+            <QueryClientProviderWrapper>
+              <ServerEventsProvider>{children}</ServerEventsProvider>
+            </QueryClientProviderWrapper>
+          </JotaiProvider>
         </RootErrorBoundary>
         <Toaster position="top-right" />
       </body>
