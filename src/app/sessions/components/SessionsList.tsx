@@ -15,7 +15,6 @@ import { sessionTimeFilterAtom } from "@/app/projects/[projectId]/sessions/[sess
 import { aliveTasksAtom } from "@/app/projects/[projectId]/sessions/[sessionId]/store/aliveTasksAtom";
 import { firstCommandToTitle } from "@/app/projects/[projectId]/services/firstCommandToTitle";
 import { NewChatModal } from "@/app/projects/[projectId]/components/newChat/NewChatModal";
-import { useProjects } from "@/app/projects/hooks/useProjects";
 import { useCombinedSessions } from "../hooks/useCombinedSessions";
 import { isSessionWithinTimeFilter } from "../utils/timeFilters";
 
@@ -27,7 +26,6 @@ export function SessionsList() {
   }, []);
 
   const { data: sessions } = useCombinedSessions();
-  const projects = useProjects();
   const aliveTasks = useAtomValue(aliveTasksAtom);
   const [timeFilter, setTimeFilter] = useAtom(sessionTimeFilterAtom);
   const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
@@ -119,7 +117,7 @@ export function SessionsList() {
           return (
             <Link
               key={`${projectId}-${session.id}`}
-              href={`/projects/${projectId}/sessions/${encodeURIComponent(session.id)}`}
+              href={`/sessions/${encodeURIComponent(session.id)}`}
               className={cn(
                 "block rounded-lg p-4 transition-all duration-200 hover:bg-blue-50/60 hover:border-blue-300/60 hover:shadow-sm border border-border bg-card",
                 "hover:shadow-lg"

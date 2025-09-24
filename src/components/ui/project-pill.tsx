@@ -25,14 +25,14 @@ function hashCode(str: string): number {
 
 function getProjectColor(projectId: string): string {
   const hash = hashCode(projectId);
-  return colors[hash % colors.length];
+  return colors[hash % colors.length] || colors[0]!;
 }
 
 interface ProjectPillProps {
   projectId: string;
   projectName: string;
   className?: string;
-  size?: "sm" | "md";
+  size?: "xs" | "sm" | "md";
 }
 
 export function ProjectPill({ 
@@ -47,6 +47,7 @@ export function ProjectPill({
     <span
       className={cn(
         "inline-flex items-center rounded-full font-medium",
+        size === "xs" ? "px-1.5 py-0.5 text-xs" : 
         size === "sm" ? "px-2 py-1 text-xs" : "px-3 py-1 text-sm",
         colorClass,
         className

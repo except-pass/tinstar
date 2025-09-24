@@ -7,7 +7,7 @@ export const sessionTimeFilterAtom = atom<SessionTimeFilter>("1d");
 // Backward compatibility - can be removed after migration
 export const showOldSessionsAtom = atom(
   (get) => get(sessionTimeFilterAtom) === "all",
-  (get, set, newValue: boolean) => {
+  (_get, set, newValue: boolean) => {
     set(sessionTimeFilterAtom, newValue ? "all" : "1d");
   }
 );

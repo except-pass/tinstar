@@ -1,35 +1,40 @@
-import { QueryClient } from "@tanstack/react-query";
-import { HistoryIcon } from "lucide-react";
-import { SessionsList } from "./components/SessionsList";
-import { projetsQueryConfig } from "../projects/hooks/useProjects";
+import { redirect } from "next/navigation";
+import { honoClient } from "@/lib/api/client";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
 export default async function SessionsPage() {
-  const queryClient = new QueryClient();
+  // Decide destination first to avoid catching Next.js redirect exceptions
+  let destination = "/projects";
 
-  // Prefetch projects data since we'll need it for the combined sessions
-  await queryClient.prefetchQuery({
-    queryKey: projetsQueryConfig.queryKey,
-    queryFn: projetsQueryConfig.queryFn,
-  });
+  try {
+    // Get all sessions using the dedicated endpoint
+    const sessionsResponse = await honoClient.api.sessions.all.$get();
+    const { sessions } = await sessionsResponse.json();
 
-  return (
-    <div className="container mx-auto px-4 py-8">
-      <header className="mb-8">
-        <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
-          <HistoryIcon className="w-8 h-8" />
-          Tinstar
-        </h1>
-        <p className="text-muted-foreground">
-          Browse your Claude Code conversation history across all projects
-        </p>
-      </header>
+    if (sessions.length > 0) {
+      // Sort by last modified (newest first) and take the first one
+      const sortedSessions = sessions.sort((a, b) => {
+        const aTime = a.session.meta.lastModifiedAt ? new Date(a.session.meta.lastModifiedAt).getTime() : 0;
+        const bTime = b.session.meta.lastModifiedAt ? new Date(b.session.meta.lastModifiedAt).getTime() : 0;
+        return bTime - aTime;
+      });
+      
+      const firstSessionWithProject = sortedSessions[0];
+      if (firstSessionWithProject) {
+        destination = `/sessions/${encodeURIComponent(firstSessionWithProject.session.id)}`;
+      } else {
+        destination = "/projects";
+      }
+    } else {
+      // No sessions found, redirect to projects page
+      destination = "/projects";
+    }
+  } catch (error) {
+    console.error("Error fetching projects:", error);
+    destination = "/projects";
+  }
 
-      <main>
-        <SessionsList />
-      </main>
-    </div>
-  );
+  redirect(destination);
 }

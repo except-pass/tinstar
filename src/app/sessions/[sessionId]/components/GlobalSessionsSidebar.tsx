@@ -1,7 +1,7 @@
 "use client";
 
 import { useAtom, useAtomValue } from "jotai";
-import { MessageSquareIcon, PlusIcon } from "lucide-react";
+import { MessageSquareIcon, PlusIcon, X } from "lucide-react";
 import Link from "next/link";
 import {
   useEffect,
@@ -17,36 +17,40 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TimeFilterSelect } from "@/components/ui/time-filter-select";
 import { WorktreeBadge } from "@/components/ui/worktree-badge";
+import { ProjectPill } from "@/components/ui/project-pill";
 import { cn } from "@/lib/utils";
 import { isWorktreeSession } from "@/lib/worktree";
-import type { Session } from "../../../../../../../server/service/types";
-import { honoClient } from "../../../../../../../lib/api/client";
-import { NewChatModal } from "../../../../components/newChat/NewChatModal";
-import { firstCommandToTitle } from "../../../../services/firstCommandToTitle";
-import { aliveTasksAtom } from "../../store/aliveTasksAtom";
-import { sessionTimeFilterAtom } from "../../store/sessionTimeFilterAtom";
+import { honoClient } from "@/lib/api/client";
+import { NewChatModal } from "@/app/projects/[projectId]/components/newChat/NewChatModal";
+import { firstCommandToTitle } from "@/app/projects/[projectId]/services/firstCommandToTitle";
+import { aliveTasksAtom } from "@/app/projects/[projectId]/sessions/[sessionId]/store/aliveTasksAtom";
+import { sessionTimeFilterAtom } from "@/app/projects/[projectId]/sessions/[sessionId]/store/sessionTimeFilterAtom";
 import { isSessionWithinTimeFilter } from "@/app/sessions/utils/timeFilters";
-import { DeleteSessionDialog } from "./DeleteSessionDialog";
+import { useCombinedSessions } from "@/app/sessions/hooks/useCombinedSessions";
+import { DeleteSessionDialog } from "@/app/projects/[projectId]/sessions/[sessionId]/components/sessionSidebar/DeleteSessionDialog";
 
-export interface SessionsTabRef {
+export interface GlobalSessionsTabRef {
   navigateUp: () => void;
   navigateDown: () => void;
   createNew: () => void;
 }
 
-export const SessionsTab = forwardRef<
-  SessionsTabRef,
+export const GlobalSessionsSidebar = forwardRef<
+  GlobalSessionsTabRef,
   {
-    sessions: Session[];
     currentSessionId: string;
-    projectId: string;
+    currentProjectId: string;
+    isMobileOpen: boolean;
+    onMobileOpenChange: (open: boolean) => void;
   }
->(({ sessions, currentSessionId, projectId }, ref) => {
-  // Defer hydration-variant values (like Date.now and live counts) until after mount
+>(({ currentSessionId, currentProjectId, isMobileOpen, onMobileOpenChange }, ref) => {
+  // Defer hydration-variant values until after mount
   const [isHydrated, setIsHydrated] = useState(false);
   useEffect(() => {
     setIsHydrated(true);
   }, []);
+
+  const { data: sessions } = useCombinedSessions();
   const aliveTasks = useAtomValue(aliveTasksAtom);
   const [timeFilter, setTimeFilter] = useAtom(sessionTimeFilterAtom);
   const router = useRouter();
@@ -55,9 +59,9 @@ export const SessionsTab = forwardRef<
   const newChatButtonRef = useRef<HTMLButtonElement>(null);
 
   // Filter sessions based on time filter
-  const filteredSessions = sessions.filter((session) => {
+  const filteredSessions = sessions.filter((sessionWithProject) => {
     return isSessionWithinTimeFilter(
-      session.meta.lastModifiedAt,
+      sessionWithProject.session.meta.lastModifiedAt,
       timeFilter,
       isHydrated
     );
@@ -65,8 +69,8 @@ export const SessionsTab = forwardRef<
 
   // Sort sessions: Running > Paused > Others, then by lastModifiedAt (newest first)
   const sortedSessions = [...filteredSessions].sort((a, b) => {
-    const aTask = aliveTasks.find((task) => task.sessionId === a.id);
-    const bTask = aliveTasks.find((task) => task.sessionId === b.id);
+    const aTask = aliveTasks.find((task) => task.sessionId === a.session.id);
+    const bTask = aliveTasks.find((task) => task.sessionId === b.session.id);
 
     const aStatus = aTask?.status;
     const bStatus = bTask?.status;
@@ -87,11 +91,11 @@ export const SessionsTab = forwardRef<
     }
 
     // Then sort by lastModifiedAt (newest first)
-    const aTime = a.meta.lastModifiedAt
-      ? new Date(a.meta.lastModifiedAt).getTime()
+    const aTime = a.session.meta.lastModifiedAt
+      ? new Date(a.session.meta.lastModifiedAt).getTime()
       : 0;
-    const bTime = b.meta.lastModifiedAt
-      ? new Date(b.meta.lastModifiedAt).getTime()
+    const bTime = b.session.meta.lastModifiedAt
+      ? new Date(b.session.meta.lastModifiedAt).getTime()
       : 0;
     return bTime - aTime;
   });
@@ -99,10 +103,12 @@ export const SessionsTab = forwardRef<
   // Find current session index in sorted list
   useEffect(() => {
     const currentIndex = sortedSessions.findIndex(
-      (session) => session.id === currentSessionId,
+      (sessionWithProject) => 
+        sessionWithProject.session.id === currentSessionId && 
+        sessionWithProject.projectId === currentProjectId,
     );
     setSelectedSessionIndex(currentIndex);
-  }, [sortedSessions, currentSessionId]);
+  }, [sortedSessions, currentSessionId, currentProjectId]);
 
   // Navigation functions with immediate feedback
   const navigateUp = useCallback(() => {
@@ -117,11 +123,11 @@ export const SessionsTab = forwardRef<
       setSelectedSessionIndex(newIndex);
       // Navigate without adding to history for faster transitions
       router.replace(
-        `/projects/${projectId}/sessions/${encodeURIComponent(targetSession.id)}`,
+        `/sessions/${encodeURIComponent(targetSession.session.id)}`,
         { scroll: false },
       );
     }
-  }, [sortedSessions, selectedSessionIndex, projectId, router]);
+  }, [sortedSessions, selectedSessionIndex, router]);
 
   const navigateDown = useCallback(() => {
     if (sortedSessions.length === 0) return;
@@ -135,21 +141,21 @@ export const SessionsTab = forwardRef<
       setSelectedSessionIndex(newIndex);
       // Navigate without adding to history for faster transitions
       router.replace(
-        `/projects/${projectId}/sessions/${encodeURIComponent(targetSession.id)}`,
+        `/sessions/${encodeURIComponent(targetSession.session.id)}`,
         { scroll: false },
       );
     }
-  }, [sortedSessions, selectedSessionIndex, projectId, router]);
+  }, [sortedSessions, selectedSessionIndex, router]);
 
   const createNew = () => {
     setIsNewChatModalOpen(true);
   };
 
-  const handleDeleteSession = async (sessionIdToDelete: string) => {
+  const handleDeleteSession = async (sessionIdToDelete: string, projectIdToDelete: string) => {
     try {
       const response = await honoClient.api.projects[":projectId"].sessions[":sessionId"].$delete({
         param: {
-          projectId,
+          projectId: projectIdToDelete,
           sessionId: sessionIdToDelete,
         },
       });
@@ -158,9 +164,9 @@ export const SessionsTab = forwardRef<
         const result = await response.json();
         toast.success(result.message);
         
-        // If we're deleting the current session, navigate to the project page
-        if (sessionIdToDelete === currentSessionId) {
-          router.push(`/projects/${projectId}`);
+        // If we're deleting the current session, navigate to the sessions page
+        if (sessionIdToDelete === currentSessionId && projectIdToDelete === currentProjectId) {
+          router.push(`/sessions`);
         }
         // The SSE system will handle updating the sessions list
       } else {
@@ -184,13 +190,12 @@ export const SessionsTab = forwardRef<
     [navigateUp, navigateDown],
   );
 
-  return (
+  const sidebarContent = (
     <div className="h-full flex flex-col">
       <div className="border-b border-sidebar-border p-4">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="font-semibold text-lg">Sessions</h2>
+          <h2 className="font-semibold text-lg">All Sessions</h2>
           <NewChatModal
-            projectId={projectId}
             isOpen={isNewChatModalOpen}
             onOpenChange={setIsNewChatModalOpen}
             trigger={
@@ -217,8 +222,9 @@ export const SessionsTab = forwardRef<
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
-        {sortedSessions.map((session) => {
-          const isActive = session.id === currentSessionId;
+        {sortedSessions.map((sessionWithProject) => {
+          const { session, projectId, projectName } = sessionWithProject;
+          const isActive = session.id === currentSessionId && projectId === currentProjectId;
           const title =
             session.meta.firstCommand !== null
               ? firstCommandToTitle(session.meta.firstCommand)
@@ -232,7 +238,7 @@ export const SessionsTab = forwardRef<
 
           return (
             <div
-              key={session.id}
+              key={`${projectId}-${session.id}`}
               className={cn(
                 "group relative rounded-lg transition-all duration-200 hover:bg-blue-50/60 hover:border-blue-300/60 hover:shadow-sm border border-sidebar-border/40 bg-sidebar/30",
                 isActive &&
@@ -240,63 +246,68 @@ export const SessionsTab = forwardRef<
               )}
             >
               <Link
-                href={`/projects/${projectId}/sessions/${encodeURIComponent(
-                  session.id,
-                )}`}
+                href={`/sessions/${encodeURIComponent(session.id)}`}
                 className="block p-2.5"
               >
-              <div className="space-y-1.5">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 space-y-1">
-                    <h3 className="text-sm font-medium line-clamp-2 leading-tight text-sidebar-foreground">
-                      {title}
-                    </h3>
-                    {isWorktreeSession(session.jsonlFilePath) && (
-                      <WorktreeBadge
-                        className="text-xs"
-                        isDirty={session.meta.isDirty}
-                        isOrphaned={session.meta.isOrphaned}
-                      />
+                <div className="space-y-1.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 space-y-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <ProjectPill
+                          projectId={projectId}
+                          projectName={projectName}
+                          size="xs"
+                        />
+                        {(isRunning || isPaused) && (
+                          <Badge
+                            variant={isRunning ? "default" : "secondary"}
+                            className={cn(
+                              "text-xs",
+                              isRunning && "bg-green-500 text-white",
+                              isPaused && "bg-yellow-500 text-white",
+                            )}
+                          >
+                            {isRunning ? "Running" : "Paused"}
+                          </Badge>
+                        )}
+                      </div>
+                      <h3 className="text-sm font-medium line-clamp-2 leading-tight text-sidebar-foreground">
+                        {title}
+                      </h3>
+                      {isWorktreeSession(session.jsonlFilePath) && (
+                        <WorktreeBadge
+                          className="text-xs"
+                          isDirty={session.meta.isDirty}
+                          isOrphaned={session.meta.isOrphaned}
+                        />
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1 text-xs text-sidebar-foreground/70">
+                      <MessageSquareIcon className="w-3 h-3" />
+                      <span>{isHydrated ? session.meta.messageCount : ""}</span>
+                    </div>
+                    {session.meta.lastModifiedAt && (
+                      <span className="text-xs text-sidebar-foreground/60">
+                        {new Date(session.meta.lastModifiedAt).toLocaleDateString(
+                          "en-US",
+                          {
+                            month: "short",
+                            day: "numeric",
+                            timeZone: "UTC",
+                          },
+                        )}
+                      </span>
                     )}
                   </div>
-                  {(isRunning || isPaused) && (
-                    <Badge
-                      variant={isRunning ? "default" : "secondary"}
-                      className={cn(
-                        "text-xs",
-                        isRunning && "bg-green-500 text-white",
-                        isPaused && "bg-yellow-500 text-white",
-                      )}
-                    >
-                      {isRunning ? "Running" : "Paused"}
-                    </Badge>
-                  )}
                 </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1 text-xs text-sidebar-foreground/70">
-                    <MessageSquareIcon className="w-3 h-3" />
-                    <span>{isHydrated ? session.meta.messageCount : ""}</span>
-                  </div>
-                  {session.meta.lastModifiedAt && (
-                    <span className="text-xs text-sidebar-foreground/60">
-                      {new Date(session.meta.lastModifiedAt).toLocaleDateString(
-                        "en-US",
-                        {
-                          month: "short",
-                          day: "numeric",
-                          timeZone: "UTC",
-                        },
-                      )}
-                    </span>
-                  )}
-                </div>
-              </div>
               </Link>
               <div className="absolute top-2 right-2">
                 <DeleteSessionDialog
                   sessionId={session.id}
                   sessionTitle={title}
-                  onDelete={handleDeleteSession}
+                  onDelete={() => handleDeleteSession(session.id, projectId)}
                 />
               </div>
             </div>
@@ -305,6 +316,37 @@ export const SessionsTab = forwardRef<
       </div>
     </div>
   );
+
+  return (
+    <>
+      {/* Desktop Sidebar */}
+      <div className="hidden md:flex w-96 bg-sidebar border-r border-sidebar-border flex-col min-h-0">
+        {sidebarContent}
+      </div>
+
+      {/* Mobile Sidebar */}
+      {isMobileOpen && (
+        <div className="md:hidden fixed inset-0 z-50 flex">
+          <div className="fixed inset-0 bg-black/20" onClick={() => onMobileOpenChange(false)} />
+          <div className="relative flex w-80 bg-sidebar border-r border-sidebar-border flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-sidebar-border">
+              <h2 className="font-semibold text-lg">All Sessions</h2>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onMobileOpenChange(false)}
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              {sidebarContent}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
 });
 
-SessionsTab.displayName = "SessionsTab";
+GlobalSessionsSidebar.displayName = "GlobalSessionsSidebar";
