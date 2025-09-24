@@ -28,6 +28,8 @@ import { sessionTimeFilterAtom } from "@/app/projects/[projectId]/sessions/[sess
 import { isSessionWithinTimeFilter } from "@/app/sessions/utils/timeFilters";
 import { useCombinedSessions } from "@/app/sessions/hooks/useCombinedSessions";
 import { DeleteSessionDialog } from "@/app/projects/[projectId]/sessions/[sessionId]/components/sessionSidebar/DeleteSessionDialog";
+import { ProjectFilter } from "@/app/sessions/components/ProjectFilter";
+import { projectFilterAtom } from "@/app/sessions/store/projectFilterAtom";
 
 export interface GlobalSessionsTabRef {
   navigateUp: () => void;
@@ -53,18 +55,26 @@ export const GlobalSessionsSidebar = forwardRef<
   const { data: sessions } = useCombinedSessions();
   const aliveTasks = useAtomValue(aliveTasksAtom);
   const [timeFilter, setTimeFilter] = useAtom(sessionTimeFilterAtom);
+  const projectFilter = useAtomValue(projectFilterAtom);
   const router = useRouter();
   const [selectedSessionIndex, setSelectedSessionIndex] = useState(-1);
   const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
   const newChatButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Filter sessions based on time filter
+  // Filter sessions based on time filter and project filter
   const filteredSessions = sessions.filter((sessionWithProject) => {
-    return isSessionWithinTimeFilter(
+    // First apply time filter
+    const passesTimeFilter = isSessionWithinTimeFilter(
       sessionWithProject.session.meta.lastModifiedAt,
       timeFilter,
       isHydrated
     );
+    
+    // Then apply project filter
+    const passesProjectFilter = projectFilter.showAll || 
+      projectFilter.selectedProjectIds.has(sessionWithProject.projectId);
+    
+    return passesTimeFilter && passesProjectFilter;
   });
 
   // Sort sessions: Running > Paused > Others, then by lastModifiedAt (newest first)
@@ -211,13 +221,16 @@ export const GlobalSessionsSidebar = forwardRef<
             }
           />
         </div>
-        <div className="flex items-center justify-between text-xs text-sidebar-foreground/70">
-          <span>{isHydrated ? `${sortedSessions.length} total` : ""}</span>
+        <div className="flex items-center gap-2 mb-2">
+          <ProjectFilter className="flex-1" />
           <TimeFilterSelect
             value={timeFilter}
             onValueChange={setTimeFilter}
             className="w-24 h-7 text-xs"
           />
+        </div>
+        <div className="flex items-center justify-between text-xs text-sidebar-foreground/70">
+          <span>{isHydrated ? `${sortedSessions.length} total` : ""}</span>
         </div>
       </div>
 
