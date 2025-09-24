@@ -30,13 +30,13 @@ export class SSEClient {
     try {
       this.eventSource = new EventSource(this.url);
 
-      // 接続確認イベント
+      // Connection confirmation event
       this.eventSource.addEventListener("connected", (event) => {
         console.log("SSE Connected:", event.data);
         this.handlers.onConnected?.();
       });
 
-      // プロジェクト変更イベント
+      // Project change event
       this.eventSource.addEventListener("project_changed", (event) => {
         try {
           const data: ProjectChangedData = JSON.parse(event.data);
@@ -47,7 +47,7 @@ export class SSEClient {
         }
       });
 
-      // セッション変更イベント
+      // Session change event
       this.eventSource.addEventListener("session_changed", (event) => {
         try {
           const data: SessionChangedData = JSON.parse(event.data);
@@ -58,7 +58,7 @@ export class SSEClient {
         }
       });
 
-      // ハートビートイベント
+      // Heartbeat event
       this.eventSource.addEventListener("heartbeat", (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -68,13 +68,13 @@ export class SSEClient {
         }
       });
 
-      // エラーハンドリング
+      // Error handling
       this.eventSource.onerror = (error) => {
         console.error("SSE Error:", error);
         this.handlers.onError?.(error);
       };
 
-      // 接続終了
+      // Connection open
       this.eventSource.onopen = () => {
         console.log("SSE Connection opened");
       };

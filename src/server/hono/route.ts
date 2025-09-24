@@ -20,6 +20,7 @@ import { getDiff } from "../service/git/getDiff";
 import { getMcpList } from "../service/mcp/getMcpList";
 import { getProject } from "../service/project/getProject";
 import { getProjects } from "../service/project/getProjects";
+import { deleteSession } from "../service/session/deleteSession";
 import { getSession } from "../service/session/getSession";
 import { getSessionCwd } from "../service/session/getSessionCwd";
 import { getSessions } from "../service/session/getSessions";
@@ -141,6 +142,34 @@ export const routes = (app: HonoAppType) => {
         const { projectId, sessionId } = c.req.param();
         const { session } = await getSession(projectId, sessionId);
         return c.json({ session });
+      })
+
+      .delete("/projects/:projectId/sessions/:sessionId", async (c) => {
+        const { projectId, sessionId } = c.req.param();
+        
+        try {
+          const result = await deleteSession(projectId, sessionId);
+          
+          if (result.success) {
+            return c.json({
+              success: true,
+              message: result.message,
+              recoveryPath: result.recoveryPath,
+            });
+          } else {
+            return c.json({ error: result.message }, 400);
+          }
+        } catch (error) {
+          console.error("Session deletion error:", error);
+          return c.json(
+            { 
+              error: error instanceof Error 
+                ? error.message 
+                : "Failed to delete session" 
+            }, 
+            500
+          );
+        }
       })
 
       .get("/projects/:projectId/sessions/:sessionId/cwd", async (c) => {
@@ -765,7 +794,7 @@ export const routes = (app: HonoAppType) => {
 
             let isConnected = true;
 
-            // ハートビート設定
+            // Heartbeat setup
             const heartbeat = setInterval(() => {
               if (isConnected) {
                 eventBus.emit("heartbeat", {
@@ -788,13 +817,13 @@ export const routes = (app: HonoAppType) => {
               clearInterval(heartbeat);
             };
 
-            // 接続終了時のクリーンアップ
+            // Cleanup when connection ends
             stream.onAbort(() => {
               console.log("SSE connection aborted");
               onConnectionClosed();
             });
 
-            // イベントリスナーを登録
+            // Register event listeners
             console.log("Registering SSE event listeners");
             eventBus.on("connected", async (event) => {
               if (!isConnected) {
@@ -845,7 +874,7 @@ export const routes = (app: HonoAppType) => {
               });
             });
 
-            // 初期接続確認メッセージ
+            // Initial connection confirmation message
             eventBus.emit("connected", {
               type: "connected",
               message: "SSE connection established",
@@ -857,7 +886,7 @@ export const routes = (app: HonoAppType) => {
           },
           async (err, stream) => {
             console.error("Streaming error:", err);
-            await stream.write("エラーが発生しました。");
+            await stream.write("An error occurred.");
           },
         );
       })

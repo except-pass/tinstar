@@ -13,6 +13,7 @@ import {
   useCallback,
 } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -20,10 +21,12 @@ import { WorktreeBadge } from "@/components/ui/worktree-badge";
 import { cn } from "@/lib/utils";
 import { isWorktreeSession } from "@/lib/worktree";
 import type { Session } from "../../../../../../../server/service/types";
+import { honoClient } from "../../../../../../../lib/api/client";
 import { NewChatModal } from "../../../../components/newChat/NewChatModal";
 import { firstCommandToTitle } from "../../../../services/firstCommandToTitle";
 import { aliveTasksAtom } from "../../store/aliveTasksAtom";
 import { showOldSessionsAtom } from "../../store/showOldSessionsAtom";
+import { DeleteSessionDialog } from "./DeleteSessionDialog";
 
 export interface SessionsTabRef {
   navigateUp: () => void;
@@ -146,6 +149,34 @@ export const SessionsTab = forwardRef<
     setIsNewChatModalOpen(true);
   };
 
+  const handleDeleteSession = async (sessionIdToDelete: string) => {
+    try {
+      const response = await honoClient.api.projects[":projectId"].sessions[":sessionId"].$delete({
+        param: {
+          projectId,
+          sessionId: sessionIdToDelete,
+        },
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        toast.success(result.message);
+        
+        // If we're deleting the current session, navigate to the project page
+        if (sessionIdToDelete === currentSessionId) {
+          router.push(`/projects/${projectId}`);
+        }
+        // The SSE system will handle updating the sessions list
+      } else {
+        const error = await response.json();
+        toast.error(error.error || "Failed to delete session");
+      }
+    } catch (error) {
+      console.error("Delete session error:", error);
+      toast.error("Failed to delete session");
+    }
+  };
+
   // Expose methods through ref
   useImperativeHandle(
     ref,
@@ -213,17 +244,20 @@ export const SessionsTab = forwardRef<
           const isPaused = aliveTask?.status === "paused";
 
           return (
-            <Link
+            <div
               key={session.id}
-              href={`/projects/${projectId}/sessions/${encodeURIComponent(
-                session.id,
-              )}`}
               className={cn(
-                "block rounded-lg p-2.5 transition-all duration-200 hover:bg-blue-50/60 hover:border-blue-300/60 hover:shadow-sm border border-sidebar-border/40 bg-sidebar/30",
+                "group relative rounded-lg transition-all duration-200 hover:bg-blue-50/60 hover:border-blue-300/60 hover:shadow-sm border border-sidebar-border/40 bg-sidebar/30",
                 isActive &&
                   "bg-blue-100 border-blue-400 shadow-md ring-1 ring-blue-200/50 hover:bg-blue-100 hover:border-blue-400",
               )}
             >
+              <Link
+                href={`/projects/${projectId}/sessions/${encodeURIComponent(
+                  session.id,
+                )}`}
+                className="block p-2.5"
+              >
               <div className="space-y-1.5">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 space-y-1">
@@ -270,7 +304,15 @@ export const SessionsTab = forwardRef<
                   )}
                 </div>
               </div>
-            </Link>
+              </Link>
+              <div className="absolute top-2 right-2">
+                <DeleteSessionDialog
+                  sessionId={session.id}
+                  sessionTitle={title}
+                  onDelete={handleDeleteSession}
+                />
+              </div>
+            </div>
           );
         })}
       </div>
