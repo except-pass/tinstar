@@ -50,7 +50,7 @@ export function ProjectFilter({ className }: ProjectFilterProps) {
     } else {
       setFilterState({
         showAll: false,
-        selectedProjectIds: new Set(projects.map(p => p.id)),
+        selectedProjectIds: new Set(), // Start with no projects selected
       });
     }
   };
