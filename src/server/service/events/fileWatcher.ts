@@ -1,6 +1,8 @@
 import { type FSWatcher, watch } from "node:fs";
+import { resolve } from "node:path";
 import z from "zod";
 import { claudeProjectPath } from "../paths";
+import { encodeProjectId } from "../project/id";
 import { type EventBus, getEventBus } from "./EventBus";
 
 const fileRegExp = /(?<projectId>.*?)\/(?<sessionId>.*?)\.jsonl/;
@@ -34,18 +36,15 @@ export class FileWatcherService {
 
           if (!groups.success) return;
 
-          const { projectId, sessionId } = groups.data;
+          const { projectId: projectDirName, sessionId } = groups.data;
 
-          this.eventBus.emit("project_changed", {
-            type: "project_changed",
-            data: {
-              fileEventType: eventType,
-              projectId,
-            },
-          });
+          // Convert directory name to full path and encode it as projectId
+          const projectPath = resolve(claudeProjectPath, projectDirName);
+          const projectId = encodeProjectId(projectPath);
 
-          this.eventBus.emit("session_changed", {
-            type: "session_changed",
+          // Emit internal event - cache will handle and then emit to SSE clients
+          this.eventBus.emit("file_changed_internal", {
+            type: "file_changed_internal",
             data: {
               projectId,
               sessionId,

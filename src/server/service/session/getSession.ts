@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { SessionCacheService } from "../cache/SessionCacheService";
 import { parseJsonl } from "../parseJsonl";
 import { decodeProjectId } from "../project/id";
 import type { SessionDetail } from "../types";
@@ -12,12 +13,34 @@ export const getSession = async (
 ): Promise<{
   session: SessionDetail;
 }> => {
+  // Try to get from cache first
+  const cacheService = SessionCacheService.getInstance();
+  const isReady = cacheService.isReady();
+  console.log(`[getSession] Cache ready: ${isReady}, looking for ${projectId}/${sessionId}`);
+
+  if (isReady) {
+    const cached = cacheService.getSession(projectId, sessionId);
+    if (cached) {
+      console.log(`[getSession] ✅ Cache HIT for ${projectId}/${sessionId}`);
+      return { session: cached };
+    }
+    console.log(`[getSession] ❌ Cache MISS for ${projectId}/${sessionId}`);
+  } else {
+    console.log(`[getSession] Cache not ready yet`);
+  }
+
+  // Fallback to file reading if cache is not ready or session not found
+  console.warn(
+    `Reading from disk: ${projectId}/${sessionId}`,
+  );
+
   const projectPath = decodeProjectId(projectId);
 
-  // Try to find the session file in the main project directory first
+  // Try to find the session file path first
   let sessionPath = resolve(projectPath, `${sessionId}.jsonl`);
   let content: string | undefined;
 
+  // Check if file exists in main project directory
   try {
     content = await readFile(sessionPath, "utf-8");
   } catch (error: unknown) {
@@ -48,6 +71,7 @@ export const getSession = async (
     }
   }
 
+  // Parse the session data
   const conversations = parseJsonl(content);
 
   const sessionDetail: SessionDetail = {
@@ -57,7 +81,5 @@ export const getSession = async (
     conversations,
   };
 
-  return {
-    session: sessionDetail,
-  };
+  return { session: sessionDetail };
 };

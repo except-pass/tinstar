@@ -22,16 +22,13 @@ export const parseJsonl = (content: string) => {
 
     const parsed = ConversationSchema.safeParse(jsonData);
     if (!parsed.success) {
-      console.warn(
-        "Failed to parse jsonl, skipping. Entry type:",
-        (jsonData as { type?: unknown }).type,
-        "Error:",
-        parsed.error.message,
-      );
-      console.warn(
-        "Failed entry preview:",
-        `${JSON.stringify(jsonData).slice(0, 200)}...`,
-      );
+      const entryType = (jsonData as { type?: unknown }).type;
+      // Only log file-history-snapshot entries silently
+      if (entryType !== "file-history-snapshot") {
+        console.warn(
+          `Failed to parse jsonl entry (type: ${entryType})`
+        );
+      }
       const errorData: ErrorJsonl = {
         type: "x-error",
         line,
