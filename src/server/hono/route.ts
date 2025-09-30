@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { zValidator } from "@hono/zod-validator";
+import { compress } from "hono/compress";
 import { setCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
@@ -28,6 +30,15 @@ import { sessionPermissionModeStorage } from "../service/sessionPermissionModes/
 import type { HonoAppType } from "./app";
 import { configMiddleware } from "./middleware/config.middleware";
 
+/**
+ * Generate ETag from file stats for caching
+ */
+const generateETag = (filePath: string, mtime: number, size: number): string => {
+  // ETag format: "mtime-size-hash"
+  const pathHash = Buffer.from(filePath).toString("base64").slice(0, 8);
+  return `"${mtime}-${size}-${pathHash}"`;
+};
+
 export const routes = (app: HonoAppType) => {
   const taskController = new ClaudeCodeTaskController();
 
@@ -35,6 +46,7 @@ export const routes = (app: HonoAppType) => {
     app
       // middleware
       .use(configMiddleware)
+      .use(compress())
 
       // routes
       .get("/config", async (c) => {
@@ -242,8 +254,38 @@ export const routes = (app: HonoAppType) => {
 
       .get("/projects/:projectId/sessions/:sessionId", async (c) => {
         const { projectId, sessionId } = c.req.param();
-        const { session } = await getSession(projectId, sessionId);
-        return c.json({ session });
+
+        try {
+          const { session } = await getSession(projectId, sessionId);
+
+          // Generate ETag from file stats
+          const stats = await stat(session.jsonlFilePath);
+          const etag = generateETag(session.jsonlFilePath, stats.mtime.getTime(), stats.size);
+
+          // Check if client has cached version
+          const ifNoneMatch = c.req.header("If-None-Match");
+          if (ifNoneMatch === etag) {
+            // Client has current version, return 304 Not Modified
+            c.header("ETag", etag);
+            return c.body(null, 304);
+          }
+
+          // Set ETag header for future caching
+          c.header("ETag", etag);
+          c.header("Cache-Control", "no-cache"); // Require revalidation but allow caching
+
+          // Log response size for debugging
+          const responseSize = JSON.stringify({ session }).length;
+          console.log(`[API] Session response size: ${responseSize} bytes (${(responseSize / 1024).toFixed(1)}KB) for ${sessionId.slice(0, 8)}...`);
+
+          return c.json({ session });
+        } catch (error) {
+          console.error("Session fetch error:", error);
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+            return c.json({ error: "Session not found" }, 404);
+          }
+          return c.json({ error: "Failed to fetch session" }, 500);
+        }
       })
 
       .delete("/projects/:projectId/sessions/:sessionId", async (c) => {
