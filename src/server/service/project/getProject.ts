@@ -13,12 +13,11 @@ export const getProject = async (
   }
 
   const meta = await getProjectMeta(fullPath);
-
-  return {
-    project: {
-      id: projectId,
-      claudeProjectPath: fullPath,
-      meta,
-    },
+  const project = {
+    id: projectId,
+    claudeProjectPath: fullPath,
+    meta,
   };
+
+  return { project };
 };
