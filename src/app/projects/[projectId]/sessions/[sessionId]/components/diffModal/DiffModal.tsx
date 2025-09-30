@@ -160,14 +160,14 @@ export const DiffModal: FC<DiffModalProps> = ({
   // But the modal prop sessionId might be optional for backward compatibility
   const actualSessionId = sessionId || "";
 
-  // Always call all hooks unconditionally
+  // Only call git hooks when modal is open
   const sessionData = useSession(projectId, actualSessionId);
-  const projectBranches = useGitBranches(projectId);
-  const projectCommits = useGitCommits(projectId);
+  const projectBranches = useGitBranches(projectId, isOpen);
+  const projectCommits = useGitCommits(projectId, isOpen);
   const projectDiff = useGitDiff();
   const projectCommit = useGitCommit();
-  const sessionBranches = useSessionGitBranches(projectId, actualSessionId);
-  const sessionCommits = useSessionGitCommits(projectId, actualSessionId);
+  const sessionBranches = useSessionGitBranches(projectId, actualSessionId, isOpen);
+  const sessionCommits = useSessionGitCommits(projectId, actualSessionId, isOpen);
   const sessionDiff = useSessionGitDiff();
   const sessionCommit = useSessionGitCommit();
 
