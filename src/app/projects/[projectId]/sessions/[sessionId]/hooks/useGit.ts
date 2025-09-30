@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { honoClient } from "@/lib/api/client";
 
-export const useGitBranches = (projectId: string) => {
+export const useGitBranches = (projectId: string, enabled = true) => {
   return useQuery({
     queryKey: ["git", "branches", projectId],
     queryFn: async () => {
@@ -18,10 +18,11 @@ export const useGitBranches = (projectId: string) => {
       return response.json();
     },
     staleTime: 30000, // 30 seconds
+    enabled,
   });
 };
 
-export const useGitCommits = (projectId: string) => {
+export const useGitCommits = (projectId: string, enabled = true) => {
   return useQuery({
     queryKey: ["git", "commits", projectId],
     queryFn: async () => {
@@ -38,6 +39,7 @@ export const useGitCommits = (projectId: string) => {
       return response.json();
     },
     staleTime: 30000, // 30 seconds
+    enabled,
   });
 };
 
@@ -69,7 +71,7 @@ export const useGitDiff = () => {
 };
 
 // Session-aware git hooks
-export const useSessionGitBranches = (projectId: string, sessionId: string) => {
+export const useSessionGitBranches = (projectId: string, sessionId: string, enabled = true) => {
   return useQuery({
     queryKey: ["git", "branches", projectId, sessionId],
     queryFn: async () => {
@@ -92,11 +94,11 @@ export const useSessionGitBranches = (projectId: string, sessionId: string) => {
       return response.json();
     },
     staleTime: 30000, // 30 seconds
-    enabled: Boolean(sessionId && sessionId !== ""), // Only run if sessionId is valid
+    enabled: enabled && Boolean(sessionId && sessionId !== ""), // Only run if sessionId is valid AND enabled
   });
 };
 
-export const useSessionGitCommits = (projectId: string, sessionId: string) => {
+export const useSessionGitCommits = (projectId: string, sessionId: string, enabled = true) => {
   return useQuery({
     queryKey: ["git", "commits", projectId, sessionId],
     queryFn: async () => {
@@ -119,7 +121,7 @@ export const useSessionGitCommits = (projectId: string, sessionId: string) => {
       return response.json();
     },
     staleTime: 30000, // 30 seconds
-    enabled: Boolean(sessionId && sessionId !== ""), // Only run if sessionId is valid
+    enabled: enabled && Boolean(sessionId && sessionId !== ""), // Only run if sessionId is valid AND enabled
   });
 };
 
