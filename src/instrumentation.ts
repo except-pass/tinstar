@@ -25,7 +25,8 @@ export async function register() {
         const { projectId, sessionId, fileEventType } = event.data;
 
         // Update cache first, then emit to SSE clients
-        cacheService.handleFileChange(projectId, sessionId)
+        cacheService
+          .handleFileChange(projectId, sessionId)
           .then(() => {
             // Cache updated - now notify clients
             eventBus.emit("project_changed", {
@@ -46,7 +47,10 @@ export async function register() {
             });
           })
           .catch((error) => {
-            console.error(`Failed to update cache for ${projectId}/${sessionId}:`, error);
+            console.error(
+              `Failed to update cache for ${projectId}/${sessionId}:`,
+              error,
+            );
             // Still emit events so clients can try to fetch fresh data
             eventBus.emit("session_changed", {
               type: "session_changed",

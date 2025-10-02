@@ -8,14 +8,50 @@ export const parseJsonl = (content: string) => {
     .filter((line) => line.trim() !== "");
 
   return lines.map((line) => {
-    let jsonData: unknown;
-    try {
-      jsonData = JSON.parse(line);
-    } catch (_error) {
-      console.warn("Failed to parse JSON in line:", `${line.slice(0, 100)}...`);
+    const trimmed = line.trim();
+
+    // Quick pre-check: JSONL conversation entries should be objects
+    // This catches obviously malformed lines before trying to parse
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      console.warn(
+        "Line doesn't look like a JSON object:",
+        `${trimmed.slice(0, 100)}...`,
+      );
       const errorData: ErrorJsonl = {
         type: "x-error",
-        line,
+        line: trimmed,
+      };
+      return errorData;
+    }
+
+    let jsonData: unknown;
+    try {
+      jsonData = JSON.parse(trimmed);
+    } catch (_error) {
+      console.warn(
+        "Failed to parse JSON in line:",
+        `${trimmed.slice(0, 100)}...`,
+      );
+      const errorData: ErrorJsonl = {
+        type: "x-error",
+        line: trimmed,
+      };
+      return errorData;
+    }
+
+    // Verify it's actually an object (not an array or primitive)
+    if (
+      typeof jsonData !== "object" ||
+      jsonData === null ||
+      Array.isArray(jsonData)
+    ) {
+      console.warn(
+        "Parsed JSON is not an object:",
+        `${trimmed.slice(0, 100)}...`,
+      );
+      const errorData: ErrorJsonl = {
+        type: "x-error",
+        line: trimmed,
       };
       return errorData;
     }
@@ -25,9 +61,7 @@ export const parseJsonl = (content: string) => {
       const entryType = (jsonData as { type?: unknown }).type;
       // Only log file-history-snapshot entries silently
       if (entryType !== "file-history-snapshot") {
-        console.warn(
-          `Failed to parse jsonl entry (type: ${entryType})`
-        );
+        console.warn(`Failed to parse jsonl entry (type: ${entryType})`);
       }
       const errorData: ErrorJsonl = {
         type: "x-error",

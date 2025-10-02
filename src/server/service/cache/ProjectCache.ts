@@ -86,7 +86,11 @@ export class ProjectCache {
   /**
    * Store project in cache with current directory modification time
    */
-  async set(projectId: string, dirPath: string, project: Project): Promise<void> {
+  async set(
+    projectId: string,
+    dirPath: string,
+    project: Project,
+  ): Promise<void> {
     try {
       const stats = await stat(dirPath);
 
@@ -102,7 +106,10 @@ export class ProjectCache {
       // Maintain cache size
       this.evictLRU();
     } catch (error) {
-      console.warn(`[ProjectCache] Failed to cache project ${projectId}`, error);
+      console.warn(
+        `[ProjectCache] Failed to cache project ${projectId}`,
+        error,
+      );
     }
   }
 
