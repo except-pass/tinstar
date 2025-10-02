@@ -51,6 +51,8 @@ export const UserConversationContent: FC<{
               <Image
                 src={`data:${content.source.media_type};base64,${content.source.data}`}
                 alt="User uploaded content"
+                width={800}
+                height={600}
                 className="max-w-full h-auto max-h-96 object-contain"
               />
             </div>
