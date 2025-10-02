@@ -229,6 +229,19 @@ export const MarkdownContent: FC<MarkdownContentProps> = ({
               </em>
             );
           },
+          img({ src, alt, ...props }) {
+            return (
+              <img
+                src={src}
+                alt={alt || ""}
+                width={800}
+                height={600}
+                style={{ maxWidth: "100%", height: "auto" }}
+                loading="lazy"
+                {...props}
+              />
+            );
+          },
         }}
       >
         {content}
