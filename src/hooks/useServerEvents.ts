@@ -1,9 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useSetAtom } from "jotai";
 import { useCallback, useEffect } from "react";
-import { aliveTasksAtom } from "../app/projects/[projectId]/sessions/[sessionId]/store/aliveTasksAtom";
-import { projetsQueryConfig } from "../app/projects/hooks/useProjects";
+import { projetsQueryConfig } from "../hooks/projects/useProjects";
 import { honoClient } from "../lib/api/client";
+import { aliveTasksAtom } from "../lib/atoms/aliveTasksAtom";
 import type { SSEEvent } from "../server/service/events/types";
 
 type ParsedEvent = {
@@ -109,6 +109,7 @@ export const useServerEvents = () => {
               const { sessionId, projectId } = event.data.data;
               await queryClient.invalidateQueries({
                 queryKey: ["sessions", sessionId],
+                refetchType: "active", // Force refetch of active queries
               });
 
               // Also invalidate the project to refresh session metadata in the list

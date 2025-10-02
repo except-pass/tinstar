@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { stat } from "node:fs/promises";
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { zValidator } from "@hono/zod-validator";
@@ -33,7 +32,11 @@ import { configMiddleware } from "./middleware/config.middleware";
 /**
  * Generate ETag from file stats for caching
  */
-const generateETag = (filePath: string, mtime: number, size: number): string => {
+const generateETag = (
+  filePath: string,
+  mtime: number,
+  size: number,
+): string => {
   // ETag format: "mtime-size-hash"
   const pathHash = Buffer.from(filePath).toString("base64").slice(0, 8);
   return `"${mtime}-${size}-${pathHash}"`;
@@ -73,7 +76,7 @@ export const routes = (app: HonoAppType) => {
       .get("/sessions/all", async (c) => {
         const { projects } = await getProjects();
         const config = c.get("config");
-        
+
         const allSessions: Array<{
           projectId: string;
           projectName: string;
@@ -157,15 +160,22 @@ export const routes = (app: HonoAppType) => {
               });
             }
           } catch (error) {
-            console.error(`Failed to get sessions for project ${project.id}:`, error);
+            console.error(
+              `Failed to get sessions for project ${project.id}:`,
+              error,
+            );
             // Continue with other projects
           }
         }
 
         // Sort by last modified date, most recent first
         allSessions.sort((a, b) => {
-          const aDate = a.session.meta.lastModifiedAt ? new Date(a.session.meta.lastModifiedAt) : new Date(0);
-          const bDate = b.session.meta.lastModifiedAt ? new Date(b.session.meta.lastModifiedAt) : new Date(0);
+          const aDate = a.session.meta.lastModifiedAt
+            ? new Date(a.session.meta.lastModifiedAt)
+            : new Date(0);
+          const bDate = b.session.meta.lastModifiedAt
+            ? new Date(b.session.meta.lastModifiedAt)
+            : new Date(0);
           return bDate.getTime() - aDate.getTime();
         });
 
@@ -260,7 +270,11 @@ export const routes = (app: HonoAppType) => {
 
           // Generate ETag from file stats
           const stats = await stat(session.jsonlFilePath);
-          const etag = generateETag(session.jsonlFilePath, stats.mtime.getTime(), stats.size);
+          const etag = generateETag(
+            session.jsonlFilePath,
+            stats.mtime.getTime(),
+            stats.size,
+          );
 
           // Check if client has cached version
           const ifNoneMatch = c.req.header("If-None-Match");
@@ -276,12 +290,18 @@ export const routes = (app: HonoAppType) => {
 
           // Log response size for debugging
           const responseSize = JSON.stringify({ session }).length;
-          console.log(`[API] Session response size: ${responseSize} bytes (${(responseSize / 1024).toFixed(1)}KB) for ${sessionId.slice(0, 8)}...`);
+          console.log(
+            `[API] Session response size: ${responseSize} bytes (${(responseSize / 1024).toFixed(1)}KB) for ${sessionId.slice(0, 8)}...`,
+          );
 
           return c.json({ session });
         } catch (error) {
           console.error("Session fetch error:", error);
-          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "ENOENT"
+          ) {
             return c.json({ error: "Session not found" }, 404);
           }
           return c.json({ error: "Failed to fetch session" }, 500);
@@ -290,10 +310,10 @@ export const routes = (app: HonoAppType) => {
 
       .delete("/projects/:projectId/sessions/:sessionId", async (c) => {
         const { projectId, sessionId } = c.req.param();
-        
+
         try {
           const result = await deleteSession(projectId, sessionId);
-          
+
           if (result.success) {
             return c.json({
               success: true,
@@ -306,12 +326,13 @@ export const routes = (app: HonoAppType) => {
         } catch (error) {
           console.error("Session deletion error:", error);
           return c.json(
-            { 
-              error: error instanceof Error 
-                ? error.message 
-                : "Failed to delete session" 
-            }, 
-            500
+            {
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Failed to delete session",
+            },
+            500,
           );
         }
       })

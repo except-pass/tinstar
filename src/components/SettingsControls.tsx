@@ -7,10 +7,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ModelSelector } from "@/components/ui/model-selector";
 import type { Config } from "@/server/config/config";
 import type { ModelType } from "@/server/service/claude-code/types";
-import { projectQueryConfig } from "../app/projects/[projectId]/hooks/useProject";
+import { projectQueryConfig } from "../hooks/projects/useProject";
 
 interface SettingsControlsProps {
-  openingProjectId: string;
+  openingProjectId?: string;
   showLabels?: boolean;
   showDescriptions?: boolean;
   className?: string;
@@ -33,9 +33,11 @@ export const SettingsControls: FC<SettingsControlsProps> = ({
     await queryClient.invalidateQueries({
       queryKey: ["projects"],
     });
-    void queryClient.invalidateQueries({
-      queryKey: projectQueryConfig(openingProjectId).queryKey,
-    });
+    if (openingProjectId) {
+      void queryClient.invalidateQueries({
+        queryKey: projectQueryConfig(openingProjectId).queryKey,
+      });
+    }
   }, [queryClient, openingProjectId]);
 
   const handleHideNoUserMessageChange = () => {

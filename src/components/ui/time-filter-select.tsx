@@ -1,5 +1,11 @@
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { SessionTimeFilter } from "@/app/projects/[projectId]/sessions/[sessionId]/store/sessionTimeFilterAtom";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import type { SessionTimeFilter } from "@/lib/atoms/sessionTimeFilterAtom";
 
 const timeFilterOptions: Array<{
   value: SessionTimeFilter;
@@ -20,7 +26,11 @@ interface TimeFilterSelectProps {
   className?: string;
 }
 
-export function TimeFilterSelect({ value, onValueChange, className }: TimeFilterSelectProps) {
+export function TimeFilterSelect({
+  value,
+  onValueChange,
+  className,
+}: TimeFilterSelectProps) {
   return (
     <Select value={value} onValueChange={onValueChange}>
       <SelectTrigger className={className}>
