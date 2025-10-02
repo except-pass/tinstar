@@ -11,7 +11,7 @@ import {
 import { NewChat } from "./NewChat";
 
 export const NewChatModal: FC<{
-  projectId: string;
+  projectId?: string; // Made optional to support global modal
   trigger?: ReactNode;
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;

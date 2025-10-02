@@ -1,7 +1,7 @@
 import { mkdir, rename, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
-import { claudeProjectPath } from "../paths";
+import { claudeProjectPath as _claudeProjectPath } from "../paths";
 import { decodeProjectId } from "../project/id";
 
 export interface DeleteSessionResult {

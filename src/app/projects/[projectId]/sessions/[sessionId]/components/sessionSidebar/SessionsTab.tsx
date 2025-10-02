@@ -5,7 +5,6 @@ import { MessageSquareIcon, PlusIcon } from "lucide-react";
 import Link from "next/link";
 import {
   useEffect,
-  useId,
   useState,
   useRef,
   forwardRef,
@@ -16,7 +15,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { TimeFilterSelect } from "@/components/ui/time-filter-select";
 import { WorktreeBadge } from "@/components/ui/worktree-badge";
 import { cn } from "@/lib/utils";
 import { isWorktreeSession } from "@/lib/worktree";
@@ -25,7 +24,8 @@ import { honoClient } from "../../../../../../../lib/api/client";
 import { NewChatModal } from "../../../../components/newChat/NewChatModal";
 import { firstCommandToTitle } from "../../../../services/firstCommandToTitle";
 import { aliveTasksAtom } from "../../store/aliveTasksAtom";
-import { showOldSessionsAtom } from "../../store/showOldSessionsAtom";
+import { sessionTimeFilterAtom } from "../../store/sessionTimeFilterAtom";
+import { isSessionWithinTimeFilter } from "@/app/sessions/utils/timeFilters";
 import { DeleteSessionDialog } from "./DeleteSessionDialog";
 
 export interface SessionsTabRef {
@@ -48,24 +48,20 @@ export const SessionsTab = forwardRef<
     setIsHydrated(true);
   }, []);
   const aliveTasks = useAtomValue(aliveTasksAtom);
-  const [showOldSessions, setShowOldSessions] = useAtom(showOldSessionsAtom);
-  const checkboxId = useId();
+  const [timeFilter, setTimeFilter] = useAtom(sessionTimeFilterAtom);
   const router = useRouter();
   const [selectedSessionIndex, setSelectedSessionIndex] = useState(-1);
   const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
   const newChatButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Filter sessions based on 24-hour cutoff if showOldSessions is false
-  const filteredSessions = showOldSessions
-    ? sessions
-    : isHydrated
-      ? sessions.filter((session) => {
-          if (!session.meta.lastModifiedAt) return false;
-          const sessionTime = new Date(session.meta.lastModifiedAt).getTime();
-          const cutoffTime = Date.now() - 24 * 60 * 60 * 1000; // 24 hours ago
-          return sessionTime > cutoffTime;
-        })
-      : sessions; // Before hydration, avoid Date.now()-based filtering to prevent SSR mismatches
+  // Filter sessions based on time filter
+  const filteredSessions = sessions.filter((session) => {
+    return isSessionWithinTimeFilter(
+      session.meta.lastModifiedAt,
+      timeFilter,
+      isHydrated
+    );
+  });
 
   // Sort sessions: Running > Paused > Others, then by lastModifiedAt (newest first)
   const sortedSessions = [...filteredSessions].sort((a, b) => {
@@ -169,7 +165,7 @@ export const SessionsTab = forwardRef<
         // The SSE system will handle updating the sessions list
       } else {
         const error = await response.json();
-        toast.error(error.error || "Failed to delete session");
+        toast.error("error" in error ? error.error : "Failed to delete session");
       }
     } catch (error) {
       console.error("Delete session error:", error);
@@ -212,20 +208,11 @@ export const SessionsTab = forwardRef<
         </div>
         <div className="flex items-center justify-between text-xs text-sidebar-foreground/70">
           <span>{isHydrated ? `${sortedSessions.length} total` : ""}</span>
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id={checkboxId}
-              checked={showOldSessions}
-              onCheckedChange={(checked) => {
-                if (typeof checked === "boolean") {
-                  setShowOldSessions(checked);
-                }
-              }}
-            />
-            <label htmlFor={checkboxId} className="text-xs cursor-pointer">
-              Show Old Sessions
-            </label>
-          </div>
+          <TimeFilterSelect
+            value={timeFilter}
+            onValueChange={setTimeFilter}
+            className="w-24 h-7 text-xs"
+          />
         </div>
       </div>
 

@@ -17,6 +17,7 @@ export const configSchema = z.object({
     .optional()
     .default(resolve(homedir(), ".tinstar", "worktrees")),
   defaultModel: modelTypeSchema.optional().default("default"),
+  defaultProjectId: z.string().optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;
