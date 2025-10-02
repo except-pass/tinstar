@@ -105,8 +105,16 @@ export const useServerEvents = () => {
             }
 
             if (event.data.type === "session_changed") {
-              // Sessions list lives under the project query; refresh those
-              await queryClient.invalidateQueries({ queryKey: projetsQueryConfig.queryKey });
+              // Invalidate the specific session that changed
+              const { sessionId, projectId } = event.data.data;
+              await queryClient.invalidateQueries({
+                queryKey: ["sessions", sessionId],
+              });
+
+              // Also invalidate the project to refresh session metadata in the list
+              await queryClient.invalidateQueries({
+                queryKey: ["projects", projectId],
+              });
             }
 
             if (event.data.type === "task_changed") {

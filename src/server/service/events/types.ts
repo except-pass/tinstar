@@ -36,6 +36,10 @@ export type SSEEvent = BaseSSEEvent &
         data: SessionChangedData;
       }
     | {
+        type: "file_changed_internal";
+        data: SessionChangedData;
+      }
+    | {
         type: "task_changed";
         data: SerializableAliveTask[];
       }
