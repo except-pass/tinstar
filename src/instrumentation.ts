@@ -1,5 +1,6 @@
 export async function register() {
-  if (process.env.NEXT_RUNTIME === "nodejs") {
+  const runtime = process.env["NEXT_RUNTIME"];
+  if (runtime === "nodejs") {
     const { SessionCacheService } = await import(
       "./server/service/cache/SessionCacheService"
     );

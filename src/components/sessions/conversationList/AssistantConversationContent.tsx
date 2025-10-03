@@ -133,6 +133,9 @@ export const AssistantConversationContent: FC<{
   isInEditGroup = false,
 }) => {
   const { openInEditor } = useOpenInEditor();
+  // Toggle state defined at top-level to satisfy hooks rule
+  const [showInputs, setShowInputs] = useState(false);
+  const [showOutputs, setShowOutputs] = useState(false);
   if (content.type === "text") {
     return (
       <div
@@ -206,17 +209,20 @@ export const AssistantConversationContent: FC<{
 
       let syntheticDiff: string;
 
-      if (
-        content.name === "MultiEdit" &&
-        content.input &&
-        typeof content.input === "object" &&
-        "edits" in content.input
-      ) {
+      function isMultiEdits(
+        input: unknown,
+      ): input is { edits: Array<{ old_string: string; new_string: string }> } {
+        return (
+          !!input &&
+          typeof input === "object" &&
+          "edits" in input &&
+          Array.isArray((input as { edits: unknown }).edits)
+        );
+      }
+
+      if (content.name === "MultiEdit" && isMultiEdits(content.input)) {
         // Handle MultiEdit with multiple edits
-        const edits = (content.input as any).edits as Array<{
-          old_string: string;
-          new_string: string;
-        }>;
+        const edits = content.input.edits;
         syntheticDiff = generateMultiEditDiff(filePath, edits);
       } else if (
         content.input &&
@@ -282,9 +288,7 @@ export const AssistantConversationContent: FC<{
       );
     }
 
-    // State for button-style toggles
-    const [showInputs, setShowInputs] = useState(false);
-    const [showOutputs, setShowOutputs] = useState(false);
+    // hooks moved to top-level above; no hooks here
 
     return (
       <div className="mb-2">
@@ -303,6 +307,7 @@ export const AssistantConversationContent: FC<{
           </Badge>
 
           <button
+            type="button"
             onClick={() => setShowInputs(!showInputs)}
             className={`px-2 py-1 text-xs rounded border transition-colors ${
               showInputs
@@ -315,6 +320,7 @@ export const AssistantConversationContent: FC<{
 
           {toolResult && (
             <button
+              type="button"
               onClick={() => setShowOutputs(!showOutputs)}
               className={`px-2 py-1 text-xs rounded border transition-colors ${
                 showOutputs

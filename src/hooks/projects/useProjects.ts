@@ -1,4 +1,5 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
+import type { Project } from "@/server/service/types";
 import { honoClient } from "@/lib/api/client";
 
 export const projetsQueryConfig = {
@@ -6,12 +7,20 @@ export const projetsQueryConfig = {
   queryFn: async () => {
     const response = await honoClient.api.projects.$get();
     const { projects } = await response.json();
-    return projects;
+    return projects.map((project) => ({
+      ...project,
+      meta: {
+        ...project.meta,
+        lastModifiedAt: project.meta.lastModifiedAt
+          ? new Date(project.meta.lastModifiedAt)
+          : null,
+      },
+    })) as Project[];
   },
 } as const;
 
 export const useProjects = () => {
-  return useSuspenseQuery({
+  return useSuspenseQuery<Project[]>({
     queryKey: projetsQueryConfig.queryKey,
     queryFn: projetsQueryConfig.queryFn,
   });

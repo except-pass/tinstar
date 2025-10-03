@@ -25,12 +25,15 @@ function hashCode(str: string): number {
 
 function getProjectColor(projectId: string): string {
   const hash = hashCode(projectId);
-  return colors[hash % colors.length] || colors[0]!;
+  const index = hash % colors.length;
+  const color = colors[index];
+  const defaultColor = colors[0] ?? "bg-slate-100 text-slate-800";
+  return color ?? defaultColor;
 }
 
 interface ProjectPillProps {
   projectId: string;
-  projectName: string;
+  projectName?: string;
   className?: string;
   size?: "xs" | "sm" | "md";
 }
@@ -56,7 +59,7 @@ export function ProjectPill({
         className,
       )}
     >
-      {projectName}
+      {projectName ?? projectId}
     </span>
   );
 }

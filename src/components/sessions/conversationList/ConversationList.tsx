@@ -684,7 +684,7 @@ export const ConversationList: FC<ConversationListProps> = ({
         }
         return (
           <div
-            key={`event-${i}`}
+            key={`tool-${event.id}-${i}`}
             className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`}
           />
         );
@@ -692,7 +692,7 @@ export const ConversationList: FC<ConversationListProps> = ({
         // Response
         return (
           <div
-            key={`event-${i}`}
+            key={`response-${i}-${group.conversations.length}`}
             className="w-2 h-2 rounded-full flex-shrink-0 bg-orange-600 dark:bg-orange-400"
           />
         );
@@ -873,6 +873,7 @@ export const ConversationList: FC<ConversationListProps> = ({
           // Render user message
           const userContent = (
             <ConversationItem
+              key={getConversationKey(userMessage)}
               conversation={userMessage}
               getToolResult={getToolResult}
               isRootSidechain={isRootSidechain}
@@ -895,14 +896,14 @@ export const ConversationList: FC<ConversationListProps> = ({
             return [
               <li
                 className="w-full flex justify-start"
-                key={`user-section-${groupIndex}`}
+                key={`user-section-${getConversationKey(userMessage)}`}
               >
                 <div className="w-full">{userContent}</div>
               </li>,
               ...workContent.map((content, workIndex) => (
                 <li
                   className="w-full flex justify-start"
-                  key={`user-section-${groupIndex}-work-${workIndex}`}
+                  key={`user-section-${getConversationKey(userMessage)}-work-${workIndex}`}
                 >
                   <div className="w-full">{content}</div>
                 </li>
@@ -913,7 +914,7 @@ export const ConversationList: FC<ConversationListProps> = ({
             return (
               <li
                 className="w-full flex justify-start"
-                key={`user-section-${groupIndex}`}
+                key={`user-section-${getConversationKey(userMessage)}`}
               >
                 <div className="w-full">
                   <Collapsible defaultOpen={false}>
@@ -927,7 +928,11 @@ export const ConversationList: FC<ConversationListProps> = ({
                       <div className="bg-background rounded border p-3 mt-2">
                         <ul className="w-full">
                           {workContent.map((content, workIndex) => (
-                            <li key={`work-${workIndex}`}>{content}</li>
+                            <li
+                              key={`work-${getConversationKey(userMessage)}-${workIndex}`}
+                            >
+                              {content}
+                            </li>
                           ))}
                         </ul>
                       </div>
