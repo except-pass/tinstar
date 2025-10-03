@@ -11,6 +11,7 @@
       "**",
       "!**/*.generated.*",
       "!.next",
+      "!spec",
       "!src/lib/$path.ts",
       "!**/*.css",
       "!dist"

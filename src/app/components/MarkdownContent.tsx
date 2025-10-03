@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import type { FC } from "react";
 import Markdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -230,14 +231,16 @@ export const MarkdownContent: FC<MarkdownContentProps> = ({
             );
           },
           img({ src, alt, ...props }) {
+            if (!src) return null;
             return (
-              <img
+              <Image
                 src={src}
-                alt={alt || ""}
+                alt={typeof alt === "string" ? alt : ""}
                 width={800}
                 height={600}
                 style={{ maxWidth: "100%", height: "auto" }}
                 loading="lazy"
+                unoptimized
                 {...props}
               />
             );

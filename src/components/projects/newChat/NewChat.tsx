@@ -55,14 +55,21 @@ export const NewChat: FC<{
       {!projectId && projects && (
         <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
           <div className="space-y-2">
-            <label className="text-sm font-medium">Project</label>
-            <ProjectSelector
-              projects={projects as any}
-              value={selectedProjectId}
-              onValueChange={setSelectedProjectId}
-              placeholder="Select a project..."
-              className="w-full"
-            />
+            <label
+              className="text-sm font-medium"
+              htmlFor={setAsDefaultCheckboxId}
+            >
+              Project
+            </label>
+            <div id={setAsDefaultCheckboxId}>
+              <ProjectSelector
+                projects={projects}
+                value={selectedProjectId}
+                onValueChange={setSelectedProjectId}
+                placeholder="Select a project..."
+                className="w-full"
+              />
+            </div>
           </div>
           <div className="flex items-center space-x-2">
             <Checkbox

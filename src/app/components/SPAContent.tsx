@@ -1,5 +1,10 @@
 "use client";
 
+import { useAtom } from "jotai";
+import { CodeIcon, CopyIcon, GitCompareIcon, InfoIcon } from "lucide-react";
+import type { FC } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useConfig } from "@/app/hooks/useConfig";
 import { useSetPermissionModeMutation } from "@/components/projects/chatForm/useChatMutations";
 import { ConversationList } from "@/components/sessions/conversationList/ConversationList";
@@ -24,11 +29,6 @@ import { currentSessionAtom } from "@/lib/atoms/currentSessionAtom";
 import { firstCommandToTitle } from "@/lib/services/firstCommandToTitle";
 import { cn } from "@/lib/utils";
 import { isWorktreeSession } from "@/lib/worktree-utils";
-import { useAtom } from "jotai";
-import { CodeIcon, CopyIcon, GitCompareIcon, InfoIcon } from "lucide-react";
-import type { FC } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
 import { UnifiedSidebar, type UnifiedSidebarRef } from "./UnifiedSidebar";
 
 export const SPAContent: FC = () => {

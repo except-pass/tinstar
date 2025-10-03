@@ -25,7 +25,7 @@ function hashCode(str: string): number {
 
 function getProjectColor(projectId: string): string {
   const hash = hashCode(projectId);
-  return colors[hash % colors.length] || colors[0]!;
+  return colors[hash % colors.length] || colors[0];
 }
 
 interface ProjectPillProps {
