@@ -231,7 +231,7 @@ export const MarkdownContent: FC<MarkdownContentProps> = ({
             );
           },
           img({ src, alt, ...props }) {
-            if (!src) return null;
+            if (typeof src !== "string") return null;
             return (
               <Image
                 src={src}
