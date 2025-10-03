@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import type { Project } from "@/server/service/types";
 import { honoClient } from "@/lib/api/client";
+import type { Project } from "@/server/service/types";
 
 export const projetsQueryConfig = {
   queryKey: ["projects"],
