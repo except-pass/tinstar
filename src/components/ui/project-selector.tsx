@@ -1,5 +1,11 @@
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ProjectPill } from "@/components/ui/project-pill";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { Project } from "@/server/service/types";
 
 interface ProjectSelectorProps {
@@ -10,14 +16,14 @@ interface ProjectSelectorProps {
   className?: string;
 }
 
-export function ProjectSelector({ 
-  projects, 
-  value, 
-  onValueChange, 
+export function ProjectSelector({
+  projects,
+  value,
+  onValueChange,
   placeholder = "Select a project...",
-  className 
+  className,
 }: ProjectSelectorProps) {
-  const selectedProject = projects.find(p => p.id === value);
+  const selectedProject = projects.find((p) => p.id === value);
 
   return (
     <Select value={value} onValueChange={onValueChange}>
@@ -25,9 +31,11 @@ export function ProjectSelector({
         <SelectValue>
           {selectedProject ? (
             <div className="flex items-center gap-2">
-              <ProjectPill 
-                projectId={selectedProject.id} 
-                projectName={selectedProject.meta.projectName || selectedProject.id}
+              <ProjectPill
+                projectId={selectedProject.id}
+                projectName={
+                  selectedProject.meta.projectName || selectedProject.id
+                }
                 size="sm"
               />
             </div>
@@ -40,8 +48,8 @@ export function ProjectSelector({
         {projects.map((project) => (
           <SelectItem key={project.id} value={project.id}>
             <div className="flex items-center gap-2">
-              <ProjectPill 
-                projectId={project.id} 
+              <ProjectPill
+                projectId={project.id}
                 projectName={project.meta.projectName || project.id}
                 size="sm"
               />

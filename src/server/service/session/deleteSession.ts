@@ -1,7 +1,6 @@
 import { mkdir, rename, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
-import { claudeProjectPath as _claudeProjectPath } from "../paths";
 import { decodeProjectId } from "../project/id";
 
 export interface DeleteSessionResult {
@@ -18,7 +17,7 @@ export async function deleteSession(
   // projectId is a base64url-encoded full path (see encodeProjectId)
   const decodedProjectPath = decodeProjectId(projectId);
   const sourcePath = resolve(decodedProjectPath, sessionFileName);
-  
+
   // Create .tinstar path - mirrors .claude structure
   const tinstarProjectPath = resolve(homedir(), ".tinstar", "projects");
   // Mirror the visible project directory name, not the encoded ID
@@ -28,7 +27,7 @@ export async function deleteSession(
   try {
     // Check if source file exists
     await stat(sourcePath);
-  } catch (error) {
+  } catch (_error) {
     return {
       success: false,
       message: `Session file not found: ${sessionFileName}`,

@@ -16,7 +16,9 @@ export const getSession = async (
   // Try to get from cache first
   const cacheService = SessionCacheService.getInstance();
   const isReady = cacheService.isReady();
-  console.log(`[getSession] Cache ready: ${isReady}, looking for ${projectId}/${sessionId}`);
+  console.log(
+    `[getSession] Cache ready: ${isReady}, looking for ${projectId}/${sessionId}`,
+  );
 
   if (isReady) {
     const cached = cacheService.getSession(projectId, sessionId);
@@ -30,9 +32,7 @@ export const getSession = async (
   }
 
   // Fallback to file reading if cache is not ready or session not found
-  console.warn(
-    `Reading from disk: ${projectId}/${sessionId}`,
-  );
+  console.warn(`Reading from disk: ${projectId}/${sessionId}`);
 
   const projectPath = decodeProjectId(projectId);
 

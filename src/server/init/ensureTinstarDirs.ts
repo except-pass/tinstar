@@ -16,5 +16,3 @@ export const ensureTinstarDirectories = async (): Promise<void> => {
   await mkdir(projectsPath, { recursive: true });
   await mkdir(worktreesPath, { recursive: true });
 };
-
-
