@@ -2,12 +2,12 @@ import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { Conversation } from "../../../lib/conversation-schema";
 import { parseJsonl } from "../parseJsonl";
+import { getProjects } from "../project/getProjects";
 import { decodeProjectId } from "../project/id";
+import { getSessionMeta } from "../session/getSessionMeta";
+import { getSessions } from "../session/getSessions";
 import type { SessionDetail, SessionMeta } from "../types";
 import { getWorktreeProjects } from "../worktree/utils";
-import { getSessionMeta } from "../session/getSessionMeta";
-import { getProjects } from "../project/getProjects";
-import { getSessions } from "../session/getSessions";
 
 interface CachedSession {
   conversations: (Conversation | { type: "x-error"; line: string })[];
@@ -169,10 +169,7 @@ export class SessionCacheService {
         });
       }
     } catch (error) {
-      console.error(
-        `Failed to load session ${projectId}/${sessionId}:`,
-        error,
-      );
+      console.error(`Failed to load session ${projectId}/${sessionId}:`, error);
       throw error;
     }
   }
@@ -200,27 +197,85 @@ export class SessionCacheService {
         return; // No changes
       }
 
-      // Read only new content from last position
-      const fileHandle = await readFile(cached.filePath, "utf-8");
-      const newContent = fileHandle.slice(cached.filePosition);
+      // Read file content
+      const fileContent = await readFile(cached.filePath, "utf-8");
 
-      if (newContent.trim().length === 0) {
+      // Find a safe starting position (beginning of a complete line)
+      // Read back to the previous newline to ensure we don't start mid-JSON
+      let startPos = cached.filePosition;
+      if (startPos > 0 && startPos <= fileContent.length) {
+        // Look backwards from cached position to find previous newline
+        const beforePos = fileContent.lastIndexOf("\n", startPos - 1);
+        if (beforePos !== -1) {
+          // Start reading from the line AFTER the last known complete line
+          startPos = beforePos + 1;
+        } else {
+          // No newline found before position, start from beginning
+          startPos = 0;
+        }
+      }
+
+      // Extract new content from safe position
+      const newContent = fileContent.slice(startPos);
+      if (!newContent.trim()) {
         return; // No new content
       }
 
-      // Parse new lines
-      const newConversations = parseJsonl(newContent);
+      // Parse only complete JSON lines
+      const lines = newContent.split("\n");
+      const completeLines: string[] = [];
+      let lastCompleteLineEnd = startPos;
 
-      // Append to existing conversations
-      cached.conversations.push(...newConversations);
-      cached.filePosition = stats.size;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]?.trim();
+        if (line?.startsWith("{") && line.endsWith("}")) {
+          completeLines.push(line);
+          // Track position after this complete line (including newline)
+          const linesUpToThis = lines.slice(0, i + 1).join("\n");
+          lastCompleteLineEnd = startPos + linesUpToThis.length;
+          if (i < lines.length - 1) {
+            lastCompleteLineEnd += 1; // +1 for the newline character
+          }
+        }
+      }
+
+      if (completeLines.length === 0) {
+        return; // No complete lines to parse
+      }
+
+      // Parse the complete lines
+      const newConversations = parseJsonl(completeLines.join("\n"));
+
+      // Deduplicate by UUID to handle re-reading overlapping lines
+      const existingUuids = new Set(
+        cached.conversations
+          .filter((c) => c.type !== "x-error" && "uuid" in c)
+          .map((c) => (c as { uuid: string }).uuid)
+          .filter(Boolean),
+      );
+
+      const uniqueNewConversations = newConversations.filter((conv) => {
+        // Keep error entries
+        if (conv.type === "x-error") return true;
+        // Check for UUID and deduplicate
+        if ("uuid" in conv) {
+          const uuid = (conv as { uuid: string }).uuid;
+          return uuid && !existingUuids.has(uuid);
+        }
+        // Keep entries without UUIDs (like summaries)
+        return true;
+      });
+
+      // Update cache with unique conversations
+      cached.conversations.push(...uniqueNewConversations);
+      cached.filePosition = lastCompleteLineEnd; // Only advance to last complete line
       cached.lastModified = stats.mtime;
 
       // Update metadata
       cached.metadata = await getSessionMeta(cached.filePath);
 
       console.log(
-        `Updated cache for ${projectId}/${sessionId} - added ${newConversations.length} new conversations`,
+        `Updated cache for ${projectId}/${sessionId} - added ${uniqueNewConversations.length} new conversations`,
       );
     } catch (error) {
       console.error(
@@ -242,14 +297,22 @@ export class SessionCacheService {
     const project = this.cache.get(projectId);
     if (!project) {
       console.log(`[SessionCache] Project not found: ${projectId}`);
-      console.log(`[SessionCache] Available projects:`, Array.from(this.cache.keys()));
+      console.log(
+        `[SessionCache] Available projects:`,
+        Array.from(this.cache.keys()),
+      );
       return null;
     }
 
     const cached = project.sessions.get(sessionId);
     if (!cached) {
-      console.log(`[SessionCache] Session not found: ${sessionId} in project ${projectId}`);
-      console.log(`[SessionCache] Available sessions in project:`, Array.from(project.sessions.keys()).slice(0, 5));
+      console.log(
+        `[SessionCache] Session not found: ${sessionId} in project ${projectId}`,
+      );
+      console.log(
+        `[SessionCache] Available sessions in project:`,
+        Array.from(project.sessions.keys()).slice(0, 5),
+      );
       return null;
     }
 

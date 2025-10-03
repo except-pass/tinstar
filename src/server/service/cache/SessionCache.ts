@@ -120,7 +120,10 @@ export class SessionCache {
       // Maintain cache size
       this.evictLRU();
     } catch (error) {
-      console.warn(`[SessionCache] Failed to cache session ${projectId}:${sessionId}`, error);
+      console.warn(
+        `[SessionCache] Failed to cache session ${projectId}:${sessionId}`,
+        error,
+      );
     }
   }
 
@@ -153,7 +156,9 @@ export class SessionCache {
     }
 
     if (keysToDelete.length > 0) {
-      console.debug(`[SessionCache] Invalidated ${keysToDelete.length} entries for project: ${projectId}`);
+      console.debug(
+        `[SessionCache] Invalidated ${keysToDelete.length} entries for project: ${projectId}`,
+      );
     }
   }
 
