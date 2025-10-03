@@ -230,14 +230,31 @@ export const MarkdownContent: FC<MarkdownContentProps> = ({
               </em>
             );
           },
-          img({ src, alt, ...props }) {
+          img({ src, alt, width, height, ...props }) {
             if (typeof src !== "string") return null;
+
+            const parsedWidth =
+              typeof width === "string"
+                ? Number.parseInt(width, 10)
+                : typeof width === "number"
+                  ? width
+                  : undefined;
+            const parsedHeight =
+              typeof height === "string"
+                ? Number.parseInt(height, 10)
+                : typeof height === "number"
+                  ? height
+                  : undefined;
+
+            const finalWidth = Number.isFinite(parsedWidth) ? parsedWidth : 800;
+            const finalHeight = Number.isFinite(parsedHeight) ? parsedHeight : 600;
+
             return (
               <Image
                 src={src}
                 alt={typeof alt === "string" ? alt : ""}
-                width={800}
-                height={600}
+                width={finalWidth}
+                height={finalHeight}
                 style={{ maxWidth: "100%", height: "auto" }}
                 loading="lazy"
                 unoptimized

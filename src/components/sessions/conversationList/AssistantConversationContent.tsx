@@ -134,8 +134,8 @@ export const AssistantConversationContent: FC<{
 }) => {
   const { openInEditor } = useOpenInEditor();
   // Toggle state defined at top-level to satisfy hooks rule
-  const [_showInputs, _setShowInputs] = useState(false);
-  const [_showOutputs, _setShowOutputs] = useState(false);
+  const [showInputs, setShowInputs] = useState(false);
+  const [showOutputs, setShowOutputs] = useState(false);
   if (content.type === "text") {
     return (
       <div
