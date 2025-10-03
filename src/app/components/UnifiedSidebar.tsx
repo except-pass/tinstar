@@ -4,39 +4,39 @@ import { useAtom, useAtomValue } from "jotai";
 import {
   MessageSquareIcon,
   PlugIcon,
-  SettingsIcon,
   PlusIcon,
+  SettingsIcon,
 } from "lucide-react";
 import {
-  useEffect,
-  useState,
-  useRef,
   forwardRef,
-  useImperativeHandle,
   useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
 } from "react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { TimeFilterSelect } from "@/components/ui/time-filter-select";
-import { WorktreeBadge } from "@/components/ui/worktree-badge";
-import { ProjectPill } from "@/components/ui/project-pill";
-import { cn } from "@/lib/utils";
-import { isWorktreeSession } from "@/lib/worktree";
-import { honoClient } from "@/lib/api/client";
+import { usePrefetchVisibleSessions } from "@/app/hooks/usePrefetchVisibleSessions";
 import { NewChatModal } from "@/components/projects/newChat/NewChatModal";
-import { firstCommandToTitle } from "@/lib/services/firstCommandToTitle";
-import { aliveTasksAtom } from "@/lib/atoms/aliveTasksAtom";
-import { sessionTimeFilterAtom } from "@/lib/atoms/sessionTimeFilterAtom";
-import { isSessionWithinTimeFilter } from "@/lib/utils/sessions/timeFilters";
-import { useCombinedSessions } from "@/hooks/sessions/useCombinedSessions";
-import { DeleteSessionDialog } from "@/components/sessions/sessionSidebar/DeleteSessionDialog";
 import { ProjectFilter } from "@/components/sessions/ProjectFilter";
-import { projectFilterAtom } from "@/lib/atoms/projectFilterAtom";
-import { currentSessionAtom } from "@/lib/atoms/currentSessionAtom";
+import { DeleteSessionDialog } from "@/components/sessions/sessionSidebar/DeleteSessionDialog";
 import { McpTab } from "@/components/sessions/sessionSidebar/McpTab";
 import { SettingsTab } from "@/components/sessions/sessionSidebar/SettingsTab";
-import { usePrefetchVisibleSessions } from "@/app/hooks/usePrefetchVisibleSessions";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ProjectPill } from "@/components/ui/project-pill";
+import { TimeFilterSelect } from "@/components/ui/time-filter-select";
+import { WorktreeBadge } from "@/components/ui/worktree-badge";
+import { useCombinedSessions } from "@/hooks/sessions/useCombinedSessions";
+import { honoClient } from "@/lib/api/client";
+import { aliveTasksAtom } from "@/lib/atoms/aliveTasksAtom";
+import { currentSessionAtom } from "@/lib/atoms/currentSessionAtom";
+import { projectFilterAtom } from "@/lib/atoms/projectFilterAtom";
+import { sessionTimeFilterAtom } from "@/lib/atoms/sessionTimeFilterAtom";
+import { firstCommandToTitle } from "@/lib/services/firstCommandToTitle";
+import { cn } from "@/lib/utils";
+import { isSessionWithinTimeFilter } from "@/lib/utils/sessions/timeFilters";
+import { isWorktreeSession } from "@/lib/worktree";
 
 export interface UnifiedSidebarRef {
   navigateUp: () => void;
@@ -175,9 +175,9 @@ export const UnifiedSidebar = forwardRef<UnifiedSidebarRef, object>(
       }
     }, [sortedSessions, selectedSessionIndex, setCurrentSession]);
 
-    const createNew = () => {
+    const createNew = useCallback(() => {
       setIsNewChatModalOpen(true);
-    };
+    }, []);
 
     const handleDeleteSession = async (
       sessionIdToDelete: string,
@@ -238,7 +238,7 @@ export const UnifiedSidebar = forwardRef<UnifiedSidebarRef, object>(
         navigateDown,
         createNew,
       }),
-      [navigateUp, navigateDown],
+      [navigateUp, navigateDown, createNew],
     );
 
     const renderContent = () => {

@@ -21,7 +21,8 @@ export function ProjectFilter({ className }: ProjectFilterProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
-  if (!projects) return null;
+  // Guard projects-dependent rendering, but keep hooks at top-level
+  const hasProjects = Array.isArray(projects) && projects.length > 0;
 
   const hasActiveFilter = !filterState.showAll;
 
@@ -102,18 +103,18 @@ export function ProjectFilter({ className }: ProjectFilterProps) {
         />
       </Button>
 
-      {isOpen && (
+      {isOpen && hasProjects && (
         <div className="absolute top-full left-0 z-50 mt-1 w-72 bg-white border border-border rounded-md shadow-lg p-2">
           <div className="space-y-2">
             {/* Show All Option */}
             <div className="flex items-center space-x-2 p-2 hover:bg-muted/50 rounded">
               <Checkbox
-                id="show-all"
+                id={`show-all-${hasProjects ? projects.length : 0}`}
                 checked={filterState.showAll}
                 onCheckedChange={handleShowAllChange}
               />
               <label
-                htmlFor="show-all"
+                htmlFor={`show-all-${hasProjects ? projects.length : 0}`}
                 className="flex-1 text-sm font-medium cursor-pointer"
               >
                 Show All Projects
