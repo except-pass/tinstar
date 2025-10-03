@@ -12,7 +12,10 @@ describe("SessionCacheService", () => {
 
   beforeEach(async () => {
     // Create isolated cache instance for each test
-    cacheService = new (SessionCacheService as any)();
+    // @ts-expect-error accessing internal constructor for test isolation
+    cacheService = new (
+      SessionCacheService as unknown as { new (): SessionCacheService }
+    )();
 
     // Create isolated temp directory for each test
     testDir = join(
