@@ -247,7 +247,9 @@ export const MarkdownContent: FC<MarkdownContentProps> = ({
                   : undefined;
 
             const finalWidth = Number.isFinite(parsedWidth) ? parsedWidth : 800;
-            const finalHeight = Number.isFinite(parsedHeight) ? parsedHeight : 600;
+            const finalHeight = Number.isFinite(parsedHeight)
+              ? parsedHeight
+              : 600;
 
             return (
               <Image

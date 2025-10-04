@@ -6,6 +6,8 @@ import type { FC } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useConfig } from "@/app/hooks/useConfig";
+import { SlashCommandPalette } from "@/components/commands/SlashCommandPalette";
+import { SlashCommandPaletteButton } from "@/components/commands/SlashCommandPaletteButton";
 import { useSetPermissionModeMutation } from "@/components/projects/chatForm/useChatMutations";
 import { ConversationList } from "@/components/sessions/conversationList/ConversationList";
 import { DiffModal } from "@/components/sessions/diffModal";
@@ -29,6 +31,7 @@ import { currentSessionAtom } from "@/lib/atoms/currentSessionAtom";
 import { firstCommandToTitle } from "@/lib/services/firstCommandToTitle";
 import { cn } from "@/lib/utils";
 import { isWorktreeSession } from "@/lib/worktree-utils";
+import { SlashCommandsBootstrap } from "./SlashCommandsBootstrap";
 import { UnifiedSidebar, type UnifiedSidebarRef } from "./UnifiedSidebar";
 
 export const SPAContent: FC = () => {
@@ -51,28 +54,38 @@ export const SPAContent: FC = () => {
   // If no session is selected yet, show loading
   if (!currentSession) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="flex gap-1">
-              <div className="w-3 h-3 bg-primary rounded-full animate-bounce" />
-              <div className="w-3 h-3 bg-primary rounded-full animate-bounce [animation-delay:0.1s]" />
-              <div className="w-3 h-3 bg-primary rounded-full animate-bounce [animation-delay:0.2s]" />
+      <>
+        <SlashCommandsBootstrap />
+        <SlashCommandPalette />
+        <SlashCommandPaletteButton />
+        <div className="flex h-screen items-center justify-center">
+          <div className="flex flex-col items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1">
+                <div className="w-3 h-3 bg-primary rounded-full animate-bounce" />
+                <div className="w-3 h-3 bg-primary rounded-full animate-bounce [animation-delay:0.1s]" />
+                <div className="w-3 h-3 bg-primary rounded-full animate-bounce [animation-delay:0.2s]" />
+              </div>
             </div>
+            <p className="text-lg text-muted-foreground font-medium">
+              Loading sessions...
+            </p>
           </div>
-          <p className="text-lg text-muted-foreground font-medium">
-            Loading sessions...
-          </p>
         </div>
-      </div>
+      </>
     );
   }
 
   return (
-    <SessionContent
-      projectId={currentSession.projectId}
-      sessionId={currentSession.sessionId}
-    />
+    <>
+      <SlashCommandsBootstrap />
+      <SlashCommandPalette />
+      <SlashCommandPaletteButton />
+      <SessionContent
+        projectId={currentSession.projectId}
+        sessionId={currentSession.sessionId}
+      />
+    </>
   );
 };
 

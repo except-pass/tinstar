@@ -1,5 +1,6 @@
 import type { WatchEventType } from "node:fs";
 import type { SerializableAliveTask } from "../claude-code/types";
+import type { CommandWatchEvent } from "../commands/types";
 
 export type WatcherEvent =
   | {
@@ -43,6 +44,7 @@ export type SSEEvent = BaseSSEEvent &
         type: "task_changed";
         data: SerializableAliveTask[];
       }
+    | CommandWatchEvent
   );
 
 export interface ProjectChangedData {
