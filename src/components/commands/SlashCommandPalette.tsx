@@ -8,7 +8,7 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   slashCommandsQueryKey,
@@ -75,9 +75,11 @@ export const SlashCommandPalette = () => {
 
   const parsed = useMemo(() => parseInput(input), [input]);
 
-  const commands: CommandRecord[] = useMemo(() => {
+  const commands = useMemo<CommandRecord[]>(() => {
     if (!data) return [];
-    return data.index.order.map((id) => data.index.byId[id]).filter(Boolean);
+    return data.index.order
+      .map((id) => data.index.byId[id])
+      .filter((c): c is CommandRecord => Boolean(c));
   }, [data]);
 
   const tokenNorm = parsed.token.replace(/^\//, "").toLowerCase();
@@ -266,7 +268,8 @@ export const SlashCommandPalette = () => {
 
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogContent className="sm:max-w-2xl p-0 overflow-hidden">
+      <DialogContent className="sm:max-w-2xl p-0 overflow-hidden top-24 left-1/2 -translate-x-1/2 translate-y-0 origin-top">
+        <DialogTitle className="sr-only">Command Palette</DialogTitle>
         <div className="border-b px-4 py-3">
           <div className="flex items-center justify-between gap-2">
             <Input
@@ -363,7 +366,8 @@ const PaletteItem = ({
   isStarred,
 }: PaletteItemProps) => {
   return (
-    <div
+    <button
+      type="button"
       className="flex w-full items-start justify-between rounded-md border px-3 py-2 text-left transition-colors hover:bg-accent hover:text-accent-foreground cursor-pointer"
       onClick={onSelect}
       onKeyDown={(event) => {
@@ -372,8 +376,6 @@ const PaletteItem = ({
           onRun();
         }
       }}
-      role="button"
-      tabIndex={0}
     >
       <div className="min-w-0">
         <div className="text-sm font-medium truncate">
@@ -424,6 +426,6 @@ const PaletteItem = ({
           Run
         </Button>
       </div>
-    </div>
+    </button>
   );
 };

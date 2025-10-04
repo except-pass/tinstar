@@ -181,8 +181,16 @@ export class CommandLoader {
       revision: nextRevision,
     };
 
-    this.commandsById = new Map(order.map((id) => [id, byId[id]]));
-    this.commandsByName = new Map(order.map((id) => [byId[id].name, byId[id]]));
+    const idEntries: Array<[string, CommandRecord]> = [];
+    const nameEntries: Array<[string, CommandRecord]> = [];
+    for (const id of order) {
+      const record = byId[id];
+      if (!record) continue;
+      idEntries.push([id, record]);
+      nameEntries.push([record.name, record]);
+    }
+    this.commandsById = new Map(idEntries);
+    this.commandsByName = new Map(nameEntries);
 
     this.eventBus.emit("commands_changed", {
       type: "commands_changed",
@@ -275,9 +283,9 @@ export class CommandLoader {
       const name = `/${relPath}`;
 
       const description = resolveDescription(frontMatter, body);
-      const aliases = normalizeStringArray(frontMatter.aliases);
-      const tags = normalizeStringArray(frontMatter.tags);
-      const allowedTools = normalizeStringArray(frontMatter.allowedTools);
+      const aliases = normalizeStringArray(frontMatter["aliases"]);
+      const tags = normalizeStringArray(frontMatter["tags"]);
+      const allowedTools = normalizeStringArray(frontMatter["allowedTools"]);
       const orderHint = extractOrderHint(frontMatter);
 
       const fileStats = await stat(filePath);

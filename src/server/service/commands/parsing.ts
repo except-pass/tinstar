@@ -1,5 +1,5 @@
 export type FrontMatterValue = string | string[] | number | boolean | undefined;
-export type FrontMatter = Record<string, FrontMatterValue | FrontMatter>;
+export type FrontMatter = Record<string, FrontMatterValue>;
 
 const parseInlineArray = (raw: string): string[] => {
   const trimmed = raw.trim().replace(/^\[|\]$/g, "");
@@ -37,10 +37,10 @@ export const parseFrontMatter = (raw: string): FrontMatter => {
       continue;
     }
 
-    if (line.startsWith("- ") && currentArray !== null && currentKey) {
+    if (line.startsWith("- ") && Array.isArray(currentArray) && currentKey) {
       const value = line.slice(2).trim();
       if (value.length > 0) {
-        currentArray.push(value.replace(/^['"]|['"]$/g, ""));
+        (currentArray as string[]).push(value.replace(/^['"]|['"]$/g, ""));
       }
       continue;
     }
@@ -121,7 +121,7 @@ export const resolveDescription = (
   frontMatter: FrontMatter,
   body: string,
 ): string | undefined => {
-  const description = frontMatter.description;
+  const description = frontMatter["description"];
   if (typeof description === "string" && description.trim().length > 0) {
     return description.trim();
   }
@@ -142,7 +142,7 @@ export const resolveDescription = (
 export const extractOrderHint = (
   frontMatter: FrontMatter,
 ): number | undefined => {
-  const orderRaw = frontMatter.order;
+  const orderRaw = frontMatter["order"];
   if (typeof orderRaw === "number" && Number.isFinite(orderRaw)) {
     return orderRaw;
   }

@@ -3,12 +3,50 @@ import type { FC } from "react";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  extractCleanCommand,
+  getCommandName,
+  isSlashCommandMessage,
+} from "@/lib/utils/slashCommandFilter";
 import { parseCommandXml } from "@/server/service/parseCommandXml";
 
 export const UserTextContent: FC<{ text: string; id?: string }> = ({
   text,
   id,
 }) => {
+  // Check for slash command messages from command palette first
+  if (isSlashCommandMessage(text)) {
+    const cleanCommand = extractCleanCommand(text);
+    const commandName = getCommandName(cleanCommand);
+
+    return (
+      <Card
+        className="border-purple-200 bg-purple-50/50 dark:border-purple-800 dark:bg-purple-950/20 gap-2 py-2 mb-1"
+        id={id}
+      >
+        <CardHeader className="py-0 px-4">
+          <div className="flex items-center gap-2">
+            <Terminal className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+            <CardTitle className="text-sm font-medium">
+              Command Palette
+            </CardTitle>
+            <Badge
+              variant="outline"
+              className="border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-300"
+            >
+              {commandName}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="py-0 px-4">
+          <code className="text-sm font-mono text-purple-800 dark:text-purple-200">
+            {cleanCommand}
+          </code>
+        </CardContent>
+      </Card>
+    );
+  }
+
   const parsed = parseCommandXml(text);
 
   if (parsed.kind === "command") {

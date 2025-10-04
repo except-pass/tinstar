@@ -7,9 +7,10 @@ import {
   useRef,
   useState,
 } from "react";
+import { useSetAtom } from "jotai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import type { CommandCompletionRef } from "./CommandCompletion";
+import { commandPaletteOpenAtom } from "@/lib/atoms/commandPaletteAtom";
 import type { FileCompletionRef } from "./FileCompletion";
 import { InlineCompletion } from "./InlineCompletion";
 
@@ -57,9 +58,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
 
     const containerRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const commandCompletionRef = useRef<CommandCompletionRef>(null);
     const fileCompletionRef = useRef<FileCompletionRef>(null);
     const helpId = useId();
+    const setCommandPaletteOpen = useSetAtom(commandPaletteOpenAtom);
 
     // Expose focus and blur methods through ref
     useImperativeHandle(
@@ -83,10 +84,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (fileCompletionRef.current?.handleKeyDown(e)) {
-        return;
-      }
-
-      if (commandCompletionRef.current?.handleKeyDown(e)) {
         return;
       }
 
@@ -165,11 +162,6 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       };
     }, []);
 
-    const handleCommandSelect = (command: string) => {
-      setMessage(command);
-      textareaRef.current?.focus();
-    };
-
     const handleFileSelect = (filePath: string) => {
       setMessage(filePath);
       textareaRef.current?.focus();
@@ -190,26 +182,31 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
               ref={textareaRef}
               value={message}
               onChange={(e) => {
-                if (
-                  e.target.value.endsWith("@") ||
-                  e.target.value.endsWith("/")
-                ) {
+                const newValue = e.target.value;
+                
+                // Open command palette when user types "/"
+                if (newValue.endsWith("/") && !message.endsWith("/")) {
+                  setCommandPaletteOpen(true);
+                }
+                
+                // Handle file completion cursor position for "@"
+                if (newValue.endsWith("@")) {
                   const position = getCursorPosition();
                   if (position) {
                     setCursorPosition(position);
                   }
                 }
 
-                setMessage(e.target.value);
+                setMessage(newValue);
               }}
               onKeyDown={handleKeyDown}
               placeholder={placeholder}
               className={`${minHeight} resize-none`}
               disabled={isPending || disabled}
               maxLength={4000}
-              aria-label="Message input with completion support"
+              aria-label="Message input with file completion support"
               aria-describedby={helpId}
-              aria-expanded={message.startsWith("/") || message.includes("@")}
+              aria-expanded={message.includes("@")}
               aria-haspopup="listbox"
               role="combobox"
               aria-autocomplete="list"
@@ -217,9 +214,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             <InlineCompletion
               projectId={projectId}
               message={message}
-              commandCompletionRef={commandCompletionRef}
               fileCompletionRef={fileCompletionRef}
-              handleCommandSelect={handleCommandSelect}
               handleFileSelect={handleFileSelect}
               cursorPosition={cursorPosition}
             />

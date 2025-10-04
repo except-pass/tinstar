@@ -10,7 +10,7 @@ export const SlashCommandPaletteButton = () => {
 
   return (
     <Button
-      className="fixed bottom-6 right-6 shadow-lg"
+      className="fixed bottom-24 right-6 shadow-lg"
       size="lg"
       onClick={() => setIsOpen(true)}
     >
