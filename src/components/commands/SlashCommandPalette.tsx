@@ -125,38 +125,39 @@ export const SlashCommandPalette = () => {
     );
   }, [filtered.all, parsed.token]);
 
-  // Set initial input when command palette opens
-  useEffect(() => {
-    if (isOpen && initialInput) {
-      setInput(initialInput);
-      // Focus and position cursor at end after setting input
-      const timer = setTimeout(() => {
-        inputRef.current?.focus();
-        const length = initialInput.length;
-        inputRef.current?.setSelectionRange(length, length);
-      }, 10);
-      setInitialInput(""); // Clear for next time
-      return () => clearTimeout(timer);
-    }
-    return undefined;
-  }, [isOpen, initialInput, setInitialInput]);
-
-  // Normal focus behavior when opening without initial input
+  // Handle opening the command palette with proper focus behavior
   useEffect(() => {
     if (!isOpen) {
       setInput("");
       return;
     }
-    // Only run normal focus if there's no initial input
-    if (!initialInput) {
-      const timer = setTimeout(() => {
-        inputRef.current?.focus();
-        inputRef.current?.select();
-      }, 10);
-      return () => clearTimeout(timer);
+
+    const timer = setTimeout(() => {
+      const element = inputRef.current;
+      if (element) {
+        element.focus();
+        
+        // Check what's actually in the input field
+        if (element.value === "") {
+          // Empty input - select all (normal behavior)
+          element.select();
+        } else {
+          // Has content - position cursor at end
+          const length = element.value.length;
+          element.setSelectionRange(length, length);
+        }
+      }
+    }, 10);
+    return () => clearTimeout(timer);
+  }, [isOpen]);
+
+  // Set initial input when command palette opens
+  useEffect(() => {
+    if (isOpen && initialInput) {
+      setInput(initialInput);
+      setInitialInput(""); // Clear for next time
     }
-    return undefined;
-  }, [isOpen, initialInput]);
+  }, [isOpen, initialInput, setInitialInput]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -313,6 +314,28 @@ export const SlashCommandPalette = () => {
     setInput(`${command.name}${parsed.args ? ` ${parsed.args}` : " "}`);
   };
 
+  const handleTabAutoComplete = () => {
+    if (activeCommand) {
+      // For Tab, always autocomplete to the command name with a space
+      setInput(`${activeCommand.name} `);
+    }
+  };
+
+  const handleEnterKey = () => {
+    if (!activeCommand) return;
+
+    // Check if the current input exactly matches a command name
+    const isCompleteCommand = commands.some(cmd => cmd.name === parsed.token);
+    
+    if (isCompleteCommand) {
+      // If it's a complete command, run it
+      handleRun(activeCommand);
+    } else {
+      // If it's incomplete, autocomplete it
+      setInput(`${activeCommand.name} `);
+    }
+  };
+
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogContent className="sm:max-w-2xl p-0 overflow-hidden top-24 left-1/2 -translate-x-1/2 translate-y-0 origin-top">
@@ -323,6 +346,15 @@ export const SlashCommandPalette = () => {
               ref={inputRef}
               value={input}
               onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Tab") {
+                  event.preventDefault();
+                  handleTabAutoComplete();
+                } else if (event.key === "Enter") {
+                  event.preventDefault();
+                  handleEnterKey();
+                }
+              }}
               placeholder={"Type / to pick a command…"}
             />
             {input.length > 0 && (
