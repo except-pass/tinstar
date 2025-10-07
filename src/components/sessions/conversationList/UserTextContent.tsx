@@ -8,6 +8,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { ChevronRight } from "lucide-react";
 import {
   extractCleanCommand,
   getCommandName,
@@ -33,49 +34,48 @@ export const UserTextContent: FC<{ text: string; id?: string }> = ({
         {hasDetails ? (
           <Collapsible defaultOpen={false}>
             <CollapsibleTrigger asChild>
-              <div className="flex items-center gap-1.5 cursor-pointer hover:bg-green-100/50 dark:hover:bg-green-900/20 rounded">
-                <Terminal className="h-3 w-3 text-green-600 dark:text-green-400 flex-shrink-0" />
-                <span className="text-xs font-medium text-green-800 dark:text-green-200">
-                  Claude Code Command
-                </span>
-                <Badge
-                  variant="outline"
-                  className="border-green-300 text-green-700 dark:border-green-700 dark:text-green-300 text-[10px] h-4 px-1.5"
-                >
-                  {parsed.commandName}
-                </Badge>
+              <div className="flex items-center justify-between cursor-pointer hover:bg-green-100/50 dark:hover:bg-green-900/20 rounded">
+                <div className="flex items-center gap-1.5">
+                  <Terminal className="h-3 w-3 text-green-600 dark:text-green-400 flex-shrink-0" />
+                  <span className="text-xs font-medium text-green-800 dark:text-green-200">
+                    Claude Code Command
+                  </span>
+                  <Badge
+                    variant="outline"
+                    className="border-green-300 text-green-700 dark:border-green-700 dark:text-green-300 text-[10px] h-4 px-1.5"
+                  >
+                    {parsed.commandName}
+                  </Badge>
+                </div>
+                <ChevronRight className="h-3 w-3 text-green-600 dark:text-green-400 transition-transform group-data-[state=open]:rotate-90" />
               </div>
             </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="py-2 pt-1">
-                <div className="space-y-2">
+            <CollapsibleContent className="overflow-hidden">
+              <div className="pb-2 space-y-2">
+                {parsed.commandArgs && (
                   <div>
-                    {parsed.commandArgs && (
-                      <>
-                        <span className="text-xs font-medium text-muted-foreground">
-                          Arguments:
-                        </span>
-                        <div className="bg-background rounded border p-2 mt-1">
-                          <code className="text-xs whitespace-pre-line break-all">
-                            {parsed.commandArgs}
-                          </code>
-                        </div>
-                      </>
-                    )}
-                    {parsed.commandMessage && (
-                      <>
-                        <span className="text-xs font-medium text-muted-foreground">
-                          Message:
-                        </span>
-                        <div className="bg-background rounded border p-2 mt-1">
-                          <code className="text-xs whitespace-pre-line break-all">
-                            {parsed.commandMessage}
-                          </code>
-                        </div>
-                      </>
-                    )}
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Arguments:
+                    </span>
+                    <div className="bg-background rounded border p-2 mt-1">
+                      <code className="text-xs whitespace-pre-line break-all">
+                        {parsed.commandArgs}
+                      </code>
+                    </div>
                   </div>
-                </div>
+                )}
+                {parsed.commandMessage && (
+                  <div>
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Message:
+                    </span>
+                    <div className="bg-background rounded border p-2 mt-1">
+                      <code className="text-xs whitespace-pre-line break-all">
+                        {parsed.commandMessage}
+                      </code>
+                    </div>
+                  </div>
+                )}
               </div>
             </CollapsibleContent>
           </Collapsible>
