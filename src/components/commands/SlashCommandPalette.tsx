@@ -16,7 +16,7 @@ import {
   useUpdateSlashCommandPrefs,
 } from "@/hooks/commands/useSlashCommands";
 import { honoClient } from "@/lib/api/client";
-import { commandPaletteOpenAtom } from "@/lib/atoms/commandPaletteAtom";
+import { commandPaletteOpenAtom, commandPaletteInitialInputAtom } from "@/lib/atoms/commandPaletteAtom";
 import { currentSessionAtom } from "@/lib/atoms/currentSessionAtom";
 import type { CommandRecord, SlashCommandData } from "@/shared/slashCommands";
 
@@ -65,6 +65,7 @@ const highlightMatch = (text: string, needle: string) => {
 
 export const SlashCommandPalette = () => {
   const [isOpen, setIsOpen] = useAtom(commandPaletteOpenAtom);
+  const [initialInput, setInitialInput] = useAtom(commandPaletteInitialInputAtom);
   const { data, isLoading } = useSlashCommands();
   const updatePrefs = useUpdateSlashCommandPrefs();
   const queryClient = useQueryClient();
@@ -124,17 +125,38 @@ export const SlashCommandPalette = () => {
     );
   }, [filtered.all, parsed.token]);
 
+  // Set initial input when command palette opens
+  useEffect(() => {
+    if (isOpen && initialInput) {
+      setInput(initialInput);
+      // Focus and position cursor at end after setting input
+      const timer = setTimeout(() => {
+        inputRef.current?.focus();
+        const length = initialInput.length;
+        inputRef.current?.setSelectionRange(length, length);
+      }, 10);
+      setInitialInput(""); // Clear for next time
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [isOpen, initialInput, setInitialInput]);
+
+  // Normal focus behavior when opening without initial input
   useEffect(() => {
     if (!isOpen) {
       setInput("");
       return;
     }
-    const timer = setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 10);
-    return () => clearTimeout(timer);
-  }, [isOpen]);
+    // Only run normal focus if there's no initial input
+    if (!initialInput) {
+      const timer = setTimeout(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      }, 10);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [isOpen, initialInput]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -148,6 +170,7 @@ export const SlashCommandPalette = () => {
         setIsOpen(true);
       }
 
+
       if (event.key === "Escape") {
         setIsOpen(false);
       }
@@ -159,12 +182,12 @@ export const SlashCommandPalette = () => {
 
   const handleToggleStar = (commandId: string) => {
     if (!data) return;
-    const current = data.prefs.starred;
-    const next = current.includes(commandId)
-      ? current.filter((id) => id !== commandId)
-      : [...current, commandId];
-
-    updatePrefs.mutate({ starred: next });
+    
+    // Update optimistically first for instant feedback
+    const nextStarred = toggleStarOptimistic(commandId);
+    if (nextStarred) {
+      updatePrefs.mutate({ starred: nextStarred });
+    }
   };
 
   const touchRecentOptimistic = (commandId: string): string[] | undefined => {
@@ -187,6 +210,28 @@ export const SlashCommandPalette = () => {
       },
     );
     return nextRecent;
+  };
+
+  const toggleStarOptimistic = (commandId: string): string[] | undefined => {
+    let nextStarred: string[] | undefined;
+    queryClient.setQueryData<SlashCommandData>(
+      slashCommandsQueryKey,
+      (prev) => {
+        if (!prev) return prev;
+        const current = prev.prefs.starred;
+        nextStarred = current.includes(commandId)
+          ? current.filter((id) => id !== commandId)
+          : [...current, commandId];
+        return {
+          ...prev,
+          prefs: {
+            ...prev.prefs,
+            starred: nextStarred,
+          },
+        };
+      },
+    );
+    return nextStarred;
   };
 
   const sendCommandMutation = useMutation({

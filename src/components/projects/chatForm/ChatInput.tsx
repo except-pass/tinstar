@@ -2,15 +2,16 @@ import { AlertCircleIcon, LoaderIcon, SendIcon } from "lucide-react";
 import {
   forwardRef,
   useCallback,
+  useEffect,
   useId,
   useImperativeHandle,
   useRef,
   useState,
 } from "react";
-import { useSetAtom } from "jotai";
+import { useAtom } from "jotai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { commandPaletteOpenAtom } from "@/lib/atoms/commandPaletteAtom";
+import { commandPaletteOpenAtom, commandPaletteInitialInputAtom } from "@/lib/atoms/commandPaletteAtom";
 import type { FileCompletionRef } from "./FileCompletion";
 import { InlineCompletion } from "./InlineCompletion";
 
@@ -60,7 +61,15 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileCompletionRef = useRef<FileCompletionRef>(null);
     const helpId = useId();
-    const setCommandPaletteOpen = useSetAtom(commandPaletteOpenAtom);
+    const [commandPaletteOpen, setCommandPaletteOpen] = useAtom(commandPaletteOpenAtom);
+    const [, setCommandPaletteInitialInput] = useAtom(commandPaletteInitialInputAtom);
+
+    // Clear "/" from input when command palette opens (only if it's just a single "/")
+    useEffect(() => {
+      if (commandPaletteOpen && message === "/") {
+        setMessage("");
+      }
+    }, [commandPaletteOpen, message]);
 
     // Expose focus and blur methods through ref
     useImperativeHandle(
@@ -184,8 +193,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
               onChange={(e) => {
                 const newValue = e.target.value;
                 
-                // Open command palette when user types "/"
-                if (newValue.endsWith("/") && !message.endsWith("/")) {
+                // Open command palette when user types "/" as the first character
+                if (newValue === "/" && message === "") {
+                  setCommandPaletteInitialInput("/");
                   setCommandPaletteOpen(true);
                 }
                 
