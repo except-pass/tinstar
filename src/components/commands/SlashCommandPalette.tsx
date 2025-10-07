@@ -235,6 +235,17 @@ export const SlashCommandPalette = () => {
 
     const commandLine = `${command.name}${parsed.args ? ` ${parsed.args}` : ""}`;
 
+    // Close palette and clear input immediately for instant feedback
+    setIsOpen(false);
+    setInput("");
+
+    // Update recent commands optimistically
+    const nextRecent = touchRecentOptimistic(command.id);
+    if (nextRecent) {
+      updatePrefs.mutate({ recent: nextRecent });
+    }
+
+    // Fire the mutation (response will stream in via SSE)
     sendCommandMutation.mutate(
       {
         projectId: currentSession.projectId,
@@ -242,15 +253,6 @@ export const SlashCommandPalette = () => {
         message: commandLine,
       },
       {
-        onSuccess: () => {
-          const nextRecent = touchRecentOptimistic(command.id);
-          if (nextRecent) {
-            updatePrefs.mutate({ recent: nextRecent });
-          }
-          toast.success(`Queued ${command.name}`);
-          setIsOpen(false);
-          setInput("");
-        },
         onError: (error: unknown) => {
           const message =
             error instanceof Error

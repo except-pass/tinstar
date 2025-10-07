@@ -141,12 +141,8 @@ export const ConversationItem: FC<{
         </ul>
       );
 
-    return conversation.isMeta === true ? (
-      // Make expandable with default collapsed state
-      <MetaConversationContent>{userConversationJsx}</MetaConversationContent>
-    ) : (
-      userConversationJsx
-    );
+    // Meta content is now filtered at the ConversationList level, so we just render normally here
+    return userConversationJsx;
   }
 
   if (conversation.type === "assistant") {

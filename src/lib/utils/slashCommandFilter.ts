@@ -3,8 +3,9 @@
  */
 
 /**
- * Detects if a message content is a slash command sent through the command palette.
- * These messages typically contain extensive context injection from Claude Code SDK.
+ * Detects if a message content is a slash command.
+ * This includes both command palette commands and manually typed slash commands.
+ * All slash commands should be displayed with special formatting.
  */
 export const isSlashCommandMessage = (content: string): boolean => {
   const trimmed = content.trim();
@@ -14,33 +15,12 @@ export const isSlashCommandMessage = (content: string): boolean => {
     return false;
   }
 
-  // Additional heuristics to distinguish command palette messages from manual slash commands:
-  // 1. Length check - context-injected messages are much longer
-  if (content.length > 200) {
-    return true;
-  }
-
-  // 2. Look for typical context injection patterns
-  const hasContextPatterns = [
-    "claudeMd",
-    "CLAUDE.md",
-    "system-reminder",
-    "important-instruction-reminders",
-    "Codebase and user instructions",
-  ].some((pattern) => content.includes(pattern));
-
-  if (hasContextPatterns) {
-    return true;
-  }
-
-  // 3. Simple slash commands (likely manual) - single line starting with /
-  const lines = content.split("\n");
-  if (lines.length === 1 && lines[0] && lines[0].trim().startsWith("/")) {
-    return false; // This is likely a manual command
-  }
-
-  // Default: if it starts with / and has multiple lines, likely command palette
-  return lines.length > 1;
+  // Any message starting with "/" is considered a command and should be formatted nicely
+  // This includes:
+  // - Simple commands from command palette (e.g., "/magic")
+  // - Complex commands with context injection (longer messages)
+  // - Manually typed slash commands
+  return true;
 };
 
 /**
