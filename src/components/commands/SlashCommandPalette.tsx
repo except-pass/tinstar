@@ -368,8 +368,7 @@ const PaletteItem = ({
   isStarred,
 }: PaletteItemProps) => {
   return (
-    <button
-      type="button"
+    <div
       className="flex w-full items-start justify-between rounded-md border px-3 py-2 text-left transition-colors hover:bg-accent hover:text-accent-foreground cursor-pointer"
       onClick={onSelect}
       onKeyDown={(event) => {
@@ -378,6 +377,9 @@ const PaletteItem = ({
           onRun();
         }
       }}
+      tabIndex={0}
+      role="button"
+      aria-label={`Select command ${command.name}`}
     >
       <div className="min-w-0">
         <div className="text-sm font-medium truncate">
@@ -428,6 +430,6 @@ const PaletteItem = ({
           Run
         </Button>
       </div>
-    </button>
+    </div>
   );
 };
