@@ -1,33 +1,35 @@
+import { getConfigStorage } from "../../config/storage";
 import { ensureCommandLoaderReady, getCommandLoader } from "./CommandLoader";
-import { getCommandPrefsStorage } from "./prefsStorage";
 import type { SlashCommandData, UserPrefs } from "./types";
 
 export const getSlashCommandData = async (): Promise<SlashCommandData> => {
   await ensureCommandLoaderReady();
   const loader = getCommandLoader();
-  const prefsStorage = getCommandPrefsStorage();
+  const configStorage = getConfigStorage();
 
-  const [index, prefs] = await Promise.all([
+  const [index, config] = await Promise.all([
     Promise.resolve(loader.getCommandsIndex()),
-    prefsStorage.getPrefs(),
+    configStorage.getConfig(),
   ]);
 
   return {
     index,
-    prefs,
+    prefs: config.commandPrefs,
   };
 };
 
 export const getCommandPrefs = async (): Promise<UserPrefs> => {
-  const prefsStorage = getCommandPrefsStorage();
-  return await prefsStorage.getPrefs();
+  const configStorage = getConfigStorage();
+  const config = await configStorage.getConfig();
+  return config.commandPrefs;
 };
 
 export const updateCommandPrefs = async (
   patch: Partial<UserPrefs>,
 ): Promise<UserPrefs> => {
-  const prefsStorage = getCommandPrefsStorage();
-  return await prefsStorage.updatePrefs(patch);
+  const configStorage = getConfigStorage();
+  const updatedConfig = await configStorage.updateCommandPrefs(patch);
+  return updatedConfig.commandPrefs;
 };
 
 export const forceReloadCommands = async () => {
