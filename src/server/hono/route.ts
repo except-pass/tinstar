@@ -8,8 +8,14 @@ import { setCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { configSchema } from "../config/config";
+import { getConfigStorage } from "../config/storage";
 import { ClaudeCodeTaskController } from "../service/claude-code/ClaudeCodeTaskController";
 import type { SerializableAliveTask } from "../service/claude-code/types";
+import {
+  forceReloadCommands,
+  getSlashCommandData,
+  updateCommandPrefs,
+} from "../service/commands";
 import { getEventBus } from "../service/events/EventBus";
 import { getFileWatcher } from "../service/events/fileWatcher";
 import { sseEventResponse } from "../service/events/sseEventResponse";
@@ -59,14 +65,53 @@ export const routes = (app: HonoAppType) => {
       })
 
       .put("/config", zValidator("json", configSchema), async (c) => {
-        const { ...config } = c.req.valid("json");
+        const config = c.req.valid("json");
+        const configStorage = getConfigStorage();
 
-        setCookie(c, "ccv-config", JSON.stringify(config));
+        // If commandPrefs are included, save to file storage
+        if (config.commandPrefs) {
+          await configStorage.updateConfig(config);
+        }
+
+        // Set cookie for session-specific overrides (excluding commandPrefs)
+        // biome-ignore lint/correctness/noUnusedVariables: commandPrefs is intentionally extracted to exclude from cookie
+        const { commandPrefs, ...cookieConfig } = config;
+        setCookie(c, "ccv-config", JSON.stringify(cookieConfig));
 
         return c.json({
           config,
         });
       })
+
+      .get("/commands", async (c) => {
+        const forceReload = c.req.query("forceReload");
+        if (forceReload === "1") {
+          try {
+            await forceReloadCommands();
+          } catch (error) {
+            console.error("Failed to force reload commands", error);
+          }
+        }
+
+        const data = await getSlashCommandData();
+        return c.json(data);
+      })
+
+      .patch(
+        "/prefs",
+        zValidator(
+          "json",
+          z.object({
+            starred: z.array(z.string()).optional(),
+            recent: z.array(z.string()).optional(),
+          }),
+        ),
+        async (c) => {
+          const patch = c.req.valid("json");
+          const prefs = await updateCommandPrefs(patch);
+          return c.json({ prefs });
+        },
+      )
 
       .get("/projects", async (c) => {
         const { projects } = await getProjects();
@@ -1029,6 +1074,16 @@ export const routes = (app: HonoAppType) => {
             });
 
             eventBus.on("task_changed", async (event) => {
+              if (!isConnected) {
+                return;
+              }
+
+              await stream.writeSSE(sseEventResponse(event)).catch(() => {
+                onConnectionClosed();
+              });
+            });
+
+            eventBus.on("commands_changed", async (event) => {
               if (!isConnected) {
                 return;
               }

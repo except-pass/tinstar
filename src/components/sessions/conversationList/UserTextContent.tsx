@@ -1,42 +1,58 @@
-import { Terminal } from "lucide-react";
+import { ChevronRight, Terminal } from "lucide-react";
 import type { FC } from "react";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  extractCleanCommand,
+  getCommandName,
+  isSlashCommandMessage,
+} from "@/lib/utils/slashCommandFilter";
 import { parseCommandXml } from "@/server/service/parseCommandXml";
 
 export const UserTextContent: FC<{ text: string; id?: string }> = ({
   text,
   id,
 }) => {
+  // Check for XML-formatted commands first (these have priority)
   const parsed = parseCommandXml(text);
 
   if (parsed.kind === "command") {
+    const hasDetails = !!(parsed.commandArgs || parsed.commandMessage);
+
     return (
       <Card
-        className="border-green-200 bg-green-50/50 dark:border-green-800 dark:bg-green-950/20 gap-2 py-2 mb-1"
+        className="border-green-200 bg-green-50/50 dark:border-green-800 dark:bg-green-950/20 mb-1 py-0.5 px-2"
         id={id}
       >
-        <CardHeader className="py-0 px-4">
-          <div className="flex items-center gap-2">
-            <Terminal className="h-4 w-4 text-green-600 dark:text-green-400" />
-            <CardTitle className="text-sm font-medium">
-              Claude Code Command
-            </CardTitle>
-            <Badge
-              variant="outline"
-              className="border-green-300 text-green-700 dark:border-green-700 dark:text-green-300"
-            >
-              {parsed.commandName}
-            </Badge>
-          </div>
-        </CardHeader>
-        {parsed.commandArgs || parsed.commandMessage ? (
-          <CardContent className="py-0 px-4">
-            <div className="space-y-2">
-              <div>
+        {hasDetails ? (
+          <Collapsible defaultOpen={false}>
+            <CollapsibleTrigger asChild>
+              <div className="flex items-center justify-between cursor-pointer hover:bg-green-100/50 dark:hover:bg-green-900/20 rounded">
+                <div className="flex items-center gap-1.5">
+                  <Terminal className="h-3 w-3 text-green-600 dark:text-green-400 flex-shrink-0" />
+                  <span className="text-xs font-medium text-green-800 dark:text-green-200">
+                    Claude Code Command
+                  </span>
+                  <Badge
+                    variant="outline"
+                    className="border-green-300 text-green-700 dark:border-green-700 dark:text-green-300 text-[10px] h-4 px-1.5"
+                  >
+                    {parsed.commandName}
+                  </Badge>
+                </div>
+                <ChevronRight className="h-3 w-3 text-green-600 dark:text-green-400 transition-transform group-data-[state=open]:rotate-90" />
+              </div>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="overflow-hidden">
+              <div className="pb-2 space-y-2">
                 {parsed.commandArgs && (
-                  <>
+                  <div>
                     <span className="text-xs font-medium text-muted-foreground">
                       Arguments:
                     </span>
@@ -45,10 +61,10 @@ export const UserTextContent: FC<{ text: string; id?: string }> = ({
                         {parsed.commandArgs}
                       </code>
                     </div>
-                  </>
+                  </div>
                 )}
                 {parsed.commandMessage && (
-                  <>
+                  <div>
                     <span className="text-xs font-medium text-muted-foreground">
                       Message:
                     </span>
@@ -57,12 +73,25 @@ export const UserTextContent: FC<{ text: string; id?: string }> = ({
                         {parsed.commandMessage}
                       </code>
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
-            </div>
-          </CardContent>
-        ) : null}
+            </CollapsibleContent>
+          </Collapsible>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <Terminal className="h-3 w-3 text-green-600 dark:text-green-400 flex-shrink-0" />
+            <span className="text-xs font-medium text-green-800 dark:text-green-200">
+              Claude Code Command
+            </span>
+            <Badge
+              variant="outline"
+              className="border-green-300 text-green-700 dark:border-green-700 dark:text-green-300 text-[10px] h-4 px-1.5"
+            >
+              {parsed.commandName}
+            </Badge>
+          </div>
+        )}
       </Card>
     );
   }
@@ -80,6 +109,39 @@ export const UserTextContent: FC<{ text: string; id?: string }> = ({
           <pre className="text-xs overflow-x-auto whitespace-pre-wrap break-words">
             {parsed.stdout}
           </pre>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Check for simple slash commands from command palette (only if not XML-formatted)
+  if (isSlashCommandMessage(text)) {
+    const cleanCommand = extractCleanCommand(text);
+    const commandName = getCommandName(cleanCommand);
+
+    return (
+      <Card
+        className="border-purple-200 bg-purple-50/50 dark:border-purple-800 dark:bg-purple-950/20 gap-2 py-2 mb-1"
+        id={id}
+      >
+        <CardHeader className="py-0 px-4">
+          <div className="flex items-center gap-2">
+            <Terminal className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+            <CardTitle className="text-sm font-medium">
+              Command Palette
+            </CardTitle>
+            <Badge
+              variant="outline"
+              className="border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-300"
+            >
+              {commandName}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="py-0 px-4">
+          <code className="text-sm font-mono text-purple-800 dark:text-purple-200">
+            {cleanCommand}
+          </code>
         </CardContent>
       </Card>
     );

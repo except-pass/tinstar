@@ -1,11 +1,19 @@
 "use client";
 
 import { useAtom } from "jotai";
-import { CodeIcon, CopyIcon, GitCompareIcon, InfoIcon } from "lucide-react";
+import {
+  CodeIcon,
+  Command,
+  CopyIcon,
+  GitCompareIcon,
+  InfoIcon,
+  Sparkles,
+} from "lucide-react";
 import type { FC } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useConfig } from "@/app/hooks/useConfig";
+import { SlashCommandPalette } from "@/components/commands/SlashCommandPalette";
 import { useSetPermissionModeMutation } from "@/components/projects/chatForm/useChatMutations";
 import { ConversationList } from "@/components/sessions/conversationList/ConversationList";
 import { DiffModal } from "@/components/sessions/diffModal";
@@ -25,10 +33,12 @@ import { useSessionPermissionMode } from "@/hooks/sessions/useSessionPermissionM
 import { useGlobalKeyboardShortcuts } from "@/hooks/useGlobalKeyboardShortcuts";
 import { useOpenInEditor } from "@/hooks/useOpenInEditor";
 import { useTaskNotifications } from "@/hooks/useTaskNotifications";
+import { commandPaletteOpenAtom } from "@/lib/atoms/commandPaletteAtom";
 import { currentSessionAtom } from "@/lib/atoms/currentSessionAtom";
 import { firstCommandToTitle } from "@/lib/services/firstCommandToTitle";
 import { cn } from "@/lib/utils";
 import { isWorktreeSession } from "@/lib/worktree-utils";
+import { SlashCommandsBootstrap } from "./SlashCommandsBootstrap";
 import { UnifiedSidebar, type UnifiedSidebarRef } from "./UnifiedSidebar";
 
 export const SPAContent: FC = () => {
@@ -51,28 +61,36 @@ export const SPAContent: FC = () => {
   // If no session is selected yet, show loading
   if (!currentSession) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="flex gap-1">
-              <div className="w-3 h-3 bg-primary rounded-full animate-bounce" />
-              <div className="w-3 h-3 bg-primary rounded-full animate-bounce [animation-delay:0.1s]" />
-              <div className="w-3 h-3 bg-primary rounded-full animate-bounce [animation-delay:0.2s]" />
+      <>
+        <SlashCommandsBootstrap />
+        <SlashCommandPalette />
+        <div className="flex h-screen items-center justify-center">
+          <div className="flex flex-col items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1">
+                <div className="w-3 h-3 bg-primary rounded-full animate-bounce" />
+                <div className="w-3 h-3 bg-primary rounded-full animate-bounce [animation-delay:0.1s]" />
+                <div className="w-3 h-3 bg-primary rounded-full animate-bounce [animation-delay:0.2s]" />
+              </div>
             </div>
+            <p className="text-lg text-muted-foreground font-medium">
+              Loading sessions...
+            </p>
           </div>
-          <p className="text-lg text-muted-foreground font-medium">
-            Loading sessions...
-          </p>
         </div>
-      </div>
+      </>
     );
   }
 
   return (
-    <SessionContent
-      projectId={currentSession.projectId}
-      sessionId={currentSession.sessionId}
-    />
+    <>
+      <SlashCommandsBootstrap />
+      <SlashCommandPalette />
+      <SessionContent
+        projectId={currentSession.projectId}
+        sessionId={currentSession.sessionId}
+      />
+    </>
   );
 };
 
@@ -84,6 +102,7 @@ const SessionContent: FC<{
     projectId,
     sessionId,
   );
+  const [, setPaletteOpen] = useAtom(commandPaletteOpenAtom);
   const { data: sessionCwd } = useSessionCwd(projectId, sessionId);
   const { openInEditor } = useOpenInEditor();
   const { config } = useConfig();
@@ -325,6 +344,19 @@ const SessionContent: FC<{
                   ? firstCommandToTitle(session.meta.firstCommand)
                   : sessionId}
               </h1>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPaletteOpen(true)}
+                className="h-7 px-2 hidden sm:inline-flex"
+                title="Open Commands (Ctrl/Cmd+K)"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span className="ml-1 hidden md:inline">Commands</span>
+                <span className="ml-2 hidden lg:flex items-center gap-1 rounded border border-border px-1.5 py-0 text-[10px] text-muted-foreground">
+                  <Command className="w-3 h-3" />K
+                </span>
+              </Button>
             </div>
 
             <div className="px-1 sm:px-5 flex flex-wrap items-center gap-1 sm:gap-2">

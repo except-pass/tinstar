@@ -115,7 +115,24 @@ export const ConversationList: FC<ConversationListProps> = ({
     () =>
       conversations.filter(
         (conversation): conversation is Conversation =>
-          conversation.type !== "x-error" && conversation.type !== "summary",
+          conversation.type !== "x-error" &&
+          conversation.type !== "summary" &&
+          // Filter out meta content that's not a command (command file context injection)
+          !(
+            conversation.type === "user" &&
+            conversation.isMeta === true &&
+            conversation.message &&
+            typeof conversation.message.content !== "string" &&
+            Array.isArray(conversation.message.content) &&
+            !conversation.message.content.some(
+              (content) =>
+                typeof content === "object" &&
+                content !== null &&
+                "text" in content &&
+                typeof content.text === "string" &&
+                content.text.startsWith("/"),
+            )
+          ),
       ),
     [conversations],
   );

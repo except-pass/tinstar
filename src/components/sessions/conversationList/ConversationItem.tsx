@@ -3,7 +3,6 @@ import type { Conversation } from "@/lib/conversation-schema";
 import type { ToolResultContent } from "@/lib/conversation-schema/content/ToolResultContentSchema";
 import { SidechainConversationModal } from "../conversationModal/SidechainConversationModal";
 import { AssistantConversationContent } from "./AssistantConversationContent";
-import { MetaConversationContent } from "./MetaConversationContent";
 import { SummaryConversationContent } from "./SummaryConversationContent";
 import { SystemConversationContent } from "./SystemConversationContent";
 import { UserConversationContent } from "./UserConversationContent";
@@ -141,12 +140,8 @@ export const ConversationItem: FC<{
         </ul>
       );
 
-    return conversation.isMeta === true ? (
-      // Make expandable with default collapsed state
-      <MetaConversationContent>{userConversationJsx}</MetaConversationContent>
-    ) : (
-      userConversationJsx
-    );
+    // Meta content is now filtered at the ConversationList level, so we just render normally here
+    return userConversationJsx;
   }
 
   if (conversation.type === "assistant") {

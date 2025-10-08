@@ -5,6 +5,7 @@ import { projetsQueryConfig } from "../hooks/projects/useProjects";
 import { honoClient } from "../lib/api/client";
 import { aliveTasksAtom } from "../lib/atoms/aliveTasksAtom";
 import type { SSEEvent } from "../server/service/events/types";
+import { slashCommandsQueryKey } from "./commands/useSlashCommands";
 
 type ParsedEvent = {
   event: string;
@@ -120,6 +121,12 @@ export const useServerEvents = () => {
 
             if (event.data.type === "task_changed") {
               setAliveTasks(event.data.data);
+            }
+
+            if (event.data.type === "commands_changed") {
+              await queryClient.invalidateQueries({
+                queryKey: slashCommandsQueryKey,
+              });
             }
           } catch (error) {
             console.error(

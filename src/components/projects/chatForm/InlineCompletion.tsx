@@ -72,9 +72,9 @@ const calculateOptimalPosition = (
 export const InlineCompletion: FC<{
   projectId: string;
   message: string;
-  commandCompletionRef: RefObject<CommandCompletionRef | null>;
+  commandCompletionRef?: RefObject<CommandCompletionRef | null>;
   fileCompletionRef: RefObject<FileCompletionRef | null>;
-  handleCommandSelect: (command: string) => void;
+  handleCommandSelect?: (command: string) => void;
   handleFileSelect: (filePath: string) => void;
   cursorPosition: {
     relative: { top: number; left: number };
@@ -108,15 +108,19 @@ export const InlineCompletion: FC<{
             : 512,
       }}
     >
-      <CommandCompletion
-        ref={commandCompletionRef}
-        projectId={projectId}
-        inputValue={message}
-        onCommandSelect={handleCommandSelect}
-        className={`absolute left-0 right-0 ${
-          position.placement === "above" ? "bottom-full mb-2" : "top-full mt-1"
-        }`}
-      />
+      {commandCompletionRef && handleCommandSelect && (
+        <CommandCompletion
+          ref={commandCompletionRef}
+          projectId={projectId}
+          inputValue={message}
+          onCommandSelect={handleCommandSelect}
+          className={`absolute left-0 right-0 ${
+            position.placement === "above"
+              ? "bottom-full mb-2"
+              : "top-full mt-1"
+          }`}
+        />
+      )}
       <FileCompletion
         ref={fileCompletionRef}
         projectId={projectId}
