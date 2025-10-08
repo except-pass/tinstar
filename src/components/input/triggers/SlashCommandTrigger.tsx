@@ -3,7 +3,7 @@ import {
   commandPaletteInitialInputAtom,
   commandPaletteOpenAtom,
 } from "@/lib/atoms/commandPaletteAtom";
-import type { TriggerMatch, TriggerPlugin, TriggerContext } from "../types";
+import type { TriggerContext, TriggerMatch, TriggerPlugin } from "../types";
 
 export class SlashCommandTrigger implements TriggerPlugin {
   readonly name = "slash-command";
@@ -11,10 +11,6 @@ export class SlashCommandTrigger implements TriggerPlugin {
 
   private setCommandPaletteOpen: (open: boolean) => void = () => {};
   private setCommandPaletteInitialInput: (input: string) => void = () => {};
-
-  constructor() {
-    // We'll set these in the component that uses this trigger
-  }
 
   detect(input: string, cursorPosition: number): TriggerMatch | null {
     // Check if cursor is at the start and input begins with "/"
@@ -31,7 +27,7 @@ export class SlashCommandTrigger implements TriggerPlugin {
     return null;
   }
 
-  onTrigger(match: TriggerMatch, context: TriggerContext): void {
+  onTrigger(_match: TriggerMatch, _context: TriggerContext): void {
     // Open command palette
     this.setCommandPaletteInitialInput("/");
     this.setCommandPaletteOpen(true);

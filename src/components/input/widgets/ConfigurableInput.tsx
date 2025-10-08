@@ -1,6 +1,6 @@
 import { forwardRef, useState } from "react";
 import { BaseInput, type BaseInputRef } from "../BaseInput";
-import { useInputConfig, InputPresets, type InputPresetKey } from "../config";
+import { type InputPresetKey, InputPresets, useInputConfig } from "../config";
 import type { InputConfig } from "../types";
 
 export interface ConfigurableInputProps {
@@ -19,7 +19,10 @@ export interface ConfigurableInputProps {
  * A configurable input that uses presets and the global configuration system.
  * This is the recommended way to create input widgets for most use cases.
  */
-export const ConfigurableInput = forwardRef<BaseInputRef, ConfigurableInputProps>(
+export const ConfigurableInput = forwardRef<
+  BaseInputRef,
+  ConfigurableInputProps
+>(
   (
     {
       projectId,

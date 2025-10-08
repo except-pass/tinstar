@@ -14,22 +14,22 @@ export interface TriggerMatch {
 export interface TriggerPlugin {
   readonly name: string;
   readonly triggers: string[];
-  
+
   /**
    * Detect if input matches this trigger
    */
   detect(input: string, cursorPosition: number): TriggerMatch | null;
-  
+
   /**
    * Handle trigger activation
    */
   onTrigger(match: TriggerMatch, context: TriggerContext): void;
-  
+
   /**
    * Handle trigger deactivation
    */
   onDeactivate?(): void;
-  
+
   /**
    * Handle keyboard events when trigger is active
    */
@@ -47,7 +47,7 @@ export interface TriggerContext {
 
 export interface CompletionPlugin {
   readonly name: string;
-  
+
   /**
    * Render completion UI
    */
@@ -59,7 +59,7 @@ export interface CompletionPlugin {
     onSelect: (value: string) => void;
     onClose: () => void;
   }): React.ReactNode;
-  
+
   /**
    * Handle keyboard events for completion
    */

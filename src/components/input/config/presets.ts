@@ -17,7 +17,8 @@ export const InputPresets = {
    * Configuration for code mode - focused on development
    */
   CODE_MODE: {
-    placeholder: "Type your message... (Start with / for commands, Ctrl+Enter to send)",
+    placeholder:
+      "Type your message... (Start with / for commands, Ctrl+Enter to send)",
     buttonText: "Send",
     minHeight: "min-h-[100px]",
   } as Partial<InputConfig>,

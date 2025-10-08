@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import {
-  FileCompletion as OriginalFileCompletion,
   type FileCompletionRef,
+  FileCompletion as OriginalFileCompletion,
 } from "@/components/projects/chatForm/FileCompletion";
 import type { CompletionPlugin, CursorPosition, TriggerMatch } from "../types";
 
@@ -78,15 +78,10 @@ export class FileCompletionPlugin implements CompletionPlugin {
       props.cursorPosition.absolute,
     );
 
-    return (
-      <FileCompletionRenderer
-        {...props}
-        position={position}
-      />
-    );
+    return <FileCompletionRenderer {...props} position={position} />;
   }
 
-  onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
+  onKeyDown(_event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
     // File completion handling will be done by the FileCompletion component
     return false;
   }

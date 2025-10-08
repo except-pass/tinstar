@@ -1,4 +1,4 @@
-import type { TriggerMatch, TriggerPlugin, TriggerContext } from "../types";
+import type { TriggerContext, TriggerMatch, TriggerPlugin } from "../types";
 
 export class FileCompletionTrigger implements TriggerPlugin {
   readonly name = "file-completion";
@@ -24,7 +24,7 @@ export class FileCompletionTrigger implements TriggerPlugin {
     };
   }
 
-  onTrigger(match: TriggerMatch, context: TriggerContext): void {
+  onTrigger(_match: TriggerMatch, _context: TriggerContext): void {
     // File completion will be handled by the completion plugin
     // This trigger just detects the pattern
   }

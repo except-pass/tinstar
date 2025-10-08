@@ -1,8 +1,13 @@
-import React, { createContext, useContext, useMemo, type ReactNode } from "react";
+import React, {
+  createContext,
+  type ReactNode,
+  useContext,
+  useMemo,
+} from "react";
 import { useConfig } from "@/app/hooks/useConfig";
 import { FileCompletionPlugin } from "../completions";
 import { FileCompletionTrigger, useSlashCommandTrigger } from "../triggers";
-import type { InputConfig, TriggerPlugin, CompletionPlugin } from "../types";
+import type { CompletionPlugin, InputConfig, TriggerPlugin } from "../types";
 
 export interface GlobalInputConfig {
   defaultSendKeys: ("enter" | "shift" | "ctrl" | "cmd")[];

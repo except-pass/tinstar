@@ -1,12 +1,12 @@
 import { Code, Map as MapIcon } from "lucide-react";
 import { type FC, useId, useState } from "react";
 import { useConfig } from "@/app/hooks/useConfig";
+import { NewSessionInput } from "@/components/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ModelBadge } from "@/components/ui/model-selector";
 import { ProjectSelector } from "@/components/ui/project-selector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useProjects } from "@/hooks/projects/useProjects";
-import { NewSessionInput } from "@/components/input";
 import { useNewChatMutation } from "../chatForm";
 
 export const NewChat: FC<{

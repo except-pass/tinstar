@@ -2,7 +2,6 @@ import { AlertCircleIcon, LoaderIcon, SendIcon } from "lucide-react";
 import {
   forwardRef,
   useCallback,
-  useEffect,
   useId,
   useImperativeHandle,
   useRef,
@@ -14,8 +13,9 @@ import type {
   BaseInputProps,
   BaseInputRef,
   CursorPosition,
-  TriggerMatch,
   TriggerContext,
+  TriggerMatch,
+  TriggerPlugin,
 } from "./types";
 
 export const BaseInput = forwardRef<BaseInputRef, BaseInputProps>(
@@ -38,7 +38,7 @@ export const BaseInput = forwardRef<BaseInputRef, BaseInputProps>(
       absolute: { top: 0, left: 0 },
     });
     const [activeTrigger, setActiveTrigger] = useState<{
-      plugin: any;
+      plugin: TriggerPlugin;
       match: TriggerMatch;
     } | null>(null);
 
@@ -173,7 +173,10 @@ export const BaseInput = forwardRef<BaseInputRef, BaseInputProps>(
 
       if (detected) {
         // New trigger detected
-        if (!activeTrigger || activeTrigger.match.type !== detected.match.type) {
+        if (
+          !activeTrigger ||
+          activeTrigger.match.type !== detected.match.type
+        ) {
           // Deactivate previous trigger
           activeTrigger?.plugin.onDeactivate?.();
 
@@ -231,7 +234,6 @@ export const BaseInput = forwardRef<BaseInputRef, BaseInputProps>(
               maxLength={config.maxLength || 4000}
               aria-label="Message input"
               aria-describedby={helpId}
-              role="textbox"
             />
 
             {/* Render active completions */}
@@ -258,8 +260,7 @@ export const BaseInput = forwardRef<BaseInputRef, BaseInputProps>(
 
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground" id={helpId}>
-              {value.length}/{config.maxLength || 4000} characters •{" "}
-              {(() => {
+              {value.length}/{config.maxLength || 4000} characters • {(() => {
                 const combinations = [];
                 if (config.sendKeys?.includes("enter"))
                   combinations.push("Enter");
@@ -304,3 +305,5 @@ export const BaseInput = forwardRef<BaseInputRef, BaseInputProps>(
 );
 
 BaseInput.displayName = "BaseInput";
+
+export type { BaseInputRef };

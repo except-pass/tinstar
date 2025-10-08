@@ -1,2 +1,7 @@
-export { InputConfigProvider, useInputConfig, type GlobalInputConfig, type InputConfigContextValue } from "./InputConfigProvider";
-export { InputPresets, type InputPresetKey } from "./presets";
+export {
+  type GlobalInputConfig,
+  type InputConfigContextValue,
+  InputConfigProvider,
+  useInputConfig,
+} from "./InputConfigProvider";
+export { type InputPresetKey, InputPresets } from "./presets";

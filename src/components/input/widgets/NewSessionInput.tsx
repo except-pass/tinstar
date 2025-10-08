@@ -46,15 +46,15 @@ export const NewSessionInput = forwardRef<BaseInputRef, NewSessionInputProps>(
 
     const getButtonText = () => {
       if (buttonText) return buttonText;
-      
+
       if (isPending && createWorktree) {
         return "Creating Worktree...";
       }
-      
+
       if (createWorktree) {
         return `Start ${planMode ? "Planning" : "Coding"} in Worktree`;
       }
-      
+
       return `Start ${planMode ? "Planning" : "Coding"}`;
     };
 
