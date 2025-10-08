@@ -1,3 +1,0 @@
-behavior of enter in command palette
-typing / should open command palette with a / already populated
-clicking star should optimistically select star
