@@ -8,6 +8,7 @@ import { setCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { configSchema } from "../config/config";
+import { getConfigStorage } from "../config/storage";
 import { ClaudeCodeTaskController } from "../service/claude-code/ClaudeCodeTaskController";
 import type { SerializableAliveTask } from "../service/claude-code/types";
 import {
@@ -64,9 +65,18 @@ export const routes = (app: HonoAppType) => {
       })
 
       .put("/config", zValidator("json", configSchema), async (c) => {
-        const { ...config } = c.req.valid("json");
+        const config = c.req.valid("json");
+        const configStorage = getConfigStorage();
 
-        setCookie(c, "ccv-config", JSON.stringify(config));
+        // If commandPrefs are included, save to file storage
+        if (config.commandPrefs) {
+          await configStorage.updateConfig(config);
+        }
+
+        // Set cookie for session-specific overrides (excluding commandPrefs)
+        // biome-ignore lint/correctness/noUnusedVariables: commandPrefs is intentionally extracted to exclude from cookie
+        const { commandPrefs, ...cookieConfig } = config;
+        setCookie(c, "ccv-config", JSON.stringify(cookieConfig));
 
         return c.json({
           config,
