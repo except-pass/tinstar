@@ -921,7 +921,6 @@ export const routes = (app: HonoAppType) => {
 
           if (!editorCommand) {
             // Try $EDITOR environment variable
-            // biome-ignore lint/complexity/useLiteralKeys: Required for TypeScript strict mode
             const envEditor = process.env["EDITOR"];
             if (envEditor) {
               editorCommand = `${envEditor} {{path}}`;
