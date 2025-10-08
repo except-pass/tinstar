@@ -15,15 +15,28 @@ import type {
 } from "./types";
 
 export class ClaudeCodeTaskController {
-  private pathToClaudeCodeExecutable: string;
   private tasks: ClaudeCodeTask[] = [];
   private eventBus: EventBus;
+  private claudeExecutablePath: string;
 
   constructor() {
-    this.pathToClaudeCodeExecutable = execSync("which claude", {})
-      .toString()
-      .trim();
     this.eventBus = getEventBus();
+    
+    // Find global Claude executable, avoiding local node_modules version
+    try {
+      // Use PATH environment variable to find global claude, avoiding local node_modules
+      const pathEnv = process.env["PATH"] || "";
+      const paths = pathEnv.split(":");
+      const globalPaths = paths.filter(p => !p.includes("node_modules"));
+      const customPath = globalPaths.join(":");
+      
+      this.claudeExecutablePath = execSync("which claude", {
+        env: { ...process.env, PATH: customPath }
+      }).toString().trim();
+    } catch (error) {
+      // Fallback to common global locations
+      this.claudeExecutablePath = "/home/ubuntu/.nvm/versions/node/v22.17.0/bin/claude";
+    }
 
     prexit(() => {
       this.aliveTasks.forEach((task) => {
@@ -141,7 +154,7 @@ export class ClaudeCodeTaskController {
           options: {
             resume: task.baseSessionId,
             cwd: task.cwd,
-            pathToClaudeCodeExecutable: this.pathToClaudeCodeExecutable,
+            pathToClaudeCodeExecutable: this.claudeExecutablePath,
             permissionMode: permissionMode,
             model: model,
             abortController: abortController,
@@ -246,7 +259,7 @@ export class ClaudeCodeTaskController {
         parts.push(
           `cwd=${task.cwd}`,
           `resumeSessionId=${String(task.baseSessionId ?? "<new>")}`,
-          `cli=${this.pathToClaudeCodeExecutable}`,
+          `claudePath=${this.claudeExecutablePath}`,
         );
 
         const detailedMessage = `Error resuming task: ${parts.join(" | ")}`;
