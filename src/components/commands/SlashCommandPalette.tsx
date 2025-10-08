@@ -16,7 +16,10 @@ import {
   useUpdateSlashCommandPrefs,
 } from "@/hooks/commands/useSlashCommands";
 import { honoClient } from "@/lib/api/client";
-import { commandPaletteOpenAtom, commandPaletteInitialInputAtom } from "@/lib/atoms/commandPaletteAtom";
+import {
+  commandPaletteInitialInputAtom,
+  commandPaletteOpenAtom,
+} from "@/lib/atoms/commandPaletteAtom";
 import { currentSessionAtom } from "@/lib/atoms/currentSessionAtom";
 import type { CommandRecord, SlashCommandData } from "@/shared/slashCommands";
 
@@ -65,7 +68,9 @@ const highlightMatch = (text: string, needle: string) => {
 
 export const SlashCommandPalette = () => {
   const [isOpen, setIsOpen] = useAtom(commandPaletteOpenAtom);
-  const [initialInput, setInitialInput] = useAtom(commandPaletteInitialInputAtom);
+  const [initialInput, setInitialInput] = useAtom(
+    commandPaletteInitialInputAtom,
+  );
   const { data, isLoading } = useSlashCommands();
   const updatePrefs = useUpdateSlashCommandPrefs();
   const queryClient = useQueryClient();
@@ -136,7 +141,7 @@ export const SlashCommandPalette = () => {
       const element = inputRef.current;
       if (element) {
         element.focus();
-        
+
         // Check what's actually in the input field
         if (element.value === "") {
           // Empty input - select all (normal behavior)
@@ -171,7 +176,6 @@ export const SlashCommandPalette = () => {
         setIsOpen(true);
       }
 
-
       if (event.key === "Escape") {
         setIsOpen(false);
       }
@@ -183,7 +187,7 @@ export const SlashCommandPalette = () => {
 
   const handleToggleStar = (commandId: string) => {
     if (!data) return;
-    
+
     // Update optimistically first for instant feedback
     const nextStarred = toggleStarOptimistic(commandId);
     if (nextStarred) {
@@ -325,8 +329,8 @@ export const SlashCommandPalette = () => {
     if (!activeCommand) return;
 
     // Check if the current input exactly matches a command name
-    const isCompleteCommand = commands.some(cmd => cmd.name === parsed.token);
-    
+    const isCompleteCommand = commands.some((cmd) => cmd.name === parsed.token);
+
     if (isCompleteCommand) {
       // If it's a complete command, run it
       handleRun(activeCommand);
@@ -445,7 +449,8 @@ const PaletteItem = ({
   isStarred,
 }: PaletteItemProps) => {
   return (
-    <div
+    <button
+      type="button"
       className="flex w-full items-start justify-between rounded-md border px-3 py-2 text-left transition-colors hover:bg-accent hover:text-accent-foreground cursor-pointer"
       onClick={onSelect}
       onKeyDown={(event) => {
@@ -454,8 +459,6 @@ const PaletteItem = ({
           onRun();
         }
       }}
-      tabIndex={0}
-      role="button"
       aria-label={`Select command ${command.name}`}
     >
       <div className="min-w-0">
@@ -507,6 +510,6 @@ const PaletteItem = ({
           Run
         </Button>
       </div>
-    </div>
+    </button>
   );
 };

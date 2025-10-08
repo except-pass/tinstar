@@ -1,3 +1,4 @@
+import { useAtom } from "jotai";
 import { AlertCircleIcon, LoaderIcon, SendIcon } from "lucide-react";
 import {
   forwardRef,
@@ -8,10 +9,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { useAtom } from "jotai";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { commandPaletteOpenAtom, commandPaletteInitialInputAtom } from "@/lib/atoms/commandPaletteAtom";
+import {
+  commandPaletteInitialInputAtom,
+  commandPaletteOpenAtom,
+} from "@/lib/atoms/commandPaletteAtom";
 import type { FileCompletionRef } from "./FileCompletion";
 import { InlineCompletion } from "./InlineCompletion";
 
@@ -61,8 +64,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileCompletionRef = useRef<FileCompletionRef>(null);
     const helpId = useId();
-    const [commandPaletteOpen, setCommandPaletteOpen] = useAtom(commandPaletteOpenAtom);
-    const [, setCommandPaletteInitialInput] = useAtom(commandPaletteInitialInputAtom);
+    const [commandPaletteOpen, setCommandPaletteOpen] = useAtom(
+      commandPaletteOpenAtom,
+    );
+    const [, setCommandPaletteInitialInput] = useAtom(
+      commandPaletteInitialInputAtom,
+    );
 
     // Clear "/" from input when command palette opens (only if it's just a single "/")
     useEffect(() => {
@@ -192,13 +199,13 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
               value={message}
               onChange={(e) => {
                 const newValue = e.target.value;
-                
+
                 // Open command palette when user types "/" as the first character
                 if (newValue === "/" && message === "") {
                   setCommandPaletteInitialInput("/");
                   setCommandPaletteOpen(true);
                 }
-                
+
                 // Handle file completion cursor position for "@"
                 if (newValue.endsWith("@")) {
                   const position = getCursorPosition();

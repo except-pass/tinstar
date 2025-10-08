@@ -1,4 +1,4 @@
-import { Terminal } from "lucide-react";
+import { ChevronRight, Terminal } from "lucide-react";
 import type { FC } from "react";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +8,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChevronRight } from "lucide-react";
 import {
   extractCleanCommand,
   getCommandName,
@@ -25,7 +24,7 @@ export const UserTextContent: FC<{ text: string; id?: string }> = ({
 
   if (parsed.kind === "command") {
     const hasDetails = !!(parsed.commandArgs || parsed.commandMessage);
-    
+
     return (
       <Card
         className="border-green-200 bg-green-50/50 dark:border-green-800 dark:bg-green-950/20 mb-1 py-0.5 px-2"

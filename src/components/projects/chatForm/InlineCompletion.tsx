@@ -115,7 +115,9 @@ export const InlineCompletion: FC<{
           inputValue={message}
           onCommandSelect={handleCommandSelect}
           className={`absolute left-0 right-0 ${
-            position.placement === "above" ? "bottom-full mb-2" : "top-full mt-1"
+            position.placement === "above"
+              ? "bottom-full mb-2"
+              : "top-full mt-1"
           }`}
         />
       )}
