@@ -21,21 +21,24 @@ export class ClaudeCodeTaskController {
 
   constructor() {
     this.eventBus = getEventBus();
-    
+
     // Find global Claude executable, avoiding local node_modules version
     try {
       // Use PATH environment variable to find global claude, avoiding local node_modules
       const pathEnv = process.env["PATH"] || "";
       const paths = pathEnv.split(":");
-      const globalPaths = paths.filter(p => !p.includes("node_modules"));
+      const globalPaths = paths.filter((p) => !p.includes("node_modules"));
       const customPath = globalPaths.join(":");
-      
+
       this.claudeExecutablePath = execSync("which claude", {
-        env: { ...process.env, PATH: customPath }
-      }).toString().trim();
-    } catch (error) {
+        env: { ...process.env, PATH: customPath },
+      })
+        .toString()
+        .trim();
+    } catch (_error) {
       // Fallback to common global locations
-      this.claudeExecutablePath = "/home/ubuntu/.nvm/versions/node/v22.17.0/bin/claude";
+      this.claudeExecutablePath =
+        "/home/ubuntu/.nvm/versions/node/v22.17.0/bin/claude";
     }
 
     prexit(() => {

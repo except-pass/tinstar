@@ -15,7 +15,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useConfig } from "@/app/hooks/useConfig";
 import { SlashCommandPalette } from "@/components/commands/SlashCommandPalette";
-import { useSetPermissionModeMutation, useStopTaskMutation } from "@/components/projects/chatForm/useChatMutations";
+import {
+  useSetPermissionModeMutation,
+  useStopTaskMutation,
+} from "@/components/projects/chatForm/useChatMutations";
 import { ConversationList } from "@/components/sessions/conversationList/ConversationList";
 import { DiffModal } from "@/components/sessions/diffModal";
 import {
