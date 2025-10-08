@@ -1,0 +1,1 @@
+export { FileCompletionPlugin } from "./FileCompletion";

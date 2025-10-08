@@ -8,12 +8,9 @@ import {
   useState,
 } from "react";
 import { useConfig } from "@/app/hooks/useConfig";
-import {
-  ChatInput,
-  type ChatInputRef,
-  useResumeChatMutation,
-} from "@/components/projects/chatForm";
+import { useResumeChatMutation } from "@/components/projects/chatForm";
 import { useSetPermissionModeMutation } from "@/components/projects/chatForm/useChatMutations";
+import { PromptInput, CodeInput, type BaseInputRef } from "@/components/input";
 import { Button } from "@/components/ui/button";
 import type { PermissionMode } from "@/server/service/claude-code/types";
 
@@ -50,7 +47,7 @@ export const ResumeChat = forwardRef<
   ) => {
     const resumeChat = useResumeChatMutation(projectId, sessionId);
     const { config } = useConfig();
-    const chatInputRef = useRef<ChatInputRef>(null);
+    const chatInputRef = useRef<BaseInputRef>(null);
     const setPermissionMode = useSetPermissionModeMutation(
       projectId,
       sessionId,
@@ -239,9 +236,11 @@ export const ResumeChat = forwardRef<
       );
     }
 
+    const InputWidget = currentPermissionMode === "plan" ? PromptInput : CodeInput;
+
     return (
       <div className="border-t border-border/50 bg-muted/20 p-4 mt-6">
-        <ChatInput
+        <InputWidget
           ref={chatInputRef}
           projectId={projectId}
           onSubmit={handleSubmit}
@@ -256,7 +255,6 @@ export const ResumeChat = forwardRef<
           minHeight="min-h-[100px]"
           containerClassName="space-y-2"
           buttonSize="default"
-          sendKeys={config?.sendKeys}
         />
       </div>
     );

@@ -6,7 +6,8 @@ import { ModelBadge } from "@/components/ui/model-selector";
 import { ProjectSelector } from "@/components/ui/project-selector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useProjects } from "@/hooks/projects/useProjects";
-import { ChatInput, useNewChatMutation } from "../chatForm";
+import { NewSessionInput } from "@/components/input";
+import { useNewChatMutation } from "../chatForm";
 
 export const NewChat: FC<{
   projectId?: string; // Made optional to support global modal
@@ -154,26 +155,14 @@ export const NewChat: FC<{
         </TabsContent>
       </Tabs>
 
-      <ChatInput
+      <NewSessionInput
         projectId={finalProjectId || ""}
         onSubmit={handleSubmit}
         isPending={startNewChat.isPending || (!projectId && !selectedProjectId)}
         error={startNewChat.error}
-        placeholder={
-          planMode
-            ? "Describe what you want to build... (Claude will plan before coding)"
-            : "Type your message here... (Claude will start coding immediately)"
-        }
-        buttonText={
-          startNewChat.isPending && createWorktree
-            ? "Creating Worktree..."
-            : createWorktree
-              ? `Start ${planMode ? "Planning" : "Coding"} in Worktree`
-              : `Start ${planMode ? "Planning" : "Coding"}`
-        }
-        minHeight="min-h-[200px]"
+        planMode={planMode}
+        createWorktree={createWorktree}
         containerClassName="space-y-4"
-        sendKeys={config?.sendKeys}
       />
     </div>
   );
