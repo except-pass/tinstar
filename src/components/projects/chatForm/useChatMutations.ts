@@ -149,3 +149,32 @@ export const useSetPermissionModeMutation = (
     },
   });
 };
+
+export const useStopTaskMutation = (sessionId: string) => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const response = await honoClient.api.tasks.abort.$post({
+        json: { sessionId },
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => undefined);
+        const message =
+          body && "error" in body && typeof body.error === "string"
+            ? body.error
+            : response.statusText;
+        throw new Error(message);
+      }
+
+      return response.json();
+    },
+    onSuccess: () => {
+      // Invalidate alive tasks to refetch the updated task states
+      queryClient.invalidateQueries({
+        queryKey: ["aliveTasks"],
+      });
+    },
+  });
+};

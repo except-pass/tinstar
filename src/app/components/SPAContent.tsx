@@ -8,13 +8,17 @@ import {
   GitCompareIcon,
   InfoIcon,
   Sparkles,
+  StopCircleIcon,
 } from "lucide-react";
 import type { FC } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useConfig } from "@/app/hooks/useConfig";
 import { SlashCommandPalette } from "@/components/commands/SlashCommandPalette";
-import { useSetPermissionModeMutation } from "@/components/projects/chatForm/useChatMutations";
+import {
+  useSetPermissionModeMutation,
+  useStopTaskMutation,
+} from "@/components/projects/chatForm/useChatMutations";
 import { ConversationList } from "@/components/sessions/conversationList/ConversationList";
 import { DiffModal } from "@/components/sessions/diffModal";
 import {
@@ -135,6 +139,7 @@ const SessionContent: FC<{
   }, [aliveTask?.model, config?.defaultModel, displayPermissionMode]);
 
   const setPermissionMode = useSetPermissionModeMutation(projectId, sessionId);
+  const stopTask = useStopTaskMutation(sessionId);
 
   const handleModeToggle = async () => {
     if (!displayPermissionMode) return;
@@ -146,6 +151,16 @@ const SessionContent: FC<{
     } catch (error) {
       console.error("Failed to toggle permission mode:", error);
       toast.error("Failed to switch mode");
+    }
+  };
+
+  const handleStopTask = async () => {
+    try {
+      await stopTask.mutateAsync();
+      toast.success("Task stopped successfully");
+    } catch (error) {
+      console.error("Failed to stop task:", error);
+      toast.error("Failed to stop task");
     }
   };
 
@@ -392,6 +407,23 @@ const SessionContent: FC<{
                     Copies claude code command to clipboard
                   </div>
                 </div>
+                {(isRunningTask || isPausedTask) && (
+                  <div className="relative group">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleStopTask}
+                      disabled={stopTask.isPending}
+                      className="h-6 sm:h-8 text-xs sm:text-sm flex items-center gap-1 px-2 sm:px-3"
+                    >
+                      <StopCircleIcon className="w-3 h-3 sm:w-4 sm:h-4" />
+                      Stop
+                    </Button>
+                    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 text-xs text-white bg-gray-900 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
+                      Stop Claude Code task
+                    </div>
+                  </div>
+                )}
                 <div className="relative group">
                   <button
                     className="h-6 sm:h-8 px-1 flex items-center text-xs text-sidebar-foreground/60 hover:text-sidebar-foreground transition-colors"

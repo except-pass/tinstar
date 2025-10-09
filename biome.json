@@ -14,7 +14,8 @@
       "!spec",
       "!src/lib/$path.ts",
       "!**/*.css",
-      "!dist"
+      "!dist",
+      "!.claude"
     ]
   },
   "formatter": {
