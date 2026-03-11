@@ -139,8 +139,3 @@ export class TaxonomyRepository {
     }
   }
 }
-
-// --- Singleton instances with mock data ---
-
-export const runRepository = new RunRepository()
-export const taxonomyRepository = new TaxonomyRepository()

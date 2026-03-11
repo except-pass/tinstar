@@ -1,12 +1,11 @@
-import { useState, useCallback, useMemo } from 'react'
-import type { GroupingDimension, TreeNode } from '../domain/types'
-import { SelectionProvider, useSelection } from './SelectionProvider'
-import { useWorkspaceView } from '../domain/view-models'
-import { runRepository } from '../domain/repositories'
-import HierarchySidebar from './HierarchySidebar'
+import { useCallback, useMemo, useState } from 'react'
+import type { GroupingDimension, Run, TreeNode } from '../domain/types'
+import { buildWorkspaceView } from '../domain/view-models'
+import { useBackendState } from '../hooks/useBackendState'
 import { GroupingControls } from './GroupingControls'
+import HierarchySidebar from './HierarchySidebar'
 import { InfiniteCanvas } from './InfiniteCanvas'
-import type { Run } from '../domain/types'
+import { SelectionProvider, useSelection } from './SelectionProvider'
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
 function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
@@ -30,16 +29,21 @@ function WorkspaceShellInner() {
     'task',
   ])
 
-  const { sidebarTree, runSummaries } = useWorkspaceView(dimensions)
+  const { runRepo, taxRepo } = useBackendState()
+
+  const { sidebarTree, runSummaries } = useMemo(
+    () => buildWorkspaceView(dimensions, runRepo, taxRepo),
+    [dimensions, runRepo, taxRepo],
+  )
 
   // Build runs map for InfiniteCanvas
   const runMap = useMemo(() => {
     const map = new Map<string, Run>()
-    for (const run of runRepository.getAll()) {
+    for (const run of runRepo.getAll()) {
       map.set(run.id, run)
     }
     return map
-  }, [])
+  }, [runRepo])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const { select, expandAll } = useSelection()

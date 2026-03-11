@@ -1,4 +1,3 @@
-import { useMemo } from 'react'
 import type {
   Run,
   GroupingDimension,
@@ -6,7 +5,6 @@ import type {
   RunSummaryViewModel,
 } from './types'
 import type { RunRepository, TaxonomyRepository } from './repositories'
-import { runRepository, taxonomyRepository } from './repositories'
 import { buildGroupTree } from './grouping'
 
 /**
@@ -73,25 +71,4 @@ export function buildWorkspaceView(
   }
 
   return { sidebarTree, treeNodes, runSummaries }
-}
-
-/**
- * React hook that builds the workspace view using the singleton repositories.
- * Memoizes the result based on dimensions.
- */
-export function useWorkspaceView(
-  dimensions: GroupingDimension[],
-): {
-  sidebarTree: TreeNode[]
-  treeNodes: TreeNode[]
-  runSummaries: Map<string, RunSummaryViewModel>
-  loading: boolean
-} {
-  const result = useMemo(
-    () => buildWorkspaceView(dimensions, runRepository, taxonomyRepository),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [dimensions.join(',')],
-  )
-
-  return { ...result, loading: false }
 }
