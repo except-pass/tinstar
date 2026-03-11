@@ -49,6 +49,24 @@ export interface SessionStateChangedPayload {
   state: 'active' | 'idle' | 'disconnected'
 }
 
+// --- Session management payloads (from session manager) ---
+
+export type ManagedSessionState = 'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped' | 'terminated'
+
+export interface ManagedSessionCreatedPayload {
+  name: string
+  state: ManagedSessionState
+}
+
+export interface ManagedSessionStateChangedPayload {
+  name: string
+  state: ManagedSessionState
+}
+
+export interface ManagedSessionDeletedPayload {
+  name: string
+}
+
 export interface SessionDeletedPayload {
   sessionId: string
 }
@@ -130,6 +148,9 @@ export type BusEvent =
   | { type: 'otel.span_started'; timestamp: string; payload: OtelSpanStartedPayload }
   | { type: 'otel.span_ended'; timestamp: string; payload: OtelSpanEndedPayload }
   | { type: 'otel.metric_recorded'; timestamp: string; payload: OtelMetricRecordedPayload }
+  | { type: 'managed_session.created'; timestamp: string; payload: ManagedSessionCreatedPayload }
+  | { type: 'managed_session.state_changed'; timestamp: string; payload: ManagedSessionStateChangedPayload }
+  | { type: 'managed_session.deleted'; timestamp: string; payload: ManagedSessionDeletedPayload }
 
 export type BusEventType = BusEvent['type']
 

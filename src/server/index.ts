@@ -7,6 +7,14 @@ import { OTelProcessor } from './processors/otel-processor'
 import { SSEBroadcaster } from './api/sse'
 import { handleRequest } from './api/routes'
 import { MockSensorSimulator } from './simulator/mock-sensors'
+import {
+  loadConfig,
+  ensureDirs,
+  reconcileSessionStates,
+  dockerBackend,
+  tmuxBackend,
+  type TinstarConfig,
+} from './sessions'
 
 export function tinstarBackend(): Plugin {
   let bus: EventBus
@@ -14,6 +22,8 @@ export function tinstarBackend(): Plugin {
   let otelStore: OTelStore
   let sse: SSEBroadcaster
   let simulator: MockSensorSimulator | null = null
+  let sessionConfig: TinstarConfig | null = null
+  let reconcileTimer: ReturnType<typeof setInterval> | null = null
 
   return {
     name: 'tinstar-backend',
@@ -50,6 +60,35 @@ export function tinstarBackend(): Plugin {
       // Auto-start in fast mode (for E2E tests) or always in dev
       startSimulator()
 
+      // --- Session management ---
+      // Initialize session config unless disabled (e.g. in CI where Docker/tmux are unavailable)
+      if (process.env.TINSTAR_NO_SESSIONS !== '1') {
+        try {
+          sessionConfig = loadConfig()
+          ensureDirs(sessionConfig)
+          console.log(`[sessions] config root: ${sessionConfig.dirs.root}`)
+
+          // Periodic reconciliation (30s)
+          const cfg = sessionConfig
+          reconcileTimer = setInterval(() => {
+            reconcileSessionStates(cfg.dirs.sessions, {
+              getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
+              getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
+              onStateChanged: (name, state) => {
+                bus.emit({
+                  type: 'managed_session.state_changed',
+                  timestamp: new Date().toISOString(),
+                  payload: { name, state },
+                })
+                console.log(`[reconcile] ${name}: state corrected to ${state}`)
+              },
+            }).catch(err => console.error('[reconcile] error:', (err as Error).message))
+          }, 30_000)
+        } catch (err) {
+          console.warn('[sessions] initialization failed:', (err as Error).message)
+        }
+      }
+
       // Attach middleware
       server.middlewares.use((req, res, next) => {
         const handled = handleRequest(
@@ -57,8 +96,10 @@ export function tinstarBackend(): Plugin {
             docStore,
             otelStore,
             sse,
+            bus,
             startSimulator,
             resetSimulator,
+            sessionConfig,
           },
           req,
           res,

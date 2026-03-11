@@ -1,6 +1,6 @@
-# uiv2 Feature Catalog
+# Tinstar Feature Catalog
 
-Complete inventory of every feature and behavior in the Qala uiv2 canvas workspace.
+Complete inventory of every feature and behavior in the Tinstar canvas workspace.
 
 ---
 
@@ -241,3 +241,78 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 ### Icons
 - Material Symbols Outlined (Google Fonts)
 - Used throughout: terminal, smart_toy, person, code, data_object, science, difference, chevron_left/right, play_arrow, stop, hourglass_empty, check, close, arrow_forward, add
+
+---
+
+## Session Management
+
+### Core Modules
+
+| # | Feature | File | Status |
+|---|---------|------|--------|
+| 1 | Config loading + secrets | `src/server/sessions/config.ts` | **done** |
+| 2 | Session CRUD + persistence | `src/server/sessions/session.ts` | **done** |
+| 3 | Workspace + project registry | `src/server/sessions/workspace.ts` | **done** |
+| 4 | Resume (conversation ID) | `src/server/sessions/resume.ts` | **done** |
+| 5 | Docker backend | `src/server/sessions/backends/docker.ts` | **done** |
+| 6 | Tmux backend | `src/server/sessions/backends/tmux.ts` | **done** |
+| 7 | Reconciliation | `src/server/sessions/reconcile.ts` | **done** |
+| 8 | Shell scripts | `src/server/sessions/scripts/` | **done** |
+| 9 | Barrel export | `src/server/sessions/index.ts` | **done** |
+
+### API Routes (in `src/server/api/routes.ts`)
+
+| # | Route | Method | Status |
+|---|-------|--------|--------|
+| 10 | `/api/sessions` | GET | **done** |
+| 11 | `/api/sessions/:name` | GET | **done** |
+| 12 | `/api/sessions` | POST | **done** |
+| 13 | `/api/sessions/:name/start` | POST | **done** |
+| 14 | `/api/sessions/:name/stop` | POST | **done** |
+| 15 | `/api/sessions/:name` | DELETE | **done** |
+| 16 | `/api/hooks/idle` | POST | **done** |
+| 17 | `/api/hooks/active` | POST | **done** |
+| 18 | `/api/projects` | GET | **done** |
+| 19 | `/api/projects` | POST | **done** |
+| 20 | `/api/projects/:name/worktrees` | GET | **done** |
+| 21 | `/api/projects/:name` | DELETE | **done** |
+
+### Integration
+
+| # | Feature | File | Status |
+|---|---------|------|--------|
+| 22 | Event bus types | `src/server/types.ts` | **done** |
+| 23 | Server wiring + reconciliation loop | `src/server/index.ts` | **done** |
+| 24 | CORS + DELETE method | `src/server/api/routes.ts` | **done** |
+
+### Session Architecture
+
+```
+API Routes → Session CRUD → Backend (Docker | Tmux)
+                          → Workspace (worktree creation)
+                          → Resume (conversation ID detection)
+                          → Config/Secrets (~/.config/tinstar/)
+                          → SSE (state change events via EventBus)
+```
+
+### Session States
+- **creating**: Initial setup
+- **running**: Claude actively processing (hooks fire)
+- **idle**: Claude finished, waiting (Stop hook fired)
+- **needs_attention**: Stale >120s (likely waiting for user input)
+- **stopped**: User stopped the session
+- **terminated**: Backend process gone
+
+### Config Directory Layout
+```
+~/.config/tinstar/
+├── config.json          # Optional user overrides
+├── projects.json        # Registered project name→path
+├── .secrets/            # One file per env var
+│   ├── CLAUDE_CODE_OAUTH_TOKEN
+│   └── GH_TOKEN
+└── sessions/
+    └── <name>/
+        ├── session.json # Session state
+        └── claude-state/ # Claude conversation files
+```

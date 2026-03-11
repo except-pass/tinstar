@@ -1,0 +1,70 @@
+import { listSessions, setState, type Session, type SessionState } from './session'
+
+const NEEDS_ATTENTION_THRESHOLD_MS = 120_000
+
+export interface ReconcileOpts {
+  getContainerState: (sessionName: string) => Promise<string>
+  getTmuxSessionState: (sessionName: string) => Promise<'exists' | 'missing'>
+  onStateChanged?: (name: string, state: SessionState) => void
+  needsAttentionThresholdMs?: number
+}
+
+export async function reconcileSessionStates(
+  sessionsDir: string,
+  opts: ReconcileOpts,
+): Promise<Session[]> {
+  const sessions = await listSessions(sessionsDir)
+  const updated: Session[] = []
+  const now = Date.now()
+
+  for (const session of sessions) {
+    // Skip states that don't need reconciliation
+    if (session.state === 'creating' || session.state === 'terminated') {
+      updated.push(session)
+      continue
+    }
+
+    let newState: SessionState | null = null
+    try {
+      if (session.backend === 'docker') {
+        const actual = await opts.getContainerState(session.name)
+        if (actual === 'running') {
+          // Container alive — no change
+        } else if (actual === 'exited') {
+          if (session.state !== 'stopped') newState = 'stopped'
+        } else {
+          // Container missing entirely
+          if (session.state !== 'terminated') newState = 'terminated'
+        }
+      } else {
+        const tmuxState = await opts.getTmuxSessionState(session.name)
+        if (tmuxState === 'exists') {
+          // Tmux alive
+        } else if (session.state === 'running' || session.state === 'idle' || session.state === 'needs_attention') {
+          newState = 'terminated'
+        }
+      }
+    } catch {
+      // If we can't check, assume current state is fine
+    }
+
+    // Detect stale 'running' sessions — likely waiting for user input
+    const threshold = opts.needsAttentionThresholdMs ?? NEEDS_ATTENTION_THRESHOLD_MS
+    if (!newState && session.state === 'running' && session.lastActive) {
+      const staleMs = now - new Date(session.lastActive).getTime()
+      if (staleMs > threshold) {
+        newState = 'needs_attention'
+      }
+    }
+
+    if (newState) {
+      setState(sessionsDir, session.name, newState)
+      session.state = newState
+      if (opts.onStateChanged) opts.onStateChanged(session.name, newState)
+    }
+
+    updated.push(session)
+  }
+
+  return updated
+}
