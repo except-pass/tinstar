@@ -13,10 +13,11 @@ export class DocumentProcessor {
   private bind(): void {
     this.bus.on('taxonomy.sync', (e) => {
       const { initiatives, epics, tasks, worktrees } = e.payload
-      for (const init of initiatives) this.store.upsertInitiative(init.id, init)
-      for (const epic of epics) this.store.upsertEpic(epic.id, epic)
-      for (const task of tasks) this.store.upsertTask(task.id, task)
-      for (const wt of worktrees) this.store.upsertWorktree(wt.id, wt)
+      const spaceId = this.store.activeSpaceId
+      for (const init of initiatives) this.store.upsertInitiative(init.id, { ...init, spaceId })
+      for (const epic of epics) this.store.upsertEpic(epic.id, { ...epic, spaceId })
+      for (const task of tasks) this.store.upsertTask(task.id, { ...task, spaceId })
+      for (const wt of worktrees) this.store.upsertWorktree(wt.id, { ...wt, spaceId })
     })
 
     this.bus.on('run.created', (e) => {
@@ -37,6 +38,7 @@ export class DocumentProcessor {
         recapEntries: [],
         rawLogs: '',
         procedures: [],
+        spaceId: this.store.activeSpaceId,
       }
       this.store.upsertRun(run.id, run)
     })
