@@ -1,4 +1,5 @@
 import type {
+  SessionStatus,
   RunStatus,
   TouchedFile,
   Procedure,
@@ -51,16 +52,14 @@ export interface SessionStateChangedPayload {
 
 // --- Session management payloads (from session manager) ---
 
-export type ManagedSessionState = 'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped' | 'terminated'
-
 export interface ManagedSessionCreatedPayload {
   name: string
-  state: ManagedSessionState
+  state: SessionStatus
 }
 
 export interface ManagedSessionStateChangedPayload {
   name: string
-  state: ManagedSessionState
+  state: SessionStatus
 }
 
 export interface ManagedSessionDeletedPayload {
@@ -99,7 +98,7 @@ export interface RunUpdatedPayload {
 
 export interface RunCompletedPayload {
   id: string
-  status: 'complete' | 'failed'
+  status: 'stopped' | 'terminated'
 }
 
 export interface RunFileTouchedPayload {

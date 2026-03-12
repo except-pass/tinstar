@@ -15,7 +15,7 @@ export interface TreeMaps {
   depthMap: Map<string, number>
 }
 
-const STORAGE_KEY = 'qala-uiv2-layouts-v3'
+const STORAGE_KEY = 'tinstar-layouts-v3'
 const DEFAULT_RUN_WIDTH = 900
 const DEFAULT_RUN_HEIGHT = 400
 const MIN_WIDTH = 300
@@ -290,17 +290,27 @@ export function useWidgetLayouts(tree: TreeNode[]) {
     treeMapsRef.current = buildTreeMaps(tree)
     prevTreeRef.current = tree
 
-    // Dimension change detection: >20% new IDs → regenerate
+    // Dimension change detection: >20% new IDs → regenerate; otherwise fill missing
     const newIds = collectTreeIds(tree)
     let missing = 0
     for (const id of newIds) {
       if (!layoutsRef.current.has(id)) missing++
     }
-    if (newIds.size > 0 && missing / newIds.size > 0.2) {
-      const fresh = generateDefaultLayouts(tree)
-      layoutsRef.current = fresh
-      // Schedule state update
-      queueMicrotask(() => setLayouts(fresh))
+    if (newIds.size > 0 && missing > 0) {
+      if (missing / newIds.size > 0.2) {
+        const fresh = generateDefaultLayouts(tree)
+        layoutsRef.current = fresh
+        queueMicrotask(() => setLayouts(fresh))
+      } else {
+        // Fill in missing layouts from defaults (e.g. new group containers after dimension change)
+        const defaults = generateDefaultLayouts(tree)
+        const patched = new Map(layoutsRef.current)
+        for (const id of newIds) {
+          if (!patched.has(id)) patched.set(id, defaults.get(id)!)
+        }
+        layoutsRef.current = patched
+        queueMicrotask(() => setLayouts(patched))
+      }
     }
   }
 

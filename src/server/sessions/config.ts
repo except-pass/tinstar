@@ -7,6 +7,7 @@ import { homedir } from 'node:os'
 export interface TinstarConfig {
   container: { prefix: string; defaultImage: string; home: string }
   ports: { ttyd: number; hostStart: number }
+  caddy: { listenPort: number; adminPort: number }
   dirs: { root: string; secrets: string; sessions: string }
   files: { config: string; projects: string }
 }
@@ -50,6 +51,10 @@ const BASE_CONFIG = {
     ttyd: 7681,
     hostStart: 8681,
   },
+  caddy: {
+    listenPort: 8088,
+    adminPort: 2019,
+  },
 }
 
 // --- Public API ---
@@ -71,6 +76,7 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
   const config: TinstarConfig = {
     container: merged.container,
     ports: merged.ports,
+    caddy: (merged as unknown as { caddy?: TinstarConfig['caddy'] }).caddy ?? { listenPort: 8088, adminPort: 2019 },
     dirs: {
       root: rootDir,
       secrets: join(rootDir, '.secrets'),

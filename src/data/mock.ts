@@ -2,7 +2,7 @@ import type { RunData } from '../types'
 
 export const mockRun: RunData = {
   id: 'R-241',
-  status: 'active',
+  status: 'running',
   sessionId: 'CLD-4092',
   initiative: 'AI Dev Platform',
   epic: 'Codebase Hygiene',
@@ -96,4 +96,6 @@ export const mockRun: RunData = {
     { id: 'p4', name: 'Git_Push_Origin', command: 'git push --force', status: 'idle' },
     { id: 'p5', name: 'Run_Linter', command: 'golangci-lint run', status: 'idle' },
   ],
+  port: null,
+  backend: null,
 }

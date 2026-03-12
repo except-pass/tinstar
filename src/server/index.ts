@@ -13,8 +13,12 @@ import {
   reconcileSessionStates,
   dockerBackend,
   tmuxBackend,
+  ensureCaddy,
+  syncRoutes,
+  listSessions,
   type TinstarConfig,
 } from './sessions'
+import { log } from './logger'
 
 export function tinstarBackend(): Plugin {
   let bus: EventBus
@@ -57,8 +61,11 @@ export function tinstarBackend(): Plugin {
         otelStore.clear()
       }
 
-      // Auto-start in fast mode (for E2E tests) or always in dev
-      startSimulator()
+      // Only auto-start simulator when TINSTAR_FAST_SIM=1 (E2E tests).
+      // In normal dev, the UI starts clean — use POST /api/simulator/start to populate.
+      if (fastSim) {
+        startSimulator()
+      }
 
       // --- Session management ---
       // Initialize session config unless disabled (e.g. in CI where Docker/tmux are unavailable)
@@ -66,7 +73,22 @@ export function tinstarBackend(): Plugin {
         try {
           sessionConfig = loadConfig()
           ensureDirs(sessionConfig)
-          console.log(`[sessions] config root: ${sessionConfig.dirs.root}`)
+          log.info('server', `session config loaded`, { root: sessionConfig.dirs.root, logFile: log.file })
+
+          // Start Caddy reverse proxy for session terminal access
+          ensureCaddy({
+            listenPort: sessionConfig.caddy.listenPort,
+            adminPort: sessionConfig.caddy.adminPort,
+            configDir: sessionConfig.dirs.root,
+          }).then(() => {
+            log.info('server', `caddy proxy ready on :${sessionConfig!.caddy.listenPort}`)
+            // Sync routes for any sessions that survived a restart
+            const sessions = listSessions(sessionConfig!.dirs.sessions)
+            const routeData = sessions.map(s => ({ name: s.name, port: s.port ?? null, state: s.state }))
+            return syncRoutes(routeData, sessionConfig!.caddy.adminPort)
+          }).catch(err => {
+            log.warn('server', `caddy startup failed (terminals will use direct ports): ${(err as Error).message}`)
+          })
 
           // Periodic reconciliation (30s)
           const cfg = sessionConfig
@@ -75,17 +97,18 @@ export function tinstarBackend(): Plugin {
               getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
               getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
               onStateChanged: (name, state) => {
+                docStore.updateRunStatus(name, state)
                 bus.emit({
                   type: 'managed_session.state_changed',
                   timestamp: new Date().toISOString(),
                   payload: { name, state },
                 })
-                console.log(`[reconcile] ${name}: state corrected to ${state}`)
+                log.info('reconcile', `${name}: state corrected to ${state}`)
               },
             }).catch(err => console.error('[reconcile] error:', (err as Error).message))
           }, 30_000)
         } catch (err) {
-          console.warn('[sessions] initialization failed:', (err as Error).message)
+          log.error('server', 'session initialization failed', { error: (err as Error).message })
         }
       }
 

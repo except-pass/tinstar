@@ -95,11 +95,12 @@ function StatusMessage({ entry }: { entry: RecapEntry }) {
 interface Props {
   recapEntries: RecapEntry[]
   rawLogs: string
+  port?: number | null
+  sessionId?: string
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs }: Props) {
-  const [activeTab, setActiveTab] = useState<'recap' | 'raw_logs'>('recap')
-  const [prompt, setPrompt] = useState('')
+export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId }: Props) {
+  const [activeTab, setActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
   const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -113,27 +114,37 @@ export function RunSessionPanel({ recapEntries, rawLogs }: Props) {
       {/* Tab toggle */}
       <div className="flex items-center justify-center border-b border-primary/20 py-2 bg-surface-panel">
         <div className="flex border border-primary/25 rounded-sm overflow-hidden">
-          {(['recap', 'raw_logs'] as const).map((tab) => (
+          {([
+            { key: 'recap' as const, label: 'Recap' },
+            { key: 'terminal' as const, label: port ? 'Terminal' : 'Logs' },
+          ]).map(({ key, label }) => (
             <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
+              key={key}
+              onClick={() => setActiveTab(key)}
               className={`
                 px-5 py-1 text-2xs font-bold font-display tracking-[0.15em] uppercase transition-all
-                ${activeTab === tab
+                ${activeTab === key
                   ? 'bg-primary text-surface-base'
                   : 'text-primary/50 hover:text-primary hover:bg-primary/[0.06]'
                 }
               `}
             >
-              {tab === 'recap' ? 'Recap' : 'Raw_Logs'}
+              {label}
             </button>
           ))}
         </div>
       </div>
 
       {/* Content */}
-      <div ref={contentRef} className="flex-1 overflow-y-auto scrollbar-thin p-4">
-        {activeTab === 'recap' ? (
+      {activeTab === 'terminal' && port ? (
+        <iframe
+          src={sessionId ? `/s/${sessionId}/` : `http://localhost:${port}`}
+          className="flex-1 w-full border-0 bg-black"
+          title="Session terminal"
+          allow="clipboard-read; clipboard-write"
+        />
+      ) : activeTab === 'recap' ? (
+        <div ref={contentRef} className="flex-1 overflow-y-auto scrollbar-thin p-4">
           <div className="space-y-5">
             {recapEntries.map((entry) => {
               switch (entry.type) {
@@ -143,7 +154,9 @@ export function RunSessionPanel({ recapEntries, rawLogs }: Props) {
               }
             })}
           </div>
-        ) : (
+        </div>
+      ) : (
+        <div ref={contentRef} className="flex-1 overflow-y-auto scrollbar-thin p-4">
           <pre className="text-2xs font-mono leading-relaxed text-slate-400 whitespace-pre-wrap">
             {rawLogs.split('\n').map((line, i) => (
               <div
@@ -151,8 +164,7 @@ export function RunSessionPanel({ recapEntries, rawLogs }: Props) {
                 className={`py-px ${
                   line.includes('PASS') ? 'text-accent-green' :
                   line.includes('FAIL') ? 'text-accent-red' :
-                  line.includes('claude-agent:') ? 'text-slate-300' :
-                  line.includes('bench:') ? 'text-accent-amber/70' :
+                  line.includes('claude-agent:') ? 'text-accent-amber/70' :
                   ''
                 }`}
               >
@@ -160,27 +172,9 @@ export function RunSessionPanel({ recapEntries, rawLogs }: Props) {
               </div>
             ))}
           </pre>
-        )}
-      </div>
-
-      {/* Prompt input */}
-      <div className="p-3 border-t border-primary/25 bg-surface-panel">
-        <div className="relative flex items-center">
-          <span className="absolute left-2.5 text-primary/30 text-2xs font-mono tracking-wider select-none">&gt;_</span>
-          <input
-            type="text"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Type command or prompt..."
-            className="w-full bg-surface-base border border-primary/25 rounded-sm text-xs font-mono py-2 pl-8 pr-10
-              focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50
-              text-slate-100 placeholder:text-slate-600 tracking-wide transition-all"
-          />
-          <button className="absolute right-2 text-primary/60 hover:text-primary transition-colors">
-            <span className="material-symbols-outlined text-lg">arrow_forward</span>
-          </button>
         </div>
-      </div>
+      )}
+
     </section>
   )
 }

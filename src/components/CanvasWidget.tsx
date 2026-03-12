@@ -14,6 +14,9 @@ interface Props {
   onResize: (id: string, w: number, h: number) => void
   onSelect?: (runId: string) => void
   onDoubleClickZoom?: (runId: string) => void
+  onDragStart?: (runId: string) => void
+  onDragMove?: (clientX: number, clientY: number) => void
+  onDragEnd?: () => void
 }
 
 const DRAG_THRESHOLD = 5
@@ -30,6 +33,9 @@ export function CanvasWidget({
   onResize,
   onSelect,
   onDoubleClickZoom,
+  onDragStart,
+  onDragMove: onDragMoveParent,
+  onDragEnd,
 }: Props) {
   const dragging = useRef(false)
   const resizing = useRef(false)
@@ -39,7 +45,7 @@ export function CanvasWidget({
   const resizeMoved = useRef(false)
 
   // --- Drag (header bar) ---
-  const onDragDown = useCallback(
+  const handleDragDown = useCallback(
     (e: ReactPointerEvent) => {
       if (e.button !== 0 || spaceHeldRef.current) return
       e.stopPropagation()
@@ -51,24 +57,31 @@ export function CanvasWidget({
     [x, y, spaceHeldRef],
   )
 
-  const onDragMove = useCallback(
+  const handleDragMove = useCallback(
     (e: ReactPointerEvent) => {
       if (!dragging.current) return
       const dx = (e.clientX - dragStart.current.x) / zoom
       const dy = (e.clientY - dragStart.current.y) / zoom
       if (!dragMoved.current && Math.hypot(e.clientX - dragStart.current.x, e.clientY - dragStart.current.y) < DRAG_THRESHOLD) return
-      dragMoved.current = true
+      if (!dragMoved.current) {
+        dragMoved.current = true
+        onDragStart?.(run.id)
+      }
       onMove(run.id, dragStart.current.originX + dx, dragStart.current.originY + dy)
+      onDragMoveParent?.(e.clientX, e.clientY)
     },
-    [run.id, zoom, onMove],
+    [run.id, zoom, onMove, onDragStart, onDragMoveParent],
   )
 
-  const onDragUp = useCallback(() => {
+  const handleDragUp = useCallback(() => {
+    if (dragging.current && dragMoved.current) {
+      onDragEnd?.()
+    }
     dragging.current = false
-  }, [])
+  }, [onDragEnd])
 
   // --- Resize (corner handle) ---
-  const onResizeDown = useCallback(
+  const handleResizeDown = useCallback(
     (e: ReactPointerEvent) => {
       if (e.button !== 0) return
       e.stopPropagation()
@@ -80,7 +93,7 @@ export function CanvasWidget({
     [width, height],
   )
 
-  const onResizeMove = useCallback(
+  const handleResizeMove = useCallback(
     (e: ReactPointerEvent) => {
       if (!resizing.current) return
       const dx = (e.clientX - resizeStart.current.x) / zoom
@@ -92,7 +105,7 @@ export function CanvasWidget({
     [run.id, zoom, onResize],
   )
 
-  const onResizeUp = useCallback(() => {
+  const handleResizeUp = useCallback(() => {
     resizing.current = false
   }, [])
 
@@ -119,10 +132,10 @@ export function CanvasWidget({
       {/* Drag handle — thin bar at top */}
       <div
         className="h-2 bg-primary/10 hover:bg-primary/20 cursor-grab active:cursor-grabbing flex-shrink-0 flex items-center justify-center"
-        onPointerDown={onDragDown}
-        onPointerMove={onDragMove}
-        onPointerUp={onDragUp}
-        onPointerCancel={onDragUp}
+        onPointerDown={handleDragDown}
+        onPointerMove={handleDragMove}
+        onPointerUp={handleDragUp}
+        onPointerCancel={handleDragUp}
       >
         <div className="w-8 h-0.5 rounded-full bg-primary/30" />
       </div>
@@ -136,10 +149,10 @@ export function CanvasWidget({
         style={{
           background: 'linear-gradient(135deg, transparent 50%, rgba(0, 240, 255, 0.4) 50%)',
         }}
-        onPointerDown={onResizeDown}
-        onPointerMove={onResizeMove}
-        onPointerUp={onResizeUp}
-        onPointerCancel={onResizeUp}
+        onPointerDown={handleResizeDown}
+        onPointerMove={handleResizeMove}
+        onPointerUp={handleResizeUp}
+        onPointerCancel={handleResizeUp}
       />
     </div>
   )

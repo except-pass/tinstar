@@ -1,11 +1,12 @@
-import type { RunData, RunStatus } from '../../types'
+import type { RunData, SessionStatus } from '../../types'
 
-const statusConfig: Record<RunStatus, { label: string; color: string; dot: string }> = {
-  active: { label: 'ACTIVE', color: 'text-accent-green', dot: 'bg-accent-green shadow-[0_0_6px_#00ff88]' },
+const statusConfig: Record<SessionStatus, { label: string; color: string; dot: string; pulse?: boolean }> = {
+  creating: { label: 'CREATING', color: 'text-blue-400', dot: 'bg-blue-400 shadow-[0_0_6px_#818cf8]', pulse: true },
+  running: { label: 'RUNNING', color: 'text-accent-green', dot: 'bg-accent-green shadow-[0_0_6px_#00ff88]', pulse: true },
   idle: { label: 'IDLE', color: 'text-accent-amber', dot: 'bg-accent-amber shadow-[0_0_6px_#ffaa00]' },
-  complete: { label: 'COMPLETE', color: 'text-primary', dot: 'bg-primary shadow-[0_0_6px_#00f0ff]' },
-  failed: { label: 'FAILED', color: 'text-accent-red', dot: 'bg-accent-red shadow-[0_0_6px_#ff3366]' },
-  queued: { label: 'QUEUED', color: 'text-slate-400', dot: 'bg-slate-400' },
+  needs_attention: { label: 'ATTENTION', color: 'text-orange-400', dot: 'bg-orange-400 shadow-[0_0_6px_#f97316]', pulse: true },
+  stopped: { label: 'STOPPED', color: 'text-slate-400', dot: 'bg-slate-500' },
+  terminated: { label: 'TERMINATED', color: 'text-accent-red', dot: 'bg-accent-red shadow-[0_0_6px_#ff3366]' },
 }
 
 interface Props {
@@ -31,7 +32,7 @@ export function RunWorkspaceHeader({ run, compact = false }: Props) {
               Run_{run.id}
             </h1>
             <div className={`flex items-center gap-1 ${status.color} shrink-0`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${status.dot} ${run.status === 'active' ? 'animate-pulse-glow' : ''}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${status.dot} ${status.pulse ? 'animate-pulse-glow' : ''}`} />
               <span className="text-2xs font-bold tracking-[0.1em] font-mono uppercase">{status.label}</span>
             </div>
           </div>

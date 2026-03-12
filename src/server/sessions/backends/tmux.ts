@@ -94,7 +94,8 @@ export async function createTmuxSession(
   await execFileAsync('tmux', ['set', '-t', tmuxName, 'status', 'off'])
   await execFileAsync('tmux', ['set', '-t', tmuxName, 'mouse', 'on'])
 
-  // Inject secrets into tmux environment
+  // Inject session identity + secrets into tmux environment
+  await execFileAsync('tmux', ['set-environment', '-t', tmuxName, 'TINSTAR_SESSION_NAME', opts.session.name])
   for (const [key, value] of Object.entries(opts.secrets)) {
     if (value) {
       await execFileAsync('tmux', ['set-environment', '-t', tmuxName, key, value])
@@ -282,25 +283,22 @@ export async function installHooks(
 
   const hooks = (existing.hooks ?? {}) as Record<string, Array<Record<string, unknown>>>
 
+  // Use $TINSTAR_SESSION_NAME env var so the hook only fires for sessions that have it set.
+  // Non-managed Claude instances (e.g. the user's own session) won't have it, so the curl
+  // sends an empty name and the server rejects it — no false state updates.
+  const hookCmd = (endpoint: string) =>
+    `if [ -n "$TINSTAR_SESSION_NAME" ]; then curl -s -X POST ${dashboardUrl}/api/hooks/${endpoint} -H 'Content-Type: application/json' -d "{\\"session\\":\\"$TINSTAR_SESSION_NAME\\"}"; fi`
+
   const tinstarHooks: Record<string, Array<Record<string, unknown>>> = {
     Stop: [{
-      hooks: [{
-        type: 'command',
-        command: `curl -s -X POST ${dashboardUrl}/api/hooks/idle -H 'Content-Type: application/json' -d '{"session":"${sessionName}"}'`,
-      }],
+      hooks: [{ type: 'command', command: hookCmd('idle') }],
     }],
     PreToolUse: [{
       matcher: '',
-      hooks: [{
-        type: 'command',
-        command: `curl -s -X POST ${dashboardUrl}/api/hooks/active -H 'Content-Type: application/json' -d '{"session":"${sessionName}"}'`,
-      }],
+      hooks: [{ type: 'command', command: hookCmd('active') }],
     }],
     UserPromptSubmit: [{
-      hooks: [{
-        type: 'command',
-        command: `curl -s -X POST ${dashboardUrl}/api/hooks/active -H 'Content-Type: application/json' -d '{"session":"${sessionName}"}'`,
-      }],
+      hooks: [{ type: 'command', command: hookCmd('active') }],
     }],
   }
 

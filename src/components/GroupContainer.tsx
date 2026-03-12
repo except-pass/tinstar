@@ -1,12 +1,6 @@
 import { useRef, useCallback, type PointerEvent as ReactPointerEvent } from 'react'
 import type { GroupingDimension } from '../domain/types'
-
-const TYPE_ICONS: Record<GroupingDimension, string> = {
-  initiative: '🚀',
-  epic: '📦',
-  task: '✅',
-  worktree: '🌿',
-}
+import { getDimensionIcon } from '../domain/dimension-meta'
 
 const BORDER_OPACITY = [0.15, 0.12, 0.08, 0.05]
 const BG_OPACITY = [0.02, 0.015, 0.01, 0.005]
@@ -33,6 +27,7 @@ interface Props {
   onMove: (id: string, x: number, y: number) => void
   onResize: (id: string, w: number, h: number) => void
   onShrinkToFit?: (id: string) => void
+  highlighted?: boolean
 }
 
 const DRAG_THRESHOLD = 5
@@ -51,6 +46,7 @@ export function GroupContainer({
   onMove,
   onResize,
   onShrinkToFit,
+  highlighted = false,
 }: Props) {
   const dragging = useRef(false)
   const resizing = useRef(false)
@@ -121,7 +117,7 @@ export function GroupContainer({
 
   const borderOp = getBorderOpacity(depth)
   const bgOp = getBgOpacity(depth)
-  const icon = TYPE_ICONS[nodeType] ?? ''
+  const icon = getDimensionIcon(nodeType)
 
   return (
     <div
@@ -133,8 +129,14 @@ export function GroupContainer({
         top: y,
         width,
         height,
-        border: `1px solid rgba(0, 240, 255, ${borderOp})`,
-        background: `rgba(0, 240, 255, ${bgOp})`,
+        border: highlighted
+          ? '2px solid rgba(0, 240, 255, 0.6)'
+          : `1px solid rgba(0, 240, 255, ${borderOp})`,
+        background: highlighted
+          ? 'rgba(0, 240, 255, 0.08)'
+          : `rgba(0, 240, 255, ${bgOp})`,
+        boxShadow: highlighted ? '0 0 20px rgba(0, 240, 255, 0.15), inset 0 0 20px rgba(0, 240, 255, 0.05)' : 'none',
+        transition: 'border 150ms, background 150ms, box-shadow 150ms',
       }}
     >
       {/* Drag handle — full header area */}

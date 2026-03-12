@@ -1,5 +1,6 @@
 // Re-export base types
 export type {
+  SessionStatus,
   RunStatus,
   FileKind,
   ProcedureStatus,
@@ -13,7 +14,7 @@ export type {
   RunData,
 } from '../types'
 
-import type { RunData, RunStatus } from '../types'
+import type { RunData, SessionStatus as RunStatus } from '../types'
 
 // --- Taxonomy entities ---
 
@@ -74,6 +75,7 @@ export interface TreeNode {
   runCount: number
   activeCount: number
   color?: string
+  orphan?: boolean
 }
 
 export interface TreemapNode {

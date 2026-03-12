@@ -35,7 +35,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
         ) : (
           <TouchedFilesPanel files={run.touchedFiles} onCollapse={() => setFilesCollapsed(true)} />
         )}
-        <RunSessionPanel recapEntries={run.recapEntries} rawLogs={run.rawLogs} />
+        <RunSessionPanel recapEntries={run.recapEntries} rawLogs={run.rawLogs} port={run.port} sessionId={run.sessionId} />
         {procsCollapsed ? (
           <div
             data-testid="collapsed-procedures"

@@ -2,6 +2,9 @@ import { useCallback, useMemo, useState } from 'react'
 import type { GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
+import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
+import { CreateSessionDialog } from './CreateSessionDialog'
+import { SettingsDialog } from './SettingsDialog'
 import { GroupingControls } from './GroupingControls'
 import HierarchySidebar from './HierarchySidebar'
 import { InfiniteCanvas } from './InfiniteCanvas'
@@ -23,11 +26,13 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
 }
 
 function WorkspaceShellInner() {
-  const [dimensions, setDimensions] = useState<GroupingDimension[]>([
-    'initiative',
-    'epic',
-    'task',
-  ])
+  const [dimensions, setDimensions] = useState<GroupingDimension[]>(() => {
+    try {
+      const stored = localStorage.getItem('tinstar-dimensions')
+      if (stored) return JSON.parse(stored) as GroupingDimension[]
+    } catch { /* ignore */ }
+    return ['initiative', 'epic', 'task']
+  })
 
   const { runRepo, taxRepo } = useBackendState()
 
@@ -46,15 +51,39 @@ function WorkspaceShellInner() {
   }, [runRepo])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
+  const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
+  const [showSessionDialog, setShowSessionDialog] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const { select, expandAll } = useSelection()
 
   const handleDimensionsChange = useCallback((dims: GroupingDimension[]) => {
     setDimensions(dims)
+    localStorage.setItem('tinstar-dimensions', JSON.stringify(dims))
   }, [])
 
-  const handleAdd = useCallback((_parentId: string | null, type: GroupingDimension | 'run') => {
-    console.log(`Add ${type} — not wired yet`)
+  const handleRename = useCallback((entityId: string, type: GroupingDimension, newName: string) => {
+    const endpointMap: Record<string, string> = {
+      initiative: '/api/initiatives',
+      epic: '/api/epics',
+      task: '/api/tasks',
+      worktree: '/api/worktrees',
+    }
+    const endpoint = endpointMap[type]
+    if (!endpoint) return
+    fetch(`${endpoint}/${entityId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName }),
+    })
   }, [])
+
+  const handleAdd = useCallback((parentId: string | null, type: GroupingDimension | 'run') => {
+    if (type === 'run') return
+    // Determine the parent's type from the dimensions hierarchy
+    const typeIdx = dimensions.indexOf(type)
+    const parentType = typeIdx > 0 ? dimensions[typeIdx - 1] : null
+    setCreateDialog({ parentId, parentType, childType: type })
+  }, [dimensions])
 
   const handleFocusRun = useCallback((runId: string) => {
     setFocusRunId(runId)
@@ -89,8 +118,25 @@ function WorkspaceShellInner() {
           activeDimensions={dimensions}
           onDimensionsChange={handleDimensionsChange}
         />
-        <div data-testid="status-area" className="text-xs text-slate-500 ml-4 flex-shrink-0">
-          {runSummaries.size} runs
+        <div className="flex items-center gap-3 ml-4 flex-shrink-0">
+          <button
+            className="px-3 py-1 text-xs bg-primary/20 text-primary border border-primary/40 rounded-full hover:bg-primary/30"
+            onClick={() => setShowSessionDialog(true)}
+            data-testid="new-session-btn"
+          >
+            + Session
+          </button>
+          <button
+            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+            onClick={() => setShowSettings(true)}
+            data-testid="settings-btn"
+            aria-label="Settings"
+          >
+            <span className="material-symbols-outlined text-base">settings</span>
+          </button>
+          <span data-testid="status-area" className="text-xs text-slate-500">
+            {runSummaries.size} runs
+          </span>
         </div>
       </div>
 
@@ -105,6 +151,7 @@ function WorkspaceShellInner() {
             tree={sidebarTree}
             dimensions={dimensions}
             onAdd={handleAdd}
+            onRename={handleRename}
             onFocusRun={handleFocusRun}
           />
         </div>
@@ -121,6 +168,21 @@ function WorkspaceShellInner() {
           />
         </div>
       </div>
+
+      {createDialog && (
+        <CreateEntityDialog
+          dialog={createDialog}
+          onClose={() => setCreateDialog(null)}
+        />
+      )}
+
+      {showSessionDialog && (
+        <CreateSessionDialog onClose={() => setShowSessionDialog(false)} />
+      )}
+
+      {showSettings && (
+        <SettingsDialog onClose={() => setShowSettings(false)} />
+      )}
     </div>
   )
 }

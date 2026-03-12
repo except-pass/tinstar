@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { log } from '../logger'
 import type { DocumentStore } from '../stores/document-store'
 import type { OTelStore } from '../stores/otel-store'
 import type { SSEBroadcaster } from './sse'
@@ -26,6 +27,8 @@ import {
   loadSecrets,
   dockerBackend,
   tmuxBackend,
+  addRoute,
+  removeRoute,
 } from '../sessions'
 
 export interface RouteContext {
@@ -66,7 +69,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
   if (method === 'OPTIONS' && url.startsWith('/api/')) {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
     })
     res.end()
@@ -186,13 +189,110 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     return true
   }
 
+  // PATCH /api/initiatives/:id
+  if (method === 'PATCH' && url.startsWith('/api/initiatives/')) {
+    const id = url.slice('/api/initiatives/'.length)
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getInitiative(id)
+      if (!existing) return json(res, { error: 'not found' }, 404)
+      const patch = JSON.parse(body)
+      ctx.docStore.upsertInitiative(id, { ...existing, ...patch })
+      json(res, { ok: true, data: ctx.docStore.getInitiative(id) })
+    })
+    return true
+  }
+
+  // PATCH /api/epics/:id
+  if (method === 'PATCH' && url.startsWith('/api/epics/')) {
+    const id = url.slice('/api/epics/'.length)
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getEpic(id)
+      if (!existing) return json(res, { error: 'not found' }, 404)
+      const patch = JSON.parse(body)
+      ctx.docStore.upsertEpic(id, { ...existing, ...patch })
+      json(res, { ok: true, data: ctx.docStore.getEpic(id) })
+    })
+    return true
+  }
+
+  // PATCH /api/tasks/:id
+  if (method === 'PATCH' && url.startsWith('/api/tasks/')) {
+    const id = url.slice('/api/tasks/'.length)
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getTask(id)
+      if (!existing) return json(res, { error: 'not found' }, 404)
+      const patch = JSON.parse(body)
+      ctx.docStore.upsertTask(id, { ...existing, ...patch })
+      json(res, { ok: true, data: ctx.docStore.getTask(id) })
+    })
+    return true
+  }
+
+  // PATCH /api/worktrees/:id
+  if (method === 'PATCH' && url.startsWith('/api/worktrees/')) {
+    const id = url.slice('/api/worktrees/'.length)
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getWorktree(id)
+      if (!existing) return json(res, { error: 'not found' }, 404)
+      const patch = JSON.parse(body)
+      ctx.docStore.upsertWorktree(id, { ...existing, ...patch })
+      json(res, { ok: true, data: ctx.docStore.getWorktree(id) })
+    })
+    return true
+  }
+
+  // DELETE /api/initiatives/:id
+  if (method === 'DELETE' && url.startsWith('/api/initiatives/')) {
+    const id = url.slice('/api/initiatives/'.length)
+    ctx.docStore.deleteInitiative(id)
+    json(res, { ok: true })
+    return true
+  }
+
+  // DELETE /api/epics/:id
+  if (method === 'DELETE' && url.startsWith('/api/epics/')) {
+    const id = url.slice('/api/epics/'.length)
+    ctx.docStore.deleteEpic(id)
+    json(res, { ok: true })
+    return true
+  }
+
+  // DELETE /api/tasks/:id
+  if (method === 'DELETE' && url.startsWith('/api/tasks/')) {
+    const id = url.slice('/api/tasks/'.length)
+    ctx.docStore.deleteTask(id)
+    json(res, { ok: true })
+    return true
+  }
+
+  // DELETE /api/worktrees/:id
+  if (method === 'DELETE' && url.startsWith('/api/worktrees/')) {
+    const id = url.slice('/api/worktrees/'.length)
+    ctx.docStore.deleteWorktree(id)
+    json(res, { ok: true })
+    return true
+  }
+
+  // PATCH /api/runs/:id
+  if (method === 'PATCH' && url.startsWith('/api/runs/')) {
+    const id = url.slice('/api/runs/'.length)
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getRun(id)
+      if (!existing) return json(res, { ok: false, error: 'not found' }, 404)
+      const patch = JSON.parse(body)
+      ctx.docStore.upsertRun(id, { ...existing, ...patch })
+      json(res, { ok: true, data: ctx.docStore.getRun(id) })
+    })
+    return true
+  }
+
   // --- Session management routes (only active when sessionConfig is set) ---
 
   if (ctx.sessionConfig) {
     const cfg = ctx.sessionConfig
     const sessDir = cfg.dirs.sessions
     const secrets = () => loadSecrets(cfg.dirs.secrets)
-    const dashboardUrl = `http://localhost:${5173}` // Vite dev port; overridden via env in prod
+    const dashboardUrl = `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`
 
     function emitSessionEvent(type: 'managed_session.created' | 'managed_session.state_changed' | 'managed_session.deleted', payload: Record<string, unknown>) {
       ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as Parameters<typeof ctx.bus.emit>[0])
@@ -235,7 +335,8 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true } = JSON.parse(body)
+        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, taskId, epicId, initiativeId } = JSON.parse(body)
+        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, taskId, epicId, initiativeId })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
         if (!['docker', 'tmux'].includes(backend)) return json(res, { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }, 400)
@@ -322,20 +423,53 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
           }
 
           const updated = getSession(sessDir, name)
+
+          // Create a Run in the document store so it appears on the canvas
+          // Start as 'creating' — hooks will update to 'running'/'idle' once Claude is live
+          const runId = name
+          ctx.docStore.upsertRun(runId, {
+            id: runId,
+            status: 'creating',
+            sessionId: name,
+            initiative: initiativeId ?? '',
+            epic: epicId ?? '',
+            task: taskId ?? '',
+            repo: project ?? '',
+            worktree: isWorktree ? name : '',
+            touchedFiles: [],
+            recapEntries: [],
+            rawLogs: '',
+            procedures: [],
+            port: sessionPort ?? null,
+            backend,
+            taskId: taskId ?? '',
+            worktreeId: '',
+            createdAt: new Date().toISOString(),
+          })
+
+          // Register Caddy route for terminal proxy
+          if (sessionPort) {
+            addRoute(name, sessionPort, cfg.caddy.adminPort).catch(err => {
+              log.warn('sessions', `caddy addRoute failed for ${name}: ${(err as Error).message}`)
+            })
+          }
+
           emitSessionEvent('managed_session.created', { name, state: 'running' })
+          log.info('sessions', `session created: ${name}`, { backend, port: sessionPort, state: 'running' })
 
           if (prompt && backend === 'docker' && !oneshot) {
             setTimeout(async () => {
               try {
                 await dockerBackend.sendPrompt(cfg, name, prompt)
               } catch (err) {
-                console.error(`Failed to send initial prompt to ${name}:`, (err as Error).message)
+                log.error('sessions', `failed to send initial prompt to ${name}`, { error: (err as Error).message })
               }
             }, 5000)
           }
 
           json(res, { ok: true, data: updated }, 201)
         } catch (err) {
+          log.error('sessions', `session creation failed: ${name}`, { error: (err as Error).message })
           json(res, { ok: false, error: { code: 'CREATE_FAILED', message: (err as Error).message } }, 500)
         }
       })
@@ -361,6 +495,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
             }
 
             setState(sessDir, session.name, 'stopped')
+            ctx.docStore.updateRunStatus(session.name, 'stopped')
             emitSessionEvent('managed_session.state_changed', { name: session.name, state: 'stopped' })
             json(res, { ok: true, data: getSession(sessDir, session.name) })
           } catch (err) {
@@ -404,6 +539,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
             }
 
             setState(sessDir, session.name, 'running')
+            ctx.docStore.updateRunStatus(session.name, 'running')
             emitSessionEvent('managed_session.state_changed', { name: session.name, state: 'running' })
             json(res, { ok: true, data: getSession(sessDir, session.name) })
           } catch (err) {
@@ -438,6 +574,9 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
               await deleteWorktree(session.workspace.basePath, session.name)
             }
 
+            // Remove Caddy route
+            removeRoute(session.name, cfg.caddy.adminPort).catch(() => {})
+
             deleteSession(sessDir, session.name)
             emitSessionEvent('managed_session.deleted', { name: session.name })
             json(res, { ok: true })
@@ -458,6 +597,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_SESSION', message: 'Session name required' } }, 400)
 
         setState(sessDir, name, 'idle')
+        ctx.docStore.updateRunStatus(name, 'idle')
         emitSessionEvent('managed_session.state_changed', { name, state: 'idle' })
         json(res, { ok: true })
       })
@@ -472,6 +612,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
 
         const prev = getSession(sessDir, name)
         setState(sessDir, name, 'running')
+        ctx.docStore.updateRunStatus(name, 'running')
         if (!prev || prev.state !== 'running') {
           emitSessionEvent('managed_session.state_changed', { name, state: 'running' })
         }

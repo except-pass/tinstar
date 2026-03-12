@@ -1,21 +1,23 @@
-import type { RunStatus, ProcedureStatus } from '../types'
+import type { SessionStatus, ProcedureStatus } from '../types'
 
 /** Tailwind class for the status indicator dot */
-export const STATUS_DOT_CLASSES: Record<RunStatus, string> = {
-  active: 'bg-green-400',
-  idle: 'bg-slate-400',
-  complete: 'bg-primary',
-  failed: 'bg-red-400',
-  queued: 'bg-amber-400',
+export const STATUS_DOT_CLASSES: Record<SessionStatus, string> = {
+  creating: 'bg-blue-400',
+  running: 'bg-green-400',
+  idle: 'bg-amber-400',
+  needs_attention: 'bg-orange-400',
+  stopped: 'bg-slate-500',
+  terminated: 'bg-red-400',
 }
 
 /** Hex color for the left border accent */
-export const STATUS_BORDER_COLORS: Record<RunStatus, string> = {
-  active: '#4ade80',
-  idle: '#94a3b8',
-  complete: '#00f0ff',
-  failed: '#f87171',
-  queued: '#fbbf24',
+export const STATUS_BORDER_COLORS: Record<SessionStatus, string> = {
+  creating: '#818cf8',
+  running: '#4ade80',
+  idle: '#fbbf24',
+  needs_attention: '#f97316',
+  stopped: '#64748b',
+  terminated: '#f87171',
 }
 
 /** Tailwind text color class for procedure status indicators */

@@ -14,6 +14,68 @@ export function getRunDimensionValue(
   return taxonomy.resolveDimension(run, dimension)
 }
 
+/** Get all entities for a dimension from the taxonomy (even those with no runs) */
+function getAllEntitiesForDimension(
+  dimension: GroupingDimension,
+  taxonomy: TaxonomyRepository,
+): Array<{ id: string; label: string; color?: string }> {
+  switch (dimension) {
+    case 'initiative':
+      return taxonomy.getInitiatives().map(i => ({ id: i.id, label: i.name, color: i.color }))
+    case 'epic':
+      return taxonomy.getEpics().map(e => ({ id: e.id, label: e.name }))
+    case 'task':
+      return taxonomy.getTasks().map(t => ({ id: t.id, label: t.name }))
+    case 'worktree':
+      return taxonomy.getWorktrees().map(w => ({ id: w.id, label: w.name }))
+  }
+}
+
+/** Get child entities that belong to a specific parent entity */
+function getChildEntitiesForParent(
+  parentDimension: GroupingDimension,
+  parentEntityId: string,
+  childDimension: GroupingDimension,
+  taxonomy: TaxonomyRepository,
+): Array<{ id: string; label: string; color?: string }> {
+  if (parentDimension === 'initiative' && childDimension === 'epic') {
+    return taxonomy.getEpicsByInitiative(parentEntityId).map(e => ({ id: e.id, label: e.name }))
+  }
+  if (parentDimension === 'epic' && childDimension === 'task') {
+    return taxonomy.getTasksByEpic(parentEntityId).map(t => ({ id: t.id, label: t.name }))
+  }
+  return []
+}
+
+/** Get orphan entities — those whose parent FK is empty or points to a missing entity */
+function getOrphanEntities(
+  dimension: GroupingDimension,
+  parentDimension: GroupingDimension | undefined,
+  taxonomy: TaxonomyRepository,
+): Array<{ id: string; label: string; color?: string }> {
+  if (!parentDimension) return []
+
+  if (parentDimension === 'initiative' && dimension === 'epic') {
+    const initIds = new Set(taxonomy.getInitiatives().map(i => i.id))
+    return taxonomy.getEpics()
+      .filter(e => !e.initiativeId || !initIds.has(e.initiativeId))
+      .map(e => ({ id: e.id, label: e.name }))
+  }
+  if (parentDimension === 'epic' && dimension === 'task') {
+    const epicIds = new Set(taxonomy.getEpics().map(e => e.id))
+    return taxonomy.getTasks()
+      .filter(t => !t.epicId || !epicIds.has(t.epicId))
+      .map(t => ({ id: t.id, label: t.name }))
+  }
+  if (parentDimension === 'initiative' && dimension === 'task') {
+    const initIds = new Set(taxonomy.getInitiatives().map(i => i.id))
+    return taxonomy.getTasks()
+      .filter(t => !t.initiativeId || !initIds.has(t.initiativeId))
+      .map(t => ({ id: t.id, label: t.name }))
+  }
+  return []
+}
+
 /**
  * Build a hierarchical tree of TreeNodes by recursively grouping runs
  * along the given dimension order.
@@ -21,11 +83,18 @@ export function getRunDimensionValue(
  * Algorithm: Take first dimension, group runs by that dimension's value,
  * create a TreeNode per group, recurse with remaining dimensions.
  * Leaf-level children are individual run nodes.
+ *
+ * Entities that exist in the taxonomy but have no runs are included as
+ * empty nodes so they're visible in the sidebar and canvas.
+ * Orphan entities (missing parent) appear after a separator at each level.
  */
 export function buildGroupTree(
   runs: Run[],
   dimensions: GroupingDimension[],
   taxonomy: TaxonomyRepository,
+  _isRoot = true,
+  _parentDimension?: GroupingDimension,
+  _parentEntityId?: string,
 ): TreeNode[] {
   if (dimensions.length === 0) {
     // No more dimensions — return run leaf nodes
@@ -36,7 +105,7 @@ export function buildGroupTree(
       entityId: run.id,
       children: [],
       runCount: 1,
-      activeCount: run.status === 'active' ? 1 : 0,
+      activeCount: run.status === 'running' ? 1 : 0,
       color: STATUS_BORDER_COLORS[run.status],
     }))
   }
@@ -46,10 +115,14 @@ export function buildGroupTree(
 
   // Group runs by this dimension's value
   const groups = new Map<string, { label: string; color?: string; runs: Run[] }>()
+  const orphanRuns: Run[] = []
 
   for (const run of runs) {
     const resolved = taxonomy.resolveDimension(run, dimension)
-    if (!resolved) continue
+    if (!resolved) {
+      orphanRuns.push(run)
+      continue
+    }
 
     const existing = groups.get(resolved.id)
     if (existing) {
@@ -63,11 +136,28 @@ export function buildGroupTree(
     }
   }
 
+  // Include empty entities so they're visible even without runs
+  if (_isRoot) {
+    // Root level: include all entities for this dimension
+    for (const entity of getAllEntitiesForDimension(dimension, taxonomy)) {
+      if (!groups.has(entity.id)) {
+        groups.set(entity.id, { label: entity.label, color: entity.color, runs: [] })
+      }
+    }
+  } else if (_parentDimension && _parentEntityId) {
+    // Nested level: include child entities that belong to this parent
+    for (const entity of getChildEntitiesForParent(_parentDimension, _parentEntityId, dimension, taxonomy)) {
+      if (!groups.has(entity.id)) {
+        groups.set(entity.id, { label: entity.label, color: entity.color, runs: [] })
+      }
+    }
+  }
+
   // Build tree nodes for each group
   const nodes: TreeNode[] = []
   for (const [entityId, group] of groups) {
-    const children = buildGroupTree(group.runs, remaining, taxonomy)
-    const activeCount = group.runs.filter(r => r.status === 'active').length
+    const children = buildGroupTree(group.runs, remaining, taxonomy, false, dimension, entityId)
+    const activeCount = group.runs.filter(r => r.status === 'running').length
 
     nodes.push({
       id: `${dimension}-${entityId}`,
@@ -81,7 +171,75 @@ export function buildGroupTree(
     })
   }
 
+  // Add orphan entities (those with missing/empty parent) at root level
+  if (_isRoot) {
+    const parentDim = _parentDimension // undefined at true root
+    // For the root level, the "parent dimension" is the dimension ABOVE
+    // the current one in the original hierarchy (not passed down).
+    // We detect orphans of the NEXT dimension whose parent in THIS dimension is missing.
+    // But more importantly, we detect orphan entities of THIS dimension that
+    // don't have a parent in the dimension above (i.e., dimensions not in our list).
+    // This is handled by getAllEntitiesForDimension already including them.
+
+    // Orphan entities of lower dimensions that float up to root:
+    // e.g. epics with no initiative when dimensions = ['initiative', 'epic', 'task']
+    for (const lowerDim of dimensions.slice(1)) {
+      const orphanEntities = getOrphanEntities(lowerDim, dimension, taxonomy)
+      for (const entity of orphanEntities) {
+        // Only add if not already present as a grouped node
+        const nodeId = `${lowerDim}-${entity.id}`
+        if (!nodes.some(n => n.id === nodeId)) {
+          // Build sub-tree for this orphan entity's runs
+          const entityRuns = orphanRuns.filter(run => {
+            const resolved = taxonomy.resolveDimension(run, lowerDim)
+            return resolved?.id === entity.id
+          })
+          const subDims = dimensions.slice(dimensions.indexOf(lowerDim) + 1)
+          const children = buildGroupTree(entityRuns, subDims, taxonomy, false, lowerDim, entity.id)
+
+          nodes.push({
+            id: nodeId,
+            label: entity.label,
+            type: lowerDim,
+            entityId: entity.id,
+            children,
+            runCount: entityRuns.length,
+            activeCount: entityRuns.filter(r => r.status === 'running').length,
+            color: entity.color,
+            orphan: true,
+          })
+        }
+      }
+    }
+
+    // Remaining truly orphan runs (not claimed by any orphan entity)
+    const claimedRunIds = new Set<string>()
+    for (const node of nodes) {
+      if (node.orphan) collectRunIds(node, claimedRunIds)
+    }
+    for (const run of orphanRuns) {
+      if (!claimedRunIds.has(run.id)) {
+        nodes.push({
+          id: `run-${run.id}`,
+          label: run.id,
+          type: 'run' as const,
+          entityId: run.id,
+          children: [],
+          runCount: 1,
+          activeCount: run.status === 'running' ? 1 : 0,
+          color: STATUS_BORDER_COLORS[run.status],
+          orphan: true,
+        })
+      }
+    }
+  }
+
   return nodes
+}
+
+function collectRunIds(node: TreeNode, ids: Set<string>): void {
+  if (node.type === 'run') ids.add(node.entityId)
+  for (const child of node.children) collectRunIds(child, ids)
 }
 
 /**
@@ -133,8 +291,8 @@ export function computeRollup(node: TreeNode, runs: Run[]): GroupRollupViewModel
     label: node.label,
     type: groupType,
     runCount: nodeRuns.length,
-    activeCount: nodeRuns.filter(r => r.status === 'active').length,
-    completedCount: nodeRuns.filter(r => r.status === 'complete').length,
-    failedCount: nodeRuns.filter(r => r.status === 'failed').length,
+    activeCount: nodeRuns.filter(r => r.status === 'running').length,
+    completedCount: nodeRuns.filter(r => r.status === 'stopped').length,
+    failedCount: nodeRuns.filter(r => r.status === 'terminated').length,
   }
 }

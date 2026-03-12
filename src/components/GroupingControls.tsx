@@ -1,17 +1,11 @@
 import { useState, useCallback, useRef } from 'react'
 import type { GroupingDimension } from '../domain/types'
 import { ALL_DIMENSIONS } from '../domain/types'
+import { getDimensionLabel } from '../domain/dimension-meta'
 
 interface GroupingControlsProps {
   activeDimensions: GroupingDimension[]
   onDimensionsChange: (dims: GroupingDimension[]) => void
-}
-
-const LABELS: Record<GroupingDimension, string> = {
-  initiative: 'Initiative',
-  epic: 'Epic',
-  task: 'Task',
-  worktree: 'Worktree',
 }
 
 export function GroupingControls({ activeDimensions, onDimensionsChange }: GroupingControlsProps) {
@@ -98,7 +92,7 @@ export function GroupingControls({ activeDimensions, onDimensionsChange }: Group
           data-testid={`pill-${dim}`}
           onPointerDown={e => onPointerDown(e, i)}
         >
-          <span className="select-none">{LABELS[dim]}</span>
+          <span className="select-none">{getDimensionLabel(dim)}</span>
           {activeDimensions.length > 1 && (
             <button
               className="text-primary/60 hover:text-red-400 ml-0.5"
@@ -122,7 +116,7 @@ export function GroupingControls({ activeDimensions, onDimensionsChange }: Group
           data-testid={`add-${dim}`}
           aria-label={`Add ${dim}`}
         >
-          + {LABELS[dim]}
+          + {getDimensionLabel(dim)}
         </button>
       ))}
     </div>

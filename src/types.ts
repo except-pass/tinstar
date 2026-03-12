@@ -1,4 +1,8 @@
-export type RunStatus = 'active' | 'idle' | 'complete' | 'failed' | 'queued'
+/** Single source of truth for session/run status — matches Qala's session states */
+export type SessionStatus = 'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped' | 'terminated'
+
+/** @deprecated Use SessionStatus instead */
+export type RunStatus = SessionStatus
 export type FileKind = 'code' | 'config' | 'test' | 'script' | 'doc'
 export type ProcedureStatus = 'idle' | 'queued' | 'running' | 'complete' | 'failed'
 export type RecapEntryType = 'agent' | 'user' | 'status'
@@ -41,7 +45,7 @@ export interface Procedure {
 
 export interface RunData {
   id: string
-  status: RunStatus
+  status: SessionStatus
   sessionId: string
   initiative: string
   epic: string
@@ -52,4 +56,6 @@ export interface RunData {
   recapEntries: RecapEntry[]
   rawLogs: string
   procedures: Procedure[]
+  port: number | null
+  backend: 'docker' | 'tmux' | null
 }

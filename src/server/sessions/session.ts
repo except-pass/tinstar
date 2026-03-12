@@ -5,9 +5,12 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
+import type { SessionStatus } from '../../types'
+
 // --- Types ---
 
-export type SessionState = 'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped' | 'terminated'
+/** @deprecated Use SessionStatus from src/types.ts — kept as alias for compatibility */
+export type SessionState = SessionStatus
 export type SessionBackend = 'docker' | 'tmux'
 
 export interface SessionWorkspace {

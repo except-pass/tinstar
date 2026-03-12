@@ -157,8 +157,9 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 ### Interactions
 - **Click node**: Select it; toggle expand/collapse if it has children
 - **Double-click run node**: Center canvas viewport on that run (zoom-to-fit)
-- **Hover node**: Highlight background, reveal "+" add button
-- **Click "+" button**: Add child of next type based on dimensions array (dynamic — e.g., if dimensions are `[initiative, task]`, initiative's child type is task) — logs to console, not wired
+- **Hover node**: Highlight background, reveal "+" add button and pencil rename button
+- **Click "+" button**: Add child of next type based on dimensions array (dynamic — e.g., if dimensions are `[initiative, task]`, initiative's child type is task)
+- **Click pencil button**: Inline rename — replaces label with text input, Enter to commit, Escape to cancel
 - **Root "+" button**: Adds a node of the first active dimension type
 
 ### Canvas → Sidebar Sync
@@ -187,12 +188,13 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 
 ## Persistence
 
-- **Storage key**: `qala-uiv2-layouts-v3`
+- **Layout storage key**: `tinstar-layouts-v3`
 - **What's saved**: All widget and group container positions/sizes as JSON (keyed by tree node ID)
 - **When saved**: On every layout change (via useEffect)
 - **Load behavior**: Merge saved layouts with defaults for any missing entries
 - **Dimension change detection**: If >20% of tree node IDs are missing from stored layouts, regenerate from scratch
 - **Fallback**: Generate fresh default recursive layout on parse error
+- **Dimension persistence key**: `tinstar-dimensions` — active grouping dimensions saved/restored across reloads
 
 ---
 
@@ -276,6 +278,14 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 | 19 | `/api/projects` | POST | **done** |
 | 20 | `/api/projects/:name/worktrees` | GET | **done** |
 | 21 | `/api/projects/:name` | DELETE | **done** |
+| 25 | `/api/initiatives/:id` | DELETE | **done** |
+| 26 | `/api/epics/:id` | DELETE | **done** |
+| 27 | `/api/tasks/:id` | DELETE | **done** |
+| 28 | `/api/worktrees/:id` | DELETE | **done** |
+| 29 | `/api/initiatives/:id` | PATCH | **done** |
+| 30 | `/api/epics/:id` | PATCH | **done** |
+| 31 | `/api/tasks/:id` | PATCH | **done** |
+| 32 | `/api/worktrees/:id` | PATCH | **done** |
 
 ### Integration
 
@@ -283,7 +293,10 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 |---|---------|------|--------|
 | 22 | Event bus types | `src/server/types.ts` | **done** |
 | 23 | Server wiring + reconciliation loop | `src/server/index.ts` | **done** |
-| 24 | CORS + DELETE method | `src/server/api/routes.ts` | **done** |
+| 24 | CORS + DELETE + PATCH methods | `src/server/api/routes.ts` | **done** |
+| 33 | Orphan handling in grouping tree | `src/domain/grouping.ts` | **done** |
+| 34 | Dimension persistence (localStorage) | `src/components/WorkspaceShell.tsx` | **done** |
+| 35 | Inline rename (pencil icon) | `src/components/HierarchySidebar.tsx` | **done** |
 
 ### Session Architecture
 

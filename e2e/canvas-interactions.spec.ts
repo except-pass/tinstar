@@ -113,7 +113,7 @@ const RUN_1 = 'canvas-widget-R-241'
 test.describe('Canvas Interactions', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
-    await page.evaluate(() => localStorage.removeItem('qala-uiv2-layouts-v3'))
+    await page.evaluate(() => localStorage.removeItem('tinstar-layouts-v3'))
     await page.reload()
     await page.waitForTimeout(500)
   })
@@ -395,6 +395,34 @@ test.describe('Canvas Interactions', () => {
   // ── Shrink-to-Fit ────────────────────────────────────────────────────
 
   test.describe('Shrink-to-Fit', () => {
+    test('shrink initiative with initiative→worktree grouping does not collapse too small', async ({ page }) => {
+      const controls = page.getByTestId('grouping-controls')
+      // Remove epic and task to get initiative → worktree
+      await controls.getByTestId('remove-epic').click()
+      await page.waitForTimeout(300)
+      await controls.getByTestId('remove-task').click()
+      await page.waitForTimeout(300)
+      // Add worktree
+      await controls.getByTestId('add-worktree').click()
+      await page.waitForTimeout(500)
+
+      const init1 = page.getByTestId('group-container-initiative-init-1')
+      await expect(init1).toBeVisible()
+
+      // Get before-shrink size
+      const beforeBox = await box(init1)
+
+      // Double-click to shrink
+      await page.mouse.dblclick(beforeBox.x + 5, beforeBox.y + 5)
+      await page.waitForTimeout(300)
+
+      const afterShrink = await box(init1)
+      // The initiative must still contain its worktree children — should not be tiny
+      // With runs inside worktrees, each run is 900px wide, so initiative should be wide
+      expect(afterShrink.width).toBeGreaterThan(400)
+      expect(afterShrink.height).toBeGreaterThan(200)
+    })
+
     test('double-click container shrinks after manual resize', async ({ page }) => {
       const task = page.getByTestId(TASK_1)
       const initialTask = await box(task)

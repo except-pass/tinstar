@@ -7,5 +7,12 @@ export default defineConfig({
   server: {
     port: 5273,
     host: true,
+    proxy: {
+      // Proxy session terminal paths through Caddy reverse proxy
+      '/s/': {
+        target: 'http://localhost:8088',
+        ws: true,
+      },
+    },
   },
 })
