@@ -32,6 +32,14 @@ export interface ResolvedSettings {
   local: EntitySettings
 }
 
+// --- Spaces ---
+
+export interface Space {
+  id: string
+  name: string
+  createdAt: string
+}
+
 // --- Taxonomy entities ---
 
 export interface Initiative {
@@ -41,6 +49,7 @@ export interface Initiative {
   status: 'active' | 'paused' | 'archived'
   summary: string
   settings?: EntitySettings
+  spaceId?: string
 }
 
 export interface Epic {
@@ -50,6 +59,7 @@ export interface Epic {
   status: string
   summary: string
   settings?: EntitySettings
+  spaceId?: string
 }
 
 export interface Task {
@@ -60,6 +70,7 @@ export interface Task {
   status: string
   summary: string
   settings?: EntitySettings
+  spaceId?: string
 }
 
 export interface Worktree {
@@ -68,6 +79,7 @@ export interface Worktree {
   branch: string
   repo: string
   worktreePath: string
+  spaceId?: string
 }
 
 // Enhanced run with foreign keys
@@ -75,6 +87,7 @@ export interface Run extends RunData {
   taskId: string
   worktreeId: string
   createdAt: string
+  spaceId?: string
 }
 
 // --- Grouping ---
