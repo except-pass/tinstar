@@ -117,6 +117,9 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   const [reassign, setReassign] = useState<ReassignState | null>(null)
   const groupNodesRef = useRef<TreeNode[]>([])
 
+  // Multi-drag: snapshot of other selected widgets' positions at drag start
+  const multiDragSnapshot = useRef<Map<string, { x: number; y: number }> | null>(null)
+
   // Marquee state
   const [marquee, setMarquee] = useState<MarqueeRect | null>(null)
   const marqueeRef = useRef<{ startX: number; startY: number; active: boolean }>({ startX: 0, startY: 0, active: false })
@@ -167,8 +170,8 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   // --- Pointer handlers: pan OR marquee ---
   const onPointerDown = useCallback(
     (e: ReactPointerEvent) => {
-      if (spaceHeld.current) {
-        // Space held = pan
+      if (spaceHeld.current || e.button === 1) {
+        // Space held or middle-click = pan
         startPan(e.nativeEvent)
         return
       }
@@ -288,7 +291,24 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   // Widget drag callbacks
   const handleWidgetDragStart = useCallback((runId: string) => {
     draggingRunRef.current = runId
-  }, [])
+    // Snapshot positions of other selected widgets for multi-drag
+    const draggedNodeId = `run-${runId}`
+    if (isSelected(draggedNodeId)) {
+      const snap = new Map<string, { x: number; y: number }>()
+      for (const nodeId of runNodeIdsRef.current) {
+        if (nodeId !== draggedNodeId && isSelected(nodeId)) {
+          const layout = layouts.get(nodeId)
+          if (layout) snap.set(nodeId, { x: layout.x, y: layout.y })
+        }
+      }
+      // Also snapshot the dragged widget's starting position for delta calc
+      const dragLayout = layouts.get(draggedNodeId)
+      if (dragLayout) snap.set('__origin__', { x: dragLayout.x, y: dragLayout.y })
+      multiDragSnapshot.current = snap.size > 1 ? snap : null // need at least origin + 1 other
+    } else {
+      multiDragSnapshot.current = null
+    }
+  }, [isSelected, layouts])
 
   const handleWidgetDragMove = useCallback((clientX: number, clientY: number) => {
     if (!draggingRunRef.current) return
@@ -312,6 +332,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   const handleWidgetDragEnd = useCallback(() => {
     const runId = draggingRunRef.current
     draggingRunRef.current = null
+    multiDragSnapshot.current = null
     if (runId && dropTarget) {
       setReassign({ runId, target: dropTarget })
     }
@@ -351,6 +372,21 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   const handleReassignCancel = useCallback(() => {
     setReassign(null)
   }, [])
+
+  // Multi-drag aware move: when dragging a selected widget, move all selected peers by the same delta
+  const handleMultiMove = useCallback((nodeId: string, newX: number, newY: number) => {
+    updateRunPosition(nodeId, newX, newY)
+    const snap = multiDragSnapshot.current
+    if (!snap) return
+    const origin = snap.get('__origin__')
+    if (!origin) return
+    const dx = newX - origin.x
+    const dy = newY - origin.y
+    for (const [peerNodeId, pos] of snap) {
+      if (peerNodeId === '__origin__') continue
+      updateRunPosition(peerNodeId, pos.x + dx, pos.y + dy)
+    }
+  }, [updateRunPosition])
 
   // Grid arrange: tile selected (or all) run widgets into a grid filling the viewport
   const arrangeGrid = useCallback(() => {
@@ -429,7 +465,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
           zoom={camera.zoom}
           spaceHeldRef={spaceHeld}
           selected={selected}
-          onMove={(runId, x, y) => updateRunPosition(node.id, x, y)}
+          onMove={(runId, x, y) => handleMultiMove(node.id, x, y)}
           onResize={(runId, w, h) => updateRunSize(node.id, w, h)}
           onSelect={onSelectRun}
           onDoubleClickZoom={onFocusRun}

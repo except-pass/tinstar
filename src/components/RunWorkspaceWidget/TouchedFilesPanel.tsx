@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState } from 'react'
 import type { TouchedFile, FileKind } from '../../types'
 
 const kindIcon: Record<FileKind, string> = {
@@ -17,26 +17,6 @@ interface Props {
 
 export function TouchedFilesPanel({ files, onFileSelect, onCollapse }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(files[2]?.id ?? null)
-  const [width, setWidth] = useState(160) // w-40 = 10rem = 160px
-  const dragRef = useRef<{ startX: number; startW: number } | null>(null)
-
-  const onResizePointerDown = useCallback((e: React.PointerEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    dragRef.current = { startX: e.clientX, startW: width }
-    const el = e.currentTarget as HTMLElement
-    el.setPointerCapture(e.pointerId)
-  }, [width])
-
-  const onResizePointerMove = useCallback((e: React.PointerEvent) => {
-    if (!dragRef.current) return
-    const newW = Math.max(100, Math.min(400, dragRef.current.startW + (e.clientX - dragRef.current.startX)))
-    setWidth(newW)
-  }, [])
-
-  const onResizePointerUp = useCallback(() => {
-    dragRef.current = null
-  }, [])
 
   // Only count reconciled files in header totals
   const reconciledFiles = files.filter(f => !f.pending)
@@ -44,32 +24,14 @@ export function TouchedFilesPanel({ files, onFileSelect, onCollapse }: Props) {
   const totalRemoved = reconciledFiles.reduce((s, f) => s + f.deletions, 0)
 
   return (
-    <section className="flex flex-col border-r border-primary/20 bg-surface-panel relative" style={{ width }}>
-      {/* Header */}
-      <div className="panel-header overflow-hidden">
-        <h3 className="panel-label truncate shrink min-w-0">Touched_Files</h3>
-        <div className="flex items-center gap-1.5 text-2xs font-mono shrink-0">
-          {width > 120 && (
-            <>
-              <span className="text-accent-green">+{totalAdded}</span>
-              <span className="text-accent-red">-{totalRemoved}</span>
-            </>
-          )}
-          {onCollapse && (
-            <button
-              data-testid="collapse-files"
-              onClick={onCollapse}
-              className="text-slate-500 hover:text-primary ml-1"
-            >
-              <span className="material-symbols-outlined text-sm">chevron_left</span>
-            </button>
-          )}
+    <div className="flex flex-col h-full">
+      {/* Summary bar */}
+      <div className="px-3 py-1.5 border-b border-primary/10 bg-surface-base/50 flex items-center justify-between">
+        <span className="text-2xs font-mono text-slate-500">{files.length} files</span>
+        <div className="flex items-center gap-1.5 text-2xs font-mono">
+          <span className="text-accent-green">+{totalAdded}</span>
+          <span className="text-accent-red">-{totalRemoved}</span>
         </div>
-      </div>
-
-      {/* File count */}
-      <div className="px-3 py-1.5 border-b border-primary/10 bg-surface-base/50">
-        <span className="text-2xs font-mono text-slate-500">{files.length} files modified</span>
       </div>
 
       {/* File list */}
@@ -125,13 +87,6 @@ export function TouchedFilesPanel({ files, onFileSelect, onCollapse }: Props) {
           )
         })}
       </div>
-      {/* Resize handle */}
-      <div
-        className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
-        onPointerDown={onResizePointerDown}
-        onPointerMove={onResizePointerMove}
-        onPointerUp={onResizePointerUp}
-      />
-    </section>
+    </div>
   )
 }

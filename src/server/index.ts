@@ -68,6 +68,13 @@ export function tinstarBackend(): Plugin {
       function resetSimulator() {
         simulator?.stop()
         simulator = null
+        // Ensure simulator space exists and is active before clearing
+        let simSpace = docStore.getAllSpaces().find(s => s.name === '_simulator')
+        if (!simSpace) {
+          simSpace = { id: shortId('spc'), name: '_simulator', createdAt: new Date().toISOString() }
+          docStore.upsertSpace(simSpace.id, simSpace)
+        }
+        docStore.activeSpaceId = simSpace.id
         docStore.clear()
         otelStore.clear()
       }

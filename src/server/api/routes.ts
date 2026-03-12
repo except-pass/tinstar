@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
+import { join, relative } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
 import type { DocumentStore } from '../stores/document-store'
@@ -463,7 +464,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     }
 
     // GET /api/sessions/:name (exact match, no trailing path)
-    if (method === 'GET' && url.startsWith('/api/sessions/') && !url.includes('/start') && !url.includes('/stop')) {
+    if (method === 'GET' && url.startsWith('/api/sessions/') && !url.includes('/start') && !url.includes('/stop') && !url.includes('/files')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)
@@ -471,6 +472,46 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
           json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
         } else {
           json(res, { ok: true, data: session })
+        }
+        return true
+      }
+    }
+
+    // GET /api/sessions/:name/files?path=<relative-dir>
+    if (method === 'GET' && url.startsWith('/api/sessions/') && url.includes('/files')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session?.workspace?.path) {
+          json(res, { ok: false, error: { code: 'NO_WORKSPACE', message: 'Session has no workspace' } }, 404)
+          return true
+        }
+        const wsRoot = session.workspace.path
+        const params = new URL(url, 'http://localhost').searchParams
+        const relPath = params.get('path') || '.'
+        const absPath = join(wsRoot, relPath)
+
+        // Safety: ensure we don't escape the workspace
+        if (!absPath.startsWith(wsRoot)) {
+          json(res, { ok: false, error: { code: 'INVALID_PATH', message: 'Path escapes workspace' } }, 400)
+          return true
+        }
+
+        try {
+          const entries = readdirSync(absPath, { withFileTypes: true })
+            .filter(e => !e.name.startsWith('.') && e.name !== 'node_modules')
+            .map(e => ({
+              name: e.name,
+              path: relative(wsRoot, join(absPath, e.name)),
+              isDir: e.isDirectory(),
+            }))
+            .sort((a, b) => {
+              if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+              return a.name.localeCompare(b.name)
+            })
+          json(res, { ok: true, data: entries })
+        } catch (err) {
+          json(res, { ok: false, error: { code: 'READ_FAILED', message: (err as Error).message } }, 500)
         }
         return true
       }
@@ -717,43 +758,40 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     if (method === 'DELETE' && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
-        (async () => {
-          const session = getSession(sessDir, name)
+        const session = getSession(sessDir, name)
 
-          if (!session) {
-            // Session file doesn't exist on disk — still clean up the UI
-            ctx.docStore.deleteRun(name)
-            emitSessionEvent('managed_session.deleted', { name })
-            return json(res, { ok: true })
-          }
+        // Respond immediately — UI removal is instant
+        ctx.docStore.deleteRun(name)
+        deleteSession(sessDir, name)
+        emitSessionEvent('managed_session.deleted', { name })
+        json(res, { ok: true })
 
-          try {
-            if (session.backend === 'docker') {
-              await dockerBackend.deleteContainer(cfg, session)
-            } else {
-              await tmuxBackend.deleteTmuxSession(cfg, session)
-              if (session.port) tmuxBackend.releasePort(session.port)
+        // Heavy cleanup runs async in background
+        if (session) {
+          ;(async () => {
+            try {
+              if (session.backend === 'docker') {
+                await dockerBackend.deleteContainer(cfg, session)
+              } else {
+                await tmuxBackend.deleteTmuxSession(cfg, session)
+                if (session.port) tmuxBackend.releasePort(session.port)
+              }
+
+              if (session.backend === 'tmux' && session.workspace?.path) {
+                try { await tmuxBackend.removeHooks(session.workspace.path) } catch { /* best effort */ }
+              }
+
+              if (session.workspace?.worktree && session.workspace?.basePath) {
+                await deleteWorktree(session.workspace.basePath, session.name)
+              }
+
+              removeRoute(session.name, cfg.caddy.adminPort).catch(() => {})
+            } catch (err) {
+              log.warn('delete', `background cleanup for ${name}: ${(err as Error).message}`)
             }
+          })()
+        }
 
-            if (session.backend === 'tmux' && session.workspace?.path) {
-              try { await tmuxBackend.removeHooks(session.workspace.path) } catch { /* best effort */ }
-            }
-
-            if (session.workspace?.worktree && session.workspace?.basePath) {
-              await deleteWorktree(session.workspace.basePath, session.name)
-            }
-
-            // Remove Caddy route
-            removeRoute(session.name, cfg.caddy.adminPort).catch(() => {})
-
-            deleteSession(sessDir, session.name)
-            ctx.docStore.deleteRun(session.name)
-            emitSessionEvent('managed_session.deleted', { name: session.name })
-            json(res, { ok: true })
-          } catch (err) {
-            json(res, { ok: false, error: { code: 'DELETE_FAILED', message: (err as Error).message } }, 500)
-          }
-        })()
         return true
       }
     }
