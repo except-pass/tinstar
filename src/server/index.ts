@@ -9,9 +9,12 @@ import { handleRequest } from './api/routes'
 import { MockSensorSimulator } from './simulator/mock-sensors'
 import { join } from 'node:path'
 import { readdirSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import {
   loadConfig,
   ensureDirs,
+  loadActiveSpaceId,
+  saveActiveSpaceId,
   reconcileSessionStates,
   dockerBackend,
   tmuxBackend,
@@ -22,6 +25,10 @@ import {
   type TinstarConfig,
 } from './sessions'
 import { log } from './logger'
+
+function shortId(prefix: string): string {
+  return `${prefix}-${randomUUID().slice(0, 8)}`
+}
 
 export function tinstarBackend(): Plugin {
   let bus: EventBus
@@ -79,6 +86,24 @@ export function tinstarBackend(): Plugin {
           // Enable file-backed persistence so data survives server restarts
           docStore.enablePersistence(join(sessionConfig.dirs.root, 'docstore.json'))
 
+          // Initialize spaces — ensure at least one exists
+          const savedSpaceId = loadActiveSpaceId(sessionConfig.dirs.root)
+          if (savedSpaceId && docStore.getSpace(savedSpaceId)) {
+            docStore.activeSpaceId = savedSpaceId
+          } else if (docStore.getAllSpaces().length > 0) {
+            docStore.activeSpaceId = docStore.getAllSpaces()[0]!.id
+          } else {
+            const defaultSpace = {
+              id: shortId('spc'),
+              name: 'Work Space',
+              createdAt: new Date().toISOString(),
+            }
+            docStore.upsertSpace(defaultSpace.id, defaultSpace)
+            docStore.activeSpaceId = defaultSpace.id
+            saveActiveSpaceId(sessionConfig.dirs.root, defaultSpace.id)
+            log.info('server', `created default space "${defaultSpace.name}" (${defaultSpace.id})`)
+          }
+
           // Rehydrate runs for sessions on disk + sync statuses with session files
           const sessEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
           for (const entry of sessEntries) {
@@ -105,6 +130,7 @@ export function tinstarBackend(): Plugin {
                 taskId: '',
                 worktreeId: '',
                 createdAt: sess.created ?? new Date().toISOString(),
+                spaceId: docStore.activeSpaceId,
               })
               log.info('rehydrate', `created run for session ${sess.name} (${sess.state})`)
             } else if (existingRun.status !== sess.state) {
@@ -118,6 +144,13 @@ export function tinstarBackend(): Plugin {
 
           // Start simulator AFTER persistence loads so mock data isn't overwritten
           if (fastSim) {
+            let simSpace = docStore.getAllSpaces().find(s => s.name === '_simulator')
+            if (!simSpace) {
+              simSpace = { id: shortId('spc'), name: '_simulator', createdAt: new Date().toISOString() }
+              docStore.upsertSpace(simSpace.id, simSpace)
+            }
+            docStore.activeSpaceId = simSpace.id
+            saveActiveSpaceId(sessionConfig.dirs.root, simSpace.id)
             docStore.clear()
             startSimulator()
           }
@@ -173,12 +206,18 @@ export function tinstarBackend(): Plugin {
           log.error('server', 'session initialization failed', { error: (err as Error).message })
           // Session init failed but simulator still needs to run
           if (fastSim) {
+            const simSpace = { id: shortId('spc'), name: '_simulator', createdAt: new Date().toISOString() }
+            docStore.upsertSpace(simSpace.id, simSpace)
+            docStore.activeSpaceId = simSpace.id
             docStore.clear()
             startSimulator()
           }
         }
       } else if (fastSim) {
         // No session management — start simulator directly
+        const simSpace = { id: shortId('spc'), name: '_simulator', createdAt: new Date().toISOString() }
+        docStore.upsertSpace(simSpace.id, simSpace)
+        docStore.activeSpaceId = simSpace.id
         startSimulator()
       }
 
