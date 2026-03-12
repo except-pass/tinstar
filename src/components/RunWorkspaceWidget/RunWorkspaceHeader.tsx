@@ -7,7 +7,6 @@ const statusConfig: Record<SessionStatus, { label: string; color: string; dot: s
   idle: { label: 'IDLE', color: 'text-accent-amber', dot: 'bg-accent-amber shadow-[0_0_6px_#ffaa00]' },
   needs_attention: { label: 'ATTENTION', color: 'text-orange-400', dot: 'bg-orange-400 shadow-[0_0_6px_#f97316]', pulse: true },
   stopped: { label: 'STOPPED', color: 'text-slate-400', dot: 'bg-slate-500' },
-  terminated: { label: 'TERMINATED', color: 'text-accent-red', dot: 'bg-accent-red shadow-[0_0_6px_#ff3366]' },
 }
 
 interface Props {

@@ -112,7 +112,7 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
     }
   }, [activeTab])
 
-  const isTerminated = status === 'terminated' || status === 'stopped'
+  const isTerminated = status === 'stopped'
 
   const handleResume = useCallback(async () => {
     if (!sessionId) return

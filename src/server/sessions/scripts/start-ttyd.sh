@@ -16,6 +16,9 @@ if ! tmux has-session -t $TMUX_SESSION 2>/dev/null; then
     tmux set -t $TMUX_SESSION status off
     tmux set -t $TMUX_SESSION mouse on
 
+    # Ctrl+Backspace (xterm.js sends 0x08 / C-h) → word-erase
+    tmux bind-key -n C-h send-keys C-w
+
     # Forward secrets into tmux environment
     for var in CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN GH_APP_ID GH_INSTALLATION_ID GH_APP_KEY; do
         [ -n "${!var}" ] && tmux set-environment -t $TMUX_SESSION "$var" "${!var}"

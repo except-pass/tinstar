@@ -16,7 +16,6 @@ const STATE_COLORS: Record<string, string> = {
   creating: '#94a3b8',
   needs_attention: '#ff3366',
   stopped: '#64748b',
-  terminated: '#475569',
 }
 
 interface Props {
@@ -116,7 +115,7 @@ export function SessionsList({ onOpenSession }: Props) {
                 <span className="material-symbols-outlined text-xs">stop</span>
               </button>
             )}
-            {(s.state === 'stopped' || s.state === 'terminated') && (
+            {s.state === 'stopped' && (
               <button
                 className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-green-400"
                 onClick={e => { e.stopPropagation(); handleStart(s.name) }}

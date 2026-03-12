@@ -7,7 +7,6 @@ export const STATUS_DOT_CLASSES: Record<SessionStatus, string> = {
   idle: 'bg-amber-400',
   needs_attention: 'bg-orange-400',
   stopped: 'bg-slate-500',
-  terminated: 'bg-red-400',
 }
 
 /** Hex color for the left border accent */
@@ -17,7 +16,6 @@ export const STATUS_BORDER_COLORS: Record<SessionStatus, string> = {
   idle: '#fbbf24',
   needs_attention: '#f97316',
   stopped: '#64748b',
-  terminated: '#f87171',
 }
 
 /** Tailwind text color class for procedure status indicators */

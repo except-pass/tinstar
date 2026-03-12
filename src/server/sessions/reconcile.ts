@@ -19,7 +19,7 @@ export async function reconcileSessionStates(
 
   for (const session of sessions) {
     // Skip states that don't need reconciliation
-    if (session.state === 'creating' || session.state === 'terminated') {
+    if (session.state === 'creating' || session.state === 'stopped') {
       updated.push(session)
       continue
     }
@@ -34,14 +34,14 @@ export async function reconcileSessionStates(
           if (session.state !== 'stopped') newState = 'stopped'
         } else {
           // Container missing entirely
-          if (session.state !== 'terminated') newState = 'terminated'
+          if (session.state !== 'stopped') newState = 'stopped'
         }
       } else {
         const tmuxState = await opts.getTmuxSessionState(session.name)
         if (tmuxState === 'exists') {
           // Tmux alive
         } else if (session.state === 'running' || session.state === 'idle' || session.state === 'needs_attention') {
-          newState = 'terminated'
+          newState = 'stopped'
         }
       }
     } catch {

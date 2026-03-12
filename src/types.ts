@@ -1,5 +1,5 @@
 /** Single source of truth for session/run status — matches Qala's session states */
-export type SessionStatus = 'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped' | 'terminated'
+export type SessionStatus = 'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped'
 
 /** @deprecated Use SessionStatus instead */
 export type RunStatus = SessionStatus

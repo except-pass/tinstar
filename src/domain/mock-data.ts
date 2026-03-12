@@ -438,7 +438,7 @@ export const mockRuns: Run[] = [
   },
   {
     id: 'R-251',
-    status: 'terminated',
+    status: 'stopped',
     sessionId: 'CLD-4102',
     initiative: 'AI Dev Platform',
     epic: 'Codebase Hygiene',

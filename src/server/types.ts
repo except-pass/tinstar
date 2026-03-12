@@ -98,7 +98,7 @@ export interface RunUpdatedPayload {
 
 export interface RunCompletedPayload {
   id: string
-  status: 'stopped' | 'terminated'
+  status: 'stopped'
 }
 
 export interface RunFileTouchedPayload {
