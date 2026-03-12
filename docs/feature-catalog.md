@@ -61,6 +61,13 @@ Group containers are recursive nesting boxes driven by the active grouping dimen
 - **Shrink to fit**: Double-click a container to snap it to its minimum size (recursive bottom-up shrink)
 - **Group drag**: Dragging a container header moves it and all descendants (children, grandchildren, etc.) by the same delta
 
+### Entity Deletion
+- **Canvas**: Close button (×) in upper-right of container header, hover-revealed, red on hover
+- **Sidebar**: Delete button (×) after the add (+) button on non-run nodes, hover-revealed, red on hover
+- **API**: `DELETE /api/{initiatives|epics|tasks|worktrees}/:id` — removes the entity from DocumentStore
+- **Orphan behavior**: Children of deleted entities become orphans — they appear under the "Ungrouped" separator in the sidebar and float to root level on the canvas
+- **No cascade**: Only the targeted entity is deleted; children, grandchildren, and runs are preserved
+
 ### Depth-Based Visual Styling
 - Type icons: 🚀 initiative, 📦 epic, ✅ task, 🌿 worktree
 - Border opacity by depth: `[0.15, 0.12, 0.08, 0.05]`
@@ -83,11 +90,19 @@ Group containers are recursive nesting boxes driven by the active grouping dimen
 Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 
 ### Drag & Resize
-- **Drag handle**: Thin 8px bar at top of widget, with centered 32px pill indicator
+- **Drag handle**: Entire header bar is the drag handle (cursor-grab / cursor-grabbing)
 - **Resize handle**: 3x3px bottom-right corner, diagonal cyan gradient at 40% opacity
 - **Drag threshold**: 5px (prevents accidental drags on click)
 - **Zoom-aware deltas**: Mouse deltas divided by zoom for correct movement at any zoom level
 - **Pointer capture**: setPointerCapture for reliable tracking outside the element
+
+### Drag-to-Reassign
+- **Drag a widget over a group container**: Container highlights with cyan border (2px), brighter background, and glow box-shadow
+- **Drop**: Opens a `ReassignDialog` confirmation modal showing run ID, target type, and target label
+- **Confirm ("Move")**: PATCHes `run.taskId` via `PATCH /api/runs/:id`, repositions widget inside target container, auto-resizes target container to fit
+- **Parent filtering**: Drop targets exclude the run's current parent container (no-op reassignment prevented via `buildParentMap()`)
+- **Hit testing**: Canvas-level pointer coords converted via `clientToCanvas()`, tested against all group container bounds, deepest match wins
+- **150ms transitions** on highlight border/background/box-shadow
 
 ### Sizing Defaults
 - Default: 900 x 400 px
@@ -109,12 +124,13 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 - Status badge with animated dot (pulses for active status)
 - Breadcrumb: Initiative > Epic > Task
 - Right side: Worktree and Repo metadata
-- Status colors:
-  - active: green (#00ff88), pulsing glow
+- Status colors (SSOT: `SessionStatus` in `src/types.ts`):
+  - creating: blue (#818cf8), pulsing glow
+  - running: green (#00ff88), pulsing glow
   - idle: amber (#ffaa00)
-  - complete: cyan (#00f0ff)
-  - failed: red (#ff3366)
-  - queued: slate (#94a3b8)
+  - needs_attention: orange (#f97316), pulsing glow
+  - stopped: slate (#94a3b8)
+  - terminated: red (#ff3366)
 
 ### Left Panel — Touched Files
 - File list with icons by kind (code, config, test, script, doc)
@@ -124,17 +140,17 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 - Collapsible — collapses to thin 6px vertical tab with rotated label
 - Default selection: 3rd file if available
 
-### Center Panel — Session (Recap / Raw Logs)
+### Center Panel — Session (Recap / Raw Logs / Terminal)
+- **Terminal**: Embedded ttyd iframe showing the live Claude Code session via Caddy proxy (`/s/{sessionId}/`)
 - **Recap tab**: Threaded messages
   - Agent messages: smart_toy icon, timestamps, inline diffs
   - User messages: person icon, right-aligned, bordered
   - Status messages: gradient divider with pulsing dot
 - **Raw Logs tab**: Colored keywords (PASS=green, FAIL=red, bench:=amber)
 - **Diff view**: Inline diffs with +/- coloring, filename header, chunk headers
-- **Prompt input**: Bottom bar with ">_" prefix and send button
 - Auto-scrolls to bottom on tab switch
 
-### Right Panel — Procedures
+### Right Panel — Procedures (collapsed by default)
 - Procedure cards with status-dependent display:
   - idle: play button
   - queued: spinning hourglass, "In Queue..." label
@@ -188,6 +204,7 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 
 ## Persistence
 
+### Client-side (localStorage)
 - **Layout storage key**: `tinstar-layouts-v3`
 - **What's saved**: All widget and group container positions/sizes as JSON (keyed by tree node ID)
 - **When saved**: On every layout change (via useEffect)
@@ -195,6 +212,14 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 - **Dimension change detection**: If >20% of tree node IDs are missing from stored layouts, regenerate from scratch
 - **Fallback**: Generate fresh default recursive layout on parse error
 - **Dimension persistence key**: `tinstar-dimensions` — active grouping dimensions saved/restored across reloads
+
+### Server-side (file-backed DocumentStore)
+- **Storage file**: `~/.config/tinstar/docstore.json`
+- **What's saved**: Full snapshot of all entities (initiatives, epics, tasks, worktrees) and runs
+- **When saved**: Debounced 500ms after any change
+- **Load behavior**: Restored on server startup via `enablePersistence()`
+- **Rehydration fallback**: Sessions on disk without a run entry get one created from `session.json`
+- **Survives**: Browser refresh, server restart, Vite HMR
 
 ---
 
@@ -212,11 +237,11 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 
 ## Data Model
 
-- **3 Initiatives**, **6 Epics**, **10 Tasks**, **4 Worktrees**, **14 Runs**
-- Hierarchy: Initiative → Epic → Task → Run
+- **Hierarchy**: Initiative → Epic → Task → Run
 - Each run has: touched files, recap entries, raw logs, procedures
-- Run statuses: active, idle, complete, failed, queued
+- **SessionStatus (SSOT)**: `'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped' | 'terminated'` — single type in `src/types.ts`, aliased as `RunStatus` and `SessionState`
 - Procedure statuses: idle, queued, running, complete, failed
+- **Run ↔ Task resolution**: `run.taskId` → task → `task.epicId` → epic → `task.initiativeId` → initiative (resolved by `TaxonomyRepository.resolveDimension`)
 
 ---
 
@@ -255,7 +280,7 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 | 1 | Config loading + secrets | `src/server/sessions/config.ts` | **done** |
 | 2 | Session CRUD + persistence | `src/server/sessions/session.ts` | **done** |
 | 3 | Workspace + project registry | `src/server/sessions/workspace.ts` | **done** |
-| 4 | Resume (conversation ID) | `src/server/sessions/resume.ts` | **done** |
+| 4 | Resume (deterministic session IDs) | `src/server/sessions/session.ts` + backends | **done** |
 | 5 | Docker backend | `src/server/sessions/backends/docker.ts` | **done** |
 | 6 | Tmux backend | `src/server/sessions/backends/tmux.ts` | **done** |
 | 7 | Reconciliation | `src/server/sessions/reconcile.ts` | **done** |
@@ -278,6 +303,7 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 | 19 | `/api/projects` | POST | **done** |
 | 20 | `/api/projects/:name/worktrees` | GET | **done** |
 | 21 | `/api/projects/:name` | DELETE | **done** |
+| 22b | `/api/runs/:id` | PATCH | **done** |
 | 25 | `/api/initiatives/:id` | DELETE | **done** |
 | 26 | `/api/epics/:id` | DELETE | **done** |
 | 27 | `/api/tasks/:id` | DELETE | **done** |
@@ -303,9 +329,10 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 ```
 API Routes → Session CRUD → Backend (Docker | Tmux)
                           → Workspace (worktree creation)
-                          → Resume (conversation ID detection)
+                          → Deterministic Session IDs (UUID on create, --resume on restart)
                           → Config/Secrets (~/.config/tinstar/)
                           → SSE (state change events via EventBus)
+                          → Caddy route management (add on create + resume)
 ```
 
 ### Session States
@@ -314,18 +341,69 @@ API Routes → Session CRUD → Backend (Docker | Tmux)
 - **idle**: Claude finished, waiting (Stop hook fired)
 - **needs_attention**: Stale >120s (likely waiting for user input)
 - **stopped**: User stopped the session
-- **terminated**: Backend process gone
+- **terminated**: Backend process gone (tmux session missing or Docker container missing)
+
+### Deterministic Session IDs
+- **On create**: `randomUUID()` generated and stored in `session.conversation.id`
+- **First launch (tmux)**: `claude --session-id <uuid>` — dictates the Claude session ID
+- **First launch (Docker)**: `SESSION_ID` env var → `claude --session-id <uuid>` (in `start-ttyd.sh`)
+- **Resume (tmux)**: `claude --resume <uuid>` — resumes previous conversation
+- **Resume (Docker)**: `RESUME_SESSION_ID` env var → `claude --resume <uuid>` (in `start-ttyd.sh`)
+- **Missing ID guard**: Sessions created before this feature have `conversation.id: null` — resume returns `NO_SESSION_ID` error with instructions to delete and recreate
+- **Orphaned ttyd cleanup**: On start, `lsof -ti :<port>` kills any stale ttyd process holding the port (survives server restarts)
+
+### Resume & Delete (Terminated Sessions)
+- **UI**: Terminated/stopped sessions show Resume and Delete button overlay in the session panel
+- **Resume flow**: Validates workspace directory still exists, finds a port, creates new tmux/Docker session with `--resume <uuid>`, adds Caddy route, syncs port on run
+- **Delete flow**: Kills tmux/Docker backend, removes session files, deletes the run from DocumentStore (widget disappears via SSE)
+
+### Backend: Tmux (local)
+- **Create**: `tmux new -d -s <prefix><name>`, configure status off + mouse on, inject env vars, send `claude --session-id <uuid>` command
+- **Resume**: If tmux session exists, send `claude --resume <uuid>` via `send-keys`; if missing, recreate tmux session then send `claude --resume <uuid>`
+- **Stop**: `tmux kill-session -t <name>`, release port, stop managed ttyd
+- **ttyd**: Managed child process per session with auto-restart on unexpected exit, orphan cleanup via `lsof`
+- **Port allocation**: Sequential scan from `ports.hostStart` (default 8681), claimed ports tracked in-memory
+
+### Backend: Docker (containerized)
+- **Create**: `docker run -d` with volume mounts (workspace, worktree .git, claude-state), then `docker exec -d` to launch `start-ttyd.sh` with `SESSION_ID` env var
+- **Resume**: `docker start` (if stopped) or `docker run` (if missing), then `docker exec -d` with `RESUME_SESSION_ID` env var
+- **Stop**: `docker stop -t 5 <name>`
+- **Delete**: `docker rm -f <name>`
+- **Shell script (`start-ttyd.sh`)**: Creates tmux session inside container, builds claude command from env vars (`SESSION_ID` → `--session-id`, `RESUME_SESSION_ID` → `--resume`), starts ttyd on port 7681
+- **Volume mounts**: Workspace path, worktree base .git, claude-state dir for conversation persistence
+- **One-shot mode**: `docker run --rm` with `-p` prompt flag, watcher process monitors exit
+
+### Caddy Reverse Proxy
+- **Purpose**: Consolidate dynamic ttyd ports behind a single port for terminal iframe access
+- **Routing**: `/s/{name}/` → `localhost:{port}/` per session
+- **Ports**: Caddy listens on 8088 (default), admin API on 2019
+- **Vite proxy**: `/s/*` proxied to Caddy so only port 5273 needs forwarding
+- **Lifecycle**: Started on server init (`ensureCaddy`), routes synced for surviving sessions, added/removed on session create/delete
+- **Implementation**: `src/server/sessions/caddy.ts`
+
+### Hook Architecture (Status Bridge)
+- **Purpose**: Real-time session status updates without polling
+- **Mechanism**: Claude Code hooks installed per workspace (`.claude/settings.json`)
+- **Scoping**: `$TINSTAR_SESSION_NAME` env var injected per tmux session — hooks only fire for managed sessions
+- **Pattern**: `if [ -n "$TINSTAR_SESSION_NAME" ]; then curl ...; fi` — always exits 0 to avoid hook errors
+- **Hooks**:
+  - `PreToolUse` → `POST /api/hooks/active` → sets status to `'running'`
+  - `UserPromptSubmit` → `POST /api/hooks/active` → sets status to `'running'`
+  - `Stop` → `POST /api/hooks/idle` → sets status to `'idle'`
+- **Bridge**: Hook endpoints call both `setState()` (disk) and `docStore.updateRunStatus()` (in-memory + SSE)
+- **Initial status**: New sessions start as `'creating'`, hooks transition to `'running'`/`'idle'`
 
 ### Config Directory Layout
 ```
 ~/.config/tinstar/
 ├── config.json          # Optional user overrides
 ├── projects.json        # Registered project name→path
+├── docstore.json        # Persisted entities + runs (auto-saved)
 ├── .secrets/            # One file per env var
 │   ├── CLAUDE_CODE_OAUTH_TOKEN
 │   └── GH_TOKEN
 └── sessions/
     └── <name>/
-        ├── session.json # Session state
-        └── claude-state/ # Claude conversation files
+        ├── session.json # Session state (includes conversation.id UUID)
+        └── claude-state/ # Claude conversation files (Docker volume mount)
 ```

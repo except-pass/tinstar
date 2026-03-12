@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 import type { Initiative, Epic, Task, Worktree, Run } from '../../domain/types'
 import type { RunStatus, TouchedFile, Procedure, RecapEntry } from '../../types'
 
@@ -10,6 +12,58 @@ export class DocumentStore {
   private runs = new Map<string, Run>()
 
   readonly changes = new EventEmitter()
+
+  private persistPath: string | null = null
+  private persistTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Enable file-backed persistence. Loads existing data and saves on changes. */
+  enablePersistence(filePath: string): void {
+    this.persistPath = filePath
+    mkdirSync(dirname(filePath), { recursive: true })
+
+    // Load existing snapshot from disk
+    try {
+      const raw = readFileSync(filePath, 'utf-8')
+      const data = JSON.parse(raw)
+      if (data.initiatives) for (const i of data.initiatives) this.initiatives.set(i.id, i)
+      if (data.epics) for (const e of data.epics) this.epics.set(e.id, e)
+      if (data.tasks) for (const t of data.tasks) this.tasks.set(t.id, t)
+      if (data.worktrees) for (const w of data.worktrees) this.worktrees.set(w.id, w)
+      if (data.runs) for (const r of data.runs) this.runs.set(r.id, r)
+    } catch {
+      // No file or corrupt — start fresh
+    }
+
+    // Debounced save on every change
+    this.changes.on('change', () => this.schedulePersist())
+  }
+
+  private schedulePersist(): void {
+    if (!this.persistPath) return
+    if (this.persistTimer) return // already scheduled
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null
+      this.persistNow()
+    }, 500)
+  }
+
+  private persistNow(): void {
+    if (!this.persistPath) return
+    try {
+      writeFileSync(this.persistPath, JSON.stringify(this.snapshot(), null, 2))
+    } catch {
+      // Best-effort — don't crash the server
+    }
+  }
+
+  /** Flush any pending writes immediately */
+  flush(): void {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer)
+      this.persistTimer = null
+    }
+    this.persistNow()
+  }
 
   // --- Initiatives ---
 

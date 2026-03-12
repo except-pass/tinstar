@@ -81,7 +81,7 @@ export function buildExecCommand(
   config: TinstarConfig,
   session: Session,
   secrets: Record<string, string>,
-  opts: { resumeConversationId?: string | null; dashboardUrl: string } = { dashboardUrl: '' },
+  opts: { sessionId?: string | null; resume?: boolean; dashboardUrl: string } = { dashboardUrl: '' },
 ): string[] {
   const name = containerName(config, session.name)
 
@@ -96,8 +96,10 @@ export function buildExecCommand(
     args.push('-e', 'SKIP_PERMISSIONS=1')
   }
 
-  if (opts.resumeConversationId) {
-    args.push('-e', `RESUME_CONVERSATION_ID=${opts.resumeConversationId}`)
+  if (opts.resume && opts.sessionId) {
+    args.push('-e', `RESUME_SESSION_ID=${opts.sessionId}`)
+  } else if (opts.sessionId) {
+    args.push('-e', `SESSION_ID=${opts.sessionId}`)
   }
   if (session.workspace?.path) {
     args.push('-e', `WORKSPACE_DIR=${session.workspace.path}`)
@@ -170,7 +172,7 @@ export async function createContainer(
   await docker(runArgs)
 
   const execArgs = buildExecCommand(config, opts.session, opts.secrets, {
-    resumeConversationId: opts.session.conversation?.id,
+    sessionId: opts.session.conversation?.id,
     dashboardUrl: opts.dashboardUrl,
   })
   await docker(execArgs)
@@ -217,7 +219,8 @@ export async function startContainer(
   }
 
   const execArgs = buildExecCommand(config, opts.session, opts.secrets, {
-    resumeConversationId: opts.session.conversation?.id,
+    sessionId: opts.session.conversation?.id,
+    resume: true,
     dashboardUrl: opts.dashboardUrl,
   })
   await docker(execArgs)

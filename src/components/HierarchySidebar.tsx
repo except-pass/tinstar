@@ -8,6 +8,7 @@ interface HierarchySidebarProps {
   dimensions: GroupingDimension[]
   onAdd: (parentId: string | null, type: GroupingDimension | 'run') => void
   onRename: (entityId: string, type: GroupingDimension, newName: string) => void
+  onDelete: (entityId: string, type: GroupingDimension) => void
   onFocusRun?: (runId: string) => void
 }
 
@@ -30,6 +31,7 @@ function SidebarNode({
   dimensions,
   onAdd,
   onRename,
+  onDelete,
   onFocusRun,
 }: {
   node: TreeNode
@@ -37,6 +39,7 @@ function SidebarNode({
   dimensions: GroupingDimension[]
   onAdd: HierarchySidebarProps['onAdd']
   onRename: HierarchySidebarProps['onRename']
+  onDelete: HierarchySidebarProps['onDelete']
   onFocusRun?: (runId: string) => void
 }) {
   const { isSelected, isExpanded, isHovered, select, hover, toggleExpand } = useSelection()
@@ -175,6 +178,22 @@ function SidebarNode({
             +
           </button>
         )}
+
+        {/* Delete button */}
+        {!isRun && !editing && (
+          <button
+            className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 hover:!opacity-100"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(node.entityId, node.type as GroupingDimension)
+            }}
+            data-testid={`delete-${node.id}`}
+            aria-label={`Delete ${node.label}`}
+            style={{ opacity: hovered ? 1 : undefined }}
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {/* Children (when expanded) */}
@@ -188,6 +207,7 @@ function SidebarNode({
               dimensions={dimensions}
               onAdd={onAdd}
               onRename={onRename}
+              onDelete={onDelete}
               onFocusRun={onFocusRun}
             />
           ))}
@@ -213,6 +233,7 @@ function TreeWithOrphanSeparators({
   dimensions,
   onAdd,
   onRename,
+  onDelete,
   onFocusRun,
 }: {
   nodes: TreeNode[]
@@ -220,6 +241,7 @@ function TreeWithOrphanSeparators({
   dimensions: GroupingDimension[]
   onAdd: HierarchySidebarProps['onAdd']
   onRename: HierarchySidebarProps['onRename']
+  onDelete: HierarchySidebarProps['onDelete']
   onFocusRun?: (runId: string) => void
 }) {
   const normal = nodes.filter(n => !n.orphan)
@@ -235,6 +257,7 @@ function TreeWithOrphanSeparators({
           dimensions={dimensions}
           onAdd={onAdd}
           onRename={onRename}
+          onDelete={onDelete}
           onFocusRun={onFocusRun}
         />
       ))}
@@ -247,6 +270,7 @@ function TreeWithOrphanSeparators({
           dimensions={dimensions}
           onAdd={onAdd}
           onRename={onRename}
+          onDelete={onDelete}
           onFocusRun={onFocusRun}
         />
       ))}
@@ -254,7 +278,7 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, dimensions, onAdd, onRename, onFocusRun }: HierarchySidebarProps) {
+export default function HierarchySidebar({ tree, dimensions, onAdd, onRename, onDelete, onFocusRun }: HierarchySidebarProps) {
   const rootType = dimensions[0] ?? 'initiative'
   return (
     <div className="flex flex-col" data-testid="hierarchy-sidebar">
@@ -286,6 +310,7 @@ export default function HierarchySidebar({ tree, dimensions, onAdd, onRename, on
             dimensions={dimensions}
             onAdd={onAdd}
             onRename={onRename}
+            onDelete={onDelete}
             onFocusRun={onFocusRun}
           />
         )}

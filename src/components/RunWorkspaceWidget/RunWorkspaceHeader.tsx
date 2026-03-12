@@ -1,3 +1,4 @@
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { RunData, SessionStatus } from '../../types'
 
 const statusConfig: Record<SessionStatus, { label: string; color: string; dot: string; pulse?: boolean }> = {
@@ -12,13 +13,22 @@ const statusConfig: Record<SessionStatus, { label: string; color: string; dot: s
 interface Props {
   run: RunData
   compact?: boolean
+  onPointerDown?: (e: ReactPointerEvent) => void
+  onPointerMove?: (e: ReactPointerEvent) => void
+  onPointerUp?: (e: ReactPointerEvent) => void
 }
 
-export function RunWorkspaceHeader({ run, compact = false }: Props) {
+export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp }: Props) {
   const status = statusConfig[run.status]
 
   return (
-    <header className="flex items-center justify-between border-b border-primary/25 bg-surface-panel px-3 py-1.5 overflow-hidden">
+    <header
+      className="flex items-center justify-between border-b border-primary/25 bg-surface-panel px-3 py-1.5 overflow-hidden cursor-grab active:cursor-grabbing select-none"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
       {/* Left: identity */}
       <div className="flex items-center gap-2 min-w-0">
         <div className="flex items-center justify-center w-6 h-6 border border-primary/60 bg-primary/10 shrink-0">

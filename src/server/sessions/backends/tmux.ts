@@ -1,4 +1,4 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -56,15 +56,18 @@ export function releasePort(port: number): void {
 
 export function buildClaudeCommand(opts: {
   skipPermissions?: boolean
-  conversationId?: string | null
+  sessionId?: string | null
+  resume?: boolean
   initialPrompt?: string | null
 } = {}): string {
   let cmd = 'claude'
   if (opts.skipPermissions) {
     cmd += ' --dangerously-skip-permissions'
   }
-  if (opts.conversationId) {
-    cmd += ` --resume ${opts.conversationId}`
+  if (opts.resume && opts.sessionId) {
+    cmd += ` --resume ${opts.sessionId}`
+  } else if (opts.sessionId) {
+    cmd += ` --session-id ${opts.sessionId}`
   }
   if (opts.initialPrompt) {
     cmd += ` ${JSON.stringify(opts.initialPrompt)}`
@@ -80,6 +83,7 @@ export async function createTmuxSession(
     session: Session & { initialPrompt?: string }
     secrets: Record<string, string>
     port: number
+    resume?: boolean
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
@@ -106,8 +110,9 @@ export async function createTmuxSession(
   const claudeParts = ['eval "$(tmux show-environment -s)"']
   const claudeCmd = buildClaudeCommand({
     skipPermissions: opts.session.skipPermissions,
-    conversationId: opts.session.conversation?.id,
-    initialPrompt: opts.session.initialPrompt,
+    sessionId: opts.session.conversation?.id,
+    resume: opts.resume,
+    initialPrompt: opts.resume ? undefined : opts.session.initialPrompt,
   })
   claudeParts.push(claudeCmd)
 
@@ -131,10 +136,20 @@ export async function startTmuxSession(
   const exists = await tmuxHasSession(tmuxName)
 
   if (!exists) {
-    return createTmuxSession(config, opts)
+    return createTmuxSession(config, { ...opts, resume: true })
   }
 
-  // Tmux exists, just restart ttyd
+  // Tmux session exists but Claude may have exited — re-send the claude command
+  const claudeParts = ['eval "$(tmux show-environment -s)"']
+  const claudeCmd = buildClaudeCommand({
+    skipPermissions: opts.session.skipPermissions,
+    sessionId: opts.session.conversation?.id,
+    resume: true,
+  })
+  claudeParts.push(claudeCmd)
+  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, claudeParts.join(' && '), 'Enter'])
+
+  // Restart ttyd
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
   return { port: opts.port, ttydPid }
 }
@@ -186,6 +201,16 @@ export function startTtyd(opts: {
   sessionName: string
 }): Promise<number | undefined> {
   stopManagedTtyd(opts.sessionName)
+
+  // Kill any orphaned ttyd still holding the port (e.g. after server restart)
+  try {
+    const lsof = execSync(`lsof -ti :${opts.port}`, { encoding: 'utf-8' }).trim()
+    if (lsof) {
+      for (const pid of lsof.split('\n')) {
+        try { process.kill(Number(pid), 'SIGTERM') } catch { /* already dead */ }
+      }
+    }
+  } catch { /* no process on port — good */ }
 
   return new Promise((resolve, reject) => {
     const child = spawn('ttyd', [

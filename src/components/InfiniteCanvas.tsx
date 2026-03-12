@@ -13,6 +13,7 @@ interface Props {
   onFocusHandled: () => void
   onSelectRun?: (runId: string) => void
   onFocusRun?: (runId: string) => void
+  onDeleteEntity?: (entityId: string, type: string) => void
 }
 
 /** Extract entity type and ID from a tree node ID like "initiative-abc123" */
@@ -34,6 +35,18 @@ function collectGroupNodes(nodes: TreeNode[]): TreeNode[] {
   return result
 }
 
+/** Build a map from child node ID → immediate parent node ID */
+function buildParentMap(nodes: TreeNode[], parentId: string | null = null): Map<string, string | null> {
+  const map = new Map<string, string | null>()
+  for (const node of nodes) {
+    map.set(node.id, parentId)
+    for (const [k, v] of buildParentMap(node.children, node.id)) {
+      map.set(k, v)
+    }
+  }
+  return map
+}
+
 interface DropTarget {
   nodeId: string
   label: string
@@ -46,7 +59,7 @@ interface ReassignState {
   target: DropTarget
 }
 
-export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSelectRun, onFocusRun }: Props) {
+export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -67,9 +80,11 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSel
   const [reassign, setReassign] = useState<ReassignState | null>(null)
   const groupNodesRef = useRef<TreeNode[]>([])
 
-  // Keep group nodes list in sync with tree
+  // Keep group nodes list and parent map in sync with tree
+  const parentMapRef = useRef<Map<string, string | null>>(new Map())
   useEffect(() => {
     groupNodesRef.current = collectGroupNodes(tree)
+    parentMapRef.current = buildParentMap(tree)
   }, [tree])
 
   // Center on a widget when focusRunId changes
@@ -146,7 +161,13 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSel
   const handleWidgetDragMove = useCallback((clientX: number, clientY: number) => {
     if (!draggingRunRef.current) return
     const canvas = clientToCanvas(clientX, clientY)
-    const target = hitTestGroups(canvas.x, canvas.y)
+    let target = hitTestGroups(canvas.x, canvas.y)
+    // Don't offer to reassign to the current parent
+    if (target) {
+      const runNodeId = `run-${draggingRunRef.current}`
+      const currentParent = parentMapRef.current.get(runNodeId)
+      if (currentParent === target.nodeId) target = null
+    }
     setDropTarget(prev => {
       if (prev?.nodeId === target?.nodeId) return prev
       return target
@@ -171,11 +192,20 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSel
     const patch: Record<string, string> = {}
     if (target.type === 'task') patch.taskId = target.entityId
 
-    // Move the widget inside the target container
+    // Move the widget inside the target container, expanding it to fit
     const containerLayout = layouts.get(target.nodeId)
-    if (containerLayout) {
-      const runNodeId = `run-${runId}`
-      updateRunPosition(runNodeId, containerLayout.x + 30, containerLayout.y + 50)
+    const runNodeId = `run-${runId}`
+    const runLayout = layouts.get(runNodeId)
+    if (containerLayout && runLayout) {
+      const padX = 30
+      const padTop = 50
+      const padBottom = 30
+      const neededW = padX + runLayout.width + padX
+      const neededH = padTop + runLayout.height + padBottom
+      if (containerLayout.width < neededW || containerLayout.height < neededH) {
+        resizeNode(target.nodeId, Math.max(containerLayout.width, neededW), Math.max(containerLayout.height, neededH))
+      }
+      updateRunPosition(runNodeId, containerLayout.x + padX, containerLayout.y + padTop)
     }
 
     await fetch(`/api/runs/${runId}`, {
@@ -184,11 +214,17 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSel
       body: JSON.stringify(patch),
     })
     setReassign(null)
-  }, [reassign, layouts, updateRunPosition])
+  }, [reassign, layouts, updateRunPosition, resizeNode])
 
   const handleReassignCancel = useCallback(() => {
     setReassign(null)
   }, [])
+
+  const handleDeleteGroup = useCallback((nodeId: string) => {
+    if (!onDeleteEntity) return
+    const parsed = parseNodeId(nodeId)
+    if (parsed) onDeleteEntity(parsed.entityId, parsed.type)
+  }, [onDeleteEntity])
 
   // Recursive render: groups render behind their children (natural DOM order)
   function renderNode(node: TreeNode, depth: number): React.ReactNode {
@@ -237,6 +273,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSel
         onMove={moveNode}
         onResize={resizeNode}
         onShrinkToFit={shrinkNode}
+        onDelete={handleDeleteGroup}
         highlighted={dropTarget?.nodeId === node.id}
       />
     )

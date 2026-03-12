@@ -77,6 +77,18 @@ function WorkspaceShellInner() {
     })
   }, [])
 
+  const handleDelete = useCallback((entityId: string, type: GroupingDimension | string) => {
+    const endpointMap: Record<string, string> = {
+      initiative: '/api/initiatives',
+      epic: '/api/epics',
+      task: '/api/tasks',
+      worktree: '/api/worktrees',
+    }
+    const endpoint = endpointMap[type]
+    if (!endpoint) return
+    fetch(`${endpoint}/${entityId}`, { method: 'DELETE' })
+  }, [])
+
   const handleAdd = useCallback((parentId: string | null, type: GroupingDimension | 'run') => {
     if (type === 'run') return
     // Determine the parent's type from the dimensions hierarchy
@@ -152,6 +164,7 @@ function WorkspaceShellInner() {
             dimensions={dimensions}
             onAdd={handleAdd}
             onRename={handleRename}
+            onDelete={handleDelete}
             onFocusRun={handleFocusRun}
           />
         </div>
@@ -165,6 +178,7 @@ function WorkspaceShellInner() {
             onFocusHandled={handleFocusHandled}
             onSelectRun={handleSelectRun}
             onFocusRun={handleCanvasFocusRun}
+            onDeleteEntity={handleDelete}
           />
         </div>
       </div>

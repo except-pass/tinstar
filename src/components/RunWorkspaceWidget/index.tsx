@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { RunData } from '../../types'
 import { RunWorkspaceHeader } from './RunWorkspaceHeader'
 import { TouchedFilesPanel } from './TouchedFilesPanel'
@@ -11,16 +11,28 @@ interface Props {
   compact?: boolean
   /** Hide the header (used when an external drag handle replaces it) */
   headless?: boolean
+  /** Pointer event handlers forwarded to the header for drag */
+  onHeaderPointerDown?: (e: ReactPointerEvent) => void
+  onHeaderPointerMove?: (e: ReactPointerEvent) => void
+  onHeaderPointerUp?: (e: ReactPointerEvent) => void
 }
 
-export function RunWorkspaceWidget({ run, className = '', compact = false, headless = false }: Props) {
+export function RunWorkspaceWidget({ run, className = '', compact = false, headless = false, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp }: Props) {
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
-  const [procsCollapsed, setProcsCollapsed] = useState(compact)
+  const [procsCollapsed, setProcsCollapsed] = useState(true)
 
   return (
     <div className={`flex flex-col overflow-hidden neon-border bg-surface-base ${className}`}>
-      {/* Header — hidden when drag handle replaces it */}
-      {!headless && <RunWorkspaceHeader run={run} compact={compact} />}
+      {/* Header doubles as drag handle */}
+      {!headless && (
+        <RunWorkspaceHeader
+          run={run}
+          compact={compact}
+          onPointerDown={onHeaderPointerDown}
+          onPointerMove={onHeaderPointerMove}
+          onPointerUp={onHeaderPointerUp}
+        />
+      )}
 
       {/* Three-panel workspace */}
       <div className="flex flex-1 overflow-hidden">
@@ -35,7 +47,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
         ) : (
           <TouchedFilesPanel files={run.touchedFiles} onCollapse={() => setFilesCollapsed(true)} />
         )}
-        <RunSessionPanel recapEntries={run.recapEntries} rawLogs={run.rawLogs} port={run.port} sessionId={run.sessionId} />
+        <RunSessionPanel recapEntries={run.recapEntries} rawLogs={run.rawLogs} port={run.port} sessionId={run.sessionId} status={run.status} />
         {procsCollapsed ? (
           <div
             data-testid="collapsed-procedures"

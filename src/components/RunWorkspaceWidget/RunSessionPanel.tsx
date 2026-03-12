@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from 'react'
-import type { RecapEntry, DiffBlock } from '../../types'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
 
 function DiffView({ diff }: { diff: DiffBlock }) {
   return (
@@ -97,10 +97,13 @@ interface Props {
   rawLogs: string
   port?: number | null
   sessionId?: string
+  status?: SessionStatus
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId }: Props) {
+export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status }: Props) {
   const [activeTab, setActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [actionLoading, setActionLoading] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -108,6 +111,44 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId }: Prop
       contentRef.current.scrollTop = contentRef.current.scrollHeight
     }
   }, [activeTab])
+
+  const isTerminated = status === 'terminated' || status === 'stopped'
+
+  const handleResume = useCallback(async () => {
+    if (!sessionId) return
+    setActionError(null)
+    setActionLoading(true)
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/start`, { method: 'POST' })
+      const data = await res.json()
+      if (!data.ok) {
+        const msg = data.error?.message ?? data.error?.code ?? 'Resume failed'
+        setActionError(msg)
+      }
+    } catch (err) {
+      setActionError((err as Error).message)
+    } finally {
+      setActionLoading(false)
+    }
+  }, [sessionId])
+
+  const handleDelete = useCallback(async () => {
+    if (!sessionId) return
+    setActionError(null)
+    setActionLoading(true)
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!data.ok) {
+        const msg = data.error?.message ?? data.error?.code ?? 'Delete failed'
+        setActionError(msg)
+      }
+    } catch (err) {
+      setActionError((err as Error).message)
+    } finally {
+      setActionLoading(false)
+    }
+  }, [sessionId])
 
   return (
     <section className="flex-1 flex flex-col min-w-0 border-x border-primary/20 bg-surface-base">
@@ -136,7 +177,37 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId }: Prop
       </div>
 
       {/* Content */}
-      {activeTab === 'terminal' && port ? (
+      {isTerminated && sessionId ? (
+        <div className="flex-1 flex flex-col items-center justify-center bg-black/50 gap-4 p-6">
+          <span className="material-symbols-outlined text-4xl text-slate-500">terminal</span>
+          <p className="text-sm font-mono text-slate-400 uppercase tracking-wider">
+            Session {status}
+          </p>
+          {actionError && (
+            <p className="text-xs font-mono text-accent-red bg-accent-red/10 border border-accent-red/30 px-3 py-2 rounded max-w-sm text-center">
+              {actionError}
+            </p>
+          )}
+          <div className="flex gap-3">
+            <button
+              onClick={handleResume}
+              disabled={actionLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-primary/20 border border-primary/40 text-primary text-xs font-mono uppercase tracking-wider hover:bg-primary/30 transition-colors disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined text-sm">play_arrow</span>
+              Resume
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={actionLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-accent-red/10 border border-accent-red/30 text-accent-red text-xs font-mono uppercase tracking-wider hover:bg-accent-red/20 transition-colors disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined text-sm">delete</span>
+              Delete
+            </button>
+          </div>
+        </div>
+      ) : activeTab === 'terminal' && port ? (
         <iframe
           src={sessionId ? `/s/${sessionId}/` : `http://localhost:${port}`}
           className="flex-1 w-full border-0 bg-black"

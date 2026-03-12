@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
 import type { DocumentStore } from '../stores/document-store'
@@ -22,7 +23,6 @@ import {
   createWorktree,
   deleteWorktree,
   listWorktrees,
-  ensureResumeReady,
   reconcileSessionStates,
   loadSecrets,
   dockerBackend,
@@ -485,8 +485,6 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
           if (!session) return json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
 
           try {
-            ensureResumeReady(sessDir, session.name, claudeStateDir(sessDir, session.name))
-
             if (session.backend === 'docker') {
               await dockerBackend.stopContainer(cfg, session)
             } else {
@@ -514,17 +512,23 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
           const session = getSession(sessDir, name)
           if (!session) return json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
 
+          // Verify workspace directory still exists
+          const wsPath = session.workspace?.path
+          if (wsPath && !existsSync(wsPath)) {
+            return json(res, { ok: false, error: { code: 'WORKSPACE_MISSING', message: `Workspace directory no longer exists: ${wsPath}` } }, 400)
+          }
+
+          // Require a conversation ID to resume — sessions created before this change won't have one
+          if (!session.conversation?.id) {
+            return json(res, { ok: false, error: { code: 'NO_SESSION_ID', message: `Session '${name}' has no conversation ID. Delete and recreate it.` } }, 400)
+          }
+
           try {
-            const enriched = session as Session & { _stateDir?: string }
-            enriched._stateDir = claudeStateDir(sessDir, session.name)
-            ensureResumeReady(sessDir, session.name, claudeStateDir(sessDir, session.name))
-            // Re-read to pick up conversation ID
-            Object.assign(session, getSession(sessDir, session.name))
             const sec = secrets()
 
             if (session.backend === 'docker') {
               const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
-              await dockerBackend.startContainer(cfg, { session: enriched, secrets: sec, port, dashboardUrl })
+              await dockerBackend.startContainer(cfg, { session: session as Session & { _stateDir?: string }, secrets: sec, port, dashboardUrl })
               updateSession(sessDir, session.name, { port })
             } else {
               const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
@@ -538,10 +542,24 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
               }
             }
 
+            // Re-read session to get updated port
+            const updated = getSession(sessDir, session.name)
+            const resumePort = updated?.port ?? session.port
+            if (resumePort) {
+              addRoute(session.name, resumePort, cfg.caddy.adminPort).catch(() => {})
+            }
+
             setState(sessDir, session.name, 'running')
             ctx.docStore.updateRunStatus(session.name, 'running')
+            // Also update port on the run in case it changed
+            if (resumePort) {
+              const run = ctx.docStore.getRun(session.name)
+              if (run && run.port !== resumePort) {
+                ctx.docStore.upsertRun(session.name, { ...run, port: resumePort })
+              }
+            }
             emitSessionEvent('managed_session.state_changed', { name: session.name, state: 'running' })
-            json(res, { ok: true, data: getSession(sessDir, session.name) })
+            json(res, { ok: true, data: updated })
           } catch (err) {
             json(res, { ok: false, error: { code: 'START_FAILED', message: (err as Error).message } }, 500)
           }
@@ -578,6 +596,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
             removeRoute(session.name, cfg.caddy.adminPort).catch(() => {})
 
             deleteSession(sessDir, session.name)
+            ctx.docStore.deleteRun(session.name)
             emitSessionEvent('managed_session.deleted', { name: session.name })
             json(res, { ok: true })
           } catch (err) {

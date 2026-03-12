@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, existsSync
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { randomUUID } from 'node:crypto'
 
 const execFileAsync = promisify(execFile)
 
@@ -86,7 +87,7 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
       branch: opts.workspace?.branch ?? null,
       basePath: opts.workspace?.basePath ?? null,
     },
-    conversation: { id: null },
+    conversation: { id: randomUUID() },
     profile: opts.profile ?? null,
     oneshot: opts.oneshot ?? false,
     skipPermissions: opts.skipPermissions ?? false,

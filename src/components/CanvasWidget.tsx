@@ -129,19 +129,14 @@ export function CanvasWidget({
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
     >
-      {/* Drag handle — thin bar at top */}
-      <div
-        className="h-2 bg-primary/10 hover:bg-primary/20 cursor-grab active:cursor-grabbing flex-shrink-0 flex items-center justify-center"
-        onPointerDown={handleDragDown}
-        onPointerMove={handleDragMove}
-        onPointerUp={handleDragUp}
-        onPointerCancel={handleDragUp}
-      >
-        <div className="w-8 h-0.5 rounded-full bg-primary/30" />
-      </div>
-
-      {/* The actual widget */}
-      <RunWorkspaceWidget run={run} className="flex-1 overflow-hidden" />
+      {/* The actual widget — header is the drag handle */}
+      <RunWorkspaceWidget
+        run={run}
+        className="flex-1 overflow-hidden"
+        onHeaderPointerDown={handleDragDown}
+        onHeaderPointerMove={handleDragMove}
+        onHeaderPointerUp={handleDragUp}
+      />
 
       {/* Resize handle — bottom-right corner */}
       <div

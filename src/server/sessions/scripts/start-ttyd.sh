@@ -3,7 +3,8 @@
 # Env vars set by docker exec:
 #   TINSTAR_SESSION_NAME - session name for title
 #   WORKSPACE_DIR - working directory
-#   RESUME_CONVERSATION_ID - conversation to resume (optional)
+#   SESSION_ID - dictate Claude session ID on first launch (optional)
+#   RESUME_SESSION_ID - resume a previous Claude session by ID (optional)
 #   SKIP_PERMISSIONS - skip Claude permission prompts (optional)
 
 TITLE="${TINSTAR_SESSION_NAME:-Tinstar}"
@@ -23,8 +24,10 @@ if ! tmux has-session -t $TMUX_SESSION 2>/dev/null; then
     # Build claude command
     CLAUDE_CMD="claude"
     [ -n "$SKIP_PERMISSIONS" ] && CLAUDE_CMD="$CLAUDE_CMD --dangerously-skip-permissions"
-    if [ -n "$RESUME_CONVERSATION_ID" ]; then
-        CLAUDE_CMD="$CLAUDE_CMD --resume $RESUME_CONVERSATION_ID"
+    if [ -n "$RESUME_SESSION_ID" ]; then
+        CLAUDE_CMD="$CLAUDE_CMD --resume $RESUME_SESSION_ID"
+    elif [ -n "$SESSION_ID" ]; then
+        CLAUDE_CMD="$CLAUDE_CMD --session-id $SESSION_ID"
     fi
 
     WORKDIR="${WORKSPACE_DIR:-$HOME}"

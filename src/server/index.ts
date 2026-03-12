@@ -7,6 +7,8 @@ import { OTelProcessor } from './processors/otel-processor'
 import { SSEBroadcaster } from './api/sse'
 import { handleRequest } from './api/routes'
 import { MockSensorSimulator } from './simulator/mock-sensors'
+import { join } from 'node:path'
+import { readdirSync } from 'node:fs'
 import {
   loadConfig,
   ensureDirs,
@@ -16,6 +18,7 @@ import {
   ensureCaddy,
   syncRoutes,
   listSessions,
+  getSession,
   type TinstarConfig,
 } from './sessions'
 import { log } from './logger'
@@ -73,17 +76,72 @@ export function tinstarBackend(): Plugin {
         try {
           sessionConfig = loadConfig()
           ensureDirs(sessionConfig)
+
+          // Enable file-backed persistence so data survives server restarts
+          docStore.enablePersistence(join(sessionConfig.dirs.root, 'docstore.json'))
+
+          // Rehydrate runs for sessions on disk + sync statuses with session files
+          const sessEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
+          for (const entry of sessEntries) {
+            if (!entry.isDirectory()) continue
+            const sess = getSession(sessionConfig.dirs.sessions, entry.name)
+            if (!sess) continue
+            const existingRun = docStore.getRun(sess.name)
+            if (!existingRun) {
+              docStore.upsertRun(sess.name, {
+                id: sess.name,
+                status: sess.state,
+                sessionId: sess.name,
+                initiative: '',
+                epic: '',
+                task: '',
+                repo: sess.project ?? '',
+                worktree: sess.workspace?.worktree ? sess.name : '',
+                touchedFiles: [],
+                recapEntries: [],
+                rawLogs: '',
+                procedures: [],
+                port: sess.port ?? null,
+                backend: sess.backend ?? null,
+                taskId: '',
+                worktreeId: '',
+                createdAt: sess.created ?? new Date().toISOString(),
+              })
+              log.info('rehydrate', `created run for session ${sess.name} (${sess.state})`)
+            } else if (existingRun.status !== sess.state) {
+              // Sync stale docstore status with session file on disk
+              log.info('rehydrate', `${sess.name}: correcting status ${existingRun.status} → ${sess.state}`)
+              docStore.updateRunStatus(sess.name, sess.state)
+            }
+          }
+
           log.info('server', `session config loaded`, { root: sessionConfig.dirs.root, logFile: log.file })
+
+          // Run reconciliation immediately to correct stale statuses from persisted store
+          const cfg = sessionConfig
+          reconcileSessionStates(cfg.dirs.sessions, {
+            getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
+            getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
+            onStateChanged: (name, state) => {
+              docStore.updateRunStatus(name, state)
+              bus.emit({
+                type: 'managed_session.state_changed',
+                timestamp: new Date().toISOString(),
+                payload: { name, state },
+              })
+              log.info('reconcile', `${name}: startup correction to ${state}`)
+            },
+          }).catch(err => log.warn('reconcile', `startup reconciliation failed: ${(err as Error).message}`))
 
           // Start Caddy reverse proxy for session terminal access
           ensureCaddy({
             listenPort: sessionConfig.caddy.listenPort,
             adminPort: sessionConfig.caddy.adminPort,
             configDir: sessionConfig.dirs.root,
-          }).then(() => {
+          }).then(async () => {
             log.info('server', `caddy proxy ready on :${sessionConfig!.caddy.listenPort}`)
             // Sync routes for any sessions that survived a restart
-            const sessions = listSessions(sessionConfig!.dirs.sessions)
+            const sessions = await listSessions(sessionConfig!.dirs.sessions)
             const routeData = sessions.map(s => ({ name: s.name, port: s.port ?? null, state: s.state }))
             return syncRoutes(routeData, sessionConfig!.caddy.adminPort)
           }).catch(err => {
@@ -91,7 +149,6 @@ export function tinstarBackend(): Plugin {
           })
 
           // Periodic reconciliation (30s)
-          const cfg = sessionConfig
           reconcileTimer = setInterval(() => {
             reconcileSessionStates(cfg.dirs.sessions, {
               getContainerState: (name) => dockerBackend.getContainerState(cfg, name),

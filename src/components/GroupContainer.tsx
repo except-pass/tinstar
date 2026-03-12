@@ -27,6 +27,7 @@ interface Props {
   onMove: (id: string, x: number, y: number) => void
   onResize: (id: string, w: number, h: number) => void
   onShrinkToFit?: (id: string) => void
+  onDelete?: (id: string) => void
   highlighted?: boolean
 }
 
@@ -46,6 +47,7 @@ export function GroupContainer({
   onMove,
   onResize,
   onShrinkToFit,
+  onDelete,
   highlighted = false,
 }: Props) {
   const dragging = useRef(false)
@@ -141,16 +143,27 @@ export function GroupContainer({
     >
       {/* Drag handle — full header area */}
       <div
-        className="h-8 flex items-center px-3 cursor-grab active:cursor-grabbing select-none"
+        className="group/header h-8 flex items-center px-3 cursor-grab active:cursor-grabbing select-none"
         style={{ borderBottom: `1px solid rgba(0, 240, 255, ${borderOp * 0.5})` }}
         onPointerDown={onDragDown}
         onPointerMove={onDragMove}
         onPointerUp={onDragUp}
         onPointerCancel={onDragUp}
       >
-        <span className="text-xs font-display uppercase tracking-wider text-primary/50">
+        <span className="text-xs font-display uppercase tracking-wider text-primary/50 flex-1">
           {icon} {label}
         </span>
+        {onDelete && (
+          <button
+            className="w-5 h-5 flex items-center justify-center text-slate-500 hover:text-red-400 opacity-0 group-hover/header:opacity-100 transition-opacity cursor-pointer"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => onDelete(nodeId)}
+            data-testid={`delete-group-${nodeId}`}
+            aria-label={`Delete ${label}`}
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {/* Resize handle — bottom-right corner */}
