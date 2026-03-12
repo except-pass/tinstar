@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space } from '../../domain/types'
 import type { RunStatus, TouchedFile, Procedure, RecapEntry } from '../../types'
 
 export class DocumentStore {
@@ -10,6 +10,9 @@ export class DocumentStore {
   private tasks = new Map<string, Task>()
   private worktrees = new Map<string, Worktree>()
   private runs = new Map<string, Run>()
+  private spaces = new Map<string, Space>()
+
+  activeSpaceId: string = ''
 
   readonly changes = new EventEmitter()
 
@@ -25,6 +28,8 @@ export class DocumentStore {
     try {
       const raw = readFileSync(filePath, 'utf-8')
       const data = JSON.parse(raw)
+      if (data.spaces) for (const s of data.spaces) this.spaces.set(s.id, s)
+      if (data.activeSpaceId) this.activeSpaceId = data.activeSpaceId
       if (data.initiatives) for (const i of data.initiatives) this.initiatives.set(i.id, i)
       if (data.epics) for (const e of data.epics) this.epics.set(e.id, e)
       if (data.tasks) for (const t of data.tasks) this.tasks.set(t.id, t)
@@ -50,7 +55,7 @@ export class DocumentStore {
   private persistNow(): void {
     if (!this.persistPath) return
     try {
-      writeFileSync(this.persistPath, JSON.stringify(this.snapshot(), null, 2))
+      writeFileSync(this.persistPath, JSON.stringify(this.snapshotAll(), null, 2))
     } catch {
       // Best-effort — don't crash the server
     }
@@ -63,6 +68,26 @@ export class DocumentStore {
       this.persistTimer = null
     }
     this.persistNow()
+  }
+
+  // --- Spaces ---
+
+  upsertSpace(id: string, data: Space): void {
+    this.spaces.set(id, data)
+    this.changes.emit('change', { entity: 'space', id, data })
+  }
+
+  getSpace(id: string): Space | undefined {
+    return this.spaces.get(id)
+  }
+
+  getAllSpaces(): Space[] {
+    return [...this.spaces.values()]
+  }
+
+  deleteSpace(id: string): void {
+    this.spaces.delete(id)
+    this.changes.emit('change', { entity: 'space', id, data: null })
   }
 
   // --- Initiatives ---
@@ -221,10 +246,26 @@ export class DocumentStore {
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
 
-  // --- Snapshot ---
+  // --- Snapshot (filtered by active space) ---
 
   snapshot() {
+    const sid = this.activeSpaceId
     return {
+      activeSpaceId: sid,
+      spaces: this.getAllSpaces(),
+      initiatives: this.getAllInitiatives().filter(e => !sid || e.spaceId === sid),
+      epics: this.getAllEpics().filter(e => !sid || e.spaceId === sid),
+      tasks: this.getAllTasks().filter(e => !sid || e.spaceId === sid),
+      worktrees: this.getAllWorktrees().filter(e => !sid || e.spaceId === sid),
+      runs: this.getAllRuns().filter(e => !sid || e.spaceId === sid),
+    }
+  }
+
+  /** Full unfiltered snapshot for disk persistence */
+  private snapshotAll() {
+    return {
+      activeSpaceId: this.activeSpaceId,
+      spaces: this.getAllSpaces(),
       initiatives: this.getAllInitiatives(),
       epics: this.getAllEpics(),
       tasks: this.getAllTasks(),
@@ -233,14 +274,31 @@ export class DocumentStore {
     }
   }
 
-  // --- Reset ---
+  // --- Space-scoped clear ---
+
+  /** Clear all entities in a specific space */
+  clearSpace(spaceId: string): void {
+    for (const [id, e] of this.initiatives) if (e.spaceId === spaceId) this.initiatives.delete(id)
+    for (const [id, e] of this.epics) if (e.spaceId === spaceId) this.epics.delete(id)
+    for (const [id, e] of this.tasks) if (e.spaceId === spaceId) this.tasks.delete(id)
+    for (const [id, e] of this.worktrees) if (e.spaceId === spaceId) this.worktrees.delete(id)
+    for (const [id, e] of this.runs) if (e.spaceId === spaceId) this.runs.delete(id)
+    this.changes.emit('change', { entity: 'all', id: '*', data: null })
+  }
+
+  // --- Reset (active space only) ---
 
   clear(): void {
-    this.initiatives.clear()
-    this.epics.clear()
-    this.tasks.clear()
-    this.worktrees.clear()
-    this.runs.clear()
-    this.changes.emit('change', { entity: 'all', id: '*', data: null })
+    const sid = this.activeSpaceId
+    if (sid) {
+      this.clearSpace(sid)
+    } else {
+      this.initiatives.clear()
+      this.epics.clear()
+      this.tasks.clear()
+      this.worktrees.clear()
+      this.runs.clear()
+      this.changes.emit('change', { entity: 'all', id: '*', data: null })
+    }
   }
 }
