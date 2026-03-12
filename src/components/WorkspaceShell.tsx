@@ -87,6 +87,10 @@ function WorkspaceShellInner() {
   }, [])
 
   const handleDelete = useCallback((entityId: string, type: GroupingDimension | string) => {
+    if (type === 'run') {
+      fetch(`/api/sessions/${entityId}`, { method: 'DELETE' })
+      return
+    }
     const endpointMap: Record<string, string> = {
       initiative: '/api/initiatives',
       epic: '/api/epics',

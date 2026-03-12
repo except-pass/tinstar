@@ -12,21 +12,25 @@ interface SettingRowProps {
   label: string
   settingKey: keyof EntitySettings
   resolved: ResolvedSettings
+  draft: EntitySettings
   children: (value: EntitySettings[keyof EntitySettings], onChange: (v: EntitySettings[keyof EntitySettings]) => void) => React.ReactNode
   onToggle: (key: keyof EntitySettings, enabled: boolean) => void
   onValueChange: (key: keyof EntitySettings, value: EntitySettings[keyof EntitySettings]) => void
 }
 
-function SettingRow({ label, settingKey, resolved, children, onToggle, onValueChange }: SettingRowProps) {
-  const localValue = resolved.local[settingKey]
+function SettingRow({ label, settingKey, resolved, draft, children, onToggle, onValueChange }: SettingRowProps) {
+  // Draft takes precedence over server state
+  const hasDraft = settingKey in draft
+  const draftValue = draft[settingKey]
+  const isDraftCleared = hasDraft && draftValue === undefined // toggled off in draft
+
+  const localValue = isDraftCleared ? undefined : (hasDraft ? draftValue : resolved.local[settingKey])
   const resolvedValue = resolved.resolved[settingKey]
   const source = resolved.sources[settingKey]
   const isLocal = localValue !== undefined
-  const hasValue = resolvedValue !== undefined
 
   return (
     <div className="flex items-start gap-3 py-2">
-      {/* Checkbox to opt-in to local override */}
       <label className="flex items-center gap-2 cursor-pointer min-w-[140px]">
         <input
           type="checkbox"
@@ -41,12 +45,10 @@ function SettingRow({ label, settingKey, resolved, children, onToggle, onValueCh
 
       <div className="flex-1">
         {isLocal ? (
-          // Local override — show cyan controls
           <div className="text-primary">
             {children(localValue, (v) => onValueChange(settingKey, v))}
           </div>
-        ) : hasValue && source ? (
-          // Inherited value — show amber pill
+        ) : !isDraftCleared && resolvedValue !== undefined && source ? (
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border"
             style={{ borderColor: 'rgba(255, 170, 0, 0.4)', color: '#ffaa00', background: 'rgba(255, 170, 0, 0.1)' }}
@@ -57,7 +59,6 @@ function SettingRow({ label, settingKey, resolved, children, onToggle, onValueCh
             </span>
           </span>
         ) : (
-          // Not set anywhere
           <span className="text-xs text-slate-500 italic">Not set</span>
         )}
       </div>
@@ -69,8 +70,9 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
   const [projects, setProjects] = useState<{ name: string; path: string }[]>([])
   const [loading, setLoading] = useState(true)
+  const [draft, setDraft] = useState<EntitySettings>({})
+  const [saving, setSaving] = useState(false)
 
-  // Fetch resolved settings
   useEffect(() => {
     const typeMap: Record<string, string> = { initiative: 'initiatives', epic: 'epics', task: 'tasks' }
     const endpoint = typeMap[entityType]
@@ -81,31 +83,17 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       fetch('/api/projects').then(r => r.json()),
     ]).then(([settingsRes, projectsRes]) => {
       if (settingsRes.ok) setSettings(settingsRes.data)
-      if (Array.isArray(projectsRes)) setProjects(projectsRes)
+      if (projectsRes?.ok && projectsRes.data && typeof projectsRes.data === 'object') {
+        setProjects(Object.entries(projectsRes.data).map(([name, path]) => ({ name, path: path as string })))
+      }
       setLoading(false)
     })
   }, [entityId, entityType])
 
-  const patchSettings = useCallback(async (patch: Record<string, unknown>) => {
-    const typeMap: Record<string, string> = { initiative: 'initiatives', epic: 'epics', task: 'tasks' }
-    const endpoint = typeMap[entityType]
-    if (!endpoint) return
-
-    await fetch(`/api/${endpoint}/${entityId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ settings: patch }),
-    })
-
-    // Refetch resolved settings
-    const res = await fetch(`/api/${endpoint}/${entityId}/settings`)
-    const data = await res.json()
-    if (data.ok) setSettings(data.data)
-  }, [entityId, entityType])
+  const hasDraftChanges = Object.keys(draft).length > 0
 
   const handleToggle = useCallback((key: keyof EntitySettings, enabled: boolean) => {
     if (enabled) {
-      // Copy inherited value as starting local value, or use a default
       const inherited = settings?.resolved[key]
       const defaults: Record<keyof EntitySettings, unknown> = {
         project: inherited ?? '',
@@ -114,21 +102,48 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
         skipPermissions: inherited ?? false,
         profile: inherited ?? '',
       }
-      patchSettings({ [key]: defaults[key] })
+      setDraft(prev => ({ ...prev, [key]: defaults[key] }))
     } else {
-      // Clear local override
-      patchSettings({ [key]: null })
+      // Mark as cleared — undefined value with key present means "remove override"
+      setDraft(prev => ({ ...prev, [key]: undefined }))
     }
-  }, [settings, patchSettings])
+  }, [settings])
 
   const handleValueChange = useCallback((key: keyof EntitySettings, value: EntitySettings[keyof EntitySettings]) => {
-    patchSettings({ [key]: value })
-  }, [patchSettings])
+    setDraft(prev => ({ ...prev, [key]: value }))
+  }, [])
+
+  const handleSave = useCallback(async () => {
+    const typeMap: Record<string, string> = { initiative: 'initiatives', epic: 'epics', task: 'tasks' }
+    const endpoint = typeMap[entityType]
+    if (!endpoint) return
+
+    setSaving(true)
+
+    // Build the patch: keys with undefined values become null (strip override)
+    const patch: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(draft)) {
+      patch[key] = value === undefined ? null : value
+    }
+
+    await fetch(`/api/${endpoint}/${entityId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: patch }),
+    })
+
+    setSaving(false)
+    onClose()
+  }, [entityId, entityType, draft, onClose])
+
+  const handleCancel = useCallback(() => {
+    onClose()
+  }, [onClose])
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[9999]" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[9999]" onClick={handleCancel}>
       <div
-        className="bg-surface-panel border border-primary/20 rounded-lg shadow-2xl w-[480px] max-h-[80vh] overflow-y-auto"
+        className="bg-surface-panel border border-primary/20 rounded-lg shadow-2xl w-[480px] max-h-[80vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
         data-testid="entity-settings-dialog"
       >
@@ -142,14 +157,14 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
           </div>
           <button
             className="text-slate-500 hover:text-slate-300"
-            onClick={onClose}
+            onClick={handleCancel}
           >
             <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>close</span>
           </button>
         </div>
 
         {/* Content */}
-        <div className="px-4 py-3">
+        <div className="px-4 py-3 overflow-y-auto flex-1">
           {loading || !settings ? (
             <div className="text-xs text-slate-500 py-4 text-center">Loading...</div>
           ) : (
@@ -158,6 +173,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 label="Project"
                 settingKey="project"
                 resolved={settings}
+                draft={draft}
                 onToggle={handleToggle}
                 onValueChange={handleValueChange}
               >
@@ -179,6 +195,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 label="Backend"
                 settingKey="backend"
                 resolved={settings}
+                draft={draft}
                 onToggle={handleToggle}
                 onValueChange={handleValueChange}
               >
@@ -205,6 +222,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 label="Worktree"
                 settingKey="worktree"
                 resolved={settings}
+                draft={draft}
                 onToggle={handleToggle}
                 onValueChange={handleValueChange}
               >
@@ -231,6 +249,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 label="Skip Perms"
                 settingKey="skipPermissions"
                 resolved={settings}
+                draft={draft}
                 onToggle={handleToggle}
                 onValueChange={handleValueChange}
               >
@@ -252,6 +271,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 label="Profile"
                 settingKey="profile"
                 resolved={settings}
+                draft={draft}
                 onToggle={handleToggle}
                 onValueChange={handleValueChange}
               >
@@ -266,6 +286,29 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
               </SettingRow>
             </div>
           )}
+        </div>
+
+        {/* Footer: Save / Cancel */}
+        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-primary/10">
+          <button
+            className="px-3 py-1.5 text-xs rounded border border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20 transition-colors"
+            onClick={handleCancel}
+            data-testid="settings-cancel"
+          >
+            Cancel
+          </button>
+          <button
+            className={`px-3 py-1.5 text-xs rounded border transition-colors ${
+              hasDraftChanges && !saving
+                ? 'bg-primary/20 border-primary/40 text-primary hover:bg-primary/30'
+                : 'bg-surface-base border-white/10 text-slate-500 cursor-not-allowed'
+            }`}
+            onClick={handleSave}
+            disabled={!hasDraftChanges || saving}
+            data-testid="settings-save"
+          >
+            {saving ? 'Saving...' : 'Save'}
+          </button>
         </div>
       </div>
     </div>

@@ -144,7 +144,7 @@ function SidebarNode({
 
         {/* Icon */}
         <span className="w-4 text-center" aria-hidden="true">
-          {getDimensionIcon(node.type)}
+          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : getDimensionIcon(node.type)}
         </span>
 
         {/* Status dot for runs */}

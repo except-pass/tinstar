@@ -161,18 +161,23 @@ export class DocumentStore {
   }
 
   deleteRun(id: string): void {
-    this.runs.delete(id)
-    this.changes.emit('change', { entity: 'run', id, data: null })
+    // Try direct key match first, then fall back to sessionId lookup
+    if (this.runs.has(id)) {
+      this.runs.delete(id)
+      this.changes.emit('change', { entity: 'run', id, data: null })
+      return
+    }
+    // Simulator runs are keyed by run id (R-xxx) but deleted by session name (CLD-xxx)
+    for (const [key, run] of this.runs) {
+      if (run.sessionId === id) {
+        this.runs.delete(key)
+        this.changes.emit('change', { entity: 'run', id: key, data: null })
+        return
+      }
+    }
   }
 
   // --- Run mutations (partial updates that emit changes) ---
-
-  addFileTouched(runId: string, file: TouchedFile): void {
-    const run = this.runs.get(runId)
-    if (!run) return
-    run.touchedFiles.push(file)
-    this.changes.emit('change', { entity: 'run', id: runId, data: run })
-  }
 
   upsertProcedure(runId: string, procedure: Procedure): void {
     const run = this.runs.get(runId)

@@ -636,7 +636,13 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       if (name) {
         (async () => {
           const session = getSession(sessDir, name)
-          if (!session) return json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
+
+          if (!session) {
+            // Session file doesn't exist on disk — still clean up the UI
+            ctx.docStore.deleteRun(name)
+            emitSessionEvent('managed_session.deleted', { name })
+            return json(res, { ok: true })
+          }
 
           try {
             if (session.backend === 'docker') {

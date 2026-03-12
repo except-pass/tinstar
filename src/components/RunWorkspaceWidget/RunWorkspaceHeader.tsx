@@ -32,7 +32,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       <div className="flex items-center gap-2 min-w-0">
         <div className="flex items-center justify-center w-6 h-6 border border-primary/60 bg-primary/10 shrink-0">
           <span className="material-symbols-outlined text-primary text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>
-            terminal
+            {run.backend === 'docker' ? 'deployed_code' : 'terminal'}
           </span>
         </div>
         <div className="min-w-0">

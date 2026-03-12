@@ -95,6 +95,7 @@ export interface TreeNode {
   activeCount: number
   color?: string
   orphan?: boolean
+  backend?: 'docker' | 'tmux' | null
 }
 
 export interface TreemapNode {
