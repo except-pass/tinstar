@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import type { Initiative, Epic, Task, Worktree, Run } from '../domain/types'
+import { useState, useEffect, useRef } from 'react'
+import type { Initiative, Epic, Task, Worktree, Run, Space } from '../domain/types'
 
 interface ServerState {
+  activeSpaceId: string
+  spaces: Space[]
   initiatives: Initiative[]
   epics: Epic[]
   tasks: Task[]
@@ -10,6 +12,8 @@ interface ServerState {
 }
 
 const EMPTY_STATE: ServerState = {
+  activeSpaceId: '',
+  spaces: [],
   initiatives: [],
   epics: [],
   tasks: [],
@@ -48,7 +52,21 @@ export function useServerEvents(): {
       setState((prev) => {
         // If entity is 'all' and data is null, it's a clear
         if (delta.entity === 'all' && delta.data === null) {
-          return EMPTY_STATE
+          return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [] }
+        }
+
+        if (delta.entity === 'space') {
+          if (delta.data === null) {
+            return { ...prev, spaces: prev.spaces.filter(s => s.id !== delta.id) }
+          }
+          const space = delta.data as Space
+          const exists = prev.spaces.some(s => s.id === space.id)
+          return {
+            ...prev,
+            spaces: exists
+              ? prev.spaces.map(s => s.id === space.id ? space : s)
+              : [...prev.spaces, space],
+          }
         }
 
         if (delta.entity === 'initiative') {
