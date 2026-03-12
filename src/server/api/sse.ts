@@ -8,6 +8,15 @@ export class SSEBroadcaster {
 
   constructor(private store: DocumentStore) {
     this.store.changes.on('change', (change: { entity: string; id: string; data: unknown }) => {
+      // Always broadcast space changes and clear-all
+      // Suppress entity deltas for non-active spaces
+      if (change.entity !== 'space' && change.entity !== 'all' && this.store.activeSpaceId) {
+        const spaceId = (change.data as Record<string, unknown> | null)?.spaceId as string | undefined
+        if (change.data !== null && spaceId && spaceId !== this.store.activeSpaceId) {
+          return
+        }
+      }
+
       this.broadcast({
         type: 'delta',
         data: {
@@ -53,6 +62,17 @@ export class SSEBroadcaster {
         client.write(payload)
       } else {
         this.clients.delete(client)
+      }
+    }
+  }
+
+  /** Send a fresh snapshot to all connected clients (used on space switch) */
+  broadcastSnapshot(): void {
+    const snapshot = this.store.snapshot()
+    const payload = `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`
+    for (const client of this.clients) {
+      if (!client.destroyed) {
+        client.write(payload)
       }
     }
   }
