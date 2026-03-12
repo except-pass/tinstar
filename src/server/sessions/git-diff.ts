@@ -60,11 +60,23 @@ export async function getGitDiffFiles(workdir: string): Promise<TouchedFile[]> {
     }
   }
 
-  // Add untracked files (no diff stats available — count as 0/0)
-  for (const line of untracked.stdout.trim().split('\n')) {
-    if (!line) continue
-    if (!fileMap.has(line)) {
-      fileMap.set(line, { additions: 0, deletions: 0 })
+  // Add untracked files — count lines as additions (entire file is new)
+  const untrackedPaths = untracked.stdout.trim().split('\n').filter(l => l && !fileMap.has(l))
+  if (untrackedPaths.length > 0) {
+    // Batch wc -l for all untracked files
+    const wc = await execFileAsync(
+      'xargs', ['wc', '-l'],
+      { cwd: workdir, timeout: 5000, input: untrackedPaths.join('\n') },
+    ).catch(() => ({ stdout: '' }))
+    const lineCounts = new Map<string, number>()
+    for (const wcLine of wc.stdout.trim().split('\n')) {
+      const match = wcLine.trim().match(/^(\d+)\s+(.+)$/)
+      if (match && match[2] !== 'total') {
+        lineCounts.set(match[2]!, parseInt(match[1]!, 10))
+      }
+    }
+    for (const path of untrackedPaths) {
+      fileMap.set(path, { additions: lineCounts.get(path) ?? 0, deletions: 0 })
     }
   }
 

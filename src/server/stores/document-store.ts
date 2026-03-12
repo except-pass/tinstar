@@ -228,14 +228,32 @@ export class DocumentStore {
     if (!run) return
     // Deduplicate by path
     if (run.touchedFiles.some(f => f.path === file.path)) return
+    // Mark as readOnly if it has no changes (hook-reported read, not yet in git diff)
+    if (file.additions === 0 && file.deletions === 0 && !file.pending) {
+      file.readOnly = true
+    }
     run.touchedFiles.push(file)
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
 
-  reconcileFiles(runId: string, files: TouchedFile[]): void {
+  reconcileFiles(runId: string, gitFiles: TouchedFile[]): void {
     const run = this.runs.get(runId)
     if (!run) return
-    run.touchedFiles = files
+
+    const gitPaths = new Set(gitFiles.map(f => f.path))
+
+    // Detect commit: if modified files from previous list disappeared from git diff,
+    // a commit happened — clear read-only files too
+    const prevModified = run.touchedFiles.filter(f => !f.readOnly && (f.additions > 0 || f.deletions > 0))
+    const committedAway = prevModified.some(f => !gitPaths.has(f.path))
+
+    // Preserve read-only (hook-reported) files that aren't in git diff,
+    // unless a commit just cleared modified files
+    const readOnlyCarry = committedAway
+      ? []
+      : run.touchedFiles.filter(f => f.readOnly && !gitPaths.has(f.path))
+
+    run.touchedFiles = [...gitFiles, ...readOnlyCarry]
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
 

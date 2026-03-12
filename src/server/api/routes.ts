@@ -831,6 +831,29 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       return true
     }
 
+    // POST /api/hooks/file-read — record a read-only file access (no git diff trigger)
+    if (method === 'POST' && url === '/api/hooks/file-read') {
+      readBody(req).then((body) => {
+        const { session: name, path: filePath } = JSON.parse(body)
+        if (!name || !filePath) return json(res, { ok: true })
+
+        const fileName = filePath.split('/').pop() ?? filePath
+        const kind = inferFileKind(filePath)
+        const file: TouchedFile = {
+          id: filePath,
+          name: fileName,
+          path: filePath,
+          additions: 0,
+          deletions: 0,
+          kind,
+          readOnly: true,
+        }
+        ctx.docStore.addFileTouched(name, file)
+        json(res, { ok: true })
+      })
+      return true
+    }
+
     // --- Projects ---
 
     // GET /api/projects

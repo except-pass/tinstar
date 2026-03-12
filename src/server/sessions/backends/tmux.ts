@@ -316,13 +316,13 @@ export async function installHooks(
   const hookCmd = (endpoint: string) =>
     `if [ -n "$TINSTAR_SESSION_NAME" ]; then curl -s -X POST ${dashboardUrl}/api/hooks/${endpoint} -H 'Content-Type: application/json' -d "{\\"session\\":\\"$TINSTAR_SESSION_NAME\\",\\"conversationId\\":\\"$CLAUDE_SESSION_ID\\"}"; fi`
 
-  // PostToolUse hook for file-touched — reads tool input JSON from stdin (Claude Code pipes it)
-  const fileHookCmd =
+  // PostToolUse hooks for file tracking — reads tool input JSON from stdin (Claude Code pipes it)
+  const fileHookCmd = (endpoint: string) =>
     `if [ -n "$TINSTAR_SESSION_NAME" ]; then ` +
     `HOOK_INPUT=$(cat); ` +
     `FILE_PATH=$(echo "$HOOK_INPUT" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'); ` +
     `if [ -n "$FILE_PATH" ]; then ` +
-    `curl -s -X POST ${dashboardUrl}/api/hooks/file-touched -H 'Content-Type: application/json' -d "{\\"session\\":\\"$TINSTAR_SESSION_NAME\\",\\"path\\":\\"$FILE_PATH\\"}"; ` +
+    `curl -s -X POST ${dashboardUrl}/api/hooks/${endpoint} -H 'Content-Type: application/json' -d "{\\"session\\":\\"$TINSTAR_SESSION_NAME\\",\\"path\\":\\"$FILE_PATH\\"}"; ` +
     `fi; fi`
 
   const tinstarHooks: Record<string, Array<Record<string, unknown>>> = {
@@ -336,10 +336,16 @@ export async function installHooks(
     UserPromptSubmit: [{
       hooks: [{ type: 'command', command: hookCmd('active') }],
     }],
-    PostToolUse: [{
-      matcher: 'Write|Edit',
-      hooks: [{ type: 'command', command: fileHookCmd }],
-    }],
+    PostToolUse: [
+      {
+        matcher: 'Write|Edit',
+        hooks: [{ type: 'command', command: fileHookCmd('file-touched') }],
+      },
+      {
+        matcher: 'Read',
+        hooks: [{ type: 'command', command: fileHookCmd('file-read') }],
+      },
+    ],
   }
 
   for (const [event, entries] of Object.entries(tinstarHooks)) {

@@ -107,9 +107,11 @@ export function TouchedFilesPanel({ files, onFileSelect, onCollapse }: Props) {
                   </div>
                 </div>
               </div>
-              <div className={`flex items-center gap-1 font-mono text-2xs shrink-0 ml-2 transition-opacity duration-200 ${file.pending ? 'animate-shimmer' : ''}`}>
+              <div className="flex items-center gap-1 font-mono text-2xs shrink-0 ml-2">
                 {file.pending ? (
                   <span className="text-slate-500">...</span>
+                ) : file.additions === 0 && file.deletions === 0 ? (
+                  <span className="cursor-default" title="File was read but not modified">&#128083;</span>
                 ) : (
                   <>
                     <span className="text-accent-green">+{file.additions}</span>

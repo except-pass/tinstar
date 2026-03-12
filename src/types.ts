@@ -35,6 +35,8 @@ export interface TouchedFile {
   deletions: number
   kind: FileKind
   pending?: boolean
+  /** File was read (e.g. by Read tool) but has no uncommitted changes */
+  readOnly?: boolean
 }
 
 export interface Procedure {
