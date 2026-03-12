@@ -32,7 +32,8 @@ import {
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import { parseNewEntries } from '../sessions/transcript-parser'
-import type { EntitySettings, GroupingDimension } from '../../domain/types'
+import type { EntitySettings, GroupingDimension, Run } from '../../domain/types'
+import { saveActiveSpaceId } from '../sessions/config'
 import type { FileKind, TouchedFile } from '../../types'
 
 function inferFileKind(filePath: string): FileKind {
@@ -152,6 +153,82 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     return true
   }
 
+  // --- Spaces ---
+
+  // GET /api/spaces
+  if (method === 'GET' && url === '/api/spaces') {
+    json(res, ctx.docStore.getAllSpaces())
+    return true
+  }
+
+  // POST /api/spaces
+  if (method === 'POST' && url === '/api/spaces') {
+    readBody(req).then(body => {
+      const { name } = JSON.parse(body)
+      const space = {
+        id: shortId('spc'),
+        name: name ?? 'Untitled Space',
+        createdAt: new Date().toISOString(),
+      }
+      ctx.docStore.upsertSpace(space.id, space)
+      json(res, space, 201)
+    })
+    return true
+  }
+
+  // POST /api/spaces/:id/activate
+  if (method === 'POST' && /^\/api\/spaces\/[^/]+\/activate$/.test(url)) {
+    const id = url.split('/')[3]!
+    const space = ctx.docStore.getSpace(id)
+    if (!space) { json(res, { error: 'not found' }, 404); return true }
+    ctx.docStore.activeSpaceId = id
+    if (ctx.sessionConfig) {
+      saveActiveSpaceId(ctx.sessionConfig.dirs.root, id)
+    }
+    ctx.sse.broadcastSnapshot()
+    json(res, { ok: true, activeSpaceId: id })
+    return true
+  }
+
+  // PATCH /api/spaces/:id
+  if (method === 'PATCH' && url.startsWith('/api/spaces/') && !url.includes('/activate')) {
+    const id = url.slice('/api/spaces/'.length)
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getSpace(id)
+      if (!existing) return json(res, { error: 'not found' }, 404)
+      const patch = JSON.parse(body)
+      ctx.docStore.upsertSpace(id, { ...existing, ...patch })
+      json(res, { ok: true, data: ctx.docStore.getSpace(id) })
+    })
+    return true
+  }
+
+  // DELETE /api/spaces/:id
+  if (method === 'DELETE' && url.startsWith('/api/spaces/') && !url.includes('/activate')) {
+    const id = url.slice('/api/spaces/'.length)
+    if (id === ctx.docStore.activeSpaceId) {
+      json(res, { error: 'Cannot delete the active space. Switch to another space first.' }, 400)
+      return true
+    }
+    if (ctx.docStore.getAllSpaces().length <= 1) {
+      json(res, { error: 'Cannot delete the last space.' }, 400)
+      return true
+    }
+    const orphanedRuns = ctx.docStore.getAllRuns().filter(r =>
+      (r as Run).spaceId === id &&
+      (r.status === 'running' || r.status === 'idle' || r.status === 'needs_attention')
+    )
+    ctx.docStore.clearSpace(id)
+    ctx.docStore.deleteSpace(id)
+    json(res, {
+      ok: true,
+      warning: orphanedRuns.length > 0
+        ? `${orphanedRuns.length} session(s) are still running. Use \`tmux ls\` or \`docker ps\` to manage them.`
+        : undefined,
+    })
+    return true
+  }
+
   // POST /api/initiatives
   if (method === 'POST' && url === '/api/initiatives') {
     readBody(req).then(body => {
@@ -162,6 +239,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         color: color ?? '#00f0ff',
         status: status ?? 'active',
         summary: summary ?? '',
+        spaceId: ctx.docStore.activeSpaceId,
       }
       ctx.docStore.upsertInitiative(entity.id, entity)
       json(res, entity, 201)
@@ -179,6 +257,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         initiativeId: initiativeId ?? '',
         status: status ?? 'active',
         summary: summary ?? '',
+        spaceId: ctx.docStore.activeSpaceId,
       }
       ctx.docStore.upsertEpic(entity.id, entity)
       json(res, entity, 201)
@@ -197,6 +276,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         initiativeId: initiativeId ?? '',
         status: status ?? 'active',
         summary: summary ?? '',
+        spaceId: ctx.docStore.activeSpaceId,
       }
       ctx.docStore.upsertTask(entity.id, entity)
       json(res, entity, 201)
@@ -214,6 +294,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         branch: branch ?? '',
         repo: repo ?? '',
         worktreePath: worktreePath ?? '',
+        spaceId: ctx.docStore.activeSpaceId,
       }
       ctx.docStore.upsertWorktree(entity.id, entity)
       json(res, entity, 201)
@@ -507,6 +588,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
             taskId: taskId ?? '',
             worktreeId: '',
             createdAt: new Date().toISOString(),
+            spaceId: ctx.docStore.activeSpaceId,
           })
 
           // Register Caddy route for terminal proxy
