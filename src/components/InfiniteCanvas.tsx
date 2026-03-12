@@ -10,6 +10,7 @@ interface Props {
   tree: TreeNode[]
   runMap: Map<string, Run>
   focusRunId: string | null
+  activeSpaceId?: string
   onFocusHandled: () => void
   onSelectRun?: (runId: string) => void
   onFocusRun?: (runId: string) => void
@@ -72,7 +73,7 @@ interface ReassignState {
   target: DropTarget
 }
 
-export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen }: Props) {
+export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -84,7 +85,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSel
     shrinkNode,
     getLayout,
     arrangeWorkspace,
-  } = useWidgetLayouts(tree)
+  } = useWidgetLayouts(tree, activeSpaceId)
   const { camera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
 
   // Drag-to-reassign state

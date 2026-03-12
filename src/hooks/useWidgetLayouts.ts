@@ -15,7 +15,7 @@ export interface TreeMaps {
   depthMap: Map<string, number>
 }
 
-const STORAGE_KEY = 'tinstar-layouts-v3'
+const STORAGE_KEY_PREFIX = 'tinstar-layouts-v3'
 const DEFAULT_RUN_WIDTH = 900
 const DEFAULT_RUN_HEIGHT = 400
 const MIN_WIDTH = 300
@@ -166,10 +166,10 @@ function collectTreeIds(tree: TreeNode[]): Set<string> {
 
 // --- Persistence ---
 
-function loadLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
+function loadLayouts(tree: TreeNode[], storageKey: string): Map<string, WidgetLayout> {
   const allIds = collectTreeIds(tree)
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey)
     if (!raw) return generateDefaultLayouts(tree)
     const parsed = JSON.parse(raw) as Record<string, WidgetLayout>
     const map = new Map<string, WidgetLayout>()
@@ -192,10 +192,10 @@ function loadLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
   }
 }
 
-function saveLayouts(layouts: Map<string, WidgetLayout>) {
+function saveLayouts(layouts: Map<string, WidgetLayout>, storageKey: string) {
   const obj: Record<string, WidgetLayout> = {}
   for (const [id, layout] of layouts) obj[id] = layout
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(obj))
+  localStorage.setItem(storageKey, JSON.stringify(obj))
 }
 
 // --- Enforce containment ---
@@ -275,9 +275,12 @@ function computeMinBounds(
 
 // --- The hook ---
 
-export function useWidgetLayouts(tree: TreeNode[]) {
+export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
+  const storageKey = spaceId ? `${STORAGE_KEY_PREFIX}-${spaceId}` : STORAGE_KEY_PREFIX
+  const storageKeyRef = useRef(storageKey)
+
   const [layouts, setLayouts] = useState<Map<string, WidgetLayout>>(() =>
-    loadLayouts(tree),
+    loadLayouts(tree, storageKey),
   )
   const layoutsRef = useRef(layouts)
   layoutsRef.current = layouts
@@ -314,9 +317,17 @@ export function useWidgetLayouts(tree: TreeNode[]) {
     }
   }
 
+  // Reload layouts when space changes
+  if (storageKey !== storageKeyRef.current) {
+    storageKeyRef.current = storageKey
+    const fresh = loadLayouts(tree, storageKey)
+    layoutsRef.current = fresh
+    queueMicrotask(() => setLayouts(fresh))
+  }
+
   // Persist on change
   useEffect(() => {
-    saveLayouts(layouts)
+    saveLayouts(layouts, storageKeyRef.current)
   }, [layouts])
 
   // Move a run (leaf), auto-expand ancestor chain
