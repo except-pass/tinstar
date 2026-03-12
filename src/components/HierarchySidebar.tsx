@@ -407,6 +407,16 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
         onRename={onRenameSpace}
         onDelete={onDeleteSpace}
       />
+      <div className="flex items-center justify-end px-3 py-1 border-b border-white/5">
+        <button
+          className="text-xs text-slate-500 hover:text-primary"
+          onClick={() => onAdd(null, rootType)}
+          data-testid="add-root"
+          aria-label={`Add ${rootType}`}
+        >
+          +
+        </button>
+      </div>
 
       {/* Tree */}
       <div
