@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, mkdirSync } from 'node:fs'
+import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -113,4 +113,24 @@ export function ensureDirs(config: TinstarConfig): void {
   mkdirSync(config.dirs.root, { recursive: true })
   mkdirSync(config.dirs.secrets, { recursive: true })
   mkdirSync(config.dirs.sessions, { recursive: true })
+}
+
+export function loadActiveSpaceId(rootDir: string): string | null {
+  try {
+    const raw = readFileSync(join(rootDir, 'config.json'), 'utf-8')
+    const data = JSON.parse(raw)
+    return data.activeSpaceId ?? null
+  } catch {
+    return null
+  }
+}
+
+export function saveActiveSpaceId(rootDir: string, spaceId: string): void {
+  const configPath = join(rootDir, 'config.json')
+  let data: Record<string, unknown> = {}
+  try {
+    data = JSON.parse(readFileSync(configPath, 'utf-8'))
+  } catch { /* no existing config */ }
+  data.activeSpaceId = spaceId
+  writeFileSync(configPath, JSON.stringify(data, null, 2))
 }
