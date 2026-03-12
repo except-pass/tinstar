@@ -36,7 +36,7 @@ function WorkspaceShellInner() {
     return ['initiative', 'epic', 'task']
   })
 
-  const { runRepo, taxRepo } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId } = useBackendState()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -64,6 +64,31 @@ function WorkspaceShellInner() {
   } | null>(null)
   const [sessionPrefill, setSessionPrefill] = useState<{ taskId?: string } | null>(null)
   const { select, expandAll } = useSelection()
+
+  // Space actions
+  const handleActivateSpace = useCallback((id: string) => {
+    fetch(`/api/spaces/${id}/activate`, { method: 'POST' })
+  }, [])
+
+  const handleCreateSpace = useCallback((name: string) => {
+    fetch('/api/spaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+  }, [])
+
+  const handleRenameSpace = useCallback((id: string, name: string) => {
+    fetch(`/api/spaces/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+  }, [])
+
+  const handleDeleteSpace = useCallback((id: string) => {
+    fetch(`/api/spaces/${id}`, { method: 'DELETE' })
+  }, [])
 
   const handleDimensionsChange = useCallback((dims: GroupingDimension[]) => {
     setDimensions(dims)
@@ -206,15 +231,16 @@ function WorkspaceShellInner() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
-      {/* Top bar: GroupingControls + status */}
+      {/* Top bar: GroupingControls + logo + status */}
       <div
-        className="flex items-center justify-between px-4 py-2 bg-surface-panel border-b border-white/10"
+        className="flex items-center justify-between px-4 py-2 bg-surface-panel border-b border-white/10 relative"
         data-testid="controls-bar"
       >
         <GroupingControls
           activeDimensions={dimensions}
           onDimensionsChange={handleDimensionsChange}
         />
+        <img src="/logo.png" alt="Tinstar" className="h-6 absolute left-1/2 -translate-x-1/2 pointer-events-none select-none opacity-80" />
         <div className="flex items-center gap-3 ml-4 flex-shrink-0">
           <button
             className="px-3 py-1 text-xs bg-primary/20 text-primary border border-primary/40 rounded-full hover:bg-primary/30"
@@ -247,6 +273,12 @@ function WorkspaceShellInner() {
           <HierarchySidebar
             tree={sidebarTree}
             dimensions={dimensions}
+            spaces={spaces}
+            activeSpaceId={activeSpaceId}
+            onActivateSpace={handleActivateSpace}
+            onCreateSpace={handleCreateSpace}
+            onRenameSpace={handleRenameSpace}
+            onDeleteSpace={handleDeleteSpace}
             onAdd={handleAdd}
             onRename={handleRename}
             onDelete={handleDelete}
@@ -262,6 +294,7 @@ function WorkspaceShellInner() {
             tree={sidebarTree}
             runMap={runMap}
             focusRunId={focusRunId}
+            activeSpaceId={activeSpaceId}
             onFocusHandled={handleFocusHandled}
             onSelectRun={handleSelectRun}
             onFocusRun={handleCanvasFocusRun}

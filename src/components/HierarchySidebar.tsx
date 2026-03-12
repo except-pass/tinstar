@@ -1,12 +1,19 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { TreeNode, GroupingDimension } from '../domain/types'
+import type { TreeNode, GroupingDimension, Space } from '../domain/types'
 import { getDimensionIcon } from '../domain/dimension-meta'
 import { useSelection } from './SelectionProvider'
 import { useSidebarDrag, type DropTarget } from '../hooks/useSidebarDrag'
+import { SpaceSwitcher } from './SpaceSwitcher'
 
 interface HierarchySidebarProps {
   tree: TreeNode[]
   dimensions: GroupingDimension[]
+  spaces: Space[]
+  activeSpaceId: string
+  onActivateSpace: (id: string) => void
+  onCreateSpace: (name: string) => void
+  onRenameSpace: (id: string, name: string) => void
+  onDeleteSpace: (id: string) => void
   onAdd: (parentId: string | null, type: GroupingDimension | 'run') => void
   onRename: (entityId: string, type: GroupingDimension, newName: string) => void
   onDelete: (entityId: string, type: GroupingDimension) => void
@@ -354,7 +361,7 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, dimensions, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent }: HierarchySidebarProps) {
+export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent }: HierarchySidebarProps) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
 
@@ -391,20 +398,15 @@ export default function HierarchySidebar({ tree, dimensions, onAdd, onRename, on
       onPointerUp={onPointerUp}
       onPointerLeave={onPointerUp}
     >
-      {/* Header */}
-      <div className="panel-header px-3 py-2 flex items-center justify-between">
-        <span className="panel-label text-xs font-display uppercase tracking-wider">
-          Hierarchy
-        </span>
-        <button
-          className="text-xs text-slate-500 hover:text-primary"
-          onClick={() => onAdd(null, rootType)}
-          data-testid="add-root"
-          aria-label={`Add ${rootType}`}
-        >
-          +
-        </button>
-      </div>
+      {/* Space switcher header */}
+      <SpaceSwitcher
+        spaces={spaces}
+        activeSpaceId={activeSpaceId}
+        onActivate={onActivateSpace}
+        onCreate={onCreateSpace}
+        onRename={onRenameSpace}
+        onDelete={onDeleteSpace}
+      />
 
       {/* Tree */}
       <div
