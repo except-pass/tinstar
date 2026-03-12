@@ -5,6 +5,8 @@ import type { GroupingDimension, SelectionState } from '../domain/types'
 
 type SelectionAction =
   | { type: 'select'; id: string; entityType: GroupingDimension | 'run' }
+  | { type: 'toggle'; id: string; entityType: GroupingDimension | 'run' }
+  | { type: 'selectMany'; ids: string[]; entityType: GroupingDimension | 'run' }
   | { type: 'deselect' }
   | { type: 'hover'; id: string | null }
   | { type: 'toggleExpand'; id: string }
@@ -18,13 +20,32 @@ function selectionReducer(state: SelectionState, action: SelectionAction): Selec
     case 'select':
       return {
         ...state,
-        selectedId: action.id,
+        selectedIds: new Set([action.id]),
         selectedType: action.entityType,
+      }
+    case 'toggle': {
+      const next = new Set(state.selectedIds)
+      if (next.has(action.id)) {
+        next.delete(action.id)
+      } else {
+        next.add(action.id)
+      }
+      return {
+        ...state,
+        selectedIds: next,
+        selectedType: next.size > 0 ? action.entityType : null,
+      }
+    }
+    case 'selectMany':
+      return {
+        ...state,
+        selectedIds: new Set(action.ids),
+        selectedType: action.ids.length > 0 ? action.entityType : null,
       }
     case 'deselect':
       return {
         ...state,
-        selectedId: null,
+        selectedIds: new Set(),
         selectedType: null,
       }
     case 'hover':
@@ -60,6 +81,8 @@ function selectionReducer(state: SelectionState, action: SelectionAction): Selec
 interface SelectionContextValue {
   state: SelectionState
   select: (id: string, type: GroupingDimension | 'run') => void
+  toggleSelect: (id: string, type: GroupingDimension | 'run') => void
+  selectMany: (ids: string[], type: GroupingDimension | 'run') => void
   deselect: () => void
   hover: (id: string | null) => void
   toggleExpand: (id: string) => void
@@ -68,10 +91,11 @@ interface SelectionContextValue {
   isSelected: (id: string) => boolean
   isExpanded: (id: string) => boolean
   isHovered: (id: string) => boolean
+  selectedCount: number
 }
 
 const initialState: SelectionState = {
-  selectedId: null,
+  selectedIds: new Set(),
   selectedType: null,
   expandedIds: new Set(),
   hoveredId: null,
@@ -87,6 +111,18 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
   const select = useCallback(
     (id: string, type: GroupingDimension | 'run') =>
       dispatch({ type: 'select', id, entityType: type }),
+    [],
+  )
+
+  const toggleSelect = useCallback(
+    (id: string, type: GroupingDimension | 'run') =>
+      dispatch({ type: 'toggle', id, entityType: type }),
+    [],
+  )
+
+  const selectMany = useCallback(
+    (ids: string[], type: GroupingDimension | 'run') =>
+      dispatch({ type: 'selectMany', ids, entityType: type }),
     [],
   )
 
@@ -110,8 +146,8 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
   const collapseAll = useCallback(() => dispatch({ type: 'collapseAll' }), [])
 
   const isSelected = useCallback(
-    (id: string) => state.selectedId === id,
-    [state.selectedId],
+    (id: string) => state.selectedIds.has(id),
+    [state.selectedIds],
   )
 
   const isExpanded = useCallback(
@@ -127,6 +163,8 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
   const value: SelectionContextValue = {
     state,
     select,
+    toggleSelect,
+    selectMany,
     deselect,
     hover,
     toggleExpand,
@@ -135,6 +173,7 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
     isSelected,
     isExpanded,
     isHovered,
+    selectedCount: state.selectedIds.size,
   }
 
   return (

@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState, type PointerEvent as ReactPoi
 import type { Run, TreeNode, GroupingDimension } from '../domain/types'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts, type WidgetLayout } from '../hooks/useWidgetLayouts'
+import { useSelection } from './SelectionProvider'
 import { CanvasWidget } from './CanvasWidget'
 import { GroupContainer } from './GroupContainer'
 import { ReassignDialog } from './ReassignDialog'
@@ -12,10 +13,12 @@ interface Props {
   focusRunId: string | null
   activeSpaceId?: string
   onFocusHandled: () => void
-  onSelectRun?: (runId: string) => void
+  onSelectRun?: (runId: string, additive: boolean) => void
   onFocusRun?: (runId: string) => void
   onDeleteEntity?: (entityId: string, type: string) => void
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
+  arrangeGridRef?: React.MutableRefObject<(() => void) | null>
+  arrangeResetRef?: React.MutableRefObject<(() => void) | null>
 }
 
 /** Extract entity type and ID from a tree node ID like "initiative-abc123" */
@@ -61,6 +64,16 @@ function buildParentMap(nodes: TreeNode[], parentId: string | null = null): Map<
   return map
 }
 
+/** Collect all run node IDs from a tree */
+function collectRunNodeIds(nodes: TreeNode[]): string[] {
+  const result: string[] = []
+  for (const node of nodes) {
+    if (node.type === 'run') result.push(node.id)
+    else result.push(...collectRunNodeIds(node.children))
+  }
+  return result
+}
+
 interface DropTarget {
   nodeId: string
   label: string
@@ -73,7 +86,16 @@ interface ReassignState {
   target: DropTarget
 }
 
-export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen }: Props) {
+interface MarqueeRect {
+  startX: number
+  startY: number
+  endX: number
+  endY: number
+}
+
+const MARQUEE_THRESHOLD = 5
+
+export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, arrangeGridRef, arrangeResetRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -87,12 +109,20 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     arrangeWorkspace,
   } = useWidgetLayouts(tree, activeSpaceId)
   const { camera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
+  const { selectMany, deselect, isSelected } = useSelection()
 
   // Drag-to-reassign state
   const draggingRunRef = useRef<string | null>(null)
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
   const [reassign, setReassign] = useState<ReassignState | null>(null)
   const groupNodesRef = useRef<TreeNode[]>([])
+
+  // Marquee state
+  const [marquee, setMarquee] = useState<MarqueeRect | null>(null)
+  const marqueeRef = useRef<{ startX: number; startY: number; active: boolean }>({ startX: 0, startY: 0, active: false })
+
+  // All run node IDs for marquee intersection
+  const runNodeIdsRef = useRef<string[]>([])
 
   // Keep group nodes list, parent map, and depth map in sync with tree
   const parentMapRef = useRef<Map<string, string | null>>(new Map())
@@ -101,6 +131,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     groupNodesRef.current = collectGroupNodes(tree)
     parentMapRef.current = buildParentMap(tree)
     depthMapRef.current = treeMaps.depthMap
+    runNodeIdsRef.current = collectRunNodeIds(tree)
   }, [tree, treeMaps])
 
   // Center on a widget when focusRunId changes
@@ -122,16 +153,6 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     return () => el.removeEventListener('wheel', handler)
   }, [handleWheel])
 
-  const onPointerDown = useCallback(
-    (e: ReactPointerEvent) => { startPan(e.nativeEvent) },
-    [startPan],
-  )
-  const onPointerMove = useCallback(
-    (e: ReactPointerEvent) => { movePan(e.nativeEvent) },
-    [movePan],
-  )
-  const onPointerUp = useCallback(() => { endPan() }, [endPan])
-
   /** Convert client coords to canvas coords */
   const clientToCanvas = useCallback((clientX: number, clientY: number) => {
     const el = containerRef.current
@@ -142,6 +163,101 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
       y: (clientY - rect.top - camera.y) / camera.zoom,
     }
   }, [camera])
+
+  // --- Pointer handlers: pan OR marquee ---
+  const onPointerDown = useCallback(
+    (e: ReactPointerEvent) => {
+      if (spaceHeld.current) {
+        // Space held = pan
+        startPan(e.nativeEvent)
+        return
+      }
+      // Start marquee on left-click on empty canvas
+      if (e.button === 0) {
+        marqueeRef.current = { startX: e.clientX, startY: e.clientY, active: false }
+      }
+    },
+    [startPan, spaceHeld],
+  )
+
+  const onPointerMove = useCallback(
+    (e: ReactPointerEvent) => {
+      if (spaceHeld.current) {
+        movePan(e.nativeEvent)
+        return
+      }
+      // Marquee drawing
+      if (marqueeRef.current.startX !== 0 || marqueeRef.current.startY !== 0) {
+        const dx = e.clientX - marqueeRef.current.startX
+        const dy = e.clientY - marqueeRef.current.startY
+        if (!marqueeRef.current.active && Math.hypot(dx, dy) < MARQUEE_THRESHOLD) return
+        marqueeRef.current.active = true
+        setMarquee({
+          startX: marqueeRef.current.startX,
+          startY: marqueeRef.current.startY,
+          endX: e.clientX,
+          endY: e.clientY,
+        })
+      }
+    },
+    [movePan, spaceHeld],
+  )
+
+  const onPointerUp = useCallback(
+    (e: ReactPointerEvent) => {
+      if (spaceHeld.current) {
+        endPan()
+        marqueeRef.current = { startX: 0, startY: 0, active: false }
+        setMarquee(null)
+        return
+      }
+
+      if (marqueeRef.current.active && marquee) {
+        // Resolve marquee: find all run widgets inside the bounding box
+        const el = containerRef.current
+        if (el) {
+          const rect = el.getBoundingClientRect()
+          const x1 = (Math.min(marquee.startX, marquee.endX) - rect.left - camera.x) / camera.zoom
+          const y1 = (Math.min(marquee.startY, marquee.endY) - rect.top - camera.y) / camera.zoom
+          const x2 = (Math.max(marquee.startX, marquee.endX) - rect.left - camera.x) / camera.zoom
+          const y2 = (Math.max(marquee.startY, marquee.endY) - rect.top - camera.y) / camera.zoom
+
+          const selected: string[] = []
+          for (const nodeId of runNodeIdsRef.current) {
+            const layout = layouts.get(nodeId)
+            if (!layout) continue
+            // Check AABB intersection
+            if (
+              layout.x + layout.width > x1 &&
+              layout.x < x2 &&
+              layout.y + layout.height > y1 &&
+              layout.y < y2
+            ) {
+              selected.push(nodeId)
+            }
+          }
+          if (selected.length > 0) {
+            selectMany(selected, 'run')
+          } else {
+            deselect()
+          }
+        }
+      } else if (!marqueeRef.current.active) {
+        // Plain click on empty canvas = deselect all
+        deselect()
+      }
+
+      marqueeRef.current = { startX: 0, startY: 0, active: false }
+      setMarquee(null)
+    },
+    [endPan, spaceHeld, marquee, layouts, camera, selectMany, deselect],
+  )
+
+  const onPointerLeave = useCallback(() => {
+    endPan()
+    marqueeRef.current = { startX: 0, startY: 0, active: false }
+    setMarquee(null)
+  }, [endPan])
 
   /** Hit-test canvas point against group containers, return deepest match */
   const hitTestGroups = useCallback((canvasX: number, canvasY: number): DropTarget | null => {
@@ -206,12 +322,9 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     if (!reassign) return
     const { runId, target } = reassign
 
-    // Build the patch based on target type
-    // resolveDimension resolves task via run.taskId, epic/initiative via task's FKs
     const patch: Record<string, string> = {}
     if (target.type === 'task') patch.taskId = target.entityId
 
-    // Move the widget inside the target container, expanding it to fit
     const containerLayout = layouts.get(target.nodeId)
     const runNodeId = `run-${runId}`
     const runLayout = layouts.get(runNodeId)
@@ -239,6 +352,50 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     setReassign(null)
   }, [])
 
+  // Grid arrange: tile selected (or all) run widgets into a grid filling the viewport
+  const arrangeGrid = useCallback(() => {
+    const el = containerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+
+    // Determine which runs to arrange
+    const targetIds = runNodeIdsRef.current.filter(id => isSelected(id))
+    const ids = targetIds.length > 0 ? targetIds : runNodeIdsRef.current
+    if (ids.length === 0) return
+
+    // Viewport in canvas coords
+    const vx = -camera.x / camera.zoom
+    const vy = -camera.y / camera.zoom
+    const vw = rect.width / camera.zoom
+    const vh = rect.height / camera.zoom
+
+    const gap = 20
+    const cols = Math.ceil(Math.sqrt(ids.length))
+    const rows = Math.ceil(ids.length / cols)
+    const cellW = (vw - gap * (cols + 1)) / cols
+    const cellH = (vh - gap * (rows + 1)) / rows
+
+    ids.forEach((nodeId, i) => {
+      const col = i % cols
+      const row = Math.floor(i / cols)
+      const nx = vx + gap + col * (cellW + gap)
+      const ny = vy + gap + row * (cellH + gap)
+      updateRunPosition(nodeId, nx, ny)
+      updateRunSize(nodeId, cellW, cellH)
+    })
+  }, [camera, isSelected, updateRunPosition, updateRunSize])
+
+  // Expose arrange functions to parent via refs
+  useEffect(() => {
+    if (arrangeGridRef) arrangeGridRef.current = arrangeGrid
+    return () => { if (arrangeGridRef) arrangeGridRef.current = null }
+  }, [arrangeGridRef, arrangeGrid])
+
+  useEffect(() => {
+    if (arrangeResetRef) arrangeResetRef.current = arrangeWorkspace
+    return () => { if (arrangeResetRef) arrangeResetRef.current = null }
+  }, [arrangeResetRef, arrangeWorkspace])
+
   const handleDeleteGroup = useCallback((nodeId: string) => {
     if (!onDeleteEntity) return
     const parsed = parseNodeId(nodeId)
@@ -249,7 +406,6 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     if (!onMenuOpen) return
     const parsed = parseNodeId(nodeId)
     if (!parsed) return
-    // Find the node label from the tree
     const label = findNodeLabel(tree, nodeId) ?? nodeId
     onMenuOpen(parsed.entityId, parsed.type as GroupingDimension, label, anchorRect)
   }, [onMenuOpen, tree])
@@ -261,6 +417,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
       if (!run) return null
       const layout = layouts.get(node.id)
       if (!layout) return null
+      const selected = isSelected(node.id)
       return (
         <CanvasWidget
           key={node.id}
@@ -271,6 +428,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
           height={layout.height}
           zoom={camera.zoom}
           spaceHeldRef={spaceHeld}
+          selected={selected}
           onMove={(runId, x, y) => updateRunPosition(node.id, x, y)}
           onResize={(runId, w, h) => updateRunSize(node.id, w, h)}
           onSelect={onSelectRun}
@@ -308,15 +466,11 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     )
   }
 
-  // Collect all nodes in render order: groups first (bottom), then leaves (top)
-  // This ensures children render on top of their parent containers
   function collectRenderOrder(nodes: TreeNode[], depth: number): React.ReactNode[] {
     const result: React.ReactNode[] = []
     for (const node of nodes) {
       if (node.type !== 'run') {
-        // Render group container first (behind)
         result.push(renderNode(node, depth))
-        // Then recurse into children
         result.push(...collectRenderOrder(node.children, depth + 1))
       } else {
         result.push(renderNode(node, depth))
@@ -326,6 +480,26 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   }
 
   const renderedNodes = collectRenderOrder(tree, 0)
+
+  // Compute marquee rect for rendering (screen-space, relative to container)
+  let marqueeStyle: React.CSSProperties | null = null
+  if (marquee) {
+    const el = containerRef.current
+    if (el) {
+      const rect = el.getBoundingClientRect()
+      marqueeStyle = {
+        position: 'absolute',
+        left: Math.min(marquee.startX, marquee.endX) - rect.left,
+        top: Math.min(marquee.startY, marquee.endY) - rect.top,
+        width: Math.abs(marquee.endX - marquee.startX),
+        height: Math.abs(marquee.endY - marquee.startY),
+        border: '1px solid rgba(0, 240, 255, 0.6)',
+        backgroundColor: 'rgba(0, 240, 255, 0.08)',
+        pointerEvents: 'none' as const,
+        zIndex: 50,
+      }
+    }
+  }
 
   return (
     <div
@@ -340,7 +514,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerLeave={onPointerUp}
+      onPointerLeave={onPointerLeave}
       data-testid="infinite-canvas"
     >
       {/* Transformed canvas layer */}
@@ -356,15 +530,11 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
         {renderedNodes}
       </div>
 
-      {/* Bottom-right controls */}
+      {/* Marquee selection box */}
+      {marqueeStyle && <div style={marqueeStyle} />}
+
+      {/* Bottom-right zoom indicator */}
       <div className="absolute bottom-3 right-3 flex items-center gap-2">
-        <button
-          className="bg-surface-panel border border-white/10 px-3 py-1.5 text-xs font-mono text-slate-400 hover:text-primary hover:border-primary/30 rounded-sm select-none transition-colors"
-          onClick={arrangeWorkspace}
-          data-testid="arrange-button"
-        >
-          Arrange
-        </button>
         <div
           className="bg-surface-panel border border-white/10 px-3 py-1.5 text-xs font-mono text-slate-500 rounded-sm select-none"
           data-testid="zoom-indicator"

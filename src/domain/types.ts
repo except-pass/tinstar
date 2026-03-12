@@ -135,7 +135,7 @@ export interface Rect {
 // --- Selection ---
 
 export interface SelectionState {
-  selectedId: string | null
+  selectedIds: Set<string>
   selectedType: GroupingDimension | 'run' | null
   expandedIds: Set<string>
   hoveredId: string | null

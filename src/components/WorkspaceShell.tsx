@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import type { GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
@@ -63,7 +63,9 @@ function WorkspaceShellInner() {
     entityId: string; entityType: GroupingDimension; entityName: string
   } | null>(null)
   const [sessionPrefill, setSessionPrefill] = useState<{ taskId?: string } | null>(null)
-  const { select, expandAll } = useSelection()
+  const { select, toggleSelect, expandAll, selectedCount } = useSelection()
+  const arrangeGridRef = useRef<(() => void) | null>(null)
+  const arrangeResetRef = useRef<(() => void) | null>(null)
 
   // Space actions
   const handleActivateSpace = useCallback((id: string) => {
@@ -222,12 +224,16 @@ function WorkspaceShellInner() {
   }, [])
 
   // Click on canvas widget → select in hierarchy + expand ancestors
-  const handleSelectRun = useCallback((runId: string) => {
+  const handleSelectRun = useCallback((runId: string, additive = false) => {
     const nodeId = `run-${runId}`
     const ancestors = findAncestorIds(sidebarTree, nodeId)
     if (ancestors.length > 0) expandAll(ancestors)
-    select(nodeId, 'run')
-  }, [sidebarTree, select, expandAll])
+    if (additive) {
+      toggleSelect(nodeId, 'run')
+    } else {
+      select(nodeId, 'run')
+    }
+  }, [sidebarTree, select, toggleSelect, expandAll])
 
   // Double-click on canvas widget → zoom to fit
   const handleCanvasFocusRun = useCallback((runId: string) => {
@@ -291,6 +297,8 @@ function WorkspaceShellInner() {
             onFocusRun={handleFocusRun}
             onMenuOpen={handleMenuOpen}
             onReparent={handleReparent}
+            onArrangeGrid={() => arrangeGridRef.current?.()}
+            onArrangeReset={() => arrangeResetRef.current?.()}
           />
         </div>
 
@@ -306,6 +314,8 @@ function WorkspaceShellInner() {
             onFocusRun={handleCanvasFocusRun}
             onDeleteEntity={handleDelete}
             onMenuOpen={handleMenuOpen}
+            arrangeGridRef={arrangeGridRef}
+            arrangeResetRef={arrangeResetRef}
           />
         </div>
       </div>

@@ -225,8 +225,8 @@ test.describe('Canvas ↔ Sidebar Sync', () => {
     await expect(sidebarNode).toHaveClass(/bg-primary/)
   })
 
-  // --- Negative: clicking empty canvas does NOT select anything ---
-  test('clicking empty canvas area does not select sidebar nodes', async ({ page }) => {
+  // --- Clicking empty canvas deselects everything ---
+  test('clicking empty canvas area deselects sidebar nodes', async ({ page }) => {
     // First select something
     const widget = page.getByTestId('canvas-widget-R-241')
     await widget.click()
@@ -239,9 +239,8 @@ test.describe('Canvas ↔ Sidebar Sync', () => {
     await page.mouse.click(box.x + box.width - 10, box.y + box.height - 10)
     await page.waitForTimeout(200)
 
-    // The run node should still be selected (clicking empty canvas = pan start, not deselect)
-    // This is by design — no deselect on empty canvas click
+    // The run node should be deselected — clicking empty canvas clears selection
     const sidebarNode = page.getByTestId('sidebar-node-run-R-241')
-    await expect(sidebarNode).toHaveClass(/bg-primary/)
+    await expect(sidebarNode).not.toHaveClass(/bg-primary/)
   })
 })

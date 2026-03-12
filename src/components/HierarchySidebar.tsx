@@ -60,7 +60,7 @@ function SidebarNode({
   dropTarget: DropTarget | null
   onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
 }) {
-  const { isSelected, isExpanded, isHovered, select, hover, toggleExpand } = useSelection()
+  const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -119,10 +119,14 @@ function SidebarNode({
         data-drag-node-id={node.id}
         data-drag-node-type={node.type}
         onPointerDown={handlePointerDown}
-        onClick={() => {
+        onClick={(e) => {
           if (editing || dragNodeId) return
-          select(node.id, node.type)
-          if (hasChildren) toggleExpand(node.id)
+          if (e.ctrlKey || e.metaKey) {
+            toggleSelect(node.id, node.type)
+          } else {
+            select(node.id, node.type)
+            if (hasChildren) toggleExpand(node.id)
+          }
         }}
         onDoubleClick={() => {
           if (node.type === 'run' && onFocusRun) {
@@ -361,7 +365,7 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent }: HierarchySidebarProps) {
+export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
 
@@ -444,6 +448,32 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
           />
         )}
       </div>
+
+      {/* Arrange section */}
+      {(onArrangeGrid || onArrangeReset) && (
+        <div className="border-t border-white/10 px-3 py-2 flex items-center gap-2">
+          <span className="text-2xs text-slate-500 uppercase tracking-wider">Arrange</span>
+          {onArrangeGrid && (
+            <button
+              className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+              onClick={onArrangeGrid}
+              title="Tile selected in grid (or all if none selected)"
+            >
+              <span className="material-symbols-outlined text-base">grid_view</span>
+            </button>
+          )}
+          {onArrangeReset && (
+            <button
+              className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+              onClick={onArrangeReset}
+              data-testid="arrange-button"
+              title="Reset layout"
+            >
+              <span className="material-symbols-outlined text-base">auto_fix_high</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Floating drag card */}
       {dragState && (

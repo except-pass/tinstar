@@ -10,9 +10,10 @@ interface Props {
   height: number
   zoom: number
   spaceHeldRef: React.RefObject<boolean>
+  selected?: boolean
   onMove: (id: string, x: number, y: number) => void
   onResize: (id: string, w: number, h: number) => void
-  onSelect?: (runId: string) => void
+  onSelect?: (runId: string, additive: boolean) => void
   onDoubleClickZoom?: (runId: string) => void
   onDragStart?: (runId: string) => void
   onDragMove?: (clientX: number, clientY: number) => void
@@ -29,6 +30,7 @@ export function CanvasWidget({
   height,
   zoom,
   spaceHeldRef,
+  selected,
   onMove,
   onResize,
   onSelect,
@@ -109,9 +111,9 @@ export function CanvasWidget({
     resizing.current = false
   }, [])
 
-  const handleClick = useCallback(() => {
+  const handleClick = useCallback((e: React.MouseEvent) => {
     if (!dragMoved.current && !resizeMoved.current && onSelect) {
-      onSelect(run.id)
+      onSelect(run.id, e.ctrlKey || e.metaKey)
     }
   }, [run.id, onSelect])
 
@@ -124,7 +126,7 @@ export function CanvasWidget({
   return (
     <div
       data-testid={`canvas-widget-${run.id}`}
-      className="absolute flex flex-col neon-border bg-surface-base"
+      className={`absolute flex flex-col bg-surface-base ${selected ? 'ring-2 ring-primary shadow-[0_0_12px_rgba(0,240,255,0.3)]' : 'neon-border'}`}
       style={{ left: x, top: y, width, height }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
