@@ -97,6 +97,8 @@ export async function createTmuxSession(
   // Configure tmux
   await execFileAsync('tmux', ['set', '-t', tmuxName, 'status', 'off'])
   await execFileAsync('tmux', ['set', '-t', tmuxName, 'mouse', 'on'])
+  // Ctrl+Backspace: xterm.js sends 0x08 (C-h) — remap to word-erase (C-w)
+  await execFileAsync('tmux', ['bind-key', '-n', 'C-h', 'send-keys', 'C-w'])
 
   // Inject session identity + secrets into tmux environment
   await execFileAsync('tmux', ['set-environment', '-t', tmuxName, 'TINSTAR_SESSION_NAME', opts.session.name])
@@ -314,10 +316,11 @@ export async function installHooks(
   const hookCmd = (endpoint: string) =>
     `if [ -n "$TINSTAR_SESSION_NAME" ]; then curl -s -X POST ${dashboardUrl}/api/hooks/${endpoint} -H 'Content-Type: application/json' -d "{\\"session\\":\\"$TINSTAR_SESSION_NAME\\",\\"conversationId\\":\\"$CLAUDE_SESSION_ID\\"}"; fi`
 
-  // PostToolUse hook for file-touched — extracts file_path from tool input JSON
+  // PostToolUse hook for file-touched — reads tool input JSON from stdin (Claude Code pipes it)
   const fileHookCmd =
-    `if [ -n "$TINSTAR_SESSION_NAME" ] && [ -n "$CLAUDE_TOOL_INPUT" ]; then ` +
-    `FILE_PATH=$(echo "$CLAUDE_TOOL_INPUT" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'); ` +
+    `if [ -n "$TINSTAR_SESSION_NAME" ]; then ` +
+    `HOOK_INPUT=$(cat); ` +
+    `FILE_PATH=$(echo "$HOOK_INPUT" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'); ` +
     `if [ -n "$FILE_PATH" ]; then ` +
     `curl -s -X POST ${dashboardUrl}/api/hooks/file-touched -H 'Content-Type: application/json' -d "{\\"session\\":\\"$TINSTAR_SESSION_NAME\\",\\"path\\":\\"$FILE_PATH\\"}"; ` +
     `fi; fi`

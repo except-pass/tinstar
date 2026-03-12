@@ -32,6 +32,7 @@ import {
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import { parseNewEntries } from '../sessions/transcript-parser'
+import { getGitDiffFiles } from '../sessions/git-diff'
 import type { EntitySettings, GroupingDimension, Run } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import type { FileKind, TouchedFile } from '../../types'
@@ -771,19 +772,19 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         json(res, { ok: true })
 
         // Async transcript parsing (fire-and-forget, after response)
-        if (conversationId) {
-          try {
-            const session = getSession(sessDir, name)
-            const workdir = session?.workspace?.path
-            if (workdir) {
-              const entries = parseNewEntries(name, workdir, conversationId)
-              for (const entry of entries) {
-                ctx.docStore.addRecapEntry(name, entry)
-              }
+        try {
+          const session = getSession(sessDir, name)
+          const workdir = session?.workspace?.path
+          // Use conversationId from hook payload, or fall back to session file
+          const convId = conversationId || session?.conversation?.id
+          if (workdir && convId) {
+            const entries = parseNewEntries(name, workdir, convId)
+            for (const entry of entries) {
+              ctx.docStore.addRecapEntry(name, entry)
             }
-          } catch (err) {
-            log.warn('transcript-parse', `Failed to parse transcript for ${name}: ${err}`)
           }
+        } catch (err) {
+          log.warn('transcript-parse', `Failed to parse transcript for ${name}: ${err}`)
         }
       })
       return true
@@ -808,24 +809,24 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
 
     // POST /api/hooks/file-touched
     if (method === 'POST' && url === '/api/hooks/file-touched') {
-      readBody(req).then((body) => {
-        const { session: name, path: filePath } = JSON.parse(body)
+      readBody(req).then(async (body) => {
+        const { session: name } = JSON.parse(body)
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_SESSION', message: 'Session name required' } }, 400)
-        if (!filePath) return json(res, { ok: true }) // no path, nothing to do
 
-        const fileName = filePath.split('/').pop() ?? filePath
-        const kind = inferFileKind(filePath)
-        const file: TouchedFile = {
-          id: filePath,
-          name: fileName,
-          path: filePath,
-          additions: 0,
-          deletions: 0,
-          kind,
-          pending: true,
-        }
-        ctx.docStore.addFileTouched(name, file)
+        // Respond immediately, then reconcile git state async
         json(res, { ok: true })
+
+        // Reconcile: get real git diff stats for the session's workdir
+        try {
+          const session = getSession(sessDir, name)
+          const workdir = session?.workspace?.path
+          if (workdir) {
+            const files = await getGitDiffFiles(workdir)
+            ctx.docStore.reconcileFiles(name, files)
+          }
+        } catch (err) {
+          log.warn('file-touched', `git diff failed for ${name}: ${(err as Error).message}`)
+        }
       })
       return true
     }

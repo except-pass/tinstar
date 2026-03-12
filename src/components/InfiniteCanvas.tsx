@@ -94,12 +94,14 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   const [reassign, setReassign] = useState<ReassignState | null>(null)
   const groupNodesRef = useRef<TreeNode[]>([])
 
-  // Keep group nodes list and parent map in sync with tree
+  // Keep group nodes list, parent map, and depth map in sync with tree
   const parentMapRef = useRef<Map<string, string | null>>(new Map())
+  const depthMapRef = useRef<Map<string, number>>(new Map())
   useEffect(() => {
     groupNodesRef.current = collectGroupNodes(tree)
     parentMapRef.current = buildParentMap(tree)
-  }, [tree])
+    depthMapRef.current = treeMaps.depthMap
+  }, [tree, treeMaps])
 
   // Center on a widget when focusRunId changes
   useEffect(() => {
@@ -155,7 +157,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
         const parsed = parseNodeId(node.id)
         if (!parsed) continue
         // Prefer deeper (more specific) containers
-        const depth = node.id.split('-').length // rough proxy
+        const depth = depthMapRef.current.get(node.id) ?? 0
         if (!best || depth > best.depth) {
           best = { node, layout, depth }
         }
@@ -176,11 +178,14 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     if (!draggingRunRef.current) return
     const canvas = clientToCanvas(clientX, clientY)
     let target = hitTestGroups(canvas.x, canvas.y)
-    // Don't offer to reassign to the current parent
+    // Don't offer to reassign to any current ancestor
     if (target) {
-      const runNodeId = `run-${draggingRunRef.current}`
-      const currentParent = parentMapRef.current.get(runNodeId)
-      if (currentParent === target.nodeId) target = null
+      let nodeId: string | null = `run-${draggingRunRef.current}`
+      while (nodeId) {
+        const parent = parentMapRef.current.get(nodeId) ?? null
+        if (parent === target.nodeId) { target = null; break }
+        nodeId = parent
+      }
     }
     setDropTarget(prev => {
       if (prev?.nodeId === target?.nodeId) return prev

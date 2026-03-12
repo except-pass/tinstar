@@ -24,6 +24,7 @@ import {
   getSession,
   type TinstarConfig,
 } from './sessions'
+import { getGitDiffFiles } from './sessions/git-diff'
 import { log } from './logger'
 
 function shortId(prefix: string): string {
@@ -87,11 +88,15 @@ export function tinstarBackend(): Plugin {
           docStore.enablePersistence(join(sessionConfig.dirs.root, 'docstore.json'))
 
           // Initialize spaces — ensure at least one exists
+          // Skip _simulator space when not in fast-sim mode (E2E may have left it as active)
           const savedSpaceId = loadActiveSpaceId(sessionConfig.dirs.root)
-          if (savedSpaceId && docStore.getSpace(savedSpaceId)) {
-            docStore.activeSpaceId = savedSpaceId
+          const savedSpace = savedSpaceId ? docStore.getSpace(savedSpaceId) : undefined
+          const isSimSaved = savedSpace?.name === '_simulator'
+          if (savedSpace && (!isSimSaved || fastSim)) {
+            docStore.activeSpaceId = savedSpaceId!
           } else if (docStore.getAllSpaces().length > 0) {
-            docStore.activeSpaceId = docStore.getAllSpaces()[0]!.id
+            const userSpace = docStore.getAllSpaces().find(s => s.name !== '_simulator')
+            docStore.activeSpaceId = (userSpace ?? docStore.getAllSpaces()[0]!).id
           } else {
             const defaultSpace = {
               id: shortId('spc'),
@@ -186,7 +191,7 @@ export function tinstarBackend(): Plugin {
             log.warn('server', `caddy startup failed (terminals will use direct ports): ${(err as Error).message}`)
           })
 
-          // Periodic reconciliation (30s)
+          // Periodic session state reconciliation (30s)
           reconcileTimer = setInterval(() => {
             reconcileSessionStates(cfg.dirs.sessions, {
               getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
@@ -202,6 +207,19 @@ export function tinstarBackend(): Plugin {
               },
             }).catch(err => console.error('[reconcile] error:', (err as Error).message))
           }, 30_000)
+
+          // Periodic git diff reconciliation for running/idle sessions (5s)
+          setInterval(() => {
+            for (const run of docStore.getAllRuns()) {
+              if (run.status !== 'running' && run.status !== 'idle') continue
+              const sess = getSession(cfg.dirs.sessions, run.id)
+              const workdir = sess?.workspace?.path
+              if (!workdir) continue
+              getGitDiffFiles(workdir).then(files => {
+                docStore.reconcileFiles(run.id, files)
+              }).catch(() => { /* git not available or not a repo — skip */ })
+            }
+          }, 5_000)
         } catch (err) {
           log.error('server', 'session initialization failed', { error: (err as Error).message })
           // Session init failed but simulator still needs to run

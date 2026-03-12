@@ -247,17 +247,20 @@ export class DocumentStore {
   }
 
   // --- Snapshot (filtered by active space) ---
+  // Include entities that match the active space OR have no spaceId (homeless).
+  // This ensures nothing silently vanishes from the UI.
 
   snapshot() {
     const sid = this.activeSpaceId
+    const inSpace = (e: { spaceId?: string }) => !sid || !e.spaceId || e.spaceId === sid
     return {
       activeSpaceId: sid,
       spaces: this.getAllSpaces(),
-      initiatives: this.getAllInitiatives().filter(e => !sid || e.spaceId === sid),
-      epics: this.getAllEpics().filter(e => !sid || e.spaceId === sid),
-      tasks: this.getAllTasks().filter(e => !sid || e.spaceId === sid),
-      worktrees: this.getAllWorktrees().filter(e => !sid || e.spaceId === sid),
-      runs: this.getAllRuns().filter(e => !sid || e.spaceId === sid),
+      initiatives: this.getAllInitiatives().filter(inSpace),
+      epics: this.getAllEpics().filter(inSpace),
+      tasks: this.getAllTasks().filter(inSpace),
+      worktrees: this.getAllWorktrees().filter(inSpace),
+      runs: this.getAllRuns().filter(inSpace),
     }
   }
 

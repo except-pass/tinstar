@@ -189,11 +189,17 @@ function WorkspaceShellInner() {
     try {
       const res = await fetch(`/api/${endpoint}/${entityMenu.entityId}/settings`)
       const data = await res.json()
+      const entityLinks: Record<string, string | undefined> = {}
+      if (entityMenu.entityType === 'task') entityLinks.taskId = entityMenu.entityId
+      else if (entityMenu.entityType === 'epic') entityLinks.epicId = entityMenu.entityId
+      else if (entityMenu.entityType === 'initiative') entityLinks.initiativeId = entityMenu.entityId
       if (data.ok) {
         setSessionPrefill({
           ...data.data.resolved,
-          taskId: entityMenu.entityType === 'task' ? entityMenu.entityId : undefined,
+          ...entityLinks,
         })
+      } else {
+        setSessionPrefill(entityLinks)
       }
     } catch { /* ignore */ }
     setShowSessionDialog(true)
@@ -342,7 +348,10 @@ function WorkspaceShellInner() {
             setEntityMenu(null)
           }}
           onAddChild={() => {
-            handleAdd(entityMenu.entityId, entityMenu.entityType)
+            // Add a child of the next dimension level below this entity
+            const idx = dimensions.indexOf(entityMenu.entityType)
+            const childType = idx >= 0 && idx < dimensions.length - 1 ? dimensions[idx + 1] : 'run'
+            handleAdd(entityMenu.entityId, childType)
             setEntityMenu(null)
           }}
           onDelete={() => {

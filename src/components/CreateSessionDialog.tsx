@@ -7,6 +7,8 @@ export interface SessionPrefill {
   skipPermissions?: boolean
   profile?: string
   taskId?: string
+  epicId?: string
+  initiativeId?: string
 }
 
 interface Props {
@@ -25,6 +27,8 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [project, setProject] = useState(prefill?.project ?? '')
   const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
   const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>(prefill?.worktreeMode ?? 'none')
+  const [worktreePath, setWorktreePath] = useState('')
+  const [availableWorktrees, setAvailableWorktrees] = useState<Array<{ path: string; branch?: string }>>([])
   const [skipPermissions, setSkipPermissions] = useState(prefill?.skipPermissions ?? true)
   const [prompt, setPrompt] = useState('')
   const [taskId, setTaskId] = useState(prefill?.taskId ?? '')
@@ -61,6 +65,24 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       .catch(() => {})
   }, [])
 
+  // Fetch existing worktrees when project is selected and mode is 'existing'
+  useEffect(() => {
+    if (!project || worktreeMode !== 'existing') {
+      setAvailableWorktrees([])
+      setWorktreePath('')
+      return
+    }
+    fetch(`/api/projects/${encodeURIComponent(project)}/worktrees`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.ok && Array.isArray(d.data)) {
+          setAvailableWorktrees(d.data)
+          if (d.data.length > 0) setWorktreePath(d.data[0].path)
+        }
+      })
+      .catch(() => {})
+  }, [project, worktreeMode])
+
   const handleSubmit = useCallback(async () => {
     if (!name.trim() || submitting) return
     setSubmitting(true)
@@ -73,8 +95,11 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
     }
     if (project) body.project = project
     if (worktreeMode === 'new') body.worktree = true
+    if (worktreeMode === 'existing' && worktreePath) body.worktreePath = worktreePath
     if (prompt.trim()) body.prompt = prompt.trim()
     if (taskId) body.taskId = taskId
+    if (prefill?.epicId) body.epicId = prefill.epicId
+    if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
 
     try {
       const res = await fetch('/api/sessions', {
@@ -93,7 +118,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       setError((err as Error).message)
       setSubmitting(false)
     }
-  }, [name, backend, project, worktreeMode, skipPermissions, prompt, submitting, onClose])
+  }, [name, backend, project, worktreeMode, worktreePath, skipPermissions, prompt, submitting, onClose])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -188,6 +213,28 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Existing worktree picker */}
+        {project && worktreeMode === 'existing' && (
+          <div className="mb-3">
+            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Select Worktree</label>
+            {availableWorktrees.length === 0 ? (
+              <div className="text-xs text-slate-500 italic px-1">No existing worktrees found for this project</div>
+            ) : (
+              <select
+                value={worktreePath}
+                onChange={e => setWorktreePath(e.target.value)}
+                className="w-full px-3 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
+              >
+                {availableWorktrees.map(wt => (
+                  <option key={wt.path} value={wt.path}>
+                    {wt.branch ?? wt.path.split('/').pop() ?? wt.path}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         )}
 

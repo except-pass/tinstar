@@ -32,8 +32,13 @@ export function useCanvasCamera() {
 
   // Track space key for space+drag panning, Alt+Z for reset zoom
   useEffect(() => {
+    const isEditable = (el: EventTarget | null): boolean => {
+      if (!el || !(el instanceof HTMLElement)) return false
+      const tag = el.tagName
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
+    }
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat) {
+      if (e.code === 'Space' && !e.repeat && !isEditable(e.target)) {
         e.preventDefault()
         spaceHeld.current = true
         updateCursor()
