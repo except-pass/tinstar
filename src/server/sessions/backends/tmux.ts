@@ -312,7 +312,15 @@ export async function installHooks(
   // Non-managed Claude instances (e.g. the user's own session) won't have it, so the curl
   // sends an empty name and the server rejects it — no false state updates.
   const hookCmd = (endpoint: string) =>
-    `if [ -n "$TINSTAR_SESSION_NAME" ]; then curl -s -X POST ${dashboardUrl}/api/hooks/${endpoint} -H 'Content-Type: application/json' -d "{\\"session\\":\\"$TINSTAR_SESSION_NAME\\"}"; fi`
+    `if [ -n "$TINSTAR_SESSION_NAME" ]; then curl -s -X POST ${dashboardUrl}/api/hooks/${endpoint} -H 'Content-Type: application/json' -d "{\\"session\\":\\"$TINSTAR_SESSION_NAME\\",\\"conversationId\\":\\"$CLAUDE_SESSION_ID\\"}"; fi`
+
+  // PostToolUse hook for file-touched — extracts file_path from tool input JSON
+  const fileHookCmd =
+    `if [ -n "$TINSTAR_SESSION_NAME" ] && [ -n "$CLAUDE_TOOL_INPUT" ]; then ` +
+    `FILE_PATH=$(echo "$CLAUDE_TOOL_INPUT" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'); ` +
+    `if [ -n "$FILE_PATH" ]; then ` +
+    `curl -s -X POST ${dashboardUrl}/api/hooks/file-touched -H 'Content-Type: application/json' -d "{\\"session\\":\\"$TINSTAR_SESSION_NAME\\",\\"path\\":\\"$FILE_PATH\\"}"; ` +
+    `fi; fi`
 
   const tinstarHooks: Record<string, Array<Record<string, unknown>>> = {
     Stop: [{
@@ -324,6 +332,10 @@ export async function installHooks(
     }],
     UserPromptSubmit: [{
       hooks: [{ type: 'command', command: hookCmd('active') }],
+    }],
+    PostToolUse: [{
+      matcher: 'Write|Edit',
+      hooks: [{ type: 'command', command: fileHookCmd }],
     }],
   }
 

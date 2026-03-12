@@ -48,10 +48,16 @@ export default {
           '0%': { transform: 'translateY(-100%)' },
           '100%': { transform: 'translateY(100%)' },
         },
+        'shimmer': {
+          '0%': { opacity: '0.3' },
+          '50%': { opacity: '0.8' },
+          '100%': { opacity: '0.3' },
+        },
       },
       animation: {
         'pulse-glow': 'pulse-glow 2s ease-in-out infinite',
         'scan': 'scan 8s linear infinite',
+        'shimmer': 'shimmer 1.5s ease-in-out infinite',
       },
     },
   },

@@ -1,7 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 
+export interface SessionPrefill {
+  project?: string
+  backend?: 'docker' | 'tmux'
+  worktreeMode?: 'none' | 'new' | 'existing'
+  skipPermissions?: boolean
+  profile?: string
+  taskId?: string
+}
+
 interface Props {
   onClose: () => void
+  prefill?: SessionPrefill
 }
 
 type Backend = 'docker' | 'tmux'
@@ -9,15 +19,15 @@ type WorktreeMode = 'none' | 'new' | 'existing'
 
 interface EntityOption { id: string; name: string }
 
-export function CreateSessionDialog({ onClose }: Props) {
+export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [name, setName] = useState('')
-  const [backend, setBackend] = useState<Backend>('tmux')
-  const [project, setProject] = useState('')
+  const [backend, setBackend] = useState<Backend>(prefill?.backend ?? 'tmux')
+  const [project, setProject] = useState(prefill?.project ?? '')
   const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
-  const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>('none')
-  const [skipPermissions, setSkipPermissions] = useState(true)
+  const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>(prefill?.worktreeMode ?? 'none')
+  const [skipPermissions, setSkipPermissions] = useState(prefill?.skipPermissions ?? true)
   const [prompt, setPrompt] = useState('')
-  const [taskId, setTaskId] = useState('')
+  const [taskId, setTaskId] = useState(prefill?.taskId ?? '')
   const [entities, setEntities] = useState<{ initiatives: EntityOption[]; epics: EntityOption[]; tasks: EntityOption[] }>({ initiatives: [], epics: [], tasks: [] })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)

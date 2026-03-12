@@ -28,6 +28,7 @@ interface Props {
   onResize: (id: string, w: number, h: number) => void
   onShrinkToFit?: (id: string) => void
   onDelete?: (id: string) => void
+  onMenuOpen?: (nodeId: string, anchorRect: DOMRect) => void
   highlighted?: boolean
 }
 
@@ -48,6 +49,7 @@ export function GroupContainer({
   onResize,
   onShrinkToFit,
   onDelete,
+  onMenuOpen,
   highlighted = false,
 }: Props) {
   const dragging = useRef(false)
@@ -153,7 +155,21 @@ export function GroupContainer({
         <span className="text-xs font-display uppercase tracking-wider text-primary/50 flex-1">
           {icon} {label}
         </span>
-        {onDelete && (
+        {onMenuOpen && (
+          <button
+            className="w-5 h-5 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover/header:opacity-100 transition-opacity cursor-pointer"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+              onMenuOpen(nodeId, rect)
+            }}
+            data-testid={`menu-group-${nodeId}`}
+            aria-label={`Menu for ${label}`}
+          >
+            ⋮
+          </button>
+        )}
+        {onDelete && !onMenuOpen && (
           <button
             className="w-5 h-5 flex items-center justify-center text-slate-500 hover:text-red-400 opacity-0 group-hover/header:opacity-100 transition-opacity cursor-pointer"
             onPointerDown={(e) => e.stopPropagation()}

@@ -34,6 +34,7 @@ export interface TouchedFile {
   additions: number
   deletions: number
   kind: FileKind
+  pending?: boolean
 }
 
 export interface Procedure {

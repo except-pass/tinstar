@@ -30,6 +30,20 @@ import {
   addRoute,
   removeRoute,
 } from '../sessions'
+import { resolveEntitySettings } from '../sessions/entity-settings'
+import { parseNewEntries } from '../sessions/transcript-parser'
+import type { EntitySettings, GroupingDimension } from '../../domain/types'
+import type { FileKind, TouchedFile } from '../../types'
+
+function inferFileKind(filePath: string): FileKind {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
+  const name = filePath.split('/').pop()?.toLowerCase() ?? ''
+  if (name.includes('.test.') || name.includes('.spec.') || name.startsWith('test_') || filePath.includes('__tests__') || filePath.includes('/e2e/')) return 'test'
+  if (['sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd'].includes(ext)) return 'script'
+  if (['md', 'txt', 'rst', 'adoc'].includes(ext)) return 'doc'
+  if (['json', 'yaml', 'yml', 'toml', 'ini', 'env', 'cfg', 'conf'].includes(ext) || name.startsWith('.')) return 'config'
+  return 'code'
+}
 
 export interface RouteContext {
   docStore: DocumentStore
@@ -51,6 +65,24 @@ function json(res: ServerResponse, data: unknown, status = 200): void {
 
 function shortId(prefix: string): string {
   return `${prefix}-${randomUUID().slice(0, 8)}`
+}
+
+/** Deep-merge entity patch with special handling for settings sub-object.
+ * - settings keys with null values are stripped (returns to "inherit" state)
+ * - settings sub-object is merged, not replaced
+ */
+function deepMergeEntity<T extends Record<string, unknown>>(existing: T, patch: Record<string, unknown>): T {
+  const result = { ...existing, ...patch }
+  if (patch.settings && typeof patch.settings === 'object') {
+    const existingSettings = (existing as Record<string, unknown>).settings as Record<string, unknown> | undefined
+    const mergedSettings = { ...existingSettings, ...patch.settings as Record<string, unknown> }
+    // Strip null-valued keys (clearing local override)
+    for (const key of Object.keys(mergedSettings)) {
+      if (mergedSettings[key] === null) delete mergedSettings[key]
+    }
+    ;(result as Record<string, unknown>).settings = Object.keys(mergedSettings).length > 0 ? mergedSettings : undefined
+  }
+  return result
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -189,6 +221,33 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     return true
   }
 
+  // GET /api/initiatives/:id/settings
+  if (method === 'GET' && /^\/api\/initiatives\/[^/]+\/settings$/.test(url)) {
+    const id = url.slice('/api/initiatives/'.length, url.lastIndexOf('/settings'))
+    const result = resolveEntitySettings(id, 'initiative', ctx.docStore)
+    if (!result) return json(res, { error: 'not found' }, 404)
+    json(res, { ok: true, data: result })
+    return true
+  }
+
+  // GET /api/epics/:id/settings
+  if (method === 'GET' && /^\/api\/epics\/[^/]+\/settings$/.test(url)) {
+    const id = url.slice('/api/epics/'.length, url.lastIndexOf('/settings'))
+    const result = resolveEntitySettings(id, 'epic', ctx.docStore)
+    if (!result) return json(res, { error: 'not found' }, 404)
+    json(res, { ok: true, data: result })
+    return true
+  }
+
+  // GET /api/tasks/:id/settings
+  if (method === 'GET' && /^\/api\/tasks\/[^/]+\/settings$/.test(url)) {
+    const id = url.slice('/api/tasks/'.length, url.lastIndexOf('/settings'))
+    const result = resolveEntitySettings(id, 'task', ctx.docStore)
+    if (!result) return json(res, { error: 'not found' }, 404)
+    json(res, { ok: true, data: result })
+    return true
+  }
+
   // PATCH /api/initiatives/:id
   if (method === 'PATCH' && url.startsWith('/api/initiatives/')) {
     const id = url.slice('/api/initiatives/'.length)
@@ -196,7 +255,8 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       const existing = ctx.docStore.getInitiative(id)
       if (!existing) return json(res, { error: 'not found' }, 404)
       const patch = JSON.parse(body)
-      ctx.docStore.upsertInitiative(id, { ...existing, ...patch })
+      const merged = deepMergeEntity(existing, patch)
+      ctx.docStore.upsertInitiative(id, merged)
       json(res, { ok: true, data: ctx.docStore.getInitiative(id) })
     })
     return true
@@ -209,7 +269,8 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       const existing = ctx.docStore.getEpic(id)
       if (!existing) return json(res, { error: 'not found' }, 404)
       const patch = JSON.parse(body)
-      ctx.docStore.upsertEpic(id, { ...existing, ...patch })
+      const merged = deepMergeEntity(existing, patch)
+      ctx.docStore.upsertEpic(id, merged)
       json(res, { ok: true, data: ctx.docStore.getEpic(id) })
     })
     return true
@@ -222,7 +283,8 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       const existing = ctx.docStore.getTask(id)
       if (!existing) return json(res, { error: 'not found' }, 404)
       const patch = JSON.parse(body)
-      ctx.docStore.upsertTask(id, { ...existing, ...patch })
+      const merged = deepMergeEntity(existing, patch)
+      ctx.docStore.upsertTask(id, merged)
       json(res, { ok: true, data: ctx.docStore.getTask(id) })
     })
     return true
@@ -612,13 +674,29 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     // POST /api/hooks/idle
     if (method === 'POST' && url === '/api/hooks/idle') {
       readBody(req).then((body) => {
-        const { session: name } = JSON.parse(body)
+        const { session: name, conversationId } = JSON.parse(body)
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_SESSION', message: 'Session name required' } }, 400)
 
         setState(sessDir, name, 'idle')
         ctx.docStore.updateRunStatus(name, 'idle')
         emitSessionEvent('managed_session.state_changed', { name, state: 'idle' })
         json(res, { ok: true })
+
+        // Async transcript parsing (fire-and-forget, after response)
+        if (conversationId) {
+          try {
+            const session = getSession(sessDir, name)
+            const workdir = session?.workspace?.path
+            if (workdir) {
+              const entries = parseNewEntries(name, workdir, conversationId)
+              for (const entry of entries) {
+                ctx.docStore.addRecapEntry(name, entry)
+              }
+            }
+          } catch (err) {
+            log.warn('transcript-parse', `Failed to parse transcript for ${name}: ${err}`)
+          }
+        }
       })
       return true
     }
@@ -635,6 +713,30 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         if (!prev || prev.state !== 'running') {
           emitSessionEvent('managed_session.state_changed', { name, state: 'running' })
         }
+        json(res, { ok: true })
+      })
+      return true
+    }
+
+    // POST /api/hooks/file-touched
+    if (method === 'POST' && url === '/api/hooks/file-touched') {
+      readBody(req).then((body) => {
+        const { session: name, path: filePath } = JSON.parse(body)
+        if (!name) return json(res, { ok: false, error: { code: 'MISSING_SESSION', message: 'Session name required' } }, 400)
+        if (!filePath) return json(res, { ok: true }) // no path, nothing to do
+
+        const fileName = filePath.split('/').pop() ?? filePath
+        const kind = inferFileKind(filePath)
+        const file: TouchedFile = {
+          id: filePath,
+          name: fileName,
+          path: filePath,
+          additions: 0,
+          deletions: 0,
+          kind,
+          pending: true,
+        }
+        ctx.docStore.addFileTouched(name, file)
         json(res, { ok: true })
       })
       return true

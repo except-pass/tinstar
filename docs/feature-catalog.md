@@ -61,9 +61,32 @@ Group containers are recursive nesting boxes driven by the active grouping dimen
 - **Shrink to fit**: Double-click a container to snap it to its minimum size (recursive bottom-up shrink)
 - **Group drag**: Dragging a container header moves it and all descendants (children, grandchildren, etc.) by the same delta
 
+### Entity Context Menu (⋮ Kebab)
+- **Trigger**: Hover-revealed ⋮ button on sidebar nodes and canvas group container headers
+- **Menu items**: Start Session (blue), Settings..., Rename, Add Child, Delete (red with inline confirmation)
+- **Delete confirmation**: First click shows "Delete {name}? Children will be ungrouped." with Delete/Cancel buttons
+- **Worktree nodes**: Hide "Start Session" and "Settings..." items (not applicable)
+- **Positioning**: Fixed position below the anchor button, aligned left
+- **Close behavior**: Click-outside or Escape key
+- **Replaces**: Individual ✏/+/× buttons on sidebar and canvas (backward-compatible fallback when `onMenuOpen` not provided)
+
+### Entity Settings & Inheritance
+- **Dialog**: Modal opened via "Settings..." in entity context menu
+- **Inheritance chain**: Task > Epic > Initiative (closest-ancestor-wins)
+- **Settings**: Project, Backend (docker/tmux), Worktree (none/new/existing), Skip Permissions, Profile
+- **Visual language**:
+  - **Cyan**: Local override (set on this entity)
+  - **Amber pill**: Inherited from ancestor (shows source entity name)
+  - **Gray italic**: Not set at any level
+- **Opt-in overrides**: Checkbox to enable local override, then value controls appear
+- **Immediate save**: Every change PATCHes immediately (no save button)
+- **Deep merge**: PATCH requests merge `settings` sub-object; `null` values clear overrides
+- **API**: `GET /api/{initiatives|epics|tasks}/:id/settings` returns `{ resolved, sources, local }`
+- **Prefill**: "Start Session" from context menu fetches resolved settings and pre-fills CreateSessionDialog
+
 ### Entity Deletion
-- **Canvas**: Close button (×) in upper-right of container header, hover-revealed, red on hover
-- **Sidebar**: Delete button (×) after the add (+) button on non-run nodes, hover-revealed, red on hover
+- **Canvas**: Via context menu → Delete with confirmation
+- **Sidebar**: Via context menu → Delete with confirmation
 - **API**: `DELETE /api/{initiatives|epics|tasks|worktrees}/:id` — removes the entity from DocumentStore
 - **Orphan behavior**: Children of deleted entities become orphans — they appear under the "Ungrouped" separator in the sidebar and float to root level on the canvas
 - **No cascade**: Only the targeted entity is deleted; children, grandchildren, and runs are preserved
@@ -134,18 +157,24 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 
 ### Left Panel — Touched Files
 - File list with icons by kind (code, config, test, script, doc)
-- Addition/deletion counters (green/red)
+- Addition/deletion counters (green/red) — only reconciled files count toward totals
 - Total additions/deletions in header
 - Click to select a file (left border highlight)
 - Collapsible — collapses to thin 6px vertical tab with rotated label
 - Default selection: 3rd file if available
+- **Optimistic updates**: Files appear instantly via PostToolUse hook with shimmer animation on stats
+- **Reconciliation**: Git diff resolves real +/- stats after 2s of hook silence; shimmer stops and stats fade in
+- **Shimmer**: 1.5s ease-in-out pulse animation on pending file stats
 
 ### Center Panel — Session (Recap / Raw Logs / Terminal)
 - **Terminal**: Embedded ttyd iframe showing the live Claude Code session via Caddy proxy (`/s/{sessionId}/`)
-- **Recap tab**: Threaded messages
+- **Recap tab**: Threaded messages populated from Claude Code's conversation transcript
   - Agent messages: smart_toy icon, timestamps, inline diffs
   - User messages: person icon, right-aligned, bordered
   - Status messages: gradient divider with pulsing dot
+  - **Transcript parsing**: On Stop hook, reads JSONL transcript from `~/.claude/projects/{encoded-workdir}/{conversationId}.jsonl`, extracts user prompts and agent text blocks, skips tool_use/thinking/progress entries
+  - **Incremental**: Tracks last-read offset per session; only parses new entries each time
+  - **Zero token cost**: Reads existing transcript files, no API calls
 - **Raw Logs tab**: Colored keywords (PASS=green, FAIL=red, bench:=amber)
 - **Diff view**: Inline diffs with +/- coloring, filename header, chunk headers
 - Auto-scrolls to bottom on tab switch
@@ -173,10 +202,19 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 ### Interactions
 - **Click node**: Select it; toggle expand/collapse if it has children
 - **Double-click run node**: Center canvas viewport on that run (zoom-to-fit)
-- **Hover node**: Highlight background, reveal "+" add button and pencil rename button
-- **Click "+" button**: Add child of next type based on dimensions array (dynamic — e.g., if dimensions are `[initiative, task]`, initiative's child type is task)
-- **Click pencil button**: Inline rename — replaces label with text input, Enter to commit, Escape to cancel
+- **Hover node**: Highlight background, reveal ⋮ kebab menu button
+- **Kebab menu (⋮)**: Context menu with Start Session, Settings, Rename, Add Child, Delete
 - **Root "+" button**: Adds a node of the first active dimension type
+
+### Drag-and-Drop Reordering
+- **Drag start**: Click-hold + 4px movement on a non-run node starts drag
+- **Floating drag card**: Shows entity icon + label at cursor position (opacity 0.85)
+- **Drop targets**: Insert before/after (cyan line indicator) or nest inside (ring highlight)
+- **Nest detection**: Cursor shifted right of indent zone or hovering center of row
+- **Auto-expand**: Hovering over collapsed group for 500ms expands it
+- **Edge scrolling**: Approaching top/bottom of panel auto-scrolls
+- **Constraints**: Cannot drop into self or descendants
+- **Reparent**: Drop triggers PATCH to update parent FK (e.g. epic.initiativeId, task.epicId)
 
 ### Canvas → Sidebar Sync
 - **Click a canvas widget**: Selects the corresponding run in the hierarchy and expands all ancestor nodes
@@ -232,6 +270,85 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 | Scroll / two-finger swipe | Pan the canvas |
 | Ctrl+scroll / pinch | Zoom in/out toward cursor |
 | Alt+Z | Reset zoom to 100% |
+
+---
+
+## Dialogs
+
+### CreateSessionDialog
+- Modal for creating new Claude Code sessions
+- **Backend selection**: Docker or Tmux toggle
+- **Project picker**: Dropdown of registered projects (from `GET /api/projects`)
+- **Worktree mode**: None / New / Existing — "New" creates a fresh git worktree, "Existing" lets you pick one
+- **Initial prompt**: Optional text sent to Claude on session start
+- **Task assignment**: Optional dropdown to assign session to a task
+- **One-shot mode** (Docker only): Single-prompt execution, session auto-closes on completion
+- **Skip permissions**: Toggle to pass `--dangerously-skip-permissions` to Claude
+- **Submit**: `Ctrl/Cmd+Enter` keyboard shortcut
+
+### CreateEntityDialog
+- Generic modal for creating initiatives, epics, tasks, and worktrees
+- Parent relationship selection based on entity type
+
+### ReassignDialog
+- Confirmation modal for drag-to-reassign operations
+- Shows run ID, target entity type, and target name
+- "Move" to confirm, "Cancel" to abort
+
+### SettingsDialog
+- Project management: view, add, and remove registered projects
+- Each project shows name and path
+
+---
+
+## Real-Time Data (SSE)
+
+### Server-Sent Events (`/api/events`)
+- **Snapshot on connect**: Full state (initiatives, epics, tasks, worktrees, runs) sent immediately when client connects
+- **Delta updates**: Incremental changes broadcast as `{ eventType, entity, id, data }` — supports create, update, and delete (data=null)
+- **Heartbeat**: Every 15 seconds to keep connection alive
+- **Client reconnection**: Browser EventSource auto-reconnects; gets fresh snapshot on reconnect
+
+### Event Bus (`src/server/event-bus.ts`)
+- Node.js EventEmitter wrapper with typed events
+- Event types: `session.*`, `taxonomy.sync`, `run.*`, `otel.*`, `managed_session.*`
+- Wildcard listener support
+
+---
+
+## Simulator (Dev/Test Mode)
+
+- **Activation**: `TINSTAR_FAST_SIM=1` env var
+- **Behavior**: Emits all mock events synchronously at startup (speedMultiplier=0)
+- **Mock data**: 3 initiatives, 6 epics, 10 tasks, 4 worktrees, 14 runs with staggered creation times
+- **Content**: Files, procedures, and recap entries trickle in with realistic timing offsets
+- **API controls**: `POST /api/simulator/start` (manual start), `POST /api/simulator/reset` (clear and reset)
+- **Persistence interaction**: When `TINSTAR_FAST_SIM=1`, clears persisted store before running to ensure clean mock state
+
+---
+
+## Observability (OTel)
+
+- **Span storage**: `POST` spans via event bus → OTelStore
+- **Query endpoints**: `GET /api/otel/spans` (optional `?traceId=`), `GET /api/otel/metrics` (optional `?name=`)
+- **Processor**: `OTelProcessor` listens for `otel.*` events and stores in `OTelStore`
+
+---
+
+## Entity CRUD API
+
+### Creation Routes
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/initiatives` | POST | Create initiative (name, color) |
+| `/api/epics` | POST | Create epic (name, initiativeId) |
+| `/api/tasks` | POST | Create task (name, epicId, initiativeId) |
+| `/api/worktrees` | POST | Create worktree (name) |
+
+### State Endpoint
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/api/state` | GET | Full document store snapshot |
 
 ---
 
@@ -312,6 +429,10 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 | 30 | `/api/epics/:id` | PATCH | **done** |
 | 31 | `/api/tasks/:id` | PATCH | **done** |
 | 32 | `/api/worktrees/:id` | PATCH | **done** |
+| 33a | `/api/initiatives/:id/settings` | GET | **done** |
+| 33b | `/api/epics/:id/settings` | GET | **done** |
+| 33c | `/api/tasks/:id/settings` | GET | **done** |
+| 34 | `/api/hooks/file-touched` | POST | **done** |
 
 ### Integration
 
@@ -389,7 +510,8 @@ API Routes → Session CRUD → Backend (Docker | Tmux)
 - **Hooks**:
   - `PreToolUse` → `POST /api/hooks/active` → sets status to `'running'`
   - `UserPromptSubmit` → `POST /api/hooks/active` → sets status to `'running'`
-  - `Stop` → `POST /api/hooks/idle` → sets status to `'idle'`
+  - `Stop` → `POST /api/hooks/idle` → sets status to `'idle'`, triggers transcript parsing for recap entries
+  - `PostToolUse` (Write|Edit) → `POST /api/hooks/file-touched` → adds file to touchedFiles with `pending: true`
 - **Bridge**: Hook endpoints call both `setState()` (disk) and `docStore.updateRunStatus()` (in-memory + SSE)
 - **Initial status**: New sessions start as `'creating'`, hooks transition to `'running'`/`'idle'`
 

@@ -14,6 +14,7 @@ interface Props {
   onSelectRun?: (runId: string) => void
   onFocusRun?: (runId: string) => void
   onDeleteEntity?: (entityId: string, type: string) => void
+  onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
 }
 
 /** Extract entity type and ID from a tree node ID like "initiative-abc123" */
@@ -21,6 +22,18 @@ function parseNodeId(nodeId: string): { type: string; entityId: string } | null 
   const dash = nodeId.indexOf('-')
   if (dash === -1) return null
   return { type: nodeId.slice(0, dash), entityId: nodeId.slice(dash + 1) }
+}
+
+/** Find a node's label by its ID in the tree */
+function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
+  for (const node of nodes) {
+    if (node.id === targetId) return node.label
+    if (node.children.length > 0) {
+      const found = findNodeLabel(node.children, targetId)
+      if (found) return found
+    }
+  }
+  return null
 }
 
 /** Find all group (non-run) nodes in the tree */
@@ -59,7 +72,7 @@ interface ReassignState {
   target: DropTarget
 }
 
-export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity }: Props) {
+export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -226,6 +239,15 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSel
     if (parsed) onDeleteEntity(parsed.entityId, parsed.type)
   }, [onDeleteEntity])
 
+  const handleMenuOpenGroup = useCallback((nodeId: string, anchorRect: DOMRect) => {
+    if (!onMenuOpen) return
+    const parsed = parseNodeId(nodeId)
+    if (!parsed) return
+    // Find the node label from the tree
+    const label = findNodeLabel(tree, nodeId) ?? nodeId
+    onMenuOpen(parsed.entityId, parsed.type as GroupingDimension, label, anchorRect)
+  }, [onMenuOpen, tree])
+
   // Recursive render: groups render behind their children (natural DOM order)
   function renderNode(node: TreeNode, depth: number): React.ReactNode {
     if (node.type === 'run') {
@@ -274,6 +296,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, onFocusHandled, onSel
         onResize={resizeNode}
         onShrinkToFit={shrinkNode}
         onDelete={handleDeleteGroup}
+        onMenuOpen={handleMenuOpenGroup}
         highlighted={dropTarget?.nodeId === node.id}
       />
     )

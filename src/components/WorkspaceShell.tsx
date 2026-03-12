@@ -9,6 +9,8 @@ import { GroupingControls } from './GroupingControls'
 import HierarchySidebar from './HierarchySidebar'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { SelectionProvider, useSelection } from './SelectionProvider'
+import { EntityMenu } from './EntityMenu'
+import { EntitySettingsDialog } from './EntitySettingsDialog'
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
 function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
@@ -54,6 +56,13 @@ function WorkspaceShellInner() {
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
   const [showSessionDialog, setShowSessionDialog] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [entityMenu, setEntityMenu] = useState<{
+    entityId: string; entityType: GroupingDimension; entityName: string; anchorRect: DOMRect
+  } | null>(null)
+  const [entitySettingsDialog, setEntitySettingsDialog] = useState<{
+    entityId: string; entityType: GroupingDimension; entityName: string
+  } | null>(null)
+  const [sessionPrefill, setSessionPrefill] = useState<{ taskId?: string } | null>(null)
   const { select, expandAll } = useSelection()
 
   const handleDimensionsChange = useCallback((dims: GroupingDimension[]) => {
@@ -96,6 +105,78 @@ function WorkspaceShellInner() {
     const parentType = typeIdx > 0 ? dimensions[typeIdx - 1] : null
     setCreateDialog({ parentId, parentType, childType: type })
   }, [dimensions])
+
+  const handleReparent = useCallback((entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => {
+    const endpointMap: Record<string, string> = {
+      initiative: '/api/initiatives',
+      epic: '/api/epics',
+      task: '/api/tasks',
+      run: '/api/runs',
+    }
+    const endpoint = endpointMap[entityType]
+    if (!endpoint) return
+
+    // Build patch based on entity type and target parent
+    const patch: Record<string, string | null> = {}
+    if (entityType === 'epic') {
+      // Epics can be reparented to an initiative
+      patch.initiativeId = newParentType === 'initiative' ? newParentId : null
+    } else if (entityType === 'task') {
+      // Tasks can be reparented to an epic or initiative
+      if (newParentType === 'epic') {
+        patch.epicId = newParentId
+      } else if (newParentType === 'initiative') {
+        patch.epicId = null
+        patch.initiativeId = newParentId
+      } else {
+        patch.epicId = null
+        patch.initiativeId = null
+      }
+    } else if (entityType === 'run') {
+      // Runs can be reparented to a task
+      patch.taskId = newParentType === 'task' ? newParentId : null
+    }
+
+    fetch(`${endpoint}/${entityId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+  }, [])
+
+  const handleMenuOpen = useCallback((entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => {
+    setEntityMenu({ entityId, entityType, entityName, anchorRect })
+  }, [])
+
+  const handleMenuStartSession = useCallback(async () => {
+    if (!entityMenu) return
+    // Resolve settings for the entity and pre-fill the session dialog
+    const typeMap: Record<string, string> = { initiative: 'initiatives', epic: 'epics', task: 'tasks' }
+    const endpoint = typeMap[entityMenu.entityType]
+    if (!endpoint) {
+      setShowSessionDialog(true)
+      return
+    }
+    try {
+      const res = await fetch(`/api/${endpoint}/${entityMenu.entityId}/settings`)
+      const data = await res.json()
+      if (data.ok) {
+        setSessionPrefill({
+          ...data.data.resolved,
+          taskId: entityMenu.entityType === 'task' ? entityMenu.entityId : undefined,
+        })
+      }
+    } catch { /* ignore */ }
+    setShowSessionDialog(true)
+  }, [entityMenu])
+
+  const handleMenuRename = useCallback(() => {
+    // Trigger inline rename in sidebar — just select the node first
+    if (entityMenu) {
+      const nodeId = `${entityMenu.entityType}-${entityMenu.entityId}`
+      select(nodeId, entityMenu.entityType)
+    }
+  }, [entityMenu, select])
 
   const handleFocusRun = useCallback((runId: string) => {
     setFocusRunId(runId)
@@ -166,6 +247,8 @@ function WorkspaceShellInner() {
             onRename={handleRename}
             onDelete={handleDelete}
             onFocusRun={handleFocusRun}
+            onMenuOpen={handleMenuOpen}
+            onReparent={handleReparent}
           />
         </div>
 
@@ -179,6 +262,7 @@ function WorkspaceShellInner() {
             onSelectRun={handleSelectRun}
             onFocusRun={handleCanvasFocusRun}
             onDeleteEntity={handleDelete}
+            onMenuOpen={handleMenuOpen}
           />
         </div>
       </div>
@@ -191,11 +275,54 @@ function WorkspaceShellInner() {
       )}
 
       {showSessionDialog && (
-        <CreateSessionDialog onClose={() => setShowSessionDialog(false)} />
+        <CreateSessionDialog
+          onClose={() => { setShowSessionDialog(false); setSessionPrefill(null) }}
+          prefill={sessionPrefill ?? undefined}
+        />
       )}
 
       {showSettings && (
         <SettingsDialog onClose={() => setShowSettings(false)} />
+      )}
+
+      {entityMenu && (
+        <EntityMenu
+          entityId={entityMenu.entityId}
+          entityType={entityMenu.entityType}
+          entityName={entityMenu.entityName}
+          anchorRect={entityMenu.anchorRect}
+          onStartSession={handleMenuStartSession}
+          onSettings={() => {
+            setEntitySettingsDialog({
+              entityId: entityMenu.entityId,
+              entityType: entityMenu.entityType,
+              entityName: entityMenu.entityName,
+            })
+            setEntityMenu(null)
+          }}
+          onRename={() => {
+            handleMenuRename()
+            setEntityMenu(null)
+          }}
+          onAddChild={() => {
+            handleAdd(entityMenu.entityId, entityMenu.entityType)
+            setEntityMenu(null)
+          }}
+          onDelete={() => {
+            handleDelete(entityMenu.entityId, entityMenu.entityType)
+            setEntityMenu(null)
+          }}
+          onClose={() => setEntityMenu(null)}
+        />
+      )}
+
+      {entitySettingsDialog && (
+        <EntitySettingsDialog
+          entityId={entitySettingsDialog.entityId}
+          entityType={entitySettingsDialog.entityType}
+          entityName={entitySettingsDialog.entityName}
+          onClose={() => setEntitySettingsDialog(null)}
+        />
       )}
     </div>
   )

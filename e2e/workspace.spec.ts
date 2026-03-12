@@ -4,7 +4,7 @@ test.describe('Workspace Structure', () => {
   test.beforeEach(async ({ page }) => {
     // Clear persisted layouts so tests start with default arrangement
     await page.goto('/')
-    await page.evaluate(() => localStorage.removeItem('qala-uiv2-layouts-v3'))
+    await page.evaluate(() => localStorage.removeItem('tinstar-layouts-v3'))
     await page.reload()
     await page.waitForTimeout(400)
   })
@@ -32,7 +32,7 @@ test.describe('Workspace Structure', () => {
 test.describe('Hierarchy Sidebar', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
-    await page.evaluate(() => localStorage.removeItem('qala-uiv2-layouts-v3'))
+    await page.evaluate(() => localStorage.removeItem('tinstar-layouts-v3'))
     await page.reload()
     await page.waitForTimeout(400)
   })
@@ -106,7 +106,7 @@ test.describe('Hierarchy Sidebar', () => {
 test.describe('Grouping Controls', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
-    await page.evaluate(() => localStorage.removeItem('qala-uiv2-layouts-v3'))
+    await page.evaluate(() => localStorage.removeItem('tinstar-layouts-v3'))
     await page.reload()
     await page.waitForTimeout(400)
   })
@@ -200,7 +200,7 @@ test.describe('Grouping Controls', () => {
 test.describe('Canvas ↔ Sidebar Sync', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
-    await page.evaluate(() => localStorage.removeItem('qala-uiv2-layouts-v3'))
+    await page.evaluate(() => localStorage.removeItem('tinstar-layouts-v3'))
     await page.reload()
     await page.waitForTimeout(400)
   })

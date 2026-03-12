@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import type { TreeNode, GroupingDimension } from '../domain/types'
 import { getDimensionIcon } from '../domain/dimension-meta'
 import { useSelection } from './SelectionProvider'
+import { useSidebarDrag, type DropTarget } from '../hooks/useSidebarDrag'
 
 interface HierarchySidebarProps {
   tree: TreeNode[]
@@ -10,6 +11,8 @@ interface HierarchySidebarProps {
   onRename: (entityId: string, type: GroupingDimension, newName: string) => void
   onDelete: (entityId: string, type: GroupingDimension) => void
   onFocusRun?: (runId: string) => void
+  onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
+  onReparent?: (entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => void
 }
 
 /** Return inline style for a colored status dot on run nodes */
@@ -33,6 +36,10 @@ function SidebarNode({
   onRename,
   onDelete,
   onFocusRun,
+  onMenuOpen,
+  dragNodeId,
+  dropTarget,
+  onDragStart,
 }: {
   node: TreeNode
   depth: number
@@ -41,6 +48,10 @@ function SidebarNode({
   onRename: HierarchySidebarProps['onRename']
   onDelete: HierarchySidebarProps['onDelete']
   onFocusRun?: (runId: string) => void
+  onMenuOpen?: HierarchySidebarProps['onMenuOpen']
+  dragNodeId: string | null
+  dropTarget: DropTarget | null
+  onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
 }) {
   const { isSelected, isExpanded, isHovered, select, hover, toggleExpand } = useSelection()
   const [editing, setEditing] = useState(false)
@@ -52,6 +63,10 @@ function SidebarNode({
   const hovered = isHovered(node.id)
   const hasChildren = node.children.length > 0
   const isRun = node.type === 'run'
+  const isDragging = dragNodeId === node.id
+  const isDropInside = dropTarget?.nodeId === node.id && dropTarget?.position === 'inside'
+  const isDropBefore = dropTarget?.nodeId === node.id && dropTarget?.position === 'before'
+  const isDropAfter = dropTarget?.nodeId === node.id && dropTarget?.position === 'after'
 
   useEffect(() => {
     if (editing) inputRef.current?.focus()
@@ -65,19 +80,40 @@ function SidebarNode({
     setEditing(false)
   }, [editValue, node, onRename])
 
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0 || editing) return
+    if (onDragStart && !isRun) {
+      onDragStart(node.id, node.type, node.label, e.clientY, e.clientX)
+    }
+  }, [node, editing, isRun, onDragStart])
+
   return (
     <div>
+      {/* Drop indicator: before */}
+      {isDropBefore && (
+        <div
+          className="h-0.5 bg-primary mx-2 rounded-full"
+          style={{ marginLeft: `${depth * 16 + 8}px` }}
+          data-testid={`drop-before-${node.id}`}
+        />
+      )}
+
       <div
         className={[
           'group flex items-center gap-1 px-2 py-1 cursor-pointer text-xs',
           'hover:bg-surface-hover transition-colors',
           selected ? 'bg-primary/20 text-primary neon-border' : '',
-          hovered ? 'bg-surface-hover' : '',
+          hovered && !isDragging ? 'bg-surface-hover' : '',
+          isDragging ? 'opacity-40' : '',
+          isDropInside ? 'bg-primary/10 ring-1 ring-primary/40' : '',
         ].join(' ')}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         data-testid={`sidebar-node-${node.id}`}
+        data-drag-node-id={node.id}
+        data-drag-node-type={node.type}
+        onPointerDown={handlePointerDown}
         onClick={() => {
-          if (editing) return
+          if (editing || dragNodeId) return
           select(node.id, node.type)
           if (hasChildren) toggleExpand(node.id)
         }}
@@ -146,53 +182,64 @@ function SidebarNode({
           </span>
         )}
 
-        {/* Rename button (pencil) */}
-        {!isRun && !editing && (
+        {/* Kebab menu button */}
+        {!isRun && !editing && onMenuOpen && (
           <button
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
             onClick={(e) => {
               e.stopPropagation()
-              setEditValue(node.label)
-              setEditing(true)
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+              onMenuOpen(node.entityId, node.type as GroupingDimension, node.label, rect)
             }}
-            data-testid={`rename-${node.id}`}
-            aria-label={`Rename ${node.label}`}
+            data-testid={`menu-${node.id}`}
+            aria-label={`Menu for ${node.label}`}
             style={{ opacity: hovered ? 1 : undefined }}
           >
-            ✏
+            ⋮
           </button>
         )}
 
-        {/* Add button */}
-        {!isRun && !editing && (
-          <button
-            className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100 hover:!opacity-100"
-            onClick={(e) => {
-              e.stopPropagation()
-              onAdd(node.entityId, nextChildType(node.type, dimensions))
-            }}
-            data-testid={`add-child-${node.id}`}
-            aria-label={`Add ${nextChildType(node.type, dimensions)}`}
-            style={{ opacity: hovered ? 1 : undefined }}
-          >
-            +
-          </button>
-        )}
-
-        {/* Delete button */}
-        {!isRun && !editing && (
-          <button
-            className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 hover:!opacity-100"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete(node.entityId, node.type as GroupingDimension)
-            }}
-            data-testid={`delete-${node.id}`}
-            aria-label={`Delete ${node.label}`}
-            style={{ opacity: hovered ? 1 : undefined }}
-          >
-            ×
-          </button>
+        {/* Fallback: individual buttons when onMenuOpen is not provided */}
+        {!isRun && !editing && !onMenuOpen && (
+          <>
+            <button
+              className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
+              onClick={(e) => {
+                e.stopPropagation()
+                setEditValue(node.label)
+                setEditing(true)
+              }}
+              data-testid={`rename-${node.id}`}
+              aria-label={`Rename ${node.label}`}
+              style={{ opacity: hovered ? 1 : undefined }}
+            >
+              ✏
+            </button>
+            <button
+              className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100 hover:!opacity-100"
+              onClick={(e) => {
+                e.stopPropagation()
+                onAdd(node.entityId, nextChildType(node.type, dimensions))
+              }}
+              data-testid={`add-child-${node.id}`}
+              aria-label={`Add ${nextChildType(node.type, dimensions)}`}
+              style={{ opacity: hovered ? 1 : undefined }}
+            >
+              +
+            </button>
+            <button
+              className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 hover:!opacity-100"
+              onClick={(e) => {
+                e.stopPropagation()
+                onDelete(node.entityId, node.type as GroupingDimension)
+              }}
+              data-testid={`delete-${node.id}`}
+              aria-label={`Delete ${node.label}`}
+              style={{ opacity: hovered ? 1 : undefined }}
+            >
+              ×
+            </button>
+          </>
         )}
       </div>
 
@@ -209,9 +256,22 @@ function SidebarNode({
               onRename={onRename}
               onDelete={onDelete}
               onFocusRun={onFocusRun}
+              onMenuOpen={onMenuOpen}
+              dragNodeId={dragNodeId}
+              dropTarget={dropTarget}
+              onDragStart={onDragStart}
             />
           ))}
         </div>
+      )}
+
+      {/* Drop indicator: after */}
+      {isDropAfter && (
+        <div
+          className="h-0.5 bg-primary mx-2 rounded-full"
+          style={{ marginLeft: `${depth * 16 + 8}px` }}
+          data-testid={`drop-after-${node.id}`}
+        />
       )}
     </div>
   )
@@ -235,6 +295,10 @@ function TreeWithOrphanSeparators({
   onRename,
   onDelete,
   onFocusRun,
+  onMenuOpen,
+  dragNodeId,
+  dropTarget,
+  onDragStart,
 }: {
   nodes: TreeNode[]
   depth: number
@@ -243,6 +307,10 @@ function TreeWithOrphanSeparators({
   onRename: HierarchySidebarProps['onRename']
   onDelete: HierarchySidebarProps['onDelete']
   onFocusRun?: (runId: string) => void
+  onMenuOpen?: HierarchySidebarProps['onMenuOpen']
+  dragNodeId: string | null
+  dropTarget: DropTarget | null
+  onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
 }) {
   const normal = nodes.filter(n => !n.orphan)
   const orphans = nodes.filter(n => n.orphan)
@@ -259,6 +327,10 @@ function TreeWithOrphanSeparators({
           onRename={onRename}
           onDelete={onDelete}
           onFocusRun={onFocusRun}
+          onMenuOpen={onMenuOpen}
+          dragNodeId={dragNodeId}
+          dropTarget={dropTarget}
+          onDragStart={onDragStart}
         />
       ))}
       {orphans.length > 0 && <OrphanSeparator />}
@@ -272,16 +344,53 @@ function TreeWithOrphanSeparators({
           onRename={onRename}
           onDelete={onDelete}
           onFocusRun={onFocusRun}
+          onMenuOpen={onMenuOpen}
+          dragNodeId={dragNodeId}
+          dropTarget={dropTarget}
+          onDragStart={onDragStart}
         />
       ))}
     </>
   )
 }
 
-export default function HierarchySidebar({ tree, dimensions, onAdd, onRename, onDelete, onFocusRun }: HierarchySidebarProps) {
+export default function HierarchySidebar({ tree, dimensions, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent }: HierarchySidebarProps) {
   const rootType = dimensions[0] ?? 'initiative'
+  const { isExpanded, expandAll } = useSelection()
+
+  const handleReparent = useCallback((entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => {
+    if (onReparent) onReparent(entityId, entityType, newParentId, newParentType)
+  }, [onReparent])
+
+  const {
+    dragState,
+    dropTarget,
+    scrollContainerRef,
+    dragInitiated,
+    handleDragStart,
+    handleDragMove,
+    handleDragEnd,
+  } = useSidebarDrag(tree, dimensions, isExpanded, (id: string) => expandAll([id]), handleReparent)
+
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    // Check ref directly — dragState may not be set until threshold is met
+    if (dragInitiated.current || dragState) {
+      handleDragMove(e.clientY, e.clientX)
+    }
+  }, [dragState, dragInitiated, handleDragMove])
+
+  const onPointerUp = useCallback(() => {
+    handleDragEnd()
+  }, [handleDragEnd])
+
   return (
-    <div className="flex flex-col" data-testid="hierarchy-sidebar">
+    <div
+      className="flex flex-col h-full"
+      data-testid="hierarchy-sidebar"
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerUp}
+    >
       {/* Header */}
       <div className="panel-header px-3 py-2 flex items-center justify-between">
         <span className="panel-label text-xs font-display uppercase tracking-wider">
@@ -298,7 +407,11 @@ export default function HierarchySidebar({ tree, dimensions, onAdd, onRename, on
       </div>
 
       {/* Tree */}
-      <div className="flex-1 overflow-y-auto scrollbar-thin py-1">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto scrollbar-thin py-1"
+        style={{ cursor: dragState ? 'grabbing' : undefined }}
+      >
         {tree.length === 0 ? (
           <div className="px-3 py-4 text-xs text-slate-500 text-center">
             No items. Click + to create.
@@ -312,9 +425,28 @@ export default function HierarchySidebar({ tree, dimensions, onAdd, onRename, on
             onRename={onRename}
             onDelete={onDelete}
             onFocusRun={onFocusRun}
+            onMenuOpen={onMenuOpen}
+            dragNodeId={dragState?.nodeId ?? null}
+            dropTarget={dropTarget}
+            onDragStart={handleDragStart}
           />
         )}
       </div>
+
+      {/* Floating drag card */}
+      {dragState && (
+        <div
+          className="fixed pointer-events-none z-50 bg-surface-panel border border-primary/40 rounded px-3 py-1 text-xs text-primary shadow-lg"
+          style={{
+            top: dragState.currentY - 12,
+            left: 16,
+            opacity: 0.85,
+          }}
+          data-testid="drag-ghost"
+        >
+          {getDimensionIcon(dragState.nodeType)} {dragState.label}
+        </div>
+      )}
     </div>
   )
 }

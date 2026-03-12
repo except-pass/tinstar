@@ -193,6 +193,22 @@ export class DocumentStore {
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
 
+  addFileTouched(runId: string, file: TouchedFile): void {
+    const run = this.runs.get(runId)
+    if (!run) return
+    // Deduplicate by path
+    if (run.touchedFiles.some(f => f.path === file.path)) return
+    run.touchedFiles.push(file)
+    this.changes.emit('change', { entity: 'run', id: runId, data: run })
+  }
+
+  reconcileFiles(runId: string, files: TouchedFile[]): void {
+    const run = this.runs.get(runId)
+    if (!run) return
+    run.touchedFiles = files
+    this.changes.emit('change', { entity: 'run', id: runId, data: run })
+  }
+
   updateRunStatus(runId: string, status: RunStatus): void {
     const run = this.runs.get(runId)
     if (!run) return

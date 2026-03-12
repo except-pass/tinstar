@@ -66,9 +66,8 @@ export function tinstarBackend(): Plugin {
 
       // Only auto-start simulator when TINSTAR_FAST_SIM=1 (E2E tests).
       // In normal dev, the UI starts clean — use POST /api/simulator/start to populate.
-      if (fastSim) {
-        startSimulator()
-      }
+      // NOTE: Simulator start is deferred until after persistence loads (see below)
+      // so that persisted data doesn't overwrite mock data.
 
       // --- Session management ---
       // Initialize session config unless disabled (e.g. in CI where Docker/tmux are unavailable)
@@ -116,6 +115,12 @@ export function tinstarBackend(): Plugin {
           }
 
           log.info('server', `session config loaded`, { root: sessionConfig.dirs.root, logFile: log.file })
+
+          // Start simulator AFTER persistence loads so mock data isn't overwritten
+          if (fastSim) {
+            docStore.clear()
+            startSimulator()
+          }
 
           // Run reconciliation immediately to correct stale statuses from persisted store
           const cfg = sessionConfig
@@ -166,7 +171,15 @@ export function tinstarBackend(): Plugin {
           }, 30_000)
         } catch (err) {
           log.error('server', 'session initialization failed', { error: (err as Error).message })
+          // Session init failed but simulator still needs to run
+          if (fastSim) {
+            docStore.clear()
+            startSimulator()
+          }
         }
+      } else if (fastSim) {
+        // No session management — start simulator directly
+        startSimulator()
       }
 
       // Attach middleware

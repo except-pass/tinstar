@@ -16,6 +16,22 @@ export type {
 
 import type { RunData, SessionStatus as RunStatus } from '../types'
 
+// --- Entity settings (closest-ancestor inheritance) ---
+
+export interface EntitySettings {
+  project?: string
+  worktree?: 'none' | 'new' | 'existing'
+  backend?: 'docker' | 'tmux'
+  skipPermissions?: boolean
+  profile?: string
+}
+
+export interface ResolvedSettings {
+  resolved: EntitySettings
+  sources: Partial<Record<keyof EntitySettings, { type: GroupingDimension; name: string }>>
+  local: EntitySettings
+}
+
 // --- Taxonomy entities ---
 
 export interface Initiative {
@@ -24,6 +40,7 @@ export interface Initiative {
   color: string
   status: 'active' | 'paused' | 'archived'
   summary: string
+  settings?: EntitySettings
 }
 
 export interface Epic {
@@ -32,6 +49,7 @@ export interface Epic {
   initiativeId: string
   status: string
   summary: string
+  settings?: EntitySettings
 }
 
 export interface Task {
@@ -41,6 +59,7 @@ export interface Task {
   initiativeId: string
   status: string
   summary: string
+  settings?: EntitySettings
 }
 
 export interface Worktree {

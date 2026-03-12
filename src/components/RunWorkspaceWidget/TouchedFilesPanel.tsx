@@ -18,8 +18,10 @@ interface Props {
 export function TouchedFilesPanel({ files, onFileSelect, onCollapse }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(files[2]?.id ?? null)
 
-  const totalAdded = files.reduce((s, f) => s + f.additions, 0)
-  const totalRemoved = files.reduce((s, f) => s + f.deletions, 0)
+  // Only count reconciled files in header totals
+  const reconciledFiles = files.filter(f => !f.pending)
+  const totalAdded = reconciledFiles.reduce((s, f) => s + f.additions, 0)
+  const totalRemoved = reconciledFiles.reduce((s, f) => s + f.deletions, 0)
 
   return (
     <section className="w-40 flex flex-col border-r border-primary/20 bg-surface-panel">
@@ -81,10 +83,16 @@ export function TouchedFilesPanel({ files, onFileSelect, onCollapse }: Props) {
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-1 font-mono text-2xs shrink-0 ml-2">
-                <span className="text-accent-green">+{file.additions}</span>
-                {file.deletions > 0 && (
-                  <span className="text-accent-red">-{file.deletions}</span>
+              <div className={`flex items-center gap-1 font-mono text-2xs shrink-0 ml-2 transition-opacity duration-200 ${file.pending ? 'animate-shimmer' : ''}`}>
+                {file.pending ? (
+                  <span className="text-slate-500">...</span>
+                ) : (
+                  <>
+                    <span className="text-accent-green">+{file.additions}</span>
+                    {file.deletions > 0 && (
+                      <span className="text-accent-red">-{file.deletions}</span>
+                    )}
+                  </>
                 )}
               </div>
             </button>
