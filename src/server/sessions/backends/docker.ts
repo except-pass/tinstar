@@ -295,6 +295,11 @@ export async function getContainerState(config: TinstarConfig, sessionName: stri
   }
 }
 
+export async function sendKeys(config: TinstarConfig, sessionName: string, keys: string[]): Promise<void> {
+  const name = containerName(config, sessionName)
+  await docker(['exec', name, 'tmux', 'send-keys', '-t', 'main', ...keys])
+}
+
 export async function sendPrompt(config: TinstarConfig, sessionName: string, prompt: string): Promise<void> {
   const name = containerName(config, sessionName)
   await docker(['exec', name, 'tmux', 'send-keys', '-t', 'main', prompt, ''])

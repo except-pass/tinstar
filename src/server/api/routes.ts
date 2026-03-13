@@ -40,6 +40,7 @@ import type { FileKind, TouchedFile } from '../../types'
 import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
 import { saveDraft, discardDraft, DRAFTS_DIR } from '../sessions/skill-drafts'
 import type { SkillDTO } from '../../types'
+import { spec as openapiSpec } from './openapi'
 
 function inferFileKind(filePath: string): FileKind {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -111,6 +112,22 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       'Access-Control-Allow-Headers': 'Content-Type',
     })
     res.end()
+    return true
+  }
+
+  // GET /api/docs — Scalar API reference UI
+  if (method === 'GET' && (url === '/api/docs' || url === '/api/docs/')) {
+    res.writeHead(200, { 'Content-Type': 'text/html' })
+    res.end(`<!doctype html>
+<html><head><title>Tinstar API</title><meta charset="utf-8"/></head>
+<body><script id="api-reference" data-url="/api/docs/openapi.json"></script>
+<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script></body></html>`)
+    return true
+  }
+
+  // GET /api/docs/openapi.json — raw OpenAPI spec
+  if (method === 'GET' && url === '/api/docs/openapi.json') {
+    json(res, openapiSpec)
     return true
   }
 
@@ -957,6 +974,58 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         })
       })
       return true
+    }
+
+    // POST /api/sessions/:name/send-keys — send raw tmux keys to a session
+    if (method === 'POST' && url.endsWith('/send-keys') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const body = JSON.parse(await readBody(req))
+        const keys: string[] = body.keys
+        if (!Array.isArray(keys) || keys.length === 0) {
+          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'keys must be a non-empty array of strings' } }, 400)
+          return true
+        }
+        const session = getSession(sessDir, name)
+        if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
+        try {
+          if (session.backend === 'docker') {
+            await dockerBackend.sendKeys(cfg, name, keys)
+          } else {
+            await tmuxBackend.sendKeys(cfg, name, keys)
+          }
+          json(res, { ok: true })
+        } catch (err) {
+          json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
+        }
+        return true
+      }
+    }
+
+    // POST /api/sessions/:name/enter-prompt — type text then submit with Enter
+    if (method === 'POST' && url.endsWith('/enter-prompt') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const body = JSON.parse(await readBody(req))
+        const prompt: string = body.prompt
+        if (!prompt || typeof prompt !== 'string') {
+          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'prompt must be a non-empty string' } }, 400)
+          return true
+        }
+        const session = getSession(sessDir, name)
+        if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
+        try {
+          if (session.backend === 'docker') {
+            await dockerBackend.sendPrompt(cfg, name, prompt)
+          } else {
+            await tmuxBackend.sendPrompt(cfg, name, prompt)
+          }
+          json(res, { ok: true })
+        } catch (err) {
+          json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
+        }
+        return true
+      }
     }
 
     // POST /api/sessions/:name/refresh-route — re-register Caddy route for a session

@@ -271,6 +271,11 @@ export function onTtydRestart(sessionName: string, callback: (pid: number) => vo
   if (entry) entry.onRestart = callback
 }
 
+export async function sendKeys(config: TinstarConfig, sessionName: string, keys: string[]): Promise<void> {
+  const tmuxName = tmuxSessionName(config, sessionName)
+  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, ...keys])
+}
+
 export async function sendPrompt(config: TinstarConfig, sessionName: string, prompt: string): Promise<void> {
   const tmuxName = tmuxSessionName(config, sessionName)
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, prompt, ''])
