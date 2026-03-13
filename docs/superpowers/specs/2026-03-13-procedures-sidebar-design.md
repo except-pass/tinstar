@@ -165,7 +165,7 @@ Small modal appearing after agent drafts a new skill (triggered by `skill.drafte
 Scans skill directories, parses frontmatter, returns skill list. Result cached for 5–10s. Returns:
 
 ```ts
-{ skills: Skill[] }
+{ skills: SkillDTO[] }  // path is server-side only, not included
 ```
 
 ### `POST /api/skills/save`
@@ -193,11 +193,20 @@ Deletes a staged draft.
 
 ### Skill staging
 
-When the agent defines a new skill, it writes to `~/.config/tinstar/skill-drafts/[draftId].md`. The backend watches this directory with `fs.watch` (scoped and cheap — this is the only location where real-time detection matters) and emits a `skill.drafted` SSE event carrying `{ draftId, skillName }` when a new file appears.
+When the agent defines a new skill, it writes to `~/.config/tinstar/skill-drafts/[draftId].md`. The backend watches this directory with `fs.watch` (scoped and cheap — this is the only location where real-time detection matters). When a new file appears, the backend **parses the draft file's frontmatter** to extract the `name` field, then emits a `skill.drafted` SSE event carrying `{ draftId, skillName }`. The `skillName` always comes from frontmatter — not from the filename. If frontmatter is missing or malformed, the backend uses the `draftId` as a fallback name and emits the event anyway.
+
+### New SSE event types
+
+Two new event types must be added to the `BusEvent` discriminated union in `src/server/types.ts`:
+
+```ts
+| { type: 'skill.drafted'; draftId: string; skillName: string }
+| { type: 'skill.saved';   skill: SkillDTO }
+```
 
 ### Procedures persistence
 
-Procedures are stored by patching the entity's `settings` via the **existing** entity PATCH route with a `settings` payload:
+Procedures are stored by patching the entity's `settings` via the **existing per-entity PATCH routes** (`PATCH /api/tasks/:id`, `PATCH /api/epics/:id`, `PATCH /api/initiatives/:id`) with a `settings` payload:
 
 ```ts
 PATCH /api/entities/:type/:id
