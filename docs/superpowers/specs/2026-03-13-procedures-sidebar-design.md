@@ -19,41 +19,76 @@ The RunWorkspace procedures sidebar is currently a placeholder. This spec define
 
 ### `Skill` (runtime, never persisted)
 
-Discovered from the filesystem on demand. Never stored.
+Discovered from the filesystem on demand. Never stored. `path` is server-side only and is not included in the `GET /api/skills` API response.
 
 ```ts
+// Server-side only (used for staging/saving)
 interface Skill {
   name: string           // e.g. "design", "sec-review"
   description?: string   // from skill file frontmatter
-  source: 'system' | 'repo'
-  path: string           // absolute path to the .md file
+  source: 'system' | 'repo' | 'plugin'
+  path: string           // absolute path to the .md file — not sent to client
+}
+
+// API response shape (path omitted)
+interface SkillDTO {
+  name: string
+  description?: string
+  source: 'system' | 'repo' | 'plugin'
 }
 ```
 
+Source badges: `sys` for `'system'` and `'plugin'`, `repo` for `'repo'`.
+
 ### `Procedure` (persisted on entity)
 
-A procedure is a reference to a skill, optionally with a custom prompt modifier.
+A procedure is a reference to a skill. `entityId` and `entityType` are **not** stored — they are redundant with the entity the procedure is stored on, and would risk going stale. They exist only as a runtime convenience when building the resolved list.
+
+`customPrompt` is post-MVP and is **not** included in the stored type. It will be added when custom prompt editing is in scope and its firing semantics are fully defined.
 
 ```ts
-interface Procedure {
+// Stored shape (inside EntitySettings.procedures)
+interface StoredProcedure {
   id: string
   skillName: string        // matches Skill.name
-  customPrompt?: string    // optional prefix/suffix when firing
-  entityId: string         // owning Task / Epic / Initiative id
+}
+
+// Runtime shape (after resolving the hierarchy)
+interface ResolvedProcedure extends StoredProcedure {
+  entityId: string
   entityType: 'task' | 'epic' | 'initiative'
 }
 ```
 
-Procedures are stored inside `EntitySettings` on each entity. The existing `settings?: EntitySettings` field on `Task`, `Epic`, and `Initiative` gains a `procedures: Procedure[]` field.
+Procedures are stored inside `EntitySettings` on each entity. The existing `settings?: EntitySettings` field on `Task`, `Epic`, and `Initiative` gains a `procedures: StoredProcedure[]` field.
+
+### Pending skill (runtime, for shimmer state)
+
+```ts
+interface PendingSkill {
+  id: string               // client-generated UUID, matches draftId sent to agent
+  placeholderName: string  // typed description, shown while agent works
+  status: 'defining' | 'saving' | 'error'
+  // entity context preserved so the procedure can be persisted after save
+  entityId: string
+  entityType: 'task' | 'epic' | 'initiative'
+}
+```
+
+The `draftId` is generated client-side and passed as part of the message fired to the agent (e.g. `"Define a new skill [draftId=abc123]: review changes for perf regressions"`). The agent includes this ID in the draft filename. When the `skill.drafted` SSE event arrives carrying `draftId`, the UI correlates it to the correct shimmer entry.
+
+**Visual states:**
+- `'defining'` and `'saving'` both show the same pulse shimmer — the presence of `SaveSkillModal` on screen is sufficient to communicate the `'saving'` state.
+- `'error'` shows red tint + retry button.
 
 ### Resolved procedure list (runtime)
 
 When a Run is active, the UI resolves the full procedure list by merging:
 
 ```
-Task.settings.procedures
-  + Epic.settings.procedures
-  + Initiative.settings.procedures
+Task.settings.procedures      → entityType: 'task'
+  + Epic.settings.procedures  → entityType: 'epic'
+  + Initiative.settings.procedures → entityType: 'initiative'
 ```
 
 Displayed in sidebar with a divider between own (Task) and inherited (Epic / Initiative), labeled by entity name.
@@ -62,15 +97,15 @@ Displayed in sidebar with a divider between own (Task) and inherited (Epic / Ini
 
 ## Skill Discovery
 
-Skills are discovered by scanning three directories on every picker open, with a **5–10s in-memory TTL cache**:
+Skills are discovered by scanning three directory groups on every picker open, with a **5–10s in-memory TTL cache**. Lazy — scan triggered by picker open, not on mount.
 
-| Source | Directory | Badge |
-|--------|-----------|-------|
-| System | `~/.claude/commands/` | `sys` |
-| Repo | `.claude/commands/` (project root) | `repo` |
-| Plugins | `~/.claude/plugins/cache/**/skills/*/` | `sys` |
+| Source | Directory | `Skill.source` | Badge |
+|--------|-----------|----------------|-------|
+| System | `~/.claude/commands/` | `'system'` | `sys` |
+| Repo | `.claude/commands/` (project root) | `'repo'` | `repo` |
+| Plugins | `~/.claude/plugins/cache/**/skills/*/` | `'plugin'` | `sys` |
 
-Each directory is scanned for `.md` files. Frontmatter (`name`, `description`) is parsed. No persistent file watcher — scan-on-open is fast enough given how rarely skills change. Cache is explicitly busted when a newly defined skill is saved.
+Each directory is scanned for `.md` files. Frontmatter (`name`, `description`) is parsed. Both `'system'` and `'plugin'` sources display the `sys` badge — they are visually identical to the user. No persistent file watcher — scan-on-open with TTL cache is sufficient. Cache is explicitly busted when a newly defined skill is saved.
 
 ---
 
@@ -80,10 +115,10 @@ Each directory is scanned for `.md` files. Frontmatter (`name`, `description`) i
 
 Fixed 160px sidebar panel inside `RunWorkspaceWidget`.
 
-- **Inherited group** (from Epic / Initiative): labeled with entity name, rendered above a divider
+- **Inherited group** (from Epic / Initiative): labeled with entity name, rendered above a divider. Only shown if the current task has a parent at that level.
 - **Task group**: task-own procedures
-- Each row: icon + skill name + `▶` run button (visible on hover)
-- **Shimmer rows**: optimistic entries for in-progress skill definitions — pulse animation, placeholder name from typed description
+- Each row: icon + skill name + `▶` run button (visible on hover). `▶` is **disabled** (greyed out, no pointer) when the session status is `running` — a tooltip says "Session is busy".
+- **Shimmer rows**: optimistic entries for in-progress skill definitions — pulse animation, placeholder name from typed description. Correlated to `PendingSkill` by `id`.
 - **`+ New` button** at bottom: opens `SkillPickerModal`
 
 ### `SkillPickerModal` (new)
@@ -93,9 +128,11 @@ Full-screen overlay with centered command picker (480px wide).
 **Input:** placeholder `"Search or define skill…"` — dual-purpose.
 
 **Behaviour:**
+- Skills fetched lazily from `useSkills` when modal opens
 - Typing filters skills by name
 - Each skill row shows: icon, name, description, source badge (`sys` / `repo`), star button
-- **Star button** → inline entity popover (Task / Epic / Initiative, current task highlighted) → selecting an entity adds the procedure immediately (optimistic)
+- **Star button** → inline entity popover. Popover shows only the ancestor levels that exist for the current session's task (e.g. if there is no Initiative, only Task and Epic are shown). Missing ancestors are hidden, not greyed out. Current task is highlighted.
+- Selecting an entity in the popover adds the procedure immediately (optimistic, via `PATCH /api/entities/:type/:id/settings`)
 - **No match state**: list collapses to a single focused row: `Define "[typed text]" as new skill… ↵`
 - **Partial match state**: filtered results shown + define row at bottom with typed text
 - `↵` on define row: closes picker, fires to agent, adds shimmer entry to sidebar
@@ -104,18 +141,20 @@ Full-screen overlay with centered command picker (480px wide).
 
 ### `SaveSkillModal` (new)
 
-Small modal appearing after agent drafts a new skill.
+Small modal appearing after agent drafts a new skill (triggered by `skill.drafted` SSE event carrying `draftId`).
 
-- Shows skill name preview
-- Two options: **System** (`~/.claude/skills/`) or **Repo** (`.claude/skills/`)
-- Confirm → `POST /api/skills/save` → skill written to chosen location, cache busted, shimmer resolves
-- Cancel → draft deleted, shimmer fades out
+- Shows skill name preview (from draft frontmatter)
+- Two options: **System** (`~/.claude/commands/`) or **Repo** (`.claude/commands/`)
+- Confirm → `POST /api/skills/save` with `{draftId, location}` → on success, client fires `PATCH /api/entities/:type/:id` to add the `StoredProcedure` for the new skill on the entity stored in the matching `PendingSkill` → cache busted, shimmer resolves
+- Cancel → `POST /api/skills/discard` with `{draftId}` → draft deleted, shimmer entry fades out
 
 ### `useSkills` hook (new)
 
-- Fetches `/api/skills` on mount (cached)
-- Subscribes to `skill.drafted` SSE event → triggers `SaveSkillModal`
-- Exposes `pendingSkills: string[]` for shimmer state management
+- **Lazy**: exposes a `fetchSkills()` function, does not fetch on mount
+- **Singleton**: mounted once globally in a context provider (e.g. `SkillsProvider` wrapping `WorkspaceShell`). This ensures only one SSE listener handles `skill.drafted` events, preventing duplicate `SaveSkillModal` renders.
+- Subscribes to `skill.drafted` SSE event → correlates via `draftId` to the matching `PendingSkill` → transitions its status to `'saving'` → opens `SaveSkillModal`
+- Subscribes to `skill.saved` SSE event → busts cache
+- Exposes `pendingSkills: PendingSkill[]` for shimmer state
 
 ---
 
@@ -134,38 +173,76 @@ Scans skill directories, parses frontmatter, returns skill list. Result cached f
 Moves a staged draft to the chosen location.
 
 ```ts
+// Request
 { draftId: string, location: 'system' | 'repo' }
+// Response
+{ skill: Skill }
 ```
 
-Busts the skill cache after write. Emits `skill.saved` SSE event.
+Busts the skill cache after write. Emits `skill.saved` SSE event carrying the new `SkillDTO`.
+
+**Name collision:** if a skill with the same `name` already exists at the chosen location, returns `409 { error: 'skill-name-conflict', existingPath: string }`. The frontend should surface this to the user with an option to rename the draft before retrying.
+
+### `POST /api/skills/discard`
+
+Deletes a staged draft.
+
+```ts
+{ draftId: string }
+```
 
 ### Skill staging
 
-When the agent defines a new skill, it writes to `~/.config/tinstar/skill-drafts/[id].md`. The backend watches this directory (fs.watch, scoped and cheap — this is the one location worth watching since it's the hot path for the define flow) and emits `skill.drafted` SSE event to the frontend.
+When the agent defines a new skill, it writes to `~/.config/tinstar/skill-drafts/[draftId].md`. The backend watches this directory with `fs.watch` (scoped and cheap — this is the only location where real-time detection matters) and emits a `skill.drafted` SSE event carrying `{ draftId, skillName }` when a new file appears.
 
 ### Procedures persistence
 
-`PATCH /api/entities/:type/:id/procedures` — adds/removes procedures on a Task, Epic, or Initiative. Persists to existing entity storage under `~/.config/tinstar/`.
+Procedures are stored by patching the entity's `settings` via the **existing** entity PATCH route with a `settings` payload:
 
-### Session input
+```ts
+PATCH /api/entities/:type/:id
+Body: { settings: { procedures: StoredProcedure[] } }
+```
 
-Running a procedure fires the slash command into the active Claude session via the existing **prompt submission API** (not raw send-keys). `POST /api/sessions/:id/prompt` with `{ text: "/design" }`.
+This avoids a new endpoint and keeps procedures consistent with how other `EntitySettings` fields are persisted. The existing deep-merge behaviour on the PATCH handler means other settings fields are unaffected.
+
+### Session input — `POST /api/sessions/:id/prompt`
+
+**This is a new route.** Running a procedure fires the slash command into the active Claude session. This route sends input via the same mechanism the interactive UI uses to submit prompts to Claude Code — not raw tmux send-keys.
+
+```ts
+// Request
+{ text: string }  // e.g. "/design"
+// Response
+{ ok: true } | { error: string }
+```
+
+**Valid session states for prompt submission:** only `'idle'` (session is waiting for user input). The `'running'` state means Claude is already processing — no input should be accepted. All other states (`'creating'`, `'stopped'`, `'needs_attention'`) also reject with `400 { error: 'session-not-ready' }`.
+
+**Error behaviour:**
+- Session state is not `'idle'` → `400 { error: 'session-not-ready' }`
+- Session backend has no input channel → `503 { error: 'input-unavailable' }`
+
+The implementation mechanism (stdin pipe, ttyd channel, etc.) is determined during implementation based on the active backend (Docker / tmux). The frontend run button is disabled for all non-`idle` states — the backend 400 guard is a safety net, not the primary enforcement.
 
 ---
 
 ## Define-New-Skill Flow (end-to-end)
 
 1. User types description in picker → `↵`
-2. Picker closes immediately
-3. Shimmer entry appears in procedures sidebar (pulse animation, typed text as placeholder name)
-4. UI fires message to active session via prompt API: `"Define a new skill: [description]"`
-5. Agent writes skill draft to `~/.config/tinstar/skill-drafts/[id].md`
-6. Backend detects draft file → emits `skill.drafted` SSE event
-7. `SaveSkillModal` appears: System or Repo?
-8. User confirms → draft moved to chosen location → cache busted
-9. Shimmer resolves to final skill name
+2. Client generates `draftId` (UUID)
+3. Picker closes immediately
+4. Shimmer entry (`PendingSkill { id: draftId, placeholderName: typed text, status: 'defining' }`) appears in procedures sidebar
+5. UI fires message to active session via `POST /api/sessions/:id/prompt`: `"Define a new skill [draftId=abc123]: [description]"`
+6. Agent writes skill draft to `~/.config/tinstar/skill-drafts/abc123.md`
+7. Backend detects new draft file → emits `skill.drafted { draftId: 'abc123', skillName: 'perf-review' }`
+8. `useSkills` receives event, correlates to shimmer by `draftId`, updates shimmer `status: 'saving'`
+9. `SaveSkillModal` appears: System or Repo?
+10. User confirms → `POST /api/skills/save { draftId, location }` → file written, cache busted
+11. Client fires `PATCH /api/entities/:type/:id` with `{ settings: { procedures: [...existing, { id, skillName }] } }` using the entity stored in `PendingSkill`
+12. `skill.saved` SSE event received → shimmer resolves to final skill name
 
-**Failure path:** If no `skill.drafted` event arrives within 30s, shimmer entry shows error state (red tint, retry option). User can dismiss.
+**Failure path:** If no `skill.drafted` event arrives within 30s, shimmer `status` → `'error'` (red tint, retry button). Retry re-fires step 5. User can also dismiss to remove the shimmer entry.
 
 ---
 
@@ -173,24 +250,30 @@ Running a procedure fires the slash command into the active Claude session via t
 
 | Scenario | Behaviour |
 |----------|-----------|
-| Skill directory missing | `/api/skills` returns empty array for that source, no error |
-| Agent fails to define skill | Shimmer entry shows error state after 30s timeout |
-| User cancels SaveSkillModal | Draft deleted, shimmer entry fades out |
-| Duplicate skill name | Picker highlights existing skill, star it instead |
+| Skill directory missing | `/api/skills` returns empty array for that source, no error thrown |
+| Agent fails to define skill | Shimmer shows error state after 30s; retry available |
+| User cancels SaveSkillModal | `POST /api/skills/discard`; shimmer fades out |
+| Duplicate skill name (in picker) | Define row not shown for exact name matches; existing skill highlighted |
+| Duplicate skill name (on save) | `409` returned; user prompted to rename before retrying |
 | Procedure entity deleted | Inherited procedures silently dropped from resolved list |
+| Session busy when firing procedure | Run button disabled; tooltip "Session is busy" |
+| Prompt API unavailable | `503` returned; frontend shows brief toast error |
+| Task has no Epic/Initiative | Entity popover shows only available ancestor levels; missing levels hidden |
 
 ---
 
 ## Testing
 
 **Unit tests:**
-- Skill discovery: mock filesystem, verify frontmatter parsing and source tagging
-- Procedure inheritance: Task + Epic + Initiative → merged list in correct order
+- Skill discovery: mock filesystem, verify frontmatter parsing, source tagging, and badge assignment for all three source types
+- Procedure inheritance: Task + Epic + Initiative → merged resolved list in correct order; orphaned task (no Epic) → only Task procedures shown
+- `PendingSkill` correlation: `skill.drafted` event with matching `draftId` updates correct shimmer entry
 
 **E2E (Playwright):**
-- Open picker → search for skill → star it → verify appears in sidebar
+- Open picker → search for skill → star it (assign to Task) → verify appears in sidebar under task group
 - Open picker → type unknown description → `↵` → verify shimmer appears in sidebar
-- Complete define flow → verify shimmer resolves to skill name
+- Complete define flow → confirm save → verify shimmer resolves to skill name
+- Star skill to Epic → open new session on sibling task → verify procedure appears in inherited group
 
 ---
 
