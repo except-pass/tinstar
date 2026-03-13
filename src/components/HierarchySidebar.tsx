@@ -366,7 +366,7 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onCollapse }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onCollapse?: () => void }) {
+export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onCollapse }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
 
