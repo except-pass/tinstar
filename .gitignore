@@ -3,3 +3,5 @@ dist
 test-results
 *.tsbuildinfo
 .superpowers/
+todo
+trivial.txt

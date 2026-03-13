@@ -226,7 +226,66 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 - Run count badges on group nodes (bg-surface-raised, rounded-full)
 - Selected node: primary/20 background, neon border, primary text
 - Hovered node: surface-hover background
-- Header: "Hierarchy" label with root-level "+" button
+- Header: Space switcher dropdown with root-level "+" button
+
+### Keyboard Reordering
+- **Cmd/Ctrl + Up**: Move item up within its level
+- **Cmd/Ctrl + Down**: Move item down within its level
+- **Tab**: Indent (nest inside previous sibling)
+- **Shift + Tab**: Outdent (move to parent's level)
+
+---
+
+## Spaces
+
+Named containers that isolate document store data (initiatives, epics, tasks, worktrees, runs). Users maintain separate working contexts — e.g., real project work vs. test data — without losing state when switching.
+
+### Data Model
+- **Space entity**: `id`, `name`, `createdAt` — flat, no nesting or hierarchy
+- **Entity association**: Every entity gets a `spaceId` field linking it to a space
+- **Sessions are global**: Sessions have no `spaceId`. Runs (which do have a `spaceId`) link sessions to spaces
+- **Active space**: Server tracks `activeSpaceId` in memory, persisted to `~/.config/tinstar/config.json`
+- **First boot**: Auto-creates "Work Space" and activates it — zero-setup landing
+
+### API
+
+```
+GET    /api/spaces              # List all spaces
+POST   /api/spaces              # Create { name } → returns created space (does NOT auto-activate)
+PATCH  /api/spaces/:id          # Update { name }
+DELETE /api/spaces/:id          # Delete (rules below)
+POST   /api/spaces/:id/activate # Set as active space
+```
+
+**Deletion rules:**
+- Cannot delete the active space → 400 ("Switch to another space first")
+- Cannot delete the last space → 400 ("Must have at least one space")
+- On delete: all entities with that `spaceId` are removed; runs removed but sessions keep running
+- Response includes orphaned session count + management hint
+
+**Entity creation:** API stamps `spaceId: activeSpaceId` automatically on all new entities.
+
+### SSE Behavior
+- **Snapshot**: Includes `activeSpaceId` + all spaces (unfiltered for dropdown) + entities filtered to active space
+- **Deltas**: Entity deltas for non-active spaces are suppressed; space CRUD deltas always sent
+- **Activation**: Triggers a fresh full snapshot (same as initial connection) — frontend replaces entire state
+
+### Widget Layouts (Per-Space)
+- localStorage key namespaced: `tinstar-layouts-v3-{spaceId}`
+- Switching spaces restores exact widget positions for that space
+- `tinstar-dimensions` remains global (grouping preferences apply across spaces)
+
+### Space Switcher (UI)
+- **Location**: Replaces "Hierarchy" label in sidebar header
+- **Trigger**: Dropdown showing active space name with expand/collapse chevron
+- **Popover**: Lists all spaces with cyan dot for active (+ checkmark), slate dot for inactive
+- **"+ New Space"**: Inline text input at bottom of list; Enter to create, Escape to cancel
+- **Right-click**: Context menu with Rename and Delete
+- **Delete confirmation**: Shows orphaned session count before proceeding
+
+### Simulator Integration
+- `TINSTAR_FAST_SIM=1`: Creates/reuses `_simulator` space, activates it, clears entities, populates mock data
+- E2E tests create a `_tinstar_e2e` space in `globalSetup`, tear it down in `globalTeardown`
 
 ---
 
@@ -243,7 +302,7 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 ## Persistence
 
 ### Client-side (localStorage)
-- **Layout storage key**: `tinstar-layouts-v3`
+- **Layout storage key**: `tinstar-layouts-v3-{spaceId}` (per-space)
 - **What's saved**: All widget and group container positions/sizes as JSON (keyed by tree node ID)
 - **When saved**: On every layout change (via useEffect)
 - **Load behavior**: Merge saved layouts with defaults for any missing entries

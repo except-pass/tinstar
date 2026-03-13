@@ -1,6 +1,14 @@
-# Tinstar
+<p align="center">
+  <img src="logo.png" alt="Tinstar" width="400" />
+</p>
 
-Canvas workspace for managing Claude Code sessions. Sessions appear as interactive widgets on an infinite canvas with live embedded terminals.
+<h3 align="center">Canvas workspace for managing Claude Code sessions</h3>
+
+<p align="center">
+  Sessions appear as interactive widgets on an infinite canvas with live embedded terminals.
+</p>
+
+---
 
 ## Quick Start
 
@@ -9,12 +17,23 @@ npm install
 npm run dev
 ```
 
-This single command starts everything:
-- Vite dev server on **:5273** (UI + API + SSE)
-- Caddy reverse proxy on **:8088** (auto-started in Docker, proxies ttyd terminals)
-- Session reconciliation loop (every 30s)
+Open `http://localhost:5273` — that's it. One port, everything included:
 
-Open `http://localhost:5273` in your browser.
+- **Vite dev server** on `:5273` (UI + API + SSE)
+- **Caddy reverse proxy** on `:8088` (auto-started in Docker, proxies ttyd terminals)
+- **Session reconciliation** loop (every 30s)
+
+## Features
+
+- **Infinite canvas** — Figma-style pan, zoom, and spatial arrangement
+- **Live terminals** — Embedded ttyd sessions with real-time status updates
+- **Multi-selection** — Marquee select, Ctrl+click, grid arrange
+- **Spaces** — Organize sessions into isolated workspaces
+- **File tree explorer** — Track touched files with live git-diff
+- **Drag-and-drop** — Reorder in sidebar, move on canvas, multi-drag
+- **Session lifecycle** — Create, stop, resume, delete sessions with Docker or tmux backends
+- **Real-time state** — SSE-powered status updates (running, idle, needs attention)
+- **Grouping** — Nest sessions into recursive group containers
 
 ## Ports
 
@@ -24,7 +43,7 @@ Open `http://localhost:5273` in your browser.
 | 8088 | Caddy (ttyd reverse proxy) | No — Vite proxies `/s/*` to it |
 | 8681+ | ttyd instances (dynamic) | No — Caddy proxies them |
 
-Vite proxies `/s/*` to Caddy, so only **port 5273** needs to be forwarded for remote access (e.g. Cursor on EC2).
+Only **port 5273** needs to be forwarded for remote access.
 
 ## Prerequisites
 
@@ -48,7 +67,7 @@ Browser ─── Vite (:5273) ─── API routes (/api/*)
                           └── Proxy (/s/*) ──► Caddy (:8088) ──► ttyd (:8681+)
 ```
 
-Sessions are the core unit. Creating a session (tmux or Docker backend) spawns a Claude Code instance with a ttyd terminal. The session appears on the canvas as a widget. Hooks inside Claude Code POST state changes (running/idle) back to the server for real-time status updates.
+Sessions are the core unit. Creating a session (tmux or Docker backend) spawns a Claude Code instance with a ttyd terminal. The session widget appears on the canvas. Hooks inside Claude Code POST state changes back to the server for real-time status updates via SSE.
 
 ## Session Status
 
@@ -60,3 +79,23 @@ Sessions are the core unit. Creating a session (tmux or Docker backend) spawns a
 | `needs_attention` | No activity for 2+ minutes |
 | `stopped` | User stopped the session |
 | `terminated` | Process crashed or disappeared |
+
+## Development
+
+```bash
+# Dev server (clean UI, no mock data)
+npm run dev
+
+# Dev server with mock data
+TINSTAR_FAST_SIM=1 npm run dev
+
+# Type check
+npx tsc --noEmit
+
+# E2E tests
+TINSTAR_FAST_SIM=1 BASE_URL=http://localhost:5273 npx playwright test
+```
+
+## License
+
+MIT
