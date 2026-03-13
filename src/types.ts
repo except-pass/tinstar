@@ -67,6 +67,7 @@ export interface RunData {
   id: string
   status: SessionStatus
   sessionId: string
+  taskId: string
   initiative: string
   epic: string
   task: string
