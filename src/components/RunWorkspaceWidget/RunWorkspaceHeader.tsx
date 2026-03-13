@@ -15,9 +15,10 @@ interface Props {
   onPointerDown?: (e: ReactPointerEvent) => void
   onPointerMove?: (e: ReactPointerEvent) => void
   onPointerUp?: (e: ReactPointerEvent) => void
+  onRefreshTerminal?: () => void
 }
 
-export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp }: Props) {
+export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp, onRefreshTerminal }: Props) {
   const status = statusConfig[run.status]
   const [busy, setBusy] = useState(false)
 
@@ -32,6 +33,12 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
     } catch { /* ignore */ }
     setBusy(false)
   }, [run.sessionId])
+
+  const refreshTerminal = useCallback(() => {
+    if (!run.sessionId) return
+    fetch(`/api/sessions/${run.sessionId}/refresh-route`, { method: 'POST' })
+      .finally(() => onRefreshTerminal?.())
+  }, [run.sessionId, onRefreshTerminal])
 
   const isLive = run.status === 'running' || run.status === 'idle' || run.status === 'needs_attention' || run.status === 'creating'
 
@@ -99,6 +106,15 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
                 title="Resume session"
               >
                 <span className="material-symbols-outlined text-sm">play_circle</span>
+              </button>
+            )}
+            {isLive && run.port && (
+              <button
+                onClick={refreshTerminal}
+                className="p-1 rounded text-slate-500 hover:text-primary transition-colors"
+                title="Refresh terminal (re-registers proxy route)"
+              >
+                <span className="material-symbols-outlined text-sm">refresh</span>
               </button>
             )}
             <button

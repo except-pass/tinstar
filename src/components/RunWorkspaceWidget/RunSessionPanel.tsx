@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useReducer } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
 
 function DiffView({ diff }: { diff: DiffBlock }) {
@@ -113,20 +113,14 @@ interface Props {
   port?: number | null
   sessionId?: string
   status?: SessionStatus
+  termTick?: number
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status }: Props) {
+export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, termTick = 0 }: Props) {
   const [activeTab, setActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
-  const [termTick, bumpTerm] = useReducer((n: number) => n + 1, 0)
 
-  const refreshTerminal = useCallback(() => {
-    if (!sessionId) { bumpTerm(); return }
-    // Re-register the Caddy route (may have been lost), then reload iframe
-    fetch(`/api/sessions/${sessionId}/refresh-route`, { method: 'POST' })
-      .finally(() => bumpTerm())
-  }, [sessionId])
   const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -197,15 +191,6 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
             </button>
           ))}
         </div>
-        {activeTab === 'terminal' && port && (
-          <button
-            onClick={refreshTerminal}
-            className="absolute right-2 p-1 rounded text-slate-500 hover:text-primary transition-colors"
-            title="Reload terminal (re-registers proxy route)"
-          >
-            <span className="material-symbols-outlined text-sm">refresh</span>
-          </button>
-        )}
       </div>
 
       {/* Content */}

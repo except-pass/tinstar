@@ -889,9 +889,66 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       }
     }
 
-    // GET /api/docker/profiles — configured image profiles
+    // GET /api/docker/profiles — configured image profiles (read from disk for freshness)
     if (method === 'GET' && url === '/api/docker/profiles') {
-      json(res, { ok: true, data: cfg.profiles })
+      let profiles = cfg.profiles
+      try {
+        const data = JSON.parse(readFileSync(cfg.files.config, 'utf-8'))
+        if (Array.isArray(data.profiles)) profiles = data.profiles
+      } catch { /* use frozen default */ }
+      json(res, { ok: true, data: profiles })
+      return true
+    }
+
+    // GET /api/docker/images — list local Docker images
+    if (method === 'GET' && url === '/api/docker/images') {
+      import('node:child_process').then(({ execFile }) => {
+        execFile('docker', ['images', '--format', '{{.Repository}}:{{.Tag}}'], { encoding: 'utf-8' }, (err, stdout) => {
+          if (err) {
+            json(res, { ok: false, error: { code: 'DOCKER_ERROR', message: err.message } }, 500)
+            return
+          }
+          const images = stdout.trim().split('\n').filter(Boolean).filter(i => i !== '<none>:<none>')
+          json(res, { ok: true, data: images })
+        })
+      })
+      return true
+    }
+
+    // POST /api/docker/profiles — add a new image profile
+    if (method === 'POST' && url === '/api/docker/profiles') {
+      readBody(req).then((body) => {
+        const { name, image, home } = JSON.parse(body)
+        if (!name || !image) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name and image are required' } }, 400)
+
+        // Read current config, update profiles array, persist
+        let data: Record<string, unknown> = {}
+        try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config yet */ }
+        const profiles: Array<{ name: string; image: string; home?: string }> = Array.isArray(data.profiles) ? data.profiles : []
+        if (profiles.some(p => p.name === name)) return json(res, { ok: false, error: { code: 'DUPLICATE', message: `Profile "${name}" already exists` } }, 409)
+
+        const profile: { name: string; image: string; home?: string } = { name, image }
+        if (home) profile.home = home
+        profiles.push(profile)
+        data.profiles = profiles
+        writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+        json(res, { ok: true, data: profile })
+      }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+      return true
+    }
+
+    // DELETE /api/docker/profiles/:name — remove an image profile
+    if (method === 'DELETE' && url.startsWith('/api/docker/profiles/')) {
+      const name = decodeURIComponent(url.slice('/api/docker/profiles/'.length))
+      let data: Record<string, unknown> = {}
+      try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
+      const profiles: Array<{ name: string; image: string; home?: string }> = Array.isArray(data.profiles) ? data.profiles : []
+      const idx = profiles.findIndex(p => p.name === name)
+      if (idx === -1) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Profile "${name}" not found` } }, 404), true
+      profiles.splice(idx, 1)
+      data.profiles = profiles
+      writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+      json(res, { ok: true })
       return true
     }
 

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useRef, useCallback, useReducer, type PointerEvent as ReactPointerEvent } from 'react'
 import type { RunData } from '../../types'
 import { RunWorkspaceHeader } from './RunWorkspaceHeader'
 import { TouchedFilesPanel } from './TouchedFilesPanel'
@@ -26,6 +26,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
   const [procsCollapsed, setProcsCollapsed] = useState(true)
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
+  const [termTick, bumpTerm] = useReducer((n: number) => n + 1, 0)
 
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
@@ -59,6 +60,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
           onPointerDown={onHeaderPointerDown}
           onPointerMove={onHeaderPointerMove}
           onPointerUp={onHeaderPointerUp}
+          onRefreshTerminal={bumpTerm}
         />
       )}
 
@@ -120,7 +122,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
             />
           </div>
         )}
-        <RunSessionPanel recapEntries={run.recapEntries} rawLogs={run.rawLogs} port={run.port} sessionId={run.sessionId} status={run.status} />
+        <RunSessionPanel recapEntries={run.recapEntries} rawLogs={run.rawLogs} port={run.port} sessionId={run.sessionId} status={run.status} termTick={termTick} />
         {procsCollapsed ? (
           <div
             data-testid="collapsed-procedures"
