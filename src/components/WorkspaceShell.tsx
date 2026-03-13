@@ -9,6 +9,7 @@ import { GroupingControls } from './GroupingControls'
 import HierarchySidebar from './HierarchySidebar'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { SelectionProvider, useSelection } from './SelectionProvider'
+import { TaxonomyProvider } from './TaxonomyContext'
 import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
 
@@ -243,6 +244,7 @@ function WorkspaceShellInner() {
   }, [handleSelectRun])
 
   return (
+    <TaxonomyProvider taxRepo={taxRepo}>
     <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
       {/* Top bar: GroupingControls + logo + status */}
       <div
@@ -382,6 +384,7 @@ function WorkspaceShellInner() {
         />
       )}
     </div>
+    </TaxonomyProvider>
   )
 }
 
