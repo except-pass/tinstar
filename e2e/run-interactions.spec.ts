@@ -92,7 +92,7 @@ test.describe('Run Widget Panels', () => {
     await page.waitForTimeout(200)
 
     // Should now show the full panel with "Procedures" heading
-    await expect(widget.getByText('Procedures')).toBeVisible()
+    await expect(widget.getByText('Procedures', { exact: true })).toBeVisible()
   })
 })
 
