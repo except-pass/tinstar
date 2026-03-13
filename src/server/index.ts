@@ -248,7 +248,7 @@ export function tinstarBackend(): Plugin {
 
       // Attach middleware
       server.middlewares.use((req, res, next) => {
-        const handled = handleRequest(
+        handleRequest(
           {
             docStore,
             otelStore,
@@ -260,8 +260,7 @@ export function tinstarBackend(): Plugin {
           },
           req,
           res,
-        )
-        if (!handled) next()
+        ).then(handled => { if (!handled) next() }).catch(next)
       })
     },
   }

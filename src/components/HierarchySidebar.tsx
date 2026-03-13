@@ -20,6 +20,7 @@ interface HierarchySidebarProps {
   onFocusRun?: (runId: string) => void
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
   onReparent?: (entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => void
+  onCollapse?: () => void
 }
 
 /** Return inline style for a colored status dot on run nodes */
@@ -365,7 +366,7 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void }) {
+export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onCollapse }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onCollapse?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
 
@@ -402,15 +403,28 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
       onPointerUp={onPointerUp}
       onPointerLeave={onPointerUp}
     >
-      {/* Space switcher header */}
-      <SpaceSwitcher
-        spaces={spaces}
-        activeSpaceId={activeSpaceId}
-        onActivate={onActivateSpace}
-        onCreate={onCreateSpace}
-        onRename={onRenameSpace}
-        onDelete={onDeleteSpace}
-      />
+      {/* Space switcher header with collapse button */}
+      <div className="flex items-center border-b border-white/10">
+        <div className="flex-1 min-w-0">
+          <SpaceSwitcher
+            spaces={spaces}
+            activeSpaceId={activeSpaceId}
+            onActivate={onActivateSpace}
+            onCreate={onCreateSpace}
+            onRename={onRenameSpace}
+            onDelete={onDeleteSpace}
+          />
+        </div>
+        {onCollapse && (
+          <button
+            onClick={onCollapse}
+            className="px-1 flex-shrink-0 text-slate-500 hover:text-primary"
+            aria-label="Collapse sidebar"
+          >
+            <span className="material-symbols-outlined text-sm">chevron_left</span>
+          </button>
+        )}
+      </div>
       <div className="flex items-center justify-end px-3 py-1 border-b border-white/5">
         <button
           className="text-xs text-slate-500 hover:text-primary"
