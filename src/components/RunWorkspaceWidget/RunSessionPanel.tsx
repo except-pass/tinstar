@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import Markdown from 'react-markdown'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
 
 function DiffView({ diff }: { diff: DiffBlock }) {
@@ -49,9 +50,13 @@ function AgentMessage({ entry }: { entry: RecapEntry }) {
             <span className="text-2xs font-mono text-slate-600">{entry.timestamp}</span>
           )}
         </div>
-        <p className="text-xs font-mono leading-relaxed text-slate-300">
-          {entry.content}
-        </p>
+        <div className="text-xs font-mono leading-relaxed text-slate-300 prose prose-invert prose-xs max-w-none
+          prose-headings:text-primary prose-headings:text-xs prose-headings:font-display prose-headings:mt-3 prose-headings:mb-1
+          prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0
+          prose-strong:text-primary prose-code:text-primary/80 prose-code:bg-primary/10 prose-code:px-1 prose-code:rounded
+          prose-pre:bg-surface-panel prose-pre:border prose-pre:border-primary/15">
+          <Markdown>{entry.content}</Markdown>
+        </div>
         {entry.diff && <DiffView diff={entry.diff} />}
       </div>
     </div>
@@ -71,9 +76,10 @@ function UserMessage({ entry }: { entry: RecapEntry }) {
           )}
           <span className="text-2xs font-mono text-slate-500 tracking-wide">YOU</span>
         </div>
-        <p className="text-xs font-mono leading-relaxed text-primary/70 bg-primary/[0.04] p-2.5 border-r-2 border-primary/40 text-left">
-          {entry.content}
-        </p>
+        <div className="text-xs font-mono leading-relaxed text-primary/70 bg-primary/[0.04] p-2.5 border-r-2 border-primary/40 text-left prose prose-invert prose-xs max-w-none
+          prose-p:my-1 prose-strong:text-primary/80 prose-code:text-primary/70 prose-code:bg-primary/10 prose-code:px-1 prose-code:rounded">
+          <Markdown>{entry.content}</Markdown>
+        </div>
       </div>
     </div>
   )
@@ -168,7 +174,7 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
   }, [sessionId])
 
   return (
-    <section className="flex-1 flex flex-col min-w-0 border-x border-primary/20 bg-surface-base">
+    <section className="flex-1 flex flex-col min-w-0 min-h-0 border-x border-primary/20 bg-surface-base">
       {/* Tab toggle */}
       <div className="flex items-center justify-center border-b border-primary/20 py-2 bg-surface-panel relative">
         <div className="flex border border-primary/25 rounded-sm overflow-hidden">
@@ -227,7 +233,7 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
       ) : activeTab === 'terminal' && port ? (
         <TerminalFrame src={sessionId ? `/s/${sessionId}/` : `http://localhost:${port}`} tick={termTick} />
       ) : activeTab === 'recap' ? (
-        <div ref={contentRef} className="flex-1 overflow-y-auto scrollbar-thin p-4">
+        <div ref={contentRef} data-scrollable className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4">
           <div className="space-y-5">
             {recapEntries.map((entry) => {
               switch (entry.type) {
@@ -239,7 +245,7 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
           </div>
         </div>
       ) : (
-        <div ref={contentRef} className="flex-1 overflow-y-auto scrollbar-thin p-4">
+        <div ref={contentRef} data-scrollable className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4">
           <pre className="text-2xs font-mono leading-relaxed text-slate-400 whitespace-pre-wrap">
             {rawLogs.split('\n').map((line, i) => (
               <div

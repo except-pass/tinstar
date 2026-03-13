@@ -15,6 +15,8 @@ if ! tmux has-session -t $TMUX_SESSION 2>/dev/null; then
     tmux -f /dev/null new -d -s $TMUX_SESSION
     tmux set -t $TMUX_SESSION status off
     tmux set -t $TMUX_SESSION mouse on
+    # Match host terminal type so C-h keybinding works consistently
+    tmux set -g default-terminal screen
 
     # Ctrl+Backspace (xterm.js sends 0x08 / C-h) → word-erase
     tmux bind-key -n C-h send-keys C-w

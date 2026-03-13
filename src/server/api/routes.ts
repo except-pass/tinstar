@@ -762,14 +762,13 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
 
         // Respond immediately — UI removal is instant
         ctx.docStore.deleteRun(name)
-        deleteSession(sessDir, name)
         emitSessionEvent('managed_session.deleted', { name })
         json(res, { ok: true })
 
-        // Heavy cleanup runs async in background
-        if (session) {
-          ;(async () => {
-            try {
+        // Cleanup: stop backend first (releases bind mounts), then remove session dir
+        ;(async () => {
+          try {
+            if (session) {
               if (session.backend === 'docker') {
                 await dockerBackend.deleteContainer(cfg, session)
               } else {
@@ -786,11 +785,17 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
               }
 
               removeRoute(session.name, cfg.caddy.adminPort).catch(() => {})
-            } catch (err) {
-              log.warn('delete', `background cleanup for ${name}: ${(err as Error).message}`)
             }
-          })()
-        }
+          } catch (err) {
+            log.warn('delete', `background cleanup for ${name}: ${(err as Error).message}`)
+          }
+
+          // Remove session dir AFTER backend cleanup (bind mounts released)
+          if (!deleteSession(sessDir, name)) {
+            log.warn('delete', `failed to remove session dir for ${name}, retrying...`)
+            setTimeout(() => deleteSession(sessDir, name), 2000)
+          }
+        })()
 
         return true
       }
@@ -972,7 +977,11 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
           // Use conversationId from hook payload, or fall back to session file
           const convId = conversationId || session?.conversation?.id
           if (workdir && convId) {
-            const entries = parseNewEntries(name, workdir, convId)
+            // Docker sessions store claude-state in the session's state dir
+            const stateDir = session?.backend === 'docker'
+              ? join(sessDir, name, 'claude-state')
+              : undefined
+            const entries = parseNewEntries(name, workdir, convId, stateDir)
             for (const entry of entries) {
               ctx.docStore.addRecapEntry(name, entry)
             }

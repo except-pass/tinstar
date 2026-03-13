@@ -1,18 +1,28 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import type { Session } from '../session'
-import type { TinstarConfig } from '../config'
+import type { TinstarConfig, ImageProfile } from '../config'
 
 const execFileAsync = promisify(execFile)
 
 // --- Helpers ---
 
+/** Read profiles fresh from disk (config object is frozen at startup). */
+function freshProfiles(config: TinstarConfig): ImageProfile[] {
+  try {
+    const data = JSON.parse(readFileSync(config.files.config, 'utf-8'))
+    if (Array.isArray(data.profiles)) return data.profiles
+  } catch { /* use frozen default */ }
+  return config.profiles
+}
+
 /** Resolve the container home directory for a session, checking profile overrides. */
 function resolveHome(config: TinstarConfig, session: Session): string {
   if (session.profile) {
-    const prof = config.profiles.find(p => p.image === session.profile)
+    const profiles = freshProfiles(config)
+    const prof = profiles.find(p => p.image === session.profile)
     if (prof?.home) return prof.home
   }
   return config.container.home
@@ -35,6 +45,10 @@ export function buildVolumeFlags(config: TinstarConfig, session: Session & { _st
   if (stateDir) {
     flags.push('-v', `${stateDir}:${home}/.claude/projects`)
   }
+
+  // Mount host credentials so Claude can authenticate
+  const hostCredentials = join(process.env.HOME ?? '/home/ubuntu', '.claude', '.credentials.json')
+  flags.push('-v', `${hostCredentials}:${home}/.claude/.credentials.json:ro`)
 
   const ws = session.workspace
   if (!ws?.path) return flags
@@ -78,6 +92,11 @@ export function buildDockerRunCommand(
     '-p', `127.0.0.1:${opts.port}:${config.ports.ttyd}`,
   ]
 
+  // Mount start-ttyd.sh from config dir so it works with any image
+  const home = resolveHome(config, session)
+  const scriptPath = join(config.dirs.root, 'start-ttyd.sh')
+  args.push('-v', `${scriptPath}:${home}/start-ttyd.sh:ro`)
+
   args.push(...buildVolumeFlags(config, session))
 
   if (session.workspace?.path) {
@@ -103,7 +122,16 @@ export function buildExecCommand(
   args.push(...buildSecretEnvFlags(secrets))
 
   args.push('-e', `TINSTAR_SESSION_NAME=${session.name}`)
-  args.push('-e', `TINSTAR_DASHBOARD_URL=${opts.dashboardUrl}`)
+  // Inside the container, localhost refers to the container itself — rewrite to host.docker.internal
+  const dockerDashboardUrl = opts.dashboardUrl.replace('localhost', 'host.docker.internal')
+  args.push('-e', `TINSTAR_DASHBOARD_URL=${dockerDashboardUrl}`)
+  // Compatibility aliases for images that use RF_* env vars in their hooks
+  args.push('-e', `RF_SESSION_NAME=${session.name}`)
+  args.push('-e', `RF_DASHBOARD_URL=${dockerDashboardUrl}`)
+
+  // Enable Claude Code's native OTLP telemetry (claude_code_* metrics)
+  const otelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://host.docker.internal:4318'
+  args.push('-e', `OTEL_EXPORTER_OTLP_ENDPOINT=${otelEndpoint.replace('localhost', 'host.docker.internal')}`)
 
   if (session.skipPermissions) {
     args.push('-e', 'SKIP_PERMISSIONS=1')
@@ -155,6 +183,10 @@ export function buildOneShotRunCommand(
   }
 
   args.push('-e', `TINSTAR_SESSION_NAME=${session.name}`)
+
+  // Enable Claude Code's native OTLP telemetry
+  const otelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://host.docker.internal:4318'
+  args.push('-e', `OTEL_EXPORTER_OTLP_ENDPOINT=${otelEndpoint.replace('localhost', 'host.docker.internal')}`)
 
   const claudeArgs = ['claude']
   if (session.skipPermissions) {

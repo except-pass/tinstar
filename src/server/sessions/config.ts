@@ -130,6 +130,16 @@ export function ensureDirs(config: TinstarConfig): void {
   mkdirSync(config.dirs.root, { recursive: true })
   mkdirSync(config.dirs.secrets, { recursive: true })
   mkdirSync(config.dirs.sessions, { recursive: true })
+
+  // Copy start-ttyd.sh to config dir so it can be mounted into any container
+  const scriptDest = join(config.dirs.root, 'start-ttyd.sh')
+  try {
+    const scriptSrc = join(new URL('.', import.meta.url).pathname, 'scripts', 'start-ttyd.sh')
+    const content = readFileSync(scriptSrc, 'utf-8')
+    writeFileSync(scriptDest, content, { mode: 0o755 })
+  } catch {
+    // Script may already exist from a previous run, or source not found in production
+  }
 }
 
 export function loadActiveSpaceId(rootDir: string): string | null {

@@ -30,11 +30,10 @@ function generateName(): string {
   return `${a}-${n}-${id}`
 }
 
-/** Sanitize a session name: lowercase, replace invalid chars with dashes, collapse runs */
+/** Sanitize a session name: allow letters, digits, dashes, and underscores */
 function sanitizeName(raw: string): string {
   return raw
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/[^a-zA-Z0-9_-]/g, '-')
     .replace(/-{2,}/g, '-')
     .replace(/^-|-$/g, '')
 }

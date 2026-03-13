@@ -58,7 +58,7 @@ export function ProceduresPanel({ procedures, onCollapse }: Props) {
       </div>
 
       {/* Procedure list */}
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-1.5">
+      <div data-scrollable className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-1.5">
         {procedures.map((proc) => {
           const display = statusDisplay[proc.status]
           const isActive = proc.status === 'queued' || proc.status === 'running'

@@ -87,6 +87,15 @@ export function useCanvasCamera() {
   }, [])
 
   const handleWheel = useCallback((e: WheelEvent) => {
+    // Let scrollable children handle their own scroll — but only if they can actually scroll
+    const target = e.target as HTMLElement | null
+    const scrollable = target?.closest('[data-scrollable]') as HTMLElement | null
+    if (scrollable && scrollable.scrollHeight > scrollable.clientHeight) {
+      const atTop = scrollable.scrollTop <= 0 && e.deltaY < 0
+      const atBottom = scrollable.scrollTop + scrollable.clientHeight >= scrollable.scrollHeight - 1 && e.deltaY > 0
+      if (!atTop && !atBottom) return
+    }
+
     e.preventDefault()
     const cam = cameraRef.current
 

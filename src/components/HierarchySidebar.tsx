@@ -129,8 +129,8 @@ function SidebarNode({
           }
         }}
         onDoubleClick={() => {
-          if (node.type === 'run' && onFocusRun) {
-            onFocusRun(node.entityId)
+          if (onFocusRun) {
+            onFocusRun(node.id)
           }
         }}
         onMouseEnter={() => hover(node.id)}

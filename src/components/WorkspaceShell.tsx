@@ -215,8 +215,9 @@ function WorkspaceShellInner() {
     }
   }, [entityMenu, select])
 
-  const handleFocusRun = useCallback((runId: string) => {
-    setFocusRunId(runId)
+  // Sidebar double-click passes node.id directly (e.g. "run-vpp", "initiative-abc")
+  const handleFocusNode = useCallback((nodeId: string) => {
+    setFocusRunId(nodeId)
   }, [])
 
   const handleFocusHandled = useCallback(() => {
@@ -235,9 +236,9 @@ function WorkspaceShellInner() {
     }
   }, [sidebarTree, select, toggleSelect, expandAll])
 
-  // Double-click on canvas widget → zoom to fit
+  // Double-click on canvas widget → zoom to fit (receives run.id, needs prefixing)
   const handleCanvasFocusRun = useCallback((runId: string) => {
-    setFocusRunId(runId)
+    setFocusRunId(`run-${runId}`)
     handleSelectRun(runId)
   }, [handleSelectRun])
 
@@ -294,7 +295,7 @@ function WorkspaceShellInner() {
             onAdd={handleAdd}
             onRename={handleRename}
             onDelete={handleDelete}
-            onFocusRun={handleFocusRun}
+            onFocusRun={handleFocusNode}
             onMenuOpen={handleMenuOpen}
             onReparent={handleReparent}
             onArrangeGrid={() => arrangeGridRef.current?.()}

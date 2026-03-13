@@ -101,8 +101,9 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
         ) : (
           <div
             draggable
-            onDragStart={(e) => handleDragStart(e, entry.path)}
-            onDoubleClick={() => onOpenFile?.(entry.path)}
+            onDragStart={(e) => { e.stopPropagation(); handleDragStart(e, entry.path) }}
+            onDoubleClick={(e) => { e.stopPropagation(); onOpenFile?.(entry.path) }}
+            onPointerDown={(e) => e.stopPropagation()}
             className="flex items-center gap-1 py-[2px] hover:bg-surface-hover cursor-grab active:cursor-grabbing group"
             style={{ paddingLeft: depth * 14 + 22 }}
             title={`Double-click to open · Drag to terminal`}
@@ -118,7 +119,7 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin py-1">
+    <div data-scrollable className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin py-1">
       {renderEntries('.', 0)}
     </div>
   )

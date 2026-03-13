@@ -65,7 +65,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
       )}
 
       {/* Three-panel workspace */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         {filesCollapsed ? (
           <div
             data-testid="collapsed-files"

@@ -36,7 +36,7 @@ export function TouchedFilesPanel({ files, onFileSelect, onOpenFile, onCollapse 
       </div>
 
       {/* File list */}
-      <div className="flex-1 overflow-y-auto scrollbar-thin">
+      <div data-scrollable className="flex-1 overflow-y-auto scrollbar-thin">
         {files.map((file) => {
           const isSelected = selectedId === file.id
           return (
@@ -46,7 +46,7 @@ export function TouchedFilesPanel({ files, onFileSelect, onOpenFile, onCollapse 
                 setSelectedId(file.id)
                 onFileSelect?.(file)
               }}
-              onDoubleClick={() => onOpenFile?.(file.path)}
+              onDoubleClick={(e) => { e.stopPropagation(); onOpenFile?.(file.path) }}
               className={`
                 w-full flex items-center justify-between px-3 py-1.5 text-left transition-all
                 border-l-2 group
