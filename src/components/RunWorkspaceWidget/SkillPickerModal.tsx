@@ -91,6 +91,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
       status: 'defining',
       entityId: taskId,
       entityType: 'task',
+      sessionId,
     }
 
     onClose()

@@ -54,6 +54,7 @@ export interface PendingSkill {
   status: 'defining' | 'saving' | 'error'
   entityId: string
   entityType: 'task' | 'epic' | 'initiative'
+  sessionId: string
 }
 
 export interface SkillDTO {

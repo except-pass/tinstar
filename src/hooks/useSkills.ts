@@ -27,6 +27,12 @@ export function useSkills(): SkillsState & SkillsActions {
   const [pickerContext, setPickerContext] = useState<{ taskId: string } | null>(null)
   const [savingDraft, setSavingDraft] = useState<{ draftId: string; skillName: string; pendingSkillId: string; sessionId: string } | null>(null)
   const timeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const pendingSkillsRef = useRef<PendingSkill[]>([])
+
+  // Keep ref in sync so SSE handlers can read latest pending skills
+  useEffect(() => {
+    pendingSkillsRef.current = pendingSkills
+  }, [pendingSkills])
 
   // Subscribe to skill.drafted and skill.saved SSE events
   useEffect(() => {
@@ -37,11 +43,14 @@ export function useSkills(): SkillsState & SkillsActions {
       // Cancel timeout for this pending skill
       const timeout = timeoutsRef.current.get(draftId)
       if (timeout) { clearTimeout(timeout); timeoutsRef.current.delete(draftId) }
+      // Read sessionId from the pending skill captured at addPendingSkill time
+      const matchingSkill = pendingSkillsRef.current.find(ps => ps.id === draftId)
+      const sessionId = matchingSkill?.sessionId ?? ''
       // Transition matching pending skill to 'saving'
       setPendingSkills(prev => prev.map(ps =>
         ps.id === draftId ? { ...ps, status: 'saving' as const } : ps
       ))
-      setSavingDraft({ draftId, skillName, pendingSkillId: draftId, sessionId: '' })
+      setSavingDraft({ draftId, skillName, pendingSkillId: draftId, sessionId })
     })
 
     es.addEventListener('skill.saved', () => {
