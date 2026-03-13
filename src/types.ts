@@ -4,7 +4,6 @@ export type SessionStatus = 'creating' | 'running' | 'idle' | 'needs_attention' 
 /** @deprecated Use SessionStatus instead */
 export type RunStatus = SessionStatus
 export type FileKind = 'code' | 'config' | 'test' | 'script' | 'doc'
-export type ProcedureStatus = 'idle' | 'queued' | 'running' | 'complete' | 'failed'
 export type RecapEntryType = 'agent' | 'user' | 'status'
 export type DiffLineType = 'context' | 'addition' | 'deletion' | 'header'
 
@@ -39,11 +38,28 @@ export interface TouchedFile {
   readOnly?: boolean
 }
 
-export interface Procedure {
+export interface StoredProcedure {
   id: string
+  skillName: string   // matches SkillDTO.name
+}
+
+export interface ResolvedProcedure extends StoredProcedure {
+  entityId: string
+  entityType: 'task' | 'epic' | 'initiative'
+}
+
+export interface PendingSkill {
+  id: string                // client-generated UUID == draftId
+  placeholderName: string   // typed description shown while agent works
+  status: 'defining' | 'saving' | 'error'
+  entityId: string
+  entityType: 'task' | 'epic' | 'initiative'
+}
+
+export interface SkillDTO {
   name: string
-  command: string
-  status: ProcedureStatus
+  description?: string
+  source: 'system' | 'repo' | 'plugin'
 }
 
 export interface RunData {
@@ -58,7 +74,6 @@ export interface RunData {
   touchedFiles: TouchedFile[]
   recapEntries: RecapEntry[]
   rawLogs: string
-  procedures: Procedure[]
   port: number | null
   backend: 'docker' | 'tmux' | null
 }

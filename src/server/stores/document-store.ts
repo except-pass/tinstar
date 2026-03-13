@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Initiative, Epic, Task, Worktree, Run, Space } from '../../domain/types'
-import type { RunStatus, TouchedFile, Procedure, RecapEntry } from '../../types'
+import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 
 export class DocumentStore {
   private initiatives = new Map<string, Initiative>()
@@ -203,18 +203,6 @@ export class DocumentStore {
   }
 
   // --- Run mutations (partial updates that emit changes) ---
-
-  upsertProcedure(runId: string, procedure: Procedure): void {
-    const run = this.runs.get(runId)
-    if (!run) return
-    const idx = run.procedures.findIndex(p => p.id === procedure.id)
-    if (idx >= 0) {
-      run.procedures[idx] = procedure
-    } else {
-      run.procedures.push(procedure)
-    }
-    this.changes.emit('change', { entity: 'run', id: runId, data: run })
-  }
 
   addRecapEntry(runId: string, entry: RecapEntry): void {
     const run = this.runs.get(runId)

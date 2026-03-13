@@ -71,24 +71,9 @@ export function buildEventSequence(): TimedEvent[] {
       })
     }
 
-    // Procedures come after files
+    // Recap entries come after files
     const filesDone = baseDelay + 50 + run.touchedFiles.length * 30
-    for (let p = 0; p < run.procedures.length; p++) {
-      events.push({
-        delayMs: filesDone + 20 + p * 25,
-        event: {
-          type: 'run.procedure_updated',
-          timestamp: now(),
-          payload: {
-            runId: run.id,
-            procedure: run.procedures[p],
-          },
-        },
-      })
-    }
-
-    // Recap entries come after procedures
-    const procsDone = filesDone + 20 + run.procedures.length * 25
+    const procsDone = filesDone + 20
     for (let r = 0; r < run.recapEntries.length; r++) {
       events.push({
         delayMs: procsDone + 15 + r * 20,

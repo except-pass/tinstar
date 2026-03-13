@@ -20,10 +20,6 @@ export function toRunSummary(
   const task = taxonomy.getTaskForRun(run)
   const worktree = taxonomy.getWorktreeForRun(run)
 
-  const activeProcedures = run.procedures.filter(
-    p => p.status === 'running',
-  ).length
-
   // Use the most recent recap entry timestamp, or createdAt as fallback
   const lastEntry = run.recapEntries[run.recapEntries.length - 1]
   const lastActivity = lastEntry?.timestamp ?? run.createdAt
@@ -38,8 +34,6 @@ export function toRunSummary(
     task: task?.name ?? 'Unknown',
     worktree: worktree?.name ?? 'Unknown',
     fileCount: run.touchedFiles.length,
-    procedureCount: run.procedures.length,
-    activeProcedures,
     lastActivity,
     lastRecap: lastEntry?.content ?? null,
   }

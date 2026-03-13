@@ -37,7 +37,8 @@ export class DocumentProcessor {
         touchedFiles: [],
         recapEntries: [],
         rawLogs: '',
-        procedures: [],
+        port: null,
+        backend: null,
         spaceId: this.store.activeSpaceId,
       }
       this.store.upsertRun(run.id, run)
@@ -53,10 +54,6 @@ export class DocumentProcessor {
 
     this.bus.on('run.file_touched', (e) => {
       this.store.addFileTouched(e.payload.runId, e.payload.file)
-    })
-
-    this.bus.on('run.procedure_updated', (e) => {
-      this.store.upsertProcedure(e.payload.runId, e.payload.procedure)
     })
 
     this.bus.on('run.recap_added', (e) => {

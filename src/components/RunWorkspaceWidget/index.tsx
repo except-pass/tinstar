@@ -132,7 +132,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
             <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr]">Procs</span>
           </div>
         ) : (
-          <ProceduresPanel procedures={run.procedures} onCollapse={() => setProcsCollapsed(true)} />
+          <ProceduresPanel onCollapse={() => setProcsCollapsed(true)} />
         )}
       </div>
 

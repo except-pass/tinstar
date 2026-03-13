@@ -2,8 +2,8 @@ import type {
   SessionStatus,
   RunStatus,
   TouchedFile,
-  Procedure,
   RecapEntry,
+  SkillDTO,
 } from '../types'
 
 // --- OTel Types (plain interfaces, not SDK) ---
@@ -106,11 +106,6 @@ export interface RunFileTouchedPayload {
   file: TouchedFile
 }
 
-export interface RunProcedureUpdatedPayload {
-  runId: string
-  procedure: Procedure
-}
-
 export interface RunRecapAddedPayload {
   runId: string
   entry: RecapEntry
@@ -131,6 +126,15 @@ export interface OtelMetricRecordedPayload {
   metric: Metric
 }
 
+export interface SkillDraftedPayload {
+  draftId: string
+  skillName: string
+}
+
+export interface SkillSavedPayload {
+  skill: SkillDTO
+}
+
 // --- Discriminated union ---
 
 export type BusEvent =
@@ -142,8 +146,9 @@ export type BusEvent =
   | { type: 'run.updated'; timestamp: string; payload: RunUpdatedPayload }
   | { type: 'run.completed'; timestamp: string; payload: RunCompletedPayload }
   | { type: 'run.file_touched'; timestamp: string; payload: RunFileTouchedPayload }
-  | { type: 'run.procedure_updated'; timestamp: string; payload: RunProcedureUpdatedPayload }
   | { type: 'run.recap_added'; timestamp: string; payload: RunRecapAddedPayload }
+  | { type: 'skill.drafted'; timestamp: string; payload: SkillDraftedPayload }
+  | { type: 'skill.saved'; timestamp: string; payload: SkillSavedPayload }
   | { type: 'otel.span_started'; timestamp: string; payload: OtelSpanStartedPayload }
   | { type: 'otel.span_ended'; timestamp: string; payload: OtelSpanEndedPayload }
   | { type: 'otel.metric_recorded'; timestamp: string; payload: OtelMetricRecordedPayload }

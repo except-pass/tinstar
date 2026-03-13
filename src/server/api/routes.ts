@@ -34,7 +34,7 @@ import {
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import { parseNewEntries } from '../sessions/transcript-parser'
 import { getGitDiffFiles } from '../sessions/git-diff'
-import type { EntitySettings, GroupingDimension, Run } from '../../domain/types'
+import type { Run } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import type { FileKind, TouchedFile } from '../../types'
 
@@ -624,7 +624,6 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
             touchedFiles: [],
             recapEntries: [],
             rawLogs: '',
-            procedures: [],
             port: sessionPort ?? null,
             backend,
             taskId: taskId ?? '',

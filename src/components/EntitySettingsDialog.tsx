@@ -106,6 +106,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
         worktree: inherited ?? 'none',
         skipPermissions: inherited ?? false,
         profile: inherited ?? '',
+        procedures: inherited ?? [],
       }
       setDraft(prev => ({ ...prev, [key]: defaults[key] }))
     } else {

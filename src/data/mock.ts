@@ -89,13 +89,6 @@ export const mockRun: RunData = {
 [14:35:03] claude-agent: Running: kubectl apply -f deploy/k8s/config.yaml --dry-run=client
 [14:35:05] kubectl: deployment.apps/scheduler configured (dry run)
 [14:35:06] claude-agent: Dry run successful. Awaiting final deploy confirmation.`,
-  procedures: [
-    { id: 'p1', name: 'Run_Benchmark', command: 'go test -bench=.', status: 'complete' },
-    { id: 'p2', name: 'Clean_Mocks', command: 'make clean-gen', status: 'idle' },
-    { id: 'p3', name: 'Deploy_Staging', command: 'kubectl apply -f deploy/', status: 'queued' },
-    { id: 'p4', name: 'Git_Push_Origin', command: 'git push --force', status: 'idle' },
-    { id: 'p5', name: 'Run_Linter', command: 'golangci-lint run', status: 'idle' },
-  ],
   port: null,
   backend: null,
 }

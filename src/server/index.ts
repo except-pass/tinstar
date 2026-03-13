@@ -136,7 +136,6 @@ export function tinstarBackend(): Plugin {
                 touchedFiles: [],
                 recapEntries: [],
                 rawLogs: '',
-                procedures: [],
                 port: sess.port ?? null,
                 backend: sess.backend ?? null,
                 taskId: '',
