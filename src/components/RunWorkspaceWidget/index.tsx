@@ -41,6 +41,14 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
 
   const onResizePointerUp = useCallback(() => { resizeDragRef.current = null }, [])
 
+  const handleOpenFile = useCallback((filePath: string) => {
+    fetch('/api/editor/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath }),
+    }).catch(() => {})
+  }, [])
+
   return (
     <div className={`flex flex-col overflow-hidden neon-border bg-surface-base ${className}`}>
       {/* Header doubles as drag handle */}
@@ -98,9 +106,9 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
             {/* Panel content */}
             <div className="flex-1 overflow-hidden">
               {filePanelMode === 'touched' ? (
-                <TouchedFilesPanel files={run.touchedFiles} />
+                <TouchedFilesPanel files={run.touchedFiles} onOpenFile={handleOpenFile} />
               ) : (
-                <FileTreePanel sessionId={run.sessionId} />
+                <FileTreePanel sessionId={run.sessionId} onOpenFile={handleOpenFile} />
               )}
             </div>
             {/* Resize handle */}

@@ -172,6 +172,32 @@ export function buildGroupTree(
     })
   }
 
+  // Non-root orphan runs: runs that don't match any entity for this dimension
+  // still need to appear as direct children (e.g. a run with no worktree
+  // inside a task group when grouping by ['task', 'worktree'])
+  if (!_isRoot && orphanRuns.length > 0) {
+    if (remaining.length > 0) {
+      // Recurse orphans through remaining dimensions
+      const orphanChildren = buildGroupTree(orphanRuns, remaining, taxonomy, false)
+      nodes.push(...orphanChildren)
+    } else {
+      // Leaf level: emit as run nodes
+      for (const run of orphanRuns) {
+        nodes.push({
+          id: `run-${run.id}`,
+          label: run.id,
+          type: 'run' as const,
+          entityId: run.id,
+          children: [],
+          runCount: 1,
+          activeCount: run.status === 'running' ? 1 : 0,
+          color: STATUS_BORDER_COLORS[run.status],
+          backend: run.backend,
+        })
+      }
+    }
+  }
+
   // Add orphan entities (those with missing/empty parent) at root level
   if (_isRoot) {
     const parentDim = _parentDimension // undefined at true root

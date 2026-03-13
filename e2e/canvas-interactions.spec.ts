@@ -258,6 +258,27 @@ test.describe('Canvas Interactions', () => {
       expect(pct).toBe(100)
     })
 
+    test('middle-click drag pans canvas', async ({ page }) => {
+      const root = page.getByTestId(ROOT_1)
+      const before = await box(root)
+
+      const canvas = page.getByTestId('infinite-canvas')
+      const canvasBox = await box(canvas)
+      const sx = canvasBox.x + canvasBox.width / 2
+      const sy = canvasBox.y + canvasBox.height / 2
+
+      // Middle-click (button 1) drag
+      await page.mouse.move(sx, sy)
+      await page.mouse.down({ button: 'middle' })
+      await page.mouse.move(sx + 150, sy + 100, { steps: 10 })
+      await page.mouse.up({ button: 'middle' })
+      await page.waitForTimeout(200)
+
+      const after = await box(root)
+      expect(after.x - before.x).toBeGreaterThan(100)
+      expect(after.y - before.y).toBeGreaterThan(50)
+    })
+
     // --- Negative: left-click on empty canvas does NOT pan ---
     test('left-click drag on empty canvas does not pan', async ({ page }) => {
       const root = page.getByTestId(ROOT_1)

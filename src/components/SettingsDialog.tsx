@@ -15,6 +15,8 @@ export function SettingsDialog({ onClose }: Props) {
   const [newName, setNewName] = useState('')
   const [newPath, setNewPath] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [editorCmd, setEditorCmd] = useState('')
+  const [editorSaved, setEditorSaved] = useState(false)
   const nameRef = useRef<HTMLInputElement>(null)
 
   const fetchProjects = useCallback(() => {
@@ -38,6 +40,10 @@ export function SettingsDialog({ onClose }: Props) {
 
   useEffect(() => {
     fetchProjects()
+    fetch('/api/config')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.ok && typeof d.data?.editor === 'string') setEditorCmd(d.data.editor) })
+      .catch(() => {})
   }, [fetchProjects])
 
   const handleAdd = useCallback(async () => {
@@ -159,6 +165,52 @@ export function SettingsDialog({ onClose }: Props) {
               {error}
             </div>
           )}
+        </div>
+
+        {/* Editor command */}
+        <div className="mb-4">
+          <h4 className="text-xs font-display uppercase tracking-wider text-slate-300 mb-2">
+            Editor
+          </h4>
+          <p className="text-2xs text-slate-500 mb-2">
+            Command to open files. Use <code className="text-slate-400">{'{{path}}'}</code> as the file path placeholder.
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={editorCmd}
+              onChange={e => { setEditorCmd(e.target.value); setEditorSaved(false) }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && editorCmd.trim()) {
+                  fetch('/api/config', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ editor: editorCmd }),
+                  }).then(() => setEditorSaved(true)).catch(() => {})
+                }
+              }}
+              placeholder="cursor {{path}}"
+              className="flex-1 px-2 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 font-mono placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
+            />
+            <button
+              className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30 disabled:opacity-50 flex-shrink-0"
+              disabled={!editorCmd.trim()}
+              onClick={() => {
+                fetch('/api/config', {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ editor: editorCmd }),
+                }).then(() => setEditorSaved(true)).catch(() => {})
+              }}
+            >
+              {editorSaved ? 'Saved' : 'Save'}
+            </button>
+          </div>
+          <div className="flex gap-3 mt-2 text-2xs text-slate-600">
+            <span>cursor {'{{path}}'}</span>
+            <span>code -g {'{{path}}'}</span>
+            <span>subl {'{{path}}'}</span>
+          </div>
         </div>
 
         {/* Config info */}

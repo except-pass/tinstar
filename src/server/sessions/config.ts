@@ -4,8 +4,16 @@ import { homedir } from 'node:os'
 
 // --- Types ---
 
+export interface ImageProfile {
+  name: string
+  image: string
+  home?: string
+}
+
 export interface TinstarConfig {
   container: { prefix: string; defaultImage: string; home: string }
+  profiles: ImageProfile[]
+  editor: string
   ports: { ttyd: number; hostStart: number }
   caddy: { listenPort: number; adminPort: number }
   dirs: { root: string; secrets: string; sessions: string }
@@ -73,8 +81,17 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
 
   const merged = deepMerge(BASE_CONFIG as unknown as Record<string, unknown>, userConfig) as unknown as typeof BASE_CONFIG
 
+  // Profiles are replaced wholesale (not deep-merged) — user list wins if present
+  const profiles: ImageProfile[] = Array.isArray(userConfig.profiles)
+    ? userConfig.profiles as ImageProfile[]
+    : []
+
+  const editor = typeof userConfig.editor === 'string' ? userConfig.editor : 'cursor {{path}}'
+
   const config: TinstarConfig = {
     container: merged.container,
+    profiles,
+    editor,
     ports: merged.ports,
     caddy: (merged as unknown as { caddy?: TinstarConfig['caddy'] }).caddy ?? { listenPort: 8088, adminPort: 2019 },
     dirs: {

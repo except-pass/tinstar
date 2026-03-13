@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
@@ -794,6 +794,80 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
 
         return true
       }
+    }
+
+    // GET /api/config — read the full user config
+    if (method === 'GET' && url === '/api/config') {
+      try {
+        const data = JSON.parse(readFileSync(cfg.files.config, 'utf-8'))
+        json(res, { ok: true, data })
+      } catch {
+        json(res, { ok: true, data: {} })
+      }
+      return true
+    }
+
+    // PATCH /api/config — merge keys into user config and persist
+    if (method === 'PATCH' && url === '/api/config') {
+      readBody(req).then((body) => {
+        const patch = JSON.parse(body)
+        let data: Record<string, unknown> = {}
+        try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no existing config */ }
+        Object.assign(data, patch)
+        writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+        json(res, { ok: true, data })
+      })
+      return true
+    }
+
+    // POST /api/editor/open — open a file in the configured editor
+    if (method === 'POST' && url === '/api/editor/open') {
+      readBody(req).then((body) => {
+        const { path: filePath } = JSON.parse(body)
+        if (!filePath) return json(res, { ok: false, error: { code: 'MISSING_PATH', message: 'path is required' } }, 400)
+
+        // Read editor command fresh from config file (survives server restarts)
+        let editorCmd = cfg.editor
+        try {
+          const raw = JSON.parse(readFileSync(cfg.files.config, 'utf-8'))
+          if (typeof raw.editor === 'string') editorCmd = raw.editor
+        } catch { /* use default */ }
+
+        const cmd = editorCmd.replace(/\{\{path\}\}/g, filePath)
+        const parts = cmd.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [cmd]
+        const [bin, ...args] = parts.map(p => p.replace(/^["']|["']$/g, ''))
+
+        log.info('editor', `opening: ${bin} ${args.join(' ')}`)
+
+        // Resolve the latest VS Code / Cursor IPC socket so the CLI can
+        // connect even if the server was started before the current editor.
+        const env = { ...process.env }
+        try {
+          const socks = readdirSync('/run/user/1000')
+            .filter(f => f.startsWith('vscode-ipc-') && f.endsWith('.sock'))
+            .map(f => ({ name: f, mtime: statSync(`/run/user/1000/${f}`).mtimeMs }))
+            .sort((a, b) => b.mtime - a.mtime)
+          if (socks.length > 0) {
+            env.VSCODE_IPC_HOOK_CLI = `/run/user/1000/${socks[0]!.name}`
+          }
+        } catch { /* non-Linux or no sockets — use inherited env */ }
+
+        import('node:child_process').then(({ spawn }) => {
+          const child = spawn(bin!, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: true, env })
+          child.stderr?.on('data', (d: Buffer) => log.warn('editor', `stderr: ${d.toString().trim()}`))
+          child.on('error', (err) => log.error('editor', `spawn error: ${err.message}`))
+          child.on('exit', (code) => { if (code) log.warn('editor', `exited with code ${code}`) })
+          child.unref()
+          json(res, { ok: true })
+        })
+      })
+      return true
+    }
+
+    // GET /api/docker/profiles — configured image profiles
+    if (method === 'GET' && url === '/api/docker/profiles') {
+      json(res, { ok: true, data: cfg.profiles })
+      return true
     }
 
     // --- Hooks (called by Claude Code inside sessions) ---

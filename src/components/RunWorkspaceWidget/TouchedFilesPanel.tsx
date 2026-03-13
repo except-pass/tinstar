@@ -12,10 +12,11 @@ const kindIcon: Record<FileKind, string> = {
 interface Props {
   files: TouchedFile[]
   onFileSelect?: (file: TouchedFile) => void
+  onOpenFile?: (filePath: string) => void
   onCollapse?: () => void
 }
 
-export function TouchedFilesPanel({ files, onFileSelect, onCollapse }: Props) {
+export function TouchedFilesPanel({ files, onFileSelect, onOpenFile, onCollapse }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(files[2]?.id ?? null)
 
   // Only count reconciled files in header totals
@@ -45,6 +46,7 @@ export function TouchedFilesPanel({ files, onFileSelect, onCollapse }: Props) {
                 setSelectedId(file.id)
                 onFileSelect?.(file)
               }}
+              onDoubleClick={() => onOpenFile?.(file.path)}
               className={`
                 w-full flex items-center justify-between px-3 py-1.5 text-left transition-all
                 border-l-2 group

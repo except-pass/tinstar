@@ -172,6 +172,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     (e: ReactPointerEvent) => {
       if (spaceHeld.current || e.button === 1) {
         // Space held or middle-click = pan
+        e.preventDefault()
         startPan(e.nativeEvent)
         return
       }
@@ -185,10 +186,9 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
 
   const onPointerMove = useCallback(
     (e: ReactPointerEvent) => {
-      if (spaceHeld.current) {
-        movePan(e.nativeEvent)
-        return
-      }
+      // Always forward to movePan — it no-ops if not panning
+      movePan(e.nativeEvent)
+      if (spaceHeld.current) return
       // Marquee drawing
       if (marqueeRef.current.startX !== 0 || marqueeRef.current.startY !== 0) {
         const dx = e.clientX - marqueeRef.current.startX
@@ -208,8 +208,9 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
 
   const onPointerUp = useCallback(
     (e: ReactPointerEvent) => {
+      // Always end pan (handles both space+drag and middle-click pan)
+      endPan()
       if (spaceHeld.current) {
-        endPan()
         marqueeRef.current = { startX: 0, startY: 0, active: false }
         setMarquee(null)
         return

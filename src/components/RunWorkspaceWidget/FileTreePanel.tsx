@@ -14,11 +14,12 @@ interface TreeNodeState {
 
 interface Props {
   sessionId: string
+  onOpenFile?: (filePath: string) => void
   onCollapse?: () => void
 }
 
 /** Lazy-loading file tree panel — fetches one directory level at a time */
-export function FileTreePanel({ sessionId }: Props) {
+export function FileTreePanel({ sessionId, onOpenFile }: Props) {
   const [dirs, setDirs] = useState<Map<string, TreeNodeState>>(() => new Map())
 
   const loadDir = useCallback(async (dirPath: string) => {
@@ -101,9 +102,10 @@ export function FileTreePanel({ sessionId }: Props) {
           <div
             draggable
             onDragStart={(e) => handleDragStart(e, entry.path)}
+            onDoubleClick={() => onOpenFile?.(entry.path)}
             className="flex items-center gap-1 py-[2px] hover:bg-surface-hover cursor-grab active:cursor-grabbing group"
             style={{ paddingLeft: depth * 14 + 22 }}
-            title={`Drag to terminal: ${entry.path}`}
+            title={`Double-click to open · Drag to terminal`}
           >
             <span className="material-symbols-outlined text-sm text-slate-600 group-hover:text-slate-400">
               {fileIcon(entry.name)}

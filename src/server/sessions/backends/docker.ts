@@ -7,6 +7,17 @@ import type { TinstarConfig } from '../config'
 
 const execFileAsync = promisify(execFile)
 
+// --- Helpers ---
+
+/** Resolve the container home directory for a session, checking profile overrides. */
+function resolveHome(config: TinstarConfig, session: Session): string {
+  if (session.profile) {
+    const prof = config.profiles.find(p => p.image === session.profile)
+    if (prof?.home) return prof.home
+  }
+  return config.container.home
+}
+
 // --- Command builders (exported for testing) ---
 
 export function containerName(config: TinstarConfig, sessionName: string): string {
@@ -17,10 +28,12 @@ export function buildVolumeFlags(config: TinstarConfig, session: Session & { _st
   const flags: string[] = []
   const stateDir = session._stateDir
 
+  const home = resolveHome(config, session)
+
   // Claude state persistence (mount only the projects subdir so the image's
   // settings.json and hook scripts in ~/.claude/ are not shadowed)
   if (stateDir) {
-    flags.push('-v', `${stateDir}:${config.container.home}/.claude/projects`)
+    flags.push('-v', `${stateDir}:${home}/.claude/projects`)
   }
 
   const ws = session.workspace
@@ -105,7 +118,8 @@ export function buildExecCommand(
     args.push('-e', `WORKSPACE_DIR=${session.workspace.path}`)
   }
 
-  args.push(name, `${config.container.home}/start-ttyd.sh`)
+  const home = resolveHome(config, session)
+  args.push(name, `${home}/start-ttyd.sh`)
   return args
 }
 

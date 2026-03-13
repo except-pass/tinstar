@@ -21,9 +21,30 @@ type WorktreeMode = 'none' | 'new' | 'existing'
 
 interface EntityOption { id: string; name: string }
 
+function generateName(): string {
+  const adj = ['swift', 'bold', 'keen', 'calm', 'warm', 'cool', 'bright', 'sharp', 'quick', 'deft']
+  const noun = ['fox', 'hawk', 'wolf', 'bear', 'lynx', 'pike', 'wren', 'crow', 'hare', 'elk']
+  const a = adj[Math.floor(Math.random() * adj.length)]
+  const n = noun[Math.floor(Math.random() * noun.length)]
+  const id = Math.random().toString(36).slice(2, 6)
+  return `${a}-${n}-${id}`
+}
+
+/** Sanitize a session name: lowercase, replace invalid chars with dashes, collapse runs */
+function sanitizeName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
 export function CreateSessionDialog({ onClose, prefill }: Props) {
+  const [placeholder] = useState(generateName)
   const [name, setName] = useState('')
   const [backend, setBackend] = useState<Backend>(prefill?.backend ?? 'tmux')
+  const [profile, setProfile] = useState(prefill?.profile ?? '')
+  const [profiles, setProfiles] = useState<Array<{ name: string; image: string }>>([])
   const [project, setProject] = useState(prefill?.project ?? '')
   const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
   const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>(prefill?.worktreeMode ?? 'none')
@@ -65,6 +86,17 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       .catch(() => {})
   }, [])
 
+  // Fetch configured image profiles when backend is docker
+  useEffect(() => {
+    if (backend !== 'docker') return
+    fetch('/api/docker/profiles')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.ok && Array.isArray(d.data)) setProfiles(d.data)
+      })
+      .catch(() => {})
+  }, [backend])
+
   // Fetch existing worktrees when project is selected and mode is 'existing'
   useEffect(() => {
     if (!project || worktreeMode !== 'existing') {
@@ -83,16 +115,19 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       .catch(() => {})
   }, [project, worktreeMode])
 
+  const effectiveName = name || placeholder
+
   const handleSubmit = useCallback(async () => {
-    if (!name.trim() || submitting) return
+    if (submitting) return
     setSubmitting(true)
     setError(null)
 
     const body: Record<string, unknown> = {
-      name: name.trim(),
+      name: effectiveName,
       backend,
       skipPermissions,
     }
+    if (profile) body.profile = profile
     if (project) body.project = project
     if (worktreeMode === 'new') body.worktree = true
     if (worktreeMode === 'existing' && worktreePath) body.worktreePath = worktreePath
@@ -118,7 +153,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       setError((err as Error).message)
       setSubmitting(false)
     }
-  }, [name, backend, project, worktreeMode, worktreePath, skipPermissions, prompt, submitting, onClose])
+  }, [effectiveName, backend, profile, project, worktreeMode, worktreePath, skipPermissions, prompt, submitting, onClose])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -146,9 +181,9 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
             ref={nameRef}
             type="text"
             value={name}
-            onChange={e => setName(e.target.value)}
+            onChange={e => setName(sanitizeName(e.target.value))}
             onKeyDown={e => { if (e.key === 'Enter') handleSubmit() }}
-            placeholder="my-session"
+            placeholder={placeholder}
             className="w-full px-3 py-2 bg-surface-base border border-white/10 rounded text-sm text-slate-200 placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
             data-testid="session-name-input"
           />
@@ -179,7 +214,12 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
 
           {/* Project picker */}
           <div className="flex-1">
-            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Project</label>
+            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block group relative cursor-default">
+              Project
+              <span className="pointer-events-none absolute left-0 top-full mt-1 z-50 hidden group-hover:block w-56 px-2 py-1.5 rounded bg-slate-800 border border-white/10 text-2xs text-slate-300 leading-relaxed shadow-lg normal-case tracking-normal">
+                Sets the working directory. For tmux: opens at the project path (or a sibling worktree dir). For Docker: bind-mounted the same way. None = no mount.
+              </span>
+            </label>
             <select
               value={project}
               onChange={e => setProject(e.target.value)}
@@ -192,6 +232,23 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
             </select>
           </div>
         </div>
+
+        {/* Docker image profile */}
+        {backend === 'docker' && profiles.length > 0 && (
+          <div className="mb-3">
+            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Image</label>
+            <select
+              value={profile}
+              onChange={e => setProfile(e.target.value)}
+              className="w-full px-3 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
+            >
+              <option value="">Default</option>
+              {profiles.map(p => (
+                <option key={p.image} value={p.image}>{p.name} ({p.image})</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Worktree mode */}
         {project && (
@@ -306,7 +363,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
             <button
               className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30 disabled:opacity-50"
               onClick={handleSubmit}
-              disabled={!name.trim() || submitting}
+              disabled={submitting}
               data-testid="create-session-submit"
             >
               {submitting ? 'Creating...' : 'Create'}
