@@ -1,158 +1,160 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { useSetAtom } from "jotai";
-import { useCallback, useEffect } from "react";
-import { projetsQueryConfig } from "../hooks/projects/useProjects";
-import { honoClient } from "../lib/api/client";
-import { aliveTasksAtom } from "../lib/atoms/aliveTasksAtom";
-import type { SSEEvent } from "../server/service/events/types";
-import { slashCommandsQueryKey } from "./commands/useSlashCommands";
+import { useState, useEffect, useRef } from 'react'
+import type { Initiative, Epic, Task, Worktree, Run, Space } from '../domain/types'
 
-type ParsedEvent = {
-  event: string;
-  data: SSEEvent;
-  id: string;
-};
+interface ServerState {
+  activeSpaceId: string
+  spaces: Space[]
+  initiatives: Initiative[]
+  epics: Epic[]
+  tasks: Task[]
+  worktrees: Worktree[]
+  runs: Run[]
+}
 
-const parseSSEEvent = (text: string): ParsedEvent => {
-  const lines = text.split("\n");
-  const eventIndex = lines.findIndex((line) => line.startsWith("event:"));
-  const dataIndex = lines.findIndex((line) => line.startsWith("data:"));
-  const idIndex = lines.findIndex((line) => line.startsWith("id:"));
+const EMPTY_STATE: ServerState = {
+  activeSpaceId: '',
+  spaces: [],
+  initiatives: [],
+  epics: [],
+  tasks: [],
+  worktrees: [],
+  runs: [],
+}
 
-  const endIndex = (index: number) => {
-    const targets = [eventIndex, dataIndex, idIndex, lines.length].filter(
-      (current) => current > index,
-    );
-    return Math.min(...targets);
-  };
-
-  if (eventIndex === -1 || dataIndex === -1 || idIndex === -1) {
-    console.error("Missing SSE fields in event:", text);
-    throw new Error(
-      `Failed to parse SSE event - missing fields. Event: ${text.slice(0, 100)}...`,
-    );
-  }
-
-  const event = lines.slice(eventIndex, endIndex(eventIndex)).join("\n");
-  const data = lines.slice(dataIndex, endIndex(dataIndex)).join("\n");
-  const id = lines.slice(idIndex, endIndex(idIndex)).join("\n");
-
-  const dataContent = data.slice("data:".length).trim();
-
-  try {
-    const parsedData = JSON.parse(dataContent) as SSEEvent;
-    return {
-      id: id.slice("id:".length).trim(),
-      event: event.slice("event:".length).trim(),
-      data: parsedData,
-    };
-  } catch (error) {
-    console.error("JSON parse error:", error);
-    console.error("Data content:", dataContent);
-    console.error("Full event text:", text);
-    throw new Error(
-      `Failed to parse SSE event JSON: ${error}. Data: ${dataContent.slice(0, 100)}...`,
-    );
-  }
-};
-
-let isInitialized = false;
-
-export const useServerEvents = () => {
-  const queryClient = useQueryClient();
-  const setAliveTasks = useSetAtom(aliveTasksAtom);
-
-  const listener = useCallback(async () => {
-    console.log("listening to events");
-    const response = await honoClient.api.events.state_changes.$get();
-
-    if (!response.ok) {
-      throw new Error("Failed to fetch events");
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error("Failed to get reader");
-    }
-
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      // Add new chunk to buffer
-      buffer += decoder.decode(value, { stream: true });
-
-      // Process complete events (separated by \n\n)
-      const eventBoundary = "\n\n";
-      let boundaryIndex: number;
-
-      boundaryIndex = buffer.indexOf(eventBoundary);
-      while (boundaryIndex !== -1) {
-        const eventText = buffer.slice(0, boundaryIndex);
-        buffer = buffer.slice(boundaryIndex + eventBoundary.length);
-
-        if (eventText.trim().length > 0) {
-          try {
-            const event = parseSSEEvent(eventText);
-            console.log("data", event);
-
-            if (event.data.type === "project_changed") {
-              await queryClient.invalidateQueries({
-                queryKey: projetsQueryConfig.queryKey,
-              });
-            }
-
-            if (event.data.type === "session_changed") {
-              // Invalidate the specific session that changed
-              const { sessionId, projectId } = event.data.data;
-              await queryClient.invalidateQueries({
-                queryKey: ["sessions", sessionId],
-                refetchType: "active", // Force refetch of active queries
-              });
-
-              // Also invalidate the project to refresh session metadata in the list
-              await queryClient.invalidateQueries({
-                queryKey: ["projects", projectId],
-              });
-            }
-
-            if (event.data.type === "task_changed") {
-              setAliveTasks(event.data.data);
-            }
-
-            if (event.data.type === "commands_changed") {
-              await queryClient.invalidateQueries({
-                queryKey: slashCommandsQueryKey,
-              });
-            }
-          } catch (error) {
-            console.error(
-              "Failed to parse SSE event:",
-              error,
-              "Event text:",
-              eventText,
-            );
-          }
-        }
-        boundaryIndex = buffer.indexOf(eventBoundary);
-      }
-    }
-  }, [queryClient, setAliveTasks]);
+export function useServerEvents(): {
+  state: ServerState
+  connected: boolean
+  loading: boolean
+} {
+  const [state, setState] = useState<ServerState>(EMPTY_STATE)
+  const [connected, setConnected] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const esRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
-    if (isInitialized === false) {
-      void listener()
-        .then(() => {
-          console.log("registered events listener");
-          isInitialized = true;
-        })
-        .catch((error) => {
-          console.error("failed to register events listener", error);
-          isInitialized = true;
-        });
+    const es = new EventSource('/api/events')
+    esRef.current = es
+
+    es.addEventListener('snapshot', (e: MessageEvent) => {
+      const snapshot = JSON.parse(e.data) as ServerState
+      setState(snapshot)
+      setLoading(false)
+    })
+
+    es.addEventListener('delta', (e: MessageEvent) => {
+      const delta = JSON.parse(e.data) as {
+        eventType: string
+        entity: string
+        id: string
+        data: unknown
+      }
+
+      setState((prev) => {
+        // If entity is 'all' and data is null, it's a clear
+        if (delta.entity === 'all' && delta.data === null) {
+          return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [] }
+        }
+
+        if (delta.entity === 'space') {
+          if (delta.data === null) {
+            return { ...prev, spaces: prev.spaces.filter(s => s.id !== delta.id) }
+          }
+          const space = delta.data as Space
+          const exists = prev.spaces.some(s => s.id === space.id)
+          return {
+            ...prev,
+            spaces: exists
+              ? prev.spaces.map(s => s.id === space.id ? space : s)
+              : [...prev.spaces, space],
+          }
+        }
+
+        if (delta.entity === 'initiative') {
+          if (delta.data === null) {
+            return { ...prev, initiatives: prev.initiatives.filter(i => i.id !== delta.id) }
+          }
+          const init = delta.data as Initiative
+          const exists = prev.initiatives.some(i => i.id === init.id)
+          return {
+            ...prev,
+            initiatives: exists
+              ? prev.initiatives.map(i => i.id === init.id ? init : i)
+              : [...prev.initiatives, init],
+          }
+        }
+
+        if (delta.entity === 'epic') {
+          if (delta.data === null) {
+            return { ...prev, epics: prev.epics.filter(e => e.id !== delta.id) }
+          }
+          const epic = delta.data as Epic
+          const exists = prev.epics.some(e => e.id === epic.id)
+          return {
+            ...prev,
+            epics: exists
+              ? prev.epics.map(e => e.id === epic.id ? epic : e)
+              : [...prev.epics, epic],
+          }
+        }
+
+        if (delta.entity === 'task') {
+          if (delta.data === null) {
+            return { ...prev, tasks: prev.tasks.filter(t => t.id !== delta.id) }
+          }
+          const task = delta.data as Task
+          const exists = prev.tasks.some(t => t.id === task.id)
+          return {
+            ...prev,
+            tasks: exists
+              ? prev.tasks.map(t => t.id === task.id ? task : t)
+              : [...prev.tasks, task],
+          }
+        }
+
+        if (delta.entity === 'worktree') {
+          if (delta.data === null) {
+            return { ...prev, worktrees: prev.worktrees.filter(w => w.id !== delta.id) }
+          }
+          const wt = delta.data as Worktree
+          const exists = prev.worktrees.some(w => w.id === wt.id)
+          return {
+            ...prev,
+            worktrees: exists
+              ? prev.worktrees.map(w => w.id === wt.id ? wt : w)
+              : [...prev.worktrees, wt],
+          }
+        }
+
+        if (delta.entity === 'run') {
+          if (delta.data === null) {
+            return { ...prev, runs: prev.runs.filter(r => r.id !== delta.id) }
+          }
+          const run = delta.data as Run
+          const exists = prev.runs.some(r => r.id === run.id)
+          return {
+            ...prev,
+            runs: exists
+              ? prev.runs.map(r => r.id === run.id ? run : r)
+              : [...prev.runs, run],
+          }
+        }
+
+        return prev
+      })
+    })
+
+    es.addEventListener('heartbeat', () => {
+      // Keep-alive, no action needed
+    })
+
+    es.onopen = () => setConnected(true)
+    es.onerror = () => setConnected(false)
+
+    return () => {
+      es.close()
+      esRef.current = null
     }
-  }, [listener]);
-};
+  }, [])
+
+  return { state, connected, loading }
+}
