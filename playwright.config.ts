@@ -2,7 +2,10 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
-  fullyParallel: true,
+  // All tests share a single simulator instance — parallel workers cause resets
+  // to wipe state mid-assertion in other workers. Use 1 worker for reliability.
+  workers: 1,
+  fullyParallel: false,
   retries: 1,
   timeout: 30000,
   use: {
