@@ -1,5 +1,10 @@
 import WorkspaceShell from './components/WorkspaceShell'
+import { SkillsProvider } from './components/SkillsProvider'
 
 export default function App() {
-  return <WorkspaceShell />
+  return (
+    <SkillsProvider>
+      <WorkspaceShell />
+    </SkillsProvider>
+  )
 }
