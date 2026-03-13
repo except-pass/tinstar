@@ -66,6 +66,18 @@ export class SSEBroadcaster {
     }
   }
 
+  /** Broadcast a custom named SSE event to all clients */
+  broadcastEvent(type: string, data: unknown): void {
+    const payload = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`
+    for (const client of this.clients) {
+      if (!client.destroyed) {
+        client.write(payload)
+      } else {
+        this.clients.delete(client)
+      }
+    }
+  }
+
   /** Send a fresh snapshot to all connected clients (used on space switch) */
   broadcastSnapshot(): void {
     const snapshot = this.store.snapshot()
