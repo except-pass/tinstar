@@ -67,6 +67,25 @@ function WorkspaceShellInner() {
   const { select, toggleSelect, expandAll, selectedCount } = useSelection()
   const arrangeGridRef = useRef<(() => void) | null>(null)
   const arrangeResetRef = useRef<(() => void) | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(240)
+  const sidebarResizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
+
+  const onSidebarResizePointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    sidebarResizeDragRef.current = { startX: e.clientX, startW: sidebarWidth }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }, [sidebarWidth])
+
+  const onSidebarResizePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!sidebarResizeDragRef.current) return
+    setSidebarWidth(Math.max(160, Math.min(400, sidebarResizeDragRef.current.startW + (e.clientX - sidebarResizeDragRef.current.startX))))
+  }, [])
+
+  const onSidebarResizePointerUp = useCallback(() => {
+    sidebarResizeDragRef.current = null
+  }, [])
 
   // Space actions
   const handleActivateSpace = useCallback((id: string) => {
@@ -281,29 +300,50 @@ function WorkspaceShellInner() {
       {/* Main area: sidebar + canvas */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <div
-          className="w-60 flex-shrink-0 bg-surface-panel border-r border-white/10 overflow-y-auto scrollbar-thin"
-          data-testid="sidebar-slot"
-        >
-          <HierarchySidebar
-            tree={sidebarTree}
-            dimensions={dimensions}
-            spaces={spaces}
-            activeSpaceId={activeSpaceId}
-            onActivateSpace={handleActivateSpace}
-            onCreateSpace={handleCreateSpace}
-            onRenameSpace={handleRenameSpace}
-            onDeleteSpace={handleDeleteSpace}
-            onAdd={handleAdd}
-            onRename={handleRename}
-            onDelete={handleDelete}
-            onFocusRun={handleFocusNode}
-            onMenuOpen={handleMenuOpen}
-            onReparent={handleReparent}
-            onArrangeGrid={() => arrangeGridRef.current?.()}
-            onArrangeReset={() => arrangeResetRef.current?.()}
-          />
-        </div>
+        {sidebarCollapsed ? (
+          <div
+            className="w-6 flex-shrink-0 flex flex-col items-center justify-center bg-surface-panel border-r border-white/10 cursor-pointer hover:bg-surface-hover"
+            onClick={() => setSidebarCollapsed(false)}
+            data-testid="collapsed-sidebar"
+          >
+            <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr] rotate-180">Hierarchy</span>
+          </div>
+        ) : (
+          <div
+            className="flex-shrink-0 bg-surface-panel border-r border-white/10 relative flex flex-col"
+            style={{ width: sidebarWidth }}
+            data-testid="sidebar-slot"
+          >
+            <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
+              <HierarchySidebar
+                tree={sidebarTree}
+                dimensions={dimensions}
+                spaces={spaces}
+                activeSpaceId={activeSpaceId}
+                onActivateSpace={handleActivateSpace}
+                onCreateSpace={handleCreateSpace}
+                onRenameSpace={handleRenameSpace}
+                onDeleteSpace={handleDeleteSpace}
+                onAdd={handleAdd}
+                onRename={handleRename}
+                onDelete={handleDelete}
+                onFocusRun={handleFocusNode}
+                onMenuOpen={handleMenuOpen}
+                onReparent={handleReparent}
+                onArrangeGrid={() => arrangeGridRef.current?.()}
+                onArrangeReset={() => arrangeResetRef.current?.()}
+                onCollapse={() => setSidebarCollapsed(true)}
+              />
+            </div>
+            <div
+              className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
+              onPointerDown={onSidebarResizePointerDown}
+              onPointerMove={onSidebarResizePointerMove}
+              onPointerUp={onSidebarResizePointerUp}
+              data-testid="sidebar-resize-handle"
+            />
+          </div>
+        )}
 
         {/* Canvas */}
         <div className="flex-1 relative overflow-hidden" data-testid="canvas-slot">

@@ -100,7 +100,7 @@ function readBody(req: IncomingMessage): Promise<string> {
   })
 }
 
-export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: ServerResponse): boolean {
+export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url ?? ''
   const method = req.method ?? 'GET'
 
