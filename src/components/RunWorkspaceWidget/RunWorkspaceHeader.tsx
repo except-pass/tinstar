@@ -1,4 +1,4 @@
-import type { PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useCallback, type PointerEvent as ReactPointerEvent } from 'react'
 import type { RunData, SessionStatus } from '../../types'
 
 const statusConfig: Record<SessionStatus, { label: string; color: string; dot: string; pulse?: boolean }> = {
@@ -19,6 +19,21 @@ interface Props {
 
 export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp }: Props) {
   const status = statusConfig[run.status]
+  const [busy, setBusy] = useState(false)
+
+  const sessionAction = useCallback(async (action: 'stop' | 'delete' | 'start') => {
+    setBusy(true)
+    try {
+      if (action === 'delete') {
+        await fetch(`/api/sessions/${run.sessionId}`, { method: 'DELETE' })
+      } else {
+        await fetch(`/api/sessions/${run.sessionId}/${action}`, { method: 'POST' })
+      }
+    } catch { /* ignore */ }
+    setBusy(false)
+  }, [run.sessionId])
+
+  const isLive = run.status === 'running' || run.status === 'idle' || run.status === 'needs_attention' || run.status === 'creating'
 
   return (
     <header
@@ -62,9 +77,40 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
         </div>
       </div>
 
-      {/* Right: meta — hidden in compact tile mode */}
+      {/* Right: actions + meta */}
       {!compact && (
         <div className="flex items-center gap-3 shrink-0 ml-2">
+          {/* Session actions */}
+          <div className="flex items-center gap-1" onPointerDown={e => e.stopPropagation()}>
+            {isLive ? (
+              <button
+                onClick={() => sessionAction('stop')}
+                disabled={busy}
+                className="p-1 rounded text-slate-500 hover:text-accent-red transition-colors disabled:opacity-50"
+                title="Stop session"
+              >
+                <span className="material-symbols-outlined text-sm">stop_circle</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => sessionAction('start')}
+                disabled={busy}
+                className="p-1 rounded text-slate-500 hover:text-accent-green transition-colors disabled:opacity-50"
+                title="Resume session"
+              >
+                <span className="material-symbols-outlined text-sm">play_circle</span>
+              </button>
+            )}
+            <button
+              onClick={() => sessionAction('delete')}
+              disabled={busy}
+              className="p-1 rounded text-slate-500 hover:text-accent-red transition-colors disabled:opacity-50"
+              title="Delete session"
+            >
+              <span className="material-symbols-outlined text-sm">delete</span>
+            </button>
+          </div>
+          <div className="w-px h-5 bg-white/10" />
           <div className="text-right">
             <div className="text-2xs font-mono text-slate-500 tracking-wide">WORKTREE</div>
             <div className="text-2xs font-mono text-primary/70 truncate max-w-[100px]">{run.worktree}</div>

@@ -864,6 +864,22 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       return true
     }
 
+    // POST /api/sessions/:name/refresh-route — re-register Caddy route for a session
+    if (method === 'POST' && url.endsWith('/refresh-route') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session?.port) {
+          json(res, { ok: false, error: { code: 'NO_PORT', message: 'Session has no port' } }, 400)
+        } else {
+          addRoute(name, session.port, cfg.caddy.adminPort)
+            .then(() => json(res, { ok: true }))
+            .catch(() => json(res, { ok: true })) // route may already exist
+        }
+        return true
+      }
+    }
+
     // GET /api/docker/profiles — configured image profiles
     if (method === 'GET' && url === '/api/docker/profiles') {
       json(res, { ok: true, data: cfg.profiles })

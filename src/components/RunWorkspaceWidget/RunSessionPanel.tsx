@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useReducer } from 'react'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
 
 function DiffView({ diff }: { diff: DiffBlock }) {
@@ -92,6 +92,21 @@ function StatusMessage({ entry }: { entry: RecapEntry }) {
   )
 }
 
+/** Iframe wrapper keyed by tick to force remount on refresh */
+function TerminalFrame({ src, tick }: { src: string; tick: number }) {
+  return (
+    <div className="flex-1 flex" onPointerDown={e => e.stopPropagation()}>
+      <iframe
+        key={tick}
+        src={src}
+        className="flex-1 w-full border-0 bg-black"
+        title="Session terminal"
+        allow="clipboard-read; clipboard-write"
+      />
+    </div>
+  )
+}
+
 interface Props {
   recapEntries: RecapEntry[]
   rawLogs: string
@@ -104,6 +119,14 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
   const [activeTab, setActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
+  const [termTick, bumpTerm] = useReducer((n: number) => n + 1, 0)
+
+  const refreshTerminal = useCallback(() => {
+    if (!sessionId) { bumpTerm(); return }
+    // Re-register the Caddy route (may have been lost), then reload iframe
+    fetch(`/api/sessions/${sessionId}/refresh-route`, { method: 'POST' })
+      .finally(() => bumpTerm())
+  }, [sessionId])
   const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -153,7 +176,7 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
   return (
     <section className="flex-1 flex flex-col min-w-0 border-x border-primary/20 bg-surface-base">
       {/* Tab toggle */}
-      <div className="flex items-center justify-center border-b border-primary/20 py-2 bg-surface-panel">
+      <div className="flex items-center justify-center border-b border-primary/20 py-2 bg-surface-panel relative">
         <div className="flex border border-primary/25 rounded-sm overflow-hidden">
           {([
             { key: 'recap' as const, label: 'Recap' },
@@ -174,6 +197,15 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
             </button>
           ))}
         </div>
+        {activeTab === 'terminal' && port && (
+          <button
+            onClick={refreshTerminal}
+            className="absolute right-2 p-1 rounded text-slate-500 hover:text-primary transition-colors"
+            title="Reload terminal (re-registers proxy route)"
+          >
+            <span className="material-symbols-outlined text-sm">refresh</span>
+          </button>
+        )}
       </div>
 
       {/* Content */}
@@ -208,12 +240,7 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
           </div>
         </div>
       ) : activeTab === 'terminal' && port ? (
-        <iframe
-          src={sessionId ? `/s/${sessionId}/` : `http://localhost:${port}`}
-          className="flex-1 w-full border-0 bg-black"
-          title="Session terminal"
-          allow="clipboard-read; clipboard-write"
-        />
+        <TerminalFrame src={sessionId ? `/s/${sessionId}/` : `http://localhost:${port}`} tick={termTick} />
       ) : activeTab === 'recap' ? (
         <div ref={contentRef} className="flex-1 overflow-y-auto scrollbar-thin p-4">
           <div className="space-y-5">

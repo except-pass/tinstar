@@ -173,7 +173,7 @@ export async function syncRoutes(
   adminPort: number,
 ): Promise<void> {
   const routes = sessions
-    .filter(s => (s.state === 'running' || s.state === 'idle') && s.port)
+    .filter(s => (s.state === 'running' || s.state === 'idle' || s.state === 'needs_attention') && s.port)
     .map(s => ({
       '@id': `session-${s.name}`,
       match: [{ path: [`/s/${s.name}`, `/s/${s.name}/*`] }],

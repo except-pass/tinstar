@@ -179,6 +179,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
           <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Name</label>
           <input
             ref={nameRef}
+            autoFocus
             type="text"
             value={name}
             onChange={e => setName(sanitizeName(e.target.value))}
