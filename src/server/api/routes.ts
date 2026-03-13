@@ -499,7 +499,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
 
         try {
           const entries = readdirSync(absPath, { withFileTypes: true })
-            .filter(e => !e.name.startsWith('.') && e.name !== 'node_modules')
+            .filter(e => e.name !== 'node_modules' && e.name !== '.git')
             .map(e => ({
               name: e.name,
               path: relative(wsRoot, join(absPath, e.name)),
@@ -823,8 +823,17 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     // POST /api/editor/open — open a file in the configured editor
     if (method === 'POST' && url === '/api/editor/open') {
       readBody(req).then((body) => {
-        const { path: filePath } = JSON.parse(body)
+        const { path: filePath, sessionId } = JSON.parse(body)
         if (!filePath) return json(res, { ok: false, error: { code: 'MISSING_PATH', message: 'path is required' } }, 400)
+
+        // Resolve relative paths against the session's workspace directory
+        let resolvedPath = filePath
+        if (sessionId && !filePath.startsWith('/')) {
+          const session = getSession(sessDir, sessionId)
+          if (session?.workspace?.path) {
+            resolvedPath = join(session.workspace.path, filePath)
+          }
+        }
 
         // Read editor command fresh from config file (survives server restarts)
         let editorCmd = cfg.editor
@@ -833,7 +842,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
           if (typeof raw.editor === 'string') editorCmd = raw.editor
         } catch { /* use default */ }
 
-        const cmd = editorCmd.replace(/\{\{path\}\}/g, filePath)
+        const cmd = editorCmd.replace(/\{\{path\}\}/g, resolvedPath)
         const parts = cmd.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [cmd]
         const [bin, ...args] = parts.map(p => p.replace(/^["']|["']$/g, ''))
 

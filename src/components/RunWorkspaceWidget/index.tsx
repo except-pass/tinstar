@@ -45,9 +45,9 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     fetch('/api/editor/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: filePath }),
+      body: JSON.stringify({ path: filePath, sessionId: run.sessionId }),
     }).catch(() => {})
-  }, [])
+  }, [run.sessionId])
 
   return (
     <div className={`flex flex-col overflow-hidden neon-border bg-surface-base ${className}`}>
