@@ -25,6 +25,7 @@ import {
   type TinstarConfig,
 } from './sessions'
 import { getGitDiffFiles } from './sessions/git-diff'
+import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
 import { log } from './logger'
 
 function shortId(prefix: string): string {
@@ -55,6 +56,10 @@ export function tinstarBackend(): Plugin {
 
       // Wire SSE
       sse = new SSEBroadcaster(docStore)
+
+      // Start draft watcher — emits skill.drafted SSE events when new drafts appear
+      ensureDraftsDir()
+      watchDrafts(sse)
 
       const fastSim = process.env.TINSTAR_FAST_SIM === '1'
       const speedMultiplier = fastSim ? 0 : 1

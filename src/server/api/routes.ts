@@ -37,6 +37,9 @@ import { getGitDiffFiles } from '../sessions/git-diff'
 import type { Run } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import type { FileKind, TouchedFile } from '../../types'
+import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
+import { saveDraft, discardDraft, DRAFTS_DIR } from '../sessions/skill-drafts'
+import type { SkillDTO } from '../../types'
 
 function inferFileKind(filePath: string): FileKind {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -427,6 +430,85 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       const patch = JSON.parse(body)
       ctx.docStore.upsertRun(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getRun(id) })
+    })
+    return true
+  }
+
+  // --- Skills ---
+
+  // GET /api/skills
+  if (method === 'GET' && url === '/api/skills') {
+    const skills = getSkills()
+    const dtos: SkillDTO[] = skills.map(({ name, description, source }) => ({ name, description, source }))
+    json(res, { skills: dtos })
+    return true
+  }
+
+  // POST /api/skills/save
+  if (method === 'POST' && url === '/api/skills/save') {
+    readBody(req).then(async (body) => {
+      const { draftId, location, sessionId } = JSON.parse(body) as {
+        draftId: string
+        location: 'system' | 'repo'
+        sessionId?: string
+      }
+      if (!draftId || !['system', 'repo'].includes(location)) {
+        json(res, { error: 'invalid-params' }, 400)
+        return
+      }
+
+      // Resolve projectRoot for repo-level saves
+      let projectRoot: string | undefined
+      if (location === 'repo' && sessionId && ctx.sessionConfig) {
+        const sess = getSession(ctx.sessionConfig.dirs.sessions, sessionId)
+        if (sess?.workspace?.path) {
+          projectRoot = sess.workspace.path
+        }
+      }
+
+      try {
+        // Read skillName from draft frontmatter BEFORE moving the file
+        const draftPath = join(DRAFTS_DIR, `${draftId}.md`)
+        let skillName = draftId  // fallback
+        try {
+          const content = readFileSync(draftPath, 'utf-8')
+          const fm = parseFrontmatter(content)
+          if (fm.name) skillName = fm.name
+        } catch { /* use fallback */ }
+
+        saveDraft(draftId, location, projectRoot)
+        bustSkillCache()
+
+        const dto: SkillDTO = {
+          name: skillName,
+          source: location === 'system' ? 'system' : 'repo',
+        }
+        // Try to get description from the refreshed cache
+        const freshSkills = getSkills()
+        const saved = freshSkills.find(s => s.name === skillName)
+        if (saved?.description) dto.description = saved.description
+
+        ctx.sse.broadcastEvent('skill.saved', { skill: dto })
+        json(res, { skill: dto })
+      } catch (err) {
+        const e = err as Error & { existingPath?: string }
+        if (e.message === 'skill-name-conflict') {
+          json(res, { error: 'skill-name-conflict', existingPath: e.existingPath }, 409)
+        } else {
+          json(res, { error: e.message }, 500)
+        }
+      }
+    })
+    return true
+  }
+
+  // POST /api/skills/discard
+  if (method === 'POST' && url === '/api/skills/discard') {
+    readBody(req).then((body) => {
+      const { draftId } = JSON.parse(body) as { draftId: string }
+      if (!draftId) { json(res, { error: 'missing draftId' }, 400); return }
+      discardDraft(draftId)
+      json(res, { ok: true })
     })
     return true
   }
@@ -1104,6 +1186,39 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         }
         return true
       }
+    }
+
+    // POST /api/sessions/:id/prompt
+    const promptMatch = method === 'POST' && url.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
+    if (promptMatch) {
+      const sessionId = promptMatch[1]!
+      const session = getSession(sessDir, sessionId)
+      if (!session) {
+        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${sessionId}' not found` } }, 404)
+        return true
+      }
+      if (session.state !== 'idle') {
+        json(res, { error: 'session-not-ready' }, 400)
+        return true
+      }
+      readBody(req).then(async (body) => {
+        const { text } = JSON.parse(body) as { text: string }
+        if (!text) { json(res, { error: 'missing text' }, 400); return }
+        try {
+          if (session.backend === 'docker') {
+            await dockerBackend.sendPrompt(cfg, sessionId, text)
+          } else if (session.backend === 'tmux') {
+            await tmuxBackend.sendPrompt(cfg, sessionId, text)
+          } else {
+            json(res, { error: 'input-unavailable' }, 503)
+            return
+          }
+          json(res, { ok: true })
+        } catch (err) {
+          json(res, { error: (err as Error).message }, 500)
+        }
+      })
+      return true
     }
   }
 
