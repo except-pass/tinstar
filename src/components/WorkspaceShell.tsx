@@ -216,8 +216,10 @@ function WorkspaceShellInner() {
       else if (entityMenu.entityType === 'epic') entityLinks.epicId = entityMenu.entityId
       else if (entityMenu.entityType === 'initiative') entityLinks.initiativeId = entityMenu.entityId
       if (data.ok) {
+        const resolved = data.data.resolved
         setSessionPrefill({
-          ...data.data.resolved,
+          ...resolved,
+          worktreeMode: resolved.worktree,
           ...entityLinks,
         })
       } else {

@@ -70,7 +70,7 @@ export function buildClaudeCommand(opts: {
     cmd += ` --session-id ${opts.sessionId}`
   }
   if (opts.initialPrompt) {
-    cmd += ` ${JSON.stringify(opts.initialPrompt)}`
+    cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
   }
   return cmd
 }
@@ -349,6 +349,10 @@ export async function installHooks(
       {
         matcher: 'Read',
         hooks: [{ type: 'command', command: fileHookCmd('file-read') }],
+      },
+      {
+        matcher: 'Bash',
+        hooks: [{ type: 'command', command: hookCmd('file-touched') }],
       },
     ],
   }

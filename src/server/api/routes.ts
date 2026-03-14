@@ -651,6 +651,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
           const isWorktree = !!(worktreePath || worktree)
 
+          // Register a Worktree entity so it appears in hierarchy/grouping
+          let worktreeEntityId = ''
+          if (isWorktree && workspacePath) {
+            worktreeEntityId = name
+            ctx.docStore.upsertWorktree(worktreeEntityId, {
+              id: worktreeEntityId,
+              name,
+              branch: branch ?? name,
+              repo: project ?? '',
+              worktreePath: workspacePath,
+              spaceId: ctx.docStore.activeSpaceId,
+            })
+          }
+
           const session = createSession(sessDir, {
             name,
             backend,
@@ -726,7 +740,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             port: sessionPort ?? null,
             backend,
             taskId: taskId ?? '',
-            worktreeId: '',
+            worktreeId: worktreeEntityId,
             createdAt: new Date().toISOString(),
             spaceId: ctx.docStore.activeSpaceId,
           })
