@@ -26,6 +26,7 @@ import {
 } from './sessions'
 import { getGitDiffFiles } from './sessions/git-diff'
 import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
+import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 
 function shortId(prefix: string): string {
@@ -56,6 +57,8 @@ export function tinstarBackend(): Plugin {
 
       // Wire SSE
       sse = new SSEBroadcaster(docStore)
+      const readyQueue = new ReadyQueue()
+      sse.setReadyQueue(readyQueue.getQueue())
 
       // Start draft watcher — emits skill.drafted SSE events when new drafts appear
       ensureDraftsDir()
@@ -261,6 +264,7 @@ export function tinstarBackend(): Plugin {
             startSimulator,
             resetSimulator,
             sessionConfig,
+            readyQueue,
           },
           req,
           res,

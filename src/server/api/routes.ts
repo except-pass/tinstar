@@ -41,6 +41,7 @@ import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-d
 import { saveDraft, discardDraft, DRAFTS_DIR } from '../sessions/skill-drafts'
 import type { SkillDTO } from '../../types'
 import { spec as openapiSpec } from './openapi'
+import { ReadyQueue } from '../sessions/ReadyQueue'
 
 function inferFileKind(filePath: string): FileKind {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -60,6 +61,7 @@ export interface RouteContext {
   startSimulator: () => void
   resetSimulator: () => void
   sessionConfig: TinstarConfig | null
+  readyQueue: ReadyQueue
 }
 
 function json(res: ServerResponse, data: unknown, status = 200): void {
@@ -902,6 +904,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // Respond immediately — UI removal is instant
         ctx.docStore.deleteRun(name)
         emitSessionEvent('managed_session.deleted', { name })
+        ctx.readyQueue.onDelete(name)
+        ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
+        ctx.sse.broadcastReadyQueueUpdate()
         json(res, { ok: true })
 
         // Cleanup: stop backend first (releases bind mounts), then remove session dir
@@ -1159,6 +1164,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         setState(sessDir, name, 'idle')
         ctx.docStore.updateRunStatus(name, 'idle')
         emitSessionEvent('managed_session.state_changed', { name, state: 'idle' })
+        ctx.readyQueue.onStatusChange(name, 'idle')
+        ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
+        ctx.sse.broadcastReadyQueueUpdate()
         json(res, { ok: true })
 
         // Async transcript parsing (fire-and-forget, after response)
@@ -1196,6 +1204,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         if (!prev || prev.state !== 'running') {
           emitSessionEvent('managed_session.state_changed', { name, state: 'running' })
         }
+        ctx.readyQueue.onStatusChange(name, 'running')
+        ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
+        ctx.sse.broadcastReadyQueueUpdate()
         json(res, { ok: true })
       })
       return true

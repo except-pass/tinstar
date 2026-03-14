@@ -1,5 +1,7 @@
 import { useState, useCallback, type PointerEvent as ReactPointerEvent } from 'react'
 import type { RunData, SessionStatus } from '../../types'
+import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
+import { HotgroupBadge } from '../HotgroupBadge'
 
 const statusConfig: Record<SessionStatus, { label: string; color: string; dot: string; pulse?: boolean }> = {
   creating: { label: 'CREATING', color: 'text-blue-400', dot: 'bg-blue-400 shadow-[0_0_6px_#818cf8]', pulse: true },
@@ -21,6 +23,7 @@ interface Props {
 export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp, onRefreshTerminal }: Props) {
   const status = statusConfig[run.status]
   const [busy, setBusy] = useState(false)
+  const { slotsForRun } = useHotgroupContext()
 
   const sessionAction = useCallback(async (action: 'stop' | 'delete' | 'start') => {
     setBusy(true)
@@ -87,6 +90,8 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       {/* Right: actions + meta */}
       {!compact && (
         <div className="flex items-center gap-3 shrink-0 ml-2">
+          {/* Hotgroup badge */}
+          <HotgroupBadge slots={slotsForRun(run.id)} testId={`hotgroup-badge-${run.id}`} />
           {/* Session actions */}
           <div className="flex items-center gap-1" onPointerDown={e => e.stopPropagation()}>
             {isLive ? (

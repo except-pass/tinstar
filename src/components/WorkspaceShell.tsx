@@ -2,6 +2,9 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import type { GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
+import { useServerEvents } from '../hooks/useServerEvents'
+import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
+import { cycleNext, cyclePrev } from '../hooks/useReadyQueue'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
 import { SettingsDialog } from './SettingsDialog'
@@ -13,6 +16,9 @@ import { TaxonomyProvider } from './TaxonomyContext'
 import { SkillsProvider } from './SkillsProvider'
 import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
+import { ActiveScopeProvider } from '../hotkeys/ActiveScopeContext'
+import { HotgroupProvider } from '../hotkeys/HotgroupContext'
+import { HotkeyPalette } from './HotkeyPalette'
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
 function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
@@ -39,6 +45,7 @@ function WorkspaceShellInner() {
   })
 
   const { runRepo, taxRepo, spaces, activeSpaceId } = useBackendState()
+  const { state: serverState } = useServerEvents()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -54,6 +61,8 @@ function WorkspaceShellInner() {
     return map
   }, [runRepo])
 
+  const runIds = useMemo(() => Array.from(runMap.keys()), [runMap])
+
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
   const [showSessionDialog, setShowSessionDialog] = useState(false)
@@ -65,7 +74,8 @@ function WorkspaceShellInner() {
     entityId: string; entityType: GroupingDimension; entityName: string
   } | null>(null)
   const [sessionPrefill, setSessionPrefill] = useState<{ taskId?: string } | null>(null)
-  const { select, toggleSelect, expandAll, selectedCount } = useSelection()
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const { select, toggleSelect, expandAll, selectedCount, state: selectionState } = useSelection()
   const arrangeGridRef = useRef<(() => void) | null>(null)
   const arrangeResetRef = useRef<(() => void) | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -238,6 +248,57 @@ function WorkspaceShellInner() {
     }
   }, [entityMenu, select])
 
+  // Global hotkeys: session cycling
+  const allRuns = useMemo(() => Array.from(runMap.values()), [runMap])
+  const selectedRunId = useMemo(() => {
+    if (selectionState.selectedType !== 'run') return null
+    const firstNodeId = [...selectionState.selectedIds][0] ?? null
+    if (!firstNodeId) return null
+    // node IDs are prefixed with 'run-', strip the prefix to get the raw run ID
+    return firstNodeId.startsWith('run-') ? firstNodeId.slice(4) : firstNodeId
+  }, [selectionState.selectedIds, selectionState.selectedType])
+
+  useGlobalHotkeys({
+    onCycleReadyNext: () => {
+      const run = cycleNext(allRuns, serverState.readyQueue, selectedRunId)
+      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
+    },
+    onCycleReadyPrev: () => {
+      const run = cyclePrev(allRuns, serverState.readyQueue, selectedRunId)
+      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
+    },
+    onCycleAllNext: () => {
+      const allNames = allRuns.map(r => r.sessionId).filter(Boolean) as string[]
+      const run = cycleNext(allRuns, allNames, selectedRunId)
+      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
+    },
+    onCycleAllPrev: () => {
+      const allNames = allRuns.map(r => r.sessionId).filter(Boolean) as string[]
+      const run = cyclePrev(allRuns, allNames, selectedRunId)
+      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
+    },
+    onSessionNew: useCallback(() => {
+      // Derive pre-selected entity from current selection
+      const { selectedType, selectedIds } = selectionState
+      const firstNodeId = [...selectedIds][0] ?? null
+      if (firstNodeId && selectedType && selectedType !== 'run') {
+        // Strip type prefix (e.g. "task-abc" → "abc")
+        const rawId = firstNodeId.startsWith(`${selectedType}-`)
+          ? firstNodeId.slice(selectedType.length + 1)
+          : firstNodeId
+        const entityLinks: Record<string, string> = {}
+        if (selectedType === 'task') entityLinks.taskId = rawId
+        else if (selectedType === 'epic') entityLinks.epicId = rawId
+        else if (selectedType === 'initiative') entityLinks.initiativeId = rawId
+        setSessionPrefill(entityLinks)
+      } else {
+        setSessionPrefill(null)
+      }
+      setShowSessionDialog(true)
+    }, [selectionState]),
+    onPaletteOpen: () => setPaletteOpen(true),
+  })
+
   // Sidebar double-click passes node.id directly (e.g. "run-vpp", "initiative-abc")
   const handleFocusNode = useCallback((nodeId: string) => {
     setFocusRunId(nodeId)
@@ -266,170 +327,184 @@ function WorkspaceShellInner() {
   }, [handleSelectRun])
 
   return (
-    <TaxonomyProvider taxRepo={taxRepo}>
-    <SkillsProvider>
-    <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
-      {/* Top bar: GroupingControls + logo + status */}
-      <div
-        className="flex items-center justify-between px-4 py-2 bg-surface-panel border-b border-white/10 relative"
-        data-testid="controls-bar"
-      >
-        <GroupingControls
-          activeDimensions={dimensions}
-          onDimensionsChange={handleDimensionsChange}
-        />
-        <img src="/logo.png" alt="Tinstar" className="h-6 absolute left-1/2 -translate-x-1/2 pointer-events-none select-none opacity-80" />
-        <div className="flex items-center gap-3 ml-4 flex-shrink-0">
-          <button
-            className="px-3 py-1 text-xs bg-primary/20 text-primary border border-primary/40 rounded-full hover:bg-primary/30"
-            onClick={() => setShowSessionDialog(true)}
-            data-testid="new-session-btn"
-          >
-            + Session
-          </button>
-          <button
-            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-            onClick={() => setShowSettings(true)}
-            data-testid="settings-btn"
-            aria-label="Settings"
-          >
-            <span className="material-symbols-outlined text-base">settings</span>
-          </button>
-          <span data-testid="status-area" className="text-xs text-slate-500">
-            {runSummaries.size} runs
-          </span>
-        </div>
-      </div>
+    <ActiveScopeProvider>
+      {activeSpaceId ? (
+        <HotgroupProvider spaceId={activeSpaceId} runIds={runIds}>
+          <TaxonomyProvider taxRepo={taxRepo}>
+            <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
+              {/* Top bar: GroupingControls + logo + status */}
+              <div
+                className="flex items-center justify-between px-4 py-2 bg-surface-panel border-b border-white/10 relative"
+                data-testid="controls-bar"
+              >
+                <GroupingControls
+                  activeDimensions={dimensions}
+                  onDimensionsChange={handleDimensionsChange}
+                />
+                <img src="/logo.png" alt="Tinstar" className="h-6 absolute left-1/2 -translate-x-1/2 pointer-events-none select-none opacity-80" />
+                <div className="flex items-center gap-3 ml-4 flex-shrink-0">
+                  <button
+                    className="px-3 py-1 text-xs bg-primary/20 text-primary border border-primary/40 rounded-full hover:bg-primary/30"
+                    onClick={() => setShowSessionDialog(true)}
+                    data-testid="new-session-btn"
+                  >
+                    + Session
+                  </button>
+                  <button
+                    className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+                    onClick={() => setShowSettings(true)}
+                    data-testid="settings-btn"
+                    aria-label="Settings"
+                  >
+                    <span className="material-symbols-outlined text-base">settings</span>
+                  </button>
+                  <span data-testid="status-area" className="text-xs text-slate-500">
+                    {runSummaries.size} runs
+                  </span>
+                </div>
+              </div>
 
-      {/* Main area: sidebar + canvas */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        {sidebarCollapsed ? (
-          <div
-            className="w-6 flex-shrink-0 flex flex-col items-center justify-center bg-surface-panel border-r border-white/10 cursor-pointer hover:bg-surface-hover"
-            onClick={() => setSidebarCollapsed(false)}
-            data-testid="collapsed-sidebar"
-          >
-            <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr] rotate-180">Hierarchy</span>
-          </div>
-        ) : (
-          <div
-            className="flex-shrink-0 bg-surface-panel border-r border-white/10 relative flex flex-col"
-            style={{ width: sidebarWidth }}
-            data-testid="sidebar-slot"
-          >
-            <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
-              <HierarchySidebar
-                tree={sidebarTree}
-                dimensions={dimensions}
-                spaces={spaces}
-                activeSpaceId={activeSpaceId}
-                onActivateSpace={handleActivateSpace}
-                onCreateSpace={handleCreateSpace}
-                onRenameSpace={handleRenameSpace}
-                onDeleteSpace={handleDeleteSpace}
-                onAdd={handleAdd}
-                onRename={handleRename}
-                onDelete={handleDelete}
-                onFocusRun={handleFocusNode}
-                onMenuOpen={handleMenuOpen}
-                onReparent={handleReparent}
-                onArrangeGrid={() => arrangeGridRef.current?.()}
-                onArrangeReset={() => arrangeResetRef.current?.()}
-                onCollapse={() => setSidebarCollapsed(true)}
-              />
+              {/* Main area: sidebar + canvas */}
+              <div className="flex flex-1 overflow-hidden">
+                {/* Sidebar */}
+                {sidebarCollapsed ? (
+                  <div
+                    className="w-6 flex-shrink-0 flex flex-col items-center justify-center bg-surface-panel border-r border-white/10 cursor-pointer hover:bg-surface-hover"
+                    onClick={() => setSidebarCollapsed(false)}
+                    data-testid="collapsed-sidebar"
+                  >
+                    <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr] rotate-180">Hierarchy</span>
+                  </div>
+                ) : (
+                  <div
+                    className="flex-shrink-0 bg-surface-panel border-r border-white/10 relative flex flex-col"
+                    style={{ width: sidebarWidth }}
+                    data-testid="sidebar-slot"
+                  >
+                    <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
+                      <HierarchySidebar
+                        tree={sidebarTree}
+                        dimensions={dimensions}
+                        spaces={spaces}
+                        activeSpaceId={activeSpaceId}
+                        onActivateSpace={handleActivateSpace}
+                        onCreateSpace={handleCreateSpace}
+                        onRenameSpace={handleRenameSpace}
+                        onDeleteSpace={handleDeleteSpace}
+                        onAdd={handleAdd}
+                        onRename={handleRename}
+                        onDelete={handleDelete}
+                        onFocusRun={handleFocusNode}
+                        onMenuOpen={handleMenuOpen}
+                        onReparent={handleReparent}
+                        onArrangeGrid={() => arrangeGridRef.current?.()}
+                        onArrangeReset={() => arrangeResetRef.current?.()}
+                        onCollapse={() => setSidebarCollapsed(true)}
+                      />
+                    </div>
+                    <div
+                      className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
+                      onPointerDown={onSidebarResizePointerDown}
+                      onPointerMove={onSidebarResizePointerMove}
+                      onPointerUp={onSidebarResizePointerUp}
+                      data-testid="sidebar-resize-handle"
+                    />
+                  </div>
+                )}
+
+                {/* Canvas */}
+                <div className="flex-1 relative overflow-hidden" data-testid="canvas-slot">
+                  <InfiniteCanvas
+                    tree={sidebarTree}
+                    runMap={runMap}
+                    focusRunId={focusRunId}
+                    activeSpaceId={activeSpaceId}
+                    onFocusHandled={handleFocusHandled}
+                    onSelectRun={handleSelectRun}
+                    onFocusRun={handleCanvasFocusRun}
+                    onDeleteEntity={handleDelete}
+                    onMenuOpen={handleMenuOpen}
+                    arrangeGridRef={arrangeGridRef}
+                    arrangeResetRef={arrangeResetRef}
+                  />
+                </div>
+              </div>
+
+              {createDialog && (
+                <CreateEntityDialog
+                  dialog={createDialog}
+                  onClose={() => setCreateDialog(null)}
+                />
+              )}
+
+              {showSessionDialog && (
+                <CreateSessionDialog
+                  onClose={() => { setShowSessionDialog(false); setSessionPrefill(null) }}
+                  prefill={sessionPrefill ?? undefined}
+                />
+              )}
+
+              {showSettings && (
+                <SettingsDialog onClose={() => setShowSettings(false)} />
+              )}
+
+              {entityMenu && (
+                <EntityMenu
+                  entityId={entityMenu.entityId}
+                  entityType={entityMenu.entityType}
+                  entityName={entityMenu.entityName}
+                  anchorRect={entityMenu.anchorRect}
+                  onStartSession={handleMenuStartSession}
+                  onSettings={() => {
+                    setEntitySettingsDialog({
+                      entityId: entityMenu.entityId,
+                      entityType: entityMenu.entityType,
+                      entityName: entityMenu.entityName,
+                    })
+                    setEntityMenu(null)
+                  }}
+                  onRename={() => {
+                    handleMenuRename()
+                    setEntityMenu(null)
+                  }}
+                  onAddChild={() => {
+                    // Add a child of the next dimension level below this entity
+                    const idx = dimensions.indexOf(entityMenu.entityType)
+                    const childType = idx >= 0 && idx < dimensions.length - 1 ? dimensions[idx + 1] : 'run'
+                    handleAdd(entityMenu.entityId, childType)
+                    setEntityMenu(null)
+                  }}
+                  onDelete={() => {
+                    handleDelete(entityMenu.entityId, entityMenu.entityType)
+                    setEntityMenu(null)
+                  }}
+                  onClose={() => setEntityMenu(null)}
+                />
+              )}
+
+              {entitySettingsDialog && (
+                <EntitySettingsDialog
+                  entityId={entitySettingsDialog.entityId}
+                  entityType={entitySettingsDialog.entityType}
+                  entityName={entitySettingsDialog.entityName}
+                  onClose={() => setEntitySettingsDialog(null)}
+                />
+              )}
             </div>
-            <div
-              className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
-              onPointerDown={onSidebarResizePointerDown}
-              onPointerMove={onSidebarResizePointerMove}
-              onPointerUp={onSidebarResizePointerUp}
-              data-testid="sidebar-resize-handle"
-            />
+          </TaxonomyProvider>
+        </HotgroupProvider>
+      ) : (
+        <TaxonomyProvider taxRepo={taxRepo}>
+          <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
+            {/* Placeholder when no active space */}
+            <div className="flex items-center justify-center h-screen text-slate-500">
+              <span>No space selected</span>
+            </div>
           </div>
-        )}
-
-        {/* Canvas */}
-        <div className="flex-1 relative overflow-hidden" data-testid="canvas-slot">
-          <InfiniteCanvas
-            tree={sidebarTree}
-            runMap={runMap}
-            focusRunId={focusRunId}
-            activeSpaceId={activeSpaceId}
-            onFocusHandled={handleFocusHandled}
-            onSelectRun={handleSelectRun}
-            onFocusRun={handleCanvasFocusRun}
-            onDeleteEntity={handleDelete}
-            onMenuOpen={handleMenuOpen}
-            arrangeGridRef={arrangeGridRef}
-            arrangeResetRef={arrangeResetRef}
-          />
-        </div>
-      </div>
-
-      {createDialog && (
-        <CreateEntityDialog
-          dialog={createDialog}
-          onClose={() => setCreateDialog(null)}
-        />
+        </TaxonomyProvider>
       )}
-
-      {showSessionDialog && (
-        <CreateSessionDialog
-          onClose={() => { setShowSessionDialog(false); setSessionPrefill(null) }}
-          prefill={sessionPrefill ?? undefined}
-        />
-      )}
-
-      {showSettings && (
-        <SettingsDialog onClose={() => setShowSettings(false)} />
-      )}
-
-      {entityMenu && (
-        <EntityMenu
-          entityId={entityMenu.entityId}
-          entityType={entityMenu.entityType}
-          entityName={entityMenu.entityName}
-          anchorRect={entityMenu.anchorRect}
-          onStartSession={handleMenuStartSession}
-          onSettings={() => {
-            setEntitySettingsDialog({
-              entityId: entityMenu.entityId,
-              entityType: entityMenu.entityType,
-              entityName: entityMenu.entityName,
-            })
-            setEntityMenu(null)
-          }}
-          onRename={() => {
-            handleMenuRename()
-            setEntityMenu(null)
-          }}
-          onAddChild={() => {
-            // Add a child of the next dimension level below this entity
-            const idx = dimensions.indexOf(entityMenu.entityType)
-            const childType = idx >= 0 && idx < dimensions.length - 1 ? dimensions[idx + 1] : 'run'
-            handleAdd(entityMenu.entityId, childType)
-            setEntityMenu(null)
-          }}
-          onDelete={() => {
-            handleDelete(entityMenu.entityId, entityMenu.entityType)
-            setEntityMenu(null)
-          }}
-          onClose={() => setEntityMenu(null)}
-        />
-      )}
-
-      {entitySettingsDialog && (
-        <EntitySettingsDialog
-          entityId={entitySettingsDialog.entityId}
-          entityType={entitySettingsDialog.entityType}
-          entityName={entitySettingsDialog.entityName}
-          onClose={() => setEntitySettingsDialog(null)}
-        />
-      )}
-    </div>
-    </SkillsProvider>
-    </TaxonomyProvider>
+      <HotkeyPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+    </ActiveScopeProvider>
   )
 }
 

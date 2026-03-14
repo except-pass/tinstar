@@ -5,6 +5,7 @@ import type { BusEventType } from '../types'
 export class SSEBroadcaster {
   private clients = new Set<ServerResponse>()
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null
+  private readyQueue: string[] = []
 
   constructor(private store: DocumentStore) {
     this.store.changes.on('change', (change: { entity: string; id: string; data: unknown }) => {
@@ -33,6 +34,14 @@ export class SSEBroadcaster {
     }, 15_000)
   }
 
+  setReadyQueue(queue: string[]): void {
+    this.readyQueue = queue
+  }
+
+  broadcastReadyQueueUpdate(): void {
+    this.broadcastEvent('ready_queue_update', { queue: this.readyQueue })
+  }
+
   addClient(res: ServerResponse): void {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -42,7 +51,7 @@ export class SSEBroadcaster {
     })
 
     // Send snapshot on connect
-    const snapshot = this.store.snapshot()
+    const snapshot = { ...this.store.snapshot(), ready_queue: this.readyQueue }
     res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`)
 
     this.clients.add(res)

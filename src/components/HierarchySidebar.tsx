@@ -4,6 +4,8 @@ import { getDimensionIcon } from '../domain/dimension-meta'
 import { useSelection } from './SelectionProvider'
 import { useSidebarDrag, type DropTarget } from '../hooks/useSidebarDrag'
 import { SpaceSwitcher } from './SpaceSwitcher'
+import { useHotgroupContext } from '../hotkeys/HotgroupContext'
+import { HotgroupBadge } from './HotgroupBadge'
 
 interface HierarchySidebarProps {
   tree: TreeNode[]
@@ -62,6 +64,7 @@ function SidebarNode({
   onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
+  const { slotsForRun } = useHotgroupContext()
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -185,6 +188,11 @@ function SidebarNode({
           />
         ) : (
           <span className="truncate flex-1">{node.label}</span>
+        )}
+
+        {/* Hotgroup badge for runs */}
+        {isRun && !editing && (
+          <HotgroupBadge slots={slotsForRun(node.id.startsWith('run-') ? node.id.slice(4) : node.id)} testId={`sidebar-hotgroup-badge-${node.id}`} />
         )}
 
         {/* Count badge */}
