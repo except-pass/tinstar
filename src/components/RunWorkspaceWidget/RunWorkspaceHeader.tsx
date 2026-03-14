@@ -2,6 +2,7 @@ import { useState, useCallback, type PointerEvent as ReactPointerEvent } from 'r
 import type { RunData, SessionStatus } from '../../types'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
 import { HotgroupBadge } from '../HotgroupBadge'
+import { hexToRgba, resolveRunAccent } from '../runAccent'
 
 const statusConfig: Record<SessionStatus, { label: string; color: string; dot: string; pulse?: boolean }> = {
   creating: { label: 'CREATING', color: 'text-blue-400', dot: 'bg-blue-400 shadow-[0_0_6px_#818cf8]', pulse: true },
@@ -22,6 +23,7 @@ interface Props {
 
 export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp, onRefreshTerminal }: Props) {
   const status = statusConfig[run.status]
+  const runAccent = resolveRunAccent(run.color)
   const [busy, setBusy] = useState(false)
   const { slotsForRun } = useHotgroupContext()
 
@@ -47,7 +49,8 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
 
   return (
     <header
-      className="flex items-center justify-between border-b border-primary/25 bg-surface-panel px-3 py-1.5 overflow-hidden cursor-grab active:cursor-grabbing select-none"
+      className="flex items-center justify-between bg-surface-panel px-3 py-1.5 overflow-hidden cursor-grab active:cursor-grabbing select-none"
+      style={{ borderBottom: `1px solid ${hexToRgba(runAccent, 0.25)}` }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -55,14 +58,20 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
     >
       {/* Left: identity */}
       <div className="flex items-center gap-2 min-w-0">
-        <div className="flex items-center justify-center w-6 h-6 border border-primary/60 bg-primary/10 shrink-0">
-          <span className="material-symbols-outlined text-primary text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>
+        <div
+          className="flex items-center justify-center w-6 h-6 border shrink-0"
+          style={{ borderColor: hexToRgba(runAccent, 0.6), backgroundColor: hexToRgba(runAccent, 0.1) }}
+        >
+          <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1", color: runAccent }}>
             {run.backend === 'docker' ? 'deployed_code' : 'terminal'}
           </span>
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h1 className="text-2xs font-bold text-primary tracking-[0.15em] uppercase font-display neon-text leading-none truncate">
+            <h1
+              className="text-2xs font-bold tracking-[0.15em] uppercase font-display leading-none truncate"
+              style={{ color: runAccent, textShadow: `0 0 10px ${hexToRgba(runAccent, 0.5)}` }}
+            >
               Run_{run.id}
             </h1>
             <div className={`flex items-center gap-1 ${status.color} shrink-0`}>
@@ -74,11 +83,14 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
             <nav className="flex items-center gap-1 mt-0.5">
               {[run.initiative, run.epic, run.task].map((segment, i, arr) => (
                 <span key={i} className="flex items-center gap-1">
-                  <span className={`text-2xs font-mono tracking-wide truncate ${i === arr.length - 1 ? 'text-primary/80' : 'text-slate-500'}`}>
+                  <span
+                    className={`text-2xs font-mono tracking-wide truncate ${i === arr.length - 1 ? '' : 'text-slate-500'}`}
+                    style={i === arr.length - 1 ? { color: hexToRgba(runAccent, 0.8) } : undefined}
+                  >
                     {segment}
                   </span>
                   {i < arr.length - 1 && (
-                    <span className="text-primary/20 text-2xs">&gt;</span>
+                    <span className="text-2xs" style={{ color: hexToRgba(runAccent, 0.2) }}>&gt;</span>
                   )}
                 </span>
               ))}
@@ -116,7 +128,8 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
             {isLive && run.port && (
               <button
                 onClick={refreshTerminal}
-                className="p-1 rounded text-slate-500 hover:text-primary transition-colors"
+                className="p-1 rounded text-slate-500 transition-colors"
+                style={{ color: runAccent }}
                 title="Refresh terminal (re-registers proxy route)"
               >
                 <span className="material-symbols-outlined text-sm">refresh</span>
@@ -134,11 +147,11 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
           <div className="w-px h-5 bg-white/10" />
           <div className="text-right">
             <div className="text-2xs font-mono text-slate-500 tracking-wide">WORKTREE</div>
-            <div className="text-2xs font-mono text-primary/70 truncate max-w-[100px]">{run.worktree}</div>
+            <div className="text-2xs font-mono truncate max-w-[100px]" style={{ color: hexToRgba(runAccent, 0.7) }}>{run.worktree}</div>
           </div>
           <div className="text-right">
             <div className="text-2xs font-mono text-slate-500 tracking-wide">REPO</div>
-            <div className="text-2xs font-mono text-primary/70 truncate max-w-[100px]">{run.repo}</div>
+            <div className="text-2xs font-mono truncate max-w-[100px]" style={{ color: hexToRgba(runAccent, 0.7) }}>{run.repo}</div>
           </div>
         </div>
       )}

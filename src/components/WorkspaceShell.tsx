@@ -231,6 +231,7 @@ function WorkspaceShellInner() {
         setSessionPrefill({
           ...resolved,
           worktreeMode: resolved.worktree,
+          runColor: resolved.defaultRunColor,
           ...entityLinks,
         })
       } else {

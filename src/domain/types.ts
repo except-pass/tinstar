@@ -26,6 +26,7 @@ export interface EntitySettings {
   backend?: 'docker' | 'tmux'
   skipPermissions?: boolean
   profile?: string
+  defaultRunColor?: string
   procedures?: StoredProcedure[]
 }
 

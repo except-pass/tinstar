@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { DEFAULT_RUN_ACCENT } from './runAccent'
 import type { GroupingDimension, EntitySettings, ResolvedSettings } from '../domain/types'
 
 interface Props {
@@ -106,6 +107,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
         worktree: inherited ?? 'none',
         skipPermissions: inherited ?? false,
         profile: inherited ?? '',
+        defaultRunColor: inherited ?? DEFAULT_RUN_ACCENT,
         procedures: inherited ?? [],
       }
       setDraft(prev => ({ ...prev, [key]: defaults[key] }))
@@ -270,6 +272,28 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                   >
                     {value ? 'Yes' : 'No'}
                   </button>
+                )}
+              </SettingRow>
+
+
+              <SettingRow
+                label="Run Color"
+                settingKey="defaultRunColor"
+                resolved={settings}
+                draft={draft}
+                onToggle={handleToggle}
+                onValueChange={handleValueChange}
+              >
+                {(value, onChange) => (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={String(value ?? DEFAULT_RUN_ACCENT)}
+                      onChange={(e) => onChange(e.target.value)}
+                      className="h-7 w-9 bg-surface-base border border-primary/30 rounded cursor-pointer"
+                    />
+                    <span className="text-xs font-mono text-primary">{String(value ?? DEFAULT_RUN_ACCENT)}</span>
+                  </div>
                 )}
               </SettingRow>
 
