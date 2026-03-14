@@ -65,6 +65,7 @@ export interface SkillDTO {
 
 export interface RunData {
   id: string
+  color?: string
   status: SessionStatus
   sessionId: string
   taskId: string

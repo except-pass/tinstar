@@ -8,6 +8,7 @@ import { ProceduresPanel } from './ProceduresPanel'
 import { SkillPickerModal } from './SkillPickerModal'
 import { useSkillsContext } from '../SkillsProvider'
 import { useWidgetHotkeys, type FocusZone } from '../../hotkeys/useWidgetHotkeys'
+import { hexToRgba, resolveRunAccent } from '../runAccent'
 
 interface Props {
   run: RunData
@@ -39,6 +40,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
   const [centerTabIndex, setCenterTabIndex] = useState(0)
 
   const leftExpanded = !filesCollapsed
+  const runAccent = resolveRunAccent(run.color)
 
   const ZONES: FocusZone[] = leftExpanded
     ? ['left-tab', 'file-list', 'center-tabs', 'right-panel']
@@ -99,7 +101,8 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
       ref={rootRef}
       tabIndex={-1}
       data-testid={`widget-root-${run.id}`}
-      className={`flex flex-col overflow-hidden neon-border bg-surface-base ${className}`}
+      className={`flex flex-col overflow-hidden bg-surface-base border ${className}`}
+      style={{ borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }}
     >
       {/* Header doubles as drag handle */}
       {!headless && (
@@ -118,25 +121,31 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
         {filesCollapsed ? (
           <div
             data-testid="collapsed-files"
-            className="w-6 flex flex-col items-center justify-center bg-surface-panel border-r border-primary/20 cursor-pointer hover:bg-surface-hover"
+            className="w-6 flex flex-col items-center justify-center bg-surface-panel cursor-pointer hover:bg-surface-hover"
+            style={{ borderRight: `1px solid ${hexToRgba(runAccent, 0.2)}` }}
             onClick={() => setFilesCollapsed(false)}
           >
             <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr] rotate-180">Files</span>
           </div>
         ) : (
-          <div className="flex flex-col bg-surface-panel border-r border-primary/20 relative flex-shrink-0" style={{ width: filesPanelWidth }}>
+          <div
+            className="flex flex-col bg-surface-panel relative flex-shrink-0"
+            style={{ width: filesPanelWidth, borderRight: `1px solid ${hexToRgba(runAccent, 0.2)}` }}
+          >
             {/* Mode toggle tabs */}
             <div
               data-testid="focus-zone-left-tab"
-              className={`flex border-b border-primary/15 ${focusZone === 'left-tab' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
+              className={`flex ${focusZone === 'left-tab' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
+              style={{ borderBottom: `1px solid ${hexToRgba(runAccent, 0.15)}` }}
             >
               <button
                 onClick={() => setFilePanelMode('touched')}
                 className={`flex-1 px-2 py-1 text-2xs font-mono uppercase tracking-wider transition-colors ${
                   filePanelMode === 'touched'
-                    ? 'text-primary bg-primary/10 border-b border-primary'
+                    ? ''
                     : 'text-slate-500 hover:text-slate-300 hover:bg-surface-hover'
                 }`}
+                style={filePanelMode === 'touched' ? { color: runAccent, backgroundColor: hexToRgba(runAccent, 0.1), borderBottom: `1px solid ${runAccent}` } : undefined}
               >
                 Changed
               </button>
@@ -144,15 +153,17 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
                 onClick={() => setFilePanelMode('tree')}
                 className={`flex-1 px-2 py-1 text-2xs font-mono uppercase tracking-wider transition-colors ${
                   filePanelMode === 'tree'
-                    ? 'text-primary bg-primary/10 border-b border-primary'
+                    ? ''
                     : 'text-slate-500 hover:text-slate-300 hover:bg-surface-hover'
                 }`}
+                style={filePanelMode === 'tree' ? { color: runAccent, backgroundColor: hexToRgba(runAccent, 0.1), borderBottom: `1px solid ${runAccent}` } : undefined}
               >
                 Explorer
               </button>
               <button
                 onClick={() => setFilesCollapsed(true)}
-                className="px-1 text-slate-500 hover:text-primary"
+                className="px-1 text-slate-500"
+                style={{ color: runAccent }}
               >
                 <span className="material-symbols-outlined text-sm">chevron_left</span>
               </button>
@@ -170,7 +181,8 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
             </div>
             {/* Resize handle */}
             <div
-              className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
+              className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize transition-colors z-10"
+              style={{ backgroundColor: hexToRgba(runAccent, 0.18) }}
               onPointerDown={onResizePointerDown}
               onPointerMove={onResizePointerMove}
               onPointerUp={onResizePointerUp}

@@ -250,6 +250,7 @@ export const spec = {
               taskId: { type: 'string' },
               epicId: { type: 'string' },
               initiativeId: { type: 'string' },
+              color: { type: 'string' },
             },
           } } },
         },
@@ -549,6 +550,7 @@ export const spec = {
           worktreeMode: { type: 'string', enum: ['none', 'new', 'existing'], nullable: true },
           skipPermissions: { type: 'boolean', nullable: true },
           prompt: { type: 'string', nullable: true },
+          defaultRunColor: { type: 'string', nullable: true },
         },
       },
       Session: {
@@ -584,6 +586,7 @@ export const spec = {
           id: { type: 'string' },
           status: { type: 'string' },
           sessionId: { type: 'string' },
+          color: { type: 'string' },
           initiative: { type: 'string' },
           epic: { type: 'string' },
           task: { type: 'string' },
