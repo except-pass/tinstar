@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -22,6 +23,8 @@ import { getDiff } from "../service/git/getDiff";
 import { getMcpList } from "../service/mcp/getMcpList";
 import { getProject } from "../service/project/getProject";
 import { getProjects } from "../service/project/getProjects";
+import { runTaskAssessment, buildAssessmentPrompt } from "../service/tasks/assessment";
+import { listProjectTasks, saveProjectTasks } from "../service/tasks/storage";
 import { deleteSession } from "../service/session/deleteSession";
 import { getSession } from "../service/session/getSession";
 import { getSessionCwd } from "../service/session/getSessionCwd";
@@ -73,7 +76,7 @@ export const routes = (app: HonoAppType) => {
       .get("/projects/:projectId", async (c) => {
         const { projectId } = c.req.param();
 
-        const [{ project }, { sessions }] = await Promise.all([
+        const [{ project }, { sessions }, tasks] = await Promise.all([
           getProject(projectId),
           getSessions(projectId).then(({ sessions }) => {
             let filteredSessions = sessions;
@@ -145,10 +148,100 @@ export const routes = (app: HonoAppType) => {
               sessions: filteredSessions,
             };
           }),
+          listProjectTasks(projectId),
         ] as const);
 
-        return c.json({ project, sessions });
+        return c.json({ project, sessions, tasks });
       })
+
+      .post(
+        "/projects/:projectId/tasks",
+        zValidator(
+          "json",
+          z.object({
+            name: z.string().min(1),
+            summary: z.string().default(""),
+            description: z.string().min(1),
+            definitionOfDone: z.string().min(1),
+            acceptanceCriteria: z.array(z.string()).default([]),
+          }),
+        ),
+        async (c) => {
+          const { projectId } = c.req.param();
+          const payload = c.req.valid("json");
+
+          const tasks = await listProjectTasks(projectId);
+          const task = {
+            id: randomUUID(),
+            ...payload,
+            progressEstimate: null,
+          };
+
+          tasks.unshift(task);
+          await saveProjectTasks(projectId, tasks);
+
+          return c.json({ task });
+        },
+      )
+
+      .post(
+        "/projects/:projectId/tasks/:taskId/assess-progress",
+        async (c) => {
+          const { projectId, taskId } = c.req.param();
+          const [{ project }, tasks] = await Promise.all([
+            getProject(projectId),
+            listProjectTasks(projectId),
+          ]);
+
+          if (project.meta.projectPath === null) {
+            return c.json({ error: "Project path not found" }, 400);
+          }
+
+          const taskIndex = tasks.findIndex((task) => task.id === taskId);
+          if (taskIndex === -1) {
+            return c.json({ error: "Task not found" }, 404);
+          }
+
+          const task = tasks[taskIndex];
+          const prompt = buildAssessmentPrompt(
+            task,
+            `Repository path: ${project.meta.projectPath}`,
+          );
+
+          try {
+            const { estimate, sessionId } = await runTaskAssessment({
+              taskController,
+              projectId,
+              cwd: project.meta.projectPath,
+              prompt,
+            });
+
+            const progressEstimate = {
+              ...estimate,
+              assessedAt: new Date().toISOString(),
+              assessmentRunId: sessionId,
+            };
+
+            tasks[taskIndex] = {
+              ...task,
+              progressEstimate,
+            };
+            await saveProjectTasks(projectId, tasks);
+
+            return c.json({ progressEstimate });
+          } catch (error) {
+            return c.json(
+              {
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "Failed to assess progress",
+              },
+              500,
+            );
+          }
+        },
+      )
 
       .get("/projects/:projectId/sessions/:sessionId", async (c) => {
         const { projectId, sessionId } = c.req.param();
@@ -663,6 +756,7 @@ export const routes = (app: HonoAppType) => {
               userMessageId: task.userMessageId,
               currentPermissionMode: task.currentPermissionMode,
               model: task.model,
+              runPurpose: task.runPurpose,
             }),
           ),
         });

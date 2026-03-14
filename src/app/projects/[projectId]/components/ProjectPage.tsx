@@ -1,6 +1,6 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeftIcon,
   ChevronDownIcon,
@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { honoClient } from "@/lib/api/client";
 import { SettingsControls } from "@/components/SettingsControls";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,12 +34,52 @@ import { firstCommandToTitle } from "../services/firstCommandToTitle";
 import { NewChatModal } from "./newChat/NewChatModal";
 
 export const ProjectPageContent = ({ projectId }: { projectId: string }) => {
-  const {
-    data: { project, sessions },
-  } = useProject(projectId);
+  const { data } = useProject(projectId);
+  const { project, sessions, tasks = [] } = data;
   const { config } = useConfig();
   const queryClient = useQueryClient();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [newTaskName, setNewTaskName] = useState("");
+  const [newTaskDescription, setNewTaskDescription] = useState("");
+  const [newTaskDefinitionOfDone, setNewTaskDefinitionOfDone] = useState("");
+
+  const createTask = useMutation({
+    mutationFn: async () => {
+      return honoClient.api.projects[":projectId"].tasks.$post({
+        param: { projectId },
+        json: {
+          name: newTaskName,
+          summary: newTaskName,
+          description: newTaskDescription,
+          definitionOfDone: newTaskDefinitionOfDone,
+          acceptanceCriteria: [],
+        },
+      });
+    },
+    onSuccess: async () => {
+      setNewTaskName("");
+      setNewTaskDescription("");
+      setNewTaskDefinitionOfDone("");
+      await queryClient.invalidateQueries({
+        queryKey: projectQueryConfig(projectId).queryKey,
+      });
+    },
+  });
+
+  const assessProgress = useMutation({
+    mutationFn: async (taskId: string) => {
+      return honoClient.api.projects[":projectId"].tasks[":taskId"][
+        "assess-progress"
+      ].$post({
+        param: { projectId, taskId },
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: projectQueryConfig(projectId).queryKey,
+      });
+    },
+  });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: invalidate when config changed
   useEffect(() => {
@@ -84,6 +125,90 @@ export const ProjectPageContent = ({ projectId }: { projectId: string }) => {
       </header>
 
       <main>
+        <section className="mb-8">
+          <h2 className="text-lg sm:text-xl font-semibold mb-4">Tasks</h2>
+          <Card className="mb-4">
+            <CardHeader>
+              <CardTitle>Create Task</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="Task name"
+                value={newTaskName}
+                onChange={(e) => setNewTaskName(e.target.value)}
+              />
+              <textarea
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="Task description"
+                value={newTaskDescription}
+                onChange={(e) => setNewTaskDescription(e.target.value)}
+              />
+              <textarea
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="Definition of done"
+                value={newTaskDefinitionOfDone}
+                onChange={(e) => setNewTaskDefinitionOfDone(e.target.value)}
+              />
+              <Button
+                onClick={() => createTask.mutate()}
+                disabled={
+                  createTask.isPending ||
+                  !newTaskName ||
+                  !newTaskDescription ||
+                  !newTaskDefinitionOfDone
+                }
+              >
+                Create Task
+              </Button>
+            </CardContent>
+          </Card>
+
+          <div className="grid gap-4">
+            {tasks.map((task) => (
+              <Card key={task.id}>
+                <CardHeader>
+                  <CardTitle>{task.name}</CardTitle>
+                  <CardDescription>{task.summary}</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  <p>{task.description}</p>
+                  <p className="font-medium">Definition of done</p>
+                  <p>{task.definitionOfDone}</p>
+                  {task.progressEstimate ? (
+                    <div className="rounded border p-3 space-y-1 bg-muted/30">
+                      <p className="font-medium">Progress Estimate</p>
+                      <p>{task.progressEstimate.percentComplete}% complete</p>
+                      <p>confidence: {task.progressEstimate.confidence}</p>
+                      <p>
+                        last assessed: {" "}
+                        {new Date(task.progressEstimate.assessedAt).toLocaleString()}
+                      </p>
+                      <p>{task.progressEstimate.summary}</p>
+                      <ul className="list-disc pl-5">
+                        {task.progressEstimate.missingPieces.map((piece: string) => (
+                          <li key={piece}>{piece}</li>
+                        ))}
+                      </ul>
+                      <p className="text-xs text-muted-foreground">
+                        AI-generated estimate from run {task.progressEstimate.assessmentRunId}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground">No progress estimate yet.</p>
+                  )}
+                  <Button
+                    onClick={() => assessProgress.mutate(task.id)}
+                    disabled={assessProgress.isPending}
+                  >
+                    {task.progressEstimate ? "Reassess" : "Assess Progress"}
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+
         <section>
           <h2 className="text-lg sm:text-xl font-semibold mb-4">
             Conversation Sessions{" "}

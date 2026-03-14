@@ -7,6 +7,25 @@ export type Project = {
   meta: ProjectMeta;
 };
 
+export type TaskProgressEstimate = {
+  percentComplete: number;
+  confidence: "low" | "medium" | "high";
+  summary: string;
+  missingPieces: string[];
+  assessedAt: string;
+  assessmentRunId: string;
+};
+
+export type ProjectTask = {
+  id: string;
+  name: string;
+  summary: string;
+  description: string;
+  definitionOfDone: string;
+  acceptanceCriteria: string[];
+  progressEstimate: TaskProgressEstimate | null;
+};
+
 export type ProjectMeta = {
   projectName: string | null;
   projectPath: string | null;

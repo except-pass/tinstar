@@ -22,6 +22,7 @@ type BaseClaudeCodeTask = {
   query?: Query;
   currentPermissionMode?: PermissionMode;
   model?: ModelType;
+  runPurpose?: string;
 };
 
 export type PendingClaudeCodeTask = BaseClaudeCodeTask & {
@@ -73,4 +74,5 @@ export type SerializableAliveTask = Pick<
   | "userMessageId"
   | "currentPermissionMode"
   | "model"
+  | "runPurpose"
 >;

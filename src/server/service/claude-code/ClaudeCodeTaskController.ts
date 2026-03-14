@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import { query } from "@anthropic-ai/claude-code";
+import type { SDKMessage } from "@anthropic-ai/claude-code";
 import prexit from "prexit";
 import { ulid } from "ulid";
 import { type EventBus, getEventBus } from "../events/EventBus";
@@ -47,6 +48,10 @@ export class ClaudeCodeTaskController {
     message: string,
     planMode?: boolean,
     model?: string,
+    options?: {
+      onMessage?: (message: SDKMessage) => void | Promise<void>;
+      runPurpose?: string;
+    },
   ): Promise<AliveClaudeCodeTask> {
     const existingTask = this.aliveTasks.find(
       (task) => task.sessionId === currentSession.sessionId,
@@ -55,7 +60,13 @@ export class ClaudeCodeTaskController {
     if (existingTask) {
       return await this.continueTask(existingTask, message);
     } else {
-      return await this.startTask(currentSession, message, planMode, model);
+      return await this.startTask(
+        currentSession,
+        message,
+        planMode,
+        model,
+        options,
+      );
     }
   }
 
@@ -74,6 +85,10 @@ export class ClaudeCodeTaskController {
     message: string,
     planMode?: boolean,
     model?: string,
+    options?: {
+      onMessage?: (message: SDKMessage) => void | Promise<void>;
+      runPurpose?: string;
+    },
   ) {
     const {
       generateMessages,
@@ -94,7 +109,8 @@ export class ClaudeCodeTaskController {
       setFirstMessagePromise,
       resolveFirstMessage,
       awaitFirstMessage,
-      onMessageHandlers: [],
+      onMessageHandlers: options?.onMessage ? [options.onMessage] : [],
+      runPurpose: options?.runPurpose,
     };
 
     let aliveTaskResolve: (task: AliveClaudeCodeTask) => void;
@@ -181,6 +197,7 @@ export class ClaudeCodeTaskController {
                 query: queryInstance,
                 currentPermissionMode: permissionMode,
                 model: model as ModelType,
+                runPurpose: task.runPurpose,
               };
               this.tasks.push(runningTask);
               // Store the permission mode for this session
@@ -312,6 +329,21 @@ export class ClaudeCodeTaskController {
       onMessageHandlers: task.onMessageHandlers,
       baseSessionId: task.baseSessionId,
       userMessageId: task.userMessageId,
+      runPurpose: task.runPurpose,
+    });
+
+    return true;
+  }
+
+  public markTaskFailed(taskId: string): boolean {
+    const task = this.tasks.find((item) => item.id === taskId);
+    if (!task) {
+      return false;
+    }
+
+    this.updateExistingTask({
+      ...task,
+      status: "failed",
     });
 
     return true;
