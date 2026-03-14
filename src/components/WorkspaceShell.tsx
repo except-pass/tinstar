@@ -13,6 +13,7 @@ import { TaxonomyProvider } from './TaxonomyContext'
 import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
 import { ActiveScopeProvider } from '../hotkeys/ActiveScopeContext'
+import { HotgroupProvider } from '../hotkeys/HotgroupContext'
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
 function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
@@ -53,6 +54,8 @@ function WorkspaceShellInner() {
     }
     return map
   }, [runRepo])
+
+  const runIds = useMemo(() => Array.from(runMap.keys()), [runMap])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
@@ -265,6 +268,7 @@ function WorkspaceShellInner() {
 
   return (
     <ActiveScopeProvider>
+      <HotgroupProvider spaceId={activeSpaceId ?? ''} runIds={runIds}>
       <TaxonomyProvider taxRepo={taxRepo}>
       <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
       {/* Top bar: GroupingControls + logo + status */}
@@ -427,6 +431,7 @@ function WorkspaceShellInner() {
       )}
     </div>
     </TaxonomyProvider>
+      </HotgroupProvider>
     </ActiveScopeProvider>
   )
 }
