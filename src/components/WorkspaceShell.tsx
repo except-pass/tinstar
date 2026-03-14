@@ -12,6 +12,7 @@ import { SelectionProvider, useSelection } from './SelectionProvider'
 import { TaxonomyProvider } from './TaxonomyContext'
 import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
+import { ActiveScopeProvider } from '../hotkeys/ActiveScopeContext'
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
 function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
@@ -263,8 +264,9 @@ function WorkspaceShellInner() {
   }, [handleSelectRun])
 
   return (
-    <TaxonomyProvider taxRepo={taxRepo}>
-    <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
+    <ActiveScopeProvider>
+      <TaxonomyProvider taxRepo={taxRepo}>
+      <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
       {/* Top bar: GroupingControls + logo + status */}
       <div
         className="flex items-center justify-between px-4 py-2 bg-surface-panel border-b border-white/10 relative"
@@ -425,6 +427,7 @@ function WorkspaceShellInner() {
       )}
     </div>
     </TaxonomyProvider>
+    </ActiveScopeProvider>
   )
 }
 
