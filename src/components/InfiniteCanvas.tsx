@@ -74,6 +74,20 @@ function collectRunNodeIds(nodes: TreeNode[]): string[] {
   return result
 }
 
+/** Collect run node IDs that are descendants of the given selected entity node IDs */
+function collectRunsUnderSelected(nodes: TreeNode[], selectedIds: Set<string>): string[] {
+  const result: string[] = []
+  for (const node of nodes) {
+    if (selectedIds.has(node.id)) {
+      if (node.type === 'run') result.push(node.id)
+      else result.push(...collectRunNodeIds(node.children))
+    } else {
+      result.push(...collectRunsUnderSelected(node.children, selectedIds))
+    }
+  }
+  return result
+}
+
 interface DropTarget {
   nodeId: string
   label: string
@@ -109,7 +123,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     arrangeWorkspace,
   } = useWidgetLayouts(tree, activeSpaceId)
   const { camera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
-  const { selectMany, deselect, isSelected } = useSelection()
+  const { selectMany, deselect, isSelected, state: selectionState } = useSelection()
 
   // Drag-to-reassign state
   const draggingRunRef = useRef<string | null>(null)
@@ -395,9 +409,17 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     if (!el) return
     const rect = el.getBoundingClientRect()
 
-    // Determine which runs to arrange
-    const targetIds = runNodeIdsRef.current.filter(id => isSelected(id))
-    const ids = targetIds.length > 0 ? targetIds : runNodeIdsRef.current
+    // Determine which runs to arrange:
+    // - entity selected (task/epic/initiative/worktree): runs under that entity
+    // - run nodes selected: those specific runs
+    // - nothing selected: all runs
+    let ids: string[]
+    if (selectionState.selectedType !== 'run' && selectionState.selectedIds.size > 0) {
+      ids = collectRunsUnderSelected(tree, selectionState.selectedIds)
+    } else {
+      const selected = runNodeIdsRef.current.filter(id => isSelected(id))
+      ids = selected.length > 0 ? selected : runNodeIdsRef.current
+    }
     if (ids.length === 0) return
 
     // Viewport in canvas coords
@@ -420,7 +442,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
       updateRunPosition(nodeId, nx, ny)
       updateRunSize(nodeId, cellW, cellH)
     })
-  }, [camera, isSelected, updateRunPosition, updateRunSize])
+  }, [camera, selectionState, tree, isSelected, updateRunPosition, updateRunSize])
 
   // Expose arrange functions to parent via refs
   useEffect(() => {
