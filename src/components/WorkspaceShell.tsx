@@ -2,6 +2,9 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import type { GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
+import { useServerEvents } from '../hooks/useServerEvents'
+import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
+import { cycleNext, cyclePrev } from '../hooks/useReadyQueue'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
 import { SettingsDialog } from './SettingsDialog'
@@ -40,6 +43,7 @@ function WorkspaceShellInner() {
   })
 
   const { runRepo, taxRepo, spaces, activeSpaceId } = useBackendState()
+  const { state: serverState } = useServerEvents()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -68,7 +72,7 @@ function WorkspaceShellInner() {
     entityId: string; entityType: GroupingDimension; entityName: string
   } | null>(null)
   const [sessionPrefill, setSessionPrefill] = useState<{ taskId?: string } | null>(null)
-  const { select, toggleSelect, expandAll, selectedCount } = useSelection()
+  const { select, toggleSelect, expandAll, selectedCount, state: selectionState } = useSelection()
   const arrangeGridRef = useRef<(() => void) | null>(null)
   const arrangeResetRef = useRef<(() => void) | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -238,6 +242,39 @@ function WorkspaceShellInner() {
       select(nodeId, entityMenu.entityType)
     }
   }, [entityMenu, select])
+
+  // Global hotkeys: session cycling
+  const allRuns = useMemo(() => Array.from(runMap.values()), [runMap])
+  const selectedRunId = useMemo(() => {
+    if (selectionState.selectedType !== 'run') return null
+    const firstNodeId = [...selectionState.selectedIds][0] ?? null
+    if (!firstNodeId) return null
+    // node IDs are prefixed with 'run-', strip the prefix to get the raw run ID
+    return firstNodeId.startsWith('run-') ? firstNodeId.slice(4) : firstNodeId
+  }, [selectionState.selectedIds, selectionState.selectedType])
+
+  useGlobalHotkeys({
+    onCycleReadyNext: () => {
+      const run = cycleNext(allRuns, serverState.readyQueue, selectedRunId)
+      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
+    },
+    onCycleReadyPrev: () => {
+      const run = cyclePrev(allRuns, serverState.readyQueue, selectedRunId)
+      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
+    },
+    onCycleAllNext: () => {
+      const allNames = allRuns.map(r => r.sessionId).filter(Boolean) as string[]
+      const run = cycleNext(allRuns, allNames, selectedRunId)
+      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
+    },
+    onCycleAllPrev: () => {
+      const allNames = allRuns.map(r => r.sessionId).filter(Boolean) as string[]
+      const run = cyclePrev(allRuns, allNames, selectedRunId)
+      if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
+    },
+    onSessionNew: () => { /* TODO: will be wired in Task 16 */ },
+    onPaletteOpen: () => { /* TODO: will be wired in Task 16 */ },
+  })
 
   // Sidebar double-click passes node.id directly (e.g. "run-vpp", "initiative-abc")
   const handleFocusNode = useCallback((nodeId: string) => {
