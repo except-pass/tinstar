@@ -9,6 +9,7 @@ interface ServerState {
   tasks: Task[]
   worktrees: Worktree[]
   runs: Run[]
+  readyQueue: string[]
 }
 
 const EMPTY_STATE: ServerState = {
@@ -19,6 +20,7 @@ const EMPTY_STATE: ServerState = {
   tasks: [],
   worktrees: [],
   runs: [],
+  readyQueue: [],
 }
 
 export function useServerEvents(): {
@@ -36,8 +38,8 @@ export function useServerEvents(): {
     esRef.current = es
 
     es.addEventListener('snapshot', (e: MessageEvent) => {
-      const snapshot = JSON.parse(e.data) as ServerState
-      setState(snapshot)
+      const snapshot = JSON.parse(e.data) as ServerState & { ready_queue?: string[] }
+      setState({ ...snapshot, readyQueue: snapshot.ready_queue ?? [] })
       setLoading(false)
     })
 
@@ -145,6 +147,11 @@ export function useServerEvents(): {
 
     es.addEventListener('heartbeat', () => {
       // Keep-alive, no action needed
+    })
+
+    es.addEventListener('ready_queue_update', (e: MessageEvent) => {
+      const { queue } = JSON.parse(e.data) as { queue: string[] }
+      setState(prev => ({ ...prev, readyQueue: queue }))
     })
 
     es.onopen = () => setConnected(true)
