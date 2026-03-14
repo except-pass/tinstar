@@ -268,3 +268,102 @@ Dismissed with `Escape` or clicking the backdrop.
 | `Space` (hold) | Pan mode | canvas | Navigation |
 | `Alt+Z` | Reset zoom | canvas | Navigation |
 | `Ctrl+Scroll` | Zoom to cursor | canvas | Navigation |
+
+---
+
+## 9. Playwright Test Plan
+
+All tests run with `TINSTAR_FAST_SIM=1` and use `resetAndWaitForData()` in `beforeEach`. Tests live in `e2e/hotkeys.spec.ts` except where noted.
+
+**Note on terminal focus toggle:** `Ctrl+Shift+\` requires a live ttyd session and cannot be tested with the simulator. Those behaviors are covered by the wrapper page's own unit-level tests (the wrapper HTML is simple enough to test in isolation). The Playwright suite tests everything else.
+
+---
+
+### Command Palette
+
+| Test | What to assert |
+|------|---------------|
+| Press `?` on canvas | `[data-testid="hotkey-palette"]` becomes visible |
+| Palette renders all categories | Each category heading from `registry.ts` is present |
+| Type "session" in search | Only hotkeys with "session" in description or keys remain visible |
+| Clear search | All hotkeys reappear |
+| Press `Escape` | Palette closes |
+| Click backdrop | Palette closes |
+| Focus a text input, press `?` | Palette does **not** open (isEditable guard) |
+| Open palette while canvas focused | Widget-scope hotkeys shown greyed-out |
+
+---
+
+### Hotgroups
+
+| Test | What to assert |
+|------|---------------|
+| Click run widget, press `Ctrl+1` | `[data-testid="hotgroup-badge-R-241"]` shows `⌨ 1`; sidebar row also shows `⌨ 1` |
+| Press `Ctrl+2` on same run | Badge updates to `⌨ 1 2` |
+| Press `Ctrl+Shift+1` | Badge updates to `⌨ 2` (slot 1 removed) |
+| Press `Ctrl+Shift+2` | Badge disappears entirely |
+| Press `1` (slot assigned) | Run is selected; sidebar ancestor nodes are expanded and visible |
+| Press `1` again within 300ms | Camera transform changes (read via `page.evaluate(() => getComputedStyle(...).transform)` on canvas layer); run is visible in viewport |
+| Press `1` with unassigned slot | No crash, no selection change |
+| Assign two runs to slot 1 (multi-select via Ctrl+click, then Ctrl+1) | Both runs show `⌨ 1`; pressing `1` selects both |
+| Press `1` (double-tap, 2 runs) | Viewport zooms to fit both runs (zoom % changes and both `[data-testid]` widgets are within viewport bounds) |
+| Slot `0` (10th group) | Same as slot 1 — `Ctrl+0` assigns, `0` selects, `0`+`0` zooms |
+| Run deleted (simulate via SSE) | Badge disappears; pressing its former slot is a no-op |
+| `1`-`9` not firing inside text input | Renaming a sidebar node — digit keys don't trigger hotgroup |
+
+---
+
+### Tab Navigation
+
+| Test | What to assert |
+|------|---------------|
+| Click run widget, press `Tab` | Element with `[data-testid="focus-zone-left-tab"]` has `ring-2` class |
+| Tab again (left panel expanded) | `[data-testid="focus-zone-file-list"]` has `ring-2` |
+| Press `↓` in file list | Second file item gets highlighted |
+| Press `↑` | First file item highlighted again |
+| Press `Tab` → center tabs | `[data-testid="focus-zone-center-tabs"]` has `ring-2` |
+| Press `→` in center tabs | Switches from Recap to second tab (Terminal or Logs) |
+| Press `←` | Switches back to Recap |
+| Press `Tab` → right panel | `[data-testid="focus-zone-right-panel"]` has `ring-2` |
+| Press `Tab` → wraps to left | `focus-zone-left-tab` has `ring-2` again |
+| Press `Shift+Tab` from left | Jumps to right panel (reverse wrap) |
+| Left panel collapsed | Tab skips `left-tab` and `file-list`, goes directly to `center-tabs` |
+| `Tab` key on empty canvas (no widget focused) | No focus zone rings appear anywhere |
+
+---
+
+### Session Cycling
+
+| Test | What to assert |
+|------|---------------|
+| Press `]` | A run widget gets canvas selection class; its sidebar node is visible/expanded |
+| Press `]` again | A **different** run is selected |
+| Press `[` | Previous run in cycle is selected |
+| Press `]` repeatedly until wrap | Cycles back to first ready-for-input run (no crash at boundary) |
+| Press `Shift+]` | Selects a session regardless of status (assert total count cycles through more sessions than `]` alone) |
+| Press `Shift+[` | Reverse all-session cycle |
+| Selected run scrolled into view | After cycling, `page.evaluate(() => el.getBoundingClientRect())` shows widget within viewport bounds |
+| Hierarchy expanded after cycle | The selected run's sidebar ancestor rows are visible |
+
+---
+
+### Window Arrangements
+
+| Test | What to assert |
+|------|---------------|
+| Drag a container, press `Ctrl+G` | Container returns to near-original grid position (within 30px) |
+| Drag a container, press `Ctrl+Shift+G` | Layout resets; container position matches fresh-load position |
+| `Ctrl+G` does not change zoom | `[data-testid="zoom-indicator"]` text unchanged before/after |
+| `Ctrl+Shift+G` while nothing dragged | No crash; layout unchanged |
+
+---
+
+### New Session (`Ctrl+Enter`)
+
+| Test | What to assert |
+|------|---------------|
+| Select sidebar node, press `Ctrl+Enter` | `CreateSessionDialog` visible; pre-selected entity matches selected node |
+| Select canvas run widget, press `Ctrl+Enter` | Dialog opens pre-scoped to that run's task |
+| Press `Ctrl+Enter` with nothing selected | Dialog opens with no pre-selection |
+| Focus a text input, press `Ctrl+Enter` | Dialog does **not** open |
+| Press `Escape` in dialog | Dialog closes |
