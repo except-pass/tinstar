@@ -120,9 +120,11 @@ interface Props {
   sessionId?: string
   status?: SessionStatus
   termTick?: number
+  terminalFocused?: boolean
+  onTerminalToggle?: () => void
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, termTick = 0 }: Props) {
+export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, termTick = 0, terminalFocused: _terminalFocused, onTerminalToggle: _onTerminalToggle }: Props) {
   const [activeTab, setActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
