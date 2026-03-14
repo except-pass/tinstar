@@ -167,6 +167,7 @@ export function useCanvasCamera() {
 
   return {
     camera,
+    setCamera,
     cursorStyle,
     spaceHeld,
     handleWheel,
