@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, iframe { width: 100%; height: 100%; border: none; display: block; }
+  </style>
+</head>
+<body>
+  <iframe id="term" allow="clipboard-read; clipboard-write"></iframe>
+  <script>
+    // Read session URL from query param
+    const params = new URLSearchParams(location.search)
+    const session = params.get('session') ?? ''
+    const port = params.get('port') ?? ''
+    if (port) {
+      document.getElementById('term').src = `http://localhost:${port}/s/${session}/`
+    }
+
+    // Intercept Ctrl+Shift+\ and notify parent
+    window.addEventListener('keydown', function(e) {
+      if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+        e.preventDefault()
+        window.parent.postMessage({ type: 'terminal-focus-toggle', sessionName: session }, '*')
+      }
+    })
+  </script>
+</body>
+</html>

@@ -99,9 +99,12 @@ function StatusMessage({ entry }: { entry: RecapEntry }) {
 }
 
 /** Iframe wrapper keyed by tick to force remount on refresh */
-function TerminalFrame({ src, tick }: { src: string; tick: number }) {
+function TerminalFrame({ src, tick, focused }: { src: string; tick: number; focused?: boolean }) {
   return (
-    <div className="flex-1 flex" onPointerDown={e => e.stopPropagation()}>
+    <div
+      className={`flex-1 flex${focused ? ' ring-2 ring-inset ring-indigo-400' : ''}`}
+      onPointerDown={e => e.stopPropagation()}
+    >
       <iframe
         key={tick}
         src={src}
@@ -124,7 +127,7 @@ interface Props {
   onTerminalToggle?: () => void
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, termTick = 0, terminalFocused: _terminalFocused, onTerminalToggle: _onTerminalToggle }: Props) {
+export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, termTick = 0, terminalFocused, onTerminalToggle }: Props) {
   const [activeTab, setActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
@@ -136,6 +139,16 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
       contentRef.current.scrollTop = contentRef.current.scrollHeight
     }
   }, [activeTab])
+
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      if (e.data?.type === 'terminal-focus-toggle' && e.data?.sessionName === sessionId) {
+        onTerminalToggle?.()
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [sessionId, onTerminalToggle])
 
   const isTerminated = status === 'stopped'
 
@@ -233,7 +246,11 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
           </div>
         </div>
       ) : activeTab === 'terminal' && port ? (
-        <TerminalFrame src={sessionId ? `/s/${sessionId}/` : `http://localhost:${port}`} tick={termTick} />
+        <TerminalFrame
+          src={`/terminal-wrapper.html?session=${encodeURIComponent(sessionId ?? '')}&port=${port}`}
+          tick={termTick}
+          focused={terminalFocused}
+        />
       ) : activeTab === 'recap' ? (
         <div ref={contentRef} data-scrollable className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4">
           <div className="space-y-5">
