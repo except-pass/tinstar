@@ -18,12 +18,21 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const [starPopover, setStarPopover] = useState<{ skillName: string; index: number; rect: DOMRect } | null>(null)
+  const [taskProcedures, setTaskProcedures] = useState<StoredProcedure[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const loadTaskProcedures = useCallback(async () => {
+    const res = await fetch(`/api/tasks/${taskId}`)
+    if (!res.ok) return
+    const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
+    setTaskProcedures(json.data?.settings?.procedures ?? [])
+  }, [taskId])
 
   useEffect(() => {
     fetchSkills()
+    loadTaskProcedures()
     inputRef.current?.focus()
-  }, [fetchSkills])
+  }, [fetchSkills, loadTaskProcedures])
 
   // Build entity levels for star popover
   const entityLevels = useCallback((): EntityLevel[] => {
@@ -78,6 +87,23 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings: { procedures: [...existing, newProcedure] } }),
     })
+    if (entityType === 'task' && entityId === taskId) {
+      setTaskProcedures(prev => [...prev, newProcedure])
+    }
+  }
+
+  async function removeProcedureFromTask(skillName: string) {
+    const res = await fetch(`/api/tasks/${taskId}`)
+    if (!res.ok) return
+    const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
+    const existing = json.data?.settings?.procedures ?? []
+    const updated = existing.filter(p => p.skillName !== skillName)
+    await fetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { procedures: updated } }),
+    })
+    setTaskProcedures(updated)
   }
 
   function handleDefine() {
@@ -104,6 +130,8 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
       body: JSON.stringify({ text: `Define a new skill [draftId=${draftId}]: ${description}` }),
     }).catch(console.error)
   }
+
+  const taskProcedureNames = new Set(taskProcedures.map(p => p.skillName))
 
   const systemSkills = filtered.filter(s => s.source === 'system' || s.source === 'plugin')
   const repoSkills = filtered.filter(s => s.source === 'repo')
@@ -144,8 +172,10 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
                   skill={skill}
                   active={activeIndex === i}
                   starActive={starPopover?.skillName === skill.name}
+                  inProcedures={taskProcedureNames.has(skill.name)}
                   onMouseEnter={() => setActiveIndex(i)}
                   onStarClick={(rect) => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i, rect })}
+                  onRemove={() => removeProcedureFromTask(skill.name)}
                 />
               ))}
             </>
@@ -161,8 +191,10 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
                   skill={skill}
                   active={activeIndex === systemSkills.length + i}
                   starActive={starPopover?.skillName === skill.name}
+                  inProcedures={taskProcedureNames.has(skill.name)}
                   onMouseEnter={() => setActiveIndex(systemSkills.length + i)}
                   onStarClick={(rect) => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i, rect })}
+                  onRemove={() => removeProcedureFromTask(skill.name)}
                 />
               ))}
             </>
@@ -224,7 +256,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
         {/* Footer */}
         <div className="flex items-center gap-3 px-3.5 py-1.5 border-t border-white/[0.06] bg-black/20">
           <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">↑↓</span> navigate</span>
-          <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">⭐</span> add to procedures</span>
+          <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">⭐</span> add / remove</span>
           <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">esc</span> close</span>
         </div>
       </div>
@@ -233,13 +265,15 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
 }
 
 function SkillRow({
-  skill, active, starActive, onMouseEnter, onStarClick,
+  skill, active, starActive, inProcedures, onMouseEnter, onStarClick, onRemove,
 }: {
   skill: SkillDTO
   active: boolean
   starActive: boolean
+  inProcedures: boolean
   onMouseEnter: () => void
   onStarClick: (rect: DOMRect) => void
+  onRemove: () => void
 }) {
   const isRepo = skill.source === 'repo'
 
@@ -259,10 +293,24 @@ function SkillRow({
         {isRepo ? 'repo' : 'sys'}
       </span>
       <button
-        onClick={e => { e.stopPropagation(); onStarClick(e.currentTarget.getBoundingClientRect()) }}
-        className={`w-6 h-6 flex items-center justify-center rounded transition-colors flex-shrink-0 ${starActive ? 'text-yellow-400 bg-yellow-400/10' : 'text-slate-600 hover:text-yellow-400 hover:bg-yellow-400/10 opacity-0 group-hover:opacity-100'}`}
+        onClick={e => {
+          e.stopPropagation()
+          if (inProcedures) {
+            onRemove()
+          } else {
+            onStarClick(e.currentTarget.getBoundingClientRect())
+          }
+        }}
+        title={inProcedures ? 'Remove from task procedures' : 'Add to procedures'}
+        className={`w-6 h-6 flex items-center justify-center rounded transition-colors flex-shrink-0 ${
+          inProcedures
+            ? 'text-yellow-400 bg-yellow-400/10'
+            : starActive
+              ? 'text-yellow-400 bg-yellow-400/10'
+              : 'text-slate-600 hover:text-yellow-400 hover:bg-yellow-400/10 opacity-0 group-hover:opacity-100'
+        }`}
       >
-        <span className="material-symbols-outlined text-sm">star</span>
+        <span className="material-symbols-outlined text-sm">{inProcedures ? 'star' : 'star'}</span>
       </button>
     </div>
   )

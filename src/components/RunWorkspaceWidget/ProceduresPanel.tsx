@@ -119,7 +119,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse }
         className="m-2 flex items-center justify-center gap-1.5 py-1.5 border border-dashed border-primary/20 text-primary/40 hover:text-primary/70 hover:border-primary/40 transition-all rounded-sm"
       >
         <span className="material-symbols-outlined text-sm">add</span>
-        <span className="text-2xs font-bold font-display tracking-[0.12em] uppercase">New</span>
+        <span className="text-2xs font-bold font-display tracking-[0.12em] uppercase">Add / Remove</span>
       </button>
     </section>
   )
