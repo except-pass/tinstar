@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from 'react'
 import { useSkills, type SkillsState, type SkillsActions } from '../hooks/useSkills'
 import { SaveSkillModal } from './RunWorkspaceWidget/SaveSkillModal'
+import { SkillPickerModal } from './RunWorkspaceWidget/SkillPickerModal'
 
 type SkillsContextValue = SkillsState & SkillsActions
 
@@ -11,6 +12,13 @@ export function SkillsProvider({ children }: { children: ReactNode }) {
   return (
     <SkillsContext.Provider value={skillsState}>
       {children}
+      {skillsState.pickerContext && (
+        <SkillPickerModal
+          taskId={skillsState.pickerContext.taskId}
+          sessionId={skillsState.pickerContext.sessionId}
+          onClose={skillsState.closePicker}
+        />
+      )}
       {skillsState.savingDraft && (
         <SaveSkillModal
           draftId={skillsState.savingDraft.draftId}

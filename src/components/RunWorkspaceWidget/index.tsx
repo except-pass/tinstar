@@ -5,8 +5,7 @@ import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { ProceduresPanel } from './ProceduresPanel'
-import { SkillPickerModal } from './SkillPickerModal'
-import { useSkillsContext } from '../SkillsProvider'
+
 
 interface Props {
   run: RunData
@@ -23,7 +22,7 @@ interface Props {
 type FilePanelMode = 'touched' | 'tree'
 
 export function RunWorkspaceWidget({ run, className = '', compact = false, headless = false, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp }: Props) {
-  const { pickerContext, closePicker } = useSkillsContext()
+
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
   const [procsCollapsed, setProcsCollapsed] = useState(true)
@@ -144,13 +143,6 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
         )}
       </div>
 
-      {pickerContext?.taskId === run.taskId && (
-        <SkillPickerModal
-          taskId={run.taskId}
-          sessionId={run.sessionId}
-          onClose={closePicker}
-        />
-      )}
     </div>
   )
 }

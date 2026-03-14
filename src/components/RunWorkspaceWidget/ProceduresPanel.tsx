@@ -115,7 +115,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse }
 
       <button
         data-testid="new-procedure-btn"
-        onClick={() => openPicker(taskId)}
+        onClick={() => openPicker(taskId, sessionId)}
         className="m-2 flex items-center justify-center gap-1.5 py-1.5 border border-dashed border-primary/20 text-primary/40 hover:text-primary/70 hover:border-primary/40 transition-all rounded-sm"
       >
         <span className="material-symbols-outlined text-sm">add</span>

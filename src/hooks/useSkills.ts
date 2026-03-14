@@ -5,13 +5,13 @@ export interface SkillsState {
   skills: SkillDTO[]
   loading: boolean
   pendingSkills: PendingSkill[]
-  pickerContext: { taskId: string } | null
+  pickerContext: { taskId: string; sessionId: string } | null
   savingDraft: { draftId: string; skillName: string; pendingSkillId: string; sessionId: string } | null
 }
 
 export interface SkillsActions {
   fetchSkills: () => Promise<void>
-  openPicker: (taskId: string) => void
+  openPicker: (taskId: string, sessionId: string) => void
   closePicker: () => void
   addPendingSkill: (skill: PendingSkill) => void
   resolvePendingSkill: (id: string, finalName: string) => void
@@ -24,7 +24,7 @@ export function useSkills(): SkillsState & SkillsActions {
   const [skills, setSkills] = useState<SkillDTO[]>([])
   const [loading, setLoading] = useState(false)
   const [pendingSkills, setPendingSkills] = useState<PendingSkill[]>([])
-  const [pickerContext, setPickerContext] = useState<{ taskId: string } | null>(null)
+  const [pickerContext, setPickerContext] = useState<{ taskId: string; sessionId: string } | null>(null)
   const [savingDraft, setSavingDraft] = useState<{ draftId: string; skillName: string; pendingSkillId: string; sessionId: string } | null>(null)
   const timeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const pendingSkillsRef = useRef<PendingSkill[]>([])
@@ -71,8 +71,8 @@ export function useSkills(): SkillsState & SkillsActions {
     }
   }, [])
 
-  const openPicker = useCallback((taskId: string) => {
-    setPickerContext({ taskId })
+  const openPicker = useCallback((taskId: string, sessionId: string) => {
+    setPickerContext({ taskId, sessionId })
   }, [])
 
   const closePicker = useCallback(() => {
