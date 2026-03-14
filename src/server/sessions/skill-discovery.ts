@@ -67,27 +67,42 @@ function scanPlugins(): Skill[] {
     if (entries.includes('skills')) {
       const skillsDir = join(dir, 'skills')
       try {
-        for (const skillName of readdirSync(skillsDir)) {
-          const skillDir = join(skillsDir, skillName)
-          try {
-            if (!statSync(skillDir).isDirectory()) continue
-          } catch { continue }
-          for (const candidate of [`${skillName}.md`, 'skill.md', 'index.md']) {
-            const mdPath = join(skillDir, candidate)
+        // Check if SKILL.md is directly in skills/ (flat single-skill plugin)
+        const flatSkillPath = join(skillsDir, 'SKILL.md')
+        let flatHandled = false
+        try {
+          const content = readFileSync(flatSkillPath, 'utf-8')
+          const fm = parseFrontmatter(content)
+          const skillName = fm.name ?? dir.split('/').pop() ?? 'unknown'
+          if (!skills.some(s => s.name === skillName)) {
+            skills.push({ name: skillName, description: fm.description, source: 'plugin', path: flatSkillPath })
+          }
+          flatHandled = true
+        } catch { /* no flat SKILL.md */ }
+
+        if (!flatHandled) {
+          for (const skillName of readdirSync(skillsDir)) {
+            const skillDir = join(skillsDir, skillName)
             try {
-              const content = readFileSync(mdPath, 'utf-8')
-              const fm = parseFrontmatter(content)
-              // Avoid duplicates from multiple versions — skip if name already seen
-              if (!skills.some(s => s.name === (fm.name ?? skillName))) {
-                skills.push({
-                  name: fm.name ?? skillName,
-                  description: fm.description,
-                  source: 'plugin',
-                  path: mdPath,
-                })
-              }
-              break
-            } catch { /* try next candidate */ }
+              if (!statSync(skillDir).isDirectory()) continue
+            } catch { continue }
+            for (const candidate of [`${skillName}.md`, 'SKILL.md', 'skill.md', 'index.md']) {
+              const mdPath = join(skillDir, candidate)
+              try {
+                const content = readFileSync(mdPath, 'utf-8')
+                const fm = parseFrontmatter(content)
+                // Avoid duplicates from multiple versions — skip if name already seen
+                if (!skills.some(s => s.name === (fm.name ?? skillName))) {
+                  skills.push({
+                    name: fm.name ?? skillName,
+                    description: fm.description,
+                    source: 'plugin',
+                    path: mdPath,
+                  })
+                }
+                break
+              } catch { /* try next candidate */ }
+            }
           }
         }
       } catch { /* no skills dir readable */ }
@@ -117,11 +132,47 @@ interface Cache {
 let cache: Cache | null = null
 const TTL_MS = 7_000
 
+/** Scan ~/.claude/skills/ — each subdir is a skill with a SKILL.md */
+function scanUserSkillsDir(): Skill[] {
+  const skillsDir = join(homedir(), '.claude', 'skills')
+  const skills: Skill[] = []
+  let entries: string[]
+  try {
+    entries = readdirSync(skillsDir)
+  } catch {
+    return skills
+  }
+  for (const skillName of entries) {
+    const skillDir = join(skillsDir, skillName)
+    try {
+      if (!statSync(skillDir).isDirectory()) continue
+    } catch { continue }
+    for (const candidate of [`${skillName}.md`, 'SKILL.md', 'skill.md', 'index.md']) {
+      const mdPath = join(skillDir, candidate)
+      try {
+        const content = readFileSync(mdPath, 'utf-8')
+        const fm = parseFrontmatter(content)
+        skills.push({
+          name: fm.name ?? skillName,
+          description: fm.description,
+          source: 'system',
+          path: mdPath,
+        })
+        break
+      } catch { /* try next candidate */ }
+    }
+  }
+  return skills
+}
+
 export function getSkills(projectRoot?: string): Skill[] {
   const now = Date.now()
   if (cache && now < cache.expiresAt) return cache.skills
 
-  const system = scanDir(join(homedir(), '.claude', 'commands'), 'system')
+  const system = [
+    ...scanDir(join(homedir(), '.claude', 'commands'), 'system'),
+    ...scanUserSkillsDir(),
+  ]
   const repo = projectRoot
     ? scanDir(join(projectRoot, '.claude', 'commands'), 'repo')
     : []
