@@ -17,7 +17,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
   const taxRepo = useTaxonomy()
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
-  const [starPopover, setStarPopover] = useState<{ skillName: string; index: number } | null>(null)
+  const [starPopover, setStarPopover] = useState<{ skillName: string; index: number; rect: DOMRect } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -69,8 +69,8 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
     const res = await fetch(`/api/${entityPath}/${entityId}`)
     if (!res.ok) return
-    const entity = await res.json() as { settings?: { procedures?: StoredProcedure[] } }
-    const existing = entity.settings?.procedures ?? []
+    const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
+    const existing = json.data?.settings?.procedures ?? []
     if (existing.some(p => p.skillName === skillName)) return
     const newProcedure: StoredProcedure = { id: crypto.randomUUID(), skillName }
     await fetch(`/api/${entityPath}/${entityId}`, {
@@ -143,11 +143,9 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
                   key={skill.name}
                   skill={skill}
                   active={activeIndex === i}
-                  showPopover={starPopover?.skillName === skill.name}
-                  entityLevels={entityLevels()}
+                  starActive={starPopover?.skillName === skill.name}
                   onMouseEnter={() => setActiveIndex(i)}
-                  onStarClick={() => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i })}
-                  onEntitySelect={(entityId, entityType) => addProcedureToEntity(skill.name, entityId, entityType)}
+                  onStarClick={(rect) => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i, rect })}
                 />
               ))}
             </>
@@ -162,11 +160,9 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
                   key={skill.name}
                   skill={skill}
                   active={activeIndex === systemSkills.length + i}
-                  showPopover={starPopover?.skillName === skill.name}
-                  entityLevels={entityLevels()}
+                  starActive={starPopover?.skillName === skill.name}
                   onMouseEnter={() => setActiveIndex(systemSkills.length + i)}
-                  onStarClick={() => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i })}
-                  onEntitySelect={(entityId, entityType) => addProcedureToEntity(skill.name, entityId, entityType)}
+                  onStarClick={(rect) => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i, rect })}
                 />
               ))}
             </>
@@ -197,6 +193,34 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
           )}
         </div>
 
+        {/* Entity picker popover — rendered outside the scrollable div to avoid overflow clipping */}
+        {starPopover && entityLevels().length > 0 && (
+          <div
+            className="fixed z-[60] bg-surface-panel border border-yellow-400/30 rounded-md w-48 shadow-lg overflow-hidden"
+            style={{ top: starPopover.rect.bottom + 4, left: Math.min(starPopover.rect.right - 192, window.innerWidth - 200) }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-3 py-1.5 text-2xs font-mono text-slate-600 uppercase tracking-widest border-b border-white/[0.06]">
+              Add to procedures for…
+            </div>
+            {entityLevels().map((level, i) => (
+              <button
+                key={level.id}
+                onClick={() => { addProcedureToEntity(starPopover.skillName, level.id, level.type); setStarPopover(null) }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-yellow-400/[0.07] transition-colors"
+              >
+                <span className="material-symbols-outlined text-xs text-slate-600">
+                  {level.type === 'task' ? 'task_alt' : level.type === 'epic' ? 'layers' : 'rocket_launch'}
+                </span>
+                <span className={`flex-1 text-xs font-mono text-left ${i === 0 ? 'text-primary' : 'text-slate-400'}`}>
+                  {level.type.charAt(0).toUpperCase() + level.type.slice(1)}
+                </span>
+                <span className="text-2xs text-slate-600 truncate max-w-[80px]">{level.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Footer */}
         <div className="flex items-center gap-3 px-3.5 py-1.5 border-t border-white/[0.06] bg-black/20">
           <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">↑↓</span> navigate</span>
@@ -209,15 +233,13 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
 }
 
 function SkillRow({
-  skill, active, showPopover, entityLevels, onMouseEnter, onStarClick, onEntitySelect,
+  skill, active, starActive, onMouseEnter, onStarClick,
 }: {
   skill: SkillDTO
   active: boolean
-  showPopover: boolean
-  entityLevels: EntityLevel[]
+  starActive: boolean
   onMouseEnter: () => void
-  onStarClick: () => void
-  onEntitySelect: (entityId: string, entityType: 'task' | 'epic' | 'initiative') => void
+  onStarClick: (rect: DOMRect) => void
 }) {
   const isRepo = skill.source === 'repo'
 
@@ -237,38 +259,11 @@ function SkillRow({
         {isRepo ? 'repo' : 'sys'}
       </span>
       <button
-        onClick={e => { e.stopPropagation(); onStarClick() }}
-        className={`w-6 h-6 flex items-center justify-center rounded transition-colors flex-shrink-0 ${showPopover ? 'text-yellow-400 bg-yellow-400/10' : 'text-slate-600 hover:text-yellow-400 hover:bg-yellow-400/10 opacity-0 group-hover:opacity-100'}`}
+        onClick={e => { e.stopPropagation(); onStarClick(e.currentTarget.getBoundingClientRect()) }}
+        className={`w-6 h-6 flex items-center justify-center rounded transition-colors flex-shrink-0 ${starActive ? 'text-yellow-400 bg-yellow-400/10' : 'text-slate-600 hover:text-yellow-400 hover:bg-yellow-400/10 opacity-0 group-hover:opacity-100'}`}
       >
         <span className="material-symbols-outlined text-sm">star</span>
       </button>
-
-      {/* Entity popover */}
-      {showPopover && (
-        <div
-          className="absolute right-0 top-full mt-0.5 z-10 bg-surface-panel border border-yellow-400/30 rounded-md w-48 shadow-lg overflow-hidden"
-          onClick={e => e.stopPropagation()}
-        >
-          <div className="px-3 py-1.5 text-2xs font-mono text-slate-600 uppercase tracking-widest border-b border-white/[0.06]">
-            Add to procedures for…
-          </div>
-          {entityLevels.map((level, i) => (
-            <button
-              key={level.id}
-              onClick={() => onEntitySelect(level.id, level.type)}
-              className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-yellow-400/[0.07] transition-colors"
-            >
-              <span className="material-symbols-outlined text-xs text-slate-600">
-                {level.type === 'task' ? 'task_alt' : level.type === 'epic' ? 'layers' : 'rocket_launch'}
-              </span>
-              <span className={`flex-1 text-xs font-mono text-left ${i === 0 ? 'text-primary' : 'text-slate-400'}`}>
-                {level.type.charAt(0).toUpperCase() + level.type.slice(1)}
-              </span>
-              <span className="text-2xs text-slate-600 truncate max-w-[80px]">{level.name}</span>
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   )
 }

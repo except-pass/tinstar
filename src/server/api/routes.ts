@@ -324,6 +324,33 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // GET /api/initiatives/:id
+  if (method === 'GET' && /^\/api\/initiatives\/[^/]+$/.test(url)) {
+    const id = url.slice('/api/initiatives/'.length)
+    const entity = ctx.docStore.getInitiative(id)
+    if (!entity) return json(res, { error: 'not found' }, 404)
+    json(res, { ok: true, data: entity })
+    return true
+  }
+
+  // GET /api/epics/:id
+  if (method === 'GET' && /^\/api\/epics\/[^/]+$/.test(url)) {
+    const id = url.slice('/api/epics/'.length)
+    const entity = ctx.docStore.getEpic(id)
+    if (!entity) return json(res, { error: 'not found' }, 404)
+    json(res, { ok: true, data: entity })
+    return true
+  }
+
+  // GET /api/tasks/:id
+  if (method === 'GET' && /^\/api\/tasks\/[^/]+$/.test(url)) {
+    const id = url.slice('/api/tasks/'.length)
+    const entity = ctx.docStore.getTask(id)
+    if (!entity) return json(res, { error: 'not found' }, 404)
+    json(res, { ok: true, data: entity })
+    return true
+  }
+
   // GET /api/initiatives/:id/settings
   if (method === 'GET' && /^\/api\/initiatives\/[^/]+\/settings$/.test(url)) {
     const id = url.slice('/api/initiatives/'.length, url.lastIndexOf('/settings'))
