@@ -17,6 +17,7 @@ import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
 import { ActiveScopeProvider } from '../hotkeys/ActiveScopeContext'
 import { HotgroupProvider } from '../hotkeys/HotgroupContext'
+import { HotkeyPalette } from './HotkeyPalette'
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
 function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
@@ -72,6 +73,7 @@ function WorkspaceShellInner() {
     entityId: string; entityType: GroupingDimension; entityName: string
   } | null>(null)
   const [sessionPrefill, setSessionPrefill] = useState<{ taskId?: string } | null>(null)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const { select, toggleSelect, expandAll, selectedCount, state: selectionState } = useSelection()
   const arrangeGridRef = useRef<(() => void) | null>(null)
   const arrangeResetRef = useRef<(() => void) | null>(null)
@@ -272,8 +274,26 @@ function WorkspaceShellInner() {
       const run = cyclePrev(allRuns, allNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
-    onSessionNew: () => { /* TODO: will be wired in Task 16 */ },
-    onPaletteOpen: () => { /* TODO: will be wired in Task 16 */ },
+    onSessionNew: useCallback(() => {
+      // Derive pre-selected entity from current selection
+      const { selectedType, selectedIds } = selectionState
+      const firstNodeId = [...selectedIds][0] ?? null
+      if (firstNodeId && selectedType && selectedType !== 'run') {
+        // Strip type prefix (e.g. "task-abc" → "abc")
+        const rawId = firstNodeId.startsWith(`${selectedType}-`)
+          ? firstNodeId.slice(selectedType.length + 1)
+          : firstNodeId
+        const entityLinks: Record<string, string> = {}
+        if (selectedType === 'task') entityLinks.taskId = rawId
+        else if (selectedType === 'epic') entityLinks.epicId = rawId
+        else if (selectedType === 'initiative') entityLinks.initiativeId = rawId
+        setSessionPrefill(entityLinks)
+      } else {
+        setSessionPrefill(null)
+      }
+      setShowSessionDialog(true)
+    }, [selectionState]),
+    onPaletteOpen: () => setPaletteOpen(true),
   })
 
   // Sidebar double-click passes node.id directly (e.g. "run-vpp", "initiative-abc")
@@ -480,6 +500,7 @@ function WorkspaceShellInner() {
           </div>
         </TaxonomyProvider>
       )}
+      <HotkeyPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </ActiveScopeProvider>
   )
 }
