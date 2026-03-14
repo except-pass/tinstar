@@ -35,6 +35,7 @@ export class ReadyQueue {
     if (this.queue.length === 0) return null
     if (!currentName) return this.queue[0] ?? null
     const idx = this.queue.indexOf(currentName)
+    if (idx === -1) return this.queue[0] ?? null
     return this.queue[(idx + 1) % this.queue.length] ?? null
   }
 
@@ -42,6 +43,7 @@ export class ReadyQueue {
     if (this.queue.length === 0) return null
     if (!currentName) return this.queue[this.queue.length - 1] ?? null
     const idx = this.queue.indexOf(currentName)
+    if (idx === -1) return this.queue[this.queue.length - 1] ?? null
     const prev = (idx - 1 + this.queue.length) % this.queue.length
     return this.queue[prev] ?? null
   }
