@@ -21,17 +21,24 @@ type HotkeyDef = {
   scope: HotkeyScope
   category: string    // for palette grouping
   description: string
-  handler: string     // reference name, resolved at runtime by each scope's hook
 }
 ```
+
+The `handler` field is intentionally absent from the registry — handler wiring happens inside each scope's hook via a string-keyed `Record<string, () => void>` map. This keeps the registry pure data (and readable as docs) while each hook owns its own action map. The handler ID string in the hook map must match `HotkeyDef.id`.
 
 ### Dispatch Hooks
 
 Three hooks consume the registry — each handles one scope:
 
-- **`useGlobalHotkeys()`** — mounted once in `WorkspaceShell`. Handles `scope: 'global'`. Suppresses canvas/widget shortcuts when focus is inside the ttyd iframe (checks `document.activeElement`). Session cycling fires even when iframe is focused.
-- **`useCanvasHotkeys()`** — mounted in `InfiniteCanvas`. Handles `scope: 'canvas'`.
-- **`useWidgetHotkeys(runId)`** — mounted in `RunWorkspaceWidget`. Handles `scope: 'widget'`. Suspended when terminal has focus.
+- **`useGlobalHotkeys()`** — mounted once in `WorkspaceShell`. Attaches a `keydown` listener to `window`. Handles `scope: 'global'`. Uses an `isEditable(target)` guard (same pattern as `useCanvasCamera`) to suppress all global hotkeys when focus is inside a text input, contenteditable, or textarea. Session cycling (`[`/`]`) is a deliberate exception: it fires even when a ttyd iframe is the active element (detected via `document.activeElement.tagName === 'IFRAME'`), and calls `.blur()` on the iframe then `.focus()` on the canvas root before executing. `Ctrl+Enter` is explicitly suppressed when an iframe is active (would be disruptive mid-terminal).
+- **`useCanvasHotkeys()`** — mounted in `InfiniteCanvas`. Attaches to `window`. Handles `scope: 'canvas'`. Applies the same `isEditable` guard. Does not fire when focus is inside the ttyd iframe.
+- **`useWidgetHotkeys(runId, rootRef)`** — mounted in `RunWorkspaceWidget`. Attaches a `keydown` listener to the **widget's root `div` element** (passed as `rootRef`, which must have `tabIndex={-1}` to be focusable). Does **not** attach to `window` — this prevents multiple mounted widgets from all receiving the same key events. Suspended (no-ops all handlers) when `terminalFocused` ref is `true`.
+
+All three hooks share a single utility: `isEditable(el: Element): boolean` — returns true for `INPUT`, `TEXTAREA`, `SELECT`, and elements with `contenteditable="true"`.
+
+### Active Scope Context
+
+`WorkspaceShell` provides an `ActiveScopeContext` with shape `{ scope: HotkeyScope }`. Each scope hook writes to this context via a setter on `focus`/`blur` events on its attachment point. The command palette reads this context to grey out out-of-scope entries. Provider lives in `WorkspaceShell`; consumers are the palette and (optionally) any UI that wants to react to the current focus scope.
 
 The `?` command palette renders `registry.ts` directly — no separate documentation to maintain.
 
@@ -41,7 +48,7 @@ The `?` command palette renders `registry.ts` directly — no separate documenta
 
 ### Data Model
 
-Hotgroup assignments persist in localStorage, keyed per space:
+Hotgroup assignments persist in localStorage, keyed per space. The `activeSpaceId` is read from the SSE snapshot state (already available in `useBackendState`) and passed as a prop/context wherever hotgroup state is needed.
 
 ```ts
 // localStorage key: 'tinstar-hotgroups-v1-{spaceId}'
@@ -52,31 +59,37 @@ type HotgroupStore = {
 
 A run may belong to multiple slots simultaneously (StarCraft multi-group model).
 
+**Space switching:** when `activeSpaceId` changes, the hotgroup store is re-read from localStorage for the new space. Assignments from the previous space are not carried over or cleared — each space has its own independent store.
+
+**Stale run IDs:** when a run deletion SSE event arrives, prune its `runId` from all slots in the current space's hotgroup store. This keeps the store clean without requiring ghost-filtering at selection time.
+
 ### Key Bindings (`scope: 'canvas'`)
 
 | Key | Action |
 |-----|--------|
 | `Ctrl+1`…`Ctrl+0` | Add selected run(s) to slot |
-| `Ctrl+Shift+1`…`0` | Remove selected run(s) from slot |
+| `Ctrl+Shift+1`…`0` | Remove selected run(s) from slot (no-op if not a member) |
 | `1`…`0` | Select group: set canvas selection + expand hierarchy for all members |
 | `1`…`0` (double-tap ≤300ms) | Zoom-to-fit all members + expand hierarchy |
 
-Double-tap detection uses a ref tracking the last keydown time per slot number.
+**Double-tap detection:** each slot maintains its own `lastTapTime` in a `Record<string, number>` ref. Tapping `1` then `2` within 300ms does not trigger a double-tap on either slot — only `1` → `1` within 300ms counts.
 
 ### Behavior
 
-**On select (single tap):** Sets canvas selection to all `runId`s in the slot. Expands every ancestor in `HierarchySidebar` for each member run.
+**On select (single tap):** Sets canvas selection to all `runId`s in the slot that have a widget in the current layout (stale IDs silently skipped). Expands every ancestor in `HierarchySidebar` for each member run.
 
-**On double-tap:** Computes the bounding box of all member widgets on the canvas. Calls the existing zoom-to-fit logic (same code path as double-clicking a widget). Expands hierarchy for all members.
+**On double-tap:** Computes the bounding box of all member widgets on the canvas. Calls the existing zoom-to-fit logic (same code path as double-clicking a widget), with a 40px margin on each side. Expands hierarchy for all members.
+
+**Empty slot:** single or double tap on an unassigned slot is a no-op (no error).
 
 ### Visual Indicator
 
-`⌨ 1 3` shown in two places, both right-aligned and muted (`text-slate-400`):
+`⌨ 1 3` shown in two places, both right-aligned and muted (`text-slate-400 text-xs`):
 
-- **Widget title bar** — right side of the drag handle header
+- **Widget title bar** — right side of the drag handle header, before the status dot
 - **HierarchySidebar row** — right side of the run's row
 
-Omitted entirely when the run belongs to no groups. No color coding per slot — the keyboard emoji + numbers is sufficient and avoids clutter.
+Omitted entirely when the run belongs to no groups. If a run belongs to more than 3 slots, show the first 3 and append `+N` (e.g. `⌨ 1 3 5 +2`) to prevent header overflow.
 
 ---
 
@@ -84,33 +97,34 @@ Omitted entirely when the run belongs to no groups. No color coding per slot —
 
 ### Scope
 
-`scope: 'widget'` — only fires when a run widget has focus and the terminal iframe does not.
+`scope: 'widget'` — only fires when a run widget has focus and `terminalFocused` is `false`.
 
-### Focus Order
+### Focus Zones
 
-Tab advances forward; Shift+Tab reverses:
+A `focusZone` ref inside `RunWorkspaceWidget` holds one of: `'left-tab' | 'file-list' | 'center-tabs' | 'right-panel'`.
 
-```
-Left panel tab toggle → file list → center panel tab toggle → right (procedures) panel toggle
-```
+- **`left-tab`**: the left panel tab strip (Changed / Explorer toggle). If the left panel is collapsed, Tab skips this zone and advances directly to `center-tabs`.
+- **`file-list`**: the file list inside the left panel. Only reachable when the left panel is expanded. Arrow keys move between files; Enter opens the focused file.
+- **`center-tabs`**: the center panel tab strip. `RunSessionPanel` has exactly **two** tab slots: "Recap" and either "Terminal" (when the session has a live port) or "Logs" (when it does not). Arrow keys (`←`/`→`) switch between them.
+- **`right-panel`**: the procedures panel toggle. If collapsed, Tab loops back to `left-tab` (or `center-tabs` if left is collapsed).
+
+Tab order (forward): `left-tab` → `file-list` (if left expanded) → `center-tabs` → `right-panel` → wrap to `left-tab`.
 
 ### Key Bindings
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Advance focus to next zone |
-| `Shift+Tab` | Reverse focus |
-| `↑` / `↓` | Move between files (when file list is focused) |
-| `←` / `→` | Switch center tabs: Recap ↔ Logs ↔ Terminal |
+| `Tab` | Advance to next zone |
+| `Shift+Tab` | Reverse to previous zone |
+| `↑` / `↓` | Move between files (when `file-list` focused) |
+| `←` / `→` | Switch center tabs (when `center-tabs` focused) |
 | `Enter` | Open focused file / activate focused procedure |
 
-### Focus Tracking
-
-A ref inside `RunWorkspaceWidget` holds the current focused zone as an enum: `'left-tab' | 'file-list' | 'center-tabs' | 'right-panel'`. The active zone receives a visible `ring-2 ring-indigo-500` highlight.
+The active zone renders a `ring-2 ring-indigo-500` highlight on its container.
 
 ### Terminal Entry
 
-When center-tabs focus is on the Terminal tab, `Ctrl+Shift+\` dives into the iframe (see Section 5). Tab navigation suspends until the user escapes back.
+When `center-tabs` is focused and the **Terminal tab is active** (not Logs), `Ctrl+Shift+\` dives into the terminal (see Section 5). Tab navigation suspends (`terminalFocused = true`) until the user toggles back. When the center tab shows "Logs" (no live terminal), `Ctrl+Shift+\` is a no-op.
 
 ---
 
@@ -129,18 +143,27 @@ When center-tabs focus is on the Terminal tab, `Ctrl+Shift+\` dives into the ifr
 
 ### Backend Queue
 
-The server maintains an ordered array of session names that are currently ready-for-input, updated on every status change via the event bus. Exposed via SSE as a `ready_queue` field in state snapshots and delta events. The frontend mirrors it in React state for future UI surfaces.
+The server maintains an ordered `string[]` of session names that are currently ready-for-input. It lives in `sessions/index.ts` as an in-memory structure (not in `DocumentStore`), updated synchronously on every status change. Order is insertion-order — newly-ready sessions append to the end.
+
+**SSE transport:**
+- **Snapshot:** `ready_queue: string[]` added as a top-level field on the existing snapshot object (alongside `runs`, `spaces`, etc.).
+- **Delta:** a new SSE event type `ready_queue_update` with payload `{ queue: string[] }` is emitted whenever the queue changes.
+- **Frontend:** `useServerEvents` is extended to handle `ready_queue_update` and store it in a new `readyQueue: string[]` field on the state returned by `useBackendState`.
 
 ### Key Bindings (`scope: 'global'`)
 
+Note: on a standard keyboard `Shift+[` produces `{` and `Shift+]` produces `}`. Implement using `e.code === 'BracketLeft'` / `e.code === 'BracketRight'` plus `e.shiftKey`, not `e.key === '['`.
+
 | Key | Action |
 |-----|--------|
-| `]` | Select next ready-for-input session |
-| `[` | Select previous ready-for-input session |
-| `Shift+]` | Select next session (all, wraps around) |
-| `Shift+[` | Select previous session (all, wraps around) |
+| `]` (`BracketRight`, no shift) | Select next ready-for-input session |
+| `[` (`BracketLeft`, no shift) | Select previous ready-for-input session |
+| `Shift+]` (`BracketRight` + shiftKey) | Select next session (all, wraps around) |
+| `Shift+[` (`BracketLeft` + shiftKey) | Select previous session (all, wraps around) |
 
-"Select" means: highlight the run widget on canvas, pan to ensure it's visible (not full zoom-to-fit), expand its hierarchy node. Session cycling fires globally, including when the ttyd iframe has focus — it naturally steals focus back to the canvas.
+**"Select" behavior:** highlight the run widget on canvas, pan to bring it into view with a 60px margin on each side (not full zoom-to-fit), expand its hierarchy node. If the widget is larger than the viewport at current zoom, pan to center it. If a run has no canvas widget (no layout entry), skip it in the cycle.
+
+**Iframe escape:** when `]`/`[`/`Shift+]`/`Shift+[` fires and `document.activeElement` is an `IFRAME`, call `.blur()` on the iframe and `.focus()` on the canvas root element before executing the cycle action. This naturally returns focus to the canvas.
 
 ---
 
@@ -148,23 +171,26 @@ The server maintains an ordered array of session names that are currently ready-
 
 ### Mechanism
 
-Caddy injects a `<script>` tag into ttyd HTML responses that listens for `Ctrl+Shift+\` and fires:
+Rather than injecting scripts via Caddy (which would require non-standard Caddy modules not available in the `caddy:2` Docker image), the terminal is loaded via a **thin wrapper page** served by the Vite backend. Instead of loading the ttyd URL directly in the `<iframe>` src, `RunSessionPanel` loads `/terminal-wrapper?session={sessionName}`. The Vite backend serves a minimal HTML page that:
 
-```js
-window.parent.postMessage({ type: 'terminal-focus-toggle' }, '*')
-```
+1. Embeds the ttyd URL in its own `<iframe>`
+2. Listens for `Ctrl+Shift+\` on `keydown`
+3. On match, calls `window.parent.postMessage({ type: 'terminal-focus-toggle' }, '*')`
 
-`RunSessionPanel` listens for this message and toggles a `terminalFocused` ref. When toggling out, it calls `.focus()` on the widget's root element to return keyboard control.
+`RunSessionPanel` listens for this `message` event on `window`, filtering by `event.data.sessionName` matching its own session — this prevents multiple mounted widgets from all toggling when any one terminal fires the chord. The wrapper page includes the `sessionName` in the payload: `{ type: 'terminal-focus-toggle', sessionName: '...' }`. This requires no Caddy changes.
 
 ### Key Bindings
 
-| Key | Action |
-|-----|--------|
-| `Ctrl+Shift+\` | Toggle focus between ttyd iframe and run widget |
+| Key | Context | Action |
+|-----|---------|--------|
+| `Ctrl+Shift+\` | Widget focused | Dive into terminal: set `terminalFocused = true`, focus the wrapper iframe |
+| `Ctrl+Shift+\` | Terminal wrapper focused | Escape to widget: postMessage → `terminalFocused = false`, focus widget root |
+
+Note: this binding does not appear in `useWidgetHotkeys` keydown handling. The "dive in" direction is handled by `useWidgetHotkeys` as a `keydown` listener. The "escape out" direction is handled by the wrapper page's own `keydown` listener via `postMessage`. The `?` palette documents it as a single toggle entry.
 
 ### Visual Feedback
 
-- **Terminal focused:** iframe gets `ring-2 ring-indigo-400`
+- **Terminal focused:** wrapper iframe gets `ring-2 ring-indigo-400` CSS class applied by `RunSessionPanel`
 - **Widget focused:** normal tab-nav ring is active on the current zone
 
 ---
@@ -182,9 +208,13 @@ window.parent.postMessage({ type: 'terminal-focus-toggle' }, '*')
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+Enter` | Open CreateSessionDialog scoped to the currently selected entity (run's task, or whichever taxonomy node is selected in the sidebar) |
+| `Ctrl+Enter` | Open CreateSessionDialog |
+
+The dialog is scoped to the currently selected entity: the selected sidebar node if one exists, or the selected canvas widget's task if a run is selected. If nothing is selected, the dialog opens with no pre-selection (user picks manually). Suppressed by the `isEditable` guard.
 
 ### Existing Canvas Hotkeys (register in registry)
+
+These already work; they just need entries added to `registry.ts`:
 
 | Key | Action | Scope |
 |-----|--------|-------|
@@ -199,11 +229,17 @@ window.parent.postMessage({ type: 'terminal-focus-toggle' }, '*')
 | `?` | Open searchable hotkey palette, grouped by category |
 | `Escape` | Close palette |
 
+Suppressed by `isEditable` guard.
+
 ---
 
 ## 7. Command Palette
 
-A modal overlay (similar to VS Code's keyboard shortcut reference) opened by pressing `?`. Renders `registry.ts` grouped by `category`. Supports text search filtering hotkey descriptions. Shows scope context (greyed-out entries for hotkeys unavailable in the current focus state). Dismissed with `Escape` or clicking outside.
+A modal overlay opened by pressing `?`. Renders `registry.ts` grouped by `category`. Supports text search filtering across `description` and `keys` fields.
+
+**Availability display:** the palette reads the current focus scope (global/canvas/widget) from a context value set by the active scope hook. Hotkeys whose scope does not match the current scope are shown greyed-out with a tooltip: "Available when [canvas / a run widget] is focused." Hotkeys that are always available are not greyed.
+
+Dismissed with `Escape` or clicking the backdrop.
 
 ---
 
@@ -217,7 +253,7 @@ A modal overlay (similar to VS Code's keyboard shortcut reference) opened by pre
 | `[` | Previous ready-for-input session | global | Sessions |
 | `Shift+]` | Next session (all) | global | Sessions |
 | `Shift+[` | Previous session (all) | global | Sessions |
-| `Ctrl+Shift+\` | Toggle terminal / widget focus | widget | Terminal |
+| `Ctrl+Shift+\` | Toggle terminal / widget focus | widget+iframe | Terminal |
 | `Tab` | Next panel zone | widget | Navigation |
 | `Shift+Tab` | Previous panel zone | widget | Navigation |
 | `↑` / `↓` | Move between files | widget | Navigation |
