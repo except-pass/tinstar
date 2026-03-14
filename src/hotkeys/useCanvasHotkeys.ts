@@ -15,6 +15,9 @@ export interface CanvasHotkeyHandlers {
 }
 
 export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
+  const handlersRef = useRef(handlers)
+  useEffect(() => { handlersRef.current = handlers })
+
   // Per-slot last-tap time for double-tap detection
   const lastTapRef = useRef<Record<string, number>>({})
 
@@ -22,18 +25,19 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
     function onKeyDown(e: KeyboardEvent) {
       const active = document.activeElement
       if (isEditable(active) || active?.tagName === 'IFRAME') return
+      const h = handlersRef.current
 
-      // Ctrl+G — arrange grid
-      if (e.key === 'g' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+      // Ctrl+G — arrange grid (use e.code for layout-independence)
+      if (e.code === 'KeyG' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
         e.preventDefault()
-        handlers.onArrangeGrid()
+        h.onArrangeGrid()
         return
       }
 
       // Ctrl+Shift+G — reset layout
-      if (e.key === 'G' && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey) {
+      if (e.code === 'KeyG' && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey) {
         e.preventDefault()
-        handlers.onArrangeReset()
+        h.onArrangeReset()
         return
       }
 
@@ -43,13 +47,13 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
 
       if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
         e.preventDefault()
-        handlers.onHotgroupRemove(digit)
+        h.onHotgroupRemove(digit)
         return
       }
 
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault()
-        handlers.onHotgroupAssign(digit)
+        h.onHotgroupAssign(digit)
         return
       }
 
@@ -60,11 +64,11 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
         const last = lastTapRef.current[digit] ?? 0
         const isDoubleTap = now - last <= 300
         lastTapRef.current[digit] = isDoubleTap ? 0 : now // reset after double-tap
-        handlers.onHotgroupSelect(digit, isDoubleTap)
+        h.onHotgroupSelect(digit, isDoubleTap)
       }
     }
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [handlers])
+  }, [])
 }

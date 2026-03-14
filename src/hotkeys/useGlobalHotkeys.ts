@@ -1,5 +1,5 @@
 // src/hotkeys/useGlobalHotkeys.ts
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { isEditable } from './isEditable'
 
 export interface GlobalHotkeyHandlers {
@@ -12,15 +12,19 @@ export interface GlobalHotkeyHandlers {
 }
 
 export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
+  const handlersRef = useRef(handlers)
+  useEffect(() => { handlersRef.current = handlers })
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const active = document.activeElement
+      const h = handlersRef.current
 
       // Palette: suppressed inside editable elements
       if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         if (isEditable(active)) return
         e.preventDefault()
-        handlers.onPaletteOpen()
+        h.onPaletteOpen()
         return
       }
 
@@ -28,7 +32,7 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
         if (isEditable(active) || active?.tagName === 'IFRAME') return
         e.preventDefault()
-        handlers.onSessionNew()
+        h.onSessionNew()
         return
       }
 
@@ -38,25 +42,25 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
         if (e.code === 'BracketRight' && !e.shiftKey) {
           if (isEditable(active)) return
           e.preventDefault()
-          handlers.onCycleReadyNext()
+          h.onCycleReadyNext()
           return
         }
         if (e.code === 'BracketLeft' && !e.shiftKey) {
           if (isEditable(active)) return
           e.preventDefault()
-          handlers.onCycleReadyPrev()
+          h.onCycleReadyPrev()
           return
         }
         if (e.code === 'BracketRight' && e.shiftKey) {
           if (isEditable(active)) return
           e.preventDefault()
-          handlers.onCycleAllNext()
+          h.onCycleAllNext()
           return
         }
         if (e.code === 'BracketLeft' && e.shiftKey) {
           if (isEditable(active)) return
           e.preventDefault()
-          handlers.onCycleAllPrev()
+          h.onCycleAllPrev()
           return
         }
       }
@@ -64,5 +68,5 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [handlers])
+  }, [])
 }
