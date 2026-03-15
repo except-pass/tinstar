@@ -91,13 +91,13 @@ export function useSkills(): SkillsState & SkillsActions {
 
   const addPendingSkill = useCallback((skill: PendingSkill) => {
     setPendingSkills(prev => [...prev, skill])
-    // Set 30s timeout → error state
+    // Set 10min timeout → error state (skill generation can take several minutes)
     const timeout = setTimeout(() => {
       setPendingSkills(prev => prev.map(ps =>
         ps.id === skill.id && ps.status === 'defining' ? { ...ps, status: 'error' as const } : ps
       ))
       timeoutsRef.current.delete(skill.id)
-    }, 30_000)
+    }, 600_000)
     timeoutsRef.current.set(skill.id, timeout)
   }, [])
 
