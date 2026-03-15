@@ -1,6 +1,5 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { tinstarBackend } from './src/server/index'
 
 function devTitle(): import('vite').Plugin {
   return {
@@ -13,15 +12,17 @@ function devTitle(): import('vite').Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), tinstarBackend(), devTitle()],
+  plugins: [react(), devTitle()],
   server: {
     port: 5273,
     host: true,
     allowedHosts: true,
     proxy: {
-      // Proxy session terminal paths through Caddy reverse proxy
+      '/api/': {
+        target: 'http://localhost:5274',
+      },
       '/s/': {
-        target: 'http://localhost:8088',
+        target: 'http://localhost:5274',
         ws: true,
       },
     },
