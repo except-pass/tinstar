@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { join, extname, dirname } from 'node:path'
+import { join, extname, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import httpProxy from 'http-proxy'
@@ -31,6 +31,7 @@ interface ServerOptions {
 }
 
 export function startServer(opts: ServerOptions) {
+  opts.clientDir = resolve(opts.clientDir)
   const ctx = initBackend()
   const proxy = httpProxy.createProxyServer({ ws: true })
 
@@ -80,7 +81,14 @@ export function startServer(opts: ServerOptions) {
     // 3. Static file serving with SPA fallback
     const pathname = url.split('?')[0]!
     const ext = extname(pathname)
-    const filePath = join(opts.clientDir, pathname)
+    const filePath = resolve(join(opts.clientDir, pathname))
+
+    // Prevent path traversal outside clientDir
+    if (!filePath.startsWith(opts.clientDir)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' })
+      res.end('Forbidden')
+      return
+    }
 
     // Try to serve the exact file if it has an extension and exists
     if (ext && existsSync(filePath)) {
