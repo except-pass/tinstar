@@ -18,6 +18,11 @@ export interface TinstarConfig {
   caddy: { listenPort: number; adminPort: number }
   dirs: { root: string; secrets: string; sessions: string }
   files: { config: string; projects: string }
+  git: {
+    taskMarkerRegex: string
+    reconciliationRepos: string[]
+    reconciliationBranchScope: string
+  }
 }
 
 // --- Helpers ---
@@ -63,6 +68,11 @@ const BASE_CONFIG = {
     listenPort: 8088,
     adminPort: 2019,
   },
+  git: {
+    taskMarkerRegex: '#([A-Za-z0-9_-]+)',
+    reconciliationRepos: [],
+    reconciliationBranchScope: '*',
+  },
 }
 
 // --- Public API ---
@@ -102,6 +112,17 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
     files: {
       config: userConfigPath,
       projects: join(rootDir, 'projects.json'),
+    },
+    git: {
+      taskMarkerRegex: typeof userConfig.taskMarkerRegex === 'string'
+        ? userConfig.taskMarkerRegex
+        : merged.git.taskMarkerRegex,
+      reconciliationRepos: Array.isArray(userConfig.reconciliationRepos)
+        ? userConfig.reconciliationRepos as string[]
+        : merged.git.reconciliationRepos,
+      reconciliationBranchScope: typeof userConfig.reconciliationBranchScope === 'string'
+        ? userConfig.reconciliationBranchScope
+        : merged.git.reconciliationBranchScope,
     },
   }
 

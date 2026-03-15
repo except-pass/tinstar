@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import type { Initiative, Epic, Task, Worktree, Run, Space } from '../domain/types'
+import type { CommitRecord } from '../types'
 
 interface ServerState {
   activeSpaceId: string
@@ -10,6 +11,7 @@ interface ServerState {
   worktrees: Worktree[]
   runs: Run[]
   readyQueue: string[]
+  commits: CommitRecord[]
 }
 
 const EMPTY_STATE: ServerState = {
@@ -21,6 +23,7 @@ const EMPTY_STATE: ServerState = {
   worktrees: [],
   runs: [],
   readyQueue: [],
+  commits: [],
 }
 
 export function useServerEvents(): {
@@ -138,6 +141,20 @@ export function useServerEvents(): {
             runs: exists
               ? prev.runs.map(r => r.id === run.id ? run : r)
               : [...prev.runs, run],
+          }
+        }
+
+        if (delta.entity === 'commit') {
+          if (delta.data === null) {
+            return { ...prev, commits: prev.commits.filter(c => c.sha !== delta.id) }
+          }
+          const commit = delta.data as CommitRecord
+          const exists = prev.commits.some(c => c.sha === commit.sha)
+          return {
+            ...prev,
+            commits: exists
+              ? prev.commits.map(c => c.sha === commit.sha ? commit : c)
+              : [...prev.commits, commit],
           }
         }
 

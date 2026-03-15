@@ -5,6 +5,7 @@ import type {
   RecapEntry,
   SkillDTO,
 } from '../types'
+import type { CommitRecord } from './commits'
 
 // --- OTel Types (plain interfaces, not SDK) ---
 
@@ -172,6 +173,7 @@ export interface SSESnapshot {
     tasks: Array<{ id: string; name: string; epicId: string; initiativeId: string; status: string; summary: string }>
     worktrees: Array<{ id: string; name: string; branch: string; repo: string; worktreePath: string }>
     runs: Array<Record<string, unknown>>
+    commits: CommitRecord[]
   }
 }
 

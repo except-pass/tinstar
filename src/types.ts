@@ -80,3 +80,19 @@ export interface RunData {
   port: number | null
   backend: 'docker' | 'tmux' | null
 }
+
+
+export interface CommitRecord {
+  sha: string
+  subject: string
+  body?: string
+  authorName: string
+  authorEmail: string
+  authorDate: string
+  observedAt: string
+  repo: string
+  branch: string
+  worktreeId?: string
+  taskTags: string[]
+  source: 'hook' | 'reconcile'
+}
