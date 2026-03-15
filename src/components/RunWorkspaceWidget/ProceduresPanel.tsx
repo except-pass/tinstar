@@ -1,4 +1,3 @@
-import { useRef, useState } from 'react'
 import { useTaxonomy } from '../TaxonomyContext'
 import { useSkillsContext } from '../SkillsProvider'
 import { resolveEntityProcedures } from '../../domain/procedures'
@@ -9,9 +8,10 @@ interface Props {
   sessionId: string
   sessionStatus: SessionStatus
   onCollapse?: () => void
+  onFocusTerminal?: () => void
 }
 
-export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse }: Props) {
+export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse, onFocusTerminal }: Props) {
   const taxRepo = useTaxonomy()
   const { pendingSkills, openPicker, optimisticProcedures } = useSkillsContext()
   const resolved = resolveEntityProcedures(taskId, taxRepo)
@@ -32,14 +32,14 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse }
 
   const isBusy = sessionStatus === 'running'
 
-  async function runProcedure(skillName: string, args?: string) {
+  async function sendToTerminal(skillName: string) {
     if (isBusy) return
-    const text = args ? `/${skillName} ${args}` : `/${skillName}`
-    await fetch(`/api/sessions/${sessionId}/prompt`, {
+    await fetch(`/api/sessions/${sessionId}/send-keys`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ keys: [`/${skillName} `] }),
     })
+    onFocusTerminal?.()
   }
 
   // Group inherited by entity
@@ -92,7 +92,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse }
                     key={proc.id}
                     name={proc.skillName}
                     isBusy={isBusy}
-                    onRun={(args) => runProcedure(proc.skillName, args)}
+                    onRun={() => sendToTerminal(proc.skillName)}
                   />
                 ))}
               </div>
@@ -109,7 +109,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse }
             key={proc.id}
             name={proc.skillName}
             isBusy={isBusy}
-            onRun={(args) => runProcedure(proc.skillName, args)}
+            onRun={() => sendToTerminal(proc.skillName)}
           />
         ))}
 
@@ -119,7 +119,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse }
             key={op.id}
             name={op.skillName}
             isBusy={isBusy}
-            onRun={(args) => runProcedure(op.skillName, args)}
+            onRun={() => sendToTerminal(op.skillName)}
           />
         ))}
 
@@ -148,69 +148,17 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse }
   )
 }
 
-function ProcedureRow({ name, isBusy, onRun }: { name: string; isBusy: boolean; onRun: (args?: string) => void }) {
-  const [argsMode, setArgsMode] = useState(false)
-  const [args, setArgs] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  function startArgsMode() {
-    setArgsMode(true)
-    setArgs('')
-    setTimeout(() => inputRef.current?.focus(), 0)
-  }
-
-  function submit() {
-    onRun(args.trim() || undefined)
-    setArgsMode(false)
-    setArgs('')
-  }
-
-  function cancel() {
-    setArgsMode(false)
-    setArgs('')
-  }
-
-  if (argsMode) {
-    return (
-      <div className="px-2 py-1.5 bg-primary/5">
-        <div className="text-2xs font-mono text-slate-600 mb-1 truncate">/{name}</div>
-        <div className="flex items-center gap-1">
-          <input
-            ref={inputRef}
-            value={args}
-            onChange={e => setArgs(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') { e.preventDefault(); submit() }
-              if (e.key === 'Escape') { e.preventDefault(); cancel() }
-            }}
-            placeholder="args…"
-            className="min-w-0 flex-1 bg-black/30 border border-primary/20 rounded-sm px-1.5 py-0.5 text-2xs font-mono text-white placeholder-slate-600 outline-none focus:border-primary/40"
-          />
-          <button onClick={submit} title="Send" className="text-primary hover:text-primary/70 flex-shrink-0">
-            <span className="material-symbols-outlined text-sm">send</span>
-          </button>
-          <button onClick={cancel} title="Cancel" className="text-slate-600 hover:text-slate-400 flex-shrink-0">
-            <span className="material-symbols-outlined text-sm">close</span>
-          </button>
-        </div>
-      </div>
-    )
-  }
-
+function ProcedureRow({ name, isBusy, onRun }: { name: string; isBusy: boolean; onRun: () => void }) {
   return (
-    <div className="group flex items-center gap-1.5 px-2 py-1.5 hover:bg-primary/5 transition-colors">
+    <div
+      className="group flex items-center gap-1.5 px-2 py-1.5 hover:bg-primary/5 transition-colors cursor-pointer"
+      onClick={() => !isBusy && onRun()}
+      title={isBusy ? 'Session is busy' : `Send /${name} to terminal`}
+    >
       <span className="material-symbols-outlined text-xs text-slate-600">terminal</span>
-      <span className="flex-1 text-2xs font-mono text-slate-400 truncate" title={name}>
+      <span className="flex-1 text-2xs font-mono text-slate-400 group-hover:text-slate-300 truncate transition-colors" title={name}>
         {name}
       </span>
-      <button
-        onClick={startArgsMode}
-        disabled={isBusy}
-        title={isBusy ? 'Session is busy' : `Run /${name}`}
-        className="opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-20 disabled:cursor-not-allowed text-primary hover:text-primary/70"
-      >
-        <span className="material-symbols-outlined text-sm">play_arrow</span>
-      </button>
     </div>
   )
 }

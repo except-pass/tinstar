@@ -241,6 +241,10 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
               sessionId={run.sessionId}
               sessionStatus={run.status}
               onCollapse={() => setProcsCollapsed(true)}
+              onFocusTerminal={() => {
+                setTerminalFocused(true)
+                rootRef.current?.querySelector('iframe')?.focus()
+              }}
             />
           )}
         </div>
