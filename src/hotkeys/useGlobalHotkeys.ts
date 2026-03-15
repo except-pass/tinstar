@@ -8,6 +8,7 @@ export interface GlobalHotkeyHandlers {
   onCycleAllNext: () => void
   onCycleAllPrev: () => void
   onSessionNew: () => void
+  onSessionQuick: () => void
   onPaletteOpen: () => void
 }
 
@@ -33,6 +34,14 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
         if (isEditable(active) || active?.tagName === 'IFRAME') return
         e.preventDefault()
         h.onSessionNew()
+        return
+      }
+
+      // S: quick new session — pre-fills task if a task is selected
+      if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (isEditable(active) || active?.tagName === 'IFRAME') return
+        e.preventDefault()
+        h.onSessionQuick()
         return
       }
 

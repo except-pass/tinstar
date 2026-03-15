@@ -262,4 +262,20 @@ test.describe('Hotkeys', () => {
       await page.keyboard.press('Escape')
     })
   })
+
+  test.describe('Quick Session (S)', () => {
+    test('S opens CreateSessionDialog', async ({ page }) => {
+      await page.keyboard.press('s')
+      await expect(page.getByTestId('session-name-input')).toBeVisible({ timeout: 2000 })
+      await page.keyboard.press('Escape')
+    })
+
+    test('S does not open dialog when input is focused', async ({ page }) => {
+      await page.getByTestId('add-root').click()
+      await page.getByRole('textbox').first().focus()
+      await page.keyboard.press('s')
+      await expect(page.getByTestId('session-name-input')).not.toBeVisible()
+      await page.keyboard.press('Escape')
+    })
+  })
 })

@@ -83,6 +83,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onDragStart={e => e.preventDefault()}
     >
       {/* Left: identity */}
       <div className="flex items-center gap-2 min-w-0">

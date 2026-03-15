@@ -325,6 +325,18 @@ function WorkspaceShellInner() {
       }
       setShowSessionDialog(true)
     }, [selectionState]),
+    onSessionQuick: useCallback(() => {
+      // Pre-fill only when a task is selected; otherwise open the dialog with no pre-fill
+      const { selectedType, selectedIds } = selectionState
+      const firstNodeId = [...selectedIds][0] ?? null
+      if (firstNodeId && selectedType === 'task') {
+        const rawId = firstNodeId.startsWith('task-') ? firstNodeId.slice(5) : firstNodeId
+        setSessionPrefill({ taskId: rawId })
+      } else {
+        setSessionPrefill(null)
+      }
+      setShowSessionDialog(true)
+    }, [selectionState]),
     onPaletteOpen: () => setPaletteOpen(true),
   })
 

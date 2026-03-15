@@ -15,6 +15,7 @@ export const HOTKEYS: HotkeyDef[] = [
 
   // --- Sessions ---
   { id: 'session-new',        keys: 'Ctrl+Enter',    scope: 'global', category: 'Sessions',   description: 'New session for selected entity' },
+  { id: 'session-quick',      keys: 'S',             scope: 'global', category: 'Sessions',   description: 'New session in selected task (or open dialog)' },
   { id: 'cycle-ready-next',   keys: ']',             scope: 'global', category: 'Sessions',   description: 'Next ready-for-input session' },
   { id: 'cycle-ready-prev',   keys: '[',             scope: 'global', category: 'Sessions',   description: 'Previous ready-for-input session' },
   { id: 'cycle-all-next',     keys: 'Shift+]',       scope: 'global', category: 'Sessions',   description: 'Next session (all)' },

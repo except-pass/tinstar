@@ -151,6 +151,7 @@ export function GroupContainer({
         onPointerMove={onDragMove}
         onPointerUp={onDragUp}
         onPointerCancel={onDragUp}
+        onDragStart={e => e.preventDefault()}
       >
         <span className="text-xs font-display uppercase tracking-wider text-primary/50 flex-1">
           {icon} {label}
