@@ -1,8 +1,9 @@
-import { useState, useCallback, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useRef, useCallback, useEffect, type PointerEvent as ReactPointerEvent } from 'react'
 import type { RunData, SessionStatus } from '../../types'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
 import { HotgroupBadge } from '../HotgroupBadge'
 import { hexToRgba, resolveRunAccent } from '../runAccent'
+import { ColorPalette } from '../ColorPalette'
 
 const statusConfig: Record<SessionStatus, { label: string; color: string; dot: string; pulse?: boolean }> = {
   creating: { label: 'CREATING', color: 'text-blue-400', dot: 'bg-blue-400 shadow-[0_0_6px_#818cf8]', pulse: true },
@@ -25,7 +26,30 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   const status = statusConfig[run.status]
   const runAccent = resolveRunAccent(run.color)
   const [busy, setBusy] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const paletteRef = useRef<HTMLDivElement>(null)
   const { slotsForRun } = useHotgroupContext()
+
+  // Close palette when clicking outside
+  useEffect(() => {
+    if (!paletteOpen) return
+    function onDown(e: MouseEvent) {
+      if (paletteRef.current && !paletteRef.current.contains(e.target as Node)) {
+        setPaletteOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [paletteOpen])
+
+  const handleColorChange = useCallback(async (color: string) => {
+    setPaletteOpen(false)
+    await fetch(`/api/runs/${run.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color }),
+    })
+  }, [run.id])
 
   const sessionAction = useCallback(async (action: 'stop' | 'delete' | 'start') => {
     setBusy(true)
@@ -104,6 +128,25 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
         <div className="flex items-center gap-3 shrink-0 ml-2">
           {/* Hotgroup badge */}
           <HotgroupBadge slots={slotsForRun(run.id)} testId={`hotgroup-badge-${run.id}`} />
+          {/* Color palette */}
+          <div className="relative" ref={paletteRef} onPointerDown={e => e.stopPropagation()}>
+            <button
+              onClick={() => setPaletteOpen(o => !o)}
+              className="p-1 rounded transition-colors"
+              style={{ color: paletteOpen ? runAccent : undefined }}
+              title="Change run color"
+            >
+              <span className="material-symbols-outlined text-sm text-slate-500 hover:text-slate-300 transition-colors" style={paletteOpen ? { color: runAccent } : undefined}>palette</span>
+            </button>
+            {paletteOpen && (
+              <div
+                className="absolute right-0 top-full mt-1 z-50 p-2 bg-surface-panel border border-white/10 rounded shadow-xl"
+                style={{ minWidth: 160 }}
+              >
+                <ColorPalette value={run.color ?? ''} onChange={handleColorChange} />
+              </div>
+            )}
+          </div>
           {/* Session actions */}
           <div className="flex items-center gap-1" onPointerDown={e => e.stopPropagation()}>
             {isLive ? (

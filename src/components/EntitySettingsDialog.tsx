@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { DEFAULT_RUN_ACCENT } from './runAccent'
 import type { GroupingDimension, EntitySettings, ResolvedSettings } from '../domain/types'
+import { ColorPalette } from './ColorPalette'
 
 interface Props {
   entityId: string
@@ -284,17 +285,18 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 onToggle={handleToggle}
                 onValueChange={handleValueChange}
               >
-                {(value, onChange) => (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={String(value ?? DEFAULT_RUN_ACCENT)}
-                      onChange={(e) => onChange(e.target.value)}
-                      className="h-7 w-9 bg-surface-base border border-primary/30 rounded cursor-pointer"
-                    />
-                    <span className="text-xs font-mono text-primary">{String(value ?? DEFAULT_RUN_ACCENT)}</span>
-                  </div>
-                )}
+                {(value, onChange) => {
+                  const color = String(value ?? DEFAULT_RUN_ACCENT)
+                  return (
+                    <div className="space-y-2">
+                      <ColorPalette value={color} onChange={onChange} />
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: color }} />
+                        <span className="text-xs font-mono" style={{ color }}>{color}</span>
+                      </div>
+                    </div>
+                  )
+                }}
               </SettingRow>
 
               <SettingRow

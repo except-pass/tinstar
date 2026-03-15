@@ -3,7 +3,10 @@ import { useEffect, useRef } from 'react'
 import { isEditable } from './isEditable'
 
 export type HotgroupSlot = '1'|'2'|'3'|'4'|'5'|'6'|'7'|'8'|'9'|'0'
-const SLOTS: HotgroupSlot[] = ['1','2','3','4','5','6','7','8','9','0']
+const SLOT_CODES: Record<string, HotgroupSlot> = {
+  Digit1: '1', Digit2: '2', Digit3: '3', Digit4: '4', Digit5: '5',
+  Digit6: '6', Digit7: '7', Digit8: '8', Digit9: '9', Digit0: '0',
+}
 
 export interface CanvasHotkeyHandlers {
   /** Called once for single-tap, twice (isDoubleTap=true on second call) for double-tap */
@@ -41,8 +44,8 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
         return
       }
 
-      // Hotgroup keys: 1-9, 0
-      const digit = SLOTS.find(s => e.key === s)
+      // Hotgroup keys: 1-9, 0 — use e.code so Ctrl+Shift+1 works regardless of e.key value
+      const digit = SLOT_CODES[e.code]
       if (!digit || e.altKey) return
 
       if ((e.ctrlKey || e.metaKey) && e.shiftKey) {

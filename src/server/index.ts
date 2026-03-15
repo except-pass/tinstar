@@ -59,6 +59,7 @@ export function tinstarBackend(): Plugin {
       sse = new SSEBroadcaster(docStore)
       const readyQueue = new ReadyQueue()
       sse.setReadyQueue(readyQueue.getQueue())
+      bus.on('ready_queue.update', (ev) => sse.setReadyQueue(ev.payload.queue))
 
       // Start draft watcher — emits skill.drafted SSE events when new drafts appear
       ensureDraftsDir()
@@ -181,6 +182,9 @@ export function tinstarBackend(): Plugin {
             getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
             onStateChanged: (name, state) => {
               docStore.updateRunStatus(name, state)
+              readyQueue.onStatusChange(name, state)
+              sse.setReadyQueue(readyQueue.getQueue())
+              sse.broadcastReadyQueueUpdate()
               bus.emit({
                 type: 'managed_session.state_changed',
                 timestamp: new Date().toISOString(),
@@ -212,6 +216,9 @@ export function tinstarBackend(): Plugin {
               getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
               onStateChanged: (name, state) => {
                 docStore.updateRunStatus(name, state)
+                readyQueue.onStatusChange(name, state)
+                sse.setReadyQueue(readyQueue.getQueue())
+                sse.broadcastReadyQueueUpdate()
                 bus.emit({
                   type: 'managed_session.state_changed',
                   timestamp: new Date().toISOString(),

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { DEFAULT_RUN_ACCENT } from './runAccent'
+import { ColorPalette } from './ColorPalette'
 
 export interface SessionPrefill {
   project?: string
@@ -320,14 +321,10 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
         {/* Run color */}
         <div className="mb-3">
           <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Run Color</label>
-          <div className="flex items-center gap-2">
-            <input
-              type="color"
-              value={runColor}
-              onChange={e => setRunColor(e.target.value)}
-              className="h-8 w-10 bg-surface-base border border-white/10 rounded cursor-pointer"
-            />
-            <span className="text-xs font-mono text-slate-300">{runColor}</span>
+          <ColorPalette value={runColor} onChange={setRunColor} />
+          <div className="flex items-center gap-2 mt-2">
+            <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: runColor }} />
+            <span className="text-xs font-mono" style={{ color: runColor }}>{runColor}</span>
           </div>
         </div>
 
