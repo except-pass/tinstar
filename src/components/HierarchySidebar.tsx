@@ -162,15 +162,21 @@ function SidebarNode({
           {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : getDimensionIcon(node.type)}
         </span>
 
-        {/* Status dot for runs */}
-        {isRun && (
+        {/* Color dot */}
+        {isRun ? (
           <span
             className="w-2 h-2 rounded-full flex-shrink-0"
             style={statusDotStyle(node)}
             data-testid={`status-dot-${node.id}`}
             aria-hidden="true"
           />
-        )}
+        ) : node.color ? (
+          <span
+            className="w-2 h-2 rounded-sm flex-shrink-0"
+            style={{ backgroundColor: node.color }}
+            aria-hidden="true"
+          />
+        ) : null}
 
         {/* Label (inline edit or static) */}
         {editing ? (

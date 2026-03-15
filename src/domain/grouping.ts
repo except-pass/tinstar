@@ -23,9 +23,9 @@ function getAllEntitiesForDimension(
     case 'initiative':
       return taxonomy.getInitiatives().map(i => ({ id: i.id, label: i.name, color: i.color }))
     case 'epic':
-      return taxonomy.getEpics().map(e => ({ id: e.id, label: e.name }))
+      return taxonomy.getEpics().map(e => ({ id: e.id, label: e.name, color: e.settings?.defaultRunColor }))
     case 'task':
-      return taxonomy.getTasks().map(t => ({ id: t.id, label: t.name }))
+      return taxonomy.getTasks().map(t => ({ id: t.id, label: t.name, color: t.settings?.defaultRunColor }))
     case 'worktree':
       return taxonomy.getWorktrees().map(w => ({ id: w.id, label: w.name }))
   }
@@ -39,10 +39,10 @@ function getChildEntitiesForParent(
   taxonomy: TaxonomyRepository,
 ): Array<{ id: string; label: string; color?: string }> {
   if (parentDimension === 'initiative' && childDimension === 'epic') {
-    return taxonomy.getEpicsByInitiative(parentEntityId).map(e => ({ id: e.id, label: e.name }))
+    return taxonomy.getEpicsByInitiative(parentEntityId).map(e => ({ id: e.id, label: e.name, color: e.settings?.defaultRunColor }))
   }
   if (parentDimension === 'epic' && childDimension === 'task') {
-    return taxonomy.getTasksByEpic(parentEntityId).map(t => ({ id: t.id, label: t.name }))
+    return taxonomy.getTasksByEpic(parentEntityId).map(t => ({ id: t.id, label: t.name, color: t.settings?.defaultRunColor }))
   }
   return []
 }

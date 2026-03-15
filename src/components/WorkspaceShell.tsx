@@ -46,7 +46,7 @@ function WorkspaceShellInner() {
   })
 
   const { runRepo, taxRepo, spaces, activeSpaceId, commits } = useBackendState()
-  const { state: serverState } = useServerEvents()
+  const { state: serverState, addOptimistic } = useServerEvents()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -491,6 +491,7 @@ function WorkspaceShellInner() {
                 <CreateEntityDialog
                   dialog={createDialog}
                   onClose={() => setCreateDialog(null)}
+                  onOptimisticCreate={addOptimistic}
                 />
               )}
 
