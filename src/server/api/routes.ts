@@ -42,6 +42,7 @@ import { saveDraft, discardDraft, DRAFTS_DIR } from '../sessions/skill-drafts'
 import type { SkillDTO } from '../../types'
 import { spec as openapiSpec } from './openapi'
 import { ReadyQueue } from '../sessions/ReadyQueue'
+import { buildCommitRecord, reconcileGitHistory } from '../commits'
 
 function inferFileKind(filePath: string): FileKind {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -174,6 +175,104 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'POST' && url === '/api/simulator/reset') {
     ctx.resetSimulator()
     json(res, { status: 'reset' })
+    return true
+  }
+
+
+
+  // POST /api/git/commit-hook
+  if (method === 'POST' && url === '/api/git/commit-hook') {
+    readBody(req).then(body => {
+      try {
+        const payload = JSON.parse(body) as {
+          sha: string
+          repo: string
+          branch: string
+          message: string
+          authorName: string
+          authorEmail: string
+          authorDate: string
+          worktreeId?: string
+        }
+        if (!ctx.sessionConfig) return json(res, { error: 'session config unavailable' }, 503)
+        if (!payload.sha || !payload.message) return json(res, { error: 'invalid payload' }, 400)
+        const record = buildCommitRecord(payload, 'hook', ctx.sessionConfig.git.taskMarkerRegex)
+        const inserted = ctx.docStore.upsertCommit(record)
+        json(res, { ok: true, inserted })
+      } catch {
+        json(res, { error: 'invalid json' }, 400)
+      }
+    })
+    return true
+  }
+
+  // POST /api/git/reconcile
+  if (method === 'POST' && url === '/api/git/reconcile') {
+    if (!ctx.sessionConfig) {
+      json(res, { error: 'session config unavailable' }, 503)
+      return true
+    }
+    const result = reconcileGitHistory(ctx.docStore, ctx.sessionConfig)
+    json(res, { ok: true, ...result })
+    return true
+  }
+
+  // GET /api/commits
+  if (method === 'GET' && url.startsWith('/api/commits')) {
+    const parsed = new URL(url, 'http://localhost')
+    const taskTag = parsed.searchParams.get('taskTag')
+    const assigned = parsed.searchParams.get('assigned')
+    const since = parsed.searchParams.get('since')
+    const until = parsed.searchParams.get('until')
+    let commits = ctx.docStore.getAllCommits()
+    if (taskTag) commits = commits.filter(c => c.taskTags.includes(taskTag))
+    if (assigned === 'false') commits = commits.filter(c => c.taskTags.length === 0)
+    if (since) commits = commits.filter(c => new Date(c.authorDate).getTime() >= new Date(since).getTime())
+    if (until) commits = commits.filter(c => new Date(c.authorDate).getTime() <= new Date(until).getTime())
+    commits = commits.sort((a, b) => new Date(b.authorDate).getTime() - new Date(a.authorDate).getTime())
+    json(res, commits)
+    return true
+  }
+
+  // GET /api/standup
+  if (method === 'GET' && url.startsWith('/api/standup')) {
+    if (ctx.sessionConfig) reconcileGitHistory(ctx.docStore, ctx.sessionConfig)
+    const parsed = new URL(url, 'http://localhost')
+    const since = parsed.searchParams.get('since')
+    const until = parsed.searchParams.get('until')
+    let commits = ctx.docStore.getAllCommits()
+    if (since) commits = commits.filter(c => new Date(c.authorDate).getTime() >= new Date(since).getTime())
+    if (until) commits = commits.filter(c => new Date(c.authorDate).getTime() <= new Date(until).getTime())
+    const grouped: Record<string, typeof commits> = {}
+    const unassigned: typeof commits = []
+    for (const commit of commits) {
+      if (commit.taskTags.length === 0) {
+        unassigned.push(commit)
+        continue
+      }
+      for (const tag of commit.taskTags) {
+        if (!grouped[tag]) grouped[tag] = []
+        grouped[tag].push(commit)
+      }
+    }
+    json(res, { grouped, unassigned })
+    return true
+  }
+
+  // POST /api/commit/:sha/assign-task
+  if (method === 'POST' && /^\/api\/commit\/[^/]+\/assign-task$/.test(url)) {
+    const sha = url.split('/')[3] ?? ''
+    readBody(req).then(body => {
+      try {
+        const { taskTag } = JSON.parse(body) as { taskTag: string }
+        if (!taskTag) return json(res, { error: 'taskTag is required' }, 400)
+        const updated = ctx.docStore.assignTaskTag(sha, taskTag)
+        if (!updated) return json(res, { error: 'not found' }, 404)
+        json(res, { ok: true, commit: updated })
+      } catch {
+        json(res, { error: 'invalid json' }, 400)
+      }
+    })
     return true
   }
 

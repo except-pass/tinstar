@@ -20,5 +20,5 @@ export function useBackendState() {
     [state.initiatives, state.epics, state.tasks, state.worktrees],
   )
 
-  return { runRepo, taxRepo, spaces: state.spaces, activeSpaceId: state.activeSpaceId, connected, loading }
+  return { runRepo, taxRepo, spaces: state.spaces, activeSpaceId: state.activeSpaceId, commits: state.commits, connected, loading }
 }

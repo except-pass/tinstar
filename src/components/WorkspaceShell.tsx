@@ -19,6 +19,7 @@ import { EntitySettingsDialog } from './EntitySettingsDialog'
 import { ActiveScopeProvider } from '../hotkeys/ActiveScopeContext'
 import { HotgroupProvider } from '../hotkeys/HotgroupContext'
 import { HotkeyPalette } from './HotkeyPalette'
+import { CommitActivityPanel } from './CommitActivityPanel'
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
 function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
@@ -44,7 +45,7 @@ function WorkspaceShellInner() {
     return ['initiative', 'epic', 'task']
   })
 
-  const { runRepo, taxRepo, spaces, activeSpaceId } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, commits } = useBackendState()
   const { state: serverState } = useServerEvents()
 
   const { sidebarTree, runSummaries } = useMemo(
@@ -80,6 +81,8 @@ function WorkspaceShellInner() {
   const arrangeResetRef = useRef<(() => void) | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(240)
+  const [commitViewMode, setCommitViewMode] = useState<'task' | 'unassigned' | 'standup' | null>(null)
+  const [selectedTaskTag, setSelectedTaskTag] = useState('')
   const sidebarResizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
 
   const onSidebarResizePointerDown = useCallback((e: React.PointerEvent) => {
@@ -358,8 +361,26 @@ function WorkspaceShellInner() {
                   >
                     <span className="material-symbols-outlined text-base">settings</span>
                   </button>
+                  <button
+                    className="px-2 py-1 text-2xs bg-white/5 border border-white/10 rounded hover:bg-white/10"
+                    onClick={() => setCommitViewMode(commitViewMode === 'task' ? null : 'task')}
+                  >
+                    Task Activity
+                  </button>
+                  <button
+                    className="px-2 py-1 text-2xs bg-white/5 border border-white/10 rounded hover:bg-white/10"
+                    onClick={() => setCommitViewMode(commitViewMode === 'standup' ? null : 'standup')}
+                  >
+                    Stand-Up
+                  </button>
+                  <button
+                    className="px-2 py-1 text-2xs bg-white/5 border border-white/10 rounded hover:bg-white/10"
+                    onClick={() => setCommitViewMode(commitViewMode === 'unassigned' ? null : 'unassigned')}
+                  >
+                    Unassigned
+                  </button>
                   <span data-testid="status-area" className="text-xs text-slate-500">
-                    {runSummaries.size} runs
+                    {runSummaries.size} runs · {commits.length} commits
                   </span>
                 </div>
               </div>
@@ -429,6 +450,15 @@ function WorkspaceShellInner() {
                   />
                 </div>
               </div>
+
+              {commitViewMode && (
+                <CommitActivityPanel
+                  commits={commits}
+                  mode={commitViewMode}
+                  selectedTaskTag={selectedTaskTag}
+                  onTaskTagChange={setSelectedTaskTag}
+                />
+              )}
 
               {createDialog && (
                 <CreateEntityDialog

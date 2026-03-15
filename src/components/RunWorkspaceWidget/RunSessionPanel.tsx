@@ -1,6 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import Markdown from 'react-markdown'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
+
+function MarkdownText({ content }: { content: string }) {
+  return (
+    <div className="whitespace-pre-wrap break-words">{content}</div>
+  )
+}
 
 function DiffView({ diff }: { diff: DiffBlock }) {
   return (
@@ -55,7 +60,7 @@ function AgentMessage({ entry }: { entry: RecapEntry }) {
           prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0
           prose-strong:text-primary prose-code:text-primary/80 prose-code:bg-primary/10 prose-code:px-1 prose-code:rounded
           prose-pre:bg-surface-panel prose-pre:border prose-pre:border-primary/15">
-          <Markdown>{entry.content}</Markdown>
+          <MarkdownText content={entry.content} />
         </div>
         {entry.diff && <DiffView diff={entry.diff} />}
       </div>
@@ -78,7 +83,7 @@ function UserMessage({ entry }: { entry: RecapEntry }) {
         </div>
         <div className="text-xs font-mono leading-relaxed text-primary/70 bg-primary/[0.04] p-2.5 border-r-2 border-primary/40 text-left prose prose-invert prose-xs max-w-none
           prose-p:my-1 prose-strong:text-primary/80 prose-code:text-primary/70 prose-code:bg-primary/10 prose-code:px-1 prose-code:rounded">
-          <Markdown>{entry.content}</Markdown>
+          <MarkdownText content={entry.content} />
         </div>
       </div>
     </div>

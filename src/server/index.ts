@@ -28,6 +28,7 @@ import { getGitDiffFiles } from './sessions/git-diff'
 import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
 import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
+import { reconcileGitHistory } from './commits'
 
 function shortId(prefix: string): string {
   return `${prefix}-${randomUUID().slice(0, 8)}`
@@ -175,6 +176,8 @@ export function tinstarBackend(): Plugin {
           }
 
           // Run reconciliation immediately to correct stale statuses from persisted store
+          reconcileGitHistory(docStore, sessionConfig)
+
           const cfg = sessionConfig
           reconcileSessionStates(cfg.dirs.sessions, {
             getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
