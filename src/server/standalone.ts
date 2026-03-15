@@ -161,9 +161,12 @@ export function startServer(opts: ServerOptions) {
   listen(opts.port)
 }
 
-// Auto-start when run directly
-const args = process.argv.slice(2)
-const portIdx = args.indexOf('--port')
-const port = portIdx !== -1 ? parseInt(args[portIdx + 1]!) : 5273
-const noOpen = args.includes('--no-open')
-startServer({ port, clientDir: join(__dirname, '../../dist/client'), open: !noOpen })
+// Auto-start when run directly (not when imported by CLI)
+const isDirectRun = process.argv[1]?.includes('standalone')
+if (isDirectRun) {
+  const args = process.argv.slice(2)
+  const portIdx = args.indexOf('--port')
+  const port = portIdx !== -1 ? parseInt(args[portIdx + 1]!) : 5273
+  const noOpen = args.includes('--no-open')
+  startServer({ port, clientDir: join(__dirname, '../../dist/client'), open: !noOpen })
+}
