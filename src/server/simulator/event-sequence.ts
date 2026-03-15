@@ -89,6 +89,21 @@ export function buildEventSequence(): TimedEvent[] {
     }
   }
 
+  // Seed the ready queue with idle session IDs
+  const idleSessions = mockRuns
+    .filter(r => r.status === 'idle' && r.sessionId)
+    .map(r => r.sessionId as string)
+  if (idleSessions.length > 0) {
+    events.push({
+      delayMs: 0,
+      event: {
+        type: 'ready_queue.update',
+        timestamp: now(),
+        payload: { queue: idleSessions },
+      },
+    })
+  }
+
   // Sort by delay
   events.sort((a, b) => a.delayMs - b.delayMs)
 

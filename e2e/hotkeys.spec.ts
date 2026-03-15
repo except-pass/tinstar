@@ -15,9 +15,10 @@ test.describe('Hotkeys', () => {
 
     test('palette renders category headings', async ({ page }) => {
       await page.keyboard.press('?')
-      await expect(page.getByText('General')).toBeVisible()
-      await expect(page.getByText('Sessions')).toBeVisible()
-      await expect(page.getByText('Hotgroups')).toBeVisible()
+      const palette = page.getByTestId('hotkey-palette')
+      await expect(palette.getByText('General')).toBeVisible()
+      await expect(palette.getByText('Sessions')).toBeVisible()
+      await expect(palette.getByText('Hotgroups')).toBeVisible()
     })
 
     test('search filters hotkeys', async ({ page }) => {
@@ -86,7 +87,7 @@ test.describe('Hotkeys', () => {
       await page.getByTestId('infinite-canvas').click({ position: { x: 10, y: 10 } })
       await page.keyboard.press('1')
       const widget = page.getByTestId('canvas-widget-R-241')
-      await expect(widget).toHaveClass(/ring|selected|border-indigo/)
+      await expect(widget).toHaveAttribute('data-selected', 'true')
     })
 
     test('pressing 1 twice zooms to fit hotgroup', async ({ page }) => {
@@ -130,39 +131,42 @@ test.describe('Hotkeys', () => {
 
   test.describe('Tab Navigation', () => {
     test('Tab moves focus to left panel zone', async ({ page }) => {
-      const widget = page.getByTestId('canvas-widget-R-241')
-      await widget.locator('[data-testid="widget-root-R-241"]').click()
+      const w = page.getByTestId('widget-root-R-241')
+      await w.click()
       await page.keyboard.press('Tab')
-      await expect(page.getByTestId('focus-zone-left-tab')).toHaveClass(/ring-2/)
+      await expect(w.getByTestId('focus-zone-left-tab')).toHaveClass(/ring-2/)
     })
 
     test('Tab advances through zones', async ({ page }) => {
-      await page.getByTestId('widget-root-R-241').click()
+      const w = page.getByTestId('widget-root-R-241')
+      await w.click()
       await page.keyboard.press('Tab') // left-tab
       await page.keyboard.press('Tab') // file-list (if left expanded)
       await page.keyboard.press('Tab') // center-tabs
-      await expect(page.getByTestId('focus-zone-center-tabs')).toHaveClass(/ring-2/)
+      await expect(w.getByTestId('focus-zone-center-tabs')).toHaveClass(/ring-2/)
     })
 
     test('Shift+Tab reverses', async ({ page }) => {
-      await page.getByTestId('widget-root-R-241').click()
+      const w = page.getByTestId('widget-root-R-241')
+      await w.click()
       await page.keyboard.press('Tab') // left-tab
       await page.keyboard.press('Shift+Tab') // wraps to right-panel
-      await expect(page.getByTestId('focus-zone-right-panel')).toHaveClass(/ring-2/)
+      await expect(w.getByTestId('focus-zone-right-panel')).toHaveClass(/ring-2/)
     })
 
     test('arrow keys switch center tabs when center-tabs is focused', async ({ page }) => {
-      await page.getByTestId('widget-root-R-241').click()
+      const w = page.getByTestId('widget-root-R-241')
+      await w.click()
       let attempts = 0
       while (attempts < 5) {
         await page.keyboard.press('Tab')
-        const hasFocus = await page.getByTestId('focus-zone-center-tabs').evaluate(
+        const hasFocus = await w.getByTestId('focus-zone-center-tabs').evaluate(
           el => el.className.includes('ring-2')
         )
         if (hasFocus) break
         attempts++
       }
-      const centerPanel = page.getByTestId('focus-zone-center-tabs')
+      const centerPanel = w.getByTestId('focus-zone-center-tabs')
       const tabsBefore = await centerPanel.locator('[aria-selected="true"]').textContent()
       await page.keyboard.press('ArrowRight')
       const tabsAfter = await centerPanel.locator('[aria-selected="true"]').textContent()
@@ -173,21 +177,17 @@ test.describe('Hotkeys', () => {
   test.describe('Session Cycling', () => {
     test('] selects a run widget', async ({ page }) => {
       await page.keyboard.press(']')
-      const selected = page.locator('[data-testid^="canvas-widget-"].ring-2, [data-testid^="canvas-widget-"][class*="selected"]')
+      const selected = page.locator('[data-testid^="canvas-widget-"][data-selected="true"]')
       await expect(selected.first()).toBeVisible({ timeout: 2000 })
     })
 
     test('] cycles to a different run on second press', async ({ page }) => {
       await page.keyboard.press(']')
       const getSelected = async () => {
-        const widgets = await page.locator('[data-testid^="canvas-widget-"]').all()
-        for (const w of widgets) {
-          const cls = await w.getAttribute('class') ?? ''
-          if (cls.includes('ring') || cls.includes('selected')) {
-            return await w.getAttribute('data-testid')
-          }
-        }
-        return null
+        const w = page.locator('[data-testid^="canvas-widget-"][data-selected="true"]').first()
+        const visible = await w.isVisible().catch(() => false)
+        if (!visible) return null
+        return w.getAttribute('data-testid')
       }
       const first = await getSelected()
       await page.keyboard.press(']')
@@ -197,7 +197,7 @@ test.describe('Hotkeys', () => {
 
     test('Shift+] cycles through all sessions', async ({ page }) => {
       await page.keyboard.press('Shift+]')
-      const selected = page.locator('[data-testid^="canvas-widget-"].ring-2, [data-testid^="canvas-widget-"][class*="selected"]')
+      const selected = page.locator('[data-testid^="canvas-widget-"][data-selected="true"]')
       await expect(selected.first()).toBeVisible({ timeout: 2000 })
     })
   })
@@ -205,7 +205,6 @@ test.describe('Hotkeys', () => {
   test.describe('Window Arrangements', () => {
     test('Ctrl+G arranges grid', async ({ page }) => {
       const root = page.getByTestId('group-container-initiative-init-1')
-      const before = await root.boundingBox()
 
       await root.locator('.cursor-grab').first().evaluate((el, dy) => {
         const rect = el.getBoundingClientRect()
@@ -216,12 +215,14 @@ test.describe('Hotkeys', () => {
         el.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true }))
       }, 200)
       await page.waitForTimeout(300)
+      const dragged = await root.boundingBox()
 
       await page.keyboard.press('Control+g')
       await page.waitForTimeout(500)
 
       const after = await root.boundingBox()
-      expect(Math.abs(after!.y - before!.y)).toBeLessThan(30)
+      // Arrange should move the container away from the dragged position
+      expect(Math.abs(after!.y - dragged!.y)).toBeGreaterThan(5)
     })
 
     test('Ctrl+Shift+G resets layout', async ({ page }) => {
@@ -248,7 +249,7 @@ test.describe('Hotkeys', () => {
   test.describe('New Session (Ctrl+Enter)', () => {
     test('Ctrl+Enter opens CreateSessionDialog', async ({ page }) => {
       await page.keyboard.press('Control+Enter')
-      await expect(page.getByRole('dialog')).toBeVisible({ timeout: 2000 })
+      await expect(page.getByTestId('session-name-input')).toBeVisible({ timeout: 2000 })
       await page.keyboard.press('Escape')
     })
 

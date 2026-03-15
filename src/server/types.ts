@@ -155,6 +155,7 @@ export type BusEvent =
   | { type: 'managed_session.created'; timestamp: string; payload: ManagedSessionCreatedPayload }
   | { type: 'managed_session.state_changed'; timestamp: string; payload: ManagedSessionStateChangedPayload }
   | { type: 'managed_session.deleted'; timestamp: string; payload: ManagedSessionDeletedPayload }
+  | { type: 'ready_queue.update'; timestamp: string; payload: { queue: string[] } }
 
 export type BusEventType = BusEvent['type']
 

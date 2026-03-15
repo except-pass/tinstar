@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
@@ -98,9 +98,34 @@ function WorkspaceShellInner() {
     sidebarResizeDragRef.current = null
   }, [])
 
+  // Deep link: apply ?space= param once spaces are known, then keep URL in sync
+  const deepLinkApplied = useRef(false)
+  useEffect(() => {
+    if (spaces.length === 0) return
+    if (!deepLinkApplied.current) {
+      deepLinkApplied.current = true
+      const urlSpaceId = new URLSearchParams(location.search).get('space')
+      if (urlSpaceId && spaces.some(s => s.id === urlSpaceId) && urlSpaceId !== activeSpaceId) {
+        fetch(`/api/spaces/${urlSpaceId}/activate`, { method: 'POST' })
+        return // URL already has the right space param
+      }
+    }
+    // Keep URL in sync with active space
+    if (activeSpaceId) {
+      const url = new URL(location.href)
+      if (url.searchParams.get('space') !== activeSpaceId) {
+        url.searchParams.set('space', activeSpaceId)
+        window.history.replaceState(null, '', url)
+      }
+    }
+  }, [activeSpaceId, spaces.length])
+
   // Space actions
   const handleActivateSpace = useCallback((id: string) => {
     fetch(`/api/spaces/${id}/activate`, { method: 'POST' })
+    const url = new URL(location.href)
+    url.searchParams.set('space', id)
+    window.history.replaceState(null, '', url)
   }, [])
 
   const handleCreateSpace = useCallback((name: string) => {
@@ -332,6 +357,7 @@ function WorkspaceShellInner() {
       {activeSpaceId ? (
         <HotgroupProvider spaceId={activeSpaceId} runIds={runIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
+          <SkillsProvider>
             <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
               {/* Top bar: GroupingControls + logo + status */}
               <div
@@ -492,6 +518,7 @@ function WorkspaceShellInner() {
                 />
               )}
             </div>
+          </SkillsProvider>
           </TaxonomyProvider>
         </HotgroupProvider>
       ) : (

@@ -129,6 +129,7 @@ export function CanvasWidget({
   return (
     <div
       data-testid={`canvas-widget-${run.id}`}
+      data-selected={selected ? 'true' : undefined}
       className="absolute flex flex-col bg-surface-base border"
       style={{
         left: x,

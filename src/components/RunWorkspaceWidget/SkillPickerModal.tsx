@@ -1,7 +1,8 @@
 // src/components/RunWorkspaceWidget/SkillPickerModal.tsx
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSkillsContext } from '../SkillsProvider'
 import { useTaxonomy } from '../TaxonomyContext'
+import { resolveEntityProcedures } from '../../domain/procedures'
 import type { SkillDTO, PendingSkill, StoredProcedure } from '../../types'
 
 interface Props {
@@ -19,6 +20,8 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
   const [activeIndex, setActiveIndex] = useState(0)
   const [starPopover, setStarPopover] = useState<{ skillName: string; index: number; rect: DOMRect } | null>(null)
   const [taskProcedures, setTaskProcedures] = useState<StoredProcedure[]>([])
+  // Optimistic tracking: skills added at any entity level during this session
+  const [optimisticAdded, setOptimisticAdded] = useState<Set<string>>(new Set())
   const inputRef = useRef<HTMLInputElement>(null)
 
   const loadTaskProcedures = useCallback(async () => {
@@ -90,6 +93,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     if (entityType === 'task' && entityId === taskId) {
       setTaskProcedures(prev => [...prev, newProcedure])
     }
+    setOptimisticAdded(prev => new Set([...prev, skillName]))
   }
 
   async function removeProcedureFromTask(skillName: string) {
@@ -131,7 +135,12 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     }).catch(console.error)
   }
 
+  // All procedure names: task-level (local state) + inherited (taxRepo) + optimistic additions
   const taskProcedureNames = new Set(taskProcedures.map(p => p.skillName))
+  const allProcedureNames = useMemo(() => {
+    const resolved = resolveEntityProcedures(taskId, taxRepo)
+    return new Set([...resolved.map(p => p.skillName), ...optimisticAdded])
+  }, [taskId, taxRepo, optimisticAdded])
 
   const systemSkills = filtered.filter(s => s.source === 'system' || s.source === 'plugin')
   const repoSkills = filtered.filter(s => s.source === 'repo')
@@ -172,7 +181,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
                   skill={skill}
                   active={activeIndex === i}
                   starActive={starPopover?.skillName === skill.name}
-                  inProcedures={taskProcedureNames.has(skill.name)}
+                  inProcedures={allProcedureNames.has(skill.name)}
                   onMouseEnter={() => setActiveIndex(i)}
                   onStarClick={(rect) => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i, rect })}
                   onRemove={() => removeProcedureFromTask(skill.name)}
@@ -191,7 +200,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
                   skill={skill}
                   active={activeIndex === systemSkills.length + i}
                   starActive={starPopover?.skillName === skill.name}
-                  inProcedures={taskProcedureNames.has(skill.name)}
+                  inProcedures={allProcedureNames.has(skill.name)}
                   onMouseEnter={() => setActiveIndex(systemSkills.length + i)}
                   onStarClick={(rect) => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i, rect })}
                   onRemove={() => removeProcedureFromTask(skill.name)}

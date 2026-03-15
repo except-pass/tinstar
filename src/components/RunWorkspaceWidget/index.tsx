@@ -202,29 +202,30 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
             termTick={termTick}
             terminalFocused={terminalFocused}
             onTerminalToggle={() => setTerminalFocused(f => !f)}
+            activeTabIndex={focusZone === 'center-tabs' ? centerTabIndex : undefined}
           />
         </div>
-        {procsCollapsed ? (
-          <div
-            data-testid="collapsed-procedures"
-            className={`w-6 flex flex-col items-center justify-center bg-surface-panel cursor-pointer hover:bg-surface-hover ${focusZone === 'right-panel' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
-            onClick={() => setProcsCollapsed(false)}
-          >
-            <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr]">Procs</span>
-          </div>
-        ) : (
-          <div
-            data-testid="focus-zone-right-panel"
-            className={focusZone === 'right-panel' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}
-          >
+        <div
+          data-testid="focus-zone-right-panel"
+          className={`flex ${focusZone === 'right-panel' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
+        >
+          {procsCollapsed ? (
+            <div
+              data-testid="collapsed-procedures"
+              className="w-6 flex flex-col items-center justify-center bg-surface-panel cursor-pointer hover:bg-surface-hover"
+              onClick={() => setProcsCollapsed(false)}
+            >
+              <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr]">Procs</span>
+            </div>
+          ) : (
             <ProceduresPanel
               taskId={run.taskId}
               sessionId={run.sessionId}
               sessionStatus={run.status}
               onCollapse={() => setProcsCollapsed(true)}
             />
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
     </div>

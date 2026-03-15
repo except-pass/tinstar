@@ -35,9 +35,8 @@ test.describe('Procedures Sidebar', () => {
     // Click the + New button
     await firstWidget.getByTestId('new-procedure-btn').click()
 
-    // Verify picker input is visible — scope to first widget to avoid strict mode violation
-    // (multiple widgets may render the modal if they share the same taskId in simulator data)
-    await expect(firstWidget.locator('input[placeholder="Search or define skill…"]').first()).toBeVisible()
+    // SkillPickerModal renders at SkillsProvider (WorkspaceShell) level, not inside the widget DOM
+    await expect(page.locator('input[placeholder="Search or define skill…"]')).toBeVisible()
   })
 
   test('pressing Escape closes skill picker modal', async ({ page }) => {
@@ -52,7 +51,7 @@ test.describe('Procedures Sidebar', () => {
 
     // Open picker
     await firstWidget.getByTestId('new-procedure-btn').click()
-    const pickerInput = firstWidget.locator('input[placeholder="Search or define skill…"]').first()
+    const pickerInput = page.locator('input[placeholder="Search or define skill…"]')
     await expect(pickerInput).toBeVisible()
 
     // Press Escape to close
@@ -77,10 +76,10 @@ test.describe('Procedures Sidebar', () => {
 
     // Type a unique string that won't match any existing skill
     const uniqueText = 'xyzzy-unique-no-match-skill'
-    await firstWidget.locator('input[placeholder="Search or define skill…"]').first().fill(uniqueText)
+    await page.locator('input[placeholder="Search or define skill…"]').fill(uniqueText)
 
     // Verify the define row shows the typed text
-    await expect(firstWidget.getByText(uniqueText).first()).toBeVisible()
+    await expect(page.getByText(uniqueText).first()).toBeVisible()
   })
 
   test('typing description and pressing Enter adds shimmer to sidebar', async ({ page }) => {
@@ -98,13 +97,13 @@ test.describe('Procedures Sidebar', () => {
 
     // Type a description
     const description = 'review code for security issues'
-    await firstWidget.locator('input[placeholder="Search or define skill…"]').first().fill(description)
+    await page.locator('input[placeholder="Search or define skill…"]').fill(description)
 
     // Press Enter to trigger define
     await page.keyboard.press('Enter')
 
     // Modal should close
-    await expect(firstWidget.locator('input[placeholder="Search or define skill…"]')).not.toBeVisible()
+    await expect(page.locator('input[placeholder="Search or define skill…"]')).not.toBeVisible()
 
     // Shimmer (pending skill) should appear in procedures panel with the description text
     await expect(firstWidget.getByText(description)).toBeVisible({ timeout: 3000 })

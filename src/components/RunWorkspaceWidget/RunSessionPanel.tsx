@@ -125,10 +125,20 @@ interface Props {
   termTick?: number
   terminalFocused?: boolean
   onTerminalToggle?: () => void
+  /** Controlled active tab (0=recap, 1=terminal/logs) for keyboard navigation */
+  activeTabIndex?: number
+  onActiveTabChange?: (tab: 'recap' | 'terminal') => void
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, termTick = 0, terminalFocused, onTerminalToggle }: Props) {
-  const [activeTab, setActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
+export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, termTick = 0, terminalFocused, onTerminalToggle, activeTabIndex, onActiveTabChange }: Props) {
+  const TABS = ['recap', 'terminal'] as const
+  const [internalActiveTab, setInternalActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
+  // Use controlled tab when provided (keyboard navigation), otherwise internal state
+  const activeTab = activeTabIndex !== undefined ? (TABS[activeTabIndex % TABS.length] ?? 'recap') : internalActiveTab
+  const setActiveTab = (tab: 'recap' | 'terminal') => {
+    setInternalActiveTab(tab)
+    onActiveTabChange?.(tab)
+  }
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
 
@@ -200,6 +210,7 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
             <button
               key={key}
               onClick={() => setActiveTab(key)}
+              aria-selected={activeTab === key}
               className={`
                 px-5 py-1 text-2xs font-bold font-display tracking-[0.15em] uppercase transition-all
                 ${activeTab === key

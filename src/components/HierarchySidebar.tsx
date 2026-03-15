@@ -192,7 +192,7 @@ function SidebarNode({
 
         {/* Hotgroup badge for runs */}
         {isRun && !editing && (
-          <HotgroupBadge slots={slotsForRun(node.id.startsWith('run-') ? node.id.slice(4) : node.id)} testId={`sidebar-hotgroup-badge-${node.id}`} />
+          <HotgroupBadge slots={slotsForRun(node.id.startsWith('run-') ? node.id.slice(4) : node.id)} testId={`sidebar-hotgroup-badge-${node.id.startsWith('run-') ? node.id.slice(4) : node.id}`} />
         )}
 
         {/* Count badge */}

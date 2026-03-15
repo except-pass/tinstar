@@ -526,22 +526,31 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
 
   useCanvasHotkeys({
     onHotgroupSelect: (slot, isDoubleTap) => {
-      const runIds = hotgroups.runsInSlot(slot).filter(id => layouts.has(id))
-      if (runIds.length === 0) return
-      selectMany(runIds, 'run')
+      // hotgroups stores raw run IDs (e.g. 'R-241'), layouts keys are node IDs ('run-R-241')
+      const nodeIds = hotgroups.runsInSlot(slot).map(id => `run-${id}`).filter(id => layouts.has(id))
+      if (nodeIds.length === 0) return
+      selectMany(nodeIds, 'run')
       // Expand ancestors in sidebar
-      expandAll(runIds)
+      expandAll(nodeIds)
       if (isDoubleTap) {
-        zoomToFitRuns(runIds)
+        zoomToFitRuns(nodeIds)
       } else {
-        panToRuns(runIds)
+        panToRuns(nodeIds)
       }
     },
     onHotgroupAssign: (slot) => {
-      for (const runId of selectionState.selectedIds) hotgroups.assign(slot, runId)
+      if (selectionState.selectedType !== 'run') return
+      for (const nodeId of selectionState.selectedIds) {
+        const runId = nodeId.startsWith('run-') ? nodeId.slice(4) : nodeId
+        hotgroups.assign(slot, runId)
+      }
     },
     onHotgroupRemove: (slot) => {
-      for (const runId of selectionState.selectedIds) hotgroups.remove(slot, runId)
+      if (selectionState.selectedType !== 'run') return
+      for (const nodeId of selectionState.selectedIds) {
+        const runId = nodeId.startsWith('run-') ? nodeId.slice(4) : nodeId
+        hotgroups.remove(slot, runId)
+      }
     },
     onArrangeGrid: () => arrangeGridRef?.current?.(),
     onArrangeReset: () => arrangeResetRef?.current?.(),
