@@ -55,6 +55,8 @@ export interface PendingSkill {
   entityId: string
   entityType: 'task' | 'epic' | 'initiative'
   sessionId: string
+  /** Pre-chosen save location; when set, skill.drafted auto-saves without showing SaveSkillModal */
+  preferredLocation?: 'system' | 'repo'
 }
 
 export interface SkillDTO {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type { SkillDTO, PendingSkill } from '../types'
+import type { SkillDTO, PendingSkill, StoredProcedure } from '../types'
 
 export interface OptimisticProcedure {
   id: string
@@ -48,7 +48,7 @@ export function useSkills(): SkillsState & SkillsActions {
   useEffect(() => {
     const es = new EventSource('/api/events')
 
-    es.addEventListener('skill.drafted', (e: MessageEvent) => {
+    es.addEventListener('skill.drafted', async (e: MessageEvent) => {
       const { draftId, skillName } = JSON.parse(e.data) as { draftId: string; skillName: string }
       // Only handle drafts that this window initiated — multiple dev servers share the
       // same skill-drafts dir on disk, so every server fires the event to all its clients
@@ -57,11 +57,53 @@ export function useSkills(): SkillsState & SkillsActions {
       // Cancel timeout for this pending skill
       const timeout = timeoutsRef.current.get(draftId)
       if (timeout) { clearTimeout(timeout); timeoutsRef.current.delete(draftId) }
-      // Transition matching pending skill to 'saving'
-      setPendingSkills(prev => prev.map(ps =>
-        ps.id === draftId ? { ...ps, status: 'saving' as const } : ps
-      ))
-      setSavingDraft({ draftId, skillName, pendingSkillId: draftId, sessionId: matchingSkill.sessionId })
+
+      if (matchingSkill.preferredLocation) {
+        // User pre-selected a location — auto-save without showing SaveSkillModal
+        setPendingSkills(prev => prev.map(ps =>
+          ps.id === draftId ? { ...ps, status: 'saving' as const } : ps
+        ))
+        try {
+          const res = await fetch('/api/skills/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ draftId, location: matchingSkill.preferredLocation, sessionId: matchingSkill.sessionId }),
+          })
+          if (res.ok) {
+            // Add procedure to entity
+            const { entityId, entityType } = matchingSkill
+            const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
+            const entityRes = await fetch(`/api/${entityPath}/${entityId}`)
+            if (entityRes.ok) {
+              const entity = await entityRes.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
+              const existing = entity.data?.settings?.procedures ?? []
+              if (!existing.some(p => p.skillName === skillName)) {
+                const newProcedure: StoredProcedure = { id: crypto.randomUUID(), skillName }
+                await fetch(`/api/${entityPath}/${entityId}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ settings: { procedures: [...existing, newProcedure] } }),
+                })
+              }
+            }
+            setPendingSkills(prev => prev.filter(ps => ps.id !== draftId))
+          } else {
+            setPendingSkills(prev => prev.map(ps =>
+              ps.id === draftId ? { ...ps, status: 'error' as const } : ps
+            ))
+          }
+        } catch {
+          setPendingSkills(prev => prev.map(ps =>
+            ps.id === draftId ? { ...ps, status: 'error' as const } : ps
+          ))
+        }
+      } else {
+        // No pre-selected location — show SaveSkillModal as before
+        setPendingSkills(prev => prev.map(ps =>
+          ps.id === draftId ? { ...ps, status: 'saving' as const } : ps
+        ))
+        setSavingDraft({ draftId, skillName, pendingSkillId: draftId, sessionId: matchingSkill.sessionId })
+      }
     })
 
     es.addEventListener('skill.saved', () => {
