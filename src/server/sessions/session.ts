@@ -147,6 +147,7 @@ export async function listSessions(sessionsDir: string): Promise<Session[]> {
   const sessions: Session[] = []
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
+    if (existsSync(join(sessionsDir, entry.name, '.deleting'))) continue
     const session = getSession(sessionsDir, entry.name)
     if (session) {
       if (session.workspace?.path) {
