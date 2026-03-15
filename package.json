@@ -8,20 +8,16 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "stable": "vite preview --config vite.preview.config.ts",
-    "test:e2e": "playwright test",
-    "build:server": "npx esbuild src/server/standalone.ts --bundle --platform=node --format=esm --outdir=dist/server --external:http-proxy",
-    "build:all": "vite build --outDir dist/client && npm run build:server"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@tailwindcss/typography": "^0.5.19",
-    "http-proxy": "^1.18.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
-    "@types/http-proxy": "^1.17.17",
     "@types/node": "^25.5.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

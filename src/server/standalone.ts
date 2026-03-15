@@ -50,7 +50,7 @@ export function startServer(opts: ServerOptions) {
     const url = req.url ?? '/'
 
     // 1. Session proxy — runs BEFORE static files
-    const sessionMatch = url.match(/^\/s\/([^/]+)(\/.*)$/)
+    const sessionMatch = url.match(/^\/s\/([^/]+)(\/.*)?$/)
     if (sessionMatch) {
       const sessionName = sessionMatch[1]!
       const run = ctx.docStore.getRun(sessionName)
@@ -60,7 +60,7 @@ export function startServer(opts: ServerOptions) {
         return
       }
       // Strip the /s/{name} prefix before proxying
-      req.url = sessionMatch[2]!
+      req.url = sessionMatch[2] || '/'
       proxy.web(req, res, { target: `http://localhost:${run.port}` })
       return
     }
@@ -119,7 +119,7 @@ export function startServer(opts: ServerOptions) {
   // WebSocket upgrades for session proxy
   server.on('upgrade', (req, socket, head) => {
     const url = req.url ?? '/'
-    const sessionMatch = url.match(/^\/s\/([^/]+)(\/.*)$/)
+    const sessionMatch = url.match(/^\/s\/([^/]+)(\/.*)?$/)
     if (!sessionMatch) {
       socket.destroy()
       return
@@ -130,7 +130,7 @@ export function startServer(opts: ServerOptions) {
       socket.destroy()
       return
     }
-    req.url = sessionMatch[2]!
+    req.url = sessionMatch[2] || '/'
     proxy.ws(req, socket, head, { target: `http://localhost:${run.port}` })
   })
 
@@ -147,7 +147,7 @@ export function startServer(opts: ServerOptions) {
       }
     })
 
-    server.on('error', (err: NodeJS.ErrnoException) => {
+    server.once('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
         log.warn('server', `port ${port} in use, trying ${port + 1}`)
         console.log(`  Port ${port} in use, trying ${port + 1}...`)
