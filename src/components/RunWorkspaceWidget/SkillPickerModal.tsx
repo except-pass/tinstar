@@ -19,23 +19,14 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const [starPopover, setStarPopover] = useState<{ skillName: string; index: number; rect: DOMRect } | null>(null)
-  const [_taskProcedures, setTaskProcedures] = useState<StoredProcedure[]>([])
   // Optimistic tracking: skills added at any entity level during this session
   const [optimisticAdded, setOptimisticAdded] = useState<Set<string>>(new Set())
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const loadTaskProcedures = useCallback(async () => {
-    const res = await fetch(`/api/tasks/${taskId}`)
-    if (!res.ok) return
-    const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
-    setTaskProcedures(json.data?.settings?.procedures ?? [])
-  }, [taskId])
-
   useEffect(() => {
     fetchSkills()
-    loadTaskProcedures()
     inputRef.current?.focus()
-  }, [fetchSkills, loadTaskProcedures])
+  }, [fetchSkills])
 
   // Build entity levels for star popover
   const entityLevels = useCallback((): EntityLevel[] => {
@@ -76,29 +67,25 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     }
   }
 
-  function addProcedureToEntity(skillName: string, entityId: string, entityType: 'task' | 'epic' | 'initiative') {
-    if (!entityId) return  // no entity to attach to — silently skip
+  async function addProcedureToEntity(skillName: string, entityId: string, entityType: 'task' | 'epic' | 'initiative') {
+    if (!entityId) return
     setStarPopover(null)
     const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
 
-    // Read existing procedures from in-memory taxRepo — no GET needed
-    let existing: StoredProcedure[] = []
-    if (entityType === 'task') existing = taxRepo.getTaskById(entityId)?.settings?.procedures ?? []
-    else if (entityType === 'epic') existing = taxRepo.getEpicById(entityId)?.settings?.procedures ?? []
-    else existing = taxRepo.getInitiativeById(entityId)?.settings?.procedures ?? []
+    // Show optimistic star immediately for snappy UX
+    const newId = crypto.randomUUID()
+    addOptimisticProcedure({ id: newId, entityId, skillName })
+    setOptimisticAdded(prev => new Set([...prev, skillName]))
+
+    // Always fetch fresh data before PATCHing — avoids overwriting concurrent stars
+    const res = await fetch(`/api/${entityPath}/${entityId}`)
+    if (!res.ok) return
+    const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
+    const existing = json.data?.settings?.procedures ?? []
 
     if (existing.some(p => p.skillName === skillName)) return
 
-    const newProcedure: StoredProcedure = { id: crypto.randomUUID(), skillName }
-
-    // Optimistic: show in ProceduresPanel immediately
-    addOptimisticProcedure({ id: newProcedure.id, entityId, skillName })
-    setOptimisticAdded(prev => new Set([...prev, skillName]))
-    if (entityType === 'task' && entityId === taskId) {
-      setTaskProcedures(prev => [...prev, newProcedure])
-    }
-
-    // Fire PATCH in background
+    const newProcedure: StoredProcedure = { id: newId, skillName }
     fetch(`/api/${entityPath}/${entityId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
