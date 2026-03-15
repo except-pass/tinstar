@@ -50,17 +50,18 @@ export function useSkills(): SkillsState & SkillsActions {
 
     es.addEventListener('skill.drafted', (e: MessageEvent) => {
       const { draftId, skillName } = JSON.parse(e.data) as { draftId: string; skillName: string }
+      // Only handle drafts that this window initiated — multiple dev servers share the
+      // same skill-drafts dir on disk, so every server fires the event to all its clients
+      const matchingSkill = pendingSkillsRef.current.find(ps => ps.id === draftId)
+      if (!matchingSkill) return
       // Cancel timeout for this pending skill
       const timeout = timeoutsRef.current.get(draftId)
       if (timeout) { clearTimeout(timeout); timeoutsRef.current.delete(draftId) }
-      // Read sessionId from the pending skill captured at addPendingSkill time
-      const matchingSkill = pendingSkillsRef.current.find(ps => ps.id === draftId)
-      const sessionId = matchingSkill?.sessionId ?? ''
       // Transition matching pending skill to 'saving'
       setPendingSkills(prev => prev.map(ps =>
         ps.id === draftId ? { ...ps, status: 'saving' as const } : ps
       ))
-      setSavingDraft({ draftId, skillName, pendingSkillId: draftId, sessionId })
+      setSavingDraft({ draftId, skillName, pendingSkillId: draftId, sessionId: matchingSkill.sessionId })
     })
 
     es.addEventListener('skill.saved', () => {
