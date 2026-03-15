@@ -63,6 +63,12 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
       if (f) {
         // Escaping FROM terminal — move browser focus back to the widget
         requestAnimationFrame(() => rootRef.current?.focus())
+      } else {
+        // Entering terminal — give the iframe actual keyboard focus
+        requestAnimationFrame(() => {
+          const iframe = rootRef.current?.querySelector('iframe') as HTMLIFrameElement | null
+          iframe?.focus()
+        })
       }
       return !f
     })
