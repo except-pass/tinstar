@@ -45,7 +45,7 @@ The CLI runs sequentially on every launch:
 | Check | Method | Pass | Fail |
 |-------|--------|------|------|
 | Claude Code installed | `which claude` | `✓ Claude Code found (v1.0.32)` | `✗ Claude Code not found` → link to install docs |
-| Claude authenticated | `claude auth status` (parse JSON) | `✓ Authenticated as user@email.com` | `✗ Not authenticated` → `Run: claude auth login` |
+| Claude authenticated | `claude auth status` (parse JSON, returns `{ loggedIn, email, ... }`) | `✓ Authenticated as user@email.com` | `✗ Not authenticated` → `Run: claude auth login` |
 | tmux installed | `which tmux` | `✓ tmux found` | `✗ tmux not found` → OS-specific install command |
 | ttyd installed | `which ttyd` | `✓ ttyd found` | `✗ ttyd not found` → OS-specific install command |
 
@@ -59,7 +59,7 @@ All checks run (doesn't stop at first failure). On any failure, prints all resul
   📁 Detected project: my-app (/home/you/my-app)
      Add as a Tinstar project? [Y/n]
   ```
-- Registers via config file before server starts
+- Registers by adding an entry to `~/.config/tinstar/projects.json` (array of `{ name, path }` objects), the same file the Settings UI reads/writes
 - If not a git repo or already registered, skips silently
 
 **Step 3 — Start server:**
@@ -100,7 +100,7 @@ A plain Node HTTP server that:
 - Serves static files from `dist/client/` (built frontend assets)
 - Runs the same middleware chain: `handleRequest()` for API routes, SSE broadcaster
 - Performs the same initialization: EventBus, DocumentStore, session rehydration, Caddy startup, reconciliation loops
-- Adds a websocket proxy for `/s/` → Caddy (replaces Vite's proxy config, using `http-proxy` or similar)
+- Adds a websocket proxy for `/s/` → Caddy on `:8088` (Caddy is started by Tinstar itself via `ensureCaddy()`; replaces Vite's proxy config, using `http-proxy` or similar)
 
 ### What Changes
 
@@ -124,7 +124,7 @@ Or alternatively, a single `npm run dev` script starts both processes via `concu
 
 ### Production (`npx tinstar`)
 
-The standalone server runs on :5273, serving the built frontend assets directly. No Vite involved at runtime.
+The standalone server runs on :5273 (or next available port if occupied), serving the built frontend assets directly. No Vite involved at runtime. The CLI prints the actual URL used.
 
 ---
 
@@ -132,13 +132,14 @@ The standalone server runs on :5273, serving the built frontend assets directly.
 
 ### Change
 
-The grouping pills (Initiative, Epic, Task, Worktree) default to **only Task selected** on first load.
+The default `dimensions` array changes from `['initiative', 'epic', 'task']` to `['task']`.
 
 ### Details
 
-- Initiative, Epic, and Worktree pills remain visible and clickable — just unselected by default
-- Sidebar and canvas organize by task out of the box
-- Stored in localStorage like existing layout preferences
+- The dimensions array controls the active grouping hierarchy in the sidebar and canvas
+- With only `['task']`, runs are grouped by task — no initiative/epic nesting
+- Initiative, Epic, and Worktree appear as addable `+` pills (the existing UX for inactive dimensions)
+- Stored in localStorage (`tinstar-dimensions` key) like existing preferences
 - Only applies when no saved preference exists — existing users keep their selections
 
 ### Rationale
