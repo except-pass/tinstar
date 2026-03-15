@@ -67,6 +67,8 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [runColor, setRunColor] = useState(prefill?.runColor ?? DEFAULT_RUN_ACCENT)
   const [taskId, setTaskId] = useState(prefill?.taskId ?? '')
   const [entities, setEntities] = useState<{ initiatives: EntityOption[]; epics: EntityOption[]; tasks: EntityOption[] }>({ initiatives: [], epics: [], tasks: [] })
+  const [addingProject, setAddingProject] = useState(false)
+  const [newProjectPath, setNewProjectPath] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const nameRef = useRef<HTMLInputElement>(null)
@@ -239,15 +241,57 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
               </span>
             </label>
             <select
-              value={project}
-              onChange={e => setProject(e.target.value)}
+              value={addingProject ? '__add__' : project}
+              onChange={e => {
+                if (e.target.value === '__add__') {
+                  setAddingProject(true)
+                } else {
+                  setProject(e.target.value)
+                  setAddingProject(false)
+                }
+              }}
               className="w-full px-3 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
             >
-              <option value="">None</option>
+              {projects.length === 0 ? (
+                <option value="" disabled>No projects yet — add one to get started</option>
+              ) : (
+                <option value="">None</option>
+              )}
               {projects.map(p => (
                 <option key={p.name} value={p.name}>{p.name}</option>
               ))}
+              <option value="__add__">+ Add project</option>
             </select>
+            {addingProject && (
+              <div className="mt-2 flex gap-2">
+                <input
+                  type="text"
+                  value={newProjectPath}
+                  onChange={e => setNewProjectPath(e.target.value)}
+                  placeholder="/path/to/project"
+                  autoFocus
+                  className="flex-1 px-3 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && newProjectPath.trim()) {
+                      const name = newProjectPath.trim().split('/').pop() || 'project'
+                      fetch('/api/projects', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name, path: newProjectPath.trim() }),
+                      }).then(r => r.json()).then(() => {
+                        setProjects(prev => [...prev, { name, path: newProjectPath.trim() }])
+                        setProject(name)
+                        setAddingProject(false)
+                        setNewProjectPath('')
+                      })
+                    } else if (e.key === 'Escape') {
+                      setAddingProject(false)
+                      setNewProjectPath('')
+                    }
+                  }}
+                />
+              </div>
+            )}
           </div>
         </div>
 

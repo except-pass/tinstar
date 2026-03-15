@@ -18,6 +18,7 @@ import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
 import { ActiveScopeProvider } from '../hotkeys/ActiveScopeContext'
 import { HotgroupProvider } from '../hotkeys/HotgroupContext'
+import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
 import { CommitActivityPanel } from './CommitActivityPanel'
 
@@ -42,7 +43,7 @@ function WorkspaceShellInner() {
       const stored = localStorage.getItem('tinstar-dimensions')
       if (stored) return JSON.parse(stored) as GroupingDimension[]
     } catch { /* ignore */ }
-    return ['initiative', 'epic', 'task']
+    return ['task']
   })
 
   const { runRepo, taxRepo, spaces, activeSpaceId, commits } = useBackendState()
@@ -591,6 +592,10 @@ function WorkspaceShellInner() {
           </div>
         </TaxonomyProvider>
       )}
+      <NoTasksToast
+        taskCount={taxRepo.getTasks().length}
+        runCount={runRepo.getAll().length}
+      />
       <HotkeyPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </ActiveScopeProvider>
   )

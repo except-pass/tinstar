@@ -8,6 +8,7 @@ import { GroupContainer } from './GroupContainer'
 import { ReassignDialog } from './ReassignDialog'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useHotgroupContext } from '../hotkeys/HotgroupContext'
+import { EmptyCanvasHint } from './EmptyCanvasHint'
 
 interface Props {
   tree: TreeNode[]
@@ -697,6 +698,9 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
       >
         {renderedNodes}
       </div>
+
+      {/* Empty canvas hint */}
+      {runMap.size === 0 && <EmptyCanvasHint />}
 
       {/* Marquee selection box */}
       {marqueeStyle && <div style={marqueeStyle} />}
