@@ -5,6 +5,7 @@ import { tinstarBackend } from './src/server/index'
 function devTitle(): import('vite').Plugin {
   return {
     name: 'dev-title',
+    apply: 'serve',
     transformIndexHtml(html) {
       return html.replace('<title>Tinstar', '<title>[DEV] Tinstar')
     },

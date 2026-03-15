@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useReducer, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useRef, useCallback, useReducer, useEffect, type PointerEvent as ReactPointerEvent } from 'react'
 import type { RunData } from '../../types'
 import { RunWorkspaceHeader } from './RunWorkspaceHeader'
 import { TouchedFilesPanel } from './TouchedFilesPanel'
@@ -68,6 +68,13 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     })
   }, [rootRef])
 
+  // When the window regains focus (from the iframe back to the page), clear terminal focus
+  useEffect(() => {
+    const onWindowFocus = () => setTerminalFocused(false)
+    window.addEventListener('focus', onWindowFocus)
+    return () => window.removeEventListener('focus', onWindowFocus)
+  }, [])
+
   useWidgetHotkeys(rootRef, {
     onFocusNext,
     onFocusPrev,
@@ -108,7 +115,10 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
       tabIndex={-1}
       data-testid={`widget-root-${run.id}`}
       className={`flex flex-col overflow-hidden bg-surface-base border ${className}`}
-      style={{ borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }}
+      style={terminalFocused
+        ? { borderColor: hexToRgba(runAccent, 0.1), boxShadow: 'none' }
+        : { borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }
+      }
     >
       {/* Header doubles as drag handle */}
       {!headless && (
@@ -209,6 +219,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
             termTick={termTick}
             terminalFocused={terminalFocused}
             onTerminalToggle={handleTerminalToggle}
+            onTerminalPointerFocus={() => setTerminalFocused(true)}
             activeTabIndex={focusZone === 'center-tabs' ? centerTabIndex : undefined}
           />
         </div>

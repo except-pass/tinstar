@@ -22,7 +22,8 @@ export const HOTKEYS: HotkeyDef[] = [
   { id: 'cycle-all-prev',     keys: 'Shift+[',       scope: 'global', category: 'Sessions',   description: 'Previous session (all)' },
 
   // --- Terminal ---
-  { id: 'terminal-toggle',    keys: 'Ctrl+Shift+\\', scope: 'widget', category: 'Terminal',   description: 'Toggle terminal / widget focus' },
+  { id: 'terminal-enter',     keys: 'Ctrl+\\',       scope: 'widget', category: 'Terminal',   description: 'Enter terminal (focus iframe)' },
+  { id: 'terminal-exit',      keys: 'Ctrl+Shift+\\', scope: 'widget', category: 'Terminal',   description: 'Exit terminal (restore widget focus)' },
 
   // --- Widget navigation ---
   { id: 'focus-next-zone',    keys: 'Tab',           scope: 'widget', category: 'Navigation', description: 'Next panel zone' },
