@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, type PointerEvent as ReactPointerEvent } from 'react'
+import { createPortal } from 'react-dom'
 import type { RunData, SessionStatus } from '../../types'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
 import { HotgroupBadge } from '../HotgroupBadge'
@@ -27,16 +28,19 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   const runAccent = resolveRunAccent(run.color)
   const [busy, setBusy] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [palettePos, setPalettePos] = useState<{ top: number; right: number } | null>(null)
   const paletteRef = useRef<HTMLDivElement>(null)
+  const paletteButtonRef = useRef<HTMLButtonElement>(null)
   const { slotsForRun } = useHotgroupContext()
 
-  // Close palette when clicking outside
+  // Close palette when clicking outside both the dropdown and the toggle button
   useEffect(() => {
     if (!paletteOpen) return
     function onDown(e: MouseEvent) {
-      if (paletteRef.current && !paletteRef.current.contains(e.target as Node)) {
-        setPaletteOpen(false)
-      }
+      const target = e.target as Node
+      const inPalette = paletteRef.current?.contains(target)
+      const inButton = paletteButtonRef.current?.contains(target)
+      if (!inPalette && !inButton) setPaletteOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
@@ -79,6 +83,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onDragStart={e => e.preventDefault()}
     >
       {/* Left: identity */}
       <div className="flex items-center gap-2 min-w-0">
@@ -131,20 +136,29 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
           {/* Color palette */}
           <div className="relative" ref={paletteRef} onPointerDown={e => e.stopPropagation()}>
             <button
-              onClick={() => setPaletteOpen(o => !o)}
+              ref={paletteButtonRef}
+              onClick={() => {
+                if (!paletteOpen && paletteButtonRef.current) {
+                  const rect = paletteButtonRef.current.getBoundingClientRect()
+                  setPalettePos({ top: rect.bottom + 4, right: window.innerWidth - rect.right })
+                }
+                setPaletteOpen(o => !o)
+              }}
               className="p-1 rounded transition-colors"
               style={{ color: paletteOpen ? runAccent : undefined }}
               title="Change run color"
             >
               <span className="material-symbols-outlined text-sm text-slate-500 hover:text-slate-300 transition-colors" style={paletteOpen ? { color: runAccent } : undefined}>palette</span>
             </button>
-            {paletteOpen && (
+            {paletteOpen && palettePos && createPortal(
               <div
-                className="absolute right-0 top-full mt-1 z-50 p-2 bg-surface-panel border border-white/10 rounded shadow-xl"
-                style={{ minWidth: 160 }}
+                className="fixed z-[9999] p-2 bg-surface-panel border border-white/10 rounded shadow-xl"
+                style={{ top: palettePos.top, right: palettePos.right, minWidth: 160 }}
+                ref={paletteRef}
               >
                 <ColorPalette value={run.color ?? ''} onChange={handleColorChange} />
-              </div>
+              </div>,
+              document.body,
             )}
           </div>
           {/* Session actions */}

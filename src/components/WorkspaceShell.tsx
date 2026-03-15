@@ -46,7 +46,7 @@ function WorkspaceShellInner() {
   })
 
   const { runRepo, taxRepo, spaces, activeSpaceId, commits } = useBackendState()
-  const { state: serverState } = useServerEvents()
+  const { state: serverState, addOptimistic } = useServerEvents()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -325,6 +325,35 @@ function WorkspaceShellInner() {
       }
       setShowSessionDialog(true)
     }, [selectionState]),
+    onSessionQuick: useCallback(async () => {
+      // Pre-fill with resolved entity settings when a task is selected
+      const { selectedType, selectedIds } = selectionState
+      const firstNodeId = [...selectedIds][0] ?? null
+      if (firstNodeId && selectedType === 'task') {
+        const rawId = firstNodeId.startsWith('task-') ? firstNodeId.slice(5) : firstNodeId
+        try {
+          const res = await fetch(`/api/tasks/${rawId}/settings`)
+          const data = await res.json()
+          if (data.ok) {
+            const resolved = data.data.resolved
+            setSessionPrefill({
+              ...resolved,
+              worktreeMode: resolved.worktree,
+              runColor: resolved.defaultRunColor,
+              taskId: rawId,
+              sources: data.data.sources,
+            })
+          } else {
+            setSessionPrefill({ taskId: rawId })
+          }
+        } catch {
+          setSessionPrefill({ taskId: rawId })
+        }
+      } else {
+        setSessionPrefill(null)
+      }
+      setShowSessionDialog(true)
+    }, [selectionState]),
     onPaletteOpen: () => setPaletteOpen(true),
   })
 
@@ -491,6 +520,7 @@ function WorkspaceShellInner() {
                 <CreateEntityDialog
                   dialog={createDialog}
                   onClose={() => setCreateDialog(null)}
+                  onOptimisticCreate={addOptimistic}
                 />
               )}
 

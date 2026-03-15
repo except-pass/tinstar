@@ -8,7 +8,7 @@ import { SSEBroadcaster } from './api/sse'
 import { handleRequest } from './api/routes'
 import { MockSensorSimulator } from './simulator/mock-sensors'
 import { join } from 'node:path'
-import { readdirSync } from 'node:fs'
+import { readdirSync, existsSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import {
   loadConfig,
@@ -129,6 +129,13 @@ export function tinstarBackend(): Plugin {
           const sessEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
           for (const entry of sessEntries) {
             if (!entry.isDirectory()) continue
+            // Skip and clean up session dirs that were mid-deletion when the server last stopped
+            const deletingMarker = join(sessionConfig.dirs.sessions, entry.name, '.deleting')
+            if (existsSync(deletingMarker)) {
+              log.info('rehydrate', `cleaning up partially-deleted session dir: ${entry.name}`)
+              rmSync(join(sessionConfig.dirs.sessions, entry.name), { recursive: true, force: true })
+              continue
+            }
             const sess = getSession(sessionConfig.dirs.sessions, entry.name)
             if (!sess) continue
             const existingRun = docStore.getRun(sess.name)

@@ -19,23 +19,16 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const [starPopover, setStarPopover] = useState<{ skillName: string; index: number; rect: DOMRect } | null>(null)
-  const [_taskProcedures, setTaskProcedures] = useState<StoredProcedure[]>([])
   // Optimistic tracking: skills added at any entity level during this session
   const [optimisticAdded, setOptimisticAdded] = useState<Set<string>>(new Set())
+  // Two-phase define: first pick location, then fire agent
+  const [pickingLocation, setPickingLocation] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
-
-  const loadTaskProcedures = useCallback(async () => {
-    const res = await fetch(`/api/tasks/${taskId}`)
-    if (!res.ok) return
-    const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
-    setTaskProcedures(json.data?.settings?.procedures ?? [])
-  }, [taskId])
 
   useEffect(() => {
     fetchSkills()
-    loadTaskProcedures()
     inputRef.current?.focus()
-  }, [fetchSkills, loadTaskProcedures])
+  }, [fetchSkills])
 
   // Build entity levels for star popover
   const entityLevels = useCallback((): EntityLevel[] => {
@@ -61,43 +54,44 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     : skills
 
   const exactMatch = skills.some(s => s.name.toLowerCase() === query.toLowerCase().trim())
-  const showDefineRow = query.trim().length > 0 && !exactMatch
+  const showDefineRow = !!taskId && query.trim().length > 0 && !exactMatch
   const totalItems = filtered.length + (showDefineRow ? 1 : 0)
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Escape') { onClose(); closePicker(); return }
+    if (e.key === 'Escape') {
+      if (pickingLocation) { setPickingLocation(false); return }
+      onClose(); closePicker(); return
+    }
+    if (pickingLocation) return  // arrow / enter handled by location buttons
     if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIndex(i => Math.min(i + 1, totalItems - 1)); return }
     if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIndex(i => Math.max(i - 1, 0)); return }
     if (e.key === 'Enter') {
       e.preventDefault()
       if (activeIndex === filtered.length && showDefineRow) {
-        handleDefine()
+        setPickingLocation(true)
       }
     }
   }
 
-  function addProcedureToEntity(skillName: string, entityId: string, entityType: 'task' | 'epic' | 'initiative') {
+  async function addProcedureToEntity(skillName: string, entityId: string, entityType: 'task' | 'epic' | 'initiative') {
+    if (!entityId) return
     setStarPopover(null)
     const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
 
-    // Read existing procedures from in-memory taxRepo — no GET needed
-    let existing: StoredProcedure[] = []
-    if (entityType === 'task') existing = taxRepo.getTaskById(entityId)?.settings?.procedures ?? []
-    else if (entityType === 'epic') existing = taxRepo.getEpicById(entityId)?.settings?.procedures ?? []
-    else existing = taxRepo.getInitiativeById(entityId)?.settings?.procedures ?? []
+    // Show optimistic star immediately for snappy UX
+    const newId = crypto.randomUUID()
+    addOptimisticProcedure({ id: newId, entityId, skillName })
+    setOptimisticAdded(prev => new Set([...prev, skillName]))
+
+    // Always fetch fresh data before PATCHing — avoids overwriting concurrent stars
+    const res = await fetch(`/api/${entityPath}/${entityId}`)
+    if (!res.ok) return
+    const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
+    const existing = json.data?.settings?.procedures ?? []
 
     if (existing.some(p => p.skillName === skillName)) return
 
-    const newProcedure: StoredProcedure = { id: crypto.randomUUID(), skillName }
-
-    // Optimistic: show in ProceduresPanel immediately
-    addOptimisticProcedure({ id: newProcedure.id, entityId, skillName })
-    setOptimisticAdded(prev => new Set([...prev, skillName]))
-    if (entityType === 'task' && entityId === taskId) {
-      setTaskProcedures(prev => [...prev, newProcedure])
-    }
-
-    // Fire PATCH in background
+    const newProcedure: StoredProcedure = { id: newId, skillName }
     fetch(`/api/${entityPath}/${entityId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -116,12 +110,12 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings: { procedures: updated } }),
     })
-    setTaskProcedures(updated)
   }
 
-  function handleDefine() {
+  function handleDefine(location: 'system' | 'repo') {
     const description = query.trim()
     if (!description) return
+    if (!taskId) return
 
     const draftId = crypto.randomUUID()
     const pending: PendingSkill = {
@@ -131,6 +125,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
       entityId: taskId,
       entityType: 'task',
       sessionId,
+      preferredLocation: location,
     }
 
     onClose()
@@ -217,21 +212,53 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
             </>
           )}
 
-          {/* Define row */}
+          {/* Define row / location picker */}
           {showDefineRow && (
             <>
               <div className="mx-3.5 my-1 h-px bg-white/5" />
-              <div
-                className={`flex items-center gap-2 px-3.5 py-2 cursor-pointer transition-colors ${activeIndex === filtered.length ? 'bg-accent-green/[0.07]' : 'hover:bg-accent-green/[0.05]'}`}
-                onClick={handleDefine}
-                onMouseEnter={() => setActiveIndex(filtered.length)}
-              >
-                <span className="material-symbols-outlined text-sm text-accent-green">add_circle</span>
-                <span className="flex-1 text-xs font-mono text-accent-green">
-                  Define <span className="text-white">"{query.trim()}"</span> as new skill…
-                </span>
-                <span className="text-2xs text-slate-600 bg-white/[0.08] rounded px-1 py-0.5">↵</span>
-              </div>
+              {pickingLocation ? (
+                <div className="px-3.5 py-2">
+                  <div className="text-2xs font-mono text-slate-500 mb-2">
+                    Save <span className="text-white">"{query.trim()}"</span> to…
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      autoFocus
+                      onClick={() => handleDefine('system')}
+                      className="flex-1 flex items-center gap-1.5 p-2 border border-white/10 hover:border-primary/40 hover:bg-primary/5 rounded transition-colors text-left"
+                    >
+                      <span className="material-symbols-outlined text-sm text-slate-500">home</span>
+                      <div>
+                        <div className="text-2xs font-mono text-white">System</div>
+                        <div className="text-2xs font-mono text-slate-600">~/.claude/</div>
+                      </div>
+                    </button>
+                    <button
+                      onClick={() => handleDefine('repo')}
+                      className="flex-1 flex items-center gap-1.5 p-2 border border-white/10 hover:border-accent-green/40 hover:bg-accent-green/5 rounded transition-colors text-left"
+                    >
+                      <span className="material-symbols-outlined text-sm text-slate-500">folder</span>
+                      <div>
+                        <div className="text-2xs font-mono text-white">Repo</div>
+                        <div className="text-2xs font-mono text-slate-600">.claude/</div>
+                      </div>
+                    </button>
+                  </div>
+                  <div className="mt-1.5 text-2xs font-mono text-slate-700">esc to go back</div>
+                </div>
+              ) : (
+                <div
+                  className={`flex items-center gap-2 px-3.5 py-2 cursor-pointer transition-colors ${activeIndex === filtered.length ? 'bg-accent-green/[0.07]' : 'hover:bg-accent-green/[0.05]'}`}
+                  onClick={() => setPickingLocation(true)}
+                  onMouseEnter={() => setActiveIndex(filtered.length)}
+                >
+                  <span className="material-symbols-outlined text-sm text-accent-green">add_circle</span>
+                  <span className="flex-1 text-xs font-mono text-accent-green">
+                    Define <span className="text-white">"{query.trim()}"</span> as new skill…
+                  </span>
+                  <span className="text-2xs text-slate-600 bg-white/[0.08] rounded px-1 py-0.5">↵</span>
+                </div>
+              )}
             </>
           )}
 
@@ -272,9 +299,15 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
 
         {/* Footer */}
         <div className="flex items-center gap-3 px-3.5 py-1.5 border-t border-white/[0.06] bg-black/20">
-          <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">↑↓</span> navigate</span>
-          <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">⭐</span> add / remove</span>
-          <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">esc</span> close</span>
+          {!taskId ? (
+            <span className="text-2xs text-amber-500/70 font-mono">Assign session to a task to save procedures</span>
+          ) : (
+            <>
+              <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">↑↓</span> navigate</span>
+              <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">⭐</span> add / remove</span>
+              <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">esc</span> close</span>
+            </>
+          )}
         </div>
       </div>
     </div>

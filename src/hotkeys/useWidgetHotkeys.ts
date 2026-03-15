@@ -45,8 +45,8 @@ export function useWidgetHotkeys(
       if (e.key === 'ArrowLeft')  { e.preventDefault(); h.onTabPrev();  return }
       if (e.key === 'Enter') { e.preventDefault(); h.onActivate();      return }
 
-      // Ctrl+Shift+\ — terminal dive (only when terminal is NOT focused)
-      if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+      // Ctrl+\ — enter terminal (only when terminal is NOT focused; exit is Ctrl+Shift+\ inside the iframe)
+      if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         e.preventDefault()
         h.onTerminalToggle()
         return

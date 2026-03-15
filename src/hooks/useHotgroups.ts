@@ -29,8 +29,9 @@ export function useHotgroups(spaceId: string, runIds: string[]) {
     setStore(load(spaceId))
   }, [spaceId])
 
-  // Prune deleted run IDs
+  // Prune deleted run IDs — skip when runIds is empty (before SSE snapshot arrives)
   useEffect(() => {
+    if (runIds.length === 0) return
     const idSet = new Set(runIds)
     setStore(prev => {
       const next: HotgroupStore = {}

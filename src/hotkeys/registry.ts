@@ -15,13 +15,15 @@ export const HOTKEYS: HotkeyDef[] = [
 
   // --- Sessions ---
   { id: 'session-new',        keys: 'Ctrl+Enter',    scope: 'global', category: 'Sessions',   description: 'New session for selected entity' },
+  { id: 'session-quick',      keys: 'S',             scope: 'global', category: 'Sessions',   description: 'New session in selected task (or open dialog)' },
   { id: 'cycle-ready-next',   keys: ']',             scope: 'global', category: 'Sessions',   description: 'Next ready-for-input session' },
   { id: 'cycle-ready-prev',   keys: '[',             scope: 'global', category: 'Sessions',   description: 'Previous ready-for-input session' },
   { id: 'cycle-all-next',     keys: 'Shift+]',       scope: 'global', category: 'Sessions',   description: 'Next session (all)' },
   { id: 'cycle-all-prev',     keys: 'Shift+[',       scope: 'global', category: 'Sessions',   description: 'Previous session (all)' },
 
   // --- Terminal ---
-  { id: 'terminal-toggle',    keys: 'Ctrl+Shift+\\', scope: 'widget', category: 'Terminal',   description: 'Toggle terminal / widget focus' },
+  { id: 'terminal-enter',     keys: 'Ctrl+\\',       scope: 'widget', category: 'Terminal',   description: 'Enter terminal (focus iframe)' },
+  { id: 'terminal-exit',      keys: 'Ctrl+Shift+\\', scope: 'widget', category: 'Terminal',   description: 'Exit terminal (restore widget focus)' },
 
   // --- Widget navigation ---
   { id: 'focus-next-zone',    keys: 'Tab',           scope: 'widget', category: 'Navigation', description: 'Next panel zone' },

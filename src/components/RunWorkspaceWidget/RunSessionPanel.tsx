@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
+import { resolveRunAccent, hexToRgba } from '../runAccent'
 
 function MarkdownText({ content }: { content: string }) {
   return (
@@ -104,11 +105,12 @@ function StatusMessage({ entry }: { entry: RecapEntry }) {
 }
 
 /** Iframe wrapper keyed by tick to force remount on refresh */
-function TerminalFrame({ src, tick, focused }: { src: string; tick: number; focused?: boolean }) {
+function TerminalFrame({ src, tick, focused, accent, onPointerFocus }: { src: string; tick: number; focused?: boolean; accent: string; onPointerFocus?: () => void }) {
   return (
     <div
-      className={`flex-1 flex${focused ? ' ring-2 ring-inset ring-indigo-400' : ''}`}
-      onPointerDown={e => e.stopPropagation()}
+      className="flex-1 flex relative"
+      style={focused ? { outline: `2px solid ${accent}`, outlineOffset: '-2px', boxShadow: `inset 0 0 12px ${hexToRgba(accent, 0.15)}` } : undefined}
+      onPointerDown={e => { e.stopPropagation(); onPointerFocus?.() }}
     >
       <iframe
         key={tick}
@@ -117,6 +119,15 @@ function TerminalFrame({ src, tick, focused }: { src: string; tick: number; focu
         title="Session terminal"
         allow="clipboard-read; clipboard-write"
       />
+      {focused && (
+        <div
+          data-testid="terminal-focus-badge"
+          className="absolute top-1.5 right-2 text-2xs font-mono uppercase tracking-widest pointer-events-none select-none px-1.5 py-0.5 rounded"
+          style={{ color: accent, background: hexToRgba(accent, 0.12), border: `1px solid ${hexToRgba(accent, 0.3)}` }}
+        >
+          terminal
+        </div>
+      )}
     </div>
   )
 }
@@ -127,15 +138,18 @@ interface Props {
   port?: number | null
   sessionId?: string
   status?: SessionStatus
+  color?: string
   termTick?: number
   terminalFocused?: boolean
   onTerminalToggle?: () => void
+  onTerminalPointerFocus?: () => void
   /** Controlled active tab (0=recap, 1=terminal/logs) for keyboard navigation */
   activeTabIndex?: number
   onActiveTabChange?: (tab: 'recap' | 'terminal') => void
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, termTick = 0, terminalFocused, onTerminalToggle, activeTabIndex, onActiveTabChange }: Props) {
+export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, color, termTick = 0, terminalFocused, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange }: Props) {
+  const accent = resolveRunAccent(color)
   const TABS = ['recap', 'terminal'] as const
   const [internalActiveTab, setInternalActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
   // Use controlled tab when provided (keyboard navigation), otherwise internal state
@@ -206,8 +220,8 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
   return (
     <section className="flex-1 flex flex-col min-w-0 min-h-0 border-x border-primary/20 bg-surface-base">
       {/* Tab toggle */}
-      <div className="flex items-center justify-center border-b border-primary/20 py-2 bg-surface-panel relative">
-        <div className="flex border border-primary/25 rounded-sm overflow-hidden">
+      <div className="flex items-center justify-center border-b py-2 bg-surface-panel relative" style={{ borderColor: hexToRgba(accent, 0.2) }}>
+        <div className="flex rounded-sm overflow-hidden border" style={{ borderColor: hexToRgba(accent, 0.25) }}>
           {([
             { key: 'recap' as const, label: 'Recap' },
             { key: 'terminal' as const, label: port ? 'Terminal' : 'Logs' },
@@ -216,13 +230,11 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
               key={key}
               onClick={() => setActiveTab(key)}
               aria-selected={activeTab === key}
-              className={`
-                px-5 py-1 text-2xs font-bold font-display tracking-[0.15em] uppercase transition-all
-                ${activeTab === key
-                  ? 'bg-primary text-surface-base'
-                  : 'text-primary/50 hover:text-primary hover:bg-primary/[0.06]'
-                }
-              `}
+              className="px-5 py-1 text-2xs font-bold font-display tracking-[0.15em] uppercase transition-all"
+              style={activeTab === key
+                ? { background: accent, color: 'var(--surface-base)' }
+                : { color: hexToRgba(accent, 0.5) }
+              }
             >
               {label}
             </button>
@@ -266,6 +278,8 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
           src={`/terminal-wrapper.html?session=${encodeURIComponent(sessionId ?? '')}&port=${port}`}
           tick={termTick}
           focused={terminalFocused}
+          accent={accent}
+          onPointerFocus={onTerminalPointerFocus}
         />
       ) : activeTab === 'recap' ? (
         <div ref={contentRef} data-scrollable className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4">

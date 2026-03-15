@@ -6,8 +6,8 @@ export interface DimensionMeta {
 
 export const DIMENSION_REGISTRY: DimensionMeta[] = [
   { key: 'initiative', label: 'Initiative', icon: '🚀' },
-  { key: 'epic', label: 'Epic', icon: '📦' },
-  { key: 'task', label: 'Task', icon: '✅' },
+  { key: 'epic', label: 'Epic', icon: '🏔️' },
+  { key: 'task', label: 'Task', icon: '🗂️' },
   { key: 'worktree', label: 'Worktree', icon: '🌿' },
   { key: 'run', label: 'Run', icon: '▶' },
 ]

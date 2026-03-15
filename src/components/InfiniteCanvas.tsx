@@ -530,8 +530,16 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
       const nodeIds = hotgroups.runsInSlot(slot).map(id => `run-${id}`).filter(id => layouts.has(id))
       if (nodeIds.length === 0) return
       selectMany(nodeIds, 'run')
-      // Expand ancestors in sidebar
-      expandAll(nodeIds)
+      // Expand all ancestors in sidebar so the runs become visible
+      const ancestorIds: string[] = []
+      for (const nodeId of nodeIds) {
+        let cur = parentMapRef.current.get(nodeId) ?? null
+        while (cur) {
+          ancestorIds.push(cur)
+          cur = parentMapRef.current.get(cur) ?? null
+        }
+      }
+      if (ancestorIds.length > 0) expandAll(ancestorIds)
       if (isDoubleTap) {
         zoomToFitRuns(nodeIds)
       } else {

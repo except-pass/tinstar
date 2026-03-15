@@ -177,6 +177,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST /api/simulator/patch-run — test-only: set any field on a run and broadcast delta
+  if (method === 'POST' && url === '/api/simulator/patch-run') {
+    const body = await readBody(req)
+    const { id, ...patch } = JSON.parse(body) as { id: string } & Record<string, unknown>
+    const run = ctx.docStore.getRun(id)
+    if (!run) { json(res, { ok: false, error: 'run not found' }, 404); return true }
+    const updated = { ...run, ...patch }
+    ctx.docStore.upsertRun(id, updated)
+    json(res, { ok: true })
+    return true
+  }
+
 
 
   // POST /api/git/commit-hook
@@ -354,9 +366,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/initiatives
   if (method === 'POST' && url === '/api/initiatives') {
     readBody(req).then(body => {
-      const { name, color, status, summary } = JSON.parse(body)
+      const { name, color, status, summary, id: providedId } = JSON.parse(body)
       const entity = {
-        id: shortId('init'),
+        id: providedId ?? shortId('init'),
         name: name ?? 'Untitled Initiative',
         color: color ?? '#00f0ff',
         status: status ?? 'active',
@@ -372,9 +384,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/epics
   if (method === 'POST' && url === '/api/epics') {
     readBody(req).then(body => {
-      const { name, initiativeId, status, summary } = JSON.parse(body)
+      const { name, initiativeId, status, summary, id: providedId } = JSON.parse(body)
       const entity = {
-        id: shortId('epic'),
+        id: providedId ?? shortId('epic'),
         name: name ?? 'Untitled Epic',
         initiativeId: initiativeId ?? '',
         status: status ?? 'active',
@@ -390,9 +402,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/tasks
   if (method === 'POST' && url === '/api/tasks') {
     readBody(req).then(body => {
-      const { name, epicId, initiativeId, status, summary } = JSON.parse(body)
+      const { name, epicId, initiativeId, status, summary, id: providedId } = JSON.parse(body)
       const entity = {
-        id: shortId('task'),
+        id: providedId ?? shortId('task'),
         name: name ?? 'Untitled Task',
         epicId: epicId ?? '',
         initiativeId: initiativeId ?? '',
@@ -999,6 +1011,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)
+
+        // Mark the session dir as mid-deletion so a server restart doesn't rehydrate it
+        try { writeFileSync(join(sessDir, name, '.deleting'), '') } catch { /* dir may already be gone */ }
 
         // Respond immediately — UI removal is instant
         ctx.docStore.deleteRun(name)

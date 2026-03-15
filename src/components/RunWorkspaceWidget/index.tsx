@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useReducer, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useRef, useCallback, useReducer, useEffect, type PointerEvent as ReactPointerEvent } from 'react'
 import type { RunData } from '../../types'
 import { RunWorkspaceHeader } from './RunWorkspaceHeader'
 import { TouchedFilesPanel } from './TouchedFilesPanel'
@@ -58,6 +58,29 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     })
   }, [leftExpanded])
 
+  const handleTerminalToggle = useCallback(() => {
+    setTerminalFocused(f => {
+      if (f) {
+        // Escaping FROM terminal — move browser focus back to the widget
+        requestAnimationFrame(() => rootRef.current?.focus())
+      } else {
+        // Entering terminal — give the iframe actual keyboard focus
+        requestAnimationFrame(() => {
+          const iframe = rootRef.current?.querySelector('iframe') as HTMLIFrameElement | null
+          iframe?.focus()
+        })
+      }
+      return !f
+    })
+  }, [rootRef])
+
+  // When the window regains focus (from the iframe back to the page), clear terminal focus
+  useEffect(() => {
+    const onWindowFocus = () => setTerminalFocused(false)
+    window.addEventListener('focus', onWindowFocus)
+    return () => window.removeEventListener('focus', onWindowFocus)
+  }, [])
+
   useWidgetHotkeys(rootRef, {
     onFocusNext,
     onFocusPrev,
@@ -66,9 +89,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     onTabNext:  () => setCenterTabIndex(i => (i + 1) % 2),
     onTabPrev:  () => setCenterTabIndex(i => (i - 1 + 2) % 2),
     onActivate: () => { /* no-op for now */ },
-    onTerminalToggle: () => {
-      setTerminalFocused(f => !f)
-    },
+    onTerminalToggle: handleTerminalToggle,
     terminalFocused,
   })
 
@@ -100,7 +121,10 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
       tabIndex={-1}
       data-testid={`widget-root-${run.id}`}
       className={`flex flex-col overflow-hidden bg-surface-base border ${className}`}
-      style={{ borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }}
+      style={terminalFocused
+        ? { borderColor: hexToRgba(runAccent, 0.1), boxShadow: 'none' }
+        : { borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }
+      }
     >
       {/* Header doubles as drag handle */}
       {!headless && (
@@ -197,9 +221,11 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
             port={run.port}
             sessionId={run.sessionId}
             status={run.status}
+            color={run.color}
             termTick={termTick}
             terminalFocused={terminalFocused}
-            onTerminalToggle={() => setTerminalFocused(f => !f)}
+            onTerminalToggle={handleTerminalToggle}
+            onTerminalPointerFocus={() => setTerminalFocused(true)}
             activeTabIndex={focusZone === 'center-tabs' ? centerTabIndex : undefined}
           />
         </div>
@@ -221,6 +247,10 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
               sessionId={run.sessionId}
               sessionStatus={run.status}
               onCollapse={() => setProcsCollapsed(true)}
+              onFocusTerminal={() => {
+                setTerminalFocused(true)
+                rootRef.current?.querySelector('iframe')?.focus()
+              }}
             />
           )}
         </div>
