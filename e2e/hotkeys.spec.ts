@@ -263,6 +263,92 @@ test.describe('Hotkeys', () => {
     })
   })
 
+  test.describe('Terminal Focus (Ctrl+\\)', () => {
+    test('Ctrl+\\ focuses terminal and typed keys reach it', async ({ page }) => {
+      // Replace terminal-wrapper.html with a key-capture stub for this test
+      await page.route('**/terminal-wrapper.html**', route =>
+        route.fulfill({
+          contentType: 'text/html',
+          body: `<!DOCTYPE html><html><body style="background:black;color:lime;font-family:monospace">
+            <div id="typed"></div>
+            <script>
+              window.addEventListener('keydown', function(e) {
+                if (e.code === 'Backslash' && e.ctrlKey && e.shiftKey) {
+                  window.parent.postMessage({ type: 'terminal-focus-toggle', sessionName: new URLSearchParams(location.search).get('session') }, '*')
+                  return
+                }
+                document.getElementById('typed').textContent += e.key
+              })
+            </script>
+          </body></html>`,
+        })
+      )
+
+      // Inject a fake port into R-241 so the Terminal tab and iframe become visible
+      await page.evaluate(async () => {
+        await fetch('/api/simulator/patch-run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: 'R-241', port: 19999 }),
+        })
+      })
+
+      // Wait for the Terminal tab button to appear on R-241's widget
+      const widget = page.getByTestId('widget-root-R-241')
+      const terminalTabBtn = widget.getByRole('button', { name: 'Terminal', exact: true })
+      await expect(terminalTabBtn).toBeVisible({ timeout: 3000 })
+
+      // Assign R-241 to hotgroup 1
+      await page.getByTestId('canvas-widget-R-241').click()
+      await page.keyboard.press('Control+1')
+
+      // Click away to deselect
+      await page.getByTestId('infinite-canvas').click({ position: { x: 10, y: 10 } })
+      await page.waitForTimeout(100)
+
+      // Press 1 to re-select via hotgroup
+      await page.keyboard.press('1')
+      await expect(page.getByTestId('canvas-widget-R-241')).toHaveAttribute('data-selected', 'true')
+
+      // Give the widget focus and switch to the Terminal tab via JS click
+      // (avoids controls-bar pointer intercept issue in headless tests)
+      await widget.click()
+      await page.evaluate(() => {
+        const widget = document.querySelector('[data-testid="widget-root-R-241"]')
+        const btn = Array.from(widget?.querySelectorAll('button') ?? [])
+          .find(b => b.textContent?.trim() === 'Terminal')
+        btn?.click()
+      })
+      await page.waitForTimeout(100)
+
+      // Re-focus the widget root so the keydown listener receives Ctrl+Backslash
+      await widget.focus()
+
+      // Dispatch Ctrl+\ directly on the widget root — what the browser does when focused
+      await page.evaluate(() => {
+        const el = document.querySelector('[data-testid="widget-root-R-241"]') as HTMLElement | null
+        el?.dispatchEvent(new KeyboardEvent('keydown', {
+          key: '\\', code: 'Backslash', ctrlKey: true, bubbles: true, cancelable: true,
+        }))
+      })
+      await page.waitForTimeout(150) // requestAnimationFrame for iframe.focus()
+
+      await expect(widget.getByTestId('terminal-focus-badge')).toBeVisible({ timeout: 1000 })
+
+      // Verify the iframe actually received browser focus
+      const iframeFocused = await page.evaluate(() => document.activeElement?.tagName === 'IFRAME')
+      expect(iframeFocused).toBe(true)
+
+      // Type into the terminal — keys should reach the stub iframe
+      const terminalFrame = page.frameLocator(`[data-testid="widget-root-R-241"] iframe`)
+      await terminalFrame.locator('body').dispatchEvent('click')
+      await page.keyboard.type('hello')
+
+      // The stub terminal page should have captured the keys
+      await expect(terminalFrame.locator('#typed')).toContainText('hello', { timeout: 2000 })
+    })
+  })
+
   test.describe('Quick Session (S)', () => {
     test('S opens CreateSessionDialog', async ({ page }) => {
       await page.keyboard.press('s')

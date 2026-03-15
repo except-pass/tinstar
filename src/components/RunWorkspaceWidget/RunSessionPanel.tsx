@@ -121,6 +121,7 @@ function TerminalFrame({ src, tick, focused, accent, onPointerFocus }: { src: st
       />
       {focused && (
         <div
+          data-testid="terminal-focus-badge"
           className="absolute top-1.5 right-2 text-2xs font-mono uppercase tracking-widest pointer-events-none select-none px-1.5 py-0.5 rounded"
           style={{ color: accent, background: hexToRgba(accent, 0.12), border: `1px solid ${hexToRgba(accent, 0.3)}` }}
         >

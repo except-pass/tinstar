@@ -177,6 +177,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST /api/simulator/patch-run — test-only: set any field on a run and broadcast delta
+  if (method === 'POST' && url === '/api/simulator/patch-run') {
+    const body = await readBody(req)
+    const { id, ...patch } = JSON.parse(body) as { id: string } & Record<string, unknown>
+    const run = ctx.docStore.getRun(id)
+    if (!run) { json(res, { ok: false, error: 'run not found' }, 404); return true }
+    const updated = { ...run, ...patch }
+    ctx.docStore.upsertRun(id, updated)
+    json(res, { ok: true })
+    return true
+  }
+
 
 
   // POST /api/git/commit-hook
