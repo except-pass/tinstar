@@ -205,6 +205,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
             port={run.port}
             sessionId={run.sessionId}
             status={run.status}
+            color={run.color}
             termTick={termTick}
             terminalFocused={terminalFocused}
             onTerminalToggle={handleTerminalToggle}

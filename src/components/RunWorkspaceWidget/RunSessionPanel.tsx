@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
+import { resolveRunAccent, hexToRgba } from '../runAccent'
 
 function MarkdownText({ content }: { content: string }) {
   return (
@@ -127,6 +128,7 @@ interface Props {
   port?: number | null
   sessionId?: string
   status?: SessionStatus
+  color?: string
   termTick?: number
   terminalFocused?: boolean
   onTerminalToggle?: () => void
@@ -135,7 +137,8 @@ interface Props {
   onActiveTabChange?: (tab: 'recap' | 'terminal') => void
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, termTick = 0, terminalFocused, onTerminalToggle, activeTabIndex, onActiveTabChange }: Props) {
+export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, color, termTick = 0, terminalFocused, onTerminalToggle, activeTabIndex, onActiveTabChange }: Props) {
+  const accent = resolveRunAccent(color)
   const TABS = ['recap', 'terminal'] as const
   const [internalActiveTab, setInternalActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
   // Use controlled tab when provided (keyboard navigation), otherwise internal state
@@ -206,8 +209,8 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
   return (
     <section className="flex-1 flex flex-col min-w-0 min-h-0 border-x border-primary/20 bg-surface-base">
       {/* Tab toggle */}
-      <div className="flex items-center justify-center border-b border-primary/20 py-2 bg-surface-panel relative">
-        <div className="flex border border-primary/25 rounded-sm overflow-hidden">
+      <div className="flex items-center justify-center border-b py-2 bg-surface-panel relative" style={{ borderColor: hexToRgba(accent, 0.2) }}>
+        <div className="flex rounded-sm overflow-hidden border" style={{ borderColor: hexToRgba(accent, 0.25) }}>
           {([
             { key: 'recap' as const, label: 'Recap' },
             { key: 'terminal' as const, label: port ? 'Terminal' : 'Logs' },
@@ -216,13 +219,11 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
               key={key}
               onClick={() => setActiveTab(key)}
               aria-selected={activeTab === key}
-              className={`
-                px-5 py-1 text-2xs font-bold font-display tracking-[0.15em] uppercase transition-all
-                ${activeTab === key
-                  ? 'bg-primary text-surface-base'
-                  : 'text-primary/50 hover:text-primary hover:bg-primary/[0.06]'
-                }
-              `}
+              className="px-5 py-1 text-2xs font-bold font-display tracking-[0.15em] uppercase transition-all"
+              style={activeTab === key
+                ? { background: accent, color: 'var(--surface-base)' }
+                : { color: hexToRgba(accent, 0.5) }
+              }
             >
               {label}
             </button>
