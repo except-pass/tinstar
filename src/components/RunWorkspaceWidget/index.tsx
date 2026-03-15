@@ -58,6 +58,16 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     })
   }, [leftExpanded])
 
+  const handleTerminalToggle = useCallback(() => {
+    setTerminalFocused(f => {
+      if (f) {
+        // Escaping FROM terminal — move browser focus back to the widget
+        requestAnimationFrame(() => rootRef.current?.focus())
+      }
+      return !f
+    })
+  }, [rootRef])
+
   useWidgetHotkeys(rootRef, {
     onFocusNext,
     onFocusPrev,
@@ -66,9 +76,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     onTabNext:  () => setCenterTabIndex(i => (i + 1) % 2),
     onTabPrev:  () => setCenterTabIndex(i => (i - 1 + 2) % 2),
     onActivate: () => { /* no-op for now */ },
-    onTerminalToggle: () => {
-      setTerminalFocused(f => !f)
-    },
+    onTerminalToggle: handleTerminalToggle,
     terminalFocused,
   })
 
@@ -199,7 +207,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
             status={run.status}
             termTick={termTick}
             terminalFocused={terminalFocused}
-            onTerminalToggle={() => setTerminalFocused(f => !f)}
+            onTerminalToggle={handleTerminalToggle}
             activeTabIndex={focusZone === 'center-tabs' ? centerTabIndex : undefined}
           />
         </div>
