@@ -11,6 +11,7 @@ export interface CreateDialogState {
 interface Props {
   dialog: CreateDialogState
   onClose: () => void
+  onOptimisticCreate?: (entity: string, data: unknown) => void
 }
 
 const ENDPOINT_MAP: Record<string, string> = {
@@ -20,34 +21,39 @@ const ENDPOINT_MAP: Record<string, string> = {
   worktree: '/api/worktrees',
 }
 
+const ID_PREFIX_MAP: Record<string, string> = {
+  initiative: 'init',
+  epic: 'epic',
+  task: 'task',
+  worktree: 'wt',
+}
+
 // Map parent dimension to the foreign key field name on the child
 function parentKeyField(parentType: GroupingDimension | null): string | null {
   if (!parentType) return null
   return `${parentType}Id`
 }
 
-// For tasks, we also need the grandparent (initiativeId comes from the parent epic's initiative)
-// But since we're creating from the sidebar, the parentId IS the direct parent entity ID.
-// The API defaults missing fields to '', which is fine for now.
-
-export function CreateEntityDialog({ dialog, onClose }: Props) {
+export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate }: Props) {
   const [name, setName] = useState('')
   const [color, setColor] = useState('#00f0ff')
-  const [submitting, setSubmitting] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
 
-  const handleSubmit = useCallback(async () => {
-    if (!name.trim() || submitting) return
-    setSubmitting(true)
+  const handleSubmit = useCallback(() => {
+    const trimmedName = name.trim()
+    if (!trimmedName) return
 
     const endpoint = ENDPOINT_MAP[dialog.childType]
     if (!endpoint) return
 
-    const body: Record<string, string> = { name: name.trim() }
+    const prefix = ID_PREFIX_MAP[dialog.childType] ?? dialog.childType
+    const id = `${prefix}-${crypto.randomUUID().slice(0, 8)}`
+
+    const body: Record<string, string> = { name: trimmedName, id }
 
     // Set parent foreign key
     const fkField = parentKeyField(dialog.parentType)
@@ -60,14 +66,32 @@ export function CreateEntityDialog({ dialog, onClose }: Props) {
       body.color = color
     }
 
-    await fetch(endpoint, {
+    // Inject optimistic entity immediately
+    if (onOptimisticCreate) {
+      const optimistic: Record<string, unknown> = {
+        id,
+        name: trimmedName,
+        status: 'active',
+        summary: '',
+        ...(fkField && dialog.parentId ? { [fkField]: dialog.parentId } : {}),
+      }
+      if (dialog.childType === 'initiative') optimistic.color = color
+      if (dialog.childType === 'epic' && !optimistic.initiativeId) optimistic.initiativeId = ''
+      if (dialog.childType === 'task') {
+        if (!optimistic.epicId) optimistic.epicId = ''
+        if (!optimistic.initiativeId) optimistic.initiativeId = ''
+      }
+      onOptimisticCreate(dialog.childType, optimistic)
+    }
+
+    onClose()
+
+    fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-
-    onClose()
-  }, [name, color, submitting, dialog, onClose])
+  }, [name, color, dialog, onClose, onOptimisticCreate])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSubmit()
@@ -124,7 +148,7 @@ export function CreateEntityDialog({ dialog, onClose }: Props) {
           <button
             className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30 disabled:opacity-50"
             onClick={handleSubmit}
-            disabled={!name.trim() || submitting}
+            disabled={!name.trim()}
             data-testid="create-dialog-submit"
           >
             Create

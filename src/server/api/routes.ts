@@ -354,9 +354,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/initiatives
   if (method === 'POST' && url === '/api/initiatives') {
     readBody(req).then(body => {
-      const { name, color, status, summary } = JSON.parse(body)
+      const { name, color, status, summary, id: providedId } = JSON.parse(body)
       const entity = {
-        id: shortId('init'),
+        id: providedId ?? shortId('init'),
         name: name ?? 'Untitled Initiative',
         color: color ?? '#00f0ff',
         status: status ?? 'active',
@@ -372,9 +372,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/epics
   if (method === 'POST' && url === '/api/epics') {
     readBody(req).then(body => {
-      const { name, initiativeId, status, summary } = JSON.parse(body)
+      const { name, initiativeId, status, summary, id: providedId } = JSON.parse(body)
       const entity = {
-        id: shortId('epic'),
+        id: providedId ?? shortId('epic'),
         name: name ?? 'Untitled Epic',
         initiativeId: initiativeId ?? '',
         status: status ?? 'active',
@@ -390,9 +390,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/tasks
   if (method === 'POST' && url === '/api/tasks') {
     readBody(req).then(body => {
-      const { name, epicId, initiativeId, status, summary } = JSON.parse(body)
+      const { name, epicId, initiativeId, status, summary, id: providedId } = JSON.parse(body)
       const entity = {
-        id: shortId('task'),
+        id: providedId ?? shortId('task'),
         name: name ?? 'Untitled Task',
         epicId: epicId ?? '',
         initiativeId: initiativeId ?? '',

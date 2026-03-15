@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import type { Initiative, Epic, Task, Worktree, Run, Space } from '../domain/types'
 import type { CommitRecord } from '../types'
 
@@ -30,11 +30,33 @@ export function useServerEvents(): {
   state: ServerState
   connected: boolean
   loading: boolean
+  addOptimistic: (entity: string, data: unknown) => void
 } {
   const [state, setState] = useState<ServerState>(EMPTY_STATE)
   const [connected, setConnected] = useState(false)
   const [loading, setLoading] = useState(true)
   const esRef = useRef<EventSource | null>(null)
+
+  const addOptimistic = useCallback((entity: string, data: unknown) => {
+    setState(prev => {
+      if (entity === 'initiative') {
+        const init = data as Initiative
+        const exists = prev.initiatives.some(i => i.id === init.id)
+        return { ...prev, initiatives: exists ? prev.initiatives.map(i => i.id === init.id ? init : i) : [...prev.initiatives, init] }
+      }
+      if (entity === 'epic') {
+        const epic = data as Epic
+        const exists = prev.epics.some(e => e.id === epic.id)
+        return { ...prev, epics: exists ? prev.epics.map(e => e.id === epic.id ? epic : e) : [...prev.epics, epic] }
+      }
+      if (entity === 'task') {
+        const task = data as Task
+        const exists = prev.tasks.some(t => t.id === task.id)
+        return { ...prev, tasks: exists ? prev.tasks.map(t => t.id === task.id ? task : t) : [...prev.tasks, task] }
+      }
+      return prev
+    })
+  }, [])
 
   useEffect(() => {
     const es = new EventSource('/api/events')
@@ -180,5 +202,5 @@ export function useServerEvents(): {
     }
   }, [])
 
-  return { state, connected, loading }
+  return { state, connected, loading, addOptimistic }
 }
