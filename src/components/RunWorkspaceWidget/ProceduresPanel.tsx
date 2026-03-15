@@ -13,8 +13,19 @@ interface Props {
 
 export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse }: Props) {
   const taxRepo = useTaxonomy()
-  const { pendingSkills, openPicker } = useSkillsContext()
+  const { pendingSkills, openPicker, optimisticProcedures } = useSkillsContext()
   const resolved = resolveEntityProcedures(taskId, taxRepo)
+
+  // Collect entity IDs in scope for this task (task + epic + initiative)
+  const task = taxRepo.getTaskById(taskId)
+  const epic = task?.epicId ? taxRepo.getEpicById(task.epicId) : undefined
+  const entityIds = new Set<string>([taskId, task?.epicId, epic?.initiativeId].filter(Boolean) as string[])
+
+  // Optimistic procedures not yet confirmed by SSE delta
+  const resolvedSkillNames = new Set(resolved.map(p => p.skillName))
+  const pendingOptimistic = optimisticProcedures.filter(
+    op => entityIds.has(op.entityId) && !resolvedSkillNames.has(op.skillName)
+  )
 
   const taskProcs = resolved.filter(p => p.entityType === 'task')
   const inheritedProcs = resolved.filter(p => p.entityType !== 'task')
@@ -54,7 +65,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse }
       <div className="panel-header">
         <h3 className="panel-label">Procedures</h3>
         <div className="flex items-center gap-1.5">
-          <span className="text-2xs font-mono text-slate-600">{resolved.length}</span>
+          <span className="text-2xs font-mono text-slate-600">{resolved.length + pendingOptimistic.length}</span>
           {onCollapse && (
             <button
               data-testid="collapse-procedures"
@@ -102,13 +113,23 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse }
           />
         ))}
 
+        {/* Optimistically added — show immediately before SSE confirms */}
+        {pendingOptimistic.map(op => (
+          <ProcedureRow
+            key={op.id}
+            name={op.skillName}
+            isBusy={isBusy}
+            onRun={(args) => runProcedure(op.skillName, args)}
+          />
+        ))}
+
         {/* Shimmer rows for pending skills */}
         {taskPendingSkills.map(ps => (
           <PendingRow key={ps.id} skill={ps} />
         ))}
 
         {/* Empty state */}
-        {resolved.length === 0 && taskPendingSkills.length === 0 && (
+        {resolved.length === 0 && taskPendingSkills.length === 0 && pendingOptimistic.length === 0 && (
           <div className="px-2 py-3 text-2xs font-mono text-slate-700 text-center">
             No procedures yet
           </div>

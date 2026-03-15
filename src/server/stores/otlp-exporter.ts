@@ -70,7 +70,7 @@ function metricsToOtlpPayload(metrics: Metric[]): unknown {
 
   const otlpMetrics = []
   for (const [name, items] of byName) {
-    const first = items[0]
+    const first = items[0]!
     const dataPoints = items.map(m => ({
       timeUnixNano: toNanos(m.timestamp),
       asInt: m.type === 'counter' ? m.value : undefined,

@@ -14,7 +14,6 @@ import {
   getSession,
   updateSession,
   deleteSession,
-  listSessions,
   setState,
   claudeStateDir,
   getProject,
@@ -429,7 +428,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/initiatives\/[^/]+$/.test(url)) {
     const id = url.slice('/api/initiatives/'.length)
     const entity = ctx.docStore.getInitiative(id)
-    if (!entity) return json(res, { error: 'not found' }, 404)
+    if (!entity) { json(res, { error: 'not found' }, 404); return true }
     json(res, { ok: true, data: entity })
     return true
   }
@@ -438,7 +437,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/epics\/[^/]+$/.test(url)) {
     const id = url.slice('/api/epics/'.length)
     const entity = ctx.docStore.getEpic(id)
-    if (!entity) return json(res, { error: 'not found' }, 404)
+    if (!entity) { json(res, { error: 'not found' }, 404); return true }
     json(res, { ok: true, data: entity })
     return true
   }
@@ -447,7 +446,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/tasks\/[^/]+$/.test(url)) {
     const id = url.slice('/api/tasks/'.length)
     const entity = ctx.docStore.getTask(id)
-    if (!entity) return json(res, { error: 'not found' }, 404)
+    if (!entity) { json(res, { error: 'not found' }, 404); return true }
     json(res, { ok: true, data: entity })
     return true
   }
@@ -456,7 +455,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/initiatives\/[^/]+\/settings$/.test(url)) {
     const id = url.slice('/api/initiatives/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'initiative', ctx.docStore)
-    if (!result) return json(res, { error: 'not found' }, 404)
+    if (!result) { json(res, { error: 'not found' }, 404); return true }
     json(res, { ok: true, data: result })
     return true
   }
@@ -465,7 +464,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/epics\/[^/]+\/settings$/.test(url)) {
     const id = url.slice('/api/epics/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'epic', ctx.docStore)
-    if (!result) return json(res, { error: 'not found' }, 404)
+    if (!result) { json(res, { error: 'not found' }, 404); return true }
     json(res, { ok: true, data: result })
     return true
   }
@@ -474,7 +473,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/tasks\/[^/]+\/settings$/.test(url)) {
     const id = url.slice('/api/tasks/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'task', ctx.docStore)
-    if (!result) return json(res, { error: 'not found' }, 404)
+    if (!result) { json(res, { error: 'not found' }, 404); return true }
     json(res, { ok: true, data: result })
     return true
   }
@@ -485,8 +484,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       const existing = ctx.docStore.getInitiative(id)
       if (!existing) return json(res, { error: 'not found' }, 404)
-      const patch = JSON.parse(body)
-      const merged = deepMergeEntity(existing, patch)
+      const patch = JSON.parse(body) as Record<string, unknown>
+      const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertInitiative(id, merged)
       json(res, { ok: true, data: ctx.docStore.getInitiative(id) })
     })
@@ -499,8 +498,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       const existing = ctx.docStore.getEpic(id)
       if (!existing) return json(res, { error: 'not found' }, 404)
-      const patch = JSON.parse(body)
-      const merged = deepMergeEntity(existing, patch)
+      const patch = JSON.parse(body) as Record<string, unknown>
+      const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertEpic(id, merged)
       json(res, { ok: true, data: ctx.docStore.getEpic(id) })
     })
@@ -513,8 +512,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       const existing = ctx.docStore.getTask(id)
       if (!existing) return json(res, { error: 'not found' }, 404)
-      const patch = JSON.parse(body)
-      const merged = deepMergeEntity(existing, patch)
+      const patch = JSON.parse(body) as Record<string, unknown>
+      const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertTask(id, merged)
       json(res, { ok: true, data: ctx.docStore.getTask(id) })
     })
@@ -667,7 +666,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const dashboardUrl = `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`
 
     function emitSessionEvent(type: 'managed_session.created' | 'managed_session.state_changed' | 'managed_session.deleted', payload: Record<string, unknown>) {
-      ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as Parameters<typeof ctx.bus.emit>[0])
+      ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as unknown as Parameters<typeof ctx.bus.emit>[0])
     }
 
     // Helper to extract :name from URL patterns like /api/sessions/foo or /api/sessions/foo/start

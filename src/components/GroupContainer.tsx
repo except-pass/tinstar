@@ -6,11 +6,11 @@ const BORDER_OPACITY = [0.15, 0.12, 0.08, 0.05]
 const BG_OPACITY = [0.02, 0.015, 0.01, 0.005]
 
 function getBorderOpacity(depth: number): number {
-  return BORDER_OPACITY[Math.min(depth, BORDER_OPACITY.length - 1)]
+  return BORDER_OPACITY[Math.min(depth, BORDER_OPACITY.length - 1)]!
 }
 
 function getBgOpacity(depth: number): number {
-  return BG_OPACITY[Math.min(depth, BG_OPACITY.length - 1)]
+  return BG_OPACITY[Math.min(depth, BG_OPACITY.length - 1)]!
 }
 
 interface Props {

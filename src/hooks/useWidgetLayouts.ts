@@ -115,7 +115,7 @@ function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
       rootY += rowMaxH + CONTAINER_GAP
       rowMaxH = 0
     }
-    const node = tree[i]
+    const node = tree[i]!
     const size = sizeMap.get(node.id)!
     layouts.set(node.id, { x: rootX, y: rootY, ...size })
     rootX += size.width + CONTAINER_GAP

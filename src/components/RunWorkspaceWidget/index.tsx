@@ -5,8 +5,6 @@ import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { ProceduresPanel } from './ProceduresPanel'
-import { SkillPickerModal } from './SkillPickerModal'
-import { useSkillsContext } from '../SkillsProvider'
 import { useWidgetHotkeys, type FocusZone } from '../../hotkeys/useWidgetHotkeys'
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 
@@ -36,7 +34,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
   const rootRef = useRef<HTMLDivElement>(null)
   const [focusZone, setFocusZone] = useState<FocusZone | null>(null)
   const [terminalFocused, setTerminalFocused] = useState(false)
-  const [fileSelectionIndex, setFileSelectionIndex] = useState(0)
+  const [_fileSelectionIndex, setFileSelectionIndex] = useState(0)
   const [centerTabIndex, setCenterTabIndex] = useState(0)
 
   const leftExpanded = !filesCollapsed

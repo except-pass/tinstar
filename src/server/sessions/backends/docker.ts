@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import type { Session } from '../session'

@@ -302,7 +302,7 @@ export async function healthCheck(port: number, opts: { timeout?: number; interv
 
 export async function installHooks(
   workspacePath: string,
-  sessionName: string,
+  _sessionName: string,
   dashboardUrl: string,
 ): Promise<void> {
   const claudeDir = join(workspacePath, '.claude')
@@ -381,7 +381,7 @@ export async function removeHooks(workspacePath: string): Promise<void> {
   if (!hooks) return
 
   for (const event of Object.keys(hooks)) {
-    hooks[event] = hooks[event].filter(
+    hooks[event] = (hooks[event] ?? []).filter(
       (h: Record<string, unknown>) => !(h.hooks as Array<Record<string, unknown>>)?.some(
         (hh: Record<string, unknown>) => (hh.command as string)?.includes('/api/hooks/')
       )

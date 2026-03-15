@@ -31,7 +31,8 @@ export function buildEventSequence(): TimedEvent[] {
   const intervalMs = totalDurationMs / runCount // ~714ms per run
 
   for (let i = 0; i < runCount; i++) {
-    const run = mockRuns[i]
+    const run = mockRuns[i]!
+
     const baseDelay = Math.round(intervalMs * (i + 0.5)) // start at ~357ms
 
     // run.created event
@@ -65,7 +66,7 @@ export function buildEventSequence(): TimedEvent[] {
           timestamp: now(),
           payload: {
             runId: run.id,
-            file: run.touchedFiles[f],
+            file: run.touchedFiles[f]!,
           },
         },
       })
@@ -82,7 +83,7 @@ export function buildEventSequence(): TimedEvent[] {
           timestamp: now(),
           payload: {
             runId: run.id,
-            entry: run.recapEntries[r],
+            entry: run.recapEntries[r]!,
           },
         },
       })

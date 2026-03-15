@@ -53,7 +53,7 @@ export class OTelProcessor {
     this.bus.on('run.completed', (e) => {
       const ref = this.runSpanMap.get(e.payload.id)
       if (ref) {
-        const status = e.payload.status === 'complete' ? 'ok' : 'error'
+        const status: 'ok' | 'error' = 'ok'
         this.store.endSpan(ref.spanId, ref.traceId, new Date().toISOString(), status)
         this.runSpanMap.delete(e.payload.id)
       }

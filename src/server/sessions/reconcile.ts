@@ -31,10 +31,10 @@ export async function reconcileSessionStates(
         if (actual === 'running') {
           // Container alive — no change
         } else if (actual === 'exited') {
-          if (session.state !== 'stopped') newState = 'stopped'
+          newState = 'stopped'
         } else {
           // Container missing entirely
-          if (session.state !== 'stopped') newState = 'stopped'
+          newState = 'stopped'
         }
       } else {
         const tmuxState = await opts.getTmuxSessionState(session.name)

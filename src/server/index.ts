@@ -41,7 +41,6 @@ export function tinstarBackend(): Plugin {
   let sse: SSEBroadcaster
   let simulator: MockSensorSimulator | null = null
   let sessionConfig: TinstarConfig | null = null
-  let reconcileTimer: ReturnType<typeof setInterval> | null = null
 
   return {
     name: 'tinstar-backend',
@@ -213,7 +212,7 @@ export function tinstarBackend(): Plugin {
           })
 
           // Periodic session state reconciliation (30s)
-          reconcileTimer = setInterval(() => {
+          setInterval(() => {
             reconcileSessionStates(cfg.dirs.sessions, {
               getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
               getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),

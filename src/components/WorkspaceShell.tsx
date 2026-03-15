@@ -76,7 +76,7 @@ function WorkspaceShellInner() {
   } | null>(null)
   const [sessionPrefill, setSessionPrefill] = useState<{ taskId?: string } | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const { select, toggleSelect, expandAll, selectedCount, state: selectionState } = useSelection()
+  const { select, toggleSelect, expandAll, selectedCount: _selectedCount, state: selectionState } = useSelection()
   const arrangeGridRef = useRef<(() => void) | null>(null)
   const arrangeResetRef = useRef<(() => void) | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -192,7 +192,7 @@ function WorkspaceShellInner() {
     if (type === 'run') return
     // Determine the parent's type from the dimensions hierarchy
     const typeIdx = dimensions.indexOf(type)
-    const parentType = typeIdx > 0 ? dimensions[typeIdx - 1] : null
+    const parentType = typeIdx > 0 ? (dimensions[typeIdx - 1] ?? null) : null
     setCreateDialog({ parentId, parentType, childType: type })
   }, [dimensions])
 
@@ -527,7 +527,7 @@ function WorkspaceShellInner() {
                   onAddChild={() => {
                     // Add a child of the next dimension level below this entity
                     const idx = dimensions.indexOf(entityMenu.entityType)
-                    const childType = idx >= 0 && idx < dimensions.length - 1 ? dimensions[idx + 1] : 'run'
+                    const childType = idx >= 0 && idx < dimensions.length - 1 ? (dimensions[idx + 1] ?? 'run') : 'run'
                     handleAdd(entityMenu.entityId, childType)
                     setEntityMenu(null)
                   }}

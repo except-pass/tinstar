@@ -35,7 +35,7 @@ function nextChildType(type: GroupingDimension | 'run', dimensions: GroupingDime
   if (type === 'run') return 'run'
   const idx = dimensions.indexOf(type)
   if (idx === -1 || idx === dimensions.length - 1) return 'run'
-  return dimensions[idx + 1]
+  return dimensions[idx + 1]!
 }
 
 function SidebarNode({

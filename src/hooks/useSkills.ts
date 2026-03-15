@@ -1,10 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { SkillDTO, PendingSkill } from '../types'
 
+export interface OptimisticProcedure {
+  id: string
+  entityId: string
+  skillName: string
+}
+
 export interface SkillsState {
   skills: SkillDTO[]
   loading: boolean
   pendingSkills: PendingSkill[]
+  optimisticProcedures: OptimisticProcedure[]
   pickerContext: { taskId: string; sessionId: string } | null
   savingDraft: { draftId: string; skillName: string; pendingSkillId: string; sessionId: string } | null
 }
@@ -18,12 +25,15 @@ export interface SkillsActions {
   errorPendingSkill: (id: string) => void
   removePendingSkill: (id: string) => void
   clearSavingDraft: () => void
+  addOptimisticProcedure: (item: OptimisticProcedure) => void
+  removeOptimisticProcedure: (id: string) => void
 }
 
 export function useSkills(): SkillsState & SkillsActions {
   const [skills, setSkills] = useState<SkillDTO[]>([])
   const [loading, setLoading] = useState(false)
   const [pendingSkills, setPendingSkills] = useState<PendingSkill[]>([])
+  const [optimisticProcedures, setOptimisticProcedures] = useState<OptimisticProcedure[]>([])
   const [pickerContext, setPickerContext] = useState<{ taskId: string; sessionId: string } | null>(null)
   const [savingDraft, setSavingDraft] = useState<{ draftId: string; skillName: string; pendingSkillId: string; sessionId: string } | null>(null)
   const timeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
@@ -111,9 +121,18 @@ export function useSkills(): SkillsState & SkillsActions {
     setSavingDraft(null)
   }, [])
 
+  const addOptimisticProcedure = useCallback((item: OptimisticProcedure) => {
+    setOptimisticProcedures(prev => [...prev, item])
+  }, [])
+
+  const removeOptimisticProcedure = useCallback((id: string) => {
+    setOptimisticProcedures(prev => prev.filter(op => op.id !== id))
+  }, [])
+
   return {
-    skills, loading, pendingSkills, pickerContext, savingDraft,
+    skills, loading, pendingSkills, optimisticProcedures, pickerContext, savingDraft,
     fetchSkills, openPicker, closePicker, addPendingSkill,
     resolvePendingSkill, errorPendingSkill, removePendingSkill, clearSavingDraft,
+    addOptimisticProcedure, removeOptimisticProcedure,
   }
 }

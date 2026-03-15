@@ -225,7 +225,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   )
 
   const onPointerUp = useCallback(
-    (e: ReactPointerEvent) => {
+    (_e: ReactPointerEvent) => {
       // Always end pan (handles both space+drag and middle-click pan)
       endPan()
       if (spaceHeld.current) {
@@ -337,7 +337,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     if (target) {
       let nodeId: string | null = `run-${draggingRunRef.current}`
       while (nodeId) {
-        const parent = parentMapRef.current.get(nodeId) ?? null
+        const parent: string | null = parentMapRef.current.get(nodeId) ?? null
         if (parent === target.nodeId) { target = null; break }
         nodeId = parent
       }
@@ -589,8 +589,8 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
           zoom={camera.zoom}
           spaceHeldRef={spaceHeld}
           selected={selected}
-          onMove={(runId, x, y) => handleMultiMove(node.id, x, y)}
-          onResize={(runId, w, h) => updateRunSize(node.id, w, h)}
+          onMove={(_runId, x, y) => handleMultiMove(node.id, x, y)}
+          onResize={(_runId, w, h) => updateRunSize(node.id, w, h)}
           onSelect={onSelectRun}
           onDoubleClickZoom={onFocusRun}
           onDragStart={handleWidgetDragStart}

@@ -137,9 +137,9 @@ export function deleteSession(sessionsDir: string, name: string): boolean {
 }
 
 export async function listSessions(sessionsDir: string): Promise<Session[]> {
-  let entries: ReturnType<typeof readdirSync>
+  let entries: import('node:fs').Dirent<string>[]
   try {
-    entries = readdirSync(sessionsDir, { withFileTypes: true })
+    entries = readdirSync(sessionsDir, { withFileTypes: true, encoding: 'utf8' as const })
   } catch {
     return []
   }

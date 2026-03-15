@@ -200,7 +200,7 @@ export function buildGroupTree(
 
   // Add orphan entities (those with missing/empty parent) at root level
   if (_isRoot) {
-    const parentDim = _parentDimension // undefined at true root
+    void _parentDimension // undefined at true root
     // For the root level, the "parent dimension" is the dimension ABOVE
     // the current one in the original hierarchy (not passed down).
     // We detect orphans of the NEXT dimension whose parent in THIS dimension is missing.

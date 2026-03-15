@@ -112,6 +112,16 @@ export interface RunRecapAddedPayload {
   entry: RecapEntry
 }
 
+export interface RunProcedureUpdatedPayload {
+  runId: string
+  procedure: {
+    id: string
+    name: string
+    command: string
+    status: string
+  }
+}
+
 export interface OtelSpanStartedPayload {
   span: Omit<Span, 'endTime'>
 }
@@ -148,6 +158,7 @@ export type BusEvent =
   | { type: 'run.completed'; timestamp: string; payload: RunCompletedPayload }
   | { type: 'run.file_touched'; timestamp: string; payload: RunFileTouchedPayload }
   | { type: 'run.recap_added'; timestamp: string; payload: RunRecapAddedPayload }
+  | { type: 'run.procedure_updated'; timestamp: string; payload: RunProcedureUpdatedPayload }
   | { type: 'skill.drafted'; timestamp: string; payload: SkillDraftedPayload }
   | { type: 'skill.saved'; timestamp: string; payload: SkillSavedPayload }
   | { type: 'otel.span_started'; timestamp: string; payload: OtelSpanStartedPayload }

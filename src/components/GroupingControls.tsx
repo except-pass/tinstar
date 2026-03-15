@@ -38,7 +38,7 @@ export function GroupingControls({ activeDimensions, onDimensionsChange }: Group
 
       if (i < dragIdx && e.clientX < mid) {
         // Swap left
-        const item = order.splice(dragIdx, 1)[0]
+        const item = order.splice(dragIdx, 1)[0]!
         order.splice(i, 0, item)
         orderRef.current = order
         setDragIdx(i)
@@ -47,7 +47,7 @@ export function GroupingControls({ activeDimensions, onDimensionsChange }: Group
       }
       if (i > dragIdx && e.clientX > mid) {
         // Swap right
-        const item = order.splice(dragIdx, 1)[0]
+        const item = order.splice(dragIdx, 1)[0]!
         order.splice(i, 0, item)
         orderRef.current = order
         setDragIdx(i)

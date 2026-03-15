@@ -16,7 +16,7 @@ interface Props {
   onCollapse?: () => void
 }
 
-export function TouchedFilesPanel({ files, onFileSelect, onOpenFile, onCollapse }: Props) {
+export function TouchedFilesPanel({ files, onFileSelect, onOpenFile, onCollapse: _onCollapse }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(files[2]?.id ?? null)
 
   // Only count reconciled files in header totals

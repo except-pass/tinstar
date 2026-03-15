@@ -4,6 +4,7 @@ export const mockRun: RunData = {
   id: 'R-241',
   status: 'running',
   sessionId: 'CLD-4092',
+  taskId: '',
   initiative: 'AI Dev Platform',
   epic: 'Codebase Hygiene',
   task: 'Reduce Scheduler Slop',
