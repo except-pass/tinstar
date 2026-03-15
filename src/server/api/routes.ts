@@ -1000,6 +1000,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (name) {
         const session = getSession(sessDir, name)
 
+        // Mark the session dir as mid-deletion so a server restart doesn't rehydrate it
+        try { writeFileSync(join(sessDir, name, '.deleting'), '') } catch { /* dir may already be gone */ }
+
         // Respond immediately — UI removal is instant
         ctx.docStore.deleteRun(name)
         emitSessionEvent('managed_session.deleted', { name })

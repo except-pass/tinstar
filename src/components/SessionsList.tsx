@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 interface SessionInfo {
   name: string
@@ -25,17 +25,20 @@ interface Props {
 export function SessionsList({ onOpenSession }: Props) {
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [loading, setLoading] = useState(true)
+  const deletingRef = useRef<Set<string>>(new Set())
 
   const fetchSessions = useCallback(() => {
     fetch('/api/sessions')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
+        let data: SessionInfo[] = []
         if (d?.ok && Array.isArray(d.data)) {
-          setSessions(d.data)
+          data = d.data
         } else if (d?.ok && d.data && typeof d.data === 'object') {
-          // Handle both array and object responses
-          setSessions(Array.isArray(d.data) ? d.data : Object.values(d.data))
+          data = Array.isArray(d.data) ? d.data : Object.values(d.data)
         }
+        // Filter out sessions that were recently deleted but whose dirs haven't been cleaned up yet
+        setSessions(data.filter(s => !deletingRef.current.has(s.name)))
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -58,9 +61,14 @@ export function SessionsList({ onOpenSession }: Props) {
   }, [fetchSessions])
 
   const handleDelete = useCallback(async (name: string) => {
+    // Optimistic removal — dir deletion is async on the server, so filtering here
+    // prevents the session from reappearing on the next poll before cleanup finishes
+    deletingRef.current.add(name)
+    setSessions(prev => prev.filter(s => s.name !== name))
     await fetch(`/api/sessions/${encodeURIComponent(name)}`, { method: 'DELETE' })
-    fetchSessions()
-  }, [fetchSessions])
+    // Clear the deleting marker after enough time for background cleanup to finish
+    setTimeout(() => deletingRef.current.delete(name), 15_000)
+  }, [])
 
   if (loading) {
     return <div className="px-3 py-2 text-2xs text-slate-500">Loading sessions...</div>
