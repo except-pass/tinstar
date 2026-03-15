@@ -36,13 +36,13 @@ export function SaveSkillModal({ draftId, skillName, pendingSkillId, sessionId, 
       if (!res.ok) throw new Error('save failed')
 
       // Add procedure to the entity from pendingSkill context
-      if (pendingSkill) {
+      if (pendingSkill && pendingSkill.entityId) {
         const entityPath = pendingSkill.entityType === 'task' ? 'tasks'
           : pendingSkill.entityType === 'epic' ? 'epics' : 'initiatives'
         const entityRes = await fetch(`/api/${entityPath}/${pendingSkill.entityId}`)
         if (entityRes.ok) {
-          const entity = await entityRes.json() as { settings?: { procedures?: StoredProcedure[] } }
-          const existing = entity.settings?.procedures ?? []
+          const entity = await entityRes.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
+          const existing = entity.data?.settings?.procedures ?? []
           const newProcedure: StoredProcedure = { id: crypto.randomUUID(), skillName }
           await fetch(`/api/${entityPath}/${pendingSkill.entityId}`, {
             method: 'PATCH',

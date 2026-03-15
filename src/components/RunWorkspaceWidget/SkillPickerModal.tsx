@@ -61,7 +61,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     : skills
 
   const exactMatch = skills.some(s => s.name.toLowerCase() === query.toLowerCase().trim())
-  const showDefineRow = query.trim().length > 0 && !exactMatch
+  const showDefineRow = !!taskId && query.trim().length > 0 && !exactMatch
   const totalItems = filtered.length + (showDefineRow ? 1 : 0)
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -77,6 +77,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
   }
 
   function addProcedureToEntity(skillName: string, entityId: string, entityType: 'task' | 'epic' | 'initiative') {
+    if (!entityId) return  // no entity to attach to — silently skip
     setStarPopover(null)
     const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
 
@@ -122,6 +123,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
   function handleDefine() {
     const description = query.trim()
     if (!description) return
+    if (!taskId) return  // can't persist without a task — picker footer explains this
 
     const draftId = crypto.randomUUID()
     const pending: PendingSkill = {
@@ -272,9 +274,15 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
 
         {/* Footer */}
         <div className="flex items-center gap-3 px-3.5 py-1.5 border-t border-white/[0.06] bg-black/20">
-          <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">↑↓</span> navigate</span>
-          <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">⭐</span> add / remove</span>
-          <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">esc</span> close</span>
+          {!taskId ? (
+            <span className="text-2xs text-amber-500/70 font-mono">Assign session to a task to save procedures</span>
+          ) : (
+            <>
+              <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">↑↓</span> navigate</span>
+              <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">⭐</span> add / remove</span>
+              <span className="text-2xs text-slate-600"><span className="bg-white/[0.08] rounded px-1">esc</span> close</span>
+            </>
+          )}
         </div>
       </div>
     </div>
