@@ -25,7 +25,10 @@ import {
   type TinstarConfig,
 } from './sessions'
 import { getGitDiffFiles } from './sessions/git-diff'
+import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
+import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
+import { reconcileGitHistory } from './commits'
 
 function shortId(prefix: string): string {
   return `${prefix}-${randomUUID().slice(0, 8)}`
@@ -38,7 +41,6 @@ export function tinstarBackend(): Plugin {
   let sse: SSEBroadcaster
   let simulator: MockSensorSimulator | null = null
   let sessionConfig: TinstarConfig | null = null
-  let reconcileTimer: ReturnType<typeof setInterval> | null = null
 
   return {
     name: 'tinstar-backend',
@@ -55,6 +57,13 @@ export function tinstarBackend(): Plugin {
 
       // Wire SSE
       sse = new SSEBroadcaster(docStore)
+      const readyQueue = new ReadyQueue()
+      sse.setReadyQueue(readyQueue.getQueue())
+      bus.on('ready_queue.update', (ev) => sse.setReadyQueue(ev.payload.queue))
+
+      // Start draft watcher — emits skill.drafted SSE events when new drafts appear
+      ensureDraftsDir()
+      watchDrafts(sse)
 
       const fastSim = process.env.TINSTAR_FAST_SIM === '1'
       const speedMultiplier = fastSim ? 0 : 1
@@ -136,7 +145,6 @@ export function tinstarBackend(): Plugin {
                 touchedFiles: [],
                 recapEntries: [],
                 rawLogs: '',
-                procedures: [],
                 port: sess.port ?? null,
                 backend: sess.backend ?? null,
                 taskId: '',
@@ -168,12 +176,17 @@ export function tinstarBackend(): Plugin {
           }
 
           // Run reconciliation immediately to correct stale statuses from persisted store
+          reconcileGitHistory(docStore, sessionConfig)
+
           const cfg = sessionConfig
           reconcileSessionStates(cfg.dirs.sessions, {
             getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
             getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
             onStateChanged: (name, state) => {
               docStore.updateRunStatus(name, state)
+              readyQueue.onStatusChange(name, state)
+              sse.setReadyQueue(readyQueue.getQueue())
+              sse.broadcastReadyQueueUpdate()
               bus.emit({
                 type: 'managed_session.state_changed',
                 timestamp: new Date().toISOString(),
@@ -199,12 +212,15 @@ export function tinstarBackend(): Plugin {
           })
 
           // Periodic session state reconciliation (30s)
-          reconcileTimer = setInterval(() => {
+          setInterval(() => {
             reconcileSessionStates(cfg.dirs.sessions, {
               getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
               getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
               onStateChanged: (name, state) => {
                 docStore.updateRunStatus(name, state)
+                readyQueue.onStatusChange(name, state)
+                sse.setReadyQueue(readyQueue.getQueue())
+                sse.broadcastReadyQueueUpdate()
                 bus.emit({
                   type: 'managed_session.state_changed',
                   timestamp: new Date().toISOString(),
@@ -248,7 +264,7 @@ export function tinstarBackend(): Plugin {
 
       // Attach middleware
       server.middlewares.use((req, res, next) => {
-        const handled = handleRequest(
+        handleRequest(
           {
             docStore,
             otelStore,
@@ -257,11 +273,11 @@ export function tinstarBackend(): Plugin {
             startSimulator,
             resetSimulator,
             sessionConfig,
+            readyQueue,
           },
           req,
           res,
-        )
-        if (!handled) next()
+        ).then(handled => { if (!handled) next() }).catch(next)
       })
     },
   }

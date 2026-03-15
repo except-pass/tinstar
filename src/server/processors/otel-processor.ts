@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import type { EventBus } from '../event-bus'
 import type { OTelStore } from '../stores/otel-store'
+import { OtlpExporter } from '../stores/otlp-exporter'
 import type { Span } from '../types'
 
 export class OTelProcessor {
   private runSpanMap = new Map<string, { spanId: string; traceId: string }>()
+  private exporter = new OtlpExporter()
 
   constructor(
     private bus: EventBus,
     private store: OTelStore,
   ) {
+    this.exporter.start()
     this.bind()
   }
 
@@ -34,20 +37,23 @@ export class OTelProcessor {
         events: [],
       }
       this.store.addSpan(span)
+      this.exporter.pushSpan(span)
 
-      this.store.recordMetric({
+      const runMetric = {
         name: 'active_runs',
-        type: 'gauge',
+        type: 'gauge' as const,
         value: 1,
         labels: { run_id: e.payload.id },
         timestamp: e.timestamp,
-      })
+      }
+      this.store.recordMetric(runMetric)
+      this.exporter.pushMetric(runMetric)
     })
 
     this.bus.on('run.completed', (e) => {
       const ref = this.runSpanMap.get(e.payload.id)
       if (ref) {
-        const status = e.payload.status === 'complete' ? 'ok' : 'error'
+        const status: 'ok' | 'error' = 'ok'
         this.store.endSpan(ref.spanId, ref.traceId, new Date().toISOString(), status)
         this.runSpanMap.delete(e.payload.id)
       }
@@ -68,13 +74,15 @@ export class OTelProcessor {
         })
       }
 
-      this.store.recordMetric({
+      const fileMetric = {
         name: 'files_touched',
-        type: 'counter',
+        type: 'counter' as const,
         value: 1,
         labels: { run_id: e.payload.runId },
         timestamp: new Date().toISOString(),
-      })
+      }
+      this.store.recordMetric(fileMetric)
+      this.exporter.pushMetric(fileMetric)
     })
 
     this.bus.on('run.procedure_updated', (e) => {
@@ -105,14 +113,17 @@ export class OTelProcessor {
       }
 
       this.store.addSpan(span)
+      this.exporter.pushSpan(span)
 
-      this.store.recordMetric({
+      const cmdMetric = {
         name: 'commands_run',
-        type: 'counter',
+        type: 'counter' as const,
         value: 1,
         labels: { run_id: e.payload.runId, procedure: e.payload.procedure.name },
         timestamp: new Date().toISOString(),
-      })
+      }
+      this.store.recordMetric(cmdMetric)
+      this.exporter.pushMetric(cmdMetric)
     })
   }
 }

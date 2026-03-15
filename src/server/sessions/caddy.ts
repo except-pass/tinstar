@@ -208,6 +208,6 @@ export async function syncRoutes(
 }
 
 /** Get the proxied URL for a session */
-export function sessionUrl(name: string, listenPort: number): string {
+export function sessionUrl(name: string, _listenPort: number): string {
   return `/s/${name}/`
 }

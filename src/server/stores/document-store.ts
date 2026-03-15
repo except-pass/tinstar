@@ -2,7 +2,8 @@ import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Initiative, Epic, Task, Worktree, Run, Space } from '../../domain/types'
-import type { RunStatus, TouchedFile, Procedure, RecapEntry } from '../../types'
+import type { CommitRecord } from '../commits'
+import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 
 export class DocumentStore {
   private initiatives = new Map<string, Initiative>()
@@ -11,6 +12,7 @@ export class DocumentStore {
   private worktrees = new Map<string, Worktree>()
   private runs = new Map<string, Run>()
   private spaces = new Map<string, Space>()
+  private commits = new Map<string, CommitRecord>()
 
   activeSpaceId: string = ''
 
@@ -35,6 +37,7 @@ export class DocumentStore {
       if (data.tasks) for (const t of data.tasks) this.tasks.set(t.id, t)
       if (data.worktrees) for (const w of data.worktrees) this.worktrees.set(w.id, w)
       if (data.runs) for (const r of data.runs) this.runs.set(r.id, r)
+      if (data.commits) for (const c of data.commits) this.commits.set(c.sha, c)
     } catch {
       // No file or corrupt — start fresh
     }
@@ -204,18 +207,6 @@ export class DocumentStore {
 
   // --- Run mutations (partial updates that emit changes) ---
 
-  upsertProcedure(runId: string, procedure: Procedure): void {
-    const run = this.runs.get(runId)
-    if (!run) return
-    const idx = run.procedures.findIndex(p => p.id === procedure.id)
-    if (idx >= 0) {
-      run.procedures[idx] = procedure
-    } else {
-      run.procedures.push(procedure)
-    }
-    this.changes.emit('change', { entity: 'run', id: runId, data: run })
-  }
-
   addRecapEntry(runId: string, entry: RecapEntry): void {
     const run = this.runs.get(runId)
     if (!run) return
@@ -264,6 +255,32 @@ export class DocumentStore {
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
 
+
+  // --- Commits ---
+
+  upsertCommit(data: CommitRecord): boolean {
+    if (this.commits.has(data.sha)) return false
+    this.commits.set(data.sha, data)
+    this.changes.emit('change', { entity: 'commit', id: data.sha, data })
+    return true
+  }
+
+  getCommit(sha: string): CommitRecord | undefined {
+    return this.commits.get(sha)
+  }
+
+  getAllCommits(): CommitRecord[] {
+    return [...this.commits.values()]
+  }
+
+  assignTaskTag(sha: string, taskTag: string): CommitRecord | null {
+    const commit = this.commits.get(sha)
+    if (!commit) return null
+    if (!commit.taskTags.includes(taskTag)) commit.taskTags = [...commit.taskTags, taskTag]
+    this.changes.emit('change', { entity: 'commit', id: sha, data: commit })
+    return commit
+  }
+
   // --- Snapshot (filtered by active space) ---
   // Include entities that match the active space OR have no spaceId (homeless).
   // This ensures nothing silently vanishes from the UI.
@@ -279,6 +296,7 @@ export class DocumentStore {
       tasks: this.getAllTasks().filter(inSpace),
       worktrees: this.getAllWorktrees().filter(inSpace),
       runs: this.getAllRuns().filter(inSpace),
+      commits: this.getAllCommits(),
     }
   }
 
@@ -292,6 +310,7 @@ export class DocumentStore {
       tasks: this.getAllTasks(),
       worktrees: this.getAllWorktrees(),
       runs: this.getAllRuns(),
+      commits: this.getAllCommits(),
     }
   }
 
@@ -319,6 +338,7 @@ export class DocumentStore {
       this.tasks.clear()
       this.worktrees.clear()
       this.runs.clear()
+      // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
     }
   }

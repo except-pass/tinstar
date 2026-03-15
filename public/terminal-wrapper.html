@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, iframe { width: 100%; height: 100%; border: none; display: block; }
+  </style>
+</head>
+<body>
+  <iframe id="term" allow="clipboard-read; clipboard-write"></iframe>
+  <script>
+    // Read session URL from query param
+    const params = new URLSearchParams(location.search)
+    const session = params.get('session') ?? ''
+    const port = params.get('port') ?? ''
+    if (session) {
+      // Route through Caddy proxy at /s/<session>/ — works for local and remote access
+      document.getElementById('term').src = `/s/${session}/`
+    } else if (port) {
+      // Fallback: direct ttyd port (local only)
+      document.getElementById('term').src = `http://localhost:${port}/s/${session}/`
+    }
+
+    // Intercept Ctrl+Shift+\ and notify parent.
+    // The shortcut must be caught in two places:
+    // 1. Here (wrapper window) — for when focus is outside the inner iframe
+    // 2. On the inner iframe's contentWindow (capture phase) — for when ttyd has focus,
+    //    since iframe keyboard events don't bubble to the parent window.
+    function handleEscape(e) {
+      if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        window.parent.postMessage({ type: 'terminal-focus-toggle', sessionName: session }, '*')
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape)
+
+    var termEl = document.getElementById('term')
+    termEl.addEventListener('load', function() {
+      try {
+        termEl.contentWindow.addEventListener('keydown', handleEscape, true)
+      } catch (err) {
+        // cross-origin: can't attach — escape won't work from inside terminal
+      }
+    })
+  </script>
+</body>
+</html>

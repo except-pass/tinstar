@@ -19,7 +19,7 @@ export function resolveEntitySettings(
   if (chain.length === 0) return null
 
   // Local settings are from the entity itself
-  local = chain[0].settings ?? {}
+  local = chain[0]!.settings ?? {}
 
   // Walk from deepest to root — closest wins
   for (const { settings, type, name } of chain) {

@@ -14,7 +14,6 @@ import {
   getSession,
   updateSession,
   deleteSession,
-  listSessions,
   setState,
   claudeStateDir,
   getProject,
@@ -34,9 +33,15 @@ import {
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import { parseNewEntries } from '../sessions/transcript-parser'
 import { getGitDiffFiles } from '../sessions/git-diff'
-import type { EntitySettings, GroupingDimension, Run } from '../../domain/types'
+import type { Run } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import type { FileKind, TouchedFile } from '../../types'
+import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
+import { saveDraft, discardDraft, DRAFTS_DIR } from '../sessions/skill-drafts'
+import type { SkillDTO } from '../../types'
+import { spec as openapiSpec } from './openapi'
+import { ReadyQueue } from '../sessions/ReadyQueue'
+import { buildCommitRecord, reconcileGitHistory } from '../commits'
 
 function inferFileKind(filePath: string): FileKind {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -56,6 +61,7 @@ export interface RouteContext {
   startSimulator: () => void
   resetSimulator: () => void
   sessionConfig: TinstarConfig | null
+  readyQueue: ReadyQueue
 }
 
 function json(res: ServerResponse, data: unknown, status = 200): void {
@@ -96,7 +102,7 @@ function readBody(req: IncomingMessage): Promise<string> {
   })
 }
 
-export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: ServerResponse): boolean {
+export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url ?? ''
   const method = req.method ?? 'GET'
 
@@ -108,6 +114,22 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       'Access-Control-Allow-Headers': 'Content-Type',
     })
     res.end()
+    return true
+  }
+
+  // GET /api/docs — Scalar API reference UI
+  if (method === 'GET' && (url === '/api/docs' || url === '/api/docs/')) {
+    res.writeHead(200, { 'Content-Type': 'text/html' })
+    res.end(`<!doctype html>
+<html><head><title>Tinstar API</title><meta charset="utf-8"/></head>
+<body><script id="api-reference" data-url="/api/docs/openapi.json"></script>
+<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script></body></html>`)
+    return true
+  }
+
+  // GET /api/docs/openapi.json — raw OpenAPI spec
+  if (method === 'GET' && url === '/api/docs/openapi.json') {
+    json(res, openapiSpec)
     return true
   }
 
@@ -152,6 +174,104 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
   if (method === 'POST' && url === '/api/simulator/reset') {
     ctx.resetSimulator()
     json(res, { status: 'reset' })
+    return true
+  }
+
+
+
+  // POST /api/git/commit-hook
+  if (method === 'POST' && url === '/api/git/commit-hook') {
+    readBody(req).then(body => {
+      try {
+        const payload = JSON.parse(body) as {
+          sha: string
+          repo: string
+          branch: string
+          message: string
+          authorName: string
+          authorEmail: string
+          authorDate: string
+          worktreeId?: string
+        }
+        if (!ctx.sessionConfig) return json(res, { error: 'session config unavailable' }, 503)
+        if (!payload.sha || !payload.message) return json(res, { error: 'invalid payload' }, 400)
+        const record = buildCommitRecord(payload, 'hook', ctx.sessionConfig.git.taskMarkerRegex)
+        const inserted = ctx.docStore.upsertCommit(record)
+        json(res, { ok: true, inserted })
+      } catch {
+        json(res, { error: 'invalid json' }, 400)
+      }
+    })
+    return true
+  }
+
+  // POST /api/git/reconcile
+  if (method === 'POST' && url === '/api/git/reconcile') {
+    if (!ctx.sessionConfig) {
+      json(res, { error: 'session config unavailable' }, 503)
+      return true
+    }
+    const result = reconcileGitHistory(ctx.docStore, ctx.sessionConfig)
+    json(res, { ok: true, ...result })
+    return true
+  }
+
+  // GET /api/commits
+  if (method === 'GET' && url.startsWith('/api/commits')) {
+    const parsed = new URL(url, 'http://localhost')
+    const taskTag = parsed.searchParams.get('taskTag')
+    const assigned = parsed.searchParams.get('assigned')
+    const since = parsed.searchParams.get('since')
+    const until = parsed.searchParams.get('until')
+    let commits = ctx.docStore.getAllCommits()
+    if (taskTag) commits = commits.filter(c => c.taskTags.includes(taskTag))
+    if (assigned === 'false') commits = commits.filter(c => c.taskTags.length === 0)
+    if (since) commits = commits.filter(c => new Date(c.authorDate).getTime() >= new Date(since).getTime())
+    if (until) commits = commits.filter(c => new Date(c.authorDate).getTime() <= new Date(until).getTime())
+    commits = commits.sort((a, b) => new Date(b.authorDate).getTime() - new Date(a.authorDate).getTime())
+    json(res, commits)
+    return true
+  }
+
+  // GET /api/standup
+  if (method === 'GET' && url.startsWith('/api/standup')) {
+    if (ctx.sessionConfig) reconcileGitHistory(ctx.docStore, ctx.sessionConfig)
+    const parsed = new URL(url, 'http://localhost')
+    const since = parsed.searchParams.get('since')
+    const until = parsed.searchParams.get('until')
+    let commits = ctx.docStore.getAllCommits()
+    if (since) commits = commits.filter(c => new Date(c.authorDate).getTime() >= new Date(since).getTime())
+    if (until) commits = commits.filter(c => new Date(c.authorDate).getTime() <= new Date(until).getTime())
+    const grouped: Record<string, typeof commits> = {}
+    const unassigned: typeof commits = []
+    for (const commit of commits) {
+      if (commit.taskTags.length === 0) {
+        unassigned.push(commit)
+        continue
+      }
+      for (const tag of commit.taskTags) {
+        if (!grouped[tag]) grouped[tag] = []
+        grouped[tag].push(commit)
+      }
+    }
+    json(res, { grouped, unassigned })
+    return true
+  }
+
+  // POST /api/commit/:sha/assign-task
+  if (method === 'POST' && /^\/api\/commit\/[^/]+\/assign-task$/.test(url)) {
+    const sha = url.split('/')[3] ?? ''
+    readBody(req).then(body => {
+      try {
+        const { taskTag } = JSON.parse(body) as { taskTag: string }
+        if (!taskTag) return json(res, { error: 'taskTag is required' }, 400)
+        const updated = ctx.docStore.assignTaskTag(sha, taskTag)
+        if (!updated) return json(res, { error: 'not found' }, 404)
+        json(res, { ok: true, commit: updated })
+      } catch {
+        json(res, { error: 'invalid json' }, 400)
+      }
+    })
     return true
   }
 
@@ -304,11 +424,38 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     return true
   }
 
+  // GET /api/initiatives/:id
+  if (method === 'GET' && /^\/api\/initiatives\/[^/]+$/.test(url)) {
+    const id = url.slice('/api/initiatives/'.length)
+    const entity = ctx.docStore.getInitiative(id)
+    if (!entity) { json(res, { error: 'not found' }, 404); return true }
+    json(res, { ok: true, data: entity })
+    return true
+  }
+
+  // GET /api/epics/:id
+  if (method === 'GET' && /^\/api\/epics\/[^/]+$/.test(url)) {
+    const id = url.slice('/api/epics/'.length)
+    const entity = ctx.docStore.getEpic(id)
+    if (!entity) { json(res, { error: 'not found' }, 404); return true }
+    json(res, { ok: true, data: entity })
+    return true
+  }
+
+  // GET /api/tasks/:id
+  if (method === 'GET' && /^\/api\/tasks\/[^/]+$/.test(url)) {
+    const id = url.slice('/api/tasks/'.length)
+    const entity = ctx.docStore.getTask(id)
+    if (!entity) { json(res, { error: 'not found' }, 404); return true }
+    json(res, { ok: true, data: entity })
+    return true
+  }
+
   // GET /api/initiatives/:id/settings
   if (method === 'GET' && /^\/api\/initiatives\/[^/]+\/settings$/.test(url)) {
     const id = url.slice('/api/initiatives/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'initiative', ctx.docStore)
-    if (!result) return json(res, { error: 'not found' }, 404)
+    if (!result) { json(res, { error: 'not found' }, 404); return true }
     json(res, { ok: true, data: result })
     return true
   }
@@ -317,7 +464,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
   if (method === 'GET' && /^\/api\/epics\/[^/]+\/settings$/.test(url)) {
     const id = url.slice('/api/epics/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'epic', ctx.docStore)
-    if (!result) return json(res, { error: 'not found' }, 404)
+    if (!result) { json(res, { error: 'not found' }, 404); return true }
     json(res, { ok: true, data: result })
     return true
   }
@@ -326,7 +473,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
   if (method === 'GET' && /^\/api\/tasks\/[^/]+\/settings$/.test(url)) {
     const id = url.slice('/api/tasks/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'task', ctx.docStore)
-    if (!result) return json(res, { error: 'not found' }, 404)
+    if (!result) { json(res, { error: 'not found' }, 404); return true }
     json(res, { ok: true, data: result })
     return true
   }
@@ -337,8 +484,8 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     readBody(req).then(body => {
       const existing = ctx.docStore.getInitiative(id)
       if (!existing) return json(res, { error: 'not found' }, 404)
-      const patch = JSON.parse(body)
-      const merged = deepMergeEntity(existing, patch)
+      const patch = JSON.parse(body) as Record<string, unknown>
+      const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertInitiative(id, merged)
       json(res, { ok: true, data: ctx.docStore.getInitiative(id) })
     })
@@ -351,8 +498,8 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     readBody(req).then(body => {
       const existing = ctx.docStore.getEpic(id)
       if (!existing) return json(res, { error: 'not found' }, 404)
-      const patch = JSON.parse(body)
-      const merged = deepMergeEntity(existing, patch)
+      const patch = JSON.parse(body) as Record<string, unknown>
+      const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertEpic(id, merged)
       json(res, { ok: true, data: ctx.docStore.getEpic(id) })
     })
@@ -365,8 +512,8 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     readBody(req).then(body => {
       const existing = ctx.docStore.getTask(id)
       if (!existing) return json(res, { error: 'not found' }, 404)
-      const patch = JSON.parse(body)
-      const merged = deepMergeEntity(existing, patch)
+      const patch = JSON.parse(body) as Record<string, unknown>
+      const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertTask(id, merged)
       json(res, { ok: true, data: ctx.docStore.getTask(id) })
     })
@@ -431,6 +578,85 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     return true
   }
 
+  // --- Skills ---
+
+  // GET /api/skills
+  if (method === 'GET' && url === '/api/skills') {
+    const skills = getSkills()
+    const dtos: SkillDTO[] = skills.map(({ name, description, source }) => ({ name, description, source }))
+    json(res, { skills: dtos })
+    return true
+  }
+
+  // POST /api/skills/save
+  if (method === 'POST' && url === '/api/skills/save') {
+    readBody(req).then(async (body) => {
+      const { draftId, location, sessionId } = JSON.parse(body) as {
+        draftId: string
+        location: 'system' | 'repo'
+        sessionId?: string
+      }
+      if (!draftId || !['system', 'repo'].includes(location)) {
+        json(res, { error: 'invalid-params' }, 400)
+        return
+      }
+
+      // Resolve projectRoot for repo-level saves
+      let projectRoot: string | undefined
+      if (location === 'repo' && sessionId && ctx.sessionConfig) {
+        const sess = getSession(ctx.sessionConfig.dirs.sessions, sessionId)
+        if (sess?.workspace?.path) {
+          projectRoot = sess.workspace.path
+        }
+      }
+
+      try {
+        // Read skillName from draft frontmatter BEFORE moving the file
+        const draftPath = join(DRAFTS_DIR, `${draftId}.md`)
+        let skillName = draftId  // fallback
+        try {
+          const content = readFileSync(draftPath, 'utf-8')
+          const fm = parseFrontmatter(content)
+          if (fm.name) skillName = fm.name
+        } catch { /* use fallback */ }
+
+        saveDraft(draftId, location, projectRoot)
+        bustSkillCache()
+
+        const dto: SkillDTO = {
+          name: skillName,
+          source: location === 'system' ? 'system' : 'repo',
+        }
+        // Try to get description from the refreshed cache
+        const freshSkills = getSkills()
+        const saved = freshSkills.find(s => s.name === skillName)
+        if (saved?.description) dto.description = saved.description
+
+        ctx.sse.broadcastEvent('skill.saved', { skill: dto })
+        json(res, { skill: dto })
+      } catch (err) {
+        const e = err as Error & { existingPath?: string }
+        if (e.message === 'skill-name-conflict') {
+          json(res, { error: 'skill-name-conflict', existingPath: e.existingPath }, 409)
+        } else {
+          json(res, { error: e.message }, 500)
+        }
+      }
+    })
+    return true
+  }
+
+  // POST /api/skills/discard
+  if (method === 'POST' && url === '/api/skills/discard') {
+    readBody(req).then((body) => {
+      const { draftId } = JSON.parse(body) as { draftId: string }
+      if (!draftId) { json(res, { error: 'missing draftId' }, 400); return }
+      discardDraft(draftId)
+      json(res, { ok: true })
+    })
+    return true
+  }
+
   // --- Session management routes (only active when sessionConfig is set) ---
 
   if (ctx.sessionConfig) {
@@ -440,7 +666,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     const dashboardUrl = `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`
 
     function emitSessionEvent(type: 'managed_session.created' | 'managed_session.state_changed' | 'managed_session.deleted', payload: Record<string, unknown>) {
-      ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as Parameters<typeof ctx.bus.emit>[0])
+      ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as unknown as Parameters<typeof ctx.bus.emit>[0])
     }
 
     // Helper to extract :name from URL patterns like /api/sessions/foo or /api/sessions/foo/start
@@ -520,8 +746,8 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, taskId, epicId, initiativeId } = JSON.parse(body)
-        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, taskId, epicId, initiativeId })
+        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, taskId, epicId, initiativeId, color } = JSON.parse(body)
+        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, taskId, epicId, initiativeId, color })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
         if (!['docker', 'tmux'].includes(backend)) return json(res, { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }, 400)
@@ -551,6 +777,20 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
           }
 
           const isWorktree = !!(worktreePath || worktree)
+
+          // Register a Worktree entity so it appears in hierarchy/grouping
+          let worktreeEntityId = ''
+          if (isWorktree && workspacePath) {
+            worktreeEntityId = name
+            ctx.docStore.upsertWorktree(worktreeEntityId, {
+              id: worktreeEntityId,
+              name,
+              branch: branch ?? name,
+              repo: project ?? '',
+              worktreePath: workspacePath,
+              spaceId: ctx.docStore.activeSpaceId,
+            })
+          }
 
           const session = createSession(sessDir, {
             name,
@@ -614,6 +854,7 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
           const runId = name
           ctx.docStore.upsertRun(runId, {
             id: runId,
+            color,
             status: 'creating',
             sessionId: name,
             initiative: initiativeId ?? '',
@@ -624,11 +865,10 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
             touchedFiles: [],
             recapEntries: [],
             rawLogs: '',
-            procedures: [],
             port: sessionPort ?? null,
             backend,
             taskId: taskId ?? '',
-            worktreeId: '',
+            worktreeId: worktreeEntityId,
             createdAt: new Date().toISOString(),
             spaceId: ctx.docStore.activeSpaceId,
           })
@@ -762,14 +1002,16 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
 
         // Respond immediately — UI removal is instant
         ctx.docStore.deleteRun(name)
-        deleteSession(sessDir, name)
         emitSessionEvent('managed_session.deleted', { name })
+        ctx.readyQueue.onDelete(name)
+        ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
+        ctx.sse.broadcastReadyQueueUpdate()
         json(res, { ok: true })
 
-        // Heavy cleanup runs async in background
-        if (session) {
-          ;(async () => {
-            try {
+        // Cleanup: stop backend first (releases bind mounts), then remove session dir
+        ;(async () => {
+          try {
+            if (session) {
               if (session.backend === 'docker') {
                 await dockerBackend.deleteContainer(cfg, session)
               } else {
@@ -786,11 +1028,17 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
               }
 
               removeRoute(session.name, cfg.caddy.adminPort).catch(() => {})
-            } catch (err) {
-              log.warn('delete', `background cleanup for ${name}: ${(err as Error).message}`)
             }
-          })()
-        }
+          } catch (err) {
+            log.warn('delete', `background cleanup for ${name}: ${(err as Error).message}`)
+          }
+
+          // Remove session dir AFTER backend cleanup (bind mounts released)
+          if (!deleteSession(sessDir, name)) {
+            log.warn('delete', `failed to remove session dir for ${name}, retrying...`)
+            setTimeout(() => deleteSession(sessDir, name), 2000)
+          }
+        })()
 
         return true
       }
@@ -873,6 +1121,58 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       return true
     }
 
+    // POST /api/sessions/:name/send-keys — send raw tmux keys to a session
+    if (method === 'POST' && url.endsWith('/send-keys') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const body = JSON.parse(await readBody(req))
+        const keys: string[] = body.keys
+        if (!Array.isArray(keys) || keys.length === 0) {
+          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'keys must be a non-empty array of strings' } }, 400)
+          return true
+        }
+        const session = getSession(sessDir, name)
+        if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
+        try {
+          if (session.backend === 'docker') {
+            await dockerBackend.sendKeys(cfg, name, keys)
+          } else {
+            await tmuxBackend.sendKeys(cfg, name, keys)
+          }
+          json(res, { ok: true })
+        } catch (err) {
+          json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
+        }
+        return true
+      }
+    }
+
+    // POST /api/sessions/:name/enter-prompt — type text then submit with Enter
+    if (method === 'POST' && url.endsWith('/enter-prompt') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const body = JSON.parse(await readBody(req))
+        const prompt: string = body.prompt
+        if (!prompt || typeof prompt !== 'string') {
+          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'prompt must be a non-empty string' } }, 400)
+          return true
+        }
+        const session = getSession(sessDir, name)
+        if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
+        try {
+          if (session.backend === 'docker') {
+            await dockerBackend.sendPrompt(cfg, name, prompt)
+          } else {
+            await tmuxBackend.sendPrompt(cfg, name, prompt)
+          }
+          json(res, { ok: true })
+        } catch (err) {
+          json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
+        }
+        return true
+      }
+    }
+
     // POST /api/sessions/:name/refresh-route — re-register Caddy route for a session
     if (method === 'POST' && url.endsWith('/refresh-route') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
@@ -889,9 +1189,66 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
       }
     }
 
-    // GET /api/docker/profiles — configured image profiles
+    // GET /api/docker/profiles — configured image profiles (read from disk for freshness)
     if (method === 'GET' && url === '/api/docker/profiles') {
-      json(res, { ok: true, data: cfg.profiles })
+      let profiles = cfg.profiles
+      try {
+        const data = JSON.parse(readFileSync(cfg.files.config, 'utf-8'))
+        if (Array.isArray(data.profiles)) profiles = data.profiles
+      } catch { /* use frozen default */ }
+      json(res, { ok: true, data: profiles })
+      return true
+    }
+
+    // GET /api/docker/images — list local Docker images
+    if (method === 'GET' && url === '/api/docker/images') {
+      import('node:child_process').then(({ execFile }) => {
+        execFile('docker', ['images', '--format', '{{.Repository}}:{{.Tag}}'], { encoding: 'utf-8' }, (err, stdout) => {
+          if (err) {
+            json(res, { ok: false, error: { code: 'DOCKER_ERROR', message: err.message } }, 500)
+            return
+          }
+          const images = stdout.trim().split('\n').filter(Boolean).filter(i => i !== '<none>:<none>')
+          json(res, { ok: true, data: images })
+        })
+      })
+      return true
+    }
+
+    // POST /api/docker/profiles — add a new image profile
+    if (method === 'POST' && url === '/api/docker/profiles') {
+      readBody(req).then((body) => {
+        const { name, image, home } = JSON.parse(body)
+        if (!name || !image) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name and image are required' } }, 400)
+
+        // Read current config, update profiles array, persist
+        let data: Record<string, unknown> = {}
+        try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config yet */ }
+        const profiles: Array<{ name: string; image: string; home?: string }> = Array.isArray(data.profiles) ? data.profiles : []
+        if (profiles.some(p => p.name === name)) return json(res, { ok: false, error: { code: 'DUPLICATE', message: `Profile "${name}" already exists` } }, 409)
+
+        const profile: { name: string; image: string; home?: string } = { name, image }
+        if (home) profile.home = home
+        profiles.push(profile)
+        data.profiles = profiles
+        writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+        json(res, { ok: true, data: profile })
+      }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+      return true
+    }
+
+    // DELETE /api/docker/profiles/:name — remove an image profile
+    if (method === 'DELETE' && url.startsWith('/api/docker/profiles/')) {
+      const name = decodeURIComponent(url.slice('/api/docker/profiles/'.length))
+      let data: Record<string, unknown> = {}
+      try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
+      const profiles: Array<{ name: string; image: string; home?: string }> = Array.isArray(data.profiles) ? data.profiles : []
+      const idx = profiles.findIndex(p => p.name === name)
+      if (idx === -1) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Profile "${name}" not found` } }, 404), true
+      profiles.splice(idx, 1)
+      data.profiles = profiles
+      writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+      json(res, { ok: true })
       return true
     }
 
@@ -906,6 +1263,9 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         setState(sessDir, name, 'idle')
         ctx.docStore.updateRunStatus(name, 'idle')
         emitSessionEvent('managed_session.state_changed', { name, state: 'idle' })
+        ctx.readyQueue.onStatusChange(name, 'idle')
+        ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
+        ctx.sse.broadcastReadyQueueUpdate()
         json(res, { ok: true })
 
         // Async transcript parsing (fire-and-forget, after response)
@@ -915,7 +1275,11 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
           // Use conversationId from hook payload, or fall back to session file
           const convId = conversationId || session?.conversation?.id
           if (workdir && convId) {
-            const entries = parseNewEntries(name, workdir, convId)
+            // Docker sessions store claude-state in the session's state dir
+            const stateDir = session?.backend === 'docker'
+              ? join(sessDir, name, 'claude-state')
+              : undefined
+            const entries = parseNewEntries(name, workdir, convId, stateDir)
             for (const entry of entries) {
               ctx.docStore.addRecapEntry(name, entry)
             }
@@ -939,6 +1303,9 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         if (!prev || prev.state !== 'running') {
           emitSessionEvent('managed_session.state_changed', { name, state: 'running' })
         }
+        ctx.readyQueue.onStatusChange(name, 'running')
+        ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
+        ctx.sse.broadcastReadyQueueUpdate()
         json(res, { ok: true })
       })
       return true
@@ -1039,6 +1406,39 @@ export function handleRequest(ctx: RouteContext, req: IncomingMessage, res: Serv
         }
         return true
       }
+    }
+
+    // POST /api/sessions/:id/prompt
+    const promptMatch = method === 'POST' && url.match(/^\/api\/sessions\/([^/]+)\/prompt$/)
+    if (promptMatch) {
+      const sessionId = promptMatch[1]!
+      const session = getSession(sessDir, sessionId)
+      if (!session) {
+        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${sessionId}' not found` } }, 404)
+        return true
+      }
+      if (session.state !== 'idle') {
+        json(res, { error: 'session-not-ready' }, 400)
+        return true
+      }
+      readBody(req).then(async (body) => {
+        const { text } = JSON.parse(body) as { text: string }
+        if (!text) { json(res, { error: 'missing text' }, 400); return }
+        try {
+          if (session.backend === 'docker') {
+            await dockerBackend.sendPrompt(cfg, sessionId, text)
+          } else if (session.backend === 'tmux') {
+            await tmuxBackend.sendPrompt(cfg, sessionId, text)
+          } else {
+            json(res, { error: 'input-unavailable' }, 503)
+            return
+          }
+          json(res, { ok: true })
+        } catch (err) {
+          json(res, { error: (err as Error).message }, 500)
+        }
+      })
+      return true
     }
   }
 

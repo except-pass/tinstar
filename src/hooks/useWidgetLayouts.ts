@@ -16,8 +16,8 @@ export interface TreeMaps {
 }
 
 const STORAGE_KEY_PREFIX = 'tinstar-layouts-v3'
-const DEFAULT_RUN_WIDTH = 900
-const DEFAULT_RUN_HEIGHT = 400
+const DEFAULT_RUN_WIDTH = 880
+const DEFAULT_RUN_HEIGHT = 820
 const MIN_WIDTH = 300
 const MIN_HEIGHT = 150
 
@@ -115,7 +115,7 @@ function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
       rootY += rowMaxH + CONTAINER_GAP
       rowMaxH = 0
     }
-    const node = tree[i]
+    const node = tree[i]!
     const size = sizeMap.get(node.id)!
     layouts.set(node.id, { x: rootX, y: rootY, ...size })
     rootX += size.width + CONTAINER_GAP

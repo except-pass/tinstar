@@ -15,6 +15,8 @@ export async function resetAndWaitForData(page: Page) {
   await page.evaluate(() => localStorage.removeItem('tinstar-layouts-v3'))
   await page.reload()
 
-  // Wait for data to be visible
+  // Wait for ALL simulator initiatives to be visible (not just the first one)
   await expect(page.getByTestId('sidebar-node-initiative-init-1')).toBeVisible({ timeout: 10000 })
+  await expect(page.getByTestId('sidebar-node-initiative-init-2')).toBeVisible({ timeout: 5000 })
+  await expect(page.getByTestId('sidebar-node-initiative-init-3')).toBeVisible({ timeout: 5000 })
 }

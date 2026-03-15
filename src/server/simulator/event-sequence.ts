@@ -31,7 +31,8 @@ export function buildEventSequence(): TimedEvent[] {
   const intervalMs = totalDurationMs / runCount // ~714ms per run
 
   for (let i = 0; i < runCount; i++) {
-    const run = mockRuns[i]
+    const run = mockRuns[i]!
+
     const baseDelay = Math.round(intervalMs * (i + 0.5)) // start at ~357ms
 
     // run.created event
@@ -65,30 +66,15 @@ export function buildEventSequence(): TimedEvent[] {
           timestamp: now(),
           payload: {
             runId: run.id,
-            file: run.touchedFiles[f],
+            file: run.touchedFiles[f]!,
           },
         },
       })
     }
 
-    // Procedures come after files
+    // Recap entries come after files
     const filesDone = baseDelay + 50 + run.touchedFiles.length * 30
-    for (let p = 0; p < run.procedures.length; p++) {
-      events.push({
-        delayMs: filesDone + 20 + p * 25,
-        event: {
-          type: 'run.procedure_updated',
-          timestamp: now(),
-          payload: {
-            runId: run.id,
-            procedure: run.procedures[p],
-          },
-        },
-      })
-    }
-
-    // Recap entries come after procedures
-    const procsDone = filesDone + 20 + run.procedures.length * 25
+    const procsDone = filesDone + 20
     for (let r = 0; r < run.recapEntries.length; r++) {
       events.push({
         delayMs: procsDone + 15 + r * 20,
@@ -97,11 +83,26 @@ export function buildEventSequence(): TimedEvent[] {
           timestamp: now(),
           payload: {
             runId: run.id,
-            entry: run.recapEntries[r],
+            entry: run.recapEntries[r]!,
           },
         },
       })
     }
+  }
+
+  // Seed the ready queue with idle session IDs
+  const idleSessions = mockRuns
+    .filter(r => r.status === 'idle' && r.sessionId)
+    .map(r => r.sessionId as string)
+  if (idleSessions.length > 0) {
+    events.push({
+      delayMs: 0,
+      event: {
+        type: 'ready_queue.update',
+        timestamp: now(),
+        payload: { queue: idleSessions },
+      },
+    })
   }
 
   // Sort by delay

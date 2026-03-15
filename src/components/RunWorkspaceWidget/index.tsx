@@ -1,10 +1,12 @@
-import { useState, useRef, useCallback, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useRef, useCallback, useReducer, type PointerEvent as ReactPointerEvent } from 'react'
 import type { RunData } from '../../types'
 import { RunWorkspaceHeader } from './RunWorkspaceHeader'
 import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { ProceduresPanel } from './ProceduresPanel'
+import { useWidgetHotkeys, type FocusZone } from '../../hotkeys/useWidgetHotkeys'
+import { hexToRgba, resolveRunAccent } from '../runAccent'
 
 interface Props {
   run: RunData
@@ -21,11 +23,54 @@ interface Props {
 type FilePanelMode = 'touched' | 'tree'
 
 export function RunWorkspaceWidget({ run, className = '', compact = false, headless = false, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp }: Props) {
+
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
   const [procsCollapsed, setProcsCollapsed] = useState(true)
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
+  const [termTick, bumpTerm] = useReducer((n: number) => n + 1, 0)
+
+  const rootRef = useRef<HTMLDivElement>(null)
+  const [focusZone, setFocusZone] = useState<FocusZone | null>(null)
+  const [terminalFocused, setTerminalFocused] = useState(false)
+  const [_fileSelectionIndex, setFileSelectionIndex] = useState(0)
+  const [centerTabIndex, setCenterTabIndex] = useState(0)
+
+  const leftExpanded = !filesCollapsed
+  const runAccent = resolveRunAccent(run.color)
+
+  const ZONES: FocusZone[] = leftExpanded
+    ? ['left-tab', 'file-list', 'center-tabs', 'right-panel']
+    : ['center-tabs', 'right-panel']
+
+  const onFocusNext = useCallback(() => {
+    setFocusZone(prev => {
+      const idx = prev ? ZONES.indexOf(prev) : -1
+      return ZONES[(idx + 1) % ZONES.length] ?? ZONES[0]!
+    })
+  }, [leftExpanded])
+
+  const onFocusPrev = useCallback(() => {
+    setFocusZone(prev => {
+      const idx = prev ? ZONES.indexOf(prev) : 0
+      return ZONES[(idx - 1 + ZONES.length) % ZONES.length] ?? ZONES[0]!
+    })
+  }, [leftExpanded])
+
+  useWidgetHotkeys(rootRef, {
+    onFocusNext,
+    onFocusPrev,
+    onFileDown: () => setFileSelectionIndex(i => i + 1),
+    onFileUp:   () => setFileSelectionIndex(i => Math.max(i - 1, 0)),
+    onTabNext:  () => setCenterTabIndex(i => (i + 1) % 2),
+    onTabPrev:  () => setCenterTabIndex(i => (i - 1 + 2) % 2),
+    onActivate: () => { /* no-op for now */ },
+    onTerminalToggle: () => {
+      setTerminalFocused(f => !f)
+    },
+    terminalFocused,
+  })
 
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
@@ -50,7 +95,13 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
   }, [run.sessionId])
 
   return (
-    <div className={`flex flex-col overflow-hidden neon-border bg-surface-base ${className}`}>
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      data-testid={`widget-root-${run.id}`}
+      className={`flex flex-col overflow-hidden bg-surface-base border ${className}`}
+      style={{ borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }}
+    >
       {/* Header doubles as drag handle */}
       {!headless && (
         <RunWorkspaceHeader
@@ -59,30 +110,40 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
           onPointerDown={onHeaderPointerDown}
           onPointerMove={onHeaderPointerMove}
           onPointerUp={onHeaderPointerUp}
+          onRefreshTerminal={bumpTerm}
         />
       )}
 
       {/* Three-panel workspace */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         {filesCollapsed ? (
           <div
             data-testid="collapsed-files"
-            className="w-6 flex flex-col items-center justify-center bg-surface-panel border-r border-primary/20 cursor-pointer hover:bg-surface-hover"
+            className="w-6 flex flex-col items-center justify-center bg-surface-panel cursor-pointer hover:bg-surface-hover"
+            style={{ borderRight: `1px solid ${hexToRgba(runAccent, 0.2)}` }}
             onClick={() => setFilesCollapsed(false)}
           >
             <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr] rotate-180">Files</span>
           </div>
         ) : (
-          <div className="flex flex-col bg-surface-panel border-r border-primary/20 relative flex-shrink-0" style={{ width: filesPanelWidth }}>
+          <div
+            className="flex flex-col bg-surface-panel relative flex-shrink-0"
+            style={{ width: filesPanelWidth, borderRight: `1px solid ${hexToRgba(runAccent, 0.2)}` }}
+          >
             {/* Mode toggle tabs */}
-            <div className="flex border-b border-primary/15">
+            <div
+              data-testid="focus-zone-left-tab"
+              className={`flex ${focusZone === 'left-tab' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
+              style={{ borderBottom: `1px solid ${hexToRgba(runAccent, 0.15)}` }}
+            >
               <button
                 onClick={() => setFilePanelMode('touched')}
                 className={`flex-1 px-2 py-1 text-2xs font-mono uppercase tracking-wider transition-colors ${
                   filePanelMode === 'touched'
-                    ? 'text-primary bg-primary/10 border-b border-primary'
+                    ? ''
                     : 'text-slate-500 hover:text-slate-300 hover:bg-surface-hover'
                 }`}
+                style={filePanelMode === 'touched' ? { color: runAccent, backgroundColor: hexToRgba(runAccent, 0.1), borderBottom: `1px solid ${runAccent}` } : undefined}
               >
                 Changed
               </button>
@@ -90,21 +151,26 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
                 onClick={() => setFilePanelMode('tree')}
                 className={`flex-1 px-2 py-1 text-2xs font-mono uppercase tracking-wider transition-colors ${
                   filePanelMode === 'tree'
-                    ? 'text-primary bg-primary/10 border-b border-primary'
+                    ? ''
                     : 'text-slate-500 hover:text-slate-300 hover:bg-surface-hover'
                 }`}
+                style={filePanelMode === 'tree' ? { color: runAccent, backgroundColor: hexToRgba(runAccent, 0.1), borderBottom: `1px solid ${runAccent}` } : undefined}
               >
                 Explorer
               </button>
               <button
                 onClick={() => setFilesCollapsed(true)}
-                className="px-1 text-slate-500 hover:text-primary"
+                className="px-1 text-slate-500"
+                style={{ color: runAccent }}
               >
                 <span className="material-symbols-outlined text-sm">chevron_left</span>
               </button>
             </div>
             {/* Panel content */}
-            <div className="flex-1 overflow-hidden">
+            <div
+              data-testid="focus-zone-file-list"
+              className={`flex-1 overflow-hidden ${focusZone === 'file-list' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
+            >
               {filePanelMode === 'touched' ? (
                 <TouchedFilesPanel files={run.touchedFiles} onOpenFile={handleOpenFile} />
               ) : (
@@ -113,25 +179,51 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
             </div>
             {/* Resize handle */}
             <div
-              className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
+              className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize transition-colors z-10"
+              style={{ backgroundColor: hexToRgba(runAccent, 0.18) }}
               onPointerDown={onResizePointerDown}
               onPointerMove={onResizePointerMove}
               onPointerUp={onResizePointerUp}
             />
           </div>
         )}
-        <RunSessionPanel recapEntries={run.recapEntries} rawLogs={run.rawLogs} port={run.port} sessionId={run.sessionId} status={run.status} />
-        {procsCollapsed ? (
-          <div
-            data-testid="collapsed-procedures"
-            className="w-6 flex flex-col items-center justify-center bg-surface-panel cursor-pointer hover:bg-surface-hover"
-            onClick={() => setProcsCollapsed(false)}
-          >
-            <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr]">Procs</span>
-          </div>
-        ) : (
-          <ProceduresPanel procedures={run.procedures} onCollapse={() => setProcsCollapsed(true)} />
-        )}
+        <div
+          data-testid="focus-zone-center-tabs"
+          className={`flex-1 flex flex-col min-w-0 min-h-0 ${focusZone === 'center-tabs' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
+        >
+          <RunSessionPanel
+            recapEntries={run.recapEntries}
+            rawLogs={run.rawLogs}
+            port={run.port}
+            sessionId={run.sessionId}
+            status={run.status}
+            termTick={termTick}
+            terminalFocused={terminalFocused}
+            onTerminalToggle={() => setTerminalFocused(f => !f)}
+            activeTabIndex={focusZone === 'center-tabs' ? centerTabIndex : undefined}
+          />
+        </div>
+        <div
+          data-testid="focus-zone-right-panel"
+          className={`flex ${focusZone === 'right-panel' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
+        >
+          {procsCollapsed ? (
+            <div
+              data-testid="collapsed-procedures"
+              className="w-6 flex flex-col items-center justify-center bg-surface-panel cursor-pointer hover:bg-surface-hover"
+              onClick={() => setProcsCollapsed(false)}
+            >
+              <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr]">Procs</span>
+            </div>
+          ) : (
+            <ProceduresPanel
+              taskId={run.taskId}
+              sessionId={run.sessionId}
+              sessionStatus={run.status}
+              onCollapse={() => setProcsCollapsed(true)}
+            />
+          )}
+        </div>
       </div>
 
     </div>

@@ -20,9 +20,9 @@ export function findNewestConversationId(baseDir: string): string | null {
   let newestMtime = 0
 
   function walk(dir: string): void {
-    let entries: ReturnType<typeof readdirSync>
+    let entries: import('node:fs').Dirent<string>[]
     try {
-      entries = readdirSync(dir, { withFileTypes: true })
+      entries = readdirSync(dir, { withFileTypes: true, encoding: 'utf8' as const })
     } catch {
       return
     }

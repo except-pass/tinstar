@@ -92,6 +92,95 @@ test.describe('Run Widget Panels', () => {
     await page.waitForTimeout(200)
 
     // Should now show the full panel with "Procedures" heading
-    await expect(widget.getByText('Procedures')).toBeVisible()
+    await expect(widget.getByText('Procedures', { exact: true })).toBeVisible()
+  })
+})
+
+test.describe('File Panel Interactions', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/')
+    await resetAndWaitForData(page)
+  })
+
+  test('double-click on touched file does not zoom the canvas widget', async ({ page }) => {
+    const widget = page.getByTestId('canvas-widget-R-241')
+
+    // Expand files panel if collapsed
+    const collapsedFiles = widget.getByTestId('collapsed-files')
+    if (await collapsedFiles.isVisible()) {
+      await collapsedFiles.click()
+      await page.waitForTimeout(200)
+    }
+
+    // Make sure we're on the "Changed" tab (touched files)
+    const changedTab = widget.getByText('Changed')
+    if (await changedTab.isVisible()) {
+      await changedTab.click()
+      await page.waitForTimeout(200)
+    }
+
+    // Get widget position before double-click
+    const before = await widget.boundingBox()
+    if (!before) throw new Error('widget not visible')
+
+    // Find a file entry and double-click it
+    const fileEntry = widget.locator('button').filter({ hasText: /\.ts/ }).first()
+    if (await fileEntry.isVisible()) {
+      await fileEntry.dblclick()
+      await page.waitForTimeout(300)
+
+      // Widget should NOT have moved (double-click should not trigger canvas zoom)
+      const after = await widget.boundingBox()
+      if (!after) throw new Error('widget not visible after dblclick')
+      expect(Math.abs(after.x - before.x)).toBeLessThan(5)
+      expect(Math.abs(after.y - before.y)).toBeLessThan(5)
+    }
+  })
+
+  test('switching between Changed and Explorer tabs works', async ({ page }) => {
+    const widget = page.getByTestId('canvas-widget-R-241')
+
+    // Expand files panel if collapsed
+    const collapsedFiles = widget.getByTestId('collapsed-files')
+    if (await collapsedFiles.isVisible()) {
+      await collapsedFiles.click()
+      await page.waitForTimeout(200)
+    }
+
+    // Switch to Explorer tab
+    const explorerTab = widget.getByText('Explorer')
+    await expect(explorerTab).toBeVisible()
+    await explorerTab.click()
+    await page.waitForTimeout(200)
+
+    // Switch back to Changed tab
+    const changedTab = widget.getByText('Changed')
+    await changedTab.click()
+    await page.waitForTimeout(200)
+
+    // Both tabs should still be visible (panel not collapsed)
+    await expect(explorerTab).toBeVisible()
+    await expect(changedTab).toBeVisible()
+  })
+
+  test('file panel collapse button works', async ({ page }) => {
+    const widget = page.getByTestId('canvas-widget-R-241')
+
+    // Expand files panel if collapsed
+    const collapsedFiles = widget.getByTestId('collapsed-files')
+    if (await collapsedFiles.isVisible()) {
+      await collapsedFiles.click()
+      await page.waitForTimeout(200)
+    }
+
+    // Click collapse button (chevron_left icon)
+    const collapseBtn = widget.locator('span:has-text("chevron_left")').first()
+    if (await collapseBtn.isVisible()) {
+      await collapseBtn.click()
+      await page.waitForTimeout(200)
+
+      // Panel should now show collapsed state
+      await expect(widget.getByTestId('collapsed-files')).toBeVisible()
+    }
   })
 })

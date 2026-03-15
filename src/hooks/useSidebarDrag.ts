@@ -61,28 +61,11 @@ function getParentId(tree: TreeNode[], targetId: string, parentId: string | null
   return null
 }
 
-/** Build a flat list of visible node IDs (respecting expanded state) */
-function flattenVisible(
-  tree: TreeNode[],
-  isExpanded: (id: string) => boolean,
-): string[] {
-  const result: string[] = []
-  function walk(nodes: TreeNode[]) {
-    for (const node of nodes) {
-      result.push(node.id)
-      if (node.children.length > 0 && isExpanded(node.id)) {
-        walk(node.children)
-      }
-    }
-  }
-  walk(tree)
-  return result
-}
 
 export function useSidebarDrag(
   tree: TreeNode[],
-  dimensions: GroupingDimension[],
-  isExpanded: (id: string) => boolean,
+  _dimensions: GroupingDimension[],
+  _isExpanded: (id: string) => boolean,
   expandNode: (id: string) => void,
   onReparent: (entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => void,
 ) {

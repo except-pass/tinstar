@@ -1,0 +1,138 @@
+import { useState, useEffect, useCallback, useRef } from 'react'
+import type { SkillDTO, PendingSkill } from '../types'
+
+export interface OptimisticProcedure {
+  id: string
+  entityId: string
+  skillName: string
+}
+
+export interface SkillsState {
+  skills: SkillDTO[]
+  loading: boolean
+  pendingSkills: PendingSkill[]
+  optimisticProcedures: OptimisticProcedure[]
+  pickerContext: { taskId: string; sessionId: string } | null
+  savingDraft: { draftId: string; skillName: string; pendingSkillId: string; sessionId: string } | null
+}
+
+export interface SkillsActions {
+  fetchSkills: () => Promise<void>
+  openPicker: (taskId: string, sessionId: string) => void
+  closePicker: () => void
+  addPendingSkill: (skill: PendingSkill) => void
+  resolvePendingSkill: (id: string, finalName: string) => void
+  errorPendingSkill: (id: string) => void
+  removePendingSkill: (id: string) => void
+  clearSavingDraft: () => void
+  addOptimisticProcedure: (item: OptimisticProcedure) => void
+  removeOptimisticProcedure: (id: string) => void
+}
+
+export function useSkills(): SkillsState & SkillsActions {
+  const [skills, setSkills] = useState<SkillDTO[]>([])
+  const [loading, setLoading] = useState(false)
+  const [pendingSkills, setPendingSkills] = useState<PendingSkill[]>([])
+  const [optimisticProcedures, setOptimisticProcedures] = useState<OptimisticProcedure[]>([])
+  const [pickerContext, setPickerContext] = useState<{ taskId: string; sessionId: string } | null>(null)
+  const [savingDraft, setSavingDraft] = useState<{ draftId: string; skillName: string; pendingSkillId: string; sessionId: string } | null>(null)
+  const timeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const pendingSkillsRef = useRef<PendingSkill[]>([])
+
+  // Keep ref in sync so SSE handlers can read latest pending skills
+  useEffect(() => {
+    pendingSkillsRef.current = pendingSkills
+  }, [pendingSkills])
+
+  // Subscribe to skill.drafted and skill.saved SSE events
+  useEffect(() => {
+    const es = new EventSource('/api/events')
+
+    es.addEventListener('skill.drafted', (e: MessageEvent) => {
+      const { draftId, skillName } = JSON.parse(e.data) as { draftId: string; skillName: string }
+      // Cancel timeout for this pending skill
+      const timeout = timeoutsRef.current.get(draftId)
+      if (timeout) { clearTimeout(timeout); timeoutsRef.current.delete(draftId) }
+      // Read sessionId from the pending skill captured at addPendingSkill time
+      const matchingSkill = pendingSkillsRef.current.find(ps => ps.id === draftId)
+      const sessionId = matchingSkill?.sessionId ?? ''
+      // Transition matching pending skill to 'saving'
+      setPendingSkills(prev => prev.map(ps =>
+        ps.id === draftId ? { ...ps, status: 'saving' as const } : ps
+      ))
+      setSavingDraft({ draftId, skillName, pendingSkillId: draftId, sessionId })
+    })
+
+    es.addEventListener('skill.saved', () => {
+      // Cache busted server-side; re-fetch will happen on next picker open
+    })
+
+    return () => es.close()
+  }, [])
+
+  const fetchSkills = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/skills')
+      const data = await res.json() as { skills: SkillDTO[] }
+      setSkills(data.skills)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const openPicker = useCallback((taskId: string, sessionId: string) => {
+    setPickerContext({ taskId, sessionId })
+  }, [])
+
+  const closePicker = useCallback(() => {
+    setPickerContext(null)
+  }, [])
+
+  const addPendingSkill = useCallback((skill: PendingSkill) => {
+    setPendingSkills(prev => [...prev, skill])
+    // Set 30s timeout → error state
+    const timeout = setTimeout(() => {
+      setPendingSkills(prev => prev.map(ps =>
+        ps.id === skill.id && ps.status === 'defining' ? { ...ps, status: 'error' as const } : ps
+      ))
+      timeoutsRef.current.delete(skill.id)
+    }, 30_000)
+    timeoutsRef.current.set(skill.id, timeout)
+  }, [])
+
+  const resolvePendingSkill = useCallback((id: string, _finalName: string) => {
+    setPendingSkills(prev => prev.filter(ps => ps.id !== id))
+  }, [])
+
+  const errorPendingSkill = useCallback((id: string) => {
+    setPendingSkills(prev => prev.map(ps =>
+      ps.id === id ? { ...ps, status: 'error' as const } : ps
+    ))
+  }, [])
+
+  const removePendingSkill = useCallback((id: string) => {
+    const timeout = timeoutsRef.current.get(id)
+    if (timeout) { clearTimeout(timeout); timeoutsRef.current.delete(id) }
+    setPendingSkills(prev => prev.filter(ps => ps.id !== id))
+  }, [])
+
+  const clearSavingDraft = useCallback(() => {
+    setSavingDraft(null)
+  }, [])
+
+  const addOptimisticProcedure = useCallback((item: OptimisticProcedure) => {
+    setOptimisticProcedures(prev => [...prev, item])
+  }, [])
+
+  const removeOptimisticProcedure = useCallback((id: string) => {
+    setOptimisticProcedures(prev => prev.filter(op => op.id !== id))
+  }, [])
+
+  return {
+    skills, loading, pendingSkills, optimisticProcedures, pickerContext, savingDraft,
+    fetchSkills, openPicker, closePicker, addPendingSkill,
+    resolvePendingSkill, errorPendingSkill, removePendingSkill, clearSavingDraft,
+    addOptimisticProcedure, removeOptimisticProcedure,
+  }
+}

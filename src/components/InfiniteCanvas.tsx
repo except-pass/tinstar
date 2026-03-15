@@ -6,6 +6,8 @@ import { useSelection } from './SelectionProvider'
 import { CanvasWidget } from './CanvasWidget'
 import { GroupContainer } from './GroupContainer'
 import { ReassignDialog } from './ReassignDialog'
+import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
+import { useHotgroupContext } from '../hotkeys/HotgroupContext'
 
 interface Props {
   tree: TreeNode[]
@@ -19,6 +21,8 @@ interface Props {
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
   arrangeGridRef?: React.MutableRefObject<(() => void) | null>
   arrangeResetRef?: React.MutableRefObject<(() => void) | null>
+  zoomToFitRunsRef?: React.MutableRefObject<((runIds: string[]) => void) | null>
+  panToRunsRef?: React.MutableRefObject<((runIds: string[]) => void) | null>
 }
 
 /** Extract entity type and ID from a tree node ID like "initiative-abc123" */
@@ -74,6 +78,20 @@ function collectRunNodeIds(nodes: TreeNode[]): string[] {
   return result
 }
 
+/** Collect run node IDs that are descendants of the given selected entity node IDs */
+function collectRunsUnderSelected(nodes: TreeNode[], selectedIds: Set<string>): string[] {
+  const result: string[] = []
+  for (const node of nodes) {
+    if (selectedIds.has(node.id)) {
+      if (node.type === 'run') result.push(node.id)
+      else result.push(...collectRunNodeIds(node.children))
+    } else {
+      result.push(...collectRunsUnderSelected(node.children, selectedIds))
+    }
+  }
+  return result
+}
+
 interface DropTarget {
   nodeId: string
   label: string
@@ -95,7 +113,7 @@ interface MarqueeRect {
 
 const MARQUEE_THRESHOLD = 5
 
-export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, arrangeGridRef, arrangeResetRef }: Props) {
+export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, arrangeGridRef, arrangeResetRef, zoomToFitRunsRef, panToRunsRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -108,8 +126,8 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     getLayout,
     arrangeWorkspace,
   } = useWidgetLayouts(tree, activeSpaceId)
-  const { camera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
-  const { selectMany, deselect, isSelected } = useSelection()
+  const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
+  const { selectMany, deselect, isSelected, state: selectionState, expandAll } = useSelection()
 
   // Drag-to-reassign state
   const draggingRunRef = useRef<string | null>(null)
@@ -207,7 +225,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   )
 
   const onPointerUp = useCallback(
-    (e: ReactPointerEvent) => {
+    (_e: ReactPointerEvent) => {
       // Always end pan (handles both space+drag and middle-click pan)
       endPan()
       if (spaceHeld.current) {
@@ -319,7 +337,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     if (target) {
       let nodeId: string | null = `run-${draggingRunRef.current}`
       while (nodeId) {
-        const parent = parentMapRef.current.get(nodeId) ?? null
+        const parent: string | null = parentMapRef.current.get(nodeId) ?? null
         if (parent === target.nodeId) { target = null; break }
         nodeId = parent
       }
@@ -395,9 +413,17 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     if (!el) return
     const rect = el.getBoundingClientRect()
 
-    // Determine which runs to arrange
-    const targetIds = runNodeIdsRef.current.filter(id => isSelected(id))
-    const ids = targetIds.length > 0 ? targetIds : runNodeIdsRef.current
+    // Determine which runs to arrange:
+    // - entity selected (task/epic/initiative/worktree): runs under that entity
+    // - run nodes selected: those specific runs
+    // - nothing selected: all runs
+    let ids: string[]
+    if (selectionState.selectedType !== 'run' && selectionState.selectedIds.size > 0) {
+      ids = collectRunsUnderSelected(tree, selectionState.selectedIds)
+    } else {
+      const selected = runNodeIdsRef.current.filter(id => isSelected(id))
+      ids = selected.length > 0 ? selected : runNodeIdsRef.current
+    }
     if (ids.length === 0) return
 
     // Viewport in canvas coords
@@ -420,7 +446,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
       updateRunPosition(nodeId, nx, ny)
       updateRunSize(nodeId, cellW, cellH)
     })
-  }, [camera, isSelected, updateRunPosition, updateRunSize])
+  }, [camera, selectionState, tree, isSelected, updateRunPosition, updateRunSize])
 
   // Expose arrange functions to parent via refs
   useEffect(() => {
@@ -432,6 +458,103 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     if (arrangeResetRef) arrangeResetRef.current = arrangeWorkspace
     return () => { if (arrangeResetRef) arrangeResetRef.current = null }
   }, [arrangeResetRef, arrangeWorkspace])
+
+  // Compute bounding box of a set of run node IDs using current layouts
+  const getBoundingBox = useCallback((runIds: string[]): { x: number; y: number; w: number; h: number } | null => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const id of runIds) {
+      const layout = layouts.get(id)
+      if (!layout) continue
+      minX = Math.min(minX, layout.x)
+      minY = Math.min(minY, layout.y)
+      maxX = Math.max(maxX, layout.x + layout.width)
+      maxY = Math.max(maxY, layout.y + layout.height)
+    }
+    if (!isFinite(minX)) return null
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  }, [layouts])
+
+  // zoomToFitRuns: compute bounding box and zoom-to-fit with 40px margin
+  const zoomToFitRuns = useCallback((runIds: string[]) => {
+    const el = containerRef.current
+    if (!el) return
+    const box = getBoundingBox(runIds)
+    if (!box) return
+    const rect = el.getBoundingClientRect()
+    centerOn(box.x, box.y, box.w, box.h, rect.width, rect.height)
+  }, [getBoundingBox, centerOn])
+
+  // panToRuns: pan to center bounding box at current zoom, 60px margin (no zoom change)
+  const panToRuns = useCallback((runIds: string[]) => {
+    const el = containerRef.current
+    if (!el) return
+    const box = getBoundingBox(runIds)
+    if (!box) return
+    const rect = el.getBoundingClientRect()
+    const MARGIN = 60
+    const zoom = camera.zoom
+    // Center of bounding box in canvas coords
+    const cx = box.x + box.w / 2
+    const cy = box.y + box.h / 2
+    // Target camera position: center the bounding box in viewport
+    const newX = rect.width / 2 - cx * zoom
+    const newY = rect.height / 2 - cy * zoom
+    // Check if box fits at current zoom with margin; if not, clamp to show top-left
+    const boxScreenW = box.w * zoom
+    const boxScreenH = box.h * zoom
+    if (boxScreenW > rect.width - MARGIN * 2 || boxScreenH > rect.height - MARGIN * 2) {
+      // Box doesn't fit at current zoom — just center it anyway
+      setCamera(prev => ({ ...prev, x: newX, y: newY }))
+    } else {
+      setCamera(prev => ({ ...prev, x: newX, y: newY }))
+    }
+  }, [getBoundingBox, camera.zoom, setCamera])
+
+  // Expose zoomToFitRuns and panToRuns via refs
+  useEffect(() => {
+    if (zoomToFitRunsRef) zoomToFitRunsRef.current = zoomToFitRuns
+    return () => { if (zoomToFitRunsRef) zoomToFitRunsRef.current = null }
+  }, [zoomToFitRunsRef, zoomToFitRuns])
+
+  useEffect(() => {
+    if (panToRunsRef) panToRunsRef.current = panToRuns
+    return () => { if (panToRunsRef) panToRunsRef.current = null }
+  }, [panToRunsRef, panToRuns])
+
+  // Hotgroup context and canvas hotkeys
+  const hotgroups = useHotgroupContext()
+
+  useCanvasHotkeys({
+    onHotgroupSelect: (slot, isDoubleTap) => {
+      // hotgroups stores raw run IDs (e.g. 'R-241'), layouts keys are node IDs ('run-R-241')
+      const nodeIds = hotgroups.runsInSlot(slot).map(id => `run-${id}`).filter(id => layouts.has(id))
+      if (nodeIds.length === 0) return
+      selectMany(nodeIds, 'run')
+      // Expand ancestors in sidebar
+      expandAll(nodeIds)
+      if (isDoubleTap) {
+        zoomToFitRuns(nodeIds)
+      } else {
+        panToRuns(nodeIds)
+      }
+    },
+    onHotgroupAssign: (slot) => {
+      if (selectionState.selectedType !== 'run') return
+      for (const nodeId of selectionState.selectedIds) {
+        const runId = nodeId.startsWith('run-') ? nodeId.slice(4) : nodeId
+        hotgroups.assign(slot, runId)
+      }
+    },
+    onHotgroupRemove: (slot) => {
+      if (selectionState.selectedType !== 'run') return
+      for (const nodeId of selectionState.selectedIds) {
+        const runId = nodeId.startsWith('run-') ? nodeId.slice(4) : nodeId
+        hotgroups.remove(slot, runId)
+      }
+    },
+    onArrangeGrid: () => arrangeGridRef?.current?.(),
+    onArrangeReset: () => arrangeResetRef?.current?.(),
+  })
 
   const handleDeleteGroup = useCallback((nodeId: string) => {
     if (!onDeleteEntity) return
@@ -466,8 +589,8 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
           zoom={camera.zoom}
           spaceHeldRef={spaceHeld}
           selected={selected}
-          onMove={(runId, x, y) => handleMultiMove(node.id, x, y)}
-          onResize={(runId, w, h) => updateRunSize(node.id, w, h)}
+          onMove={(_runId, x, y) => handleMultiMove(node.id, x, y)}
+          onResize={(_runId, w, h) => updateRunSize(node.id, w, h)}
           onSelect={onSelectRun}
           onDoubleClickZoom={onFocusRun}
           onDragStart={handleWidgetDragStart}

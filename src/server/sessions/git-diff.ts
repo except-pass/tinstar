@@ -66,10 +66,10 @@ export async function getGitDiffFiles(workdir: string): Promise<TouchedFile[]> {
     // Batch wc -l for all untracked files
     const wc = await execFileAsync(
       'xargs', ['wc', '-l'],
-      { cwd: workdir, timeout: 5000, input: untrackedPaths.join('\n') },
+      { cwd: workdir, timeout: 5000, input: untrackedPaths.join('\n') } as Parameters<typeof execFileAsync>[2],
     ).catch(() => ({ stdout: '' }))
     const lineCounts = new Map<string, number>()
-    for (const wcLine of wc.stdout.trim().split('\n')) {
+    for (const wcLine of (wc.stdout as string).trim().split('\n')) {
       const match = wcLine.trim().match(/^(\d+)\s+(.+)$/)
       if (match && match[2] !== 'total') {
         lineCounts.set(match[2]!, parseInt(match[1]!, 10))

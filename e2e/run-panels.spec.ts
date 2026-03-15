@@ -54,7 +54,7 @@ test.describe('Run Widget Panels', () => {
       await collapsedProcs.click()
 
       // After expanding, should show procedures content
-      await expect(firstWidget.getByText('Procedures')).toBeVisible()
+      await expect(firstWidget.getByText('Procedures', { exact: true })).toBeVisible()
     }
   })
 

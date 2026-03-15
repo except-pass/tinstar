@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import type { Initiative, Epic, Task, Worktree, Run, Space } from '../domain/types'
+import type { CommitRecord } from '../types'
 
 interface ServerState {
   activeSpaceId: string
@@ -9,6 +10,8 @@ interface ServerState {
   tasks: Task[]
   worktrees: Worktree[]
   runs: Run[]
+  readyQueue: string[]
+  commits: CommitRecord[]
 }
 
 const EMPTY_STATE: ServerState = {
@@ -19,6 +22,8 @@ const EMPTY_STATE: ServerState = {
   tasks: [],
   worktrees: [],
   runs: [],
+  readyQueue: [],
+  commits: [],
 }
 
 export function useServerEvents(): {
@@ -36,8 +41,8 @@ export function useServerEvents(): {
     esRef.current = es
 
     es.addEventListener('snapshot', (e: MessageEvent) => {
-      const snapshot = JSON.parse(e.data) as ServerState
-      setState(snapshot)
+      const snapshot = JSON.parse(e.data) as ServerState & { ready_queue?: string[] }
+      setState({ ...snapshot, readyQueue: snapshot.ready_queue ?? [] })
       setLoading(false)
     })
 
@@ -139,12 +144,31 @@ export function useServerEvents(): {
           }
         }
 
+        if (delta.entity === 'commit') {
+          if (delta.data === null) {
+            return { ...prev, commits: prev.commits.filter(c => c.sha !== delta.id) }
+          }
+          const commit = delta.data as CommitRecord
+          const exists = prev.commits.some(c => c.sha === commit.sha)
+          return {
+            ...prev,
+            commits: exists
+              ? prev.commits.map(c => c.sha === commit.sha ? commit : c)
+              : [...prev.commits, commit],
+          }
+        }
+
         return prev
       })
     })
 
     es.addEventListener('heartbeat', () => {
       // Keep-alive, no action needed
+    })
+
+    es.addEventListener('ready_queue_update', (e: MessageEvent) => {
+      const { queue } = JSON.parse(e.data) as { queue: string[] }
+      setState(prev => ({ ...prev, readyQueue: queue }))
     })
 
     es.onopen = () => setConnected(true)

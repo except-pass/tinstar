@@ -1,6 +1,7 @@
 import { useRef, useCallback, type PointerEvent as ReactPointerEvent } from 'react'
 import type { Run } from '../domain/types'
 import { RunWorkspaceWidget } from './RunWorkspaceWidget'
+import { hexToRgba, resolveRunAccent } from './runAccent'
 
 interface Props {
   run: Run
@@ -117,6 +118,8 @@ export function CanvasWidget({
     }
   }, [run.id, onSelect])
 
+  const runAccent = resolveRunAccent(run.color)
+
   const handleDoubleClick = useCallback(() => {
     if (onDoubleClickZoom) {
       onDoubleClickZoom(run.id)
@@ -126,8 +129,18 @@ export function CanvasWidget({
   return (
     <div
       data-testid={`canvas-widget-${run.id}`}
-      className={`absolute flex flex-col bg-surface-base ${selected ? 'ring-2 ring-primary shadow-[0_0_12px_rgba(0,240,255,0.3)]' : 'neon-border'}`}
-      style={{ left: x, top: y, width, height }}
+      data-selected={selected ? 'true' : undefined}
+      className="absolute flex flex-col bg-surface-base border"
+      style={{
+        left: x,
+        top: y,
+        width,
+        height,
+        borderColor: selected ? runAccent : hexToRgba(runAccent, 0.3),
+        boxShadow: selected
+          ? `0 0 0 2px ${runAccent}, 0 0 12px ${hexToRgba(runAccent, 0.3)}`
+          : `0 0 6px ${hexToRgba(runAccent, 0.12)}`,
+      }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
     >
@@ -144,7 +157,7 @@ export function CanvasWidget({
       <div
         className="absolute right-0 bottom-0 w-3 h-3 cursor-se-resize z-10"
         style={{
-          background: 'linear-gradient(135deg, transparent 50%, rgba(0, 240, 255, 0.4) 50%)',
+          background: `linear-gradient(135deg, transparent 50%, ${hexToRgba(runAccent, 0.4)} 50%)`,
         }}
         onPointerDown={handleResizeDown}
         onPointerMove={handleResizeMove}

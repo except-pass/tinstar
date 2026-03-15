@@ -70,7 +70,7 @@ export function buildClaudeCommand(opts: {
     cmd += ` --session-id ${opts.sessionId}`
   }
   if (opts.initialPrompt) {
-    cmd += ` ${JSON.stringify(opts.initialPrompt)}`
+    cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
   }
   return cmd
 }
@@ -271,6 +271,11 @@ export function onTtydRestart(sessionName: string, callback: (pid: number) => vo
   if (entry) entry.onRestart = callback
 }
 
+export async function sendKeys(config: TinstarConfig, sessionName: string, keys: string[]): Promise<void> {
+  const tmuxName = tmuxSessionName(config, sessionName)
+  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, ...keys])
+}
+
 export async function sendPrompt(config: TinstarConfig, sessionName: string, prompt: string): Promise<void> {
   const tmuxName = tmuxSessionName(config, sessionName)
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, prompt, ''])
@@ -297,7 +302,7 @@ export async function healthCheck(port: number, opts: { timeout?: number; interv
 
 export async function installHooks(
   workspacePath: string,
-  sessionName: string,
+  _sessionName: string,
   dashboardUrl: string,
 ): Promise<void> {
   const claudeDir = join(workspacePath, '.claude')
@@ -345,6 +350,10 @@ export async function installHooks(
         matcher: 'Read',
         hooks: [{ type: 'command', command: fileHookCmd('file-read') }],
       },
+      {
+        matcher: 'Bash',
+        hooks: [{ type: 'command', command: hookCmd('file-touched') }],
+      },
     ],
   }
 
@@ -372,7 +381,7 @@ export async function removeHooks(workspacePath: string): Promise<void> {
   if (!hooks) return
 
   for (const event of Object.keys(hooks)) {
-    hooks[event] = hooks[event].filter(
+    hooks[event] = (hooks[event] ?? []).filter(
       (h: Record<string, unknown>) => !(h.hooks as Array<Record<string, unknown>>)?.some(
         (hh: Record<string, unknown>) => (hh.command as string)?.includes('/api/hooks/')
       )

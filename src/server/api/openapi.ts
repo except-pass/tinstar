@@ -1,0 +1,637 @@
+/** OpenAPI 3.0 specification for the Tinstar API */
+export const spec = {
+  openapi: '3.0.3',
+  info: {
+    title: 'Tinstar API',
+    version: '3.1.0',
+    description: 'Session orchestration, taxonomy management, and observability for Claude Code agents.',
+  },
+  servers: [{ url: '/' }],
+  tags: [
+    { name: 'State', description: 'Full document-store snapshot and SSE stream' },
+    { name: 'Spaces', description: 'Workspace isolation' },
+    { name: 'Initiatives', description: 'Top-level taxonomy nodes' },
+    { name: 'Epics', description: 'Mid-level taxonomy nodes' },
+    { name: 'Tasks', description: 'Leaf-level taxonomy nodes' },
+    { name: 'Worktrees', description: 'Git worktree tracking' },
+    { name: 'Runs', description: 'Agent run instances' },
+    { name: 'Sessions', description: 'Docker/tmux session lifecycle' },
+    { name: 'Hooks', description: 'Callbacks from Claude Code inside sessions' },
+    { name: 'Projects', description: 'Registered project directories' },
+    { name: 'Docker', description: 'Image profiles and Docker management' },
+    { name: 'Config', description: 'User configuration' },
+    { name: 'Editor', description: 'Open files in external editor' },
+    { name: 'Observability', description: 'OpenTelemetry spans and metrics' },
+    { name: 'Simulator', description: 'Mock data generator (dev/test only)' },
+  ],
+  paths: {
+    // ── State ────────────────────────────────────────────
+    '/api/state': {
+      get: {
+        tags: ['State'],
+        summary: 'Full document-store snapshot',
+        responses: {
+          200: { description: 'Current state', content: { 'application/json': { schema: { $ref: '#/components/schemas/State' } } } },
+        },
+      },
+    },
+    '/api/events': {
+      get: {
+        tags: ['State'],
+        summary: 'Server-Sent Events stream',
+        description: 'Real-time updates for all state changes. Sends an initial snapshot followed by delta events.',
+        responses: {
+          200: { description: 'SSE stream', content: { 'text/event-stream': {} } },
+        },
+      },
+    },
+
+    // ── Spaces ───────────────────────────────────────────
+    '/api/spaces': {
+      get: {
+        tags: ['Spaces'],
+        summary: 'List all spaces',
+        responses: { 200: { description: 'Space list', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, data: { type: 'array', items: { $ref: '#/components/schemas/Space' } } } } } } } },
+      },
+      post: {
+        tags: ['Spaces'],
+        summary: 'Create a space',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' } } } } } },
+        responses: { 201: { description: 'Created' } },
+      },
+    },
+    '/api/spaces/{id}': {
+      patch: {
+        tags: ['Spaces'],
+        summary: 'Update a space',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' } } } } } },
+        responses: { 200: { description: 'Updated' } },
+      },
+      delete: {
+        tags: ['Spaces'],
+        summary: 'Delete a space',
+        description: 'Cannot delete the last or currently active space.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' }, 400: { description: 'Cannot delete last/active space' } },
+      },
+    },
+    '/api/spaces/{id}/activate': {
+      post: {
+        tags: ['Spaces'],
+        summary: 'Set active space',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Activated' } },
+      },
+    },
+
+    // ── Initiatives ──────────────────────────────────────
+    '/api/initiatives': {
+      post: {
+        tags: ['Initiatives'],
+        summary: 'Create an initiative',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' }, color: { type: 'string' }, status: { type: 'string', enum: ['active', 'paused', 'archived'] }, summary: { type: 'string' } } } } } },
+        responses: { 201: { description: 'Created', content: { 'application/json': { schema: { $ref: '#/components/schemas/Initiative' } } } } },
+      },
+    },
+    '/api/initiatives/{id}': {
+      patch: {
+        tags: ['Initiatives'],
+        summary: 'Update an initiative',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' }, color: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' }, settings: { $ref: '#/components/schemas/EntitySettings' } } } } } },
+        responses: { 200: { description: 'Updated' } },
+      },
+      delete: {
+        tags: ['Initiatives'],
+        summary: 'Delete an initiative',
+        description: 'Children are orphaned, not deleted.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' } },
+      },
+    },
+    '/api/initiatives/{id}/settings': {
+      get: {
+        tags: ['Initiatives'],
+        summary: 'Resolved settings (with inheritance)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Resolved settings showing inherited vs local values' } },
+      },
+    },
+
+    // ── Epics ────────────────────────────────────────────
+    '/api/epics': {
+      post: {
+        tags: ['Epics'],
+        summary: 'Create an epic',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' }, initiativeId: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } } } } } },
+        responses: { 201: { description: 'Created' } },
+      },
+    },
+    '/api/epics/{id}': {
+      patch: {
+        tags: ['Epics'],
+        summary: 'Update an epic',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' }, initiativeId: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' }, settings: { $ref: '#/components/schemas/EntitySettings' } } } } } },
+        responses: { 200: { description: 'Updated' } },
+      },
+      delete: {
+        tags: ['Epics'],
+        summary: 'Delete an epic',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' } },
+      },
+    },
+    '/api/epics/{id}/settings': {
+      get: {
+        tags: ['Epics'],
+        summary: 'Resolved settings (with inheritance)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Resolved settings' } },
+      },
+    },
+
+    // ── Tasks ────────────────────────────────────────────
+    '/api/tasks': {
+      post: {
+        tags: ['Tasks'],
+        summary: 'Create a task',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' }, epicId: { type: 'string' }, initiativeId: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } } } } } },
+        responses: { 201: { description: 'Created' } },
+      },
+    },
+    '/api/tasks/{id}': {
+      patch: {
+        tags: ['Tasks'],
+        summary: 'Update a task',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' }, epicId: { type: 'string' }, initiativeId: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' }, settings: { $ref: '#/components/schemas/EntitySettings' } } } } } },
+        responses: { 200: { description: 'Updated' } },
+      },
+      delete: {
+        tags: ['Tasks'],
+        summary: 'Delete a task',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' } },
+      },
+    },
+    '/api/tasks/{id}/settings': {
+      get: {
+        tags: ['Tasks'],
+        summary: 'Resolved settings (with inheritance)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Resolved settings' } },
+      },
+    },
+
+    // ── Worktrees ────────────────────────────────────────
+    '/api/worktrees': {
+      post: {
+        tags: ['Worktrees'],
+        summary: 'Create a worktree record',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { name: { type: 'string' }, branch: { type: 'string' }, repo: { type: 'string' }, worktreePath: { type: 'string' } } } } } },
+        responses: { 201: { description: 'Created' } },
+      },
+    },
+    '/api/worktrees/{id}': {
+      patch: {
+        tags: ['Worktrees'],
+        summary: 'Update a worktree',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Updated' } },
+      },
+      delete: {
+        tags: ['Worktrees'],
+        summary: 'Delete a worktree',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' } },
+      },
+    },
+
+    // ── Runs ─────────────────────────────────────────────
+    '/api/runs/{id}': {
+      patch: {
+        tags: ['Runs'],
+        summary: 'Update a run',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object' } } } },
+        responses: { 200: { description: 'Updated' } },
+      },
+    },
+
+    // ── Sessions ─────────────────────────────────────────
+    '/api/sessions': {
+      get: {
+        tags: ['Sessions'],
+        summary: 'List all sessions',
+        description: 'Triggers backend reconciliation (checks Docker/tmux process state).',
+        responses: { 200: { description: 'Session list', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, data: { type: 'array', items: { $ref: '#/components/schemas/Session' } } } } } } } },
+      },
+      post: {
+        tags: ['Sessions'],
+        summary: 'Create a new session',
+        description: 'Starts a Docker container or tmux session with Claude Code.',
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: {
+            type: 'object',
+            required: ['name'],
+            properties: {
+              name: { type: 'string', description: 'Session name (unique identifier)' },
+              backend: { type: 'string', enum: ['docker', 'tmux'], default: 'docker' },
+              project: { type: 'string', description: 'Project name for workspace mount' },
+              worktree: { type: 'boolean', default: false },
+              worktreePath: { type: 'string', description: 'Existing worktree path (if not creating new)' },
+              profile: { type: 'string', description: 'Docker image profile name' },
+              prompt: { type: 'string', description: 'Initial message to send to Claude' },
+              oneshot: { type: 'boolean', default: false, description: 'Auto-stop after Claude finishes (Docker only)' },
+              skipPermissions: { type: 'boolean', default: true },
+              taskId: { type: 'string' },
+              epicId: { type: 'string' },
+              initiativeId: { type: 'string' },
+              color: { type: 'string' },
+            },
+          } } },
+        },
+        responses: { 201: { description: 'Session created and started' }, 400: { description: 'Missing name or invalid config' }, 409: { description: 'Session name already exists' } },
+      },
+    },
+    '/api/sessions/{name}': {
+      get: {
+        tags: ['Sessions'],
+        summary: 'Get session by name',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Session details' }, 404: { description: 'Not found' } },
+      },
+      delete: {
+        tags: ['Sessions'],
+        summary: 'Delete a session',
+        description: 'Responds immediately, then asynchronously stops backend, removes worktree, and cleans up.',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' } },
+      },
+    },
+    '/api/sessions/{name}/start': {
+      post: {
+        tags: ['Sessions'],
+        summary: 'Start/resume a stopped session',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Started' } },
+      },
+    },
+    '/api/sessions/{name}/stop': {
+      post: {
+        tags: ['Sessions'],
+        summary: 'Stop a running session',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Stopped' } },
+      },
+    },
+    '/api/sessions/{name}/files': {
+      get: {
+        tags: ['Sessions'],
+        summary: 'List files in session workspace',
+        parameters: [
+          { name: 'name', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'path', in: 'query', schema: { type: 'string', default: '.' }, description: 'Relative directory path' },
+        ],
+        responses: { 200: { description: 'File listing', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, data: { type: 'array', items: { $ref: '#/components/schemas/FileEntry' } } } } } } } },
+      },
+    },
+    '/api/sessions/{name}/send-keys': {
+      post: {
+        tags: ['Sessions'],
+        summary: 'Send raw tmux keys to a session',
+        description: 'Sends arbitrary key sequences to the session\'s tmux pane. Works for both Docker and tmux backends.',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: {
+            type: 'object',
+            required: ['keys'],
+            properties: {
+              keys: { type: 'array', items: { type: 'string' }, description: 'Array of tmux key arguments (passed directly to tmux send-keys)', example: ['hello world', 'Enter'] },
+            },
+          } } },
+        },
+        responses: { 200: { description: 'Keys sent' }, 400: { description: 'Invalid keys' }, 404: { description: 'Session not found' } },
+      },
+    },
+    '/api/sessions/{name}/enter-prompt': {
+      post: {
+        tags: ['Sessions'],
+        summary: 'Type text then submit with Enter',
+        description: 'Sends the prompt text to the session, waits 300ms for the terminal to process it, then sends Enter. This avoids the common pitfall where sending text+Enter in one shot causes a newline instead of submission in Claude Code.',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: {
+            type: 'object',
+            required: ['prompt'],
+            properties: {
+              prompt: { type: 'string', description: 'Text to type into the session' },
+            },
+          } } },
+        },
+        responses: { 200: { description: 'Prompt submitted' }, 400: { description: 'Missing prompt' }, 404: { description: 'Session not found' } },
+      },
+    },
+    '/api/sessions/{name}/refresh-route': {
+      post: {
+        tags: ['Sessions'],
+        summary: 'Re-register Caddy reverse proxy route',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Route refreshed' } },
+      },
+    },
+
+    // ── Hooks ────────────────────────────────────────────
+    '/api/hooks/idle': {
+      post: {
+        tags: ['Hooks'],
+        summary: 'Session went idle',
+        description: 'Called by Claude Code Stop hook. Triggers transcript parsing.',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['session'], properties: { session: { type: 'string' }, conversationId: { type: 'string' } } } } } },
+        responses: { 200: { description: 'Acknowledged' } },
+      },
+    },
+    '/api/hooks/active': {
+      post: {
+        tags: ['Hooks'],
+        summary: 'Session became active',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['session'], properties: { session: { type: 'string' }, conversationId: { type: 'string' } } } } } },
+        responses: { 200: { description: 'Acknowledged' } },
+      },
+    },
+    '/api/hooks/file-touched': {
+      post: {
+        tags: ['Hooks'],
+        summary: 'File was written/edited',
+        description: 'Triggers async git diff reconciliation.',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['session'], properties: { session: { type: 'string' }, path: { type: 'string' } } } } } },
+        responses: { 200: { description: 'Acknowledged' } },
+      },
+    },
+    '/api/hooks/file-read': {
+      post: {
+        tags: ['Hooks'],
+        summary: 'File was read',
+        description: 'Records file as read-only in the run\'s touched files.',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['session', 'path'], properties: { session: { type: 'string' }, path: { type: 'string' } } } } } },
+        responses: { 200: { description: 'Acknowledged' } },
+      },
+    },
+
+    // ── Projects ─────────────────────────────────────────
+    '/api/projects': {
+      get: {
+        tags: ['Projects'],
+        summary: 'List registered projects',
+        responses: { 200: { description: 'Project map' } },
+      },
+      post: {
+        tags: ['Projects'],
+        summary: 'Register a project',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['name', 'path'], properties: { name: { type: 'string' }, path: { type: 'string' } } } } } },
+        responses: { 201: { description: 'Registered' }, 400: { description: 'Missing fields' } },
+      },
+    },
+    '/api/projects/{name}': {
+      delete: {
+        tags: ['Projects'],
+        summary: 'Unregister a project',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Unregistered' }, 404: { description: 'Not found' } },
+      },
+    },
+    '/api/projects/{name}/worktrees': {
+      get: {
+        tags: ['Projects'],
+        summary: 'List git worktrees for a project',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Worktree list' } },
+      },
+    },
+
+    // ── Docker ───────────────────────────────────────────
+    '/api/docker/profiles': {
+      get: {
+        tags: ['Docker'],
+        summary: 'List image profiles',
+        responses: { 200: { description: 'Profile list' } },
+      },
+      post: {
+        tags: ['Docker'],
+        summary: 'Create an image profile',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['name', 'image'], properties: { name: { type: 'string' }, image: { type: 'string' }, home: { type: 'string' } } } } } },
+        responses: { 201: { description: 'Created' }, 409: { description: 'Duplicate name' } },
+      },
+    },
+    '/api/docker/profiles/{name}': {
+      delete: {
+        tags: ['Docker'],
+        summary: 'Delete an image profile',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' }, 404: { description: 'Not found' } },
+      },
+    },
+    '/api/docker/images': {
+      get: {
+        tags: ['Docker'],
+        summary: 'List local Docker images',
+        responses: { 200: { description: 'Image list', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, data: { type: 'array', items: { type: 'string' } } } } } } } },
+      },
+    },
+
+    // ── Config ───────────────────────────────────────────
+    '/api/config': {
+      get: {
+        tags: ['Config'],
+        summary: 'Read user configuration',
+        responses: { 200: { description: 'Config object' } },
+      },
+      patch: {
+        tags: ['Config'],
+        summary: 'Update user configuration',
+        description: 'Deep-merges into ~/.config/tinstar/config.json.',
+        requestBody: { content: { 'application/json': { schema: { type: 'object' } } } },
+        responses: { 200: { description: 'Merged config' } },
+      },
+    },
+
+    // ── Editor ───────────────────────────────────────────
+    '/api/editor/open': {
+      post: {
+        tags: ['Editor'],
+        summary: 'Open a file in the configured editor',
+        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['path'], properties: { path: { type: 'string' }, sessionId: { type: 'string', description: 'Session name to resolve relative paths against' } } } } } },
+        responses: { 200: { description: 'Editor launched' } },
+      },
+    },
+
+    // ── Observability ────────────────────────────────────
+    '/api/otel/spans': {
+      get: {
+        tags: ['Observability'],
+        summary: 'Query OpenTelemetry spans',
+        parameters: [{ name: 'traceId', in: 'query', schema: { type: 'string' }, description: 'Filter by trace ID' }],
+        responses: { 200: { description: 'Span list' } },
+      },
+    },
+    '/api/otel/metrics': {
+      get: {
+        tags: ['Observability'],
+        summary: 'Query OpenTelemetry metrics',
+        parameters: [{ name: 'name', in: 'query', schema: { type: 'string' }, description: 'Filter by metric name' }],
+        responses: { 200: { description: 'Metric list' } },
+      },
+    },
+
+    // ── Simulator ────────────────────────────────────────
+    '/api/simulator/start': {
+      post: {
+        tags: ['Simulator'],
+        summary: 'Start the mock data simulator',
+        responses: { 200: { description: 'Started' } },
+      },
+    },
+    '/api/simulator/reset': {
+      post: {
+        tags: ['Simulator'],
+        summary: 'Reset and restart the simulator',
+        description: 'Clears the document store and re-emits all mock events.',
+        responses: { 200: { description: 'Reset complete' } },
+      },
+    },
+  },
+
+  components: {
+    schemas: {
+      State: {
+        type: 'object',
+        properties: {
+          activeSpaceId: { type: 'string' },
+          spaces: { type: 'array', items: { $ref: '#/components/schemas/Space' } },
+          initiatives: { type: 'array' },
+          epics: { type: 'array' },
+          tasks: { type: 'array' },
+          worktrees: { type: 'array' },
+          runs: { type: 'array', items: { $ref: '#/components/schemas/Run' } },
+        },
+      },
+      Space: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      Initiative: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          color: { type: 'string' },
+          status: { type: 'string', enum: ['active', 'paused', 'archived'] },
+          summary: { type: 'string' },
+          settings: { $ref: '#/components/schemas/EntitySettings' },
+          spaceId: { type: 'string' },
+        },
+      },
+      EntitySettings: {
+        type: 'object',
+        description: 'Nullable fields — null means "inherit from parent".',
+        properties: {
+          project: { type: 'string', nullable: true },
+          backend: { type: 'string', enum: ['docker', 'tmux'], nullable: true },
+          profile: { type: 'string', nullable: true },
+          worktreeMode: { type: 'string', enum: ['none', 'new', 'existing'], nullable: true },
+          skipPermissions: { type: 'boolean', nullable: true },
+          prompt: { type: 'string', nullable: true },
+          defaultRunColor: { type: 'string', nullable: true },
+        },
+      },
+      Session: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          backend: { type: 'string', enum: ['docker', 'tmux'] },
+          state: { type: 'string', enum: ['running', 'idle', 'stopped', 'needs_attention'] },
+          project: { type: 'string' },
+          workspace: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              worktree: { type: 'boolean' },
+              branch: { type: 'string', nullable: true },
+            },
+          },
+          conversation: {
+            type: 'object',
+            properties: { id: { type: 'string' } },
+          },
+          profile: { type: 'string' },
+          port: { type: 'integer', nullable: true },
+          oneshot: { type: 'boolean' },
+          skipPermissions: { type: 'boolean' },
+          created: { type: 'string', format: 'date-time' },
+          lastActive: { type: 'string', format: 'date-time' },
+        },
+      },
+      Run: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          status: { type: 'string' },
+          sessionId: { type: 'string' },
+          color: { type: 'string' },
+          initiative: { type: 'string' },
+          epic: { type: 'string' },
+          task: { type: 'string' },
+          backend: { type: 'string' },
+          port: { type: 'integer', nullable: true },
+          touchedFiles: { type: 'array', items: { $ref: '#/components/schemas/TouchedFile' } },
+          recapEntries: { type: 'array' },
+          createdAt: { type: 'string', format: 'date-time' },
+          spaceId: { type: 'string' },
+        },
+      },
+      TouchedFile: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          path: { type: 'string' },
+          name: { type: 'string' },
+          kind: { type: 'string', enum: ['code', 'config', 'test', 'script', 'doc'] },
+          additions: { type: 'integer' },
+          deletions: { type: 'integer' },
+          readOnly: { type: 'boolean' },
+          pending: { type: 'boolean' },
+        },
+      },
+      FileEntry: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          path: { type: 'string' },
+          isDir: { type: 'boolean' },
+        },
+      },
+      Error: {
+        type: 'object',
+        properties: {
+          ok: { const: false },
+          error: {
+            type: 'object',
+            properties: {
+              code: { type: 'string' },
+              message: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const

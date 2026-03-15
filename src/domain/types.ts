@@ -3,18 +3,20 @@ export type {
   SessionStatus,
   RunStatus,
   FileKind,
-  ProcedureStatus,
   RecapEntryType,
   DiffLineType,
   DiffLine,
   DiffBlock,
   RecapEntry,
   TouchedFile,
-  Procedure,
+  StoredProcedure,
+  ResolvedProcedure,
+  PendingSkill,
+  SkillDTO,
   RunData,
 } from '../types'
 
-import type { RunData, SessionStatus as RunStatus } from '../types'
+import type { RunData, SessionStatus as RunStatus, StoredProcedure } from '../types'
 
 // --- Entity settings (closest-ancestor inheritance) ---
 
@@ -24,6 +26,8 @@ export interface EntitySettings {
   backend?: 'docker' | 'tmux'
   skipPermissions?: boolean
   profile?: string
+  defaultRunColor?: string
+  procedures?: StoredProcedure[]
 }
 
 export interface ResolvedSettings {
@@ -153,8 +157,6 @@ export interface RunSummaryViewModel {
   task: string
   worktree: string
   fileCount: number
-  procedureCount: number
-  activeProcedures: number
   lastActivity: string
   lastRecap: string | null
 }

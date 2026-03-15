@@ -18,6 +18,11 @@ export interface TinstarConfig {
   caddy: { listenPort: number; adminPort: number }
   dirs: { root: string; secrets: string; sessions: string }
   files: { config: string; projects: string }
+  git: {
+    taskMarkerRegex: string
+    reconciliationRepos: string[]
+    reconciliationBranchScope: string
+  }
 }
 
 // --- Helpers ---
@@ -63,6 +68,11 @@ const BASE_CONFIG = {
     listenPort: 8088,
     adminPort: 2019,
   },
+  git: {
+    taskMarkerRegex: '#([A-Za-z0-9_-]+)',
+    reconciliationRepos: [],
+    reconciliationBranchScope: '*',
+  },
 }
 
 // --- Public API ---
@@ -103,6 +113,17 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
       config: userConfigPath,
       projects: join(rootDir, 'projects.json'),
     },
+    git: {
+      taskMarkerRegex: typeof userConfig.taskMarkerRegex === 'string'
+        ? userConfig.taskMarkerRegex
+        : merged.git.taskMarkerRegex,
+      reconciliationRepos: Array.isArray(userConfig.reconciliationRepos)
+        ? userConfig.reconciliationRepos as string[]
+        : merged.git.reconciliationRepos,
+      reconciliationBranchScope: typeof userConfig.reconciliationBranchScope === 'string'
+        ? userConfig.reconciliationBranchScope
+        : merged.git.reconciliationBranchScope,
+    },
   }
 
   return deepFreeze(config)
@@ -130,6 +151,16 @@ export function ensureDirs(config: TinstarConfig): void {
   mkdirSync(config.dirs.root, { recursive: true })
   mkdirSync(config.dirs.secrets, { recursive: true })
   mkdirSync(config.dirs.sessions, { recursive: true })
+
+  // Copy start-ttyd.sh to config dir so it can be mounted into any container
+  const scriptDest = join(config.dirs.root, 'start-ttyd.sh')
+  try {
+    const scriptSrc = join(new URL('.', import.meta.url).pathname, 'scripts', 'start-ttyd.sh')
+    const content = readFileSync(scriptSrc, 'utf-8')
+    writeFileSync(scriptDest, content, { mode: 0o755 })
+  } catch {
+    // Script may already exist from a previous run, or source not found in production
+  }
 }
 
 export function loadActiveSpaceId(rootDir: string): string | null {

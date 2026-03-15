@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
+import { DEFAULT_RUN_ACCENT } from './runAccent'
 import type { GroupingDimension, EntitySettings, ResolvedSettings } from '../domain/types'
+import { ColorPalette } from './ColorPalette'
 
 interface Props {
   entityId: string
@@ -69,6 +71,7 @@ function SettingRow({ label, settingKey, resolved, draft, children, onToggle, on
 export function EntitySettingsDialog({ entityId, entityType, entityName, onClose }: Props) {
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
   const [projects, setProjects] = useState<{ name: string; path: string }[]>([])
+  const [profiles, setProfiles] = useState<{ name: string; image: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<EntitySettings>({})
   const [saving, setSaving] = useState(false)
@@ -81,10 +84,14 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
     Promise.all([
       fetch(`/api/${endpoint}/${entityId}/settings`).then(r => r.json()),
       fetch('/api/projects').then(r => r.json()),
-    ]).then(([settingsRes, projectsRes]) => {
+      fetch('/api/docker/profiles').then(r => r.json()),
+    ]).then(([settingsRes, projectsRes, profilesRes]) => {
       if (settingsRes.ok) setSettings(settingsRes.data)
       if (projectsRes?.ok && projectsRes.data && typeof projectsRes.data === 'object') {
         setProjects(Object.entries(projectsRes.data).map(([name, path]) => ({ name, path: path as string })))
+      }
+      if (profilesRes?.ok && Array.isArray(profilesRes.data)) {
+        setProfiles(profilesRes.data)
       }
       setLoading(false)
     })
@@ -101,6 +108,8 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
         worktree: inherited ?? 'none',
         skipPermissions: inherited ?? false,
         profile: inherited ?? '',
+        defaultRunColor: inherited ?? DEFAULT_RUN_ACCENT,
+        procedures: inherited ?? [],
       }
       setDraft(prev => ({ ...prev, [key]: defaults[key] }))
     } else {
@@ -267,6 +276,29 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 )}
               </SettingRow>
 
+
+              <SettingRow
+                label="Run Color"
+                settingKey="defaultRunColor"
+                resolved={settings}
+                draft={draft}
+                onToggle={handleToggle}
+                onValueChange={handleValueChange}
+              >
+                {(value, onChange) => {
+                  const color = String(value ?? DEFAULT_RUN_ACCENT)
+                  return (
+                    <div className="space-y-2">
+                      <ColorPalette value={color} onChange={onChange} />
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: color }} />
+                        <span className="text-xs font-mono" style={{ color }}>{color}</span>
+                      </div>
+                    </div>
+                  )
+                }}
+              </SettingRow>
+
               <SettingRow
                 label="Profile"
                 settingKey="profile"
@@ -276,12 +308,16 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 onValueChange={handleValueChange}
               >
                 {(value, onChange) => (
-                  <input
-                    className="bg-surface-base border border-primary/30 rounded px-2 py-1 text-xs text-primary outline-none w-full"
+                  <select
+                    className="bg-surface-base border border-primary/30 rounded px-2 py-1 text-xs text-primary outline-none"
                     value={String(value ?? '')}
                     onChange={(e) => onChange(e.target.value || undefined)}
-                    placeholder="Docker image..."
-                  />
+                  >
+                    <option value="">Select profile...</option>
+                    {profiles.map(p => (
+                      <option key={p.name} value={p.image}>{p.name} ({p.image})</option>
+                    ))}
+                  </select>
                 )}
               </SettingRow>
             </div>

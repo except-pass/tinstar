@@ -1,10 +1,15 @@
 import { test, expect } from '@playwright/test'
 import { resetAndWaitForData } from './helpers'
 
+// These tests mutate shared simulator state (delete entities).
+// Running them in parallel causes races where one test's reset wipes another's data.
+test.describe.configure({ mode: 'serial' })
+
 /** Open the kebab menu for a sidebar node and click a menu action */
 async function openMenuAndClick(page: import('@playwright/test').Page, nodeId: string, actionTestId: string) {
   const node = page.getByTestId(`sidebar-node-${nodeId}`)
-  await node.hover()
+  await expect(node).toBeVisible()
+  await node.hover({ force: true })
   await page.getByTestId(`menu-${nodeId}`).click({ force: true })
   const menu = page.getByTestId('entity-menu')
   await expect(menu).toBeVisible()

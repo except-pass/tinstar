@@ -1,4 +1,4 @@
-import type { SessionStatus, ProcedureStatus } from '../types'
+import type { SessionStatus } from '../types'
 
 /** Tailwind class for the status indicator dot */
 export const STATUS_DOT_CLASSES: Record<SessionStatus, string> = {
@@ -18,11 +18,3 @@ export const STATUS_BORDER_COLORS: Record<SessionStatus, string> = {
   stopped: '#64748b',
 }
 
-/** Tailwind text color class for procedure status indicators */
-export const PROC_STATUS_COLORS: Record<ProcedureStatus, string> = {
-  running: 'text-green-400',
-  complete: 'text-primary',
-  failed: 'text-red-400',
-  queued: 'text-amber-400',
-  idle: 'text-slate-500',
-}

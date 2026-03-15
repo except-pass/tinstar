@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { DEFAULT_RUN_ACCENT } from './runAccent'
+import { ColorPalette } from './ColorPalette'
 
 export interface SessionPrefill {
   project?: string
@@ -6,6 +8,7 @@ export interface SessionPrefill {
   worktreeMode?: 'none' | 'new' | 'existing'
   skipPermissions?: boolean
   profile?: string
+  runColor?: string
   taskId?: string
   epicId?: string
   initiativeId?: string
@@ -30,11 +33,10 @@ function generateName(): string {
   return `${a}-${n}-${id}`
 }
 
-/** Sanitize a session name: lowercase, replace invalid chars with dashes, collapse runs */
+/** Sanitize a session name: allow letters, digits, dashes, and underscores */
 function sanitizeName(raw: string): string {
   return raw
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/[^a-zA-Z0-9_-]/g, '-')
     .replace(/-{2,}/g, '-')
     .replace(/^-|-$/g, '')
 }
@@ -52,6 +54,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [availableWorktrees, setAvailableWorktrees] = useState<Array<{ path: string; branch?: string }>>([])
   const [skipPermissions, setSkipPermissions] = useState(prefill?.skipPermissions ?? true)
   const [prompt, setPrompt] = useState('')
+  const [runColor, setRunColor] = useState(prefill?.runColor ?? DEFAULT_RUN_ACCENT)
   const [taskId, setTaskId] = useState(prefill?.taskId ?? '')
   const [entities, setEntities] = useState<{ initiatives: EntityOption[]; epics: EntityOption[]; tasks: EntityOption[] }>({ initiatives: [], epics: [], tasks: [] })
   const [submitting, setSubmitting] = useState(false)
@@ -133,6 +136,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
     if (worktreeMode === 'existing' && worktreePath) body.worktreePath = worktreePath
     if (prompt.trim()) body.prompt = prompt.trim()
     if (taskId) body.taskId = taskId
+    if (runColor) body.color = runColor
     if (prefill?.epicId) body.epicId = prefill.epicId
     if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
 
@@ -153,7 +157,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       setError((err as Error).message)
       setSubmitting(false)
     }
-  }, [effectiveName, backend, profile, project, worktreeMode, worktreePath, skipPermissions, prompt, submitting, onClose])
+  }, [effectiveName, backend, profile, project, worktreeMode, worktreePath, skipPermissions, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -312,6 +316,17 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
             </select>
           </div>
         )}
+
+
+        {/* Run color */}
+        <div className="mb-3">
+          <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Run Color</label>
+          <ColorPalette value={runColor} onChange={setRunColor} />
+          <div className="flex items-center gap-2 mt-2">
+            <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: runColor }} />
+            <span className="text-xs font-mono" style={{ color: runColor }}>{runColor}</span>
+          </div>
+        </div>
 
         {/* Skip permissions */}
         <div className="flex items-center gap-2 mb-3">
