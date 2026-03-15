@@ -12,6 +12,7 @@ export interface SessionPrefill {
   taskId?: string
   epicId?: string
   initiativeId?: string
+  sources?: Record<string, { type: string; name: string }>
 }
 
 interface Props {
@@ -41,6 +42,15 @@ function sanitizeName(raw: string): string {
     .replace(/^-|-$/g, '')
 }
 
+function InheritedFrom({ source }: { source?: { type: string; name: string } }) {
+  if (!source) return null
+  return (
+    <span className="ml-1.5 text-2xs text-slate-500 normal-case tracking-normal font-normal">
+      · from {source.type}: <span className="text-slate-400">{source.name}</span>
+    </span>
+  )
+}
+
 export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [placeholder] = useState(generateName)
   const [name, setName] = useState('')
@@ -60,6 +70,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const nameRef = useRef<HTMLInputElement>(null)
+  const sources = prefill?.sources ?? {}
 
   useEffect(() => {
     nameRef.current?.focus()
@@ -198,7 +209,9 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
         <div className="flex gap-3 mb-3">
           {/* Backend toggle */}
           <div className="flex-1">
-            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Backend</label>
+            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">
+              Backend<InheritedFrom source={sources.backend} />
+            </label>
             <div className="flex rounded border border-white/10 overflow-hidden">
               {(['docker', 'tmux'] as Backend[]).map(b => (
                 <button
@@ -220,7 +233,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
           {/* Project picker */}
           <div className="flex-1">
             <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block group relative cursor-default">
-              Project
+              Project<InheritedFrom source={sources.project} />
               <span className="pointer-events-none absolute left-0 top-full mt-1 z-50 hidden group-hover:block w-56 px-2 py-1.5 rounded bg-slate-800 border border-white/10 text-2xs text-slate-300 leading-relaxed shadow-lg normal-case tracking-normal">
                 Sets the working directory. For tmux: opens at the project path (or a sibling worktree dir). For Docker: bind-mounted the same way. None = no mount.
               </span>
@@ -241,7 +254,9 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
         {/* Docker image profile */}
         {backend === 'docker' && profiles.length > 0 && (
           <div className="mb-3">
-            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Image</label>
+            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">
+              Image<InheritedFrom source={sources.profile} />
+            </label>
             <select
               value={profile}
               onChange={e => setProfile(e.target.value)}
@@ -258,7 +273,9 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
         {/* Worktree mode */}
         {project && (
           <div className="mb-3">
-            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Worktree</label>
+            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">
+              Worktree<InheritedFrom source={sources.worktree} />
+            </label>
             <div className="flex rounded border border-white/10 overflow-hidden">
               {(['none', 'new', 'existing'] as WorktreeMode[]).map(m => (
                 <button
@@ -320,7 +337,9 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
 
         {/* Run color */}
         <div className="mb-3">
-          <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Run Color</label>
+          <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">
+            Run Color<InheritedFrom source={sources.defaultRunColor} />
+          </label>
           <ColorPalette value={runColor} onChange={setRunColor} />
           <div className="flex items-center gap-2 mt-2">
             <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: runColor }} />
@@ -338,7 +357,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
             className="accent-primary"
           />
           <label htmlFor="skip-perms" className="text-xs text-slate-300 cursor-pointer">
-            Skip permissions
+            Skip permissions<InheritedFrom source={sources.skipPermissions} />
           </label>
           <span className="text-2xs text-slate-500">
             (--dangerously-skip-permissions)
