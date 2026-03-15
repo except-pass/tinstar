@@ -32,6 +32,7 @@
 | `vite.config.ts` | Add proxy to standalone backend for dev mode |
 | `package.json` | Add `bin` field, `build:server` script, production dependencies |
 | `README.md` | Rewrite Quick Start with `npx tinstar` and agent install prompt |
+| `src/server/index.ts` | Skip `ensureCaddy()` by default (built-in proxy replaces it for tmux) |
 
 ---
 
@@ -42,7 +43,7 @@
 **Files:**
 - Modify: `src/server/index.ts:37-291`
 
-The `configureServer()` hook in `tinstarBackend()` contains ~240 lines of initialization (event bus, document store, session rehydration, Caddy, reconciliation loops). Extract this into a standalone function that both the Vite plugin and the new standalone server can call.
+The `configureServer()` hook in `tinstarBackend()` contains ~240 lines of initialization (event bus, document store, session rehydration, reconciliation loops). Extract this into a standalone function that both the Vite plugin and the new standalone server can call. The extracted `initBackend()` should skip `ensureCaddy()` by default — the standalone server handles session proxying directly. Caddy startup becomes opt-in (only needed for Docker-backend users).
 
 - [ ] **Step 1: Create `initBackend()` function**
 
@@ -156,11 +157,34 @@ export function startServer(options: { port: number; clientDir: string; open?: b
     createReadStream(filePath).pipe(res)
   })
 
-  // WebSocket proxy for /s/ → Caddy (started by Tinstar via ensureCaddy())
-  const proxy = httpProxy.createProxyServer({ target: 'http://localhost:8088', ws: true })
+  // Built-in session proxy — routes /s/{name}/* to the correct ttyd port
+  // Replaces Caddy for tmux-first users (no Docker dependency)
+  const proxy = httpProxy.createProxyServer({ ws: true })
+
+  function getSessionPort(url: string): { port: number; rewrittenPath: string } | null {
+    const match = url.match(/^\/s\/([^/]+)(.*)$/)
+    if (!match) return null
+    const sessionName = match[1]!
+    const run = ctx.docStore.getRun(sessionName)
+    if (!run?.port) return null
+    return { port: run.port, rewrittenPath: match[2] || '/' }
+  }
+
+  // HTTP proxy for /s/ paths
+  server.on('request', (req, res) => {
+    const target = req.url ? getSessionPort(req.url) : null
+    if (target) {
+      req.url = target.rewrittenPath
+      proxy.web(req, res, { target: `http://localhost:${target.port}` })
+    }
+  })
+
+  // WebSocket proxy for /s/ paths
   server.on('upgrade', (req, socket, head) => {
-    if (req.url?.startsWith('/s/')) {
-      proxy.ws(req, socket, head)
+    const target = req.url ? getSessionPort(req.url) : null
+    if (target) {
+      req.url = target.rewrittenPath
+      proxy.ws(req, socket, head, { target: `http://localhost:${target.port}` })
     }
   })
 
@@ -848,8 +872,8 @@ git commit -m "feat: prepare package for npm publishing"
 ## Execution Order & Dependencies
 
 ```
-Task 1 (extract initBackend)
-  └─→ Task 2 (standalone server)
+Task 1 (extract initBackend — skip Caddy by default)
+  └─→ Task 2 (standalone server with built-in session proxy)
        └─→ Task 3 (CLI entry point)
             └─→ Task 4 (dev workflow split)
 
@@ -864,3 +888,5 @@ Task 10 (npm packaging)          ← after Tasks 1-4
 
 Tasks 5-8 are independent of each other and of Tasks 1-4. They can be parallelized.
 Tasks 9-10 depend on the server extraction being complete.
+
+**Note on Caddy:** The built-in session proxy in Task 2 replaces Caddy for tmux-first users. The `ensureCaddy()` call in `initBackend()` (Task 1) should be conditional — skipped when the built-in proxy is active (default), only called when Docker backend sessions need it. The `caddy.ts` module stays in the codebase for Docker-backend users but is not part of the default startup path.

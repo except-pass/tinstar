@@ -99,8 +99,8 @@ A plain Node HTTP server that:
 
 - Serves static files from `dist/client/` (built frontend assets)
 - Runs the same middleware chain: `handleRequest()` for API routes, SSE broadcaster
-- Performs the same initialization: EventBus, DocumentStore, session rehydration, Caddy startup, reconciliation loops
-- Adds a websocket proxy for `/s/` → Caddy on `:8088` (Caddy is started by Tinstar itself via `ensureCaddy()`; replaces Vite's proxy config, using `http-proxy` or similar)
+- Performs the same initialization: EventBus, DocumentStore, session rehydration, reconciliation loops
+- Includes a built-in session proxy: routes `/s/{name}/*` requests (HTTP + WebSocket) directly to the correct ttyd port, replacing Caddy entirely for tmux-first users
 
 ### What Changes
 
@@ -108,7 +108,7 @@ A plain Node HTTP server that:
 |-----------|--------|-------|
 | Backend entry | Vite plugin `configureServer()` | Standalone `createServer()` |
 | Static file serving | Vite dev server | `serve-static` or equivalent |
-| `/s/` websocket proxy | Vite proxy config | `http-proxy` |
+| `/s/` session proxy | Caddy Docker container | Built-in Node proxy (`http-proxy`) — routes by session name to ttyd port |
 | API routes, EventBus, SSE, sessions | Unchanged | Unchanged |
 | DocumentStore, processors | Unchanged | Unchanged |
 
@@ -216,6 +216,52 @@ npx tinstar
 ```
 
 **Why this works:** The pre-flight checks output clear, actionable error messages. An agent can read those errors, run the suggested install commands, and retry `npx tinstar` until it passes. The user watches their agent set up its own orchestrator.
+
+---
+
+## 6. Built-in Session Proxy (Replaces Caddy)
+
+### Problem
+
+Caddy currently runs as a Docker container (`caddy:2`) to reverse-proxy `/s/{session-name}/*` requests to the correct ttyd port. This creates a hidden Docker dependency even for tmux-first users.
+
+### Solution
+
+Replace Caddy with a built-in Node proxy in the standalone server. The server already uses `http-proxy` — extend it to handle session routing directly.
+
+### How It Works
+
+- Each tmux session starts ttyd on a unique port (8681+). The session registry (document store + session files) already maps session name → port.
+- For any HTTP request matching `/s/{name}/*`, the server looks up the session's port, strips the `/s/{name}` prefix, and proxies to `localhost:{port}`.
+- For WebSocket `upgrade` events on `/s/{name}/*`, same lookup and proxy via `http-proxy`.
+- Route management (`addRoute`, `removeRoute`, `syncRoutes`) is replaced by direct lookups against the session registry — no admin API, no config files.
+
+### What This Eliminates
+
+- No Caddy Docker container for tmux users
+- No `ensureCaddy()` call in the tmux startup path
+- No Docker dependency at all for the default onboarding experience
+- Caddy code (`caddy.ts`) remains available for Docker-backend users who want it
+
+### What Stays The Same
+
+- ttyd still binds to individual ports (8681+)
+- Session URLs still look like `/s/session-name/`
+- Frontend doesn't change at all
+
+---
+
+## 7. Telemetry Default
+
+### Current State
+
+The OTLP exporter sends spans/metrics to `localhost:4318` by default. If no collector is running, data is silently dropped — no errors, no hook failures.
+
+### Change
+
+No code change needed. The silent-drop behavior is already correct for onboarding. Telemetry is opt-in via the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable.
+
+The Claude Code hooks installed by Tinstar (idle, active, file-touched, file-read) curl back to the Tinstar server itself (`/api/hooks/*`), not to any external telemetry endpoint. These work out of the box with no configuration.
 
 ---
 
