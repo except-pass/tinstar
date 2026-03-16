@@ -214,9 +214,14 @@ export function startTtyd(opts: {
 }): Promise<number | undefined> {
   stopManagedTtyd(opts.sessionName)
 
-  // Kill any orphaned ttyd still holding the port (e.g. after server restart)
+  // Kill any orphaned ttyd still holding the port (e.g. after server restart).
+  // Only kill ttyd processes — lsof may also return the server itself or other
+  // servers that have proxy connections to this port.
   try {
-    const lsof = execSync(`lsof -ti :${opts.port}`, { encoding: 'utf-8' }).trim()
+    const lsof = execSync(
+      `lsof -ti :${opts.port} | xargs -r ps -o pid=,comm= -p 2>/dev/null | awk '$2=="ttyd"{print $1}'`,
+      { encoding: 'utf-8' },
+    ).trim()
     if (lsof) {
       for (const pid of lsof.split('\n')) {
         try { process.kill(Number(pid), 'SIGTERM') } catch { /* already dead */ }
