@@ -150,6 +150,68 @@ function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
   return layouts
 }
 
+// --- Smart placement for new nodes ---
+
+/**
+ * Place new run nodes near their existing siblings rather than using the
+ * full grid-from-scratch position. For each missing run:
+ *   1. Find the rightmost sibling that already has a position → place to its right.
+ *   2. No siblings yet → place inside the parent container (top-left corner).
+ *   3. No parent positioned either → return nothing (caller falls back to defaults).
+ *
+ * Container nodes are not handled here; callers should cascadeExpansion after
+ * placing runs so parent containers expand to contain them.
+ */
+function placeNewRuns(
+  missingIds: Set<string>,
+  tree: TreeNode[],
+  existing: Map<string, WidgetLayout>,
+  treeMaps: TreeMaps,
+): Map<string, WidgetLayout> {
+  const nodeMap = new Map<string, TreeNode>()
+  function index(nodes: TreeNode[]) {
+    for (const n of nodes) { nodeMap.set(n.id, n); index(n.children) }
+  }
+  index(tree)
+
+  const placed = new Map<string, WidgetLayout>()
+
+  for (const id of missingIds) {
+    const node = nodeMap.get(id)
+    if (!node || node.type !== 'run') continue
+
+    const parentId = treeMaps.parentMap.get(id)
+    const parent = parentId ? nodeMap.get(parentId) : null
+    if (!parent) continue
+
+    // Find rightmost positioned sibling
+    let maxRight = -Infinity
+    let refY: number | null = null
+    for (const sib of parent.children) {
+      if (sib.id === id) continue
+      const sl = existing.get(sib.id) ?? placed.get(sib.id)
+      if (!sl) continue
+      if (sl.x + sl.width > maxRight) { maxRight = sl.x + sl.width; refY = sl.y }
+    }
+
+    if (refY !== null) {
+      placed.set(id, { x: maxRight + RUN_GAP, y: refY, width: DEFAULT_RUN_WIDTH, height: DEFAULT_RUN_HEIGHT })
+      continue
+    }
+
+    // No siblings — place inside parent container if parent is positioned
+    const parentLayout = existing.get(parentId!) ?? placed.get(parentId!)
+    if (parentLayout) {
+      const depth = treeMaps.depthMap.get(parentId!) ?? 0
+      const { padX, padTop } = getPadding(depth)
+      placed.set(id, { x: parentLayout.x + padX, y: parentLayout.y + padTop, width: DEFAULT_RUN_WIDTH, height: DEFAULT_RUN_HEIGHT })
+    }
+    // else: no reference found — caller will fall back to generateDefaultLayouts
+  }
+
+  return placed
+}
+
 // --- Collect all node IDs ---
 
 function collectTreeIds(tree: TreeNode[]): Set<string> {
@@ -179,11 +241,17 @@ function loadLayouts(tree: TreeNode[], storageKey: string): Map<string, WidgetLa
     }
     // If >20% missing, regenerate from scratch
     if (map.size < allIds.size * 0.8) return generateDefaultLayouts(tree)
-    // Fill any remaining missing with defaults
+    // Fill any remaining missing with smart placement (near siblings) or defaults
     if (map.size < allIds.size) {
+      const missing = new Set([...allIds].filter(id => !map.has(id)))
+      const treeMaps = buildTreeMaps(tree)
+      const smart = placeNewRuns(missing, tree, map, treeMaps)
       const defaults = generateDefaultLayouts(tree)
-      for (const id of allIds) {
-        if (!map.has(id)) map.set(id, defaults.get(id)!)
+      for (const id of missing) {
+        map.set(id, smart.get(id) ?? defaults.get(id)!)
+      }
+      for (const id of smart.keys()) {
+        cascadeExpansion(map, id, treeMaps)
       }
     }
     return map
@@ -305,11 +373,17 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
         layoutsRef.current = fresh
         queueMicrotask(() => setLayouts(fresh))
       } else {
-        // Fill in missing layouts from defaults (e.g. new group containers after dimension change)
+        // Fill in missing nodes: place runs near siblings/parent, fall back to defaults for containers
+        const missing = new Set([...newIds].filter(id => !layoutsRef.current.has(id)))
+        const smart = placeNewRuns(missing, tree, layoutsRef.current, treeMapsRef.current)
         const defaults = generateDefaultLayouts(tree)
         const patched = new Map(layoutsRef.current)
-        for (const id of newIds) {
-          if (!patched.has(id)) patched.set(id, defaults.get(id)!)
+        for (const id of missing) {
+          patched.set(id, smart.get(id) ?? defaults.get(id)!)
+        }
+        // Expand parent containers to contain any newly placed runs
+        for (const id of smart.keys()) {
+          cascadeExpansion(patched, id, treeMapsRef.current)
         }
         layoutsRef.current = patched
         queueMicrotask(() => setLayouts(patched))
