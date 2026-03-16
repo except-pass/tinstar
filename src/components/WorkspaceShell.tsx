@@ -298,7 +298,6 @@ function WorkspaceShellInner() {
       clearFocus()
       const run = runMap.get(selectedRunId)
       pushFocus({ id: selectedRunId, type: 'run-workspace', label: run?.id ?? selectedRunId })
-      triggerWidgetFlourish(selectedRunId)
     } else {
       clearFocus()
     }

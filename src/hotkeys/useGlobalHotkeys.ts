@@ -1,6 +1,7 @@
 // src/hotkeys/useGlobalHotkeys.ts
 import { useEffect, useRef } from 'react'
 import { isEditable } from './isEditable'
+import { emitBindingFired } from './bindingFiredBus'
 
 export interface GlobalHotkeyHandlers {
   onCycleReadyNext: () => void
@@ -26,6 +27,7 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
         if (isEditable(active)) return
         e.preventDefault()
         h.onPaletteOpen()
+        emitBindingFired('?')
         return
       }
 
@@ -34,6 +36,7 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
         if (isEditable(active) || active?.tagName === 'IFRAME') return
         e.preventDefault()
         h.onSessionNew()
+        emitBindingFired('Ctrl+↵')
         return
       }
 
@@ -42,6 +45,7 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
         if (isEditable(active) || active?.tagName === 'IFRAME') return
         e.preventDefault()
         h.onSessionQuick()
+        emitBindingFired('S')
         return
       }
 
@@ -52,24 +56,28 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
           if (isEditable(active)) return
           e.preventDefault()
           h.onCycleReadyNext()
+          emitBindingFired(']')
           return
         }
         if (e.code === 'BracketLeft' && !e.shiftKey) {
           if (isEditable(active)) return
           e.preventDefault()
           h.onCycleReadyPrev()
+          emitBindingFired('[')
           return
         }
         if (e.code === 'BracketRight' && e.shiftKey) {
           if (isEditable(active)) return
           e.preventDefault()
           h.onCycleAllNext()
+          emitBindingFired('Shift+]')
           return
         }
         if (e.code === 'BracketLeft' && e.shiftKey) {
           if (isEditable(active)) return
           e.preventDefault()
           h.onCycleAllPrev()
+          emitBindingFired('Shift+[')
           return
         }
       }
