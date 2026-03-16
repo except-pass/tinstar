@@ -29,7 +29,6 @@ interface WidgetDefinition {
   displayName: string       // shown in sidebar header
   contexts: WidgetContext[] // navigable sub-elements this widget exposes
   bindings: Binding[]       // direct actions when this widget is the active focus
-  onContextEnter?: (contextKey: string) => void  // called by router when a sub-context is entered; widget uses this to highlight its active sub-element
 }
 
 interface WidgetContext {
@@ -52,8 +51,27 @@ interface Binding {
 `src/hotkeys/widgetRegistry.ts` — a singleton map of `type → WidgetDefinition`. Widgets self-register at module load time via `registerWidget(def)`. Registration performs three validations, each throwing on failure (never silently overriding):
 
 1. **Duplicate type** — registering the same `type` string twice throws.
-2. **Reserved key conflict** — any binding or context key that matches a tier-1 reserved key throws.
+2. **Reserved key conflict** — any binding or context key that exactly matches a tier-1 reserved key string throws. The reserved set is the exhaustive list in the Tier 1 table below (exact string equality, case-sensitive).
 3. **Intra-definition conflict** — any key that appears in both `contexts` and `bindings` of the same definition throws. Tier 2 bindings MAY shadow tier 3 (canvas) bindings — the focus path disambiguates at runtime and this is intentional. Widget authors can freely reuse canvas-level keys for their own widget bindings.
+
+### Key String Format
+
+All `Binding.key` and `WidgetContext.key` values use the following canonical format:
+- **Single key**: `e.key` value — e.g. `'s'`, `'S'`, `'?'`, `'['`, `` '`' ``
+- **With modifiers**: `Modifier+key` — e.g. `'Ctrl+Enter'`, `'Shift+['`, `'Ctrl+G'`
+- **Modifier order**: `Ctrl` before `Shift` before `Alt`
+
+The router normalizes each `KeyboardEvent` to this format before matching. This is also the format used in the Tier 1 reserved set table.
+
+### Migration from ActiveScopeContext
+
+The existing `ActiveScopeContext.tsx` (`HotkeyScope = 'global' | 'canvas' | 'widget'`), `registry.ts` (`HOTKEYS: HotkeyDef[]`), and `ActiveScopeProvider` are **superseded** by this system:
+- `ActiveScopeProvider` is removed from the component tree.
+- `HOTKEYS` entries in `registry.ts` are migrated into `WidgetDefinition` bindings on the appropriate widget types (canvas or run-workspace).
+- `HotkeyPalette` is updated to read bindings from `widgetRegistry` instead of `HOTKEYS`.
+- The old `registry.ts` is deleted once migration is complete.
+
+Both RunWorkspaceWidget and GroupContainer will receive concrete `WidgetDefinition` entries as part of this sub-project.
 
 ---
 
@@ -77,7 +95,7 @@ Keys that always fire regardless of focus state. Cannot be claimed by any widget
 | `Ctrl+Shift+G` | Arrange reset | useCanvasHotkeys |
 | `Ctrl+1`–`Ctrl+0` | Enter hotgroup slot | useCanvasHotkeys |
 | `Ctrl+Shift+1`–`Ctrl+Shift+0` | Remove from hotgroup slot | useCanvasHotkeys |
-| digit (after slot active) | Hotgroup select/zoom | useCanvasHotkeys |
+| `0`–`9` (bare digit) | Hotgroup select/zoom (when not in editable) | useCanvasHotkeys |
 
 Any `WidgetDefinition` whose `bindings` or `contexts` contain a tier-1 key throws at registration time.
 
@@ -110,11 +128,15 @@ interface FocusPathState {
 - `setChord(contextId: string)` — enter transient chord state
 - `clearChord()` — resolve or cancel chord state
 
-**Relationship to SelectionProvider:** When a user selects a widget (click or `[`), `SelectionProvider.selectedIds` is set (existing behavior, unchanged). Separately, the context router pushes that widget onto `FocusPathContext.path`. The two are kept in sync by `WorkspaceShell`: when `selectedRunId` changes, `WorkspaceShell` calls `clearFocus()` and `pushFocus({ type:'run-workspace', ... })`. Clicking a different widget on canvas resets both.
+**Provider placement:** `FocusPathProvider` wraps the entire app at the same level as `SelectionProvider` (near the root in `App.tsx` or `main.tsx`), so all consumers can call `useFocusPath()`.
+
+**Relationship to SelectionProvider:** When a user selects a widget (click or `[`), `SelectionProvider.selectedIds` is set (existing behavior, unchanged). Separately, the context router pushes that widget onto `FocusPathContext.path`. `WorkspaceShellInner` syncs them via a `useEffect` on `selectedRunId`: when `selectedRunId` changes, it calls `clearFocus()` then `pushFocus({ id: selectedRunId, type:'run-workspace', label: runName })`. Clicking a different widget on canvas resets both.
 
 **Root key (`` ` ``):** clears `FocusPathContext.path` entirely. `SelectionProvider` selection (highlighting) is preserved — you can see what's selected, you just deactivated deep context.
 
 **Transient chord state:** `chordState` in `FocusPathContext` — set when a `transient: true` context key is pressed. Does NOT modify `path`. Cleared when a chord binding fires or `` ` `` is pressed.
+
+**Per-instance sub-element highlighting:** `WidgetDefinition` is a static type registration and cannot reference specific instances. When the router enters a sub-context, it pushes a new `FocusNode` onto `path`. Widget instances highlight their active sub-element by subscribing to path via a `useWidgetFocus(myId)` hook (provided by `src/hotkeys/useWidgetFocus.ts`). This hook returns `{ activeContextKey: string | null }` — the `key` of the sub-context that is active for that widget instance, or null if not focused. Widget renders use this to conditionally apply highlight classes.
 
 ---
 
@@ -125,6 +147,10 @@ interface FocusPathState {
 On every keydown event (global listener):
 
 ```
+0. isEditable guard:
+     → if e.target is input/textarea/contenteditable AND key is not a Ctrl/Meta combo → skip all tiers
+     → tier-1 keys that were already guarded in existing hooks (S, ?, [, ], Ctrl+Enter) retain
+       their isEditable suppression in the router
 1. Check reserved tier 1 → fire immediately if match, done
 2. If chordState active:
      → match against chord context's bindings → fire action, clear chordState
@@ -160,7 +186,9 @@ Triggered when: a chord binding fires (arrange, quick command).
 - Scan line sweep only, 300ms
 - No bloom, no ripple — the widget isn't changing context, just executing
 
-Both effects implemented as CSS animations (no JS animation loop). Applied by toggling a class on the target element. Class removed after animation ends via `animationend` listener.
+Both effects implemented as CSS animations (no JS animation loop). Applied by toggling a class on the target element.
+
+For the Full Hollywood Hit, three animations run simultaneously (`fullHit`, `fullHitScan`, `fullHitRipple`). Class removal is triggered by the `animationend` event on the **container element** for its `fullHit` animation (the longest, 500ms). A handler checks `e.animationName === 'fullHit'` before removing classes to avoid premature removal on shorter sub-animations.
 
 Tailwind config already has `scan` and `pulse-glow` — new keyframes added for `ignite` (bloom) and `ripple-ring`.
 
