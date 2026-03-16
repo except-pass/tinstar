@@ -14,15 +14,15 @@ function devTitle(): import('vite').Plugin {
 export default defineConfig({
   plugins: [react(), devTitle()],
   server: {
-    port: 5273,
+    port: 5280,
     host: true,
     allowedHosts: true,
     proxy: {
       '/api/': {
-        target: 'http://localhost:5274',
+        target: 'http://localhost:5281',
       },
       '/s/': {
-        target: 'http://localhost:5274',
+        target: 'http://localhost:5281',
         ws: true,
       },
     },
