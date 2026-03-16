@@ -93,10 +93,10 @@ Keys that always fire regardless of focus state. Cannot be claimed by any widget
 | Key combo | Action | Source |
 |---|---|---|
 | `` ` `` | Root — clear focus path, return to canvas | new |
-| `[` (BracketLeft) | Cycle to next ready session | useGlobalHotkeys |
-| `]` (BracketRight) | Cycle to previous ready session | useGlobalHotkeys |
-| `Shift+[` | Cycle all sessions prev | useGlobalHotkeys |
-| `Shift+]` | Cycle all sessions next | useGlobalHotkeys |
+| `[` (BracketLeft) | Cycle to previous ready session | useGlobalHotkeys |
+| `]` (BracketRight) | Cycle to next ready session | useGlobalHotkeys |
+| `Shift+[` (Shift+BracketLeft) | Cycle all sessions prev | useGlobalHotkeys |
+| `Shift+]` (Shift+BracketRight) | Cycle all sessions next | useGlobalHotkeys |
 | `?` | Open hotkey palette | useGlobalHotkeys |
 | `Ctrl+Enter` | New session | useGlobalHotkeys |
 | `S` / `s` | Quick session | useGlobalHotkeys |
@@ -160,13 +160,20 @@ Clicking a different widget on canvas resets both.
 On every keydown event (global listener):
 
 ```
-0. isEditable guard (applies only to tier 1):
-     → if e.target is input/textarea/contenteditable, skip tier-1 keys that were guarded
-       in existing hooks (KeyS, Slash, BracketLeft, BracketRight, Ctrl+Enter)
-     → tier-2 and tier-3 bindings do NOT apply the isEditable guard — widget bindings
-       are responsible for not conflicting with editable elements (same scoping as the
-       retired useWidgetHotkeys which attached to the element ref)
-1. Check reserved tier 1 → fire immediately if match, done
+0. isEditable guard:
+     Tier-1 suppression: if e.target is input/textarea/contenteditable, skip these tier-1 keys
+     (preserving existing hook behavior exactly):
+       - KeyS / 's' / 'S'        → skip if editable OR iframe
+       - '?' (Slash+Shift)        → skip if editable
+       - BracketLeft / BracketRight / Shift+Bracket → skip if editable
+       - Ctrl+Enter               → skip if editable OR iframe
+       - Ctrl+KeyG / Ctrl+Shift+KeyG → skip if editable (canvas arrange)
+       - Ctrl+Digit1–0 / Ctrl+Shift+Digit1–0 → skip if editable (hotgroup)
+       - bare Digit0–9            → skip if editable (hotgroup select)
+     Tier-2 and tier-3 bindings fire regardless of isEditable — widget bindings
+     are scoped by the focus path (only fire when that widget type is active),
+     and widget authors must not claim keys that conflict with text input
+1. Check reserved tier 1 → fire immediately if match (with above suppressions applied), done
 2. If chordState active:
      → match against chord context's bindings → fire action, clear chordState
      → ` → clear chordState (cancel chord)
@@ -244,7 +251,7 @@ During chord state: middle section dims current bindings and shows chord options
 
 ### Reactivity
 
-Pure derivation from React state. No async. `useHotkeyContext()` is a convenience hook exported from `src/hotkeys/FocusPathContext.tsx` that composes `useFocusPath()` with a registry lookup and returns `{ focusPath, chordState, activeDefinition: WidgetDefinition | null }` — sidebar subscribes and re-renders synchronously. Updates feel instant because they are instant — all state is in-memory React.
+Pure derivation from React state. No async. `useHotkeyContext()` is a convenience hook exported from `src/hotkeys/FocusPathContext.tsx` that composes `useFocusPath()` with a registry lookup and returns `{ focusPath, chordState, activeDefinition: WidgetDefinition | null }`. When `focusPath` is empty (canvas root), `activeDefinition` is the `canvas` WidgetDefinition (tier 3 bindings). When a widget is focused, `activeDefinition` is that widget's definition. Sidebar subscribes and re-renders synchronously. Updates feel instant because they are instant — all state is in-memory React.
 
 ---
 
