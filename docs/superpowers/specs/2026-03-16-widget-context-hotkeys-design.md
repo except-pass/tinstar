@@ -1,0 +1,213 @@
+# Widget Contract + Contextual Hotkeys + Sidebar Design Spec
+
+**Date**: 2026-03-16
+**Status**: Approved
+
+## Problem
+
+Tinstar currently has two hardcoded widget types (RunWorkspaceWidget, GroupContainer) with hotkeys wired directly into ad-hoc hooks. There is no shared contract for what a widget is, no way to add new widget types without touching InfiniteCanvas, and no visual system for discovering what keys do what. As the widget surface grows, this becomes unmanageable.
+
+## Solution
+
+Three tightly coupled pieces built as one sub-project:
+
+1. **Widget Contract** — a `WidgetDefinition` interface that every widget type registers. Declares its navigable sub-contexts and direct key bindings. The registry validates against a reserved key set at registration time.
+2. **Contextual Hotkeys** — selection IS context. The active focus path (canvas → widget → sub-element) determines which bindings are live. A chord state handles transient command contexts (e.g. arrange mode) without touching the focus path.
+3. **Context Sidebar** — a right-side panel that always shows available hotkeys for the current context, updates instantly, is resizable and hideable.
+
+This does NOT refactor how widgets are rendered on the canvas (that is sub-project ③ — widget extensibility). It adds the contract and hotkey layer on top of the existing two widget types.
+
+---
+
+## Widget Contract
+
+### WidgetDefinition
+
+```typescript
+interface WidgetDefinition {
+  type: string              // e.g. 'run-workspace' | 'group-container' | 'canvas'
+  displayName: string       // shown in sidebar header
+  contexts: WidgetContext[] // navigable sub-elements this widget exposes
+  bindings: Binding[]       // direct actions when this widget is the active focus
+  onContextEnter?: (contextKey: string) => void  // called by router when a sub-context is entered; widget uses this to highlight its active sub-element
+}
+
+interface WidgetContext {
+  key: string               // key that navigates into this context
+  label: string             // e.g. 'Terminal', 'Files'
+  type: string              // sub-widget type that becomes active
+  transient?: boolean       // if true: chord mode (don't push focus path)
+}
+
+interface Binding {
+  key: string               // e.g. 'S', 'G'
+  label: string             // e.g. 'New session', 'Grid arrange'
+  action: string            // identifier dispatched to the widget instance
+  chord?: boolean           // true if this binding is shown during chord state only
+}
+```
+
+### Widget Registry
+
+`src/hotkeys/widgetRegistry.ts` — a singleton map of `type → WidgetDefinition`. Widgets self-register at module load time via `registerWidget(def)`. Registration performs three validations, each throwing on failure (never silently overriding):
+
+1. **Duplicate type** — registering the same `type` string twice throws.
+2. **Reserved key conflict** — any binding or context key that matches a tier-1 reserved key throws.
+3. **Intra-definition conflict** — any key that appears in both `contexts` and `bindings` of the same definition throws. Tier 2 bindings MAY shadow tier 3 (canvas) bindings — the focus path disambiguates at runtime and this is intentional. Widget authors can freely reuse canvas-level keys for their own widget bindings.
+
+---
+
+## Three-Tier Hotkey Priority
+
+### Tier 1 — Reserved (global, always fire)
+
+Keys that always fire regardless of focus state. Cannot be claimed by any widget. This is the exhaustive list — derived directly from the existing `useGlobalHotkeys` and `useCanvasHotkeys` hooks plus the new root key:
+
+| Key combo | Action | Source |
+|---|---|---|
+| `` ` `` | Root — clear focus path, return to canvas | new |
+| `[` (BracketLeft) | Cycle to next ready session | useGlobalHotkeys |
+| `]` (BracketRight) | Cycle to previous ready session | useGlobalHotkeys |
+| `Shift+[` | Cycle all sessions prev | useGlobalHotkeys |
+| `Shift+]` | Cycle all sessions next | useGlobalHotkeys |
+| `?` | Open hotkey palette | useGlobalHotkeys |
+| `Ctrl+Enter` | New session | useGlobalHotkeys |
+| `S` / `s` | Quick session | useGlobalHotkeys |
+| `Ctrl+G` | Arrange grid | useCanvasHotkeys |
+| `Ctrl+Shift+G` | Arrange reset | useCanvasHotkeys |
+| `Ctrl+1`–`Ctrl+0` | Enter hotgroup slot | useCanvasHotkeys |
+| `Ctrl+Shift+1`–`Ctrl+Shift+0` | Remove from hotgroup slot | useCanvasHotkeys |
+| digit (after slot active) | Hotgroup select/zoom | useCanvasHotkeys |
+
+Any `WidgetDefinition` whose `bindings` or `contexts` contain a tier-1 key throws at registration time.
+
+### Tier 2 — Contextual (active when widget type is focused)
+
+Bindings from the `WidgetDefinition` of the current focus path tail. Only live when that widget type is selected.
+
+### Tier 3 — Canvas (active at root)
+
+Bindings on the `canvas` WidgetDefinition. Active when focus path is empty or explicitly at canvas.
+
+---
+
+## Focus Path (Selection Depth)
+
+The focus path lives in a **new, separate `FocusPathContext`** (`src/hotkeys/FocusPathContext.tsx`) — it does NOT modify `SelectionProvider`. `SelectionProvider` and its `selectedIds`/`selectedType` are left untouched. This is the lower-risk approach because `WorkspaceShell.tsx` and many other consumers read from `useSelection()` directly.
+
+```typescript
+type FocusNode = { id: string; type: string; label: string }
+
+interface FocusPathState {
+  path: FocusNode[]   // ordered canvas → widget → sub-element
+  chordState: { contextId: string } | null
+}
+```
+
+`FocusPathContext` provides:
+- `pushFocus(node: FocusNode)` — navigate into a sub-context
+- `clearFocus()` — root key: clear path entirely (backtick)
+- `setChord(contextId: string)` — enter transient chord state
+- `clearChord()` — resolve or cancel chord state
+
+**Relationship to SelectionProvider:** When a user selects a widget (click or `[`), `SelectionProvider.selectedIds` is set (existing behavior, unchanged). Separately, the context router pushes that widget onto `FocusPathContext.path`. The two are kept in sync by `WorkspaceShell`: when `selectedRunId` changes, `WorkspaceShell` calls `clearFocus()` and `pushFocus({ type:'run-workspace', ... })`. Clicking a different widget on canvas resets both.
+
+**Root key (`` ` ``):** clears `FocusPathContext.path` entirely. `SelectionProvider` selection (highlighting) is preserved — you can see what's selected, you just deactivated deep context.
+
+**Transient chord state:** `chordState` in `FocusPathContext` — set when a `transient: true` context key is pressed. Does NOT modify `path`. Cleared when a chord binding fires or `` ` `` is pressed.
+
+---
+
+## Context Router
+
+`src/hotkeys/contextRouter.ts` — a pure function `resolveBindings(focusPath, chordState, registry) → ActiveBindings`.
+
+On every keydown event (global listener):
+
+```
+1. Check reserved tier 1 → fire immediately if match, done
+2. If chordState active:
+     → match against chord context's bindings → fire action, clear chordState
+     → ` → clear chordState (cancel chord)
+     → no match → ignore (don't fall through)
+3. Read focusPath.at(-1) → look up WidgetDefinition
+4. Check contexts:
+     → transient=false match → push FocusNode onto path
+     → transient=true match  → set chordState
+5. Check direct bindings → fire action
+6. Else: ignore
+```
+
+The router never fires more than one action per keypress. Reserved keys take absolute priority.
+
+---
+
+## Visual Flourish
+
+Two levels of activation feedback, keyed to action weight:
+
+### Navigation / context change (Full Hollywood Hit)
+Triggered when: focus path changes, widget selected via keyboard.
+
+- Instant bloom: element scales to 102% with a hard cyan border + outer corona glow
+- Scan line sweeps left-to-right across the element (diagonal, 350ms)
+- Ripple ring emanates outward from border and fades
+- Full duration: 500ms — snappy peak at ~8%, graceful decay
+
+### Transient chord action (Scan Line only)
+Triggered when: a chord binding fires (arrange, quick command).
+
+- Scan line sweep only, 300ms
+- No bloom, no ripple — the widget isn't changing context, just executing
+
+Both effects implemented as CSS animations (no JS animation loop). Applied by toggling a class on the target element. Class removed after animation ends via `animationend` listener.
+
+Tailwind config already has `scan` and `pulse-glow` — new keyframes added for `ignite` (bloom) and `ripple-ring`.
+
+---
+
+## Hotkey Sidebar
+
+`src/components/HotkeysSidebar.tsx` — fixed right-side panel.
+
+### Layout
+
+```
+┌────────────────────┐
+│ Canvas             │  ← focus path breadcrumb
+│ › my-agent         │
+│ › Terminal         │
+├────────────────────┤
+│  TERMINAL          │  ← current context label
+│                    │
+│  Ctrl+\  exit      │  ← context bindings
+│  …                 │
+├────────────────────┤
+│  ALWAYS AVAILABLE  │  ← tier 1 reserved, always shown
+│  `    canvas root  │
+│  [    next session │
+│  11   hotgroup 1   │
+└────────────────────┘
+```
+
+During chord state: middle section dims current bindings and shows chord options with a cyan highlight until resolved.
+
+### Resizable + Hideable
+
+- Default width: 180px
+- Drag handle on left edge — resize between 140px and 320px. Width persisted to localStorage (`tinstar-sidebar-hotkeys-width`).
+- Collapse button (« ») in the sidebar header — collapses to a 24px vertical strip showing "KEYS" text, same pattern as the files/procs panels in RunWorkspaceWidget.
+- Collapsed state persisted to localStorage (`tinstar-sidebar-hotkeys-collapsed`).
+
+### Reactivity
+
+Pure derivation from React state. No async. `useHotkeyContext()` hook returns `{ focusPath, chordState, activeDefinition }` — sidebar subscribes and re-renders synchronously. Updates feel instant because they are instant — all state is in-memory React.
+
+---
+
+## What This Does NOT Change
+
+- Hotgroup key bindings (Ctrl+1 etc.) — untouched
+- How widgets are rendered on the canvas (that is sub-project ③)
+- The existing `useGlobalHotkeys`, `useCanvasHotkeys`, `useWidgetHotkeys` hooks — these are migrated/wired into the new router but their behavior is preserved
+- Selection for multi-widget drag/arrange — transient chords never modify selection state
