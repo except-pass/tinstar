@@ -166,7 +166,7 @@ const isDirectRun = process.argv[1]?.includes('standalone')
 if (isDirectRun) {
   const args = process.argv.slice(2)
   const portIdx = args.indexOf('--port')
-  const port = portIdx !== -1 ? parseInt(args[portIdx + 1]!) : 5273
+  const port = portIdx !== -1 ? parseInt(args[portIdx + 1]!) : parseInt(process.env.TINSTAR_BACKEND_PORT ?? '5273')
   const noOpen = args.includes('--no-open')
   startServer({ port, clientDir: join(__dirname, '../../dist/client'), open: !noOpen })
 }

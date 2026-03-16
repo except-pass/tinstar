@@ -1,4 +1,11 @@
 import { defineConfig } from '@playwright/test'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const frontendPort = process.env.TINSTAR_FRONTEND_PORT ?? '5280'
+const backendPort = process.env.TINSTAR_BACKEND_PORT ?? '5281'
+const baseURL = process.env.BASE_URL ?? `http://localhost:${frontendPort}`
+const testDataDir = process.env.TINSTAR_DATA_DIR ?? join(tmpdir(), `tinstar-test-${Date.now()}`)
 
 export default defineConfig({
   testDir: './e2e',
@@ -9,16 +16,20 @@ export default defineConfig({
   retries: 1,
   timeout: 30000,
   use: {
-    baseURL: 'http://localhost:5273',
+    baseURL,
     trace: 'on-first-retry',
   },
   webServer: {
     command: 'npm run dev',
-    url: 'http://localhost:5273',
-    reuseExistingServer: true,
+    url: baseURL,
+    reuseExistingServer: !process.env.CI,
     timeout: 15000,
     env: {
       TINSTAR_FAST_SIM: '1',
+      TINSTAR_NO_SESSIONS: '1',
+      TINSTAR_DATA_DIR: testDataDir,
+      TINSTAR_BACKEND_PORT: backendPort,
+      TINSTAR_FRONTEND_PORT: frontendPort,
     },
   },
 })

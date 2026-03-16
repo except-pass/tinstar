@@ -11,18 +11,21 @@ function devTitle(): import('vite').Plugin {
   }
 }
 
+const backendPort = process.env.TINSTAR_BACKEND_PORT ?? '5281'
+const frontendPort = parseInt(process.env.TINSTAR_FRONTEND_PORT ?? '5280')
+
 export default defineConfig({
   plugins: [react(), devTitle()],
   server: {
-    port: 5280,
+    port: frontendPort,
     host: true,
     allowedHosts: true,
     proxy: {
       '/api/': {
-        target: 'http://localhost:5281',
+        target: `http://localhost:${backendPort}`,
       },
       '/s/': {
-        target: 'http://localhost:5281',
+        target: `http://localhost:${backendPort}`,
         ws: true,
       },
     },
