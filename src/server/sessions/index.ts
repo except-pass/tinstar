@@ -32,4 +32,3 @@ import * as dockerBackend from './backends/docker'
 import * as tmuxBackend from './backends/tmux'
 export { dockerBackend, tmuxBackend }
 
-export { ensureCaddy, stopCaddy, addRoute, removeRoute, syncRoutes, sessionUrl } from './caddy'

@@ -178,6 +178,16 @@ export async function deleteTmuxSession(config: TinstarConfig, session: Session)
   }
 }
 
+export async function reattachTmuxSession(
+  config: TinstarConfig,
+  opts: { session: Session; port: number },
+): Promise<{ port: number; ttydPid: number | undefined }> {
+  const tmuxName = tmuxSessionName(config, opts.session.name)
+  claimedPorts.add(opts.port)
+  const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
+  return { port: opts.port, ttydPid }
+}
+
 export async function getTmuxSessionState(config: TinstarConfig, sessionName: string): Promise<'exists' | 'missing'> {
   const tmuxName = tmuxSessionName(config, sessionName)
   const exists = await tmuxHasSession(tmuxName)

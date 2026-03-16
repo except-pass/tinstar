@@ -15,7 +15,6 @@ export interface TinstarConfig {
   profiles: ImageProfile[]
   editor: string
   ports: { ttyd: number; hostStart: number }
-  caddy: { listenPort: number; adminPort: number }
   dirs: { root: string; secrets: string; sessions: string }
   files: { config: string; projects: string }
   git: {
@@ -64,10 +63,6 @@ const BASE_CONFIG = {
     ttyd: 7681,
     hostStart: 8681,
   },
-  caddy: {
-    listenPort: 8088,
-    adminPort: 2019,
-  },
   git: {
     taskMarkerRegex: '#([A-Za-z0-9_-]+)',
     reconciliationRepos: [],
@@ -103,7 +98,6 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
     profiles,
     editor,
     ports: merged.ports,
-    caddy: (merged as unknown as { caddy?: TinstarConfig['caddy'] }).caddy ?? { listenPort: 8088, adminPort: 2019 },
     dirs: {
       root: rootDir,
       secrets: join(rootDir, '.secrets'),

@@ -19,6 +19,7 @@ import {
   dockerBackend,
   tmuxBackend,
   getSession,
+  updateSession,
   type TinstarConfig,
 } from './sessions'
 import type { SessionStatus } from '../types'
@@ -186,6 +187,27 @@ export function initBackend(): RouteContext {
           onStateChanged(name, state)
           log.info('reconcile', `${name}: startup correction to ${state}`)
         },
+      }).then(async (sessions) => {
+        // Reattach ttyd for tmux sessions that survived a server crash
+        for (const session of sessions) {
+          if (session.state === 'stopped' || session.state === 'creating') continue
+          if (session.backend !== 'tmux') continue
+          const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
+          try {
+            const result = await tmuxBackend.reattachTmuxSession(cfg, { session, port })
+            updateSession(cfg.dirs.sessions, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
+            tmuxBackend.onTtydRestart(session.name, (newPid) => {
+              updateSession(cfg.dirs.sessions, session.name, { ttydPid: newPid })
+            })
+            const run = docStore.getRun(session.name)
+            if (run && run.port !== result.port) {
+              docStore.upsertRun(session.name, { ...run, port: result.port })
+            }
+            log.info('reattach', `${session.name}: ttyd restarted on :${result.port}`)
+          } catch (err) {
+            log.warn('reattach', `${session.name}: failed to reattach: ${(err as Error).message}`)
+          }
+        }
       }).catch(err => log.warn('reconcile', `startup reconciliation failed: ${(err as Error).message}`))
 
       // Periodic session state reconciliation (30s)

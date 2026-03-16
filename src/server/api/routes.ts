@@ -27,8 +27,6 @@ import {
   loadSecrets,
   dockerBackend,
   tmuxBackend,
-  addRoute,
-  removeRoute,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import { parseNewEntries } from '../sessions/transcript-parser'
@@ -886,13 +884,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             spaceId: ctx.docStore.activeSpaceId,
           })
 
-          // Register Caddy route for terminal proxy
-          if (sessionPort) {
-            addRoute(name, sessionPort, cfg.caddy.adminPort).catch(err => {
-              log.warn('sessions', `caddy addRoute failed for ${name}: ${(err as Error).message}`)
-            })
-          }
-
           emitSessionEvent('managed_session.created', { name, state: 'running' })
           log.info('sessions', `session created: ${name}`, { backend, port: sessionPort, state: 'running' })
 
@@ -984,10 +975,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // Re-read session to get updated port
             const updated = getSession(sessDir, session.name)
             const resumePort = updated?.port ?? session.port
-            if (resumePort) {
-              addRoute(session.name, resumePort, cfg.caddy.adminPort).catch(() => {})
-            }
-
             setState(sessDir, session.name, 'running')
             ctx.docStore.updateRunStatus(session.name, 'running')
             // Also update port on the run in case it changed
@@ -1043,7 +1030,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 await deleteWorktree(session.workspace.basePath, session.name)
               }
 
-              removeRoute(session.name, cfg.caddy.adminPort).catch(() => {})
             }
           } catch (err) {
             log.warn('delete', `background cleanup for ${name}: ${(err as Error).message}`)
@@ -1184,22 +1170,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           json(res, { ok: true })
         } catch (err) {
           json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
-        }
-        return true
-      }
-    }
-
-    // POST /api/sessions/:name/refresh-route — re-register Caddy route for a session
-    if (method === 'POST' && url.endsWith('/refresh-route') && url.startsWith('/api/sessions/')) {
-      const name = extractSessionName(url, '/api/sessions/')
-      if (name) {
-        const session = getSession(sessDir, name)
-        if (!session?.port) {
-          json(res, { ok: false, error: { code: 'NO_PORT', message: 'Session has no port' } }, 400)
-        } else {
-          addRoute(name, session.port, cfg.caddy.adminPort)
-            .then(() => json(res, { ok: true }))
-            .catch(() => json(res, { ok: true })) // route may already exist
         }
         return true
       }

@@ -68,10 +68,8 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   }, [run.sessionId])
 
   const refreshTerminal = useCallback(() => {
-    if (!run.sessionId) return
-    fetch(`/api/sessions/${run.sessionId}/refresh-route`, { method: 'POST' })
-      .finally(() => onRefreshTerminal?.())
-  }, [run.sessionId, onRefreshTerminal])
+    onRefreshTerminal?.()
+  }, [onRefreshTerminal])
 
   const isLive = run.status === 'running' || run.status === 'idle' || run.status === 'needs_attention' || run.status === 'creating'
 
