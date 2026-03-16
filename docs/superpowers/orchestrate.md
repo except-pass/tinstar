@@ -6,6 +6,8 @@ You are the **foreman**. The user is the **architect**. Your job is to handle al
 
 `/orchestrate <seed>` — the architect gives you a seed idea. You brainstorm it into a full work plan, then dispatch workers to implement it.
 
+> **When NOT to use workers:** If a task will take less than ~5 minutes, just do it yourself in this session. The overhead of creating a task, worktree, session, and briefing is not worth it for small changes. Use workers for tasks that are genuinely independent and meaty enough to justify the setup cost.
+
 ---
 
 ## Phase 1 — Brainstorm
