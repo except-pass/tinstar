@@ -5,7 +5,10 @@ import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { ProceduresPanel } from './ProceduresPanel'
-import { useWidgetHotkeys, type FocusZone } from '../../hotkeys/useWidgetHotkeys'
+import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
+import { useFlourish } from '../../hotkeys/useFlourish'
+import type { FocusZone } from '../../hotkeys/widgetTypes'
+import '../../hotkeys/widgets/runWorkspaceWidget'  // side-effect: registers WidgetDefinition
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 
 interface Props {
@@ -85,17 +88,31 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     return () => window.removeEventListener('focus', onWindowFocus)
   }, [])
 
-  useWidgetHotkeys(rootRef, {
-    onFocusNext,
-    onFocusPrev,
-    onFileDown: () => setFileSelectionIndex(i => i + 1),
-    onFileUp:   () => setFileSelectionIndex(i => Math.max(i - 1, 0)),
-    onTabNext:  () => setCenterTabIndex(i => (i + 1) % 2),
-    onTabPrev:  () => setCenterTabIndex(i => (i - 1 + 2) % 2),
-    onActivate: () => { /* no-op for now */ },
-    onTerminalToggle: handleTerminalToggle,
-    terminalFocused,
+  // Expose action dispatch so context router can trigger widget actions
+  const { triggerHollywoodHit, triggerScanLine } = useFlourish(rootRef)
+
+  useEffect(() => {
+    registerActionHandler(run.id, (action) => {
+      // All widget hotkeys suspended when terminal has focus
+      if (terminalFocused) return
+      switch (action) {
+        case 'focus-next':      onFocusNext();                                    break
+        case 'focus-prev':      onFocusPrev();                                    break
+        case 'file-down':       setFileSelectionIndex(i => i + 1);               break
+        case 'file-up':         setFileSelectionIndex(i => Math.max(i - 1, 0));  break
+        case 'tab-next':        setCenterTabIndex(i => (i + 1) % 2);             break
+        case 'tab-prev':        setCenterTabIndex(i => (i - 1 + 2) % 2);        break
+        case 'activate':        /* no-op for now */                               break
+        case 'terminal-toggle': triggerScanLine(); handleTerminalToggle();        break
+      }
+    })
+    return () => deregisterActionHandler(run.id)
   })
+
+  useEffect(() => {
+    registerFlourishHandler(run.id, triggerHollywoodHit)
+    return () => deregisterFlourishHandler(run.id)
+  }, [run.id, triggerHollywoodHit])
 
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
@@ -124,12 +141,15 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
       ref={rootRef}
       tabIndex={-1}
       data-testid={`widget-root-${run.id}`}
-      className={`flex flex-col overflow-hidden bg-surface-base border ${className}`}
+      className={`relative flex flex-col overflow-hidden bg-surface-base border ${className}`}
       style={terminalFocused
         ? { borderColor: hexToRgba(runAccent, 0.1), boxShadow: 'none' }
         : { borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }
       }
     >
+      {/* Flourish animation layers */}
+      <div className="flourish-scan-line" />
+      <div className="flourish-ripple-ring" />
       {/* Header doubles as drag handle */}
       {!headless && (
         <RunWorkspaceHeader

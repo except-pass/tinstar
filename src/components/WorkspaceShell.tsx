@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
@@ -15,10 +15,13 @@ import { TaxonomyProvider } from './TaxonomyContext'
 import { SkillsProvider } from './SkillsProvider'
 import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
-import { ActiveScopeProvider } from '../hotkeys/ActiveScopeContext'
 import { HotgroupProvider } from '../hotkeys/HotgroupContext'
+import { FocusPathProvider, useFocusPath } from '../hotkeys/FocusPathContext'
+import { useContextRouter } from '../hotkeys/contextRouter'
+import { triggerWidgetFlourish } from '../hotkeys/actionHandlerRegistry'
 import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
+import { HotkeysSidebar } from './HotkeysSidebar'
 import { CommitActivityPanel } from './CommitActivityPanel'
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
@@ -286,6 +289,30 @@ function WorkspaceShellInner() {
     return firstNodeId.startsWith('run-') ? firstNodeId.slice(4) : firstNodeId
   }, [selectionState.selectedIds, selectionState.selectedType])
 
+  const { path, chordState, pushFocus, clearFocus, setChord, clearChord } = useFocusPath()
+
+  // Sync selectedRunId → FocusPathContext
+  // useLayoutEffect ensures path is updated synchronously before next user input
+  useLayoutEffect(() => {
+    if (selectedRunId) {
+      clearFocus()
+      const run = runMap.get(selectedRunId)
+      pushFocus({ id: selectedRunId, type: 'run-workspace', label: run?.id ?? selectedRunId })
+      triggerWidgetFlourish(selectedRunId)
+    } else {
+      clearFocus()
+    }
+  }, [selectedRunId, pushFocus, clearFocus, runMap])
+
+  useContextRouter({
+    path,
+    chordState,
+    pushFocus,
+    clearFocus,
+    setChord,
+    clearChord,
+  })
+
   useGlobalHotkeys({
     onCycleReadyNext: () => {
       const run = cycleNext(allRuns, readyQueue, selectedRunId)
@@ -384,7 +411,7 @@ function WorkspaceShellInner() {
   }, [handleSelectRun])
 
   return (
-    <ActiveScopeProvider>
+    <>
       {activeSpaceId ? (
         <HotgroupProvider spaceId={activeSpaceId} runIds={runIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
@@ -504,6 +531,8 @@ function WorkspaceShellInner() {
                     arrangeResetRef={arrangeResetRef}
                   />
                 </div>
+                {/* Hotkeys sidebar (right) */}
+                <HotkeysSidebar />
               </div>
 
               {commitViewMode && (
@@ -595,14 +624,16 @@ function WorkspaceShellInner() {
         runCount={runRepo.getAll().length}
       />
       <HotkeyPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
-    </ActiveScopeProvider>
+    </>
   )
 }
 
 export default function WorkspaceShell() {
   return (
-    <SelectionProvider>
-      <WorkspaceShellInner />
-    </SelectionProvider>
+    <FocusPathProvider>
+      <SelectionProvider>
+        <WorkspaceShellInner />
+      </SelectionProvider>
+    </FocusPathProvider>
   )
 }

@@ -13,19 +13,17 @@ test.describe('Hotkeys', () => {
       await expect(page.getByTestId('hotkey-palette')).toBeVisible()
     })
 
-    test('palette renders category headings', async ({ page }) => {
+    test('palette renders widget display name headings', async ({ page }) => {
       await page.keyboard.press('?')
       const palette = page.getByTestId('hotkey-palette')
-      await expect(palette.getByText('General')).toBeVisible()
-      await expect(palette.getByText('Sessions')).toBeVisible()
-      await expect(palette.getByText('Hotgroups')).toBeVisible()
+      await expect(palette.getByText('Agent Session')).toBeVisible()
     })
 
     test('search filters hotkeys', async ({ page }) => {
       await page.keyboard.press('?')
-      await page.getByTestId('hotkey-palette-input').fill('session')
-      await expect(page.getByText('Next ready-for-input session')).toBeVisible()
-      await expect(page.getByText('Pan mode')).not.toBeVisible()
+      await page.getByTestId('hotkey-palette-input').fill('terminal')
+      await expect(page.getByText('Enter terminal')).toBeVisible()
+      await expect(page.getByText('Next panel')).not.toBeVisible()
     })
 
     test('Escape closes palette', async ({ page }) => {
@@ -346,6 +344,42 @@ test.describe('Hotkeys', () => {
 
       // The stub terminal page should have captured the keys
       await expect(terminalFrame.locator('#typed')).toContainText('hello', { timeout: 2000 })
+    })
+  })
+
+  test.describe('Hotkeys Sidebar', () => {
+    test('sidebar renders with ALWAYS section', async ({ page }) => {
+      await expect(page.getByTestId('hotkeys-sidebar')).toBeVisible()
+      await expect(page.getByTestId('hotkeys-sidebar').getByText('Always')).toBeVisible()
+    })
+
+    test('sidebar collapse and expand', async ({ page }) => {
+      const sidebar = page.getByTestId('hotkeys-sidebar')
+      await expect(sidebar).toBeVisible()
+      // Click collapse button
+      await sidebar.getByTitle('Collapse hotkeys panel').click()
+      await expect(page.getByTestId('hotkeys-sidebar-collapsed')).toBeVisible()
+      await expect(page.getByTestId('hotkeys-sidebar')).not.toBeVisible()
+      // Click collapsed strip to expand
+      await page.getByTestId('hotkeys-sidebar-collapsed').click()
+      await expect(page.getByTestId('hotkeys-sidebar')).toBeVisible()
+    })
+
+    test('backtick clears focus path (root key)', async ({ page }) => {
+      // Press backtick to clear focus path
+      await page.keyboard.press('`')
+      // Sidebar should show Canvas context
+      await expect(page.getByTestId('hotkeys-sidebar').getByText('Canvas')).toBeVisible()
+    })
+  })
+
+  test.describe('HotkeyPalette after migration', () => {
+    test('palette still renders with key bindings', async ({ page }) => {
+      await page.keyboard.press('?')
+      const palette = page.getByTestId('hotkey-palette')
+      await expect(palette).toBeVisible()
+      // Should show at least the Agent Session section (from run-workspace WidgetDefinition)
+      await expect(palette.getByText('Agent Session')).toBeVisible()
     })
   })
 
