@@ -44,6 +44,7 @@ export function useContextRouter(handlers: RouterHandlers) {
         if (isEditable(active)) return
         e.preventDefault()
         h.clearFocus()
+        emitBindingFired('`')
         return
       }
 
