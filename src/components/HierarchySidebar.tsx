@@ -193,7 +193,10 @@ function SidebarNode({
             onClick={e => e.stopPropagation()}
           />
         ) : (
-          <span className="truncate flex-1">{node.label}</span>
+          <span className="truncate flex-1">
+            {node.type === 'task' && node.status === 'completed' && <span className="mr-1">✅</span>}
+            {node.label}
+          </span>
         )}
 
         {/* Hotgroup badge for runs */}

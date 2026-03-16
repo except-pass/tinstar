@@ -3,7 +3,7 @@ import { useServerEvents } from './useServerEvents'
 import { RunRepository, TaxonomyRepository } from '../domain/repositories'
 
 export function useBackendState() {
-  const { state, connected, loading } = useServerEvents()
+  const { state, connected, loading, addOptimistic } = useServerEvents()
 
   const runRepo = useMemo(
     () => new RunRepository(state.runs),
@@ -20,5 +20,5 @@ export function useBackendState() {
     [state.initiatives, state.epics, state.tasks, state.worktrees],
   )
 
-  return { runRepo, taxRepo, spaces: state.spaces, activeSpaceId: state.activeSpaceId, commits: state.commits, connected, loading }
+  return { runRepo, taxRepo, spaces: state.spaces, activeSpaceId: state.activeSpaceId, commits: state.commits, readyQueue: state.readyQueue, connected, loading, addOptimistic }
 }

@@ -115,6 +115,7 @@ export interface TreeNode {
   orphan?: boolean
   backend?: 'docker' | 'tmux' | null
   percentDone?: number | null
+  status?: string
 }
 
 export interface TreemapNode {

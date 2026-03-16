@@ -173,6 +173,7 @@ export function buildGroupTree(
     if (dimension === 'task') {
       const task = taxonomy.getTaskById(entityId)
       node.percentDone = task?.percentDone ?? null
+      node.status = task?.status
     }
     nodes.push(node)
   }

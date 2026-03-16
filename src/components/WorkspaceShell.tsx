@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
-import { useServerEvents } from '../hooks/useServerEvents'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
 import { cycleNext, cyclePrev } from '../hooks/useReadyQueue'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
@@ -46,8 +45,7 @@ function WorkspaceShellInner() {
     return ['task']
   })
 
-  const { runRepo, taxRepo, spaces, activeSpaceId, commits } = useBackendState()
-  const { state: serverState, addOptimistic } = useServerEvents()
+  const { runRepo, taxRepo, spaces, activeSpaceId, commits, readyQueue, addOptimistic } = useBackendState()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -290,11 +288,11 @@ function WorkspaceShellInner() {
 
   useGlobalHotkeys({
     onCycleReadyNext: () => {
-      const run = cycleNext(allRuns, serverState.readyQueue, selectedRunId)
+      const run = cycleNext(allRuns, readyQueue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleReadyPrev: () => {
-      const run = cyclePrev(allRuns, serverState.readyQueue, selectedRunId)
+      const run = cyclePrev(allRuns, readyQueue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllNext: () => {
