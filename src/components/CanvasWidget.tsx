@@ -112,6 +112,13 @@ export function CanvasWidget({
     resizing.current = false
   }, [])
 
+  // Select on pointer-down so the hotkey context updates immediately, even
+  // when the click ends up inside the ttyd iframe (which swallows onClick).
+  const handlePointerDown = useCallback((e: ReactPointerEvent) => {
+    if (e.button !== 0 || spaceHeldRef.current) return
+    if (onSelect) onSelect(run.id, e.ctrlKey || e.metaKey)
+  }, [run.id, onSelect, spaceHeldRef])
+
   const handleClick = useCallback((e: React.MouseEvent) => {
     if (!dragMoved.current && !resizeMoved.current && onSelect) {
       onSelect(run.id, e.ctrlKey || e.metaKey)
@@ -141,6 +148,7 @@ export function CanvasWidget({
           ? `0 0 0 2px ${runAccent}, 0 0 12px ${hexToRgba(runAccent, 0.3)}`
           : `0 0 6px ${hexToRgba(runAccent, 0.12)}`,
       }}
+      onPointerDown={handlePointerDown}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
     >

@@ -197,6 +197,10 @@ export function HotkeysSidebar() {
             ))}
           </div>
         )}
+        {/* Backtick always escapes to canvas root — show when inside a widget context */}
+        {path.length > 0 && (
+          <BindingRow binding={{ key: '`', label: 'Canvas root' }} fired={firedKey === '`'} />
+        )}
       </div>
 
       {/* Divider */}
