@@ -97,7 +97,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
           <div className="flex items-center gap-2">
             <h1
               className="text-2xs font-bold tracking-[0.15em] uppercase font-display leading-none truncate"
-              style={{ color: runAccent, textShadow: `0 0 10px ${hexToRgba(runAccent, 0.5)}` }}
+              style={{ color: runAccent }}
             >
               Run_{run.id}
             </h1>

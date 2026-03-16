@@ -5,7 +5,7 @@ import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { ProceduresPanel } from './ProceduresPanel'
-import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
+import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
 import { useFlourish } from '../../hotkeys/useFlourish'
 import type { FocusZone } from '../../hotkeys/widgetTypes'
 import '../../hotkeys/widgets/runWorkspaceWidget'  // side-effect: registers WidgetDefinition
@@ -111,8 +111,9 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
 
   useEffect(() => {
     registerFlourishHandler(run.id, triggerHollywoodHit)
+    registerScanHandler(run.id, triggerScanLine)
     return () => deregisterFlourishHandler(run.id)
-  }, [run.id, triggerHollywoodHit])
+  }, [run.id, triggerHollywoodHit, triggerScanLine])
 
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
