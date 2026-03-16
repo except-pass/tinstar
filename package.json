@@ -22,7 +22,7 @@
     "build:server": "npx esbuild src/server/standalone.ts --bundle --platform=node --format=esm --outdir=dist/server --external:http-proxy",
     "build:all": "vite build --outDir dist/client && npm run build:server",
     "preview": "vite preview",
-    "stable": "vite preview --config vite.preview.config.ts",
+    "stable": "npm run build:all && node bin/tinstar.js --no-open --port 5180",
     "test:e2e": "playwright test",
     "prepublishOnly": "npm run build:all"
   },

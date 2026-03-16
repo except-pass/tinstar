@@ -96,8 +96,10 @@ async function main() {
 
   // Start server
   const noOpen = process.argv.includes('--no-open')
+  const portIdx = process.argv.indexOf('--port')
+  const port = portIdx !== -1 ? parseInt(process.argv[portIdx + 1]) : 5273
   const { startServer } = await import('../dist/server/standalone.js')
-  startServer({ port: 5273, clientDir: join(import.meta.dirname, '..', 'dist', 'client'), open: !noOpen })
+  startServer({ port, clientDir: join(import.meta.dirname, '..', 'dist', 'client'), open: !noOpen })
 }
 
 main().catch(err => {
