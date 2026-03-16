@@ -269,6 +269,16 @@ function SidebarNode({
         )}
       </div>
 
+      {/* Progress bar for task nodes with percentDone */}
+      {node.type === 'task' && node.percentDone != null && (
+        <div className="h-px bg-surface-raised mx-2">
+          <div
+            className="h-px bg-primary"
+            style={{ width: `${Math.min(100, Math.max(0, node.percentDone))}%` }}
+          />
+        </div>
+      )}
+
       {/* Children (when expanded) */}
       {hasChildren && expanded && (
         <div data-testid={`children-${node.id}`}>

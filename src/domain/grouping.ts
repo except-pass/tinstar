@@ -160,7 +160,7 @@ export function buildGroupTree(
     const children = buildGroupTree(group.runs, remaining, taxonomy, false, dimension, entityId)
     const activeCount = group.runs.filter(r => r.status === 'running').length
 
-    nodes.push({
+    const node: TreeNode = {
       id: `${dimension}-${entityId}`,
       label: group.label,
       type: dimension,
@@ -169,7 +169,12 @@ export function buildGroupTree(
       runCount: group.runs.length,
       activeCount,
       color: group.color,
-    })
+    }
+    if (dimension === 'task') {
+      const task = taxonomy.getTaskById(entityId)
+      node.percentDone = task?.percentDone ?? null
+    }
+    nodes.push(node)
   }
 
   // Non-root orphan runs: runs that don't match any entity for this dimension

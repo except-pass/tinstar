@@ -75,6 +75,7 @@ export interface Task {
   summary: string
   settings?: EntitySettings
   spaceId?: string
+  percentDone?: number | null
 }
 
 export interface Worktree {
@@ -113,6 +114,7 @@ export interface TreeNode {
   color?: string
   orphan?: boolean
   backend?: 'docker' | 'tmux' | null
+  percentDone?: number | null
 }
 
 export interface TreemapNode {
