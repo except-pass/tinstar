@@ -18,7 +18,7 @@ import { EntitySettingsDialog } from './EntitySettingsDialog'
 import { HotgroupProvider } from '../hotkeys/HotgroupContext'
 import { FocusPathProvider, useFocusPath } from '../hotkeys/FocusPathContext'
 import { useContextRouter } from '../hotkeys/contextRouter'
-import { triggerWidgetFlourish, triggerWidgetScan } from '../hotkeys/actionHandlerRegistry'
+import { triggerWidgetFlourish } from '../hotkeys/actionHandlerRegistry'
 import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
 import { HotkeysSidebar } from './HotkeysSidebar'
@@ -312,7 +312,6 @@ function WorkspaceShellInner() {
     setChord,
     clearChord,
     onNavigate: (id) => triggerWidgetFlourish(id),
-    onChordAction: (id) => triggerWidgetScan(id),
   })
 
   useGlobalHotkeys({

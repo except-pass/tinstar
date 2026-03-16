@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import { isEditable } from './isEditable'
 import { getWidget } from './widgetRegistry'
 import { dispatchAction } from './actionHandlerRegistry'
+import { emitBindingFired } from './bindingFiredBus'
 import type { FocusNode } from './FocusPathContext'
 
 /** Normalise a KeyboardEvent to the canonical "Modifier+Code" string format */
@@ -58,6 +59,7 @@ export function useContextRouter(handlers: RouterHandlers) {
               h.onChordAction?.(tailId)
               dispatchAction(tailId, binding.action)
             }
+            emitBindingFired(binding.key)
             h.clearChord()
             return
           }
@@ -93,6 +95,7 @@ export function useContextRouter(handlers: RouterHandlers) {
           h.onChordAction?.(tail.id)
           dispatchAction(tail.id, binding.action)
         }
+        emitBindingFired(binding.key)
         return
       }
     }

@@ -1,6 +1,7 @@
 // src/components/HotkeysSidebar.tsx
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useHotkeyContext } from '../hotkeys/FocusPathContext'
+import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding } from '../hotkeys/widgetTypes'
 
 // Tier-1 always-available bindings shown in the bottom section
@@ -32,9 +33,44 @@ function KeyBadge({ label }: { label: string }) {
   )
 }
 
-function BindingRow({ binding }: { binding: Binding | { key: string; label: string } }) {
+function BindingRow({ binding, fired }: { binding: Binding | { key: string; label: string }; fired: boolean }) {
+  const rowRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = rowRef.current
+    if (!el || !fired) return
+
+    const scan = el.querySelector('.flourish-scan-line') as HTMLElement | null
+    const ripple = el.querySelector('.flourish-ripple-ring') as HTMLElement | null
+
+    // Force reflow so re-trigger works
+    el.classList.remove('flourish-ignite')
+    scan?.classList.remove('flourish-scan-active')
+    ripple?.classList.remove('flourish-ripple-active')
+    void el.offsetWidth
+
+    el.classList.add('flourish-ignite')
+    scan?.classList.add('flourish-scan-active')
+    ripple?.classList.add('flourish-ripple-active')
+
+    const onEnd = (ev: AnimationEvent) => {
+      if (ev.animationName !== 'ignite') return
+      el.classList.remove('flourish-ignite')
+      scan?.classList.remove('flourish-scan-active')
+      ripple?.classList.remove('flourish-ripple-active')
+      el.removeEventListener('animationend', onEnd)
+    }
+    el.addEventListener('animationend', onEnd)
+    return () => el.removeEventListener('animationend', onEnd)
+  }, [fired])
+
   return (
-    <div className="flex items-center justify-between gap-2 py-0.5">
+    <div
+      ref={rowRef}
+      className="relative flex items-center justify-between gap-2 py-0.5 overflow-hidden rounded-sm"
+    >
+      <div className="flourish-scan-line" />
+      <div className="flourish-ripple-ring" style={{ borderRadius: '2px' }} />
       <span className="text-2xs text-slate-400 truncate">{binding.label}</span>
       <KeyBadge label={binding.key} />
     </div>
@@ -43,6 +79,17 @@ function BindingRow({ binding }: { binding: Binding | { key: string; label: stri
 
 export function HotkeysSidebar() {
   const { path, chordState, activeDefinition } = useHotkeyContext()
+  const [firedKey, setFiredKey] = useState<string | null>(null)
+
+  // Subscribe to binding-fired events from the context router
+  useEffect(() => {
+    return onBindingFired((key) => {
+      setFiredKey(key)
+      // Clear after animation completes so re-pressing the same key re-triggers
+      const t = setTimeout(() => setFiredKey(null), 550)
+      return () => clearTimeout(t)
+    })
+  }, [])
 
   const [width, setWidth] = useState(() => {
     const saved = localStorage.getItem(LS_WIDTH)
@@ -144,8 +191,10 @@ export function HotkeysSidebar() {
         {activeBindings.length === 0 ? (
           <div className="text-2xs text-slate-600 italic">no bindings</div>
         ) : (
-          <div className={chordState ? 'opacity-100' : ''}>
-            {activeBindings.map(b => <BindingRow key={b.key} binding={b} />)}
+          <div>
+            {activeBindings.map(b => (
+              <BindingRow key={b.key} binding={b} fired={firedKey === b.key} />
+            ))}
           </div>
         )}
       </div>
@@ -158,8 +207,10 @@ export function HotkeysSidebar() {
         <div className="text-2xs font-mono font-bold text-slate-600 uppercase tracking-widest mb-1">
           Always
         </div>
-        <div className="space-y-0">
-          {ALWAYS_AVAILABLE.map(b => <BindingRow key={b.key} binding={b} />)}
+        <div>
+          {ALWAYS_AVAILABLE.map(b => (
+            <BindingRow key={b.key} binding={b} fired={firedKey === b.key} />
+          ))}
         </div>
       </div>
     </div>
