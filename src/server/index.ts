@@ -21,6 +21,7 @@ import {
   getSession,
   type TinstarConfig,
 } from './sessions'
+import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
 import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
 import { ReadyQueue } from './sessions/ReadyQueue'
@@ -166,7 +167,7 @@ export function initBackend(): RouteContext {
       reconcileGitHistory(docStore, sessionConfig)
 
       const cfg = sessionConfig
-      const onStateChanged = (name: string, state: string) => {
+      const onStateChanged = (name: string, state: SessionStatus) => {
         docStore.updateRunStatus(name, state)
         readyQueue.onStatusChange(name, state)
         sse.setReadyQueue(readyQueue.getQueue())
