@@ -28,9 +28,7 @@ export function HotkeyPalette({ open, onClose }: Props) {
     return () => window.removeEventListener('keydown', handler)
   }, [open, onClose])
 
-  if (!open) return null
-
-  const q = query.toLowerCase()
+  const q = open ? query.toLowerCase() : ''
 
   // Flatten all registered widget bindings into a searchable list
   const allBindings = useMemo(() => {
@@ -58,6 +56,8 @@ export function HotkeyPalette({ open, onClose }: Props) {
     }
     return map
   }, [filtered])
+
+  if (!open) return null
 
   return (
     <div

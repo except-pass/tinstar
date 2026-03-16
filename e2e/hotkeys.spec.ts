@@ -368,8 +368,8 @@ test.describe('Hotkeys', () => {
     test('backtick clears focus path (root key)', async ({ page }) => {
       // Press backtick to clear focus path
       await page.keyboard.press('`')
-      // Sidebar should show Canvas context
-      await expect(page.getByTestId('hotkeys-sidebar').getByText('Canvas')).toBeVisible()
+      // Sidebar should show Canvas context (exact: true avoids matching 'Canvas root')
+      await expect(page.getByTestId('hotkeys-sidebar').getByText('Canvas', { exact: true }).first()).toBeVisible()
     })
   })
 

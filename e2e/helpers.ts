@@ -11,8 +11,11 @@ export async function resetAndWaitForData(page: Page) {
   // Small delay for SSE delta events to arrive
   await page.waitForTimeout(500)
 
-  // Clear layouts and reload to get clean UI state
-  await page.evaluate(() => localStorage.removeItem('tinstar-layouts-v3'))
+  // Clear layouts, force initiative grouping (default changed to 'task'), and reload
+  await page.evaluate(() => {
+    localStorage.removeItem('tinstar-layouts-v3')
+    localStorage.setItem('tinstar-dimensions', JSON.stringify(['initiative', 'epic', 'task']))
+  })
   await page.reload()
 
   // Wait for ALL simulator initiatives to be visible (not just the first one)
