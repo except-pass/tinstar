@@ -56,12 +56,12 @@ interface Binding {
 
 ### Key String Format
 
-All `Binding.key` and `WidgetContext.key` values use the following canonical format:
-- **Single key**: `e.key` value — e.g. `'s'`, `'S'`, `'?'`, `'['`, `` '`' ``
-- **With modifiers**: `Modifier+key` — e.g. `'Ctrl+Enter'`, `'Shift+['`, `'Ctrl+G'`
+All `Binding.key` and `WidgetContext.key` values use `e.code`-based notation for layout independence (consistent with the existing `useGlobalHotkeys` and `useCanvasHotkeys` implementations):
+- **Single key**: `e.code` value — e.g. `'KeyS'`, `'BracketLeft'`, `'BracketRight'`, `'Backquote'`, `'Slash'`
+- **With modifiers**: `Modifier+code` — e.g. `'Ctrl+Enter'`, `'Shift+BracketLeft'`, `'Ctrl+KeyG'`
 - **Modifier order**: `Ctrl` before `Shift` before `Alt`
 
-The router normalizes each `KeyboardEvent` to this format before matching. This is also the format used in the Tier 1 reserved set table.
+The router normalizes each `KeyboardEvent` to this format before matching. `Binding.label` is the human-readable display string shown in the sidebar. The Tier 1 reserved set table below uses human-readable notation for readability; the actual reserved strings in the registry use this `e.code` format.
 
 ### Migration from ActiveScopeContext
 
@@ -71,7 +71,16 @@ The existing `ActiveScopeContext.tsx` (`HotkeyScope = 'global' | 'canvas' | 'wid
 - `HotkeyPalette` is updated to read bindings from `widgetRegistry` instead of `HOTKEYS`.
 - The old `registry.ts` is deleted once migration is complete.
 
-Both RunWorkspaceWidget and GroupContainer will receive concrete `WidgetDefinition` entries as part of this sub-project.
+Both RunWorkspaceWidget and GroupContainer will receive concrete `WidgetDefinition` entries as part of this sub-project. `useWidgetHotkeys` (the per-element-ref keydown listener) is **retired** in this sub-project. Its bindings (`Tab`, `ArrowDown/Up/Right/Left`, `Enter`, `Ctrl+\`) are migrated into the `run-workspace` `WidgetDefinition.bindings`.
+
+### Action Dispatch
+
+`Binding.action` is a string identifier. When the router fires a tier-2 or tier-3 binding, it must reach the specific widget instance. This is done via a global `actionHandlerRegistry` (singleton `Map<widgetId: string, handler: (action: string) => void>`), exported from `src/hotkeys/actionHandlerRegistry.ts`:
+
+- `registerActionHandler(id, fn)` / `deregisterActionHandler(id)` — called by widget instances in `useEffect` (cleanup deregisters)
+- `dispatchAction(id, action)` — called by the router; no-op if no handler registered for that id
+
+The `id` to dispatch to is the `id` of the current `FocusPath` tail node.
 
 ---
 
@@ -93,7 +102,7 @@ Keys that always fire regardless of focus state. Cannot be claimed by any widget
 | `S` / `s` | Quick session | useGlobalHotkeys |
 | `Ctrl+G` | Arrange grid | useCanvasHotkeys |
 | `Ctrl+Shift+G` | Arrange reset | useCanvasHotkeys |
-| `Ctrl+1`–`Ctrl+0` | Enter hotgroup slot | useCanvasHotkeys |
+| `Ctrl+1`–`Ctrl+0` | Assign to hotgroup slot | useCanvasHotkeys |
 | `Ctrl+Shift+1`–`Ctrl+Shift+0` | Remove from hotgroup slot | useCanvasHotkeys |
 | `0`–`9` (bare digit) | Hotgroup select/zoom (when not in editable) | useCanvasHotkeys |
 
@@ -130,7 +139,11 @@ interface FocusPathState {
 
 **Provider placement:** `FocusPathProvider` wraps the entire app at the same level as `SelectionProvider` (near the root in `App.tsx` or `main.tsx`), so all consumers can call `useFocusPath()`.
 
-**Relationship to SelectionProvider:** When a user selects a widget (click or `[`), `SelectionProvider.selectedIds` is set (existing behavior, unchanged). Separately, the context router pushes that widget onto `FocusPathContext.path`. `WorkspaceShellInner` syncs them via a `useEffect` on `selectedRunId`: when `selectedRunId` changes, it calls `clearFocus()` then `pushFocus({ id: selectedRunId, type:'run-workspace', label: runName })`. Clicking a different widget on canvas resets both.
+**Relationship to SelectionProvider:** When a user selects a widget (click or `[`), `SelectionProvider.selectedIds` is set (existing behavior, unchanged). Separately, the context router pushes that widget onto `FocusPathContext.path`. `WorkspaceShellInner` syncs them via a `useEffect` on `selectedRunId`:
+- When `selectedRunId` becomes a non-null value: call `clearFocus()` then `pushFocus({ id: selectedRunId, type:'run-workspace', label: runName })`
+- When `selectedRunId` becomes `null` (user deselects): call `clearFocus()`
+
+Clicking a different widget on canvas resets both.
 
 **Root key (`` ` ``):** clears `FocusPathContext.path` entirely. `SelectionProvider` selection (highlighting) is preserved — you can see what's selected, you just deactivated deep context.
 
@@ -147,10 +160,12 @@ interface FocusPathState {
 On every keydown event (global listener):
 
 ```
-0. isEditable guard:
-     → if e.target is input/textarea/contenteditable AND key is not a Ctrl/Meta combo → skip all tiers
-     → tier-1 keys that were already guarded in existing hooks (S, ?, [, ], Ctrl+Enter) retain
-       their isEditable suppression in the router
+0. isEditable guard (applies only to tier 1):
+     → if e.target is input/textarea/contenteditable, skip tier-1 keys that were guarded
+       in existing hooks (KeyS, Slash, BracketLeft, BracketRight, Ctrl+Enter)
+     → tier-2 and tier-3 bindings do NOT apply the isEditable guard — widget bindings
+       are responsible for not conflicting with editable elements (same scoping as the
+       retired useWidgetHotkeys which attached to the element ref)
 1. Check reserved tier 1 → fire immediately if match, done
 2. If chordState active:
      → match against chord context's bindings → fire action, clear chordState
@@ -188,7 +203,7 @@ Triggered when: a chord binding fires (arrange, quick command).
 
 Both effects implemented as CSS animations (no JS animation loop). Applied by toggling a class on the target element.
 
-For the Full Hollywood Hit, three animations run simultaneously (`fullHit`, `fullHitScan`, `fullHitRipple`). Class removal is triggered by the `animationend` event on the **container element** for its `fullHit` animation (the longest, 500ms). A handler checks `e.animationName === 'fullHit'` before removing classes to avoid premature removal on shorter sub-animations.
+For the Full Hollywood Hit, three animations run simultaneously (`fullHit`, `fullHitScan`, `fullHitRipple`). Class removal is triggered by the `animationend` event on the **container element** for its `fullHit` animation (the longest, 500ms). A handler checks `e.animationName === 'fullHit'` before removing classes to avoid premature removal on shorter sub-animations. The listener is registered via `useEffect` with cleanup (removes the listener on unmount) to avoid leaks when widget components are removed from the DOM during animation.
 
 Tailwind config already has `scan` and `pulse-glow` — new keyframes added for `ignite` (bloom) and `ripple-ring`.
 
@@ -229,7 +244,7 @@ During chord state: middle section dims current bindings and shows chord options
 
 ### Reactivity
 
-Pure derivation from React state. No async. `useHotkeyContext()` hook returns `{ focusPath, chordState, activeDefinition }` — sidebar subscribes and re-renders synchronously. Updates feel instant because they are instant — all state is in-memory React.
+Pure derivation from React state. No async. `useHotkeyContext()` is a convenience hook exported from `src/hotkeys/FocusPathContext.tsx` that composes `useFocusPath()` with a registry lookup and returns `{ focusPath, chordState, activeDefinition: WidgetDefinition | null }` — sidebar subscribes and re-renders synchronously. Updates feel instant because they are instant — all state is in-memory React.
 
 ---
 
