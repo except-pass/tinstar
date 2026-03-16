@@ -64,10 +64,14 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
         // Escaping FROM terminal — move browser focus back to the widget
         requestAnimationFrame(() => rootRef.current?.focus())
       } else {
-        // Entering terminal — give the iframe actual keyboard focus
+        // Entering terminal — give the iframe actual keyboard focus, then ask the
+        // wrapper to focus xterm's internal textarea so typing works immediately.
         requestAnimationFrame(() => {
           const iframe = rootRef.current?.querySelector('iframe') as HTMLIFrameElement | null
-          iframe?.focus()
+          if (iframe) {
+            iframe.focus()
+            iframe.contentWindow?.postMessage({ type: 'terminal-focus' }, '*')
+          }
         })
       }
       return !f

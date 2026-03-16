@@ -20,21 +20,24 @@ interface Props {
 export function ColorPalette({ value, onChange }: Props) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 4 }}>
-      {PALETTE.map(hue =>
-        hue.shades.map(color => (
-          <button
-            key={color}
-            type="button"
-            title={`${hue.name} — ${color}`}
-            onClick={() => onChange(color)}
-            style={{ background: color }}
-            className={`aspect-square rounded-sm border-2 transition-transform hover:scale-110 ${
-              value.toLowerCase() === color.toLowerCase()
-                ? 'border-white'
-                : 'border-transparent'
-            }`}
-          />
-        ))
+      {([0, 1, 2] as const).flatMap(shadeIdx =>
+        PALETTE.map(hue => {
+          const color = hue.shades[shadeIdx]
+          return (
+            <button
+              key={color}
+              type="button"
+              title={`${hue.name} — ${color}`}
+              onClick={() => onChange(color)}
+              style={{ background: color }}
+              className={`aspect-square rounded-sm border-2 transition-transform hover:scale-110 ${
+                value.toLowerCase() === color.toLowerCase()
+                  ? 'border-white'
+                  : 'border-transparent'
+              }`}
+            />
+          )
+        })
       )}
     </div>
   )
