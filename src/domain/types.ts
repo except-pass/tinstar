@@ -95,6 +95,19 @@ export interface Run extends RunData {
   spaceId?: string
 }
 
+export interface EditorWidget {
+  id: string
+  spaceId?: string
+  sessionId: string
+  filePath: string
+  task: string
+  epic: string
+  initiative: string
+  worktree: string
+  repo: string
+  color?: string
+}
+
 // --- Grouping ---
 
 export type GroupingDimension = 'initiative' | 'epic' | 'task' | 'worktree'
