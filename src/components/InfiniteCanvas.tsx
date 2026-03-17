@@ -679,6 +679,36 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
 
   const renderedNodes = collectRenderOrder(tree, 0)
 
+  // Compute drag ghost: outline showing exact drop position
+  let dragGhost: React.CSSProperties | null = null
+  if (draggingNodeId) {
+    const dragLayout = layouts.get(draggingNodeId)
+    if (dragLayout) {
+      let ghostX = dragLayout.x
+      let ghostY = dragLayout.y
+      if (dropTarget) {
+        const containerLayout = layouts.get(dropTarget.nodeId)
+        if (containerLayout) {
+          // Must match the padding used in handleReassignConfirm
+          ghostX = containerLayout.x + 30
+          ghostY = containerLayout.y + 50
+        }
+      }
+      dragGhost = {
+        position: 'absolute',
+        left: ghostX,
+        top: ghostY,
+        width: dragLayout.width,
+        height: dragLayout.height,
+        border: '2px dashed rgba(0, 240, 255, 0.7)',
+        backgroundColor: 'rgba(0, 240, 255, 0.04)',
+        pointerEvents: 'none',
+        zIndex: 200,
+        boxSizing: 'border-box',
+      }
+    }
+  }
+
   // Compute marquee rect for rendering (screen-space, relative to container)
   let marqueeStyle: React.CSSProperties | null = null
   if (marquee) {
@@ -726,6 +756,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
         }}
       >
         {renderedNodes}
+        {dragGhost && <div style={dragGhost} />}
       </div>
 
       {/* Empty canvas hint */}

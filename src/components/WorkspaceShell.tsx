@@ -352,31 +352,28 @@ function WorkspaceShellInner() {
       setShowSessionDialog(true)
     }, [selectionState]),
     onSessionQuick: useCallback(async () => {
-      // Pre-fill with resolved entity settings when a task is selected
+      // S is contextual: only fires when a task is selected
       const { selectedType, selectedIds } = selectionState
       const firstNodeId = [...selectedIds][0] ?? null
-      if (firstNodeId && selectedType === 'task') {
-        const rawId = firstNodeId.startsWith('task-') ? firstNodeId.slice(5) : firstNodeId
-        try {
-          const res = await fetch(`/api/tasks/${rawId}/settings`)
-          const data = await res.json()
-          if (data.ok) {
-            const resolved = data.data.resolved
-            setSessionPrefill({
-              ...resolved,
-              worktreeMode: resolved.worktree,
-              runColor: resolved.defaultRunColor,
-              taskId: rawId,
-              sources: data.data.sources,
-            })
-          } else {
-            setSessionPrefill({ taskId: rawId })
-          }
-        } catch {
+      if (!firstNodeId || selectedType !== 'task') return
+      const rawId = firstNodeId.startsWith('task-') ? firstNodeId.slice(5) : firstNodeId
+      try {
+        const res = await fetch(`/api/tasks/${rawId}/settings`)
+        const data = await res.json()
+        if (data.ok) {
+          const resolved = data.data.resolved
+          setSessionPrefill({
+            ...resolved,
+            worktreeMode: resolved.worktree,
+            runColor: resolved.defaultRunColor,
+            taskId: rawId,
+            sources: data.data.sources,
+          })
+        } else {
           setSessionPrefill({ taskId: rawId })
         }
-      } else {
-        setSessionPrefill(null)
+      } catch {
+        setSessionPrefill({ taskId: rawId })
       }
       setShowSessionDialog(true)
     }, [selectionState]),
