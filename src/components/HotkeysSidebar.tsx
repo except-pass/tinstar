@@ -202,8 +202,8 @@ export function HotkeysSidebar() {
             ))}
           </div>
         )}
-        {/* Backtick always escapes to canvas root — show when inside a widget context */}
-        {path.length > 0 && (
+        {/* Backtick escapes to canvas root — hide in terminal context (iframe swallows the key) */}
+        {path.length > 0 && activeDefinition?.type !== 'run-terminal' && (
           <BindingRow binding={{ key: '`', label: 'Canvas root' }} fireCount={firedCounts['`'] ?? 0} />
         )}
       </div>
