@@ -12,7 +12,13 @@
     "dist/server/",
     "README.md"
   ],
-  "keywords": ["claude", "agent", "orchestrator", "ai", "tmux"],
+  "keywords": [
+    "claude",
+    "agent",
+    "orchestrator",
+    "ai",
+    "tmux"
+  ],
   "license": "MIT",
   "scripts": {
     "dev:backend": "tsx watch src/server/standalone.ts --port 5281 --no-open",
@@ -27,6 +33,7 @@
     "prepublishOnly": "npm run build:all"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/typography": "^0.5.19",
     "http-proxy": "^1.18.1",
     "react": "^18.3.1",

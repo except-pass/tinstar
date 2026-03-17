@@ -242,7 +242,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, isSel
               className={`flex-1 overflow-hidden ${focusZone === 'file-list' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
             >
               {filePanelMode === 'touched' ? (
-                <TouchedFilesPanel files={run.touchedFiles} onOpenFile={handleOpenFile} />
+                <TouchedFilesPanel files={run.touchedFiles} sessionId={run.sessionId} onOpenFile={handleOpenFile} />
               ) : (
                 <FileTreePanel sessionId={run.sessionId} onOpenFile={handleOpenFile} />
               )}

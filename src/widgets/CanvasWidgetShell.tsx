@@ -178,6 +178,7 @@ export function CanvasWidgetShell({
       ref={containerRef}
       data-testid={`canvas-widget-${nodeId}`}
       data-selected={isSelected ? 'true' : undefined}
+      data-widget-type={registration.type}
       className={`absolute ${frameClass} transition-opacity duration-150 ${isDimmed ? 'opacity-40' : 'opacity-100'}`}
       style={{
         left: layout.x,

@@ -62,8 +62,9 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
 
   const handleDragStart = useCallback((e: React.DragEvent, filePath: string) => {
     e.dataTransfer.setData('text/plain', filePath)
+    e.dataTransfer.setData('application/tinstar-editor', JSON.stringify({ sessionId, filePath }))
     e.dataTransfer.effectAllowed = 'copy'
-  }, [])
+  }, [sessionId])
 
   function renderEntries(dirPath: string, depth: number): React.ReactNode {
     const state = dirs.get(dirPath)
