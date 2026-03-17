@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import type { TreeNode } from '../domain/types'
+import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
 
 export interface WidgetLayout {
   x: number
@@ -72,14 +73,19 @@ function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
 
   // Phase 1: Bottom-up sizing
   function computeSize(node: TreeNode, depth: number): { width: number; height: number } {
-    if (node.type === 'run') {
-      const size = { width: DEFAULT_RUN_WIDTH, height: DEFAULT_RUN_HEIGHT }
+    const reg = getWidgetComponent(toWidgetType(node.type))
+    if (!reg?.isContainer) {
+      const w = reg?.defaultSize?.width ?? DEFAULT_RUN_WIDTH
+      const h = reg?.defaultSize?.height ?? DEFAULT_RUN_HEIGHT
+      const size = { width: w, height: h }
       sizeMap.set(node.id, size)
       return size
     }
 
     const { padX, padTop, padBottom } = getPadding(depth)
-    const hasContainers = node.children.some(c => c.type !== 'run')
+    const hasContainers = node.children.some(
+      c => getWidgetComponent(toWidgetType(c.type))?.isContainer,
+    )
     const gap = hasContainers ? CONTAINER_GAP : RUN_GAP
 
     let totalWidth = 0
@@ -125,7 +131,9 @@ function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
   // Phase 3: Top-down absolutization
   function absolutize(parent: TreeNode, parentLayout: WidgetLayout, depth: number) {
     const { padX, padTop } = getPadding(depth)
-    const hasContainers = parent.children.some(c => c.type !== 'run')
+    const hasContainers = parent.children.some(
+      c => getWidgetComponent(toWidgetType(c.type))?.isContainer,
+    )
     const gap = hasContainers ? CONTAINER_GAP : RUN_GAP
     let childX = padX
 
@@ -178,7 +186,11 @@ function placeNewRuns(
 
   for (const id of missingIds) {
     const node = nodeMap.get(id)
-    if (!node || node.type !== 'run') continue
+    const nodeReg = getWidgetComponent(toWidgetType(node?.type ?? ''))
+    if (!node || nodeReg?.isContainer) continue
+
+    const w = nodeReg?.defaultSize?.width ?? DEFAULT_RUN_WIDTH
+    const h = nodeReg?.defaultSize?.height ?? DEFAULT_RUN_HEIGHT
 
     const parentId = treeMaps.parentMap.get(id)
     const parent = parentId ? nodeMap.get(parentId) : null
@@ -195,7 +207,7 @@ function placeNewRuns(
     }
 
     if (refY !== null) {
-      placed.set(id, { x: maxRight + RUN_GAP, y: refY, width: DEFAULT_RUN_WIDTH, height: DEFAULT_RUN_HEIGHT })
+      placed.set(id, { x: maxRight + RUN_GAP, y: refY, width: w, height: h })
       continue
     }
 
@@ -204,7 +216,7 @@ function placeNewRuns(
     if (parentLayout) {
       const depth = treeMaps.depthMap.get(parentId!) ?? 0
       const { padX, padTop } = getPadding(depth)
-      placed.set(id, { x: parentLayout.x + padX, y: parentLayout.y + padTop, width: DEFAULT_RUN_WIDTH, height: DEFAULT_RUN_HEIGHT })
+      placed.set(id, { x: parentLayout.x + padX, y: parentLayout.y + padTop, width: w, height: h })
     }
     // else: no reference found — caller will fall back to generateDefaultLayouts
   }
