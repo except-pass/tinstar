@@ -3,8 +3,9 @@ import type { Run, TreeNode, GroupingDimension } from '../domain/types'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts, type WidgetLayout } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
-import { CanvasWidget } from './CanvasWidget'
-import { GroupContainer } from './GroupContainer'
+import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
+import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
+import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { ReassignDialog } from './ReassignDialog'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useHotgroupContext } from '../hotkeys/HotgroupContext'
@@ -45,11 +46,11 @@ function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
   return null
 }
 
-/** Find all group (non-run) nodes in the tree */
+/** Find all group (container) nodes in the tree */
 function collectGroupNodes(nodes: TreeNode[]): TreeNode[] {
   const result: TreeNode[] = []
   for (const node of nodes) {
-    if (node.type !== 'run') {
+    if (getWidgetComponent(toWidgetType(node.type))?.isContainer) {
       result.push(node)
       result.push(...collectGroupNodes(node.children))
     }
@@ -69,23 +70,32 @@ function buildParentMap(nodes: TreeNode[], parentId: string | null = null): Map<
   return map
 }
 
-/** Collect all run node IDs from a tree */
+/** Collect all leaf (non-container) node IDs from a tree */
 function collectRunNodeIds(nodes: TreeNode[]): string[] {
   const result: string[] = []
   for (const node of nodes) {
-    if (node.type === 'run') result.push(node.id)
-    else result.push(...collectRunNodeIds(node.children))
+    if (!getWidgetComponent(toWidgetType(node.type))?.isContainer) {
+      result.push(node.id)
+    } else {
+      result.push(...collectRunNodeIds(node.children))
+    }
   }
   return result
 }
 
-/** Collect run node IDs that are descendants of the given selected entity node IDs */
-function collectRunsUnderSelected(nodes: TreeNode[], selectedIds: Set<string>): string[] {
+/** Collect leaf node IDs that are descendants of the given selected entity node IDs */
+function collectRunsUnderSelected(
+  nodes: TreeNode[],
+  selectedIds: Set<string>,
+): string[] {
   const result: string[] = []
   for (const node of nodes) {
     if (selectedIds.has(node.id)) {
-      if (node.type === 'run') result.push(node.id)
-      else result.push(...collectRunNodeIds(node.children))
+      if (!getWidgetComponent(toWidgetType(node.type))?.isContainer) {
+        result.push(node.id)
+      } else {
+        result.push(...collectRunNodeIds(node.children))
+      }
     } else {
       result.push(...collectRunsUnderSelected(node.children, selectedIds))
     }
@@ -309,34 +319,31 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   }, [layouts])
 
   // Widget drag callbacks
-  const handleWidgetDragStart = useCallback((runId: string) => {
-    draggingRunRef.current = runId
-    // Snapshot positions of other selected widgets for multi-drag
-    const draggedNodeId = `run-${runId}`
-    if (isSelected(draggedNodeId)) {
+  const handleWidgetDragStart = useCallback((nodeId: string) => {
+    draggingRunRef.current = nodeId
+    if (isSelected(nodeId)) {
       const snap = new Map<string, { x: number; y: number }>()
-      for (const nodeId of runNodeIdsRef.current) {
-        if (nodeId !== draggedNodeId && isSelected(nodeId)) {
-          const layout = layouts.get(nodeId)
-          if (layout) snap.set(nodeId, { x: layout.x, y: layout.y })
+      for (const leafId of runNodeIdsRef.current) {
+        if (leafId !== nodeId && isSelected(leafId)) {
+          const layout = layouts.get(leafId)
+          if (layout) snap.set(leafId, { x: layout.x, y: layout.y })
         }
       }
-      // Also snapshot the dragged widget's starting position for delta calc
-      const dragLayout = layouts.get(draggedNodeId)
+      const dragLayout = layouts.get(nodeId)
       if (dragLayout) snap.set('__origin__', { x: dragLayout.x, y: dragLayout.y })
-      multiDragSnapshot.current = snap.size > 1 ? snap : null // need at least origin + 1 other
+      multiDragSnapshot.current = snap.size > 1 ? snap : null
     } else {
       multiDragSnapshot.current = null
     }
   }, [isSelected, layouts])
 
-  const handleWidgetDragMove = useCallback((clientX: number, clientY: number) => {
+  const handleWidgetDragMove = useCallback((_nodeId: string, clientX: number, clientY: number) => {
     if (!draggingRunRef.current) return
     const canvas = clientToCanvas(clientX, clientY)
     let target = hitTestGroups(canvas.x, canvas.y)
-    // Don't offer to reassign to any current ancestor
     if (target) {
-      let nodeId: string | null = `run-${draggingRunRef.current}`
+      // Don't offer to reassign to any current ancestor
+      let nodeId: string | null = draggingRunRef.current
       while (nodeId) {
         const parent: string | null = parentMapRef.current.get(nodeId) ?? null
         if (parent === target.nodeId) { target = null; break }
@@ -349,12 +356,12 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     })
   }, [clientToCanvas, hitTestGroups])
 
-  const handleWidgetDragEnd = useCallback(() => {
-    const runId = draggingRunRef.current
+  const handleWidgetDragEnd = useCallback((_nodeId: string) => {
+    const storedNodeId = draggingRunRef.current
     draggingRunRef.current = null
     multiDragSnapshot.current = null
-    if (runId && dropTarget) {
-      setReassign({ runId, target: dropTarget })
+    if (storedNodeId && dropTarget) {
+      setReassign({ runId: storedNodeId.replace(/^run-/, ''), target: dropTarget })
     }
     setDropTarget(null)
   }, [dropTarget])
@@ -579,58 +586,62 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     onMenuOpen(parsed.entityId, parsed.type as GroupingDimension, label, anchorRect)
   }, [onMenuOpen, tree])
 
+  const handleSelect = useCallback((nodeId: string, additive: boolean) => {
+    if (nodeId.startsWith('run-') && onSelectRun) {
+      onSelectRun(nodeId.slice(4), additive)
+    }
+    // Group containers intentionally do not fire onSelectRun
+  }, [onSelectRun])
+
+  const handleDoubleClickZoom = useCallback((nodeId: string) => {
+    if (onFocusRun && nodeId.startsWith('run-')) {
+      onFocusRun(nodeId.slice(4))
+    }
+  }, [onFocusRun])
+
   // Recursive render: groups render behind their children (natural DOM order)
   function renderNode(node: TreeNode, depth: number): React.ReactNode {
-    if (node.type === 'run') {
-      const run = runMap.get(node.entityId)
-      if (!run) return null
-      const layout = layouts.get(node.id)
-      if (!layout) return null
-      const selected = isSelected(node.id)
-      return (
-        <CanvasWidget
-          key={node.id}
-          run={run}
-          x={layout.x}
-          y={layout.y}
-          width={layout.width}
-          height={layout.height}
-          zoom={camera.zoom}
-          spaceHeldRef={spaceHeld}
-          selected={selected}
-          onMove={(_runId, x, y) => handleMultiMove(node.id, x, y)}
-          onResize={(_runId, w, h) => updateRunSize(node.id, w, h)}
-          onSelect={onSelectRun}
-          onDoubleClickZoom={onFocusRun}
-          onDragStart={handleWidgetDragStart}
-          onDragMove={handleWidgetDragMove}
-          onDragEnd={handleWidgetDragEnd}
-        />
-      )
+    const widgetType = toWidgetType(node.type)
+    const reg = getWidgetComponent(widgetType)
+    if (!reg) {
+      console.warn(`No widget registered for type: ${node.type}`)
+      return null
     }
-
-    // Group container + recurse children
     const layout = layouts.get(node.id)
     if (!layout) return null
+
+    const data: unknown =
+      node.type === 'run'
+        ? runMap.get(node.entityId)
+        : ({
+            node,
+            depth: depthMapRef.current.get(node.id) ?? 0,
+            onShrinkToFit: shrinkNode,
+            onDelete: handleDeleteGroup,
+            onMenuOpen: handleMenuOpenGroup,
+          } satisfies GroupWidgetData)
+
+    const moveHandler = reg.isContainer ? moveNode : handleMultiMove
+    const resizeHandler = reg.isContainer ? resizeNode : updateRunSize
+
     return (
-      <GroupContainer
+      <CanvasWidgetShell
         key={node.id}
+        registration={reg}
         nodeId={node.id}
-        label={node.label}
-        depth={depth}
-        nodeType={node.type as GroupingDimension}
-        x={layout.x}
-        y={layout.y}
-        width={layout.width}
-        height={layout.height}
+        data={data}
+        layout={layout}
         zoom={camera.zoom}
+        isSelected={isSelected(node.id)}
+        isDropTarget={dropTarget?.nodeId === node.id}
         spaceHeldRef={spaceHeld}
-        onMove={moveNode}
-        onResize={resizeNode}
-        onShrinkToFit={shrinkNode}
-        onDelete={handleDeleteGroup}
-        onMenuOpen={handleMenuOpenGroup}
-        highlighted={dropTarget?.nodeId === node.id}
+        onSelect={handleSelect}
+        onDoubleClickZoom={node.type === 'run' ? handleDoubleClickZoom : undefined}
+        onMove={moveHandler}
+        onResize={resizeHandler}
+        onDragStart={node.type === 'run' ? handleWidgetDragStart : undefined}
+        onDragMove={node.type === 'run' ? handleWidgetDragMove : undefined}
+        onDragEnd={node.type === 'run' ? handleWidgetDragEnd : undefined}
       />
     )
   }
@@ -638,7 +649,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   function collectRenderOrder(nodes: TreeNode[], depth: number): React.ReactNode[] {
     const result: React.ReactNode[] = []
     for (const node of nodes) {
-      if (node.type !== 'run') {
+      if (getWidgetComponent(toWidgetType(node.type))?.isContainer) {
         result.push(renderNode(node, depth))
         result.push(...collectRenderOrder(node.children, depth + 1))
       } else {

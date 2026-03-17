@@ -106,7 +106,7 @@ export const ALL_DIMENSIONS: GroupingDimension[] = ['initiative', 'epic', 'task'
 export interface TreeNode {
   id: string
   label: string
-  type: GroupingDimension | 'run'
+  type: string
   entityId: string
   children: TreeNode[]
   runCount: number

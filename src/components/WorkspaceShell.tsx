@@ -45,7 +45,7 @@ function WorkspaceShellInner() {
       const stored = localStorage.getItem('tinstar-dimensions')
       if (stored) return JSON.parse(stored) as GroupingDimension[]
     } catch { /* ignore */ }
-    return ['task']
+    return ['initiative', 'epic', 'task']
   })
 
   const { runRepo, taxRepo, spaces, activeSpaceId, commits, readyQueue, addOptimistic } = useBackendState()

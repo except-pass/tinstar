@@ -16,6 +16,7 @@ interface Props {
   run: RunData
   className?: string
   compact?: boolean
+  zoom?: number
   /** Hide the header (used when an external drag handle replaces it) */
   headless?: boolean
   /** Pointer event handlers forwarded to the header for drag */
@@ -167,9 +168,6 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
         <RunWorkspaceHeader
           run={run}
           compact={compact}
-          onPointerDown={onHeaderPointerDown}
-          onPointerMove={onHeaderPointerMove}
-          onPointerUp={onHeaderPointerUp}
           onRefreshTerminal={bumpTerm}
         />
       )}

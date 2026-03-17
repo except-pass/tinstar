@@ -1,0 +1,23 @@
+import { registerWidgetComponent, type WidgetProps } from '../widgetComponentRegistry'
+import { RunWorkspaceWidget } from '../../components/RunWorkspaceWidget'
+import type { RunData } from '../../types'
+
+function RunWorkspaceAdapter({ data, zoom }: WidgetProps) {
+  const run = data as RunData
+  return <RunWorkspaceWidget run={run} className="w-full h-full" zoom={zoom} />
+}
+
+registerWidgetComponent({
+  type: 'run-workspace',
+  component: RunWorkspaceAdapter,
+  isContainer: false,
+  defaultSize: { width: 880, height: 820 },
+  minSize: { width: 300, height: 150 },
+  dragHandleSelector: '.widget-drag-handle',
+  getFrameClass: ({ isDragging, isSelected }) => {
+    if (isDragging) return 'widget-run-dragging'
+    if (isSelected) return 'widget-run-selected'
+    return ''
+  },
+  supportsMinimize: true,
+})
