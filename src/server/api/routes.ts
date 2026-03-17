@@ -595,11 +595,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const sessDir = ctx.sessionConfig?.dirs.sessions ?? ''
       const session = getSession(sessDir, sessionId)
       const workspacePath = session?.workspace?.path
-      const absoluteFilePath = filePath.startsWith('/')
-        ? filePath
-        : workspacePath
-          ? resolve(workspacePath, filePath)
-          : filePath
+      const absoluteFilePath = (() => {
+        if (!filePath.startsWith('/')) return workspacePath ? resolve(workspacePath, filePath) : filePath
+        if (existsSync(filePath)) return filePath
+        // Container-absolute path (e.g. /src/utils/foo.ts): strip leading slash, resolve against workspace
+        return workspacePath ? resolve(workspacePath, filePath.replace(/^\/+/, '')) : filePath
+      })()
 
       const widget: EditorWidget = {
         id: shortId('editor'),
@@ -659,7 +660,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
-    const absolutePath = filePath.startsWith('/') ? filePath : resolve(workspacePath, filePath)
+    const absolutePath = (() => {
+      if (!filePath.startsWith('/')) return resolve(workspacePath, filePath)
+      if (existsSync(filePath)) return filePath
+      return resolve(workspacePath, filePath.replace(/^\/+/, ''))
+    })()
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -1472,12 +1477,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const { session: name, path: filePath } = JSON.parse(body)
         if (!name || !filePath) return json(res, { ok: true })
 
-        const fileName = filePath.split('/').pop() ?? filePath
-        const kind = inferFileKind(filePath)
+        // Normalize container-absolute paths to host-absolute paths
+        const sessDir = ctx.sessionConfig?.dirs.sessions ?? ''
+        const session = getSession(sessDir, name)
+        const workspacePath = session?.workspace?.path
+        const resolvedPath = (() => {
+          if (!filePath.startsWith('/')) return filePath
+          if (existsSync(filePath)) return filePath
+          return workspacePath ? resolve(workspacePath, filePath.replace(/^\/+/, '')) : filePath
+        })()
+
+        const fileName = resolvedPath.split('/').pop() ?? resolvedPath
+        const kind = inferFileKind(resolvedPath)
         const file: TouchedFile = {
-          id: filePath,
+          id: resolvedPath,
           name: fileName,
-          path: filePath,
+          path: resolvedPath,
           additions: 0,
           deletions: 0,
           kind,

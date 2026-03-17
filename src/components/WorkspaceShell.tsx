@@ -85,10 +85,38 @@ function WorkspaceShellInner() {
     return map
   }, [editorWidgets])
 
-  const canvasTree = useMemo(
-    () => [...sidebarTree, ...syntheticEditorNodes],
-    [sidebarTree, syntheticEditorNodes],
-  )
+  const canvasTree = useMemo(() => {
+    if (syntheticEditorNodes.length === 0) return sidebarTree
+
+    // Map taskNodeId → editor nodes to nest inside it
+    const editorsByTaskNode = new Map<string, TreeNode[]>()
+    const orphanEditors: TreeNode[] = []
+    for (const editorNode of syntheticEditorNodes) {
+      const widget = editorWidgets.find(w => w.id === editorNode.entityId)
+      const run = widget ? [...runMap.values()].find(r => r.sessionId === widget.sessionId) : undefined
+      const taskNodeId = run?.taskId ? `task-${run.taskId}` : null
+      if (taskNodeId) {
+        const list = editorsByTaskNode.get(taskNodeId) ?? []
+        list.push(editorNode)
+        editorsByTaskNode.set(taskNodeId, list)
+      } else {
+        orphanEditors.push(editorNode)
+      }
+    }
+
+    if (editorsByTaskNode.size === 0) return [...sidebarTree, ...orphanEditors]
+
+    function inject(nodes: TreeNode[]): TreeNode[] {
+      return nodes.map(node => {
+        const toInject = editorsByTaskNode.get(node.id)
+        const injectedChildren = inject(node.children)
+        if (!toInject) return injectedChildren === node.children ? node : { ...node, children: injectedChildren }
+        return { ...node, children: [...injectedChildren, ...toInject] }
+      })
+    }
+
+    return [...inject(sidebarTree), ...orphanEditors]
+  }, [sidebarTree, syntheticEditorNodes, editorWidgets, runMap])
 
   const runIds = useMemo(() => Array.from(runMap.keys()), [runMap])
 
