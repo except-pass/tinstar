@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -40,6 +39,7 @@ import type { SkillDTO } from '../../types'
 import { spec as openapiSpec } from './openapi'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
+import { shortId } from '../utils/shortId'
 
 function inferFileKind(filePath: string): FileKind {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -68,10 +68,6 @@ function json(res: ServerResponse, data: unknown, status = 200): void {
     'Access-Control-Allow-Origin': '*',
   })
   res.end(JSON.stringify(data))
-}
-
-function shortId(prefix: string): string {
-  return `${prefix}-${randomUUID().slice(0, 8)}`
 }
 
 /** Deep-merge entity patch with special handling for settings sub-object.
