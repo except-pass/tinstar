@@ -4,7 +4,9 @@ import { registerWidget } from '../widgetRegistry'
 registerWidget({
   type: 'run-workspace',
   displayName: 'Agent Session',
-  contexts: [],
+  contexts: [
+    { key: 'Ctrl+Backslash', type: 'run-terminal', label: 'Terminal' },
+  ],
   bindings: [
     { key: 'Tab',        label: 'Next panel',        action: 'focus-next' },
     { key: 'Shift+Tab',  label: 'Prev panel',        action: 'focus-prev' },
@@ -13,6 +15,5 @@ registerWidget({
     { key: 'ArrowRight', label: 'Next tab',          action: 'tab-next' },
     { key: 'ArrowLeft',  label: 'Prev tab',          action: 'tab-prev' },
     { key: 'Enter',      label: 'Activate',          action: 'activate' },
-    { key: 'Ctrl+Backslash', label: 'Enter terminal', action: 'terminal-toggle' },
   ],
 })

@@ -16,6 +16,7 @@ interface FocusPathState {
 
 interface FocusPathContextValue extends FocusPathState {
   pushFocus: (node: FocusNode) => void
+  popFocus: () => void
   clearFocus: () => void
   setChord: (contextId: string) => void
   clearChord: () => void
@@ -25,6 +26,7 @@ const FocusPathContext = createContext<FocusPathContextValue>({
   path: [],
   chordState: null,
   pushFocus: () => {},
+  popFocus: () => {},
   clearFocus: () => {},
   setChord: () => {},
   clearChord: () => {},
@@ -36,6 +38,10 @@ export function FocusPathProvider({ children }: { children: ReactNode }) {
 
   const pushFocus = useCallback((node: FocusNode) => {
     setPath(prev => [...prev, node])
+  }, [])
+
+  const popFocus = useCallback(() => {
+    setPath(prev => prev.slice(0, -1))
   }, [])
 
   const clearFocus = useCallback(() => {
@@ -52,7 +58,7 @@ export function FocusPathProvider({ children }: { children: ReactNode }) {
   }, [])
 
   return (
-    <FocusPathContext.Provider value={{ path, chordState, pushFocus, clearFocus, setChord, clearChord }}>
+    <FocusPathContext.Provider value={{ path, chordState, pushFocus, popFocus, clearFocus, setChord, clearChord }}>
       {children}
     </FocusPathContext.Provider>
   )

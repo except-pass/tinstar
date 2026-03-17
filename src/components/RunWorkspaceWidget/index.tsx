@@ -7,6 +7,7 @@ import { RunSessionPanel } from './RunSessionPanel'
 import { ProceduresPanel } from './ProceduresPanel'
 import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
 import { useFlourish } from '../../hotkeys/useFlourish'
+import { useWidgetFocus, useFocusPath } from '../../hotkeys/FocusPathContext'
 import type { FocusZone } from '../../hotkeys/widgetTypes'
 import '../../hotkeys/widgets/runWorkspaceWidget'  // side-effect: registers WidgetDefinition
 import { hexToRgba, resolveRunAccent } from '../runAccent'
@@ -47,6 +48,9 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     ? ['left-tab', 'file-list', 'center-tabs', 'right-panel']
     : ['center-tabs', 'right-panel']
 
+  const { activeContextKey } = useWidgetFocus(run.id)
+  const { popFocus } = useFocusPath()
+
   const onFocusNext = useCallback(() => {
     setFocusZone(prev => {
       const idx = prev ? ZONES.indexOf(prev) : -1
@@ -61,32 +65,29 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     })
   }, [leftExpanded])
 
-  const handleTerminalToggle = useCallback(() => {
-    setTerminalFocused(f => {
-      if (f) {
-        // Escaping FROM terminal — move browser focus back to the widget
-        requestAnimationFrame(() => rootRef.current?.focus())
-      } else {
-        // Entering terminal — give the iframe actual keyboard focus, then ask the
-        // wrapper to focus xterm's internal textarea so typing works immediately.
-        requestAnimationFrame(() => {
-          const iframe = rootRef.current?.querySelector('iframe') as HTMLIFrameElement | null
-          if (iframe) {
-            iframe.focus()
-            iframe.contentWindow?.postMessage({ type: 'terminal-focus' }, '*')
-          }
-        })
-      }
-      return !f
-    })
-  }, [rootRef])
-
-  // When the window regains focus (from the iframe back to the page), clear terminal focus
+  // Sync terminal focus when context router navigates into run-terminal
   useEffect(() => {
-    const onWindowFocus = () => setTerminalFocused(false)
+    if (activeContextKey === 'run-terminal') {
+      setTerminalFocused(true)
+      requestAnimationFrame(() => {
+        const iframe = rootRef.current?.querySelector('iframe') as HTMLIFrameElement | null
+        if (iframe) {
+          iframe.focus()
+          iframe.contentWindow?.postMessage({ type: 'terminal-focus' }, '*')
+        }
+      })
+    }
+  }, [activeContextKey, rootRef])
+
+  // When the window regains focus (iframe lost focus), clear terminal state and pop the context
+  useEffect(() => {
+    const onWindowFocus = () => {
+      setTerminalFocused(false)
+      popFocus()
+    }
     window.addEventListener('focus', onWindowFocus)
     return () => window.removeEventListener('focus', onWindowFocus)
-  }, [])
+  }, [popFocus])
 
   // Expose action dispatch so context router can trigger widget actions
   const { triggerHollywoodHit, triggerScanLine } = useFlourish(rootRef)
@@ -103,7 +104,6 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
         case 'tab-next':        setCenterTabIndex(i => (i + 1) % 2);             break
         case 'tab-prev':        setCenterTabIndex(i => (i - 1 + 2) % 2);        break
         case 'activate':        /* no-op for now */                               break
-        case 'terminal-toggle': triggerScanLine(); handleTerminalToggle();        break
       }
     })
     return () => deregisterActionHandler(run.id)
