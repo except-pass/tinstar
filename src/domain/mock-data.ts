@@ -82,7 +82,6 @@ export const mockTasks: Task[] = [
     epicId: 'epic-1',
     initiativeId: 'init-1',
     status: 'active',
-    summary: 'Replace FIFO queue with priority-based scheduling',
   },
   {
     id: 'task-2',
@@ -90,7 +89,6 @@ export const mockTasks: Task[] = [
     epicId: 'epic-1',
     initiativeId: 'init-1',
     status: 'active',
-    summary: 'Profile and fix memory leaks in long-running agent processes',
   },
   {
     id: 'task-3',
@@ -98,7 +96,6 @@ export const mockTasks: Task[] = [
     epicId: 'epic-2',
     initiativeId: 'init-1',
     status: 'complete',
-    summary: 'Implement heartbeat and health check protocol for agents',
   },
   {
     id: 'task-4',
@@ -106,7 +103,6 @@ export const mockTasks: Task[] = [
     epicId: 'epic-2',
     initiativeId: 'init-1',
     status: 'active',
-    summary: 'Auto-scale agent pool based on queue depth',
   },
   {
     id: 'task-5',
@@ -114,7 +110,6 @@ export const mockTasks: Task[] = [
     epicId: 'epic-3',
     initiativeId: 'init-2',
     status: 'active',
-    summary: 'High-throughput span ingestion endpoint with batching',
   },
   {
     id: 'task-6',
@@ -122,7 +117,6 @@ export const mockTasks: Task[] = [
     epicId: 'epic-3',
     initiativeId: 'init-2',
     status: 'queued',
-    summary: 'GraphQL API for querying traces by service, duration, status',
   },
   {
     id: 'task-7',
@@ -130,7 +124,6 @@ export const mockTasks: Task[] = [
     epicId: 'epic-4',
     initiativeId: 'init-2',
     status: 'active',
-    summary: 'Domain-specific language for defining alert conditions',
   },
   {
     id: 'task-8',
@@ -138,7 +131,6 @@ export const mockTasks: Task[] = [
     epicId: 'epic-4',
     initiativeId: 'init-2',
     status: 'complete',
-    summary: 'Slack integration for alert notifications',
   },
   {
     id: 'task-9',
@@ -146,7 +138,6 @@ export const mockTasks: Task[] = [
     epicId: 'epic-5',
     initiativeId: 'init-3',
     status: 'paused',
-    summary: 'Token bucket rate limiter for API gateway',
   },
   {
     id: 'task-10',
@@ -154,7 +145,6 @@ export const mockTasks: Task[] = [
     epicId: 'epic-6',
     initiativeId: 'init-3',
     status: 'active',
-    summary: 'Parse OpenAPI 3.1 specs and extract endpoint metadata',
   },
 ]
 

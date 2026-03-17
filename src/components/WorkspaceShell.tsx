@@ -559,6 +559,7 @@ function WorkspaceShellInner() {
                     onFocusRun={handleCanvasFocusRun}
                     onDeleteEntity={handleDelete}
                     onMenuOpen={handleMenuOpen}
+                    onTaskUpdate={handleTaskUpdate}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
                   />

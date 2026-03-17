@@ -183,6 +183,7 @@ export function buildGroupTree(
       const task = taxonomy.getTaskById(entityId)
       node.percentDone = task?.percentDone ?? null
       node.status = task?.status
+      node.externalUrl = task?.externalUrl ?? null
     }
     nodes.push(node)
   }

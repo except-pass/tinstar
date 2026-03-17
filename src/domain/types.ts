@@ -72,10 +72,10 @@ export interface Task {
   epicId: string
   initiativeId: string
   status: string
-  summary: string
   settings?: EntitySettings
   spaceId?: string
   percentDone?: number | null
+  externalUrl?: string | null
 }
 
 export interface Worktree {
@@ -129,6 +129,7 @@ export interface TreeNode {
   backend?: 'docker' | 'tmux' | null
   percentDone?: number | null
   status?: string
+  externalUrl?: string | null
 }
 
 export interface TreemapNode {

@@ -396,16 +396,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/tasks
   if (method === 'POST' && url === '/api/tasks') {
     readBody(req).then(body => {
-      const { name, epicId, initiativeId, status, summary, id: providedId, percentDone } = JSON.parse(body)
+      const { name, epicId, initiativeId, status, id: providedId, percentDone, externalUrl } = JSON.parse(body)
       const entity = {
         id: providedId ?? shortId('task'),
         name: name ?? 'Untitled Task',
         epicId: epicId ?? '',
         initiativeId: initiativeId ?? '',
         status: status ?? 'active',
-        summary: summary ?? '',
         spaceId: ctx.docStore.activeSpaceId,
         percentDone: percentDone ?? null,
+        externalUrl: externalUrl ?? null,
       }
       ctx.docStore.upsertTask(entity.id, entity)
       json(res, entity, 201)

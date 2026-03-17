@@ -9,11 +9,13 @@ export interface GroupWidgetData {
     entityId: string
     children: unknown[]
     color?: string
+    externalUrl?: string | null
   }
   depth: number
   onShrinkToFit?: (id: string) => void
   onDelete?: (id: string) => void
   onMenuOpen?: (nodeId: string, anchorRect: DOMRect) => void
+  onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
 }
 
 export interface WidgetProps {

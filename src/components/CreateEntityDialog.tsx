@@ -72,7 +72,6 @@ export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate }: Prop
         id,
         name: trimmedName,
         status: 'active',
-        summary: '',
         ...(fkField && dialog.parentId ? { [fkField]: dialog.parentId } : {}),
       }
       if (dialog.childType === 'initiative') optimistic.color = color
