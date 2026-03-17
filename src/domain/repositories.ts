@@ -87,7 +87,18 @@ export class TaxonomyRepository {
   getInitiativeForRun(run: Run): Initiative | undefined {
     const task = this.tasks.find(t => t.id === run.taskId)
     if (!task) return undefined
-    return this.initiatives.find(i => i.id === task.initiativeId)
+    if (task.initiativeId) {
+      const direct = this.initiatives.find(i => i.id === task.initiativeId)
+      if (direct) return direct
+    }
+    // Fall back to initiative via epic chain (task has epicId but no initiativeId)
+    if (task.epicId) {
+      const epic = this.epics.find(e => e.id === task.epicId)
+      if (epic?.initiativeId) {
+        return this.initiatives.find(i => i.id === epic.initiativeId)
+      }
+    }
+    return undefined
   }
 
   /** Get the epic for a run by traversing task → epic */

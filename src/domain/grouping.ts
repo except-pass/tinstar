@@ -69,8 +69,17 @@ function getOrphanEntities(
   }
   if (parentDimension === 'initiative' && dimension === 'task') {
     const initIds = new Set(taxonomy.getInitiatives().map(i => i.id))
+    const epicById = new Map(taxonomy.getEpics().map(e => [e.id, e]))
     return taxonomy.getTasks()
-      .filter(t => !t.initiativeId || !initIds.has(t.initiativeId))
+      .filter(t => {
+        if (t.initiativeId && initIds.has(t.initiativeId)) return false
+        // Task reachable via epic chain is not an orphan
+        if (t.epicId) {
+          const epic = epicById.get(t.epicId)
+          if (epic?.initiativeId && initIds.has(epic.initiativeId)) return false
+        }
+        return true
+      })
       .map(t => ({ id: t.id, label: t.name }))
   }
   return []

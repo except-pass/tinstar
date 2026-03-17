@@ -160,7 +160,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, isSel
       style={terminalFocused
         ? { borderColor: hexToRgba(runAccent, 0.1), boxShadow: 'none' }
         : isDragging
-          ? { borderColor: hexToRgba(runAccent, 0.7), boxShadow: `0 20px 60px ${hexToRgba(runAccent, 0.3)}, 0 40px 100px ${hexToRgba(runAccent, 0.12)}, 0 0 0 1px ${hexToRgba(runAccent, 0.5)}` }
+          ? { borderColor: hexToRgba(runAccent, 0.9), boxShadow: `0 20px 80px ${hexToRgba(runAccent, 0.55)}, 0 40px 120px ${hexToRgba(runAccent, 0.3)}, 0 0 0 2px ${hexToRgba(runAccent, 0.8)}, 0 0 40px ${hexToRgba(runAccent, 0.2)}` }
           : isSelected
             ? { borderColor: hexToRgba(runAccent, 0.9), boxShadow: `0 0 0 1px ${hexToRgba(runAccent, 0.5)}, 0 0 16px ${hexToRgba(runAccent, 0.25)}` }
             : { borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }
