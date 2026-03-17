@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import type { editor as MonacoEditor } from 'monaco-editor'
 import type { EditorWidget } from '../../domain/types'
@@ -49,10 +49,11 @@ export function FileEditorWidget({ data }: WidgetProps) {
     })
   }, [content])
 
+  // onMount fires once; useEffect above handles subsequent content updates
   const handleEditorMount = useCallback((ed: MonacoEditor.IStandaloneCodeEditor) => {
     editorRef.current = ed
     if (content !== null) ed.setValue(content)
-  }, [content])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOpenInEditor = useCallback(() => {
     fetch('/api/editor/open', {
@@ -66,9 +67,13 @@ export function FileEditorWidget({ data }: WidgetProps) {
     fetch(`/api/editor-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
   }, [widget.id])
 
-  const secondsAgo = lastUpdatedAt
-    ? Math.floor((Date.now() - lastUpdatedAt.getTime()) / 1000)
-    : null
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!lastUpdatedAt) return
+    const id = setInterval(() => setNow(Date.now()), 5_000)
+    return () => clearInterval(id)
+  }, [lastUpdatedAt])
+  const secondsAgo = lastUpdatedAt ? Math.floor((now - lastUpdatedAt.getTime()) / 1000) : null
 
   return (
     <div className="flex flex-col h-full bg-surface-base text-slate-300 overflow-hidden">
