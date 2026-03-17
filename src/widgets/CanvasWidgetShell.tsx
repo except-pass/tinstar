@@ -11,6 +11,7 @@ interface CanvasWidgetShellProps {
   layout: WidgetLayout
   zoom: number
   isSelected: boolean
+  isDimmed?: boolean
   isDropTarget?: boolean
   spaceHeldRef: RefObject<boolean>
   onSelect: (id: string, additive: boolean) => void
@@ -29,6 +30,7 @@ export function CanvasWidgetShell({
   layout,
   zoom,
   isSelected,
+  isDimmed = false,
   isDropTarget = false,
   spaceHeldRef,
   onSelect,
@@ -65,11 +67,12 @@ export function CanvasWidgetShell({
   const handlePointerDown = useCallback(
     (e: ReactPointerEvent) => {
       if (e.button !== 0 || spaceHeldRef.current) return
+      // Prevent canvas from treating this as an empty-canvas click (would deselect)
+      e.stopPropagation()
       onSelect(nodeId, e.ctrlKey || e.metaKey)
 
       const target = e.target as Element
       if (target.closest(dragHandleSelector)) {
-        e.stopPropagation()
         dragging.current = true
         dragMoved.current = false
         dragPointerId.current = e.pointerId
@@ -175,7 +178,7 @@ export function CanvasWidgetShell({
       ref={containerRef}
       data-testid={`canvas-widget-${nodeId}`}
       data-selected={isSelected ? 'true' : undefined}
-      className={`absolute ${frameClass}`}
+      className={`absolute ${frameClass} transition-opacity duration-150 ${isDimmed ? 'opacity-40' : 'opacity-100'}`}
       style={{
         left: layout.x,
         top: layout.y,

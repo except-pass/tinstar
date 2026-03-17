@@ -80,12 +80,8 @@
   transition: transform 100ms ease-out;
 }
 
-/* Run workspace: selected state — cyan glow */
-.widget-run-selected {
-  box-shadow:
-    0 0 0 2px rgba(0, 240, 255, 0.8),
-    0 0 20px rgba(0, 240, 255, 0.3);
-}
+/* Run workspace: selected state — inner widget handles the accent border; shell gets no extra ring */
+.widget-run-selected {}
 
 @layer components {
   .scrollbar-thin::-webkit-scrollbar {

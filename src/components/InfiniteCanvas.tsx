@@ -152,6 +152,8 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   // Marquee state
   const [marquee, setMarquee] = useState<MarqueeRect | null>(null)
   const marqueeRef = useRef<{ startX: number; startY: number; active: boolean }>({ startX: 0, startY: 0, active: false })
+  // Tracks whether the current pointer-down actually landed on empty canvas (not a widget)
+  const canvasPointerDownRef = useRef(false)
 
   // All run node IDs for marquee intersection
   const runNodeIdsRef = useRef<string[]>([])
@@ -206,7 +208,9 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
         return
       }
       // Start marquee on left-click on empty canvas
+      // (widget clicks stop propagation so this only fires for true empty-canvas clicks)
       if (e.button === 0) {
+        canvasPointerDownRef.current = true
         marqueeRef.current = { startX: e.clientX, startY: e.clientY, active: false }
       }
     },
@@ -239,11 +243,15 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     (_e: ReactPointerEvent) => {
       // Always end pan (handles both space+drag and middle-click pan)
       endPan()
+      const wasCanvasPointerDown = canvasPointerDownRef.current
+      canvasPointerDownRef.current = false
       if (spaceHeld.current) {
         marqueeRef.current = { startX: 0, startY: 0, active: false }
         setMarquee(null)
         return
       }
+      // If the pointer went down on a widget (not empty canvas), don't deselect
+      if (!wasCanvasPointerDown) return
 
       if (marqueeRef.current.active && marquee) {
         // Resolve marquee: find all run widgets inside the bounding box
@@ -633,6 +641,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
         layout={layout}
         zoom={camera.zoom}
         isSelected={isSelected(node.id)}
+        isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
         isDropTarget={dropTarget?.nodeId === node.id}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}
