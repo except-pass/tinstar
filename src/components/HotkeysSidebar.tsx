@@ -2,7 +2,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useHotkeyContext } from '../hotkeys/FocusPathContext'
 import { onBindingFired } from '../hotkeys/bindingFiredBus'
-import type { Binding } from '../hotkeys/widgetTypes'
+import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 
 // Tier-1 always-available bindings shown in the bottom section
 const ALWAYS_AVAILABLE: Array<{ key: string; label: string }> = [
@@ -132,6 +132,11 @@ export function HotkeysSidebar() {
         : activeDefinition.bindings.filter(b => !b.chord))
     : []
 
+  // Contexts shown alongside bindings (not during chord state)
+  const activeContexts: WidgetContext[] = (!chordState && activeDefinition)
+    ? activeDefinition.contexts
+    : []
+
   if (collapsed) {
     return (
       <div
@@ -185,7 +190,10 @@ export function HotkeysSidebar() {
         <div className={`text-2xs font-mono font-bold text-slate-500 uppercase tracking-widest mb-1.5 ${chordState ? 'text-primary' : ''}`}>
           {chordState ? '⌨ CHORD' : contextLabel}
         </div>
-        {activeBindings.length === 0 ? (
+        {activeContexts.map(c => (
+          <BindingRow key={c.key} binding={{ key: c.key, label: `${c.label} →` }} fireCount={firedCounts[c.key] ?? 0} />
+        ))}
+        {activeBindings.length === 0 && activeContexts.length === 0 ? (
           <div className="text-2xs text-slate-600 italic">no bindings</div>
         ) : (
           <div>

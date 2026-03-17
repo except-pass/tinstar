@@ -5,5 +5,7 @@ registerWidget({
   type: 'run-terminal',
   displayName: 'Terminal',
   contexts: [],
-  bindings: [],
+  bindings: [
+    { key: 'Ctrl+Shift+Backslash', label: 'Exit terminal', action: 'terminal-exit' },
+  ],
 })

@@ -114,6 +114,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
         case 'tab-next':        setCenterTabIndex(i => (i + 1) % 2);             break
         case 'tab-prev':        setCenterTabIndex(i => (i - 1 + 2) % 2);        break
         case 'activate':        /* no-op for now */                               break
+        case 'terminal-exit':   popFocus(); requestAnimationFrame(() => rootRef.current?.focus()); break
       }
     })
     return () => deregisterActionHandler(run.id)
