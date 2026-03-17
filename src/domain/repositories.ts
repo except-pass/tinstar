@@ -133,7 +133,7 @@ export class TaxonomyRepository {
     switch (dimension) {
       case 'initiative': {
         const initiative = this.getInitiativeForRun(run)
-        return initiative ? { id: initiative.id, label: initiative.name, color: initiative.color } : undefined
+        return initiative ? { id: initiative.id, label: initiative.name, color: initiative.settings?.defaultRunColor ?? initiative.color } : undefined
       }
       case 'epic': {
         const epic = this.getEpicForRun(run)

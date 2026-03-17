@@ -21,7 +21,7 @@ function getAllEntitiesForDimension(
 ): Array<{ id: string; label: string; color?: string }> {
   switch (dimension) {
     case 'initiative':
-      return taxonomy.getInitiatives().map(i => ({ id: i.id, label: i.name, color: i.color }))
+      return taxonomy.getInitiatives().map(i => ({ id: i.id, label: i.name, color: i.settings?.defaultRunColor ?? i.color }))
     case 'epic':
       return taxonomy.getEpics().map(e => ({ id: e.id, label: e.name, color: e.settings?.defaultRunColor }))
     case 'task':
