@@ -15,7 +15,7 @@ Three pieces:
 2. **CanvasWidgetShell** — a generic replacement for `CanvasWidget.tsx` that owns drag/resize/selection and delegates all visual personality to the widget.
 3. **Widget contract** — what every widget component receives as props, and what it optionally declares in its registration.
 
-This sub-project does NOT change the hotkey/context system (sub-project ①②), server entity models, or layout storage.
+This sub-project does NOT change the hotkey/context system (sub-project ①②), server entity models, or `FocusPathContext`.
 
 ---
 
@@ -23,31 +23,48 @@ This sub-project does NOT change the hotkey/context system (sub-project ①②),
 
 **File:** `src/widgets/widgetComponentRegistry.ts`
 
-A singleton map of `type → WidgetRegistration`. Widgets self-register at module load via `registerWidgetComponent(reg)`.
+A singleton map of `type → WidgetRegistration`. Widgets self-register at module load via `registerWidgetComponent(reg)`. The lookup export is named `getWidgetComponent(type)` to avoid collision with `getWidget` exported from `src/hotkeys/widgetRegistry.ts`.
 
 ```typescript
 interface WidgetRegistration {
   type: string                    // e.g. 'run-workspace', 'task-group', 'telemetry'
   component: React.ComponentType<WidgetProps>
-  defaultSize: { width: number; height: number }
+  isContainer: boolean            // true for group-like widgets whose children are rendered as canvas siblings
+  defaultSize?: { width: number; height: number }  // omit for container types (sized by content)
   minSize: { width: number; height: number }
   dragHandleSelector?: string     // CSS selector within component DOM; default: '.widget-drag-handle'
-  getFrameClass?: (state: WidgetFrameState) => string  // classes applied to shell's outer frame div
-  supportsMinimize?: boolean      // opt-in; shell renders collapse chrome if true
+  getFrameClass?: (state: WidgetFrameState) => string
+  supportsMinimize?: boolean
 }
 
 interface WidgetFrameState {
   isDragging: boolean
   isSelected: boolean
   isHovered: boolean
+  isDropTarget: boolean           // for container widgets: drop-target reassign highlight
 }
 ```
 
-Registration rules (throw on violation, never silently override):
-- Duplicate `type` string throws.
-- Registering a `type` that matches an existing hotkey registry entry with a conflicting display name throws (the two registries are independent but must agree on display names per type).
+Registration rules: duplicate `type` string throws. `registerWidgetComponent` uses `reg.type` as the map key — it is the canonical identifier in both the map and the registration object.
 
-`getWidget(type)` returns the registration or `undefined`. Callers handle undefined gracefully — the canvas skips unknown node types with a `console.warn`.
+`getWidgetComponent(type)` returns the registration or `undefined`. Unknown types produce a `console.warn` at render time and render nothing.
+
+### Node type → widget type mapping
+
+`TreeNode.type` values do not always equal the widget type strings used in the registry (e.g. `'run'` → `'run-workspace'`). A shared helper `toWidgetType(nodeType: string): string` in `widgetComponentRegistry.ts` centralizes this mapping:
+
+```typescript
+export function toWidgetType(nodeType: string): string {
+  if (nodeType === 'run') return 'run-workspace'
+  return nodeType  // group types map to themselves (e.g. 'task' → 'task-group' once registered)
+}
+```
+
+All callers — `renderNode`, `collectGroupNodes`, `collectRunNodeIds`, `collectRunsUnderSelected`, `collectRenderOrder`, and `useWidgetLayouts` — call `toWidgetType(node.type)` before calling `getWidgetComponent`.
+
+### Module initialization order
+
+Widget registrations happen as side effects at module load (`registerWidgetComponent` calls in each widget's index file). These modules must be imported before any component that calls `getWidgetComponent`. The entry point (`main.tsx` or `App.tsx`) imports all widget index files at the top, before `InfiniteCanvas` or `useWidgetLayouts` are instantiated.
 
 ---
 
@@ -57,17 +74,37 @@ Every registered component receives:
 
 ```typescript
 interface WidgetProps {
-  data: unknown          // entity data for this node (RunData, group config, telemetry config, etc.)
+  data: unknown          // entity data — see "Entity Data by Type" below
   zoom: number           // raw canvas zoom float — widget quantizes as needed
   isSelected: boolean
   isDragging: boolean
   isHovered: boolean
+  isDropTarget: boolean  // container widgets use this for reassign highlight
 }
 ```
 
-`data` is typed `unknown` at the contract level. Each widget casts it to its own data type internally. The canvas passes `run` for `'run-workspace'` nodes, the group record for group nodes, etc. — whatever the entity store provides for that node.
+Widgets own all internal visual behavior. They receive `zoom` raw and quantize it themselves.
 
-Widgets own all internal visual behavior. They receive `zoom` raw and quantize it themselves — different widget types have different zoom thresholds that matter to them. The terminal widget uses zoom to adjust ttyd font size; a telemetry widget might use it to show/hide axis labels.
+### Entity Data by Type
+
+| Widget type | `data` shape |
+|---|---|
+| `'run-workspace'` | `RunData` — `runMap.get(node.entityId)` |
+| `'task-group'` | `GroupWidgetData` — see below |
+
+```typescript
+interface GroupWidgetData {
+  node: TreeNode                          // label, nodeType, color, etc.
+  depth: number                           // from InfiniteCanvas depthMap — drives border/bg opacity tiers
+  onShrinkToFit?: (id: string) => void
+  onDelete?: (id: string) => void
+  onMenuOpen?: (nodeId: string, anchorRect: DOMRect) => void
+}
+```
+
+Container action callbacks (`onShrinkToFit`, `onDelete`, `onMenuOpen`) are threaded into the widget via `data` rather than as generic shell props, keeping the shell interface clean. `InfiniteCanvas` constructs `GroupWidgetData` when calling `getEntityData` for group nodes.
+
+Future widget types define their own data shape and document it in their own sub-project spec.
 
 ---
 
@@ -77,14 +114,50 @@ Widgets own all internal visual behavior. They receive `zoom` raw and quantize i
 
 Replaces `CanvasWidget.tsx`. Works for any registered widget type.
 
+**Props:**
+
+```typescript
+interface CanvasWidgetShellProps {
+  registration: WidgetRegistration
+  nodeId: string
+  data: unknown
+  layout: WidgetLayout                            // { x, y, width, height }
+  zoom: number
+  isSelected: boolean                             // from InfiniteCanvas's isSelected(node.id)
+  isDropTarget?: boolean                          // set by InfiniteCanvas during drag-over
+  spaceHeldRef: React.RefObject<boolean>          // guards drag initiation vs canvas pan
+  onSelect: (id: string, additive: boolean) => void  // shell extracts additive from e.metaKey||e.shiftKey
+  onDoubleClickZoom?: (id: string) => void
+  onMove: (id: string, x: number, y: number) => void     // absolute canvas coords; id = nodeId
+  onResize: (id: string, w: number, h: number) => void
+  onDragStart?: (id: string) => void                     // id = nodeId (e.g. 'run-R-241')
+  onDragMove?: (id: string, clientX: number, clientY: number) => void
+  onDragEnd?: (id: string) => void
+}
+```
+
+**`onMove` clarification:** the shell passes its own `nodeId` as the `id` and the new absolute canvas `(x, y)` — not deltas. `InfiniteCanvas.handleMultiMove(nodeId, newX, newY)` uses this to move all co-selected nodes.
+
+**`onDragStart` / `onDragMove` / `onDragEnd` contract change:** today's `CanvasWidget` passes the raw run entity ID (e.g. `'R-241'`) to `onDragStart`, and `handleWidgetDragStart` reconstructs `'run-R-241'` for layout lookup. The shell passes `nodeId` directly (already `'run-R-241'`), so `handleWidgetDragStart` drops the `run-` prepend. `onDragMove` gains a leading `id` parameter; `handleWidgetDragMove` currently identifies the dragging node via local closure/state — the `id` param makes this explicit and removes the implicit coupling. Both handlers must be updated.
+
+**Container resize:** `CanvasWidgetShell` renders a resize handle for all widget types including containers. `isContainer` does not affect resize behavior — group widgets remain freely resizable as today.
+
+**`draggingRunRef` migration:** `InfiniteCanvas` currently stores the raw run entity ID in `draggingRunRef` (e.g. `'R-241'`) and composes `run-${draggingRunRef.current}` for layout lookups and `{ runId }` for the reassign dialog and API calls. After this change the shell passes `nodeId` (e.g. `'run-R-241'`) to all drag callbacks. `draggingRunRef` is updated to store `nodeId`. Downstream uses are updated accordingly:
+- Layout lookup: `layouts.get(draggingRunRef.current)` (no prefix composition needed)
+- Reassign dialog: `setReassign({ runId: draggingRunRef.current.replace(/^run-/, ''), target })`
+- API call in `handleReassignConfirm`: extract raw ID with the same `.replace(/^run-/, '')` helper
+
+**`arrangeGrid` scope:** `arrangeGrid` and its supporting `collectRunNodeIds` / `updateRunPosition` / `updateRunSize` functions remain run-specific in this sub-project. The `isContainer`-based update to `collectRunNodeIds` makes it correctly treat any registered non-container node as a leaf, but `arrangeGrid` itself only acts on nodes that match `'run-workspace'` type. Non-run leaf widgets are unaffected by arrange operations and are not expected to be arranged in this sub-project.
+
 **What the shell owns:**
-- Absolute positioning (`x`, `y`, `width`, `height`) on the canvas
-- Drag — pointer events on the element matching `dragHandleSelector` (default `.widget-drag-handle`)
+- Absolute positioning on the canvas
+- Drag — pointer events on `dragHandleSelector` (default `.widget-drag-handle`); suppressed when `spaceHeldRef.current` is true
 - Resize — bottom-right corner handle
-- Selection highlight
+- Selection — calls `onSelect` on pointer-down
+- Double-click zoom — calls `onDoubleClickZoom` if provided
 - Hover tracking
-- Minimize chrome (title-bar collapse) when `supportsMinimize: true`
-- Calling `getFrameClass(state)` and applying the result to its own outer frame `div`
+- Minimize chrome when `supportsMinimize: true`
+- Calling `getFrameClass({ isDragging, isSelected, isHovered, isDropTarget })` and applying the result to its outer frame `div`
 
 **What the shell does not own:**
 - Any visual effect inside the widget boundary
@@ -93,9 +166,9 @@ Replaces `CanvasWidget.tsx`. Works for any registered widget type.
 
 **Frame class pattern:**
 
-When drag, selection, or hover state changes, the shell calls `registration.getFrameClass({ isDragging, isSelected, isHovered })` and sets the result as a class on its outer `div`. The widget registration defines this function alongside its component — it returns whatever Tailwind/CSS classes produce the desired frame effect. The run workspace uses this to apply a scale-up + downward beam-of-light shadow during drag. A task group uses it for a selection glow. The shell never knows what the classes look like.
+The shell calls `registration.getFrameClass(state)` on each state change and applies the returned string as a class on its outer `div`. Widget CSS defines the actual keyframes and effects.
 
-Example (in `src/widgets/runWorkspace/index.ts`):
+Example (`src/widgets/runWorkspace/index.ts`):
 ```typescript
 getFrameClass: ({ isDragging, isSelected }) => {
   if (isDragging) return 'widget-run-dragging'
@@ -104,17 +177,35 @@ getFrameClass: ({ isDragging, isSelected }) => {
 }
 ```
 
-CSS for `widget-run-dragging` lives in the run workspace's own stylesheet — scale, shadow, beam effect defined there.
-
 ---
 
 ## InfiniteCanvas Changes
 
-`renderNode()` becomes a registry lookup:
+### renderNode
+
+Rendering order is unchanged — group frames and run widgets remain absolute DOM siblings (groups first, runs on top). No nested React tree.
 
 ```typescript
+function getEntityData(
+  node: TreeNode,
+  runMap: Map<string, RunData>,
+  groupCallbacks: GroupCallbacks,
+): unknown {
+  if (node.type === 'run') return runMap.get(node.entityId)
+  return {
+    node,
+    depth: depthMap.get(node.id) ?? 0,
+    onShrinkToFit: groupCallbacks.onShrinkToFit,
+    onDelete: groupCallbacks.onDelete,
+    onMenuOpen: groupCallbacks.onMenuOpen,
+  } satisfies GroupWidgetData
+}
+
+// depth param is structural (drives recursive child rendering); not forwarded to shell —
+// group widgets get depth from GroupWidgetData.depth via depthMap
 function renderNode(node: TreeNode, depth: number): React.ReactNode {
-  const reg = getWidget(node.type === 'run' ? 'run-workspace' : node.type)
+  const widgetType = toWidgetType(node.type)
+  const reg = getWidgetComponent(widgetType)
   if (!reg) {
     console.warn(`No widget registered for type: ${node.type}`)
     return null
@@ -126,40 +217,70 @@ function renderNode(node: TreeNode, depth: number): React.ReactNode {
       key={node.id}
       registration={reg}
       nodeId={node.id}
-      data={getEntityData(node)}
+      data={getEntityData(node, runMap, groupCallbacks)}
       layout={layout}
       zoom={camera.zoom}
+      isSelected={isSelected(node.id)}
+      isDropTarget={dropTargetId === node.id}
+      spaceHeldRef={spaceHeldRef}
+      onSelect={handleSelect}
+      onDoubleClickZoom={handleDoubleClickZoom}
+      onMove={handleMove}
+      onResize={handleResize}
+      onDragStart={handleDragStart}
+      onDragMove={handleDragMove}
+      onDragEnd={handleDragEnd}
     />
   )
 }
 ```
 
-No hardcoded type branches remain. Group children still recurse — `CanvasWidgetShell` receives `children` for group-type widgets that need to render their children inside their boundary.
+### Canvas helper functions
+
+The following functions currently branch on `node.type !== 'run'` or `node.type === 'run'` to distinguish containers from leaf nodes. All are updated to use `getWidgetComponent(toWidgetType(node.type))?.isContainer` instead:
+
+- `collectGroupNodes` — collects container nodes for drop-target hit-testing
+- `collectRunNodeIds` — collects leaf node IDs
+- `collectRunsUnderSelected` — walks selected subtrees for multi-drag
+- `collectRenderOrder` — decides whether to recurse into children
+
+Nodes whose type has no registered component are treated as leaf nodes (non-container).
+
+---
+
+## useWidgetLayouts Changes
+
+`useWidgetLayouts` has multiple sites that branch on `node.type === 'run'` or `node.type !== 'run'`. All are updated to use `getWidgetComponent(toWidgetType(node.type))?.isContainer`:
+
+- **`computeSize`** — currently assigns `DEFAULT_RUN_WIDTH / DEFAULT_RUN_HEIGHT` for run nodes. Updated to use `registration.defaultSize` for leaf nodes (fallback to `DEFAULT_RUN_WIDTH / DEFAULT_RUN_HEIGHT` for `'run-workspace'` specifically, or for any leaf type with no `defaultSize`).
+- **`absolutize`** — contains a `hasContainers` heuristic derived from node type. Updated to use `isContainer`.
+- **`generateDefaultLayouts`** / **`placeNewRuns`** — the `if (node.type !== 'run') continue` guard in `placeNewRuns` is replaced with `if (reg?.isContainer) continue`, so any registered leaf type gets smart placement using `registration.defaultSize`. Unregistered types fall through to `generateDefaultLayouts` defaults.
 
 ---
 
 ## TreeNode Type Expansion
 
-`TreeNode.type` currently accepts `'run' | GroupingDimension`. It expands to `string` — the canvas no longer constrains what type values are valid, the registry does. The server introduces new entity kinds over time; the canvas renders them as soon as a component is registered for that type. Unknown types produce a `console.warn` and render nothing.
-
-Existing type values (`'run'`, `'initiative'`, `'epic'`, `'task'`, `'worktree'`) continue to work unchanged. The mapping `'run'` → `'run-workspace'` and `GroupingDimension` → `'task-group'` is handled in `renderNode`.
+`TreeNode.type` expands from `'run' | GroupingDimension` to `string`. The canvas no longer constrains valid type values. Unknown types produce a `console.warn` and render nothing. Existing type values continue to work unchanged.
 
 ---
 
 ## Existing Widget Registrations
 
-Two widget components register immediately as part of this sub-project:
-
 **run-workspace** (`src/widgets/runWorkspace/`):
-- `defaultSize`: 880 × 820 (unchanged)
-- `dragHandleSelector`: `.widget-drag-handle` (header bar)
+- `isContainer`: false
+- `defaultSize`: `{ width: 880, height: 820 }`
+- `minSize`: `{ width: 300, height: 150 }`
+- `dragHandleSelector`: `.widget-drag-handle`
 - `getFrameClass`: drag → `widget-run-dragging` (scale 1.03 + beam shadow), selected → `widget-run-selected` (cyan glow)
 - `supportsMinimize`: true
 
 **task-group** (`src/widgets/taskGroup/`):
 - Migrated from `GroupContainer.tsx`
-- `dragHandleSelector`: `.widget-drag-handle` (header bar)
-- `getFrameClass`: selected → `widget-group-selected` (depth-aware glow)
+- `isContainer`: true
+- `defaultSize`: omitted (sized by child layout algorithm)
+- `minSize`: `{ width: 200, height: 100 }`
+- `dragHandleSelector`: `.widget-drag-handle`
+- `getFrameClass`: selected → `widget-group-selected` (depth-aware glow), dropTarget → `widget-group-drop-target`
 - `supportsMinimize`: false
 
 ---
@@ -167,11 +288,10 @@ Two widget components register immediately as part of this sub-project:
 ## What This Does NOT Change
 
 - Hotkey registry and `WidgetDefinition` system (sub-projects ①②)
-- `useWidgetLayouts` — layout storage and default sizing logic unchanged
 - `SelectionProvider` and `selectedIds`
 - `FocusPathContext` and the context router
-- Server-side entity models — new widget types add server entities in their own sub-projects
-- `useWidgetLayouts` default sizes — `DEFAULT_RUN_WIDTH`/`DEFAULT_RUN_HEIGHT` stay, new types declare their own via `defaultSize`
+- Server-side entity models
+- Layout storage key (`tinstar-layouts-v3`) and layout shape
 
 ---
 
