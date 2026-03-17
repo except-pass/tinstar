@@ -4,9 +4,8 @@ import { useHotkeyContext } from '../hotkeys/FocusPathContext'
 import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 
-// Tier-1 always-available bindings shown in the bottom section
-const ALWAYS_AVAILABLE: Array<{ key: string; label: string }> = [
-  { key: '`',         label: 'Canvas root' },
+// Tier-1 global bindings — work at any level except inside a terminal (iframe captures keyboard)
+const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
   { key: ']',         label: 'Next session' },
   { key: '[',         label: 'Prev session' },
   { key: 'Shift+]',   label: 'Next (all)' },
@@ -14,6 +13,10 @@ const ALWAYS_AVAILABLE: Array<{ key: string; label: string }> = [
   { key: '?',         label: 'Hotkeys' },
   { key: 'Ctrl+↵',    label: 'New session' },
   { key: 'S',         label: 'Quick session' },
+]
+
+// Canvas-level bindings — only work when no widget context is active
+const CANVAS_KEYS: Array<{ key: string; label: string }> = [
   { key: 'Ctrl+G',    label: 'Arrange grid' },
   { key: '1–9',       label: 'Hotgroup select' },
   { key: 'Ctrl+1–9',  label: 'Hotgroup assign' },
@@ -208,20 +211,38 @@ export function HotkeysSidebar() {
         )}
       </div>
 
-      {/* Divider */}
-      <div className="border-t border-white/10 mx-2" />
-
-      {/* Always-available tier-1 section */}
-      <div className="px-2 py-1.5 flex-shrink-0">
-        <div className="text-2xs font-mono font-bold text-slate-600 uppercase tracking-widest mb-1">
-          Always
-        </div>
-        <div>
-          {ALWAYS_AVAILABLE.map(b => (
-            <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
-          ))}
-        </div>
-      </div>
+      {/* Divider + tier-1 sections (hidden in terminal: iframe owns the keyboard) */}
+      {activeDefinition?.type !== 'run-terminal' && (
+        <>
+          <div className="border-t border-white/10 mx-2" />
+          <div className="px-2 py-1.5 flex-shrink-0">
+            <div className="text-2xs font-mono font-bold text-slate-600 uppercase tracking-widest mb-1">
+              Global
+            </div>
+            <div>
+              {GLOBAL_KEYS.map(b => (
+                <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
+              ))}
+            </div>
+          </div>
+          {/* Canvas-only keys — only active when no widget context is focused */}
+          {path.length === 0 && (
+            <>
+              <div className="border-t border-white/10 mx-2" />
+              <div className="px-2 py-1.5 flex-shrink-0">
+                <div className="text-2xs font-mono font-bold text-slate-600 uppercase tracking-widest mb-1">
+                  Canvas
+                </div>
+                <div>
+                  {CANVAS_KEYS.map(b => (
+                    <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
     </div>
   )
 }
