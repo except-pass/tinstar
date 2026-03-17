@@ -12,10 +12,7 @@ for (const type of ['initiative', 'epic', 'task', 'worktree'] as const) {
     // No defaultSize — containers are sized by the layout algorithm
     minSize: { width: 200, height: 100 },
     dragHandleSelector: '.widget-drag-handle',
-    getFrameClass: ({ isDropTarget }) => {
-      if (isDropTarget) return 'widget-group-drop-target'
-      return ''
-    },
+    // Drop-target visual state is handled inline in TaskGroupWidget via isDropTarget prop
     supportsMinimize: false,
   })
 }
