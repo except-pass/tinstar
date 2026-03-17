@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
 import type { DocumentStore } from '../stores/document-store'
@@ -30,7 +30,7 @@ import {
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import { parseNewEntries } from '../sessions/transcript-parser'
 import { getGitDiffFiles } from '../sessions/git-diff'
-import type { Run } from '../../domain/types'
+import type { Run, EditorWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import type { FileKind, TouchedFile } from '../../types'
 import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
@@ -568,6 +568,66 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'DELETE' && url.startsWith('/api/worktrees/')) {
     const id = url.slice('/api/worktrees/'.length)
     ctx.docStore.deleteWorktree(id)
+    json(res, { ok: true })
+    return true
+  }
+
+  // POST /api/editor-widgets
+  if (method === 'POST' && url === '/api/editor-widgets') {
+    readBody(req).then(body => {
+      const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
+      if (!sessionId || !filePath) {
+        json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId and filePath required' } }, 400)
+        return
+      }
+      const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
+      if (!run) {
+        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }, 404)
+        return
+      }
+      // Resolve display names from taxonomy
+      const task = ctx.docStore.getAllTasks().find(t => t.id === run.taskId)
+      const epic = task ? ctx.docStore.getAllEpics().find(e => e.id === task.epicId) : undefined
+      const initiative = epic ? ctx.docStore.getAllInitiatives().find(i => i.id === epic.initiativeId) : undefined
+      const worktree = ctx.docStore.getAllWorktrees().find(w => w.id === run.worktreeId)
+
+      // Resolve relative paths to absolute (Explorer panel sends relative paths)
+      const sessDir = ctx.sessionConfig?.dirs.sessions ?? ''
+      const session = getSession(sessDir, sessionId)
+      const workspacePath = session?.workspace?.path
+      const absoluteFilePath = filePath.startsWith('/')
+        ? filePath
+        : workspacePath
+          ? resolve(workspacePath, filePath)
+          : filePath
+
+      const widget: EditorWidget = {
+        id: shortId('editor'),
+        spaceId: ctx.docStore.activeSpaceId || undefined,
+        sessionId,
+        filePath: absoluteFilePath,
+        task: task?.name ?? '',
+        epic: epic?.name ?? '',
+        initiative: initiative?.name ?? '',
+        worktree: worktree?.name ?? '',
+        repo: worktree?.repo ?? run.repo ?? '',
+        color: run.color,
+      }
+      ctx.docStore.upsertEditorWidget(widget.id, widget)
+      json(res, { ok: true, data: widget })
+    })
+    return true
+  }
+
+  // DELETE /api/editor-widgets/:id
+  if (method === 'DELETE' && url.startsWith('/api/editor-widgets/')) {
+    const id = url.slice('/api/editor-widgets/'.length)
+    const existing = ctx.docStore.getAllEditorWidgets().find(w => w.id === id)
+    if (!existing) {
+      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `EditorWidget ${id} not found` } }, 404)
+      return true
+    }
+    ctx.docStore.deleteEditorWidget(id)
     json(res, { ok: true })
     return true
   }
