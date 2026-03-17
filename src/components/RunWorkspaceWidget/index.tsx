@@ -18,6 +18,7 @@ interface Props {
   compact?: boolean
   zoom?: number
   isSelected?: boolean
+  isDragging?: boolean
   /** Hide the header (used when an external drag handle replaces it) */
   headless?: boolean
   /** Pointer event handlers forwarded to the header for drag */
@@ -28,7 +29,7 @@ interface Props {
 
 type FilePanelMode = 'touched' | 'tree'
 
-export function RunWorkspaceWidget({ run, className = '', compact = false, isSelected = false, headless = false, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp }: Props) {
+export function RunWorkspaceWidget({ run, className = '', compact = false, isSelected = false, isDragging = false, headless = false, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp }: Props) {
 
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
@@ -158,9 +159,11 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, isSel
       className={`relative flex flex-col overflow-hidden bg-surface-base border ${className}`}
       style={terminalFocused
         ? { borderColor: hexToRgba(runAccent, 0.1), boxShadow: 'none' }
-        : isSelected
-          ? { borderColor: hexToRgba(runAccent, 0.9), boxShadow: `0 0 0 1px ${hexToRgba(runAccent, 0.5)}, 0 0 16px ${hexToRgba(runAccent, 0.25)}` }
-          : { borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }
+        : isDragging
+          ? { borderColor: hexToRgba(runAccent, 0.7), boxShadow: `0 20px 60px ${hexToRgba(runAccent, 0.3)}, 0 40px 100px ${hexToRgba(runAccent, 0.12)}, 0 0 0 1px ${hexToRgba(runAccent, 0.5)}` }
+          : isSelected
+            ? { borderColor: hexToRgba(runAccent, 0.9), boxShadow: `0 0 0 1px ${hexToRgba(runAccent, 0.5)}, 0 0 16px ${hexToRgba(runAccent, 0.25)}` }
+            : { borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }
       }
     >
       {/* Flourish animation layers */}

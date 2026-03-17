@@ -2,9 +2,9 @@ import { registerWidgetComponent, type WidgetProps } from '../widgetComponentReg
 import { RunWorkspaceWidget } from '../../components/RunWorkspaceWidget'
 import type { RunData } from '../../types'
 
-function RunWorkspaceAdapter({ data, zoom, isSelected }: WidgetProps) {
+function RunWorkspaceAdapter({ data, zoom, isSelected, isDragging }: WidgetProps) {
   const run = data as RunData
-  return <RunWorkspaceWidget run={run} className="w-full h-full" zoom={zoom} isSelected={isSelected} />
+  return <RunWorkspaceWidget run={run} className="w-full h-full" zoom={zoom} isSelected={isSelected} isDragging={isDragging} />
 }
 
 registerWidgetComponent({

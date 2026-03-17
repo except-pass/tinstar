@@ -679,31 +679,22 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
 
   const renderedNodes = collectRenderOrder(tree, 0)
 
-  // Compute drag ghost: outline showing exact drop position
+  // Compute drag ghost: precise dashed outline at the widget's current drag position.
+  // Sits behind the widget (z-index 50 < widget's 100) so the widget floats on top.
   let dragGhost: React.CSSProperties | null = null
   if (draggingNodeId) {
     const dragLayout = layouts.get(draggingNodeId)
     if (dragLayout) {
-      let ghostX = dragLayout.x
-      let ghostY = dragLayout.y
-      if (dropTarget) {
-        const containerLayout = layouts.get(dropTarget.nodeId)
-        if (containerLayout) {
-          // Must match the padding used in handleReassignConfirm
-          ghostX = containerLayout.x + 30
-          ghostY = containerLayout.y + 50
-        }
-      }
       dragGhost = {
         position: 'absolute',
-        left: ghostX,
-        top: ghostY,
+        left: dragLayout.x,
+        top: dragLayout.y,
         width: dragLayout.width,
         height: dragLayout.height,
         border: '2px dashed rgba(0, 240, 255, 0.7)',
         backgroundColor: 'rgba(0, 240, 255, 0.04)',
         pointerEvents: 'none',
-        zIndex: 200,
+        zIndex: 50,
         boxSizing: 'border-box',
       }
     }
