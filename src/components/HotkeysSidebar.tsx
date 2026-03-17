@@ -225,8 +225,8 @@ export function HotkeysSidebar() {
               ))}
             </div>
           </div>
-          {/* Canvas-only keys — only active when no widget context is focused */}
-          {path.length === 0 && (
+          {/* Canvas keys — available at all levels except terminal (iframe owns keyboard) */}
+          {activeDefinition?.type !== 'run-terminal' && (
             <>
               <div className="border-t border-white/10 mx-2" />
               <div className="px-2 py-1.5 flex-shrink-0">
