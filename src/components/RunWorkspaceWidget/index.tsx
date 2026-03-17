@@ -270,7 +270,12 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, isSel
             termTick={termTick}
             terminalFocused={terminalFocused}
             onTerminalToggle={handleTerminalToggle}
-            onTerminalPointerFocus={() => setTerminalFocused(true)}
+            onTerminalPointerFocus={() => {
+              setTerminalFocused(true)
+              if (activeContextKey !== 'run-terminal') {
+                pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
+              }
+            }}
             activeTabIndex={focusZone === 'center-tabs' ? centerTabIndex : undefined}
           />
         </div>
