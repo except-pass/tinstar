@@ -33,12 +33,12 @@ function KeyBadge({ label }: { label: string }) {
   )
 }
 
-function BindingRow({ binding, fired }: { binding: Binding | { key: string; label: string }; fired: boolean }) {
+function BindingRow({ binding, fireCount }: { binding: Binding | { key: string; label: string }; fireCount: number }) {
   const rowRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const el = rowRef.current
-    if (!el || !fired) return
+    if (!el || fireCount === 0) return
 
     const scan = el.querySelector('.flourish-scan-line') as HTMLElement | null
     const ripple = el.querySelector('.flourish-ripple-ring') as HTMLElement | null
@@ -62,7 +62,7 @@ function BindingRow({ binding, fired }: { binding: Binding | { key: string; labe
     }
     el.addEventListener('animationend', onEnd)
     return () => el.removeEventListener('animationend', onEnd)
-  }, [fired])
+  }, [fireCount])
 
   return (
     <div
@@ -79,15 +79,12 @@ function BindingRow({ binding, fired }: { binding: Binding | { key: string; labe
 
 export function HotkeysSidebar() {
   const { path, chordState, activeDefinition } = useHotkeyContext()
-  const [firedKey, setFiredKey] = useState<string | null>(null)
+  const [firedCounts, setFiredCounts] = useState<Record<string, number>>({})
 
   // Subscribe to binding-fired events from the context router
   useEffect(() => {
     return onBindingFired((key) => {
-      setFiredKey(key)
-      // Clear after animation completes so re-pressing the same key re-triggers
-      const t = setTimeout(() => setFiredKey(null), 550)
-      return () => clearTimeout(t)
+      setFiredCounts(c => ({ ...c, [key]: (c[key] ?? 0) + 1 }))
     })
   }, [])
 
@@ -193,13 +190,13 @@ export function HotkeysSidebar() {
         ) : (
           <div>
             {activeBindings.map(b => (
-              <BindingRow key={b.key} binding={b} fired={firedKey === b.key} />
+              <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
             ))}
           </div>
         )}
         {/* Backtick always escapes to canvas root — show when inside a widget context */}
         {path.length > 0 && (
-          <BindingRow binding={{ key: '`', label: 'Canvas root' }} fired={firedKey === '`'} />
+          <BindingRow binding={{ key: '`', label: 'Canvas root' }} fireCount={firedCounts['`'] ?? 0} />
         )}
       </div>
 
@@ -213,7 +210,7 @@ export function HotkeysSidebar() {
         </div>
         <div>
           {ALWAYS_AVAILABLE.map(b => (
-            <BindingRow key={b.key} binding={b} fired={firedKey === b.key} />
+            <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
           ))}
         </div>
       </div>
