@@ -6,7 +6,6 @@ import { useSelection } from './SelectionProvider'
 import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
 import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
-import { ReassignDialog } from './ReassignDialog'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useHotgroupContext } from '../hotkeys/HotgroupContext'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
@@ -44,18 +43,6 @@ function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
     }
   }
   return null
-}
-
-/** Find all group (container) nodes in the tree */
-function collectGroupNodes(nodes: TreeNode[]): TreeNode[] {
-  const result: TreeNode[] = []
-  for (const node of nodes) {
-    if (getWidgetComponent(toWidgetType(node.type))?.isContainer) {
-      result.push(node)
-      result.push(...collectGroupNodes(node.children))
-    }
-  }
-  return result
 }
 
 /** Build a map from child node ID → immediate parent node ID */
@@ -103,18 +90,6 @@ function collectRunsUnderSelected(
   return result
 }
 
-interface DropTarget {
-  nodeId: string
-  label: string
-  type: string
-  entityId: string
-}
-
-interface ReassignState {
-  runId: string
-  target: DropTarget
-}
-
 interface MarqueeRect {
   startX: number
   startY: number
@@ -140,12 +115,9 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
   const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState, expandAll } = useSelection()
 
-  // Drag-to-reassign state
+  // Drag state
   const draggingRunRef = useRef<string | null>(null)
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null)
-  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
-  const [reassign, setReassign] = useState<ReassignState | null>(null)
-  const groupNodesRef = useRef<TreeNode[]>([])
 
   // Multi-drag: snapshot of other selected widgets' positions at drag start
   const multiDragSnapshot = useRef<Map<string, { x: number; y: number }> | null>(null)
@@ -159,11 +131,10 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   // All run node IDs for marquee intersection
   const runNodeIdsRef = useRef<string[]>([])
 
-  // Keep group nodes list, parent map, and depth map in sync with tree
+  // Keep parent map, depth map, and run node IDs in sync with tree
   const parentMapRef = useRef<Map<string, string | null>>(new Map())
   const depthMapRef = useRef<Map<string, number>>(new Map())
   useEffect(() => {
-    groupNodesRef.current = collectGroupNodes(tree)
     parentMapRef.current = buildParentMap(tree)
     depthMapRef.current = treeMaps.depthMap
     runNodeIdsRef.current = collectRunNodeIds(tree)
@@ -301,32 +272,6 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     setMarquee(null)
   }, [endPan])
 
-  /** Hit-test canvas point against group containers, return deepest match */
-  const hitTestGroups = useCallback((canvasX: number, canvasY: number): DropTarget | null => {
-    let best: { node: TreeNode; layout: WidgetLayout; depth: number } | null = null
-
-    for (const node of groupNodesRef.current) {
-      const layout = layouts.get(node.id)
-      if (!layout) continue
-      if (
-        canvasX >= layout.x && canvasX <= layout.x + layout.width &&
-        canvasY >= layout.y && canvasY <= layout.y + layout.height
-      ) {
-        const parsed = parseNodeId(node.id)
-        if (!parsed) continue
-        // Prefer deeper (more specific) containers
-        const depth = depthMapRef.current.get(node.id) ?? 0
-        if (!best || depth > best.depth) {
-          best = { node, layout, depth }
-        }
-      }
-    }
-
-    if (!best) return null
-    const parsed = parseNodeId(best.node.id)!
-    return { nodeId: best.node.id, label: best.node.label, type: parsed.type, entityId: parsed.entityId }
-  }, [layouts])
-
   // Widget drag callbacks
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
@@ -347,68 +292,10 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     }
   }, [isSelected, layouts])
 
-  const handleWidgetDragMove = useCallback((_nodeId: string, clientX: number, clientY: number) => {
-    if (!draggingRunRef.current) return
-    const canvas = clientToCanvas(clientX, clientY)
-    let target = hitTestGroups(canvas.x, canvas.y)
-    if (target) {
-      // Don't offer to reassign to any current ancestor
-      let nodeId: string | null = draggingRunRef.current
-      while (nodeId) {
-        const parent: string | null = parentMapRef.current.get(nodeId) ?? null
-        if (parent === target.nodeId) { target = null; break }
-        nodeId = parent
-      }
-    }
-    setDropTarget(prev => {
-      if (prev?.nodeId === target?.nodeId) return prev
-      return target
-    })
-  }, [clientToCanvas, hitTestGroups])
-
-  const handleWidgetDragEnd = useCallback((_nodeId: string) => {
-    const storedNodeId = draggingRunRef.current
+  const handleWidgetDragEnd = useCallback(() => {
     draggingRunRef.current = null
     setDraggingNodeId(null)
     multiDragSnapshot.current = null
-    if (storedNodeId && dropTarget) {
-      setReassign({ runId: storedNodeId.replace(/^run-/, ''), target: dropTarget })
-    }
-    setDropTarget(null)
-  }, [dropTarget])
-
-  const handleReassignConfirm = useCallback(async () => {
-    if (!reassign) return
-    const { runId, target } = reassign
-
-    const patch: Record<string, string> = {}
-    if (target.type === 'task') patch.taskId = target.entityId
-
-    const containerLayout = layouts.get(target.nodeId)
-    const runNodeId = `run-${runId}`
-    const runLayout = layouts.get(runNodeId)
-    if (containerLayout && runLayout) {
-      const padX = 30
-      const padTop = 50
-      const padBottom = 30
-      const neededW = padX + runLayout.width + padX
-      const neededH = padTop + runLayout.height + padBottom
-      if (containerLayout.width < neededW || containerLayout.height < neededH) {
-        resizeNode(target.nodeId, Math.max(containerLayout.width, neededW), Math.max(containerLayout.height, neededH))
-      }
-      updateRunPosition(runNodeId, containerLayout.x + padX, containerLayout.y + padTop)
-    }
-
-    await fetch(`/api/runs/${runId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    })
-    setReassign(null)
-  }, [reassign, layouts, updateRunPosition, resizeNode])
-
-  const handleReassignCancel = useCallback(() => {
-    setReassign(null)
   }, [])
 
   // Multi-drag aware move: when dragging a selected widget, move all selected peers by the same delta
@@ -651,14 +538,12 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
         zoom={camera.zoom}
         isSelected={isSelected(node.id)}
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
-        isDropTarget={dropTarget?.nodeId === node.id}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}
         onDoubleClickZoom={node.type === 'run' ? handleDoubleClickZoom : undefined}
         onMove={moveHandler}
         onResize={resizeHandler}
         onDragStart={node.type === 'run' ? handleWidgetDragStart : undefined}
-        onDragMove={node.type === 'run' ? handleWidgetDragMove : undefined}
         onDragEnd={node.type === 'run' ? handleWidgetDragEnd : undefined}
       />
     )
@@ -766,15 +651,6 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
         </div>
       </div>
 
-      {reassign && (
-        <ReassignDialog
-          runId={reassign.runId}
-          targetLabel={reassign.target.label}
-          targetType={reassign.target.type}
-          onConfirm={handleReassignConfirm}
-          onCancel={handleReassignCancel}
-        />
-      )}
     </div>
   )
 }
