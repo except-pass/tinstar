@@ -29,7 +29,7 @@ interface Props {
 
 type FilePanelMode = 'touched' | 'tree'
 
-export function RunWorkspaceWidget({ run, className = '', compact = false, isSelected = false, isDragging = false, headless = false, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp }: Props) {
+export function RunWorkspaceWidget({ run, className = '', compact = false, zoom = 1, isSelected = false, isDragging = false, headless = false, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp }: Props) {
 
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
