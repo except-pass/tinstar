@@ -8,28 +8,7 @@ export interface Camera {
 
 const MIN_ZOOM = 0.1
 const MAX_ZOOM = 4.0
-
-// Quantized zoom levels — rational fractions so (zoom × DPR) is integer on
-// 1×, 2×, and 3× displays, keeping terminal text crisp.
-const ZOOM_LEVELS = [
-  0.1, 0.125, 0.167, 0.25, 0.333,
-  0.5, 0.667, 0.75,
-  1.0, 1.25, 1.333, 1.5,
-  2.0, 3.0, 4.0,
-]
-
-/** Step to the next zoom level in the given direction (±1). */
-function stepZoom(current: number, dir: 1 | -1): number {
-  if (dir === 1) {
-    return ZOOM_LEVELS.find(z => z > current + 0.001) ?? ZOOM_LEVELS[ZOOM_LEVELS.length - 1]!
-  }
-  return [...ZOOM_LEVELS].reverse().find(z => z < current - 0.001) ?? ZOOM_LEVELS[0]!
-}
-
-/** Snap z down to the largest zoom level that is ≤ z (for zoom-to-fit). */
-function snapZoomDown(z: number): number {
-  return [...ZOOM_LEVELS].reverse().find(l => l <= z + 0.001) ?? ZOOM_LEVELS[0]!
-}
+const ZOOM_SENSITIVITY = 0.003
 
 export function useCanvasCamera() {
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, zoom: 1 })
@@ -120,10 +99,12 @@ export function useCanvasCamera() {
     e.preventDefault()
     const cam = cameraRef.current
 
-    // Ctrl+scroll or trackpad pinch → step through quantized zoom levels toward cursor
+    // Ctrl+scroll or trackpad pinch → zoom toward cursor
     if (e.ctrlKey || e.metaKey) {
-      const dir = e.deltaY > 0 ? -1 : 1
-      const newZoom = stepZoom(cam.zoom, dir)
+      const newZoom = Math.min(
+        MAX_ZOOM,
+        Math.max(MIN_ZOOM, cam.zoom * (1 - e.deltaY * ZOOM_SENSITIVITY)),
+      )
       const ratio = newZoom / cam.zoom
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
       const cx = e.clientX - rect.left
@@ -174,7 +155,7 @@ export function useCanvasCamera() {
         (viewportW - PADDING * 2) / ww,
         (viewportH - PADDING * 2) / wh,
       )
-      const zoom = snapZoomDown(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fitZoom)))
+      const zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fitZoom))
       setCamera({
         x: viewportW / 2 - (wx + ww / 2) * zoom,
         y: viewportH / 2 - (wy + wh / 2) * zoom,
