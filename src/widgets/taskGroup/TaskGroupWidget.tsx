@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import type { WidgetProps, GroupWidgetData } from '../widgetComponentRegistry'
 import { getDimensionIcon } from '../../domain/dimension-meta'
 import type { GroupingDimension } from '../../domain/types'
+import { hexToRgba } from '../../components/runAccent'
 
 const BORDER_OPACITY = [0.15, 0.12, 0.08, 0.05]
 const BG_OPACITY = [0.02, 0.015, 0.01, 0.005]
@@ -32,6 +33,7 @@ export function TaskGroupWidget({ data, isSelected, isDropTarget }: WidgetProps)
     BORDER_OPACITY[Math.min(depth, BORDER_OPACITY.length - 1)] ?? 0.05
   const bgOp = BG_OPACITY[Math.min(depth, BG_OPACITY.length - 1)] ?? 0.005
   const icon = getDimensionIcon(node.type as GroupingDimension)
+  const accent = node.color || '#00f0ff'
 
   const handleDoubleClick = useCallback(() => {
     onShrinkToFit?.(node.id)
@@ -44,19 +46,19 @@ export function TaskGroupWidget({ data, isSelected, isDropTarget }: WidgetProps)
       onDoubleClick={handleDoubleClick}
       style={{
         border: isDropTarget
-          ? '2px solid rgba(0, 240, 255, 0.6)'
+          ? `2px solid ${hexToRgba(accent, 0.6)}`
           : isSelected
-            ? '1px solid rgba(0, 240, 255, 0.5)'
-            : `1px solid rgba(0, 240, 255, ${borderOp})`,
+            ? `1px solid ${hexToRgba(accent, 0.5)}`
+            : `1px solid ${hexToRgba(accent, borderOp)}`,
         background: isDropTarget
-          ? 'rgba(0, 240, 255, 0.08)'
+          ? hexToRgba(accent, 0.08)
           : isSelected
-            ? 'rgba(0, 240, 255, 0.06)'
-            : `rgba(0, 240, 255, ${bgOp})`,
+            ? hexToRgba(accent, 0.06)
+            : hexToRgba(accent, bgOp),
         boxShadow: isDropTarget
-          ? '0 0 20px rgba(0, 240, 255, 0.15), inset 0 0 20px rgba(0, 240, 255, 0.05)'
+          ? `0 0 20px ${hexToRgba(accent, 0.15)}, inset 0 0 20px ${hexToRgba(accent, 0.05)}`
           : isSelected
-            ? '0 0 0 1px rgba(0, 240, 255, 0.2), 0 0 12px rgba(0, 240, 255, 0.1)'
+            ? `0 0 0 1px ${hexToRgba(accent, 0.2)}, 0 0 12px ${hexToRgba(accent, 0.1)}`
             : 'none',
         transition: 'border 150ms, background 150ms, box-shadow 150ms',
       }}
@@ -65,11 +67,11 @@ export function TaskGroupWidget({ data, isSelected, isDropTarget }: WidgetProps)
       <div
         className="widget-drag-handle group/header h-8 flex items-center px-3 cursor-grab active:cursor-grabbing select-none"
         style={{
-          borderBottom: `1px solid rgba(0, 240, 255, ${borderOp * 0.5})`,
+          borderBottom: `1px solid ${hexToRgba(accent, borderOp * 0.5)}`,
         }}
         onDragStart={(e) => e.preventDefault()}
       >
-        <span className="text-xs font-display uppercase tracking-wider text-primary/50 flex-1">
+        <span className="text-xs font-display uppercase tracking-wider flex-1" style={{ color: hexToRgba(accent, 0.7) }}>
           {icon} {node.label}
         </span>
         {/* External link badge — task nodes only */}
