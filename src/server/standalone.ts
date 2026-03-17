@@ -149,6 +149,10 @@ export function startServer(opts: ServerOptions) {
 
     server.once('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
+        if (process.env.TINSTAR_NO_PORT_FALLBACK === '1') {
+          process.stderr.write(`[standalone] Port ${port} in use and TINSTAR_NO_PORT_FALLBACK=1 — exiting\n`)
+          process.exit(1)
+        }
         log.warn('server', `port ${port} in use, trying ${port + 1}`)
         console.log(`  Port ${port} in use, trying ${port + 1}...`)
         listen(port + 1)

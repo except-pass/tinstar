@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './fixtures'
 import { resetAndWaitForData } from './helpers'
 
 test('editor widget appears when created via API', async ({ page }) => {

@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Page } from './fixtures'
 import { resetAndWaitForData } from './helpers'
 
 test.describe('Real-Time SSE Updates', () => {
