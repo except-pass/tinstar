@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
@@ -629,6 +629,95 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
     ctx.docStore.deleteEditorWidget(id)
     json(res, { ok: true })
+    return true
+  }
+
+  // GET /api/file-watch?session=SESSION_ID&path=FILE_PATH
+  if (method === 'GET' && url.startsWith('/api/file-watch')) {
+    const qs = new URL(url, 'http://localhost').searchParams
+    const sessionId = qs.get('session')
+    const filePath = qs.get('path')
+
+    if (!sessionId || !filePath) {
+      json(res, { error: 'session and path required' }, 400)
+      return true
+    }
+
+    const sessDir = ctx.sessionConfig?.dirs.sessions
+    if (!sessDir) {
+      json(res, { error: 'session config unavailable' }, 503)
+      return true
+    }
+    const session = getSession(sessDir, sessionId)
+    if (!session) {
+      json(res, { error: 'session not found' }, 404)
+      return true
+    }
+    const workspacePath = session.workspace?.path ?? null
+    if (!workspacePath) {
+      json(res, { error: 'session workspace unavailable' }, 400)
+      return true
+    }
+
+    const absolutePath = filePath.startsWith('/') ? filePath : resolve(workspacePath, filePath)
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    })
+
+    const sendEvent = (type: string, data: string) => {
+      res.write(`data: ${JSON.stringify({ type, data })}\n\n`)
+    }
+
+    // Send initial content
+    try {
+      const content = readFileSync(absolutePath, 'utf-8')
+      sendEvent('content', content)
+    } catch {
+      sendEvent('error', 'file unavailable')
+      res.end()
+      return true
+    }
+
+    // Debounced file watcher
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    let watcher: ReturnType<typeof watch> | null = null
+    let keepalive: ReturnType<typeof setInterval>
+
+    const cleanup = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      clearInterval(keepalive)
+      watcher?.close()
+    }
+
+    try {
+      watcher = watch(absolutePath, () => {
+        if (debounceTimer) clearTimeout(debounceTimer)
+        debounceTimer = setTimeout(() => {
+          try {
+            const content = readFileSync(absolutePath, 'utf-8')
+            sendEvent('content', content)
+          } catch {
+            sendEvent('error', 'file unavailable')
+            cleanup()
+            res.end()
+          }
+        }, 50)
+      })
+    } catch {
+      sendEvent('error', 'file unavailable')
+      res.end()
+      return true
+    }
+
+    keepalive = setInterval(() => { res.write(': keep-alive\n\n') }, 15_000)
+
+    req.on('close', () => {
+      cleanup()
+    })
+
     return true
   }
 
