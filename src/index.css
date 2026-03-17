@@ -40,7 +40,7 @@
 }
 
 .flourish-ignite {
-  animation: ignite 500ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: ignite 250ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 .flourish-scan-line {
   position: absolute;
@@ -54,7 +54,7 @@
 }
 .flourish-scan-active {
   display: block !important;
-  animation: scan-oneshot 350ms 20ms ease forwards;
+  animation: scan-oneshot 200ms ease forwards;
 }
 .flourish-ripple-ring {
   position: absolute;
@@ -64,7 +64,7 @@
   pointer-events: none;
 }
 .flourish-ripple-active {
-  animation: ripple-ring 500ms 20ms cubic-bezier(0.2, 0, 0.6, 1) forwards;
+  animation: ripple-ring 250ms cubic-bezier(0.2, 0, 0.6, 1) forwards;
 }
 
 @layer components {

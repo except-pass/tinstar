@@ -184,6 +184,20 @@ export async function reattachTmuxSession(
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
   claimedPorts.add(opts.port)
+
+  // If ttyd is already running on this port (e.g. another server instance owns it),
+  // adopt it rather than killing and restarting — avoids a kill/restart cycle when
+  // npx tinstar and npm run dev share the same config dir.
+  try {
+    const lsof = execSync(
+      `lsof -ti :${opts.port} | xargs -r ps -o pid=,comm= -p 2>/dev/null | awk '$2=="ttyd"{print $1}'`,
+      { encoding: 'utf-8' },
+    ).trim()
+    if (lsof) {
+      return { port: opts.port, ttydPid: Number(lsof.split('\n')[0]) }
+    }
+  } catch { /* no ttyd running — proceed to start */ }
+
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
   return { port: opts.port, ttydPid }
 }
