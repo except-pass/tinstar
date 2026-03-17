@@ -6,7 +6,7 @@ import type { GroupingDimension } from '../../domain/types'
 const BORDER_OPACITY = [0.15, 0.12, 0.08, 0.05]
 const BG_OPACITY = [0.02, 0.015, 0.01, 0.005]
 
-export function TaskGroupWidget({ data, isDropTarget }: WidgetProps) {
+export function TaskGroupWidget({ data, isSelected, isDropTarget }: WidgetProps) {
   const { node, depth, onShrinkToFit, onDelete, onMenuOpen } =
     data as GroupWidgetData
 
@@ -27,13 +27,19 @@ export function TaskGroupWidget({ data, isDropTarget }: WidgetProps) {
       style={{
         border: isDropTarget
           ? '2px solid rgba(0, 240, 255, 0.6)'
-          : `1px solid rgba(0, 240, 255, ${borderOp})`,
+          : isSelected
+            ? '1px solid rgba(0, 240, 255, 0.5)'
+            : `1px solid rgba(0, 240, 255, ${borderOp})`,
         background: isDropTarget
           ? 'rgba(0, 240, 255, 0.08)'
-          : `rgba(0, 240, 255, ${bgOp})`,
+          : isSelected
+            ? 'rgba(0, 240, 255, 0.06)'
+            : `rgba(0, 240, 255, ${bgOp})`,
         boxShadow: isDropTarget
           ? '0 0 20px rgba(0, 240, 255, 0.15), inset 0 0 20px rgba(0, 240, 255, 0.05)'
-          : 'none',
+          : isSelected
+            ? '0 0 0 1px rgba(0, 240, 255, 0.2), 0 0 12px rgba(0, 240, 255, 0.1)'
+            : 'none',
         transition: 'border 150ms, background 150ms, box-shadow 150ms',
       }}
     >

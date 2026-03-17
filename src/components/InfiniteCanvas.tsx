@@ -138,10 +138,11 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     arrangeWorkspace,
   } = useWidgetLayouts(tree, activeSpaceId)
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
-  const { selectMany, deselect, isSelected, state: selectionState, expandAll } = useSelection()
+  const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState, expandAll } = useSelection()
 
   // Drag-to-reassign state
   const draggingRunRef = useRef<string | null>(null)
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
   const [reassign, setReassign] = useState<ReassignState | null>(null)
   const groupNodesRef = useRef<TreeNode[]>([])
@@ -329,6 +330,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   // Widget drag callbacks
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
+    setDraggingNodeId(nodeId)
     if (isSelected(nodeId)) {
       const snap = new Map<string, { x: number; y: number }>()
       for (const leafId of runNodeIdsRef.current) {
@@ -367,6 +369,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   const handleWidgetDragEnd = useCallback((_nodeId: string) => {
     const storedNodeId = draggingRunRef.current
     draggingRunRef.current = null
+    setDraggingNodeId(null)
     multiDragSnapshot.current = null
     if (storedNodeId && dropTarget) {
       setReassign({ runId: storedNodeId.replace(/^run-/, ''), target: dropTarget })
@@ -597,9 +600,15 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
   const handleSelect = useCallback((nodeId: string, additive: boolean) => {
     if (nodeId.startsWith('run-') && onSelectRun) {
       onSelectRun(nodeId.slice(4), additive)
+    } else {
+      // Group container click — select it in the shared selection state so hierarchy highlights too
+      const parsed = parseNodeId(nodeId)
+      if (parsed) {
+        const t = parsed.type as import('../domain/types').GroupingDimension
+        additive ? toggleSelect(nodeId, t) : select(nodeId, t)
+      }
     }
-    // Group containers intentionally do not fire onSelectRun
-  }, [onSelectRun])
+  }, [onSelectRun, select, toggleSelect])
 
   const handleDoubleClickZoom = useCallback((nodeId: string) => {
     if (onFocusRun && nodeId.startsWith('run-')) {
