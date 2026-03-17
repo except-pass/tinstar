@@ -106,22 +106,24 @@ function StatusMessage({ entry }: { entry: RecapEntry }) {
 
 /** Iframe wrapper keyed by tick to force remount on refresh.
  *
- * Counter-scaling: the iframe is sized to its actual on-screen pixel dimensions
- * (containerSize × zoom) and then scaled back by 1/zoom. Combined with the
- * canvas layer's scale(zoom), the net transform on the iframe content is 1×,
- * so terminal text is always rendered at device-pixel resolution — no blurring.
+ * When zoomed in (zoom > 1): counter-scale the iframe so it renders at screen
+ * pixel resolution — canvas scale(zoom) × iframe scale(1/zoom) = 1×, crisp.
+ *
+ * When zoomed out (zoom ≤ 1): no scaling. The terminal fills the container at
+ * its natural size so ttyd maintains a full row/column count. The canvas zoom
+ * makes text smaller naturally, which is fine and preserves readability.
  */
 function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus }: { src: string; tick: number; focused?: boolean; accent: string; zoom?: number; onPointerFocus?: () => void }) {
+  // Only counter-scale when zoomed in; zooming out lets text shrink naturally.
+  const needsScale = zoom > 1
   return (
     <div
       className="flex-1 relative overflow-hidden"
       style={focused ? { outline: `2px solid ${accent}`, outlineOffset: '-2px', boxShadow: `inset 0 0 12px ${hexToRgba(accent, 0.15)}` } : undefined}
       onPointerDown={e => { e.stopPropagation(); onPointerFocus?.() }}
     >
-      {/* Scale up the iframe so it renders at screen resolution, then inverse-scale
-          back to fit the container. Canvas scale(zoom) × this scale(1/zoom) = 1. */}
       <div
-        style={{
+        style={needsScale ? {
           position: 'absolute',
           top: 0,
           left: 0,
@@ -129,7 +131,7 @@ function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus }:
           height: `${zoom * 100}%`,
           transformOrigin: '0 0',
           transform: `scale(${1 / zoom})`,
-        }}
+        } : { display: 'contents' }}
       >
         <iframe
           key={tick}
