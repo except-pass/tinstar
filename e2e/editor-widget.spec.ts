@@ -69,8 +69,9 @@ test('editor widget close button removes it', async ({ page }) => {
     })
   }, sessionId)
 
+  const before = await page.locator('[data-widget-type="file-editor"]').count()
   const editorWidget = page.locator('[data-widget-type="file-editor"]').first()
   await expect(editorWidget).toBeVisible({ timeout: 5000 })
   await editorWidget.locator('button[title="Close"]').click()
-  await expect(page.locator('[data-widget-type="file-editor"]')).toHaveCount(0, { timeout: 5000 })
+  await expect(page.locator('[data-widget-type="file-editor"]')).toHaveCount(before - 1, { timeout: 5000 })
 })

@@ -46,6 +46,7 @@ export function TouchedFilesPanel({ files, sessionId, onFileSelect, onOpenFile, 
               draggable
               onDragStart={(e) => {
                 e.stopPropagation()
+                e.dataTransfer.setData('text/plain', file.path)
                 e.dataTransfer.setData('application/tinstar-editor', JSON.stringify({ sessionId, filePath: file.path }))
                 e.dataTransfer.effectAllowed = 'copy'
               }}
