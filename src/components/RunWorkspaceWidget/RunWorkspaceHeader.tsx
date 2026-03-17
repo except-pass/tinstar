@@ -75,7 +75,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
 
   return (
     <header
-      className="flex items-center justify-between bg-surface-panel px-3 py-1.5 overflow-hidden cursor-grab active:cursor-grabbing select-none"
+      className="widget-drag-handle flex items-center justify-between bg-surface-panel px-3 py-1.5 overflow-hidden cursor-grab active:cursor-grabbing select-none"
       style={{ borderBottom: `1px solid ${hexToRgba(runAccent, 0.25)}` }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
