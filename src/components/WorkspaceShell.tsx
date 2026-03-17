@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { GroupingDimension, Run, TreeNode } from '../domain/types'
+import type { EditorWidget, GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
@@ -48,7 +48,7 @@ function WorkspaceShellInner() {
     return ['initiative', 'epic', 'task']
   })
 
-  const { runRepo, taxRepo, spaces, activeSpaceId, commits, readyQueue, addOptimistic } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, commits, readyQueue, addOptimistic, editorWidgets } = useBackendState()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -63,6 +63,32 @@ function WorkspaceShellInner() {
     }
     return map
   }, [runRepo])
+
+  const syntheticEditorNodes: TreeNode[] = useMemo(
+    () =>
+      editorWidgets.map(w => ({
+        id: w.id,
+        label: w.filePath.split('/').pop() ?? w.filePath,
+        type: 'file-editor',
+        entityId: w.id,
+        children: [],
+        runCount: 0,
+        activeCount: 0,
+        color: w.color,
+      })),
+    [editorWidgets],
+  )
+
+  const editorWidgetMap = useMemo(() => {
+    const map = new Map<string, EditorWidget>()
+    for (const w of editorWidgets) map.set(w.id, w)
+    return map
+  }, [editorWidgets])
+
+  const canvasTree = useMemo(
+    () => [...sidebarTree, ...syntheticEditorNodes],
+    [sidebarTree, syntheticEditorNodes],
+  )
 
   const runIds = useMemo(() => Array.from(runMap.keys()), [runMap])
 
@@ -389,6 +415,14 @@ function WorkspaceShellInner() {
     setFocusRunId(null)
   }, [])
 
+  const handleTaskUpdate = useCallback((taskId: string, patch: { externalUrl?: string | null }) => {
+    void fetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+  }, [])
+
   // Click on canvas widget → select in hierarchy + expand ancestors
   const handleSelectRun = useCallback((runId: string, additive = false) => {
     const nodeId = `run-${runId}`
@@ -515,7 +549,8 @@ function WorkspaceShellInner() {
                 {/* Canvas */}
                 <div className="flex-1 relative overflow-hidden" data-testid="canvas-slot">
                   <InfiniteCanvas
-                    tree={sidebarTree}
+                    tree={canvasTree}
+                    editorWidgetMap={editorWidgetMap}
                     runMap={runMap}
                     focusRunId={focusRunId}
                     activeSpaceId={activeSpaceId}

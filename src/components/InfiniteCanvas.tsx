@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import type { Run, TreeNode, GroupingDimension } from '../domain/types'
+import type { EditorWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts, type WidgetLayout } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
@@ -13,6 +13,7 @@ import { EmptyCanvasHint } from './EmptyCanvasHint'
 interface Props {
   tree: TreeNode[]
   runMap: Map<string, Run>
+  editorWidgetMap?: Map<string, EditorWidget>
   focusRunId: string | null
   activeSpaceId?: string
   onFocusHandled: () => void
@@ -20,6 +21,7 @@ interface Props {
   onFocusRun?: (runId: string) => void
   onDeleteEntity?: (entityId: string, type: string) => void
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
+  onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
   arrangeGridRef?: React.MutableRefObject<(() => void) | null>
   arrangeResetRef?: React.MutableRefObject<(() => void) | null>
   zoomToFitRunsRef?: React.MutableRefObject<((runIds: string[]) => void) | null>
@@ -99,7 +101,7 @@ interface MarqueeRect {
 
 const MARQUEE_THRESHOLD = 5
 
-export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, arrangeGridRef, arrangeResetRef, zoomToFitRunsRef, panToRunsRef }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, arrangeGridRef, arrangeResetRef, zoomToFitRunsRef, panToRunsRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -111,6 +113,7 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     shrinkNode,
     getLayout,
     arrangeWorkspace,
+    insertLayout,
   } = useWidgetLayouts(tree, activeSpaceId)
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
   const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState, expandAll } = useSelection()
@@ -503,6 +506,48 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     }
   }, [onFocusRun])
 
+  const handleDrop = useCallback(
+    async (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault()
+      const raw = e.dataTransfer.getData('application/tinstar-editor')
+      if (!raw) return
+      const { sessionId, filePath } = JSON.parse(raw) as { sessionId: string; filePath: string }
+
+      const res = await fetch('/api/editor-widgets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, filePath }),
+      })
+      const resJson = await res.json() as { ok: boolean; data?: EditorWidget }
+      if (!resJson.ok || !resJson.data) return
+      const widget = resJson.data
+
+      // Calculate spawn position: next to source run widget
+      const run = [...runMap.values()].find(r => r.sessionId === sessionId)
+      const sourceLayout = run ? layouts.get('run-' + run.id) : undefined
+      let spawnLayout: { x: number; y: number; width: number; height: number }
+      if (sourceLayout) {
+        spawnLayout = {
+          x: sourceLayout.x + sourceLayout.width + 16,
+          y: sourceLayout.y,
+          width: 640,
+          height: 480,
+        }
+      } else {
+        const rect = containerRef.current!.getBoundingClientRect()
+        spawnLayout = {
+          x: (e.clientX - rect.left - camera.x) / camera.zoom,
+          y: (e.clientY - rect.top - camera.y) / camera.zoom,
+          width: 640,
+          height: 480,
+        }
+      }
+
+      insertLayout(widget.id, spawnLayout)
+    },
+    [runMap, layouts, camera, insertLayout],
+  )
+
   // Recursive render: groups render behind their children (natural DOM order)
   function renderNode(node: TreeNode, depth: number): React.ReactNode {
     const widgetType = toWidgetType(node.type)
@@ -517,13 +562,16 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
     const data: unknown =
       node.type === 'run'
         ? runMap.get(node.entityId)
-        : ({
-            node,
-            depth: depthMapRef.current.get(node.id) ?? 0,
-            onShrinkToFit: shrinkNode,
-            onDelete: handleDeleteGroup,
-            onMenuOpen: handleMenuOpenGroup,
-          } satisfies GroupWidgetData)
+        : node.type === 'file-editor'
+          ? editorWidgetMap.get(node.entityId)
+          : ({
+              node,
+              depth: depthMapRef.current.get(node.id) ?? 0,
+              onShrinkToFit: shrinkNode,
+              onDelete: handleDeleteGroup,
+              onMenuOpen: handleMenuOpenGroup,
+              ...(node.type === 'task' && { onTaskUpdate }),
+            } satisfies GroupWidgetData)
 
     const moveHandler = reg.isContainer ? moveNode : handleMultiMove
     const resizeHandler = reg.isContainer ? resizeNode : updateRunSize
@@ -619,6 +667,8 @@ export function InfiniteCanvas({ tree, runMap, focusRunId, activeSpaceId, onFocu
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerLeave={onPointerLeave}
+      onDragOver={(e) => { e.preventDefault() }}
+      onDrop={handleDrop}
       data-testid="infinite-canvas"
     >
       {/* Transformed canvas layer */}
