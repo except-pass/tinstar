@@ -93,10 +93,10 @@ function SidebarNode({
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0 || editing) return
-    if (onDragStart && !isRun) {
+    if (onDragStart) {
       onDragStart(node.id, node.type, node.label, e.clientY, e.clientX)
     }
-  }, [node, editing, isRun, onDragStart])
+  }, [node, editing, onDragStart])
 
   return (
     <div>
