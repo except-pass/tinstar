@@ -251,6 +251,13 @@ function loadLayouts(tree: TreeNode[], storageKey: string): Map<string, WidgetLa
       const saved = parsed[id]
       if (saved && typeof saved.x === 'number') map.set(id, saved)
     }
+    // Also load any saved positions not in the current tree
+    // (e.g. editor widgets arriving via SSE after initial mount)
+    for (const [id, layout] of Object.entries(parsed)) {
+      if (!map.has(id) && typeof (layout as WidgetLayout).x === 'number') {
+        map.set(id, layout as WidgetLayout)
+      }
+    }
     // If >20% missing, regenerate from scratch
     if (map.size < allIds.size * 0.8) return generateDefaultLayouts(tree)
     // Fill any remaining missing with smart placement (near siblings) or defaults
@@ -526,6 +533,11 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     setLayouts(generateDefaultLayouts(tree))
   }, [tree])
 
+  const insertLayout = useCallback((id: string, layout: WidgetLayout) => {
+    layoutsRef.current = new Map(layoutsRef.current).set(id, layout)
+    setLayouts(new Map(layoutsRef.current))
+  }, [])
+
   return {
     layouts,
     treeMaps: treeMapsRef.current,
@@ -536,5 +548,6 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     shrinkNode,
     getLayout,
     arrangeWorkspace,
+    insertLayout,
   }
 }
