@@ -322,12 +322,11 @@ function WorkspaceShellInner() {
   useLayoutEffect(() => {
     if (selectedRunId) {
       clearFocus()
-      const run = runMap.get(selectedRunId)
-      pushFocus({ id: selectedRunId, type: 'run-workspace', label: run?.id ?? selectedRunId })
+      pushFocus({ id: selectedRunId, type: 'run-workspace', label: selectedRunId })
     } else {
       clearFocus()
     }
-  }, [selectedRunId, pushFocus, clearFocus, runMap])
+  }, [selectedRunId, pushFocus, clearFocus])
 
   useContextRouter({
     path,
