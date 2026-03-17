@@ -41,7 +41,13 @@
     })
 
     // Intercept Ctrl+Shift+\ and notify parent to release terminal focus.
+    // Lock prevents double-fire when both the wrapper-window listener (Layer 1)
+    // and the inner-iframe capture listener (Layer 2) fire for the same keypress.
+    var notifyEscapeLocked = false
     function notifyEscape() {
+      if (notifyEscapeLocked) return
+      notifyEscapeLocked = true
+      setTimeout(function() { notifyEscapeLocked = false }, 500)
       window.parent.postMessage({ type: 'terminal-focus-toggle', sessionName: session }, '*')
     }
 

@@ -52,11 +52,12 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, isSel
     : ['center-tabs', 'right-panel']
 
   const { activeContextKey } = useWidgetFocus(run.id)
-  const { pushFocus, popFocus } = useFocusPath()
+  const { pushFocus, popFocus, path } = useFocusPath()
 
   // Push/pop terminal context — used by both the Ctrl+\ key path and the click toggle
   const handleTerminalToggle = useCallback(() => {
     if (activeContextKey === 'run-terminal') {
+      setTerminalFocused(false)
       popFocus()
       requestAnimationFrame(() => rootRef.current?.focus())
     } else {
@@ -272,7 +273,9 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, isSel
             onTerminalToggle={handleTerminalToggle}
             onTerminalPointerFocus={() => {
               setTerminalFocused(true)
-              if (activeContextKey !== 'run-terminal') {
+              // Only enter terminal context if run-workspace is already in the focus path
+              const runInPath = path.some(n => n.id === run.id && n.type === 'run-workspace')
+              if (runInPath && activeContextKey !== 'run-terminal') {
                 pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
               }
             }}
