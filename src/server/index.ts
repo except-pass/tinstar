@@ -9,7 +9,7 @@ import { handleRequest, type RouteContext } from './api/routes'
 import { MockSensorSimulator } from './simulator/mock-sensors'
 import { join } from 'node:path'
 import { readdirSync, existsSync, rmSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { shortId } from './utils/shortId'
 import {
   loadConfig,
   ensureDirs,
@@ -28,10 +28,6 @@ import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
 import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
-
-function shortId(prefix: string): string {
-  return `${prefix}-${randomUUID().slice(0, 8)}`
-}
 
 export function initBackend(): RouteContext {
   // Instantiate core components
