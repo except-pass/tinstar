@@ -122,6 +122,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
   const draggingRunRef = useRef<string | null>(null)
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null)
 
+  // File-drag overlay: shows a full-canvas drop target when a tinstar-editor drag enters,
+  // so the terminal iframe doesn't swallow the drop
+  const [editorDragActive, setEditorDragActive] = useState(false)
+  const dragEnterCountRef = useRef(0)
+
   // Multi-drag: snapshot of other selected widgets' positions at drag start
   const multiDragSnapshot = useRef<Map<string, { x: number; y: number }> | null>(null)
 
@@ -670,8 +675,31 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
       onPointerLeave={onPointerLeave}
       onDragOver={(e) => { e.preventDefault() }}
       onDrop={handleDrop}
+      onDragEnter={(e) => {
+        if (e.dataTransfer.types.includes('application/tinstar-editor')) {
+          dragEnterCountRef.current++
+          setEditorDragActive(true)
+        }
+      }}
+      onDragLeave={() => {
+        dragEnterCountRef.current--
+        if (dragEnterCountRef.current <= 0) {
+          dragEnterCountRef.current = 0
+          setEditorDragActive(false)
+        }
+      }}
       data-testid="infinite-canvas"
     >
+      {/* File-editor drag overlay — covers iframes so the drop always lands on the canvas */}
+      {editorDragActive && (
+        <div
+          className="absolute inset-0 z-[9999]"
+          style={{ background: 'rgba(0,240,255,0.04)', border: '2px dashed rgba(0,240,255,0.35)' }}
+          onDragOver={(e) => { e.preventDefault() }}
+          onDrop={(e) => { setEditorDragActive(false); dragEnterCountRef.current = 0; void handleDrop(e) }}
+          onDragLeave={() => { dragEnterCountRef.current = 0; setEditorDragActive(false) }}
+        />
+      )}
       {/* Transformed canvas layer */}
       <div
         style={{
