@@ -39,6 +39,10 @@ export function useContextRouter(handlers: RouterHandlers) {
       const active = document.activeElement
       const key = normalizeKey(e)
 
+      // When an iframe has focus, keypresses go to the iframe — skip all bindings
+      // (terminal escape is handled via postMessage from terminal-wrapper.html)
+      if (active?.tagName === 'IFRAME') return
+
       // --- Backtick: root key (tier-1 reserved, but handled here for focus path) ---
       if (e.code === 'Backquote' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         if (isEditable(active)) return

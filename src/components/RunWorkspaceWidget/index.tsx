@@ -107,7 +107,13 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, isSel
 
   useEffect(() => {
     registerActionHandler(run.id, (action) => {
-      // All widget hotkeys suspended when terminal has focus
+      // terminal-exit must fire even when terminal has focus
+      if (action === 'terminal-exit') {
+        popFocus()
+        requestAnimationFrame(() => rootRef.current?.focus())
+        return
+      }
+      // All other widget hotkeys suspended when terminal has focus
       if (terminalFocused) return
       switch (action) {
         case 'focus-next':      onFocusNext();                                    break
@@ -117,7 +123,6 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, isSel
         case 'tab-next':        setCenterTabIndex(i => (i + 1) % 2);             break
         case 'tab-prev':        setCenterTabIndex(i => (i - 1 + 2) % 2);        break
         case 'activate':        /* no-op for now */                               break
-        case 'terminal-exit':   popFocus(); requestAnimationFrame(() => rootRef.current?.focus()); break
       }
     })
     return () => deregisterActionHandler(run.id)
