@@ -7,11 +7,13 @@
 
 Surface task metadata (summary, % done, status, definition of done) directly on the canvas task group container, with all fields editable inline. A collapse toggle lets users hide the metadata when they want more canvas space.
 
+`TaskContainer.tsx` is dead code — it is not wired into the canvas render tree. The actual rendering target is `TaskGroupWidget`, which receives a `GroupWidgetData` payload assembled in `InfiniteCanvas.renderNode()`.
+
 ## Data Model Changes
 
 ### `src/domain/types.ts`
 
-Add `definitionOfDone` to the `Task` interface:
+Add `definitionOfDone` to the `Task` interface. Also tighten `status` to a union (currently `string` — `Initiative` already uses a typed union, so this is consistent):
 
 ```ts
 export interface Task {
@@ -19,7 +21,7 @@ export interface Task {
   name: string
   epicId: string
   initiativeId: string
-  status: string
+  status: 'active' | 'blocked' | 'done'   // was: string
   summary: string
   settings?: EntitySettings
   spaceId?: string
@@ -28,80 +30,115 @@ export interface Task {
 }
 ```
 
-No other type changes required. `TreeNode` already passes `percentDone` and `status` through from the task; `entityId` gives access to the full task via `taxRepo`.
-
 ### API (`src/server/api/routes.ts`)
 
 - `POST /api/tasks` — accept `definitionOfDone` in the request body alongside existing fields
-- `PATCH /api/tasks/:id` — accept `definitionOfDone` in the patch body (already uses deep merge, so this works automatically)
+- `PATCH /api/tasks/:id` — accept `definitionOfDone` in the patch body
 
-The document store's `upsertTask` already stores whatever is passed — no changes needed there.
+`deepMergeEntity` does a shallow spread (`{ ...existing, ...patch }`), so sending `{ definitionOfDone: [...newArray] }` replaces the whole array — which is exactly what we want. **Always send the complete `definitionOfDone` array on every update, never a partial.** Sending a partial array will silently discard unchecked items.
 
 ## Component Changes
 
-### `src/components/TaskContainer.tsx`
-
-**New props:**
+### `src/widgets/widgetComponentRegistry.ts` — extend `GroupWidgetData`
 
 ```ts
-interface Props {
-  taskId: string
-  taskName: string
-  // ... existing positioning/resize props ...
-  task?: Task                                      // full task object for metadata
-  collapsed?: boolean                              // controls metadata visibility
-  onToggleCollapse?: (taskId: string) => void      // called when ▼/▲ clicked
-  onUpdate?: (taskId: string, patch: Partial<Task>) => void  // fires PATCH /api/tasks/:id
+import type { Task } from '../domain/types'
+
+export interface GroupWidgetData {
+  node: { id: string; label: string; type: string; entityId: string; children: unknown[]; color?: string }
+  depth: number
+  onShrinkToFit?: (id: string) => void
+  onDelete?: (id: string) => void
+  onMenuOpen?: (nodeId: string, anchorRect: DOMRect) => void
+  // NEW — only populated for task-type nodes
+  task?: Task
+  collapsed?: boolean
+  onToggleCollapse?: (taskId: string) => void
+  onTaskUpdate?: (taskId: string, patch: Partial<Task>) => void
 }
 ```
 
-**Header row** (the existing 32px drag handle):
-- Left: grip icon + task name (unchanged)
-- Right: status pill (click to cycle `active → blocked → done → active`) + `▼/▲` collapse button
+### `src/widgets/taskGroup/TaskGroupWidget.tsx`
 
-**Metadata section** (rendered below header when `collapsed !== true`):
+The component renders `GroupWidgetData`. For task-type nodes (`node.type === 'task'`), render the expanded metadata section below the existing drag-handle header.
 
-1. **Progress row** — label "done", progress bar, percentage value
-   - Click the `%` number to replace it with a text input; blur/Enter commits, fires `onUpdate({ percentDone })`
-   - Progress bar is a visual read-out of the same value (not separately clickable)
+**Header row** (existing `widget-drag-handle` div — unchanged except additions):
+- Keep: icon + label + menu button / delete button
+- Add right of existing buttons: status pill (only when `node.type === 'task'`) + `▼/▲` collapse button (only when `node.type === 'task'`)
+- Status pill: click cycles `active → blocked → done → active`, calls `onTaskUpdate(node.entityId, { status: nextStatus })`; stop pointer propagation
+- Collapse button: calls `onToggleCollapse?.(node.entityId)`; stop pointer propagation
 
-2. **Summary** — plain text, click to enter edit mode (textarea, auto-height)
-   - Blur or Ctrl+Enter commits, fires `onUpdate({ summary })`
-   - Escape cancels
+**Metadata section** (below header, `node.type === 'task'` only, hidden when `collapsed`):
 
-3. **Definition of Done section**
-   - Label "Definition of Done"
+All interactive elements must call `e.stopPropagation()` on `onPointerDown` to prevent canvas pan, marquee selection, and container drag.
+
+1. **Progress row** — `done` label + progress bar + percentage
+   - Click the `%` value: replace with `<input type="number" min=0 max=100>`; blur/Enter commits, calls `onTaskUpdate(entityId, { percentDone: value })`; Escape cancels
+   - Progress bar is a read-only visual of the same value
+
+2. **Summary** — click the text to enter edit mode (`<textarea>`, auto-height)
+   - Blur or Ctrl+Enter commits, calls `onTaskUpdate(entityId, { summary: value })`
+   - Escape cancels, restores original
+
+3. **Definition of Done**
+   - Label row: "Definition of Done"
    - Each item: `[ ]` checkbox + text
-     - Click checkbox → toggles `checked`, fires `onUpdate({ definitionOfDone })`
-     - Click text → inline edit (single-line input), blur commits, fires `onUpdate({ definitionOfDone })`
-   - `+ add criterion` at the bottom appends `{ text: '', checked: false }` and immediately focuses the new input
-   - No delete button for now (can be edited to empty via API)
+     - Click checkbox: toggles `checked`, calls `onTaskUpdate(entityId, { definitionOfDone: fullUpdatedArray })`
+     - Click text: inline `<input>`, blur commits, calls `onTaskUpdate(entityId, { definitionOfDone: fullUpdatedArray })`; always send the complete array
+   - `+ add criterion`: appends `{ text: '', checked: false }`, immediately focuses new input
+   - Optimistic local state for checkbox toggles and new-item appends (round-trip visible lag on toggles would violate UI philosophy); text fields can wait for server confirmation
 
-**Collapse button:**
-- `▼` when expanded, `▲` when collapsed
-- Positioned in the header row, right of the status pill
-- Clicking calls `onToggleCollapse(taskId)` — state is managed by the parent
-
-### Collapse State — `src/hooks/useTaskCollapseState.ts` (new)
-
-A small hook that reads/writes collapse state to `localStorage` under the key `tinstar-task-collapse-v1` (a `Record<taskId, boolean>`). Collapsed = `true`, expanded = default (`false`/absent).
-
-```ts
-function useTaskCollapseState(): {
-  isCollapsed: (taskId: string) => boolean
-  toggleCollapse: (taskId: string) => void
-}
-```
+**Collapsed-height behaviour:** when `collapsed` is `true`, the metadata section is hidden (`display: none`). The container's stored layout height is unchanged — only the content is hidden. A `minHeight` equal to the header row height (32px) is enforced via `style` so the container never shrinks below the drag handle. Users can then manually resize to a smaller footprint if they want.
 
 ### `src/components/InfiniteCanvas.tsx`
 
-- Instantiate `useTaskCollapseState()`
-- Pass `task`, `collapsed`, `onToggleCollapse`, and `onUpdate` down to `TaskContainer`
-- `task` is resolved from `taxRepo` by `entityId` for each task-type tree node
+**New prop:**
+```ts
+interface Props {
+  // ...existing...
+  onTaskUpdate?: (taskId: string, patch: Partial<Task>) => void  // NEW
+}
+```
+
+**Obtain `taxRepo`** — call `const taxRepo = useTaxonomy()` at the top of `InfiniteCanvas` (import from `./TaxonomyContext`). This is the same pattern used by `RunWorkspaceWidget`.
+
+**`renderNode()` — extend `GroupWidgetData` assembly**:
+```ts
+const data: unknown =
+  node.type === 'run'
+    ? runMap.get(node.entityId)
+    : ({
+        node,
+        depth: depthMapRef.current.get(node.id) ?? 0,
+        onShrinkToFit: shrinkNode,
+        onDelete: handleDeleteGroup,
+        onMenuOpen: handleMenuOpenGroup,
+        // NEW — task-specific fields
+        ...(node.type === 'task' && {
+          task: taxRepo.getTaskById(node.entityId),
+          collapsed: isTaskCollapsed(node.entityId),
+          onToggleCollapse: toggleTaskCollapse,
+          onTaskUpdate: props.onTaskUpdate,
+        }),
+      } satisfies GroupWidgetData)
+```
+
+**Collapse state** — instantiate `useTaskCollapseState()` in `InfiniteCanvas`, destructure `isTaskCollapsed` and `toggleTaskCollapse`.
+
+### `src/hooks/useTaskCollapseState.ts` (new file)
+
+Reads/writes collapse state to `localStorage` under key `tinstar-task-collapse-v1` (`Record<taskId, boolean>`). Collapsed = `true`, expanded = default.
+
+```ts
+export function useTaskCollapseState(): {
+  isTaskCollapsed: (taskId: string) => boolean
+  toggleTaskCollapse: (taskId: string) => void
+}
+```
 
 ### `src/components/WorkspaceShell.tsx`
 
-Add `handleTaskUpdate` callback:
+Add `handleTaskUpdate` and pass it to `InfiniteCanvas`:
 
 ```ts
 const handleTaskUpdate = useCallback((taskId: string, patch: Partial<Task>) => {
@@ -111,30 +148,36 @@ const handleTaskUpdate = useCallback((taskId: string, patch: Partial<Task>) => {
     body: JSON.stringify(patch),
   })
 }, [])
-```
 
-Pass it to `InfiniteCanvas` via a new `onTaskUpdate` prop.
+// In JSX:
+<InfiniteCanvas
+  // ...existing props...
+  onTaskUpdate={handleTaskUpdate}
+/>
+```
 
 ## Data Flow
 
 ```
-User edits field in TaskContainer
-  → onUpdate(taskId, patch)
-    → InfiniteCanvas passes to WorkspaceShell.handleTaskUpdate
-      → PATCH /api/tasks/:id
-        → DocumentStore.upsertTask (updates in-memory Map)
-          → SSE delta broadcast to all clients
-            → useServerEvents delta handler updates state
-              → TaxonomyRepository reconstructed
-                → TaskContainer re-renders with new values
+User edits field in TaskGroupWidget
+  → onTaskUpdate(taskId, patch)          ← always send complete arrays for definitionOfDone
+    → InfiniteCanvas passes through props.onTaskUpdate
+      → WorkspaceShell.handleTaskUpdate
+        → PATCH /api/tasks/:id
+          → DocumentStore.upsertTask
+            → SSE delta broadcast
+              → useServerEvents updates state
+                → TaxonomyRepository reconstructed
+                  → InfiniteCanvas passes new task to TaskGroupWidget via GroupWidgetData
 ```
 
-Optimistic updates are not needed — the round-trip is fast enough for text editing.
+Optimistic local state is used for checkbox toggles and new DoD item appends only. Text fields (summary, percentDone) wait for server round-trip — fast enough for typing.
 
 ## What Is Not In Scope
 
-- Delete individual DoD items from the UI (use API directly for now)
-- Syncing DoD items with agent output
-- Separate "description" field (summary serves this purpose)
-- Inline task name editing on the canvas (already supported via sidebar rename)
-- Epic or initiative metadata on their canvas containers (task only for now)
+- Deleting individual DoD items from the UI (edit via API directly)
+- Syncing DoD with agent output
+- A separate `description` field — `summary` serves this purpose
+- Inline task name editing on the canvas (use sidebar rename)
+- Metadata on epic or initiative containers (task only)
+- `TaskContainer.tsx` — leave as dead code, do not delete (separate cleanup)
