@@ -490,8 +490,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
   const handleSelect = useCallback((nodeId: string, additive: boolean) => {
     if (nodeId.startsWith('run-') && onSelectRun) {
       onSelectRun(nodeId.slice(4), additive)
-    } else {
+    } else if (!nodeId.startsWith('editor-')) {
       // Group container click — select it in the shared selection state so hierarchy highlights too
+      // (file-editor widgets do not participate in hierarchy selection)
       const parsed = parseNodeId(nodeId)
       if (parsed) {
         const t = parsed.type as import('../domain/types').GroupingDimension
