@@ -49,7 +49,17 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     : ['center-tabs', 'right-panel']
 
   const { activeContextKey } = useWidgetFocus(run.id)
-  const { popFocus } = useFocusPath()
+  const { pushFocus, popFocus } = useFocusPath()
+
+  // Push/pop terminal context — used by both the Ctrl+\ key path and the click toggle
+  const handleTerminalToggle = useCallback(() => {
+    if (activeContextKey === 'run-terminal') {
+      popFocus()
+      requestAnimationFrame(() => rootRef.current?.focus())
+    } else {
+      pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
+    }
+  }, [activeContextKey, pushFocus, popFocus, run.id, rootRef])
 
   const onFocusNext = useCallback(() => {
     setFocusZone(prev => {
@@ -273,8 +283,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
               sessionStatus={run.status}
               onCollapse={() => setProcsCollapsed(true)}
               onFocusTerminal={() => {
-                setTerminalFocused(true)
-                rootRef.current?.querySelector('iframe')?.focus()
+                pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
               }}
             />
           )}
