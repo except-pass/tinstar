@@ -270,6 +270,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, isSel
             color={run.color}
             termTick={termTick}
             terminalFocused={terminalFocused}
+            zoom={zoom}
             onTerminalToggle={handleTerminalToggle}
             onTerminalPointerFocus={() => {
               setTerminalFocused(true)

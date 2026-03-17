@@ -104,21 +104,41 @@ function StatusMessage({ entry }: { entry: RecapEntry }) {
   )
 }
 
-/** Iframe wrapper keyed by tick to force remount on refresh */
-function TerminalFrame({ src, tick, focused, accent, onPointerFocus }: { src: string; tick: number; focused?: boolean; accent: string; onPointerFocus?: () => void }) {
+/** Iframe wrapper keyed by tick to force remount on refresh.
+ *
+ * Counter-scaling: the iframe is sized to its actual on-screen pixel dimensions
+ * (containerSize × zoom) and then scaled back by 1/zoom. Combined with the
+ * canvas layer's scale(zoom), the net transform on the iframe content is 1×,
+ * so terminal text is always rendered at device-pixel resolution — no blurring.
+ */
+function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus }: { src: string; tick: number; focused?: boolean; accent: string; zoom?: number; onPointerFocus?: () => void }) {
   return (
     <div
-      className="flex-1 flex relative"
+      className="flex-1 relative overflow-hidden"
       style={focused ? { outline: `2px solid ${accent}`, outlineOffset: '-2px', boxShadow: `inset 0 0 12px ${hexToRgba(accent, 0.15)}` } : undefined}
       onPointerDown={e => { e.stopPropagation(); onPointerFocus?.() }}
     >
-      <iframe
-        key={tick}
-        src={src}
-        className="flex-1 w-full border-0 bg-black"
-        title="Session terminal"
-        allow="clipboard-read; clipboard-write"
-      />
+      {/* Scale up the iframe so it renders at screen resolution, then inverse-scale
+          back to fit the container. Canvas scale(zoom) × this scale(1/zoom) = 1. */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: `${zoom * 100}%`,
+          height: `${zoom * 100}%`,
+          transformOrigin: '0 0',
+          transform: `scale(${1 / zoom})`,
+        }}
+      >
+        <iframe
+          key={tick}
+          src={src}
+          style={{ display: 'block', width: '100%', height: '100%', border: 0, background: 'black' }}
+          title="Session terminal"
+          allow="clipboard-read; clipboard-write"
+        />
+      </div>
       {focused && (
         <div
           data-testid="terminal-focus-badge"
@@ -141,6 +161,7 @@ interface Props {
   color?: string
   termTick?: number
   terminalFocused?: boolean
+  zoom?: number
   onTerminalToggle?: () => void
   onTerminalPointerFocus?: () => void
   /** Controlled active tab (0=recap, 1=terminal/logs) for keyboard navigation */
@@ -148,7 +169,7 @@ interface Props {
   onActiveTabChange?: (tab: 'recap' | 'terminal') => void
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, color, termTick = 0, terminalFocused, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange }: Props) {
+export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, color, termTick = 0, terminalFocused, zoom, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange }: Props) {
   const accent = resolveRunAccent(color)
   const TABS = ['recap', 'terminal'] as const
   const [internalActiveTab, setInternalActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
@@ -279,6 +300,7 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
           tick={termTick}
           focused={terminalFocused}
           accent={accent}
+          zoom={zoom}
           onPointerFocus={onTerminalPointerFocus}
         />
       ) : activeTab === 'recap' ? (
