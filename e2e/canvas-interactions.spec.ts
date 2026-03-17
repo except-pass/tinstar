@@ -449,7 +449,7 @@ test.describe('Canvas Interactions', () => {
       const initialTask = await box(task)
 
       // Manually resize the container larger via the resize handle (cursor-se-resize)
-      const resizeHandle = task.locator('.cursor-se-resize').first()
+      const resizeHandle = task.locator('xpath=..').locator('.cursor-se-resize').first()
       await resizeHandle.evaluate(
         (el, { dx, dy }) => {
           const rect = el.getBoundingClientRect()

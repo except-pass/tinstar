@@ -56,6 +56,7 @@ export function CanvasWidgetShell({
   const resizeStart = useRef({ x: 0, y: 0, originW: 0, originH: 0 })
   const dragMoved = useRef(false)
   const resizeMoved = useRef(false)
+  const dragPointerId = useRef<number | null>(null)
 
   const frameClass =
     getFrameClass?.({ isDragging, isSelected, isHovered, isDropTarget }) ?? ''
@@ -69,9 +70,9 @@ export function CanvasWidgetShell({
       const target = e.target as Element
       if (target.closest(dragHandleSelector)) {
         e.stopPropagation()
-        containerRef.current?.setPointerCapture(e.pointerId)
         dragging.current = true
         dragMoved.current = false
+        dragPointerId.current = e.pointerId
         dragStart.current = {
           x: e.clientX,
           y: e.clientY,
@@ -98,6 +99,10 @@ export function CanvasWidgetShell({
         return
       if (!dragMoved.current) {
         dragMoved.current = true
+        // Defer setPointerCapture to drag start so dblclick fires on correct element
+        if (dragPointerId.current !== null) {
+          containerRef.current?.setPointerCapture(dragPointerId.current)
+        }
         setIsDragging(true)
         onDragStart?.(nodeId)
       }
