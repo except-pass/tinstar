@@ -273,11 +273,14 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, isSel
             onTerminalToggle={handleTerminalToggle}
             onTerminalPointerFocus={() => {
               setTerminalFocused(true)
-              // Only enter terminal context if run-workspace is already in the focus path
-              const runInPath = path.some(n => n.id === run.id && n.type === 'run-workspace')
-              if (runInPath && activeContextKey !== 'run-terminal') {
-                pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
+              if (activeContextKey === 'run-terminal') return
+              // Ensure run-workspace is in the path before pushing run-terminal.
+              // TerminalFrame.onPointerDown stops propagation so the widget may not
+              // be "selected" via the normal path — push run-workspace manually if needed.
+              if (!path.some(n => n.id === run.id && n.type === 'run-workspace')) {
+                pushFocus({ id: run.id, type: 'run-workspace', label: run.id })
               }
+              pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
             }}
             activeTabIndex={focusZone === 'center-tabs' ? centerTabIndex : undefined}
           />
