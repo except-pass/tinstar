@@ -8,7 +8,6 @@ export interface GlobalHotkeyHandlers {
   onCycleReadyPrev: () => void
   onCycleAllNext: () => void
   onCycleAllPrev: () => void
-  onSessionNew: () => void
   onSessionQuick: () => void
   onPaletteOpen: () => void
 }
@@ -31,16 +30,7 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
         return
       }
 
-      // Ctrl+Enter: suppressed inside editable elements AND iframes
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-        if (isEditable(active) || active?.tagName === 'IFRAME') return
-        e.preventDefault()
-        h.onSessionNew()
-        emitBindingFired('Ctrl+↵')
-        return
-      }
-
-      // S: quick new session — pre-fills task if a task is selected
+      // S: new session — pre-fills task settings if a task is selected
       if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         if (isEditable(active) || active?.tagName === 'IFRAME') return
         e.preventDefault()

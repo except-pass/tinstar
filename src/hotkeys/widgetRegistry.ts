@@ -10,8 +10,7 @@ const RESERVED_KEYS = new Set([
   'Shift+BracketLeft',   // Shift+[ cycle all prev
   'Shift+BracketRight',  // Shift+] cycle all next
   '?',                   // open palette (e.key '?' fires as Shift+Slash but checked as '?')
-  'Ctrl+Enter',          // new session
-  'KeyS',                // quick session
+  'KeyS',                // new session
   'Ctrl+KeyG',           // arrange grid
   'Ctrl+Shift+KeyG',     // arrange reset
   'Ctrl+Digit1', 'Ctrl+Digit2', 'Ctrl+Digit3', 'Ctrl+Digit4', 'Ctrl+Digit5',

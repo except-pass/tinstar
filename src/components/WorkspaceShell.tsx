@@ -48,7 +48,7 @@ function WorkspaceShellInner() {
     return ['initiative', 'epic', 'task']
   })
 
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, disconnect } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets } = useBackendState()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -181,17 +181,13 @@ function WorkspaceShellInner() {
 
   // Space actions
   const handleActivateSpace = useCallback(async (id: string) => {
-    // Close SSE first so the proxy doesn't block the activate request
-    disconnect()
     await fetch(`/api/spaces/${id}/activate`, { method: 'POST' })
     const url = new URL(location.href)
     url.searchParams.set('space', id)
     window.location.href = url.toString()
-  }, [disconnect])
+  }, [])
 
   const handleCreateSpace = useCallback(async (name: string) => {
-    // Close SSE first so the proxy doesn't block API requests
-    disconnect()
     const res = await fetch('/api/spaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -203,7 +199,7 @@ function WorkspaceShellInner() {
     const url = new URL(location.href)
     url.searchParams.set('space', space.id)
     window.location.href = url.toString()
-  }, [disconnect])
+  }, [])
 
   const handleRenameSpace = useCallback((id: string, name: string) => {
     fetch(`/api/spaces/${id}`, {
@@ -399,30 +395,15 @@ function WorkspaceShellInner() {
       const run = cyclePrev(allRuns, allNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
-    onSessionNew: useCallback(() => {
-      // Derive pre-selected entity from current selection
-      const { selectedType, selectedIds } = selectionState
-      const firstNodeId = [...selectedIds][0] ?? null
-      if (firstNodeId && selectedType && selectedType !== 'run') {
-        // Strip type prefix (e.g. "task-abc" → "abc")
-        const rawId = firstNodeId.startsWith(`${selectedType}-`)
-          ? firstNodeId.slice(selectedType.length + 1)
-          : firstNodeId
-        const entityLinks: Record<string, string> = {}
-        if (selectedType === 'task') entityLinks.taskId = rawId
-        else if (selectedType === 'epic') entityLinks.epicId = rawId
-        else if (selectedType === 'initiative') entityLinks.initiativeId = rawId
-        setSessionPrefill(entityLinks)
-      } else {
-        setSessionPrefill(null)
-      }
-      setShowSessionDialog(true)
-    }, [selectionState]),
     onSessionQuick: useCallback(async () => {
-      // S is contextual: only fires when a task is selected
+      // S opens session dialog — if a task is selected, pre-fill with task settings
       const { selectedType, selectedIds } = selectionState
       const firstNodeId = [...selectedIds][0] ?? null
-      if (!firstNodeId || selectedType !== 'task') return
+      if (!firstNodeId || selectedType !== 'task') {
+        setSessionPrefill(null)
+        setShowSessionDialog(true)
+        return
+      }
       const rawId = firstNodeId.startsWith('task-') ? firstNodeId.slice(5) : firstNodeId
       try {
         const res = await fetch(`/api/tasks/${rawId}/settings`)

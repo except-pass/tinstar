@@ -74,6 +74,7 @@ function SidebarNode({
   const hovered = isHovered(node.id)
   const hasChildren = node.children.length > 0
   const isRun = node.type === 'run'
+  const isFileEditor = node.type === 'file-editor'
   const isDragging = dragNodeId === node.id
   const isDropInside = dropTarget?.nodeId === node.id && dropTarget?.position === 'inside'
   const isDropBefore = dropTarget?.nodeId === node.id && dropTarget?.position === 'before'
@@ -159,7 +160,7 @@ function SidebarNode({
 
         {/* Icon */}
         <span className="w-4 text-center" aria-hidden="true">
-          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : getDimensionIcon(node.type)}
+          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : isFileEditor ? '📄' : getDimensionIcon(node.type)}
         </span>
 
         {/* Color dot */}
@@ -211,8 +212,23 @@ function SidebarNode({
           </span>
         )}
 
+        {/* Close button for file-editor nodes */}
+        {isFileEditor && !editing && (
+          <button
+            className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-accent-red opacity-0 group-hover:opacity-100"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(node.entityId, node.type)
+            }}
+            aria-label={`Close ${node.label}`}
+            style={{ opacity: hovered ? 1 : undefined }}
+          >
+            ×
+          </button>
+        )}
+
         {/* Kebab menu button */}
-        {!isRun && !editing && onMenuOpen && (
+        {!isRun && !isFileEditor && !editing && onMenuOpen && (
           <button
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
             onClick={(e) => {
@@ -229,7 +245,7 @@ function SidebarNode({
         )}
 
         {/* Fallback: individual buttons when onMenuOpen is not provided */}
-        {!isRun && !editing && !onMenuOpen && (
+        {!isRun && !isFileEditor && !editing && !onMenuOpen && (
           <>
             <button
               className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"

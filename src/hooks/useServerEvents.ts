@@ -1,3 +1,6 @@
+/* eslint-disable no-var */
+declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
+
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget } from '../domain/types'
 interface ServerState {
@@ -58,7 +61,12 @@ export function useServerEvents(): {
   }, [])
 
   useEffect(() => {
-    const es = new EventSource('/api/events')
+    // In dev mode, connect SSE directly to the backend to bypass the Vite proxy
+    // (the proxy blocks other requests while an SSE connection is active)
+    const sseUrl = import.meta.env.DEV && typeof __TINSTAR_BACKEND_PORT__ !== 'undefined'
+      ? `http://${location.hostname}:${__TINSTAR_BACKEND_PORT__}/api/events`
+      : '/api/events'
+    const es = new EventSource(sseUrl)
     esRef.current = es
 
     es.addEventListener('snapshot', (e: MessageEvent) => {

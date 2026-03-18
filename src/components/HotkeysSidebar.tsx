@@ -11,8 +11,7 @@ const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
   { key: 'Shift+]',   label: 'Next (all)' },
   { key: 'Shift+[',   label: 'Prev (all)' },
   { key: '?',         label: 'Hotkeys' },
-  { key: 'Ctrl+↵',    label: 'New session' },
-  { key: 'S',         label: 'Quick session' },
+  { key: 'S',         label: 'New session' },
 ]
 
 // Canvas-level bindings — only work when no widget context is active
