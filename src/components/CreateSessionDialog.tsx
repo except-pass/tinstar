@@ -308,7 +308,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
             >
               <option value="">Default</option>
               {profiles.map(p => (
-                <option key={p.image} value={p.image}>{p.name} ({p.image})</option>
+                <option key={p.name} value={p.name}>{p.name} ({p.image})</option>
               ))}
             </select>
           </div>
