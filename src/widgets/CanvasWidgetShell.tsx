@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, type RefObject, type PointerEvent as ReactPointerEvent } from 'react'
+import { useRef, useState, useCallback, useEffect, type RefObject, type PointerEvent as ReactPointerEvent } from 'react'
 import type { WidgetRegistration } from './widgetComponentRegistry'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 
@@ -172,6 +172,25 @@ export function CanvasWidgetShell({
   const handleDoubleClick = useCallback(() => {
     onDoubleClickZoom?.(nodeId)
   }, [nodeId, onDoubleClickZoom])
+
+  // Escape cancels any in-progress drag or resize
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return
+      if (!dragging.current && !resizing.current) return
+      dragging.current = false
+      dragMoved.current = false
+      resizing.current = false
+      resizeMoved.current = false
+      setIsDragging(false)
+      if (dragPointerId.current !== null) {
+        containerRef.current?.releasePointerCapture(dragPointerId.current)
+        dragPointerId.current = null
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   return (
     <div

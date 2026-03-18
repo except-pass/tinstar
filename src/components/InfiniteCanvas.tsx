@@ -341,6 +341,32 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
     setMarquee(null)
   }, [endPan])
 
+  // Escape: cancel any drag, deselect everything, focus the canvas
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return
+      // Don't steal Escape from dialogs/modals
+      const active = document.activeElement
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) return
+
+      e.preventDefault()
+      // Cancel canvas-level drag state
+      endPan()
+      marqueeRef.current = { startX: 0, startY: 0, active: false }
+      setMarquee(null)
+      canvasPointerDownRef.current = false
+      draggingRunRef.current = null
+      setDraggingNodeId(null)
+      multiDragSnapshot.current = null
+      // Deselect all
+      deselect()
+      // Focus the canvas container
+      containerRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [endPan, deselect])
+
   // Widget drag callbacks
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
@@ -707,7 +733,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
   return (
     <div
       ref={containerRef}
-      className="w-full h-full overflow-hidden relative"
+      tabIndex={-1}
+      className="w-full h-full overflow-hidden relative outline-none"
       style={{
         cursor: cursorStyle,
         backgroundImage: 'radial-gradient(circle, rgba(0,240,255,0.04) 1px, transparent 1px)',
@@ -741,7 +768,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
           className="absolute inset-0 z-[9999]"
           style={{ background: 'rgba(0,240,255,0.04)', border: '2px dashed rgba(0,240,255,0.35)' }}
           onDragOver={(e) => { e.preventDefault() }}
-          onDrop={(e) => { setEditorDragActive(false); dragEnterCountRef.current = 0; void handleDrop(e) }}
+          onDrop={(e) => { e.stopPropagation(); setEditorDragActive(false); dragEnterCountRef.current = 0; void handleDrop(e) }}
           onDragLeave={() => { dragEnterCountRef.current = 0; setEditorDragActive(false) }}
         />
       )}
