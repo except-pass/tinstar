@@ -81,9 +81,11 @@ This calls `/api/simulator/reset` + `/api/simulator/start`, clears localStorage,
 
 ---
 
-## Serial vs parallel
+## Parallel execution
 
-Tests are forced to a single worker (`workers: 1`) because they share a simulator instance — resetting state mid-assertion in another worker would cause flaky failures. Keep new tests serial.
+Tests run fully in parallel (`fullyParallel: true`). Each Playwright worker gets its own isolated backend process on a deterministic port (`5290 + workerIndex`) with a fresh `TINSTAR_DATA_DIR`. Worker count defaults to `cpus().length`; override with `TEST_WORKERS=N`.
+
+The global setup (`e2e/global-setup.ts`) kills any orphaned backends on the worker port range, then builds the frontend once (`dist/client` is shared read-only by all workers).
 
 ---
 
