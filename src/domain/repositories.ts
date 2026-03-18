@@ -137,11 +137,11 @@ export class TaxonomyRepository {
       }
       case 'epic': {
         const epic = this.getEpicForRun(run)
-        return epic ? { id: epic.id, label: epic.name } : undefined
+        return epic ? { id: epic.id, label: epic.name, color: epic.settings?.defaultRunColor } : undefined
       }
       case 'task': {
         const task = this.getTaskForRun(run)
-        return task ? { id: task.id, label: task.name } : undefined
+        return task ? { id: task.id, label: task.name, color: task.settings?.defaultRunColor } : undefined
       }
       case 'worktree': {
         const worktree = this.getWorktreeForRun(run)
