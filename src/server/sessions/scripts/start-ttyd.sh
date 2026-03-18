@@ -6,6 +6,7 @@
 #   SESSION_ID - dictate Claude session ID on first launch (optional)
 #   RESUME_SESSION_ID - resume a previous Claude session by ID (optional)
 #   SKIP_PERMISSIONS - skip Claude permission prompts (optional)
+#   INITIAL_PROMPT - passed as positional argument to claude on first launch (optional)
 
 TITLE="${TINSTAR_SESSION_NAME:-Tinstar}"
 TMUX_SESSION="main"
@@ -33,6 +34,9 @@ if ! tmux has-session -t $TMUX_SESSION 2>/dev/null; then
         CLAUDE_CMD="$CLAUDE_CMD --resume $RESUME_SESSION_ID"
     elif [ -n "$SESSION_ID" ]; then
         CLAUDE_CMD="$CLAUDE_CMD --session-id $SESSION_ID"
+    fi
+    if [ -n "$INITIAL_PROMPT" ]; then
+        CLAUDE_CMD="$CLAUDE_CMD -- $(printf '%q' "$INITIAL_PROMPT")"
     fi
 
     WORKDIR="${WORKSPACE_DIR:-$HOME}"

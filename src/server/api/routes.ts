@@ -992,7 +992,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             updateSession(sessDir, name, { state: 'running' })
           } else if (backend === 'docker') {
             sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
-            await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl })
+            await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: prompt || undefined })
             updateSession(sessDir, name, { port: sessionPort, state: 'running' })
           } else {
             const port = await tmuxBackend.findPort(cfg.ports.hostStart)
@@ -1039,12 +1039,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
           emitSessionEvent('managed_session.created', { name, state: 'running' })
           log.info('sessions', `session created: ${name}`, { backend, port: sessionPort, state: 'running' })
-
-          if (prompt && backend === 'docker' && !oneshot && sessionPort) {
-            dockerBackend.sendInitialPrompt(cfg, name, prompt, sessionPort).catch((err: Error) => {
-              log.error('sessions', `failed to send initial prompt to ${name}`, { error: err.message })
-            })
-          }
 
           json(res, { ok: true, data: updated }, 201)
         } catch (err) {
