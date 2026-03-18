@@ -29,6 +29,7 @@ export function useServerEvents(): {
   connected: boolean
   loading: boolean
   addOptimistic: (entity: string, data: unknown) => void
+  disconnect: () => void
 } {
   const [state, setState] = useState<ServerState>(EMPTY_STATE)
   const [connected, setConnected] = useState(false)
@@ -199,11 +200,22 @@ export function useServerEvents(): {
     es.onopen = () => setConnected(true)
     es.onerror = () => setConnected(false)
 
+    // Close SSE before page unload so the proxy can clean up the connection
+    // (prevents Vite dev proxy from hanging on page refresh)
+    const onBeforeUnload = () => es.close()
+    window.addEventListener('beforeunload', onBeforeUnload)
+
     return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
       es.close()
       esRef.current = null
     }
   }, [])
 
-  return { state, connected, loading, addOptimistic }
+  const disconnect = useCallback(() => {
+    esRef.current?.close()
+    esRef.current = null
+  }, [])
+
+  return { state, connected, loading, addOptimistic, disconnect }
 }

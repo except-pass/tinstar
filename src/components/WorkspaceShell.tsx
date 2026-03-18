@@ -48,7 +48,7 @@ function WorkspaceShellInner() {
     return ['initiative', 'epic', 'task']
   })
 
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, disconnect } = useBackendState()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -180,14 +180,18 @@ function WorkspaceShellInner() {
   }, [activeSpaceId, spaces.length])
 
   // Space actions
-  const handleActivateSpace = useCallback((id: string) => {
-    fetch(`/api/spaces/${id}/activate`, { method: 'POST' })
+  const handleActivateSpace = useCallback(async (id: string) => {
+    // Close SSE first so the proxy doesn't block the activate request
+    disconnect()
+    await fetch(`/api/spaces/${id}/activate`, { method: 'POST' })
     const url = new URL(location.href)
     url.searchParams.set('space', id)
-    window.history.replaceState(null, '', url)
-  }, [])
+    window.location.href = url.toString()
+  }, [disconnect])
 
   const handleCreateSpace = useCallback(async (name: string) => {
+    // Close SSE first so the proxy doesn't block API requests
+    disconnect()
     const res = await fetch('/api/spaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -195,12 +199,11 @@ function WorkspaceShellInner() {
     })
     if (!res.ok) return
     const space = await res.json() as { id: string }
-    // Immediately switch to the new space
-    fetch(`/api/spaces/${space.id}/activate`, { method: 'POST' })
+    await fetch(`/api/spaces/${space.id}/activate`, { method: 'POST' })
     const url = new URL(location.href)
     url.searchParams.set('space', space.id)
-    window.history.replaceState(null, '', url)
-  }, [])
+    window.location.href = url.toString()
+  }, [disconnect])
 
   const handleRenameSpace = useCallback((id: string, name: string) => {
     fetch(`/api/spaces/${id}`, {
