@@ -98,7 +98,7 @@ git clone <repo> && cd tinstar
 npm install
 npm run dev          # Vite HMR + backend (hot-reload)
 npx tsc --noEmit     # Type check
-TINSTAR_FAST_SIM=1 BASE_URL=http://localhost:5273 npx playwright test  # E2E tests
+npx playwright test  # E2E tests (isolated server started automatically)
 ```
 
 ## License
