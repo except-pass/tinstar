@@ -52,6 +52,8 @@ export default {
           '50%': { opacity: '0.8' },
           '100%': { opacity: '0.3' },
         },
+        // ignite / scan-oneshot / ripple-ring are defined in index.css directly
+        // so they are always bundled (Tailwind purges unused keyframes).
       },
       animation: {
         'pulse-glow': 'pulse-glow 2s ease-in-out infinite',

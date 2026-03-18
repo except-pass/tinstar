@@ -1,13 +1,13 @@
 // src/hotkeys/useGlobalHotkeys.ts
 import { useEffect, useRef } from 'react'
 import { isEditable } from './isEditable'
+import { emitBindingFired } from './bindingFiredBus'
 
 export interface GlobalHotkeyHandlers {
   onCycleReadyNext: () => void
   onCycleReadyPrev: () => void
   onCycleAllNext: () => void
   onCycleAllPrev: () => void
-  onSessionNew: () => void
   onSessionQuick: () => void
   onPaletteOpen: () => void
 }
@@ -26,22 +26,16 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
         if (isEditable(active)) return
         e.preventDefault()
         h.onPaletteOpen()
+        emitBindingFired('?')
         return
       }
 
-      // Ctrl+Enter: suppressed inside editable elements AND iframes
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-        if (isEditable(active) || active?.tagName === 'IFRAME') return
-        e.preventDefault()
-        h.onSessionNew()
-        return
-      }
-
-      // S: quick new session — pre-fills task if a task is selected
+      // S: new session — pre-fills task settings if a task is selected
       if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         if (isEditable(active) || active?.tagName === 'IFRAME') return
         e.preventDefault()
         h.onSessionQuick()
+        emitBindingFired('S')
         return
       }
 
@@ -52,24 +46,28 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
           if (isEditable(active)) return
           e.preventDefault()
           h.onCycleReadyNext()
+          emitBindingFired(']')
           return
         }
         if (e.code === 'BracketLeft' && !e.shiftKey) {
           if (isEditable(active)) return
           e.preventDefault()
           h.onCycleReadyPrev()
+          emitBindingFired('[')
           return
         }
         if (e.code === 'BracketRight' && e.shiftKey) {
           if (isEditable(active)) return
           e.preventDefault()
           h.onCycleAllNext()
+          emitBindingFired('Shift+]')
           return
         }
         if (e.code === 'BracketLeft' && e.shiftKey) {
           if (isEditable(active)) return
           e.preventDefault()
           h.onCycleAllPrev()
+          emitBindingFired('Shift+[')
           return
         }
       }

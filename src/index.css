@@ -17,6 +17,66 @@
   }
 }
 
+/* Hotkey activation flourish
+   Keyframes live here (not tailwind.config) so they are always bundled
+   regardless of which classes appear in markup at build time. */
+
+@keyframes ignite {
+  0%   { border-color: rgba(0,240,255,0.15); box-shadow: none; transform: scale(1); }
+  8%   { border-color: #00f0ff; box-shadow: 0 0 0 6px rgba(0,240,255,0.35), 0 0 28px rgba(0,240,255,0.25), inset 0 0 20px rgba(0,240,255,0.1); transform: scale(1.015); }
+  25%  { border-color: #00f0ff; box-shadow: 0 0 0 3px rgba(0,240,255,0.15), inset 0 0 10px rgba(0,240,255,0.06); transform: scale(1.005); }
+  100% { border-color: rgba(0,240,255,0.15); box-shadow: none; transform: scale(1); }
+}
+
+@keyframes scan-oneshot {
+  0%   { transform: translateX(-100%) skewX(-10deg); opacity: 0; }
+  5%   { opacity: 0.9; }
+  100% { transform: translateX(120%) skewX(-10deg); opacity: 0; }
+}
+
+@keyframes ripple-ring {
+  0%   { inset: 0px; border-color: rgba(0,240,255,0.8); opacity: 1; }
+  100% { inset: -16px; border-color: rgba(0,240,255,0); opacity: 0; }
+}
+
+.flourish-ignite {
+  animation: ignite 250ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.flourish-scan-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(0,240,255,0.25), rgba(0,240,255,0.08), transparent);
+  pointer-events: none;
+  display: none;
+}
+.flourish-scan-active {
+  display: block !important;
+  animation: scan-oneshot 200ms ease forwards;
+}
+.flourish-ripple-ring {
+  position: absolute;
+  inset: -4px;
+  border: 2px solid rgba(0,240,255,0);
+  border-radius: 10px;
+  pointer-events: none;
+}
+.flourish-ripple-active {
+  animation: ripple-ring 250ms cubic-bezier(0.2, 0, 0.6, 1) forwards;
+}
+
+/* ── Widget frame effects ────────────────────────────────────────────── */
+
+/* Run workspace: drag state — lifted z-index; shadow handled by inner widget (color-aware) */
+.widget-run-dragging {
+  z-index: 100;
+}
+
+/* Run workspace: selected state — inner widget handles the accent border; shell gets no extra ring */
+.widget-run-selected {}
+
 @layer components {
   .scrollbar-thin::-webkit-scrollbar {
     width: 3px;

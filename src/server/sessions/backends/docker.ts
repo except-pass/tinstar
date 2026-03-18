@@ -18,14 +18,21 @@ function freshProfiles(config: TinstarConfig): ImageProfile[] {
   return config.profiles
 }
 
+/** Resolve the ImageProfile for a session by matching profile name. */
+function resolveProfile(config: TinstarConfig, session: Session): ImageProfile | undefined {
+  if (!session.profile) return undefined
+  const profiles = freshProfiles(config)
+  return profiles.find(p => p.name === session.profile)
+}
+
+/** Resolve the Docker image for a session, respecting profile config. */
+function resolveImage(config: TinstarConfig, session: Session): string {
+  return resolveProfile(config, session)?.image ?? config.container.defaultImage
+}
+
 /** Resolve the container home directory for a session, checking profile overrides. */
 function resolveHome(config: TinstarConfig, session: Session): string {
-  if (session.profile) {
-    const profiles = freshProfiles(config)
-    const prof = profiles.find(p => p.image === session.profile)
-    if (prof?.home) return prof.home
-  }
-  return config.container.home
+  return resolveProfile(config, session)?.home ?? config.container.home
 }
 
 // --- Command builders (exported for testing) ---
@@ -103,7 +110,7 @@ export function buildDockerRunCommand(
     args.push('--workdir', session.workspace.path)
   }
 
-  const image = session.profile ?? config.container.defaultImage
+  const image = resolveImage(config, session)
   args.push(image, 'sleep', 'infinity')
 
   return args
@@ -159,7 +166,7 @@ export function buildOneShotRunCommand(
   const name = containerName(config, session.name)
   const uid = process.getuid?.() ?? 1000
   const gid = process.getgid?.() ?? 1000
-  const image = session.profile ?? config.container.defaultImage
+  const image = resolveImage(config, session)
 
   const args = [
     'run', '-d', '--rm',
@@ -305,6 +312,36 @@ export async function sendPrompt(config: TinstarConfig, sessionName: string, pro
   await docker(['exec', name, 'tmux', 'send-keys', '-t', 'main', prompt, ''])
   await new Promise(r => setTimeout(r, 300))
   await docker(['exec', name, 'tmux', 'send-keys', '-t', 'main', '', 'Enter'])
+}
+
+/**
+ * Wait for the container to be ready, then send the initial prompt.
+ * Waits for ttyd health check, adds a buffer for Claude to start,
+ * then retries sendPrompt with backoff if the tmux session isn't ready yet.
+ */
+export async function sendInitialPrompt(
+  config: TinstarConfig,
+  sessionName: string,
+  prompt: string,
+  port: number,
+): Promise<void> {
+  const ready = await healthCheck(port, { timeout: 60_000, interval: 500 })
+  if (!ready) throw new Error(`container ${sessionName} did not become healthy`)
+
+  // Buffer for Claude to start and render its input bar
+  await new Promise(r => setTimeout(r, 2000))
+
+  // Retry sendPrompt — tmux session 'main' may not exist immediately after ttyd is up
+  const maxAttempts = 5
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      await sendPrompt(config, sessionName, prompt)
+      return
+    } catch (err) {
+      if (i === maxAttempts - 1) throw err
+      await new Promise(r => setTimeout(r, 1000 * (i + 1)))
+    }
+  }
 }
 
 export async function healthCheck(port: number, opts: { timeout?: number; interval?: number } = {}): Promise<boolean> {

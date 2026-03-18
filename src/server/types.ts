@@ -74,7 +74,7 @@ export interface SessionDeletedPayload {
 export interface TaxonomySyncPayload {
   initiatives: Array<{ id: string; name: string; color: string; status: 'active' | 'paused' | 'archived'; summary: string }>
   epics: Array<{ id: string; name: string; initiativeId: string; status: string; summary: string }>
-  tasks: Array<{ id: string; name: string; epicId: string; initiativeId: string; status: string; summary: string }>
+  tasks: Array<{ id: string; name: string; epicId: string; initiativeId: string; status: string; externalUrl?: string | null }>
   worktrees: Array<{ id: string; name: string; branch: string; repo: string; worktreePath: string }>
 }
 
@@ -181,7 +181,7 @@ export interface SSESnapshot {
   data: {
     initiatives: Array<{ id: string; name: string; color: string; status: string; summary: string }>
     epics: Array<{ id: string; name: string; initiativeId: string; status: string; summary: string }>
-    tasks: Array<{ id: string; name: string; epicId: string; initiativeId: string; status: string; summary: string }>
+    tasks: Array<{ id: string; name: string; epicId: string; initiativeId: string; status: string; externalUrl?: string | null }>
     worktrees: Array<{ id: string; name: string; branch: string; repo: string; worktreePath: string }>
     runs: Array<Record<string, unknown>>
     commits: CommitRecord[]

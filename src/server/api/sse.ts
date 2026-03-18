@@ -50,15 +50,22 @@ export class SSEBroadcaster {
       'Access-Control-Allow-Origin': '*',
     })
 
-    // Send snapshot on connect
-    const snapshot = { ...this.store.snapshot(), ready_queue: this.readyQueue }
-    res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`)
-
     this.clients.add(res)
 
     res.on('close', () => {
       this.clients.delete(res)
     })
+    res.on('error', () => {
+      this.clients.delete(res)
+    })
+
+    // Send snapshot on connect
+    try {
+      const snapshot = { ...this.store.snapshot(), ready_queue: this.readyQueue }
+      res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`)
+    } catch {
+      this.clients.delete(res)
+    }
   }
 
   private broadcast(message: { type: string; data?: unknown }): void {
@@ -94,6 +101,8 @@ export class SSEBroadcaster {
     for (const client of this.clients) {
       if (!client.destroyed) {
         client.write(payload)
+      } else {
+        this.clients.delete(client)
       }
     }
   }

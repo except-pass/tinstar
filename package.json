@@ -1,30 +1,57 @@
 {
   "name": "tinstar",
-  "private": true,
-  "version": "3.0.0",
+  "version": "3.2.0",
+  "description": "Agent orchestrator — manage multiple Claude Code sessions from a visual canvas",
   "type": "module",
+  "bin": {
+    "tinstar": "bin/tinstar.js"
+  },
+  "files": [
+    "bin/",
+    "dist/client/",
+    "dist/server/",
+    "README.md"
+  ],
+  "keywords": [
+    "claude",
+    "agent",
+    "orchestrator",
+    "ai",
+    "tmux"
+  ],
+  "license": "MIT",
   "scripts": {
-    "dev": "vite",
+    "dev:backend": "tsx watch src/server/standalone.ts --port 5281 --no-open",
+    "dev:frontend": "vite",
+    "dev": "concurrently -n be,fe -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
     "build": "tsc -b && vite build",
+    "build:server": "npx esbuild src/server/standalone.ts --bundle --platform=node --format=esm --outdir=dist/server --external:http-proxy",
+    "build:all": "vite build --outDir dist/client && npm run build:server",
     "preview": "vite preview",
-    "stable": "vite preview --config vite.preview.config.ts",
-    "test:e2e": "playwright test"
+    "stable": "npm run build:all && node bin/tinstar.js --no-open",
+    "test:e2e": "playwright test",
+    "prepublishOnly": "npm run build:all"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/typography": "^0.5.19",
+    "http-proxy": "^1.18.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
+    "@types/http-proxy": "^1.17.17",
     "@types/node": "^25.5.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"
   }

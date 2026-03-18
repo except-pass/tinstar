@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Locator } from '@playwright/test'
+import { test, expect, type Page, type Locator } from './fixtures'
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ const ROOT_1 = 'group-container-initiative-init-1' // AI Dev Platform
 const ROOT_2 = 'group-container-initiative-init-2' // Observability Stack
 const EPIC_1 = 'group-container-epic-epic-1' // Codebase Hygiene
 const TASK_1 = 'group-container-task-task-1' // Reduce Scheduler Slop
-const RUN_1 = 'canvas-widget-R-241'
+const RUN_1 = 'canvas-widget-run-R-241'
 
 // ── tests ────────────────────────────────────────────────────────────────
 
@@ -449,7 +449,7 @@ test.describe('Canvas Interactions', () => {
       const initialTask = await box(task)
 
       // Manually resize the container larger via the resize handle (cursor-se-resize)
-      const resizeHandle = task.locator('.cursor-se-resize').first()
+      const resizeHandle = task.locator('xpath=..').locator('.cursor-se-resize').first()
       await resizeHandle.evaluate(
         (el, { dx, dy }) => {
           const rect = el.getBoundingClientRect()

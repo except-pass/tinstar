@@ -5,13 +5,20 @@ import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { ProceduresPanel } from './ProceduresPanel'
-import { useWidgetHotkeys, type FocusZone } from '../../hotkeys/useWidgetHotkeys'
+import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
+import { useFlourish } from '../../hotkeys/useFlourish'
+import { useWidgetFocus, useFocusPath } from '../../hotkeys/FocusPathContext'
+import type { FocusZone } from '../../hotkeys/widgetTypes'
+import '../../hotkeys/widgets/runWorkspaceWidget'  // side-effect: registers WidgetDefinition
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 
 interface Props {
   run: RunData
   className?: string
   compact?: boolean
+  zoom?: number
+  isSelected?: boolean
+  isDragging?: boolean
   /** Hide the header (used when an external drag handle replaces it) */
   headless?: boolean
   /** Pointer event handlers forwarded to the header for drag */
@@ -22,7 +29,7 @@ interface Props {
 
 type FilePanelMode = 'touched' | 'tree'
 
-export function RunWorkspaceWidget({ run, className = '', compact = false, headless = false, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp }: Props) {
+export function RunWorkspaceWidget({ run, className = '', compact = false, zoom = 1, isSelected = false, isDragging = false, headless = false, onHeaderPointerDown, onHeaderPointerMove, onHeaderPointerUp }: Props) {
 
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
@@ -44,6 +51,20 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     ? ['left-tab', 'file-list', 'center-tabs', 'right-panel']
     : ['center-tabs', 'right-panel']
 
+  const { activeContextKey } = useWidgetFocus(run.id)
+  const { pushFocus, popFocus, path } = useFocusPath()
+
+  // Push/pop terminal context — used by both the Ctrl+\ key path and the click toggle
+  const handleTerminalToggle = useCallback(() => {
+    if (activeContextKey === 'run-terminal') {
+      setTerminalFocused(false)
+      popFocus()
+      requestAnimationFrame(() => rootRef.current?.focus())
+    } else {
+      pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
+    }
+  }, [activeContextKey, pushFocus, popFocus, run.id, rootRef])
+
   const onFocusNext = useCallback(() => {
     setFocusZone(prev => {
       const idx = prev ? ZONES.indexOf(prev) : -1
@@ -58,40 +79,61 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
     })
   }, [leftExpanded])
 
-  const handleTerminalToggle = useCallback(() => {
-    setTerminalFocused(f => {
-      if (f) {
-        // Escaping FROM terminal — move browser focus back to the widget
-        requestAnimationFrame(() => rootRef.current?.focus())
-      } else {
-        // Entering terminal — give the iframe actual keyboard focus
-        requestAnimationFrame(() => {
-          const iframe = rootRef.current?.querySelector('iframe') as HTMLIFrameElement | null
-          iframe?.focus()
-        })
-      }
-      return !f
-    })
-  }, [rootRef])
-
-  // When the window regains focus (from the iframe back to the page), clear terminal focus
+  // Sync terminal focus when context router navigates into run-terminal
   useEffect(() => {
-    const onWindowFocus = () => setTerminalFocused(false)
+    if (activeContextKey === 'run-terminal') {
+      setTerminalFocused(true)
+      requestAnimationFrame(() => {
+        const iframe = rootRef.current?.querySelector('iframe') as HTMLIFrameElement | null
+        if (iframe) {
+          iframe.focus()
+          iframe.contentWindow?.postMessage({ type: 'terminal-focus' }, '*')
+        }
+      })
+    }
+  }, [activeContextKey, rootRef])
+
+  // When the window regains focus (iframe lost focus), clear terminal state and pop the context
+  useEffect(() => {
+    const onWindowFocus = () => {
+      setTerminalFocused(false)
+      popFocus()
+    }
     window.addEventListener('focus', onWindowFocus)
     return () => window.removeEventListener('focus', onWindowFocus)
-  }, [])
+  }, [popFocus])
 
-  useWidgetHotkeys(rootRef, {
-    onFocusNext,
-    onFocusPrev,
-    onFileDown: () => setFileSelectionIndex(i => i + 1),
-    onFileUp:   () => setFileSelectionIndex(i => Math.max(i - 1, 0)),
-    onTabNext:  () => setCenterTabIndex(i => (i + 1) % 2),
-    onTabPrev:  () => setCenterTabIndex(i => (i - 1 + 2) % 2),
-    onActivate: () => { /* no-op for now */ },
-    onTerminalToggle: handleTerminalToggle,
-    terminalFocused,
+  // Expose action dispatch so context router can trigger widget actions
+  const { triggerHollywoodHit, triggerScanLine } = useFlourish(rootRef)
+
+  useEffect(() => {
+    registerActionHandler(run.id, (action) => {
+      // terminal-exit must fire even when terminal has focus
+      if (action === 'terminal-exit') {
+        popFocus()
+        requestAnimationFrame(() => rootRef.current?.focus())
+        return
+      }
+      // All other widget hotkeys suspended when terminal has focus
+      if (terminalFocused) return
+      switch (action) {
+        case 'focus-next':      onFocusNext();                                    break
+        case 'focus-prev':      onFocusPrev();                                    break
+        case 'file-down':       setFileSelectionIndex(i => i + 1);               break
+        case 'file-up':         setFileSelectionIndex(i => Math.max(i - 1, 0));  break
+        case 'tab-next':        setCenterTabIndex(i => (i + 1) % 2);             break
+        case 'tab-prev':        setCenterTabIndex(i => (i - 1 + 2) % 2);        break
+        case 'activate':        /* no-op for now */                               break
+      }
+    })
+    return () => deregisterActionHandler(run.id)
   })
+
+  useEffect(() => {
+    registerFlourishHandler(run.id, triggerHollywoodHit)
+    registerScanHandler(run.id, triggerScanLine)
+    return () => deregisterFlourishHandler(run.id)
+  }, [run.id, triggerHollywoodHit, triggerScanLine])
 
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
@@ -120,20 +162,24 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
       ref={rootRef}
       tabIndex={-1}
       data-testid={`widget-root-${run.id}`}
-      className={`flex flex-col overflow-hidden bg-surface-base border ${className}`}
+      className={`relative flex flex-col overflow-hidden bg-surface-base border ${className}`}
       style={terminalFocused
         ? { borderColor: hexToRgba(runAccent, 0.1), boxShadow: 'none' }
-        : { borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }
+        : isDragging
+          ? { borderColor: hexToRgba(runAccent, 0.9), boxShadow: `0 20px 80px ${hexToRgba(runAccent, 0.55)}, 0 40px 120px ${hexToRgba(runAccent, 0.3)}, 0 0 0 2px ${hexToRgba(runAccent, 0.8)}, 0 0 40px ${hexToRgba(runAccent, 0.2)}` }
+          : isSelected
+            ? { borderColor: hexToRgba(runAccent, 0.9), boxShadow: `0 0 0 1px ${hexToRgba(runAccent, 0.5)}, 0 0 16px ${hexToRgba(runAccent, 0.25)}` }
+            : { borderColor: hexToRgba(runAccent, 0.3), boxShadow: `0 0 6px ${hexToRgba(runAccent, 0.1)}` }
       }
     >
+      {/* Flourish animation layers */}
+      <div className="flourish-scan-line" />
+      <div className="flourish-ripple-ring" />
       {/* Header doubles as drag handle */}
       {!headless && (
         <RunWorkspaceHeader
           run={run}
           compact={compact}
-          onPointerDown={onHeaderPointerDown}
-          onPointerMove={onHeaderPointerMove}
-          onPointerUp={onHeaderPointerUp}
           onRefreshTerminal={bumpTerm}
         />
       )}
@@ -196,7 +242,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
               className={`flex-1 overflow-hidden ${focusZone === 'file-list' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
             >
               {filePanelMode === 'touched' ? (
-                <TouchedFilesPanel files={run.touchedFiles} onOpenFile={handleOpenFile} />
+                <TouchedFilesPanel files={run.touchedFiles} sessionId={run.sessionId} onOpenFile={handleOpenFile} />
               ) : (
                 <FileTreePanel sessionId={run.sessionId} onOpenFile={handleOpenFile} />
               )}
@@ -224,8 +270,19 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
             color={run.color}
             termTick={termTick}
             terminalFocused={terminalFocused}
+            zoom={zoom}
             onTerminalToggle={handleTerminalToggle}
-            onTerminalPointerFocus={() => setTerminalFocused(true)}
+            onTerminalPointerFocus={() => {
+              setTerminalFocused(true)
+              if (activeContextKey === 'run-terminal') return
+              // Ensure run-workspace is in the path before pushing run-terminal.
+              // TerminalFrame.onPointerDown stops propagation so the widget may not
+              // be "selected" via the normal path — push run-workspace manually if needed.
+              if (!path.some(n => n.id === run.id && n.type === 'run-workspace')) {
+                pushFocus({ id: run.id, type: 'run-workspace', label: run.id })
+              }
+              pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
+            }}
             activeTabIndex={focusZone === 'center-tabs' ? centerTabIndex : undefined}
           />
         </div>
@@ -248,8 +305,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, headl
               sessionStatus={run.status}
               onCollapse={() => setProcsCollapsed(true)}
               onFocusTerminal={() => {
-                setTerminalFocused(true)
-                rootRef.current?.querySelector('iframe')?.focus()
+                pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
               }}
             />
           )}

@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import type { Initiative, Epic, Task, Worktree, Run, Space } from '../domain/types'
-import type { CommitRecord } from '../types'
+/* eslint-disable no-var */
+declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
+import { useState, useEffect, useRef, useCallback } from 'react'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget } from '../domain/types'
 interface ServerState {
   activeSpaceId: string
   spaces: Space[]
@@ -10,8 +11,8 @@ interface ServerState {
   tasks: Task[]
   worktrees: Worktree[]
   runs: Run[]
+  editorWidgets: EditorWidget[]
   readyQueue: string[]
-  commits: CommitRecord[]
 }
 
 const EMPTY_STATE: ServerState = {
@@ -22,8 +23,8 @@ const EMPTY_STATE: ServerState = {
   tasks: [],
   worktrees: [],
   runs: [],
+  editorWidgets: [],
   readyQueue: [],
-  commits: [],
 }
 
 export function useServerEvents(): {
@@ -31,6 +32,7 @@ export function useServerEvents(): {
   connected: boolean
   loading: boolean
   addOptimistic: (entity: string, data: unknown) => void
+  disconnect: () => void
 } {
   const [state, setState] = useState<ServerState>(EMPTY_STATE)
   const [connected, setConnected] = useState(false)
@@ -59,7 +61,12 @@ export function useServerEvents(): {
   }, [])
 
   useEffect(() => {
-    const es = new EventSource('/api/events')
+    // In dev mode, connect SSE directly to the backend to bypass the Vite proxy
+    // (the proxy blocks other requests while an SSE connection is active)
+    const sseUrl = import.meta.env.DEV && typeof __TINSTAR_BACKEND_PORT__ !== 'undefined'
+      ? `http://${location.hostname}:${__TINSTAR_BACKEND_PORT__}/api/events`
+      : '/api/events'
+    const es = new EventSource(sseUrl)
     esRef.current = es
 
     es.addEventListener('snapshot', (e: MessageEvent) => {
@@ -79,7 +86,7 @@ export function useServerEvents(): {
       setState((prev) => {
         // If entity is 'all' and data is null, it's a clear
         if (delta.entity === 'all' && delta.data === null) {
-          return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [] }
+          return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [], editorWidgets: [] }
         }
 
         if (delta.entity === 'space') {
@@ -166,18 +173,23 @@ export function useServerEvents(): {
           }
         }
 
-        if (delta.entity === 'commit') {
+        if (delta.entity === 'editorWidget') {
+          const ews = prev.editorWidgets
           if (delta.data === null) {
-            return { ...prev, commits: prev.commits.filter(c => c.sha !== delta.id) }
+            return { ...prev, editorWidgets: ews.filter(w => w.id !== delta.id) }
           }
-          const commit = delta.data as CommitRecord
-          const exists = prev.commits.some(c => c.sha === commit.sha)
+          const w = delta.data as EditorWidget
+          const idx = ews.findIndex(x => x.id === w.id)
           return {
             ...prev,
-            commits: exists
-              ? prev.commits.map(c => c.sha === commit.sha ? commit : c)
-              : [...prev.commits, commit],
+            editorWidgets: idx >= 0 ? ews.map((x, i) => (i === idx ? w : x)) : [...ews, w],
           }
+        }
+
+        if (delta.entity === 'commit') {
+          // Commits are fetched on-demand by CommitActivityPanel; just notify it to refresh
+          window.dispatchEvent(new Event('tinstar:commit-delta'))
+          return prev
         }
 
         return prev
@@ -196,11 +208,22 @@ export function useServerEvents(): {
     es.onopen = () => setConnected(true)
     es.onerror = () => setConnected(false)
 
+    // Close SSE before page unload so the proxy can clean up the connection
+    // (prevents Vite dev proxy from hanging on page refresh)
+    const onBeforeUnload = () => es.close()
+    window.addEventListener('beforeunload', onBeforeUnload)
+
     return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
       es.close()
       esRef.current = null
     }
   }, [])
 
-  return { state, connected, loading, addOptimistic }
+  const disconnect = useCallback(() => {
+    esRef.current?.close()
+    esRef.current = null
+  }, [])
+
+  return { state, connected, loading, addOptimistic, disconnect }
 }

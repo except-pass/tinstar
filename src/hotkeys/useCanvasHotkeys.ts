@@ -1,11 +1,14 @@
 // src/hotkeys/useCanvasHotkeys.ts
 import { useEffect, useRef } from 'react'
 import { isEditable } from './isEditable'
+import { emitBindingFired } from './bindingFiredBus'
 
 export type HotgroupSlot = '1'|'2'|'3'|'4'|'5'|'6'|'7'|'8'|'9'|'0'
 const SLOT_CODES: Record<string, HotgroupSlot> = {
   Digit1: '1', Digit2: '2', Digit3: '3', Digit4: '4', Digit5: '5',
   Digit6: '6', Digit7: '7', Digit8: '8', Digit9: '9', Digit0: '0',
+  Numpad1: '1', Numpad2: '2', Numpad3: '3', Numpad4: '4', Numpad5: '5',
+  Numpad6: '6', Numpad7: '7', Numpad8: '8', Numpad9: '9', Numpad0: '0',
 }
 
 export interface CanvasHotkeyHandlers {
@@ -34,6 +37,7 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
       if (e.code === 'KeyG' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
         e.preventDefault()
         h.onArrangeGrid()
+        emitBindingFired('Ctrl+G')
         return
       }
 
@@ -57,6 +61,7 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault()
         h.onHotgroupAssign(digit)
+        emitBindingFired('Ctrl+1–9')
         return
       }
 
@@ -68,6 +73,7 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
         const isDoubleTap = now - last <= 300
         lastTapRef.current[digit] = isDoubleTap ? 0 : now // reset after double-tap
         h.onHotgroupSelect(digit, isDoubleTap)
+        emitBindingFired('1–9')
       }
     }
 

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './fixtures'
 import { resetAndWaitForData } from './helpers'
 
 // These tests mutate shared simulator state (delete entities).

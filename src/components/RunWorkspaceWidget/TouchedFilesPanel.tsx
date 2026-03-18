@@ -11,12 +11,13 @@ const kindIcon: Record<FileKind, string> = {
 
 interface Props {
   files: TouchedFile[]
+  sessionId: string
   onFileSelect?: (file: TouchedFile) => void
   onOpenFile?: (filePath: string) => void
   onCollapse?: () => void
 }
 
-export function TouchedFilesPanel({ files, onFileSelect, onOpenFile, onCollapse: _onCollapse }: Props) {
+export function TouchedFilesPanel({ files, sessionId, onFileSelect, onOpenFile, onCollapse: _onCollapse }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(files[2]?.id ?? null)
 
   // Only count reconciled files in header totals
@@ -42,6 +43,13 @@ export function TouchedFilesPanel({ files, onFileSelect, onOpenFile, onCollapse:
           return (
             <button
               key={file.id}
+              draggable
+              onDragStart={(e) => {
+                e.stopPropagation()
+                e.dataTransfer.setData('text/plain', file.path)
+                e.dataTransfer.setData('application/tinstar-editor', JSON.stringify({ sessionId, filePath: file.path }))
+                e.dataTransfer.effectAllowed = 'copy'
+              }}
               onClick={() => {
                 setSelectedId(file.id)
                 onFileSelect?.(file)

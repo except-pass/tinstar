@@ -21,7 +21,7 @@ function getAllEntitiesForDimension(
 ): Array<{ id: string; label: string; color?: string }> {
   switch (dimension) {
     case 'initiative':
-      return taxonomy.getInitiatives().map(i => ({ id: i.id, label: i.name, color: i.color }))
+      return taxonomy.getInitiatives().map(i => ({ id: i.id, label: i.name, color: i.settings?.defaultRunColor ?? i.color }))
     case 'epic':
       return taxonomy.getEpics().map(e => ({ id: e.id, label: e.name, color: e.settings?.defaultRunColor }))
     case 'task':
@@ -69,8 +69,17 @@ function getOrphanEntities(
   }
   if (parentDimension === 'initiative' && dimension === 'task') {
     const initIds = new Set(taxonomy.getInitiatives().map(i => i.id))
+    const epicById = new Map(taxonomy.getEpics().map(e => [e.id, e]))
     return taxonomy.getTasks()
-      .filter(t => !t.initiativeId || !initIds.has(t.initiativeId))
+      .filter(t => {
+        if (t.initiativeId && initIds.has(t.initiativeId)) return false
+        // Task reachable via epic chain is not an orphan
+        if (t.epicId) {
+          const epic = epicById.get(t.epicId)
+          if (epic?.initiativeId && initIds.has(epic.initiativeId)) return false
+        }
+        return true
+      })
       .map(t => ({ id: t.id, label: t.name }))
   }
   return []
@@ -160,7 +169,7 @@ export function buildGroupTree(
     const children = buildGroupTree(group.runs, remaining, taxonomy, false, dimension, entityId)
     const activeCount = group.runs.filter(r => r.status === 'running').length
 
-    nodes.push({
+    const node: TreeNode = {
       id: `${dimension}-${entityId}`,
       label: group.label,
       type: dimension,
@@ -169,7 +178,14 @@ export function buildGroupTree(
       runCount: group.runs.length,
       activeCount,
       color: group.color,
-    })
+    }
+    if (dimension === 'task') {
+      const task = taxonomy.getTaskById(entityId)
+      node.percentDone = task?.percentDone ?? null
+      node.status = task?.status
+      node.externalUrl = task?.externalUrl ?? null
+    }
+    nodes.push(node)
   }
 
   // Non-root orphan runs: runs that don't match any entity for this dimension
@@ -210,12 +226,23 @@ export function buildGroupTree(
 
     // Orphan entities of lower dimensions that float up to root:
     // e.g. epics with no initiative when dimensions = ['initiative', 'epic', 'task']
+    // Track all node IDs already present anywhere in the tree (including descendants of
+    // orphan nodes added in earlier iterations) to avoid duplicates like baserepo appearing
+    // both under an orphan epic AND as a standalone orphan task.
+    const addedNodeIds = new Set<string>()
+    function trackNodeIds(n: TreeNode) {
+      addedNodeIds.add(n.id)
+      for (const c of n.children) trackNodeIds(c)
+    }
+    for (const n of nodes) trackNodeIds(n)
+
     for (const lowerDim of dimensions.slice(1)) {
       const orphanEntities = getOrphanEntities(lowerDim, dimension, taxonomy)
       for (const entity of orphanEntities) {
-        // Only add if not already present as a grouped node
+        // Only add if not already present anywhere in the tree (including as a descendant
+        // of an orphan node added in a previous lowerDim iteration)
         const nodeId = `${lowerDim}-${entity.id}`
-        if (!nodes.some(n => n.id === nodeId)) {
+        if (!addedNodeIds.has(nodeId)) {
           // Build sub-tree for this orphan entity's runs
           const entityRuns = orphanRuns.filter(run => {
             const resolved = taxonomy.resolveDimension(run, lowerDim)
@@ -224,7 +251,7 @@ export function buildGroupTree(
           const subDims = dimensions.slice(dimensions.indexOf(lowerDim) + 1)
           const children = buildGroupTree(entityRuns, subDims, taxonomy, false, lowerDim, entity.id)
 
-          nodes.push({
+          const newNode: TreeNode = {
             id: nodeId,
             label: entity.label,
             type: lowerDim,
@@ -234,7 +261,9 @@ export function buildGroupTree(
             activeCount: entityRuns.filter(r => r.status === 'running').length,
             color: entity.color,
             orphan: true,
-          })
+          }
+          nodes.push(newNode)
+          trackNodeIds(newNode)
         }
       }
     }

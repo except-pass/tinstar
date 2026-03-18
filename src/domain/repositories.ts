@@ -87,7 +87,18 @@ export class TaxonomyRepository {
   getInitiativeForRun(run: Run): Initiative | undefined {
     const task = this.tasks.find(t => t.id === run.taskId)
     if (!task) return undefined
-    return this.initiatives.find(i => i.id === task.initiativeId)
+    if (task.initiativeId) {
+      const direct = this.initiatives.find(i => i.id === task.initiativeId)
+      if (direct) return direct
+    }
+    // Fall back to initiative via epic chain (task has epicId but no initiativeId)
+    if (task.epicId) {
+      const epic = this.epics.find(e => e.id === task.epicId)
+      if (epic?.initiativeId) {
+        return this.initiatives.find(i => i.id === epic.initiativeId)
+      }
+    }
+    return undefined
   }
 
   /** Get the epic for a run by traversing task → epic */
@@ -122,15 +133,15 @@ export class TaxonomyRepository {
     switch (dimension) {
       case 'initiative': {
         const initiative = this.getInitiativeForRun(run)
-        return initiative ? { id: initiative.id, label: initiative.name, color: initiative.color } : undefined
+        return initiative ? { id: initiative.id, label: initiative.name, color: initiative.settings?.defaultRunColor ?? initiative.color } : undefined
       }
       case 'epic': {
         const epic = this.getEpicForRun(run)
-        return epic ? { id: epic.id, label: epic.name } : undefined
+        return epic ? { id: epic.id, label: epic.name, color: epic.settings?.defaultRunColor } : undefined
       }
       case 'task': {
         const task = this.getTaskForRun(run)
-        return task ? { id: task.id, label: task.name } : undefined
+        return task ? { id: task.id, label: task.name, color: task.settings?.defaultRunColor } : undefined
       }
       case 'worktree': {
         const worktree = this.getWorktreeForRun(run)

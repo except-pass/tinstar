@@ -1,7 +1,7 @@
 // src/components/HotkeyPalette.tsx
-import { useState, useEffect, useRef } from 'react'
-import { HOTKEYS, type HotkeyDef } from '../hotkeys/registry'
-import { useActiveScope } from '../hotkeys/ActiveScopeContext'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { getAllWidgets } from '../hotkeys/widgetRegistry'
+import type { Binding } from '../hotkeys/widgetTypes'
 
 interface Props {
   open: boolean
@@ -10,7 +10,6 @@ interface Props {
 
 export function HotkeyPalette({ open, onClose }: Props) {
   const [query, setQuery] = useState('')
-  const { scope } = useActiveScope()
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -29,22 +28,36 @@ export function HotkeyPalette({ open, onClose }: Props) {
     return () => window.removeEventListener('keydown', handler)
   }, [open, onClose])
 
-  if (!open) return null
+  const q = open ? query.toLowerCase() : ''
 
-  const q = query.toLowerCase()
+  // Flatten all registered widget bindings into a searchable list
+  const allBindings = useMemo(() => {
+    const result: Array<{ widgetType: string; displayName: string; binding: Binding }> = []
+    for (const def of getAllWidgets()) {
+      for (const b of def.bindings) {
+        result.push({ widgetType: def.type, displayName: def.displayName, binding: b })
+      }
+    }
+    return result
+  }, [])
+
   const filtered = q
-    ? HOTKEYS.filter(h => h.description.toLowerCase().includes(q) || h.keys.toLowerCase().includes(q))
-    : HOTKEYS
+    ? allBindings.filter(({ binding }) =>
+        binding.label.toLowerCase().includes(q) || binding.key.toLowerCase().includes(q)
+      )
+    : allBindings
 
-  // Group by category
-  const categories = [...new Set(filtered.map(h => h.category))]
+  // Group by widget displayName (replaces category)
+  const groups = useMemo(() => {
+    const map = new Map<string, Binding[]>()
+    for (const { displayName, binding } of filtered) {
+      if (!map.has(displayName)) map.set(displayName, [])
+      map.get(displayName)!.push(binding)
+    }
+    return map
+  }, [filtered])
 
-  const isAvailable = (h: HotkeyDef) => {
-    if (h.scope === 'global') return true
-    if (h.scope === 'canvas') return scope === 'canvas'
-    if (h.scope === 'widget') return scope === 'widget'
-    return true
-  }
+  if (!open) return null
 
   return (
     <div
@@ -67,22 +80,21 @@ export function HotkeyPalette({ open, onClose }: Props) {
           />
         </div>
         <div className="overflow-y-auto max-h-96 p-2">
-          {categories.map(cat => (
-            <div key={cat} className="mb-3">
-              <div className="text-xs text-slate-500 uppercase tracking-wider px-2 py-1">{cat}</div>
-              {filtered.filter(h => h.category === cat).map(h => (
+          {[...groups.entries()].map(([displayName, bindings]) => (
+            <div key={displayName} className="mb-3">
+              <div className="text-xs text-slate-500 uppercase tracking-wider px-2 py-1">{displayName}</div>
+              {bindings.map(b => (
                 <div
-                  key={h.id}
-                  className={`flex items-center justify-between px-2 py-1.5 rounded text-sm ${isAvailable(h) ? 'text-slate-200' : 'text-slate-600'}`}
-                  title={isAvailable(h) ? '' : `Available when ${h.scope} is focused`}
+                  key={b.key}
+                  className="flex items-center justify-between px-2 py-1.5 rounded text-sm text-slate-200"
                 >
-                  <span>{h.description}</span>
-                  <kbd className="text-xs bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">{h.keys}</kbd>
+                  <span>{b.label}</span>
+                  <kbd className="text-xs bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">{b.key}</kbd>
                 </div>
               ))}
             </div>
           ))}
-          {filtered.length === 0 && (
+          {groups.size === 0 && (
             <div className="text-slate-500 text-sm text-center py-4">No hotkeys match "{query}"</div>
           )}
         </div>

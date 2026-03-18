@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { GroupingDimension, Run, TreeNode } from '../domain/types'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { EditorWidget, GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
-import { useServerEvents } from '../hooks/useServerEvents'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
 import { cycleNext, cyclePrev } from '../hooks/useReadyQueue'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
@@ -16,9 +15,13 @@ import { TaxonomyProvider } from './TaxonomyContext'
 import { SkillsProvider } from './SkillsProvider'
 import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
-import { ActiveScopeProvider } from '../hotkeys/ActiveScopeContext'
 import { HotgroupProvider } from '../hotkeys/HotgroupContext'
+import { FocusPathProvider, useFocusPath } from '../hotkeys/FocusPathContext'
+import { useContextRouter } from '../hotkeys/contextRouter'
+import { triggerWidgetFlourish } from '../hotkeys/actionHandlerRegistry'
+import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
+import { HotkeysSidebar } from './HotkeysSidebar'
 import { CommitActivityPanel } from './CommitActivityPanel'
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
@@ -45,8 +48,7 @@ function WorkspaceShellInner() {
     return ['initiative', 'epic', 'task']
   })
 
-  const { runRepo, taxRepo, spaces, activeSpaceId, commits } = useBackendState()
-  const { state: serverState, addOptimistic } = useServerEvents()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, connected } = useBackendState()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -61,6 +63,60 @@ function WorkspaceShellInner() {
     }
     return map
   }, [runRepo])
+
+  const syntheticEditorNodes: TreeNode[] = useMemo(
+    () =>
+      editorWidgets.map(w => ({
+        id: w.id,
+        label: w.filePath.split('/').pop() ?? w.filePath,
+        type: 'file-editor',
+        entityId: w.id,
+        children: [],
+        runCount: 0,
+        activeCount: 0,
+        color: w.color,
+      })),
+    [editorWidgets],
+  )
+
+  const editorWidgetMap = useMemo(() => {
+    const map = new Map<string, EditorWidget>()
+    for (const w of editorWidgets) map.set(w.id, w)
+    return map
+  }, [editorWidgets])
+
+  const canvasTree = useMemo(() => {
+    if (syntheticEditorNodes.length === 0) return sidebarTree
+
+    // Map taskNodeId → editor nodes to nest inside it
+    const editorsByTaskNode = new Map<string, TreeNode[]>()
+    const orphanEditors: TreeNode[] = []
+    for (const editorNode of syntheticEditorNodes) {
+      const widget = editorWidgets.find(w => w.id === editorNode.entityId)
+      const run = widget ? [...runMap.values()].find(r => r.sessionId === widget.sessionId) : undefined
+      const taskNodeId = run?.taskId ? `task-${run.taskId}` : null
+      if (taskNodeId) {
+        const list = editorsByTaskNode.get(taskNodeId) ?? []
+        list.push(editorNode)
+        editorsByTaskNode.set(taskNodeId, list)
+      } else {
+        orphanEditors.push(editorNode)
+      }
+    }
+
+    if (editorsByTaskNode.size === 0) return [...sidebarTree, ...orphanEditors]
+
+    function inject(nodes: TreeNode[]): TreeNode[] {
+      return nodes.map(node => {
+        const toInject = editorsByTaskNode.get(node.id)
+        const injectedChildren = inject(node.children)
+        if (!toInject) return injectedChildren === node.children ? node : { ...node, children: injectedChildren }
+        return { ...node, children: [...injectedChildren, ...toInject] }
+      })
+    }
+
+    return [...inject(sidebarTree), ...orphanEditors]
+  }, [sidebarTree, syntheticEditorNodes, editorWidgets, runMap])
 
   const runIds = useMemo(() => Array.from(runMap.keys()), [runMap])
 
@@ -80,9 +136,11 @@ function WorkspaceShellInner() {
   const arrangeGridRef = useRef<(() => void) | null>(null)
   const arrangeResetRef = useRef<(() => void) | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(240)
-  const [commitViewMode, setCommitViewMode] = useState<'task' | 'unassigned' | 'standup' | null>(null)
-  const [selectedTaskTag, setSelectedTaskTag] = useState('')
+  // Feature-flagged: commit activity buttons disabled for now
+  // const [commitViewMode, setCommitViewMode] = useState<'task' | 'unassigned' | 'standup' | null>(null)
+  // const [selectedTaskTag, setSelectedTaskTag] = useState('')
   const sidebarResizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
 
   const onSidebarResizePointerDown = useCallback((e: React.PointerEvent) => {
@@ -124,19 +182,25 @@ function WorkspaceShellInner() {
   }, [activeSpaceId, spaces.length])
 
   // Space actions
-  const handleActivateSpace = useCallback((id: string) => {
-    fetch(`/api/spaces/${id}/activate`, { method: 'POST' })
+  const handleActivateSpace = useCallback(async (id: string) => {
+    await fetch(`/api/spaces/${id}/activate`, { method: 'POST' })
     const url = new URL(location.href)
     url.searchParams.set('space', id)
-    window.history.replaceState(null, '', url)
+    window.location.href = url.toString()
   }, [])
 
-  const handleCreateSpace = useCallback((name: string) => {
-    fetch('/api/spaces', {
+  const handleCreateSpace = useCallback(async (name: string) => {
+    const res = await fetch('/api/spaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     })
+    if (!res.ok) return
+    const space = await res.json() as { id: string }
+    await fetch(`/api/spaces/${space.id}/activate`, { method: 'POST' })
+    const url = new URL(location.href)
+    url.searchParams.set('space', space.id)
+    window.location.href = url.toString()
   }, [])
 
   const handleRenameSpace = useCallback((id: string, name: string) => {
@@ -175,6 +239,10 @@ function WorkspaceShellInner() {
   const handleDelete = useCallback((entityId: string, type: GroupingDimension | string) => {
     if (type === 'run') {
       fetch(`/api/sessions/${entityId}`, { method: 'DELETE' })
+      return
+    }
+    if (type === 'file-editor') {
+      fetch(`/api/editor-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
     const endpointMap: Record<string, string> = {
@@ -270,10 +338,10 @@ function WorkspaceShellInner() {
   }, [entityMenu])
 
   const handleMenuRename = useCallback(() => {
-    // Trigger inline rename in sidebar — just select the node first
     if (entityMenu) {
       const nodeId = `${entityMenu.entityType}-${entityMenu.entityId}`
       select(nodeId, entityMenu.entityType)
+      setRenamingNodeId(nodeId)
     }
   }, [entityMenu, select])
 
@@ -287,13 +355,36 @@ function WorkspaceShellInner() {
     return firstNodeId.startsWith('run-') ? firstNodeId.slice(4) : firstNodeId
   }, [selectionState.selectedIds, selectionState.selectedType])
 
+  const { path, chordState, pushFocus, clearFocus, setChord, clearChord } = useFocusPath()
+
+  // Sync selectedRunId → FocusPathContext
+  // useLayoutEffect ensures path is updated synchronously before next user input
+  useLayoutEffect(() => {
+    if (selectedRunId) {
+      clearFocus()
+      pushFocus({ id: selectedRunId, type: 'run-workspace', label: selectedRunId })
+    } else {
+      clearFocus()
+    }
+  }, [selectedRunId, pushFocus, clearFocus])
+
+  useContextRouter({
+    path,
+    chordState,
+    pushFocus,
+    clearFocus,
+    setChord,
+    clearChord,
+    onNavigate: (id) => triggerWidgetFlourish(id),
+  })
+
   useGlobalHotkeys({
     onCycleReadyNext: () => {
-      const run = cycleNext(allRuns, serverState.readyQueue, selectedRunId)
+      const run = cycleNext(allRuns, readyQueue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleReadyPrev: () => {
-      const run = cyclePrev(allRuns, serverState.readyQueue, selectedRunId)
+      const run = cyclePrev(allRuns, readyQueue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllNext: () => {
@@ -306,51 +397,33 @@ function WorkspaceShellInner() {
       const run = cyclePrev(allRuns, allNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
-    onSessionNew: useCallback(() => {
-      // Derive pre-selected entity from current selection
-      const { selectedType, selectedIds } = selectionState
-      const firstNodeId = [...selectedIds][0] ?? null
-      if (firstNodeId && selectedType && selectedType !== 'run') {
-        // Strip type prefix (e.g. "task-abc" → "abc")
-        const rawId = firstNodeId.startsWith(`${selectedType}-`)
-          ? firstNodeId.slice(selectedType.length + 1)
-          : firstNodeId
-        const entityLinks: Record<string, string> = {}
-        if (selectedType === 'task') entityLinks.taskId = rawId
-        else if (selectedType === 'epic') entityLinks.epicId = rawId
-        else if (selectedType === 'initiative') entityLinks.initiativeId = rawId
-        setSessionPrefill(entityLinks)
-      } else {
-        setSessionPrefill(null)
-      }
-      setShowSessionDialog(true)
-    }, [selectionState]),
     onSessionQuick: useCallback(async () => {
-      // Pre-fill with resolved entity settings when a task is selected
+      // S opens session dialog — if a task is selected, pre-fill with task settings
       const { selectedType, selectedIds } = selectionState
       const firstNodeId = [...selectedIds][0] ?? null
-      if (firstNodeId && selectedType === 'task') {
-        const rawId = firstNodeId.startsWith('task-') ? firstNodeId.slice(5) : firstNodeId
-        try {
-          const res = await fetch(`/api/tasks/${rawId}/settings`)
-          const data = await res.json()
-          if (data.ok) {
-            const resolved = data.data.resolved
-            setSessionPrefill({
-              ...resolved,
-              worktreeMode: resolved.worktree,
-              runColor: resolved.defaultRunColor,
-              taskId: rawId,
-              sources: data.data.sources,
-            })
-          } else {
-            setSessionPrefill({ taskId: rawId })
-          }
-        } catch {
+      if (!firstNodeId || selectedType !== 'task') {
+        setSessionPrefill(null)
+        setShowSessionDialog(true)
+        return
+      }
+      const rawId = firstNodeId.startsWith('task-') ? firstNodeId.slice(5) : firstNodeId
+      try {
+        const res = await fetch(`/api/tasks/${rawId}/settings`)
+        const data = await res.json()
+        if (data.ok) {
+          const resolved = data.data.resolved
+          setSessionPrefill({
+            ...resolved,
+            worktreeMode: resolved.worktree,
+            runColor: resolved.defaultRunColor,
+            taskId: rawId,
+            sources: data.data.sources,
+          })
+        } else {
           setSessionPrefill({ taskId: rawId })
         }
-      } else {
-        setSessionPrefill(null)
+      } catch {
+        setSessionPrefill({ taskId: rawId })
       }
       setShowSessionDialog(true)
     }, [selectionState]),
@@ -364,6 +437,14 @@ function WorkspaceShellInner() {
 
   const handleFocusHandled = useCallback(() => {
     setFocusRunId(null)
+  }, [])
+
+  const handleTaskUpdate = useCallback((taskId: string, patch: { externalUrl?: string | null }) => {
+    void fetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
   }, [])
 
   // Click on canvas widget → select in hierarchy + expand ancestors
@@ -385,7 +466,7 @@ function WorkspaceShellInner() {
   }, [handleSelectRun])
 
   return (
-    <ActiveScopeProvider>
+    <>
       {activeSpaceId ? (
         <HotgroupProvider spaceId={activeSpaceId} runIds={runIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
@@ -417,26 +498,12 @@ function WorkspaceShellInner() {
                   >
                     <span className="material-symbols-outlined text-base">settings</span>
                   </button>
-                  <button
-                    className="px-2 py-1 text-2xs bg-white/5 border border-white/10 rounded hover:bg-white/10"
-                    onClick={() => setCommitViewMode(commitViewMode === 'task' ? null : 'task')}
-                  >
-                    Task Activity
-                  </button>
-                  <button
-                    className="px-2 py-1 text-2xs bg-white/5 border border-white/10 rounded hover:bg-white/10"
-                    onClick={() => setCommitViewMode(commitViewMode === 'standup' ? null : 'standup')}
-                  >
-                    Stand-Up
-                  </button>
-                  <button
-                    className="px-2 py-1 text-2xs bg-white/5 border border-white/10 rounded hover:bg-white/10"
-                    onClick={() => setCommitViewMode(commitViewMode === 'unassigned' ? null : 'unassigned')}
-                  >
-                    Unassigned
-                  </button>
-                  <span data-testid="status-area" className="text-xs text-slate-500">
-                    {runSummaries.size} runs · {commits.length} commits
+                  <span data-testid="status-area" className="text-xs text-slate-500 flex items-center gap-2">
+                    {runSummaries.size} runs
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full ${connected ? 'bg-green-500 shadow-[0_0_4px_#22c55e]' : 'bg-red-500 shadow-[0_0_4px_#ef4444]'}`}
+                      title={connected ? 'Connected' : 'Disconnected'}
+                    />
                   </span>
                 </div>
               </div>
@@ -460,7 +527,7 @@ function WorkspaceShellInner() {
                   >
                     <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
                       <HierarchySidebar
-                        tree={sidebarTree}
+                        tree={canvasTree}
                         dimensions={dimensions}
                         spaces={spaces}
                         activeSpaceId={activeSpaceId}
@@ -477,6 +544,8 @@ function WorkspaceShellInner() {
                         onArrangeGrid={() => arrangeGridRef.current?.()}
                         onArrangeReset={() => arrangeResetRef.current?.()}
                         onCollapse={() => setSidebarCollapsed(true)}
+                        renamingNodeId={renamingNodeId}
+                        onRenameComplete={() => setRenamingNodeId(null)}
                       />
                     </div>
                     <div
@@ -492,7 +561,8 @@ function WorkspaceShellInner() {
                 {/* Canvas */}
                 <div className="flex-1 relative overflow-hidden" data-testid="canvas-slot">
                   <InfiniteCanvas
-                    tree={sidebarTree}
+                    tree={canvasTree}
+                    editorWidgetMap={editorWidgetMap}
                     runMap={runMap}
                     focusRunId={focusRunId}
                     activeSpaceId={activeSpaceId}
@@ -501,20 +571,24 @@ function WorkspaceShellInner() {
                     onFocusRun={handleCanvasFocusRun}
                     onDeleteEntity={handleDelete}
                     onMenuOpen={handleMenuOpen}
+                    onTaskUpdate={handleTaskUpdate}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
                   />
                 </div>
+                {/* Hotkeys sidebar (right) */}
+                <HotkeysSidebar />
               </div>
 
+              {/* Feature-flagged: commit activity panel disabled for now
               {commitViewMode && (
                 <CommitActivityPanel
-                  commits={commits}
                   mode={commitViewMode}
                   selectedTaskTag={selectedTaskTag}
                   onTaskTagChange={setSelectedTaskTag}
                 />
               )}
+              */}
 
               {createDialog && (
                 <CreateEntityDialog
@@ -591,15 +665,21 @@ function WorkspaceShellInner() {
           </div>
         </TaxonomyProvider>
       )}
+      <NoTasksToast
+        taskCount={taxRepo.getTasks().length}
+        runCount={runRepo.getAll().length}
+      />
       <HotkeyPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
-    </ActiveScopeProvider>
+    </>
   )
 }
 
 export default function WorkspaceShell() {
   return (
-    <SelectionProvider>
-      <WorkspaceShellInner />
-    </SelectionProvider>
+    <FocusPathProvider>
+      <SelectionProvider>
+        <WorkspaceShellInner />
+      </SelectionProvider>
+    </FocusPathProvider>
   )
 }

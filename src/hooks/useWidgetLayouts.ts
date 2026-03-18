@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import type { TreeNode } from '../domain/types'
+import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
 
 export interface WidgetLayout {
   x: number
@@ -72,14 +73,19 @@ function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
 
   // Phase 1: Bottom-up sizing
   function computeSize(node: TreeNode, depth: number): { width: number; height: number } {
-    if (node.type === 'run') {
-      const size = { width: DEFAULT_RUN_WIDTH, height: DEFAULT_RUN_HEIGHT }
+    const reg = getWidgetComponent(toWidgetType(node.type))
+    if (!reg?.isContainer) {
+      const w = reg?.defaultSize?.width ?? DEFAULT_RUN_WIDTH
+      const h = reg?.defaultSize?.height ?? DEFAULT_RUN_HEIGHT
+      const size = { width: w, height: h }
       sizeMap.set(node.id, size)
       return size
     }
 
     const { padX, padTop, padBottom } = getPadding(depth)
-    const hasContainers = node.children.some(c => c.type !== 'run')
+    const hasContainers = node.children.some(
+      c => getWidgetComponent(toWidgetType(c.type))?.isContainer,
+    )
     const gap = hasContainers ? CONTAINER_GAP : RUN_GAP
 
     let totalWidth = 0
@@ -125,7 +131,9 @@ function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
   // Phase 3: Top-down absolutization
   function absolutize(parent: TreeNode, parentLayout: WidgetLayout, depth: number) {
     const { padX, padTop } = getPadding(depth)
-    const hasContainers = parent.children.some(c => c.type !== 'run')
+    const hasContainers = parent.children.some(
+      c => getWidgetComponent(toWidgetType(c.type))?.isContainer,
+    )
     const gap = hasContainers ? CONTAINER_GAP : RUN_GAP
     let childX = padX
 
@@ -148,6 +156,72 @@ function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
   }
 
   return layouts
+}
+
+// --- Smart placement for new nodes ---
+
+/**
+ * Place new run nodes near their existing siblings rather than using the
+ * full grid-from-scratch position. For each missing run:
+ *   1. Find the rightmost sibling that already has a position → place to its right.
+ *   2. No siblings yet → place inside the parent container (top-left corner).
+ *   3. No parent positioned either → return nothing (caller falls back to defaults).
+ *
+ * Container nodes are not handled here; callers should cascadeExpansion after
+ * placing runs so parent containers expand to contain them.
+ */
+function placeNewRuns(
+  missingIds: Set<string>,
+  tree: TreeNode[],
+  existing: Map<string, WidgetLayout>,
+  treeMaps: TreeMaps,
+): Map<string, WidgetLayout> {
+  const nodeMap = new Map<string, TreeNode>()
+  function index(nodes: TreeNode[]) {
+    for (const n of nodes) { nodeMap.set(n.id, n); index(n.children) }
+  }
+  index(tree)
+
+  const placed = new Map<string, WidgetLayout>()
+
+  for (const id of missingIds) {
+    const node = nodeMap.get(id)
+    const nodeReg = getWidgetComponent(toWidgetType(node?.type ?? ''))
+    if (!node || nodeReg?.isContainer) continue
+
+    const w = nodeReg?.defaultSize?.width ?? DEFAULT_RUN_WIDTH
+    const h = nodeReg?.defaultSize?.height ?? DEFAULT_RUN_HEIGHT
+
+    const parentId = treeMaps.parentMap.get(id)
+    const parent = parentId ? nodeMap.get(parentId) : null
+    if (!parent) continue
+
+    // Find rightmost positioned sibling
+    let maxRight = -Infinity
+    let refY: number | null = null
+    for (const sib of parent.children) {
+      if (sib.id === id) continue
+      const sl = existing.get(sib.id) ?? placed.get(sib.id)
+      if (!sl) continue
+      if (sl.x + sl.width > maxRight) { maxRight = sl.x + sl.width; refY = sl.y }
+    }
+
+    if (refY !== null) {
+      placed.set(id, { x: maxRight + RUN_GAP, y: refY, width: w, height: h })
+      continue
+    }
+
+    // No siblings — place inside parent container if parent is positioned
+    const parentLayout = existing.get(parentId!) ?? placed.get(parentId!)
+    if (parentLayout) {
+      const depth = treeMaps.depthMap.get(parentId!) ?? 0
+      const { padX, padTop } = getPadding(depth)
+      placed.set(id, { x: parentLayout.x + padX, y: parentLayout.y + padTop, width: w, height: h })
+    }
+    // else: no reference found — caller will fall back to generateDefaultLayouts
+  }
+
+  return placed
 }
 
 // --- Collect all node IDs ---
@@ -177,13 +251,26 @@ function loadLayouts(tree: TreeNode[], storageKey: string): Map<string, WidgetLa
       const saved = parsed[id]
       if (saved && typeof saved.x === 'number') map.set(id, saved)
     }
+    // Also load any saved positions not in the current tree
+    // (e.g. editor widgets arriving via SSE after initial mount)
+    for (const [id, layout] of Object.entries(parsed)) {
+      if (!map.has(id) && typeof (layout as WidgetLayout).x === 'number') {
+        map.set(id, layout as WidgetLayout)
+      }
+    }
     // If >20% missing, regenerate from scratch
     if (map.size < allIds.size * 0.8) return generateDefaultLayouts(tree)
-    // Fill any remaining missing with defaults
+    // Fill any remaining missing with smart placement (near siblings) or defaults
     if (map.size < allIds.size) {
+      const missing = new Set([...allIds].filter(id => !map.has(id)))
+      const treeMaps = buildTreeMaps(tree)
+      const smart = placeNewRuns(missing, tree, map, treeMaps)
       const defaults = generateDefaultLayouts(tree)
-      for (const id of allIds) {
-        if (!map.has(id)) map.set(id, defaults.get(id)!)
+      for (const id of missing) {
+        map.set(id, smart.get(id) ?? defaults.get(id)!)
+      }
+      for (const id of smart.keys()) {
+        cascadeExpansion(map, id, treeMaps)
       }
     }
     return map
@@ -250,7 +337,7 @@ function cascadeExpansion(
   }
 }
 
-/** Compute min bounds for a container from its children */
+/** Compute min bounds for a container from its children (lower-right only — upper-left stays fixed) */
 function computeMinBounds(
   map: Map<string, WidgetLayout>,
   parentLayout: WidgetLayout,
@@ -270,6 +357,34 @@ function computeMinBounds(
   return {
     minWidth: maxRight - parentLayout.x + padX,
     minHeight: maxBottom - parentLayout.y + padBottom,
+  }
+}
+
+/** Compute tight bounding box for a container by hugging all four edges of its children */
+function computeTightBounds(
+  map: Map<string, WidgetLayout>,
+  childIds: string[],
+  depth: number,
+): WidgetLayout | null {
+  const { padX, padTop, padBottom } = getPadding(depth)
+  let minLeft = Infinity
+  let minTop = Infinity
+  let maxRight = -Infinity
+  let maxBottom = -Infinity
+  for (const cid of childIds) {
+    const c = map.get(cid)
+    if (!c) continue
+    minLeft = Math.min(minLeft, c.x)
+    minTop = Math.min(minTop, c.y)
+    maxRight = Math.max(maxRight, c.x + c.width)
+    maxBottom = Math.max(maxBottom, c.y + c.height)
+  }
+  if (minLeft === Infinity) return null
+  return {
+    x: minLeft - padX,
+    y: minTop - padTop,
+    width: maxRight - minLeft + padX * 2,
+    height: maxBottom - minTop + padTop + padBottom,
   }
 }
 
@@ -305,11 +420,17 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
         layoutsRef.current = fresh
         queueMicrotask(() => setLayouts(fresh))
       } else {
-        // Fill in missing layouts from defaults (e.g. new group containers after dimension change)
+        // Fill in missing nodes: place runs near siblings/parent, fall back to defaults for containers
+        const missing = new Set([...newIds].filter(id => !layoutsRef.current.has(id)))
+        const smart = placeNewRuns(missing, tree, layoutsRef.current, treeMapsRef.current)
         const defaults = generateDefaultLayouts(tree)
         const patched = new Map(layoutsRef.current)
-        for (const id of newIds) {
-          if (!patched.has(id)) patched.set(id, defaults.get(id)!)
+        for (const id of missing) {
+          patched.set(id, smart.get(id) ?? defaults.get(id)!)
+        }
+        // Expand parent containers to contain any newly placed runs
+        for (const id of smart.keys()) {
+          cascadeExpansion(patched, id, treeMapsRef.current)
         }
         layoutsRef.current = patched
         queueMicrotask(() => setLayouts(patched))
@@ -421,11 +542,25 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
         const node = next.get(nid)
         if (!node) return
         const depth = tm.depthMap.get(nid) ?? 0
-        const { minWidth, minHeight } = computeMinBounds(next, node, childIds, depth)
-        next.set(nid, { ...node, width: minWidth, height: minHeight })
+        const tight = computeTightBounds(next, childIds, depth)
+        if (tight) next.set(nid, tight)
       }
 
       shrink(nodeId)
+
+      // Cascade tightening upward so ancestor containers also hug their (now-shrunken) children
+      let current = nodeId
+      while (true) {
+        const parentId = tm.parentMap.get(current)
+        if (!parentId) break
+        const parentChildIds = tm.childrenMap.get(parentId) ?? []
+        if (parentChildIds.length === 0) break
+        const parentDepth = tm.depthMap.get(parentId) ?? 0
+        const parentTight = computeTightBounds(next, parentChildIds, parentDepth)
+        if (parentTight) next.set(parentId, parentTight)
+        current = parentId
+      }
+
       return next
     })
   }, [])
@@ -440,6 +575,21 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     setLayouts(generateDefaultLayouts(tree))
   }, [tree])
 
+  const insertLayout = useCallback((id: string, layout: WidgetLayout) => {
+    layoutsRef.current = new Map(layoutsRef.current).set(id, layout)
+    setLayouts(new Map(layoutsRef.current))
+  }, [])
+
+  // Apply many layout updates in a single state transition (no cascadeExpansion —
+  // caller is responsible for computing correct sizes top-down)
+  const batchSetLayouts = useCallback((updates: Map<string, WidgetLayout>) => {
+    setLayouts(prev => {
+      const next = new Map(prev)
+      for (const [id, layout] of updates) next.set(id, layout)
+      return next
+    })
+  }, [])
+
   return {
     layouts,
     treeMaps: treeMapsRef.current,
@@ -450,5 +600,7 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     shrinkNode,
     getLayout,
     arrangeWorkspace,
+    insertLayout,
+    batchSetLayouts,
   }
 }

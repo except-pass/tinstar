@@ -178,6 +178,30 @@ export async function deleteTmuxSession(config: TinstarConfig, session: Session)
   }
 }
 
+export async function reattachTmuxSession(
+  config: TinstarConfig,
+  opts: { session: Session; port: number },
+): Promise<{ port: number; ttydPid: number | undefined }> {
+  const tmuxName = tmuxSessionName(config, opts.session.name)
+  claimedPorts.add(opts.port)
+
+  // If ttyd is already running on this port (e.g. another server instance owns it),
+  // adopt it rather than killing and restarting — avoids a kill/restart cycle when
+  // npx tinstar and npm run dev share the same config dir.
+  try {
+    const lsof = execSync(
+      `lsof -ti :${opts.port} | xargs -r ps -o pid=,comm= -p 2>/dev/null | awk '$2=="ttyd"{print $1}'`,
+      { encoding: 'utf-8' },
+    ).trim()
+    if (lsof) {
+      return { port: opts.port, ttydPid: Number(lsof.split('\n')[0]) }
+    }
+  } catch { /* no ttyd running — proceed to start */ }
+
+  const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
+  return { port: opts.port, ttydPid }
+}
+
 export async function getTmuxSessionState(config: TinstarConfig, sessionName: string): Promise<'exists' | 'missing'> {
   const tmuxName = tmuxSessionName(config, sessionName)
   const exists = await tmuxHasSession(tmuxName)
@@ -204,9 +228,14 @@ export function startTtyd(opts: {
 }): Promise<number | undefined> {
   stopManagedTtyd(opts.sessionName)
 
-  // Kill any orphaned ttyd still holding the port (e.g. after server restart)
+  // Kill any orphaned ttyd still holding the port (e.g. after server restart).
+  // Only kill ttyd processes — lsof may also return the server itself or other
+  // servers that have proxy connections to this port.
   try {
-    const lsof = execSync(`lsof -ti :${opts.port}`, { encoding: 'utf-8' }).trim()
+    const lsof = execSync(
+      `lsof -ti :${opts.port} | xargs -r ps -o pid=,comm= -p 2>/dev/null | awk '$2=="ttyd"{print $1}'`,
+      { encoding: 'utf-8' },
+    ).trim()
     if (lsof) {
       for (const pid of lsof.split('\n')) {
         try { process.kill(Number(pid), 'SIGTERM') } catch { /* already dead */ }

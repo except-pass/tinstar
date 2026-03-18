@@ -68,16 +68,14 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   }, [run.sessionId])
 
   const refreshTerminal = useCallback(() => {
-    if (!run.sessionId) return
-    fetch(`/api/sessions/${run.sessionId}/refresh-route`, { method: 'POST' })
-      .finally(() => onRefreshTerminal?.())
-  }, [run.sessionId, onRefreshTerminal])
+    onRefreshTerminal?.()
+  }, [onRefreshTerminal])
 
   const isLive = run.status === 'running' || run.status === 'idle' || run.status === 'needs_attention' || run.status === 'creating'
 
   return (
     <header
-      className="flex items-center justify-between bg-surface-panel px-3 py-1.5 overflow-hidden cursor-grab active:cursor-grabbing select-none"
+      className="widget-drag-handle flex items-center justify-between bg-surface-panel px-3 py-1.5 overflow-hidden cursor-grab active:cursor-grabbing select-none"
       style={{ borderBottom: `1px solid ${hexToRgba(runAccent, 0.25)}` }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -99,7 +97,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
           <div className="flex items-center gap-2">
             <h1
               className="text-2xs font-bold tracking-[0.15em] uppercase font-display leading-none truncate"
-              style={{ color: runAccent, textShadow: `0 0 10px ${hexToRgba(runAccent, 0.5)}` }}
+              style={{ color: runAccent }}
             >
               Run_{run.id}
             </h1>

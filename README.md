@@ -30,16 +30,19 @@ Attention is the limiting resource. Tinstar is built around that fact.
 
 ## Quick Start
 
-```
-npm install
-npm run dev
+### Install with an agent
+
+Paste this into Claude Code:
+
+> Install and launch Tinstar for me. Run `npx tinstar` and fix any missing dependencies it reports until it starts successfully.
+
+### Manual install
+
+```bash
+npx tinstar
 ```
 
-Open `http://localhost:5273` — that's it. One port, everything included:
-
-- **Vite dev server** on `:5273` (UI + API + SSE)
-- **Caddy reverse proxy** on `:8088` (auto-started in Docker, proxies ttyd terminals)
-- **Session reconciliation** loop (every 30s)
+The CLI checks for dependencies (Claude Code, tmux, ttyd), offers to register your current directory as a project, and starts the server.
 
 ## Features
 
@@ -49,43 +52,24 @@ Open `http://localhost:5273` — that's it. One port, everything included:
 - **Spaces** — Organize sessions into isolated workspaces
 - **File tree explorer** — Track touched files with live git-diff
 - **Drag-and-drop** — Reorder in sidebar, move on canvas, multi-drag
-- **Session lifecycle** — Create, stop, resume, delete sessions with Docker or tmux backends
+- **Session lifecycle** — Create, stop, resume, delete sessions with tmux or Docker backends
 - **Real-time state** — SSE-powered status updates (running, idle, needs attention)
 - **Grouping** — Nest sessions into recursive group containers
 
-## Ports
-
-| Port | Service | Forward? |
-|------|---------|----------|
-| 5273 | Vite (UI + API + terminal proxy) | **Yes** — the only port you need |
-| 8088 | Caddy (ttyd reverse proxy) | No — Vite proxies `/s/*` to it |
-| 8681+ | ttyd instances (dynamic) | No — Caddy proxies them |
-
-Only **port 5273** needs to be forwarded for remote access.
-
 ## Prerequisites
 
-- Node 20+
-- Docker (for Caddy container and optional Docker-backend sessions)
-- tmux + ttyd (for tmux-backend sessions)
+- **Node.js 20+** — runtime
+- **Claude Code** — installed and authenticated (`claude auth login`)
+- **tmux** — session multiplexing (`brew install tmux` / `apt install tmux`)
+- **ttyd** — web terminal (`brew install ttyd` / [download binary](https://github.com/tsl0922/ttyd/releases))
+- **Docker** (optional) — for isolated container sessions
 
-## Environment Variables
+## Ports
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `TINSTAR_FAST_SIM` | unset | Set to `1` to auto-start mock data simulator |
-| `TINSTAR_NO_SESSIONS` | unset | Set to `1` to skip session management (CI) |
-| `TINSTAR_DASHBOARD_PORT` | `5273` | Port hooks POST to (must match Vite port) |
-
-## Architecture
-
-```
-Browser ─── Vite (:5273) ─── API routes (/api/*)
-                          ├── SSE stream (/api/events)
-                          └── Proxy (/s/*) ──► Caddy (:8088) ──► ttyd (:8681+)
-```
-
-Sessions are the core unit. Creating a session (tmux or Docker backend) spawns a Claude Code instance with a ttyd terminal. The session widget appears on the canvas. Hooks inside Claude Code POST state changes back to the server for real-time status updates via SSE.
+| Port | Service |
+|------|---------|
+| 5273 | Tinstar (UI + API + session proxy) — **the only port you need** |
+| 8681+ | ttyd instances (dynamic, proxied through 5273) |
 
 ## Session Status
 
@@ -98,20 +82,23 @@ Sessions are the core unit. Creating a session (tmux or Docker backend) spawns a
 | `stopped` | User stopped the session |
 | `terminated` | Process crashed or disappeared |
 
+## Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TINSTAR_FAST_SIM` | unset | Set to `1` to auto-start mock data simulator |
+| `TINSTAR_NO_SESSIONS` | unset | Set to `1` to skip session management (CI) |
+
 ## Development
 
+For contributors working on Tinstar itself:
+
 ```bash
-# Dev server (clean UI, no mock data)
-npm run dev
-
-# Dev server with mock data
-TINSTAR_FAST_SIM=1 npm run dev
-
-# Type check
-npx tsc --noEmit
-
-# E2E tests
-TINSTAR_FAST_SIM=1 BASE_URL=http://localhost:5273 npx playwright test
+git clone <repo> && cd tinstar
+npm install
+npm run dev          # Vite HMR + backend (hot-reload)
+npx tsc --noEmit     # Type check
+TINSTAR_FAST_SIM=1 BASE_URL=http://localhost:5273 npx playwright test  # E2E tests
 ```
 
 ## License

@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
 import type { DocumentStore } from '../stores/document-store'
@@ -27,13 +26,11 @@ import {
   loadSecrets,
   dockerBackend,
   tmuxBackend,
-  addRoute,
-  removeRoute,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import { parseNewEntries } from '../sessions/transcript-parser'
 import { getGitDiffFiles } from '../sessions/git-diff'
-import type { Run } from '../../domain/types'
+import type { Run, EditorWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import type { FileKind, TouchedFile } from '../../types'
 import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
@@ -42,6 +39,7 @@ import type { SkillDTO } from '../../types'
 import { spec as openapiSpec } from './openapi'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
+import { shortId } from '../utils/shortId'
 
 function inferFileKind(filePath: string): FileKind {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -70,10 +68,6 @@ function json(res: ServerResponse, data: unknown, status = 200): void {
     'Access-Control-Allow-Origin': '*',
   })
   res.end(JSON.stringify(data))
-}
-
-function shortId(prefix: string): string {
-  return `${prefix}-${randomUUID().slice(0, 8)}`
 }
 
 /** Deep-merge entity patch with special handling for settings sub-object.
@@ -402,15 +396,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/tasks
   if (method === 'POST' && url === '/api/tasks') {
     readBody(req).then(body => {
-      const { name, epicId, initiativeId, status, summary, id: providedId } = JSON.parse(body)
+      const { name, epicId, initiativeId, status, id: providedId, percentDone, externalUrl } = JSON.parse(body)
       const entity = {
         id: providedId ?? shortId('task'),
         name: name ?? 'Untitled Task',
         epicId: epicId ?? '',
         initiativeId: initiativeId ?? '',
         status: status ?? 'active',
-        summary: summary ?? '',
         spaceId: ctx.docStore.activeSpaceId,
+        percentDone: percentDone ?? null,
+        externalUrl: externalUrl ?? null,
       }
       ctx.docStore.upsertTask(entity.id, entity)
       json(res, entity, 201)
@@ -574,6 +569,163 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/worktrees/'.length)
     ctx.docStore.deleteWorktree(id)
     json(res, { ok: true })
+    return true
+  }
+
+  // POST /api/editor-widgets
+  if (method === 'POST' && url === '/api/editor-widgets') {
+    readBody(req).then(body => {
+      const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
+      if (!sessionId || !filePath) {
+        json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId and filePath required' } }, 400)
+        return
+      }
+      const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
+      if (!run) {
+        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }, 404)
+        return
+      }
+      // Resolve display names from taxonomy
+      const task = ctx.docStore.getAllTasks().find(t => t.id === run.taskId)
+      const epic = task ? ctx.docStore.getAllEpics().find(e => e.id === task.epicId) : undefined
+      const initiative = epic ? ctx.docStore.getAllInitiatives().find(i => i.id === epic.initiativeId) : undefined
+      const worktree = ctx.docStore.getAllWorktrees().find(w => w.id === run.worktreeId)
+
+      // Resolve relative paths to absolute (Explorer panel sends relative paths)
+      const sessDir = ctx.sessionConfig?.dirs.sessions ?? ''
+      const session = getSession(sessDir, sessionId)
+      const workspacePath = session?.workspace?.path
+      const absoluteFilePath = (() => {
+        if (!filePath.startsWith('/')) return workspacePath ? resolve(workspacePath, filePath) : filePath
+        if (existsSync(filePath)) return filePath
+        // Container-absolute path (e.g. /src/utils/foo.ts): strip leading slash, resolve against workspace
+        return workspacePath ? resolve(workspacePath, filePath.replace(/^\/+/, '')) : filePath
+      })()
+
+      const widget: EditorWidget = {
+        id: shortId('editor'),
+        spaceId: ctx.docStore.activeSpaceId || undefined,
+        sessionId,
+        filePath: absoluteFilePath,
+        task: task?.name ?? '',
+        epic: epic?.name ?? '',
+        initiative: initiative?.name ?? '',
+        worktree: worktree?.name ?? '',
+        repo: worktree?.repo ?? run.repo ?? '',
+        color: run.color,
+      }
+      ctx.docStore.upsertEditorWidget(widget.id, widget)
+      json(res, { ok: true, data: widget })
+    })
+    return true
+  }
+
+  // DELETE /api/editor-widgets/:id
+  if (method === 'DELETE' && url.startsWith('/api/editor-widgets/')) {
+    const id = url.slice('/api/editor-widgets/'.length)
+    const existing = ctx.docStore.getAllEditorWidgets().find(w => w.id === id)
+    if (!existing) {
+      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `EditorWidget ${id} not found` } }, 404)
+      return true
+    }
+    ctx.docStore.deleteEditorWidget(id)
+    json(res, { ok: true })
+    return true
+  }
+
+  // GET /api/file-watch?session=SESSION_ID&path=FILE_PATH
+  if (method === 'GET' && url.startsWith('/api/file-watch')) {
+    const qs = new URL(url, 'http://localhost').searchParams
+    const sessionId = qs.get('session')
+    const filePath = qs.get('path')
+
+    if (!sessionId || !filePath) {
+      json(res, { error: 'session and path required' }, 400)
+      return true
+    }
+
+    // Fast path: host-absolute paths that exist don't need a session lookup
+    let absolutePath: string
+    if (filePath.startsWith('/') && existsSync(filePath)) {
+      absolutePath = filePath
+    } else {
+      const sessDir = ctx.sessionConfig?.dirs.sessions
+      if (!sessDir) {
+        json(res, { error: 'session config unavailable' }, 503)
+        return true
+      }
+      const session = getSession(sessDir, sessionId)
+      if (!session) {
+        json(res, { error: 'session not found' }, 404)
+        return true
+      }
+      const workspacePath = session.workspace?.path ?? null
+      if (!workspacePath) {
+        json(res, { error: 'session workspace unavailable' }, 400)
+        return true
+      }
+      absolutePath = filePath.startsWith('/')
+        ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
+        : resolve(workspacePath, filePath)
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    })
+
+    const sendEvent = (type: string, data: string) => {
+      res.write(`data: ${JSON.stringify({ type, data })}\n\n`)
+    }
+
+    // Send initial content
+    try {
+      const content = readFileSync(absolutePath, 'utf-8')
+      sendEvent('content', content)
+    } catch {
+      sendEvent('error', 'file unavailable')
+      res.end()
+      return true
+    }
+
+    // Debounced file watcher
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    let watcher: ReturnType<typeof watch> | null = null
+    let keepalive: ReturnType<typeof setInterval>
+
+    const cleanup = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      clearInterval(keepalive)
+      watcher?.close()
+    }
+
+    try {
+      watcher = watch(absolutePath, () => {
+        if (debounceTimer) clearTimeout(debounceTimer)
+        debounceTimer = setTimeout(() => {
+          try {
+            const content = readFileSync(absolutePath, 'utf-8')
+            sendEvent('content', content)
+          } catch {
+            sendEvent('error', 'file unavailable')
+            cleanup()
+            res.end()
+          }
+        }, 50)
+      })
+    } catch {
+      sendEvent('error', 'file unavailable')
+      res.end()
+      return true
+    }
+
+    keepalive = setInterval(() => { res.write(': keep-alive\n\n') }, 15_000)
+
+    req.on('close', () => {
+      cleanup()
+    })
+
     return true
   }
 
@@ -885,24 +1037,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             spaceId: ctx.docStore.activeSpaceId,
           })
 
-          // Register Caddy route for terminal proxy
-          if (sessionPort) {
-            addRoute(name, sessionPort, cfg.caddy.adminPort).catch(err => {
-              log.warn('sessions', `caddy addRoute failed for ${name}: ${(err as Error).message}`)
-            })
-          }
-
           emitSessionEvent('managed_session.created', { name, state: 'running' })
           log.info('sessions', `session created: ${name}`, { backend, port: sessionPort, state: 'running' })
 
-          if (prompt && backend === 'docker' && !oneshot) {
-            setTimeout(async () => {
-              try {
-                await dockerBackend.sendPrompt(cfg, name, prompt)
-              } catch (err) {
-                log.error('sessions', `failed to send initial prompt to ${name}`, { error: (err as Error).message })
-              }
-            }, 5000)
+          if (prompt && backend === 'docker' && !oneshot && sessionPort) {
+            dockerBackend.sendInitialPrompt(cfg, name, prompt, sessionPort).catch((err: Error) => {
+              log.error('sessions', `failed to send initial prompt to ${name}`, { error: err.message })
+            })
           }
 
           json(res, { ok: true, data: updated }, 201)
@@ -983,10 +1124,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // Re-read session to get updated port
             const updated = getSession(sessDir, session.name)
             const resumePort = updated?.port ?? session.port
-            if (resumePort) {
-              addRoute(session.name, resumePort, cfg.caddy.adminPort).catch(() => {})
-            }
-
             setState(sessDir, session.name, 'running')
             ctx.docStore.updateRunStatus(session.name, 'running')
             // Also update port on the run in case it changed
@@ -1042,7 +1179,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 await deleteWorktree(session.workspace.basePath, session.name)
               }
 
-              removeRoute(session.name, cfg.caddy.adminPort).catch(() => {})
             }
           } catch (err) {
             log.warn('delete', `background cleanup for ${name}: ${(err as Error).message}`)
@@ -1183,22 +1319,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           json(res, { ok: true })
         } catch (err) {
           json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
-        }
-        return true
-      }
-    }
-
-    // POST /api/sessions/:name/refresh-route — re-register Caddy route for a session
-    if (method === 'POST' && url.endsWith('/refresh-route') && url.startsWith('/api/sessions/')) {
-      const name = extractSessionName(url, '/api/sessions/')
-      if (name) {
-        const session = getSession(sessDir, name)
-        if (!session?.port) {
-          json(res, { ok: false, error: { code: 'NO_PORT', message: 'Session has no port' } }, 400)
-        } else {
-          addRoute(name, session.port, cfg.caddy.adminPort)
-            .then(() => json(res, { ok: true }))
-            .catch(() => json(res, { ok: true })) // route may already exist
         }
         return true
       }
@@ -1356,12 +1476,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const { session: name, path: filePath } = JSON.parse(body)
         if (!name || !filePath) return json(res, { ok: true })
 
-        const fileName = filePath.split('/').pop() ?? filePath
-        const kind = inferFileKind(filePath)
+        // Normalize container-absolute paths to host-absolute paths
+        const sessDir = ctx.sessionConfig?.dirs.sessions ?? ''
+        const session = getSession(sessDir, name)
+        const workspacePath = session?.workspace?.path
+        const resolvedPath = (() => {
+          if (!filePath.startsWith('/')) return filePath
+          if (existsSync(filePath)) return filePath
+          return workspacePath ? resolve(workspacePath, filePath.replace(/^\/+/, '')) : filePath
+        })()
+
+        const fileName = resolvedPath.split('/').pop() ?? resolvedPath
+        const kind = inferFileKind(resolvedPath)
         const file: TouchedFile = {
-          id: filePath,
+          id: resolvedPath,
           name: fileName,
-          path: filePath,
+          path: resolvedPath,
           additions: 0,
           deletions: 0,
           kind,

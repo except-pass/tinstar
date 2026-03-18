@@ -337,15 +337,6 @@ export const spec = {
         responses: { 200: { description: 'Prompt submitted' }, 400: { description: 'Missing prompt' }, 404: { description: 'Session not found' } },
       },
     },
-    '/api/sessions/{name}/refresh-route': {
-      post: {
-        tags: ['Sessions'],
-        summary: 'Re-register Caddy reverse proxy route',
-        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { 200: { description: 'Route refreshed' } },
-      },
-    },
-
     // ── Hooks ────────────────────────────────────────────
     '/api/hooks/idle': {
       post: {

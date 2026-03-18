@@ -23,6 +23,8 @@ interface HierarchySidebarProps {
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
   onReparent?: (entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => void
   onCollapse?: () => void
+  renamingNodeId?: string | null
+  onRenameComplete?: () => void
 }
 
 /** Return inline style for a colored status dot on run nodes */
@@ -50,6 +52,8 @@ function SidebarNode({
   dragNodeId,
   dropTarget,
   onDragStart,
+  renamingNodeId,
+  onRenameComplete,
 }: {
   node: TreeNode
   depth: number
@@ -62,6 +66,8 @@ function SidebarNode({
   dragNodeId: string | null
   dropTarget: DropTarget | null
   onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
+  renamingNodeId?: string | null
+  onRenameComplete?: () => void
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
   const { slotsForRun } = useHotgroupContext()
@@ -74,6 +80,7 @@ function SidebarNode({
   const hovered = isHovered(node.id)
   const hasChildren = node.children.length > 0
   const isRun = node.type === 'run'
+  const isFileEditor = node.type === 'file-editor'
   const isDragging = dragNodeId === node.id
   const isDropInside = dropTarget?.nodeId === node.id && dropTarget?.position === 'inside'
   const isDropBefore = dropTarget?.nodeId === node.id && dropTarget?.position === 'before'
@@ -83,20 +90,28 @@ function SidebarNode({
     if (editing) inputRef.current?.focus()
   }, [editing])
 
+  useEffect(() => {
+    if (renamingNodeId === node.id && !editing) {
+      setEditValue(node.label)
+      setEditing(true)
+    }
+  }, [renamingNodeId, node.id, node.label, editing])
+
   const commitRename = useCallback(() => {
     const trimmed = editValue.trim()
     if (trimmed && trimmed !== node.label && node.type !== 'run') {
       onRename(node.entityId, node.type as GroupingDimension, trimmed)
     }
     setEditing(false)
-  }, [editValue, node, onRename])
+    onRenameComplete?.()
+  }, [editValue, node, onRename, onRenameComplete])
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0 || editing) return
-    if (onDragStart && !isRun) {
+    if (onDragStart) {
       onDragStart(node.id, node.type, node.label, e.clientY, e.clientX)
     }
-  }, [node, editing, isRun, onDragStart])
+  }, [node, editing, onDragStart])
 
   return (
     <div>
@@ -129,7 +144,6 @@ function SidebarNode({
             toggleSelect(node.id, node.type)
           } else {
             select(node.id, node.type)
-            if (hasChildren) toggleExpand(node.id)
           }
         }}
         onDoubleClick={() => {
@@ -159,7 +173,7 @@ function SidebarNode({
 
         {/* Icon */}
         <span className="w-4 text-center" aria-hidden="true">
-          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : getDimensionIcon(node.type)}
+          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : isFileEditor ? '📄' : getDimensionIcon(node.type)}
         </span>
 
         {/* Color dot */}
@@ -193,7 +207,10 @@ function SidebarNode({
             onClick={e => e.stopPropagation()}
           />
         ) : (
-          <span className="truncate flex-1">{node.label}</span>
+          <span className="truncate flex-1">
+            {node.type === 'task' && node.status === 'completed' && <span className="mr-1">✅</span>}
+            {node.label}
+          </span>
         )}
 
         {/* Hotgroup badge for runs */}
@@ -208,8 +225,23 @@ function SidebarNode({
           </span>
         )}
 
+        {/* Close button for file-editor nodes */}
+        {isFileEditor && !editing && (
+          <button
+            className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-accent-red opacity-0 group-hover:opacity-100"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(node.entityId, node.type)
+            }}
+            aria-label={`Close ${node.label}`}
+            style={{ opacity: hovered ? 1 : undefined }}
+          >
+            ×
+          </button>
+        )}
+
         {/* Kebab menu button */}
-        {!isRun && !editing && onMenuOpen && (
+        {!isRun && !isFileEditor && !editing && onMenuOpen && (
           <button
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
             onClick={(e) => {
@@ -226,7 +258,7 @@ function SidebarNode({
         )}
 
         {/* Fallback: individual buttons when onMenuOpen is not provided */}
-        {!isRun && !editing && !onMenuOpen && (
+        {!isRun && !isFileEditor && !editing && !onMenuOpen && (
           <>
             <button
               className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
@@ -269,6 +301,16 @@ function SidebarNode({
         )}
       </div>
 
+      {/* Progress bar for task nodes with percentDone */}
+      {node.type === 'task' && node.percentDone != null && (
+        <div className="h-px bg-surface-raised mx-2">
+          <div
+            className="h-px bg-primary"
+            style={{ width: `${Math.min(100, Math.max(0, node.percentDone))}%` }}
+          />
+        </div>
+      )}
+
       {/* Children (when expanded) */}
       {hasChildren && expanded && (
         <div data-testid={`children-${node.id}`}>
@@ -286,6 +328,8 @@ function SidebarNode({
               dragNodeId={dragNodeId}
               dropTarget={dropTarget}
               onDragStart={onDragStart}
+              renamingNodeId={renamingNodeId}
+              onRenameComplete={onRenameComplete}
             />
           ))}
         </div>
@@ -325,6 +369,8 @@ function TreeWithOrphanSeparators({
   dragNodeId,
   dropTarget,
   onDragStart,
+  renamingNodeId,
+  onRenameComplete,
 }: {
   nodes: TreeNode[]
   depth: number
@@ -337,6 +383,8 @@ function TreeWithOrphanSeparators({
   dragNodeId: string | null
   dropTarget: DropTarget | null
   onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
+  renamingNodeId?: string | null
+  onRenameComplete?: () => void
 }) {
   const normal = nodes.filter(n => !n.orphan)
   const orphans = nodes.filter(n => n.orphan)
@@ -357,6 +405,8 @@ function TreeWithOrphanSeparators({
           dragNodeId={dragNodeId}
           dropTarget={dropTarget}
           onDragStart={onDragStart}
+          renamingNodeId={renamingNodeId}
+          onRenameComplete={onRenameComplete}
         />
       ))}
       {orphans.length > 0 && <OrphanSeparator />}
@@ -374,13 +424,15 @@ function TreeWithOrphanSeparators({
           dragNodeId={dragNodeId}
           dropTarget={dropTarget}
           onDragStart={onDragStart}
+          renamingNodeId={renamingNodeId}
+          onRenameComplete={onRenameComplete}
         />
       ))}
     </>
   )
 }
 
-export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onCollapse }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void }) {
+export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
 
@@ -473,6 +525,8 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
             dragNodeId={dragState?.nodeId ?? null}
             dropTarget={dropTarget}
             onDragStart={handleDragStart}
+            renamingNodeId={renamingNodeId}
+            onRenameComplete={onRenameComplete}
           />
         )}
       </div>

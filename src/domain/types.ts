@@ -72,9 +72,10 @@ export interface Task {
   epicId: string
   initiativeId: string
   status: string
-  summary: string
   settings?: EntitySettings
   spaceId?: string
+  percentDone?: number | null
+  externalUrl?: string | null
 }
 
 export interface Worktree {
@@ -94,6 +95,19 @@ export interface Run extends RunData {
   spaceId?: string
 }
 
+export interface EditorWidget {
+  id: string
+  spaceId?: string
+  sessionId: string
+  filePath: string
+  task: string
+  epic: string
+  initiative: string
+  worktree: string
+  repo: string
+  color?: string
+}
+
 // --- Grouping ---
 
 export type GroupingDimension = 'initiative' | 'epic' | 'task' | 'worktree'
@@ -105,7 +119,7 @@ export const ALL_DIMENSIONS: GroupingDimension[] = ['initiative', 'epic', 'task'
 export interface TreeNode {
   id: string
   label: string
-  type: GroupingDimension | 'run'
+  type: string
   entityId: string
   children: TreeNode[]
   runCount: number
@@ -113,6 +127,9 @@ export interface TreeNode {
   color?: string
   orphan?: boolean
   backend?: 'docker' | 'tmux' | null
+  percentDone?: number | null
+  status?: string
+  externalUrl?: string | null
 }
 
 export interface TreemapNode {

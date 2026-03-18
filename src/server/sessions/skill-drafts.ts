@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { parseFrontmatter, bustSkillCache } from './skill-discovery'
 import type { SSEBroadcaster } from '../api/sse'
 
-export const DRAFTS_DIR = join(homedir(), '.config', 'tinstar', 'skill-drafts')
+export const DRAFTS_DIR = join(process.env.TINSTAR_DATA_DIR ?? join(homedir(), '.config', 'tinstar'), 'skill-drafts')
 
 export function ensureDraftsDir(): void {
   mkdirSync(DRAFTS_DIR, { recursive: true })
