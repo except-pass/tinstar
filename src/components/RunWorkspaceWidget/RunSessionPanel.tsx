@@ -131,7 +131,13 @@ function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus }:
           height: `${zoom * 100}%`,
           transformOrigin: '0 0',
           transform: `scale(${1 / zoom})`,
-        } : { display: 'contents' }}
+        } : {
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+        }}
       >
         <iframe
           key={tick}
