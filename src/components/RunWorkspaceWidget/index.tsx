@@ -197,7 +197,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
           </div>
         ) : (
           <div
-            className="flex flex-col bg-surface-panel relative flex-shrink-0"
+            className="flex flex-col bg-surface-panel relative flex-shrink-0 min-h-0"
             style={{ width: filesPanelWidth, borderRight: `1px solid ${hexToRgba(runAccent, 0.2)}` }}
           >
             {/* Mode toggle tabs */}
@@ -239,7 +239,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
             {/* Panel content */}
             <div
               data-testid="focus-zone-file-list"
-              className={`flex-1 overflow-hidden ${focusZone === 'file-list' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
+              className={`flex flex-col flex-1 min-h-0 overflow-hidden ${focusZone === 'file-list' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
             >
               {filePanelMode === 'touched' ? (
                 <TouchedFilesPanel files={run.touchedFiles} sessionId={run.sessionId} onOpenFile={handleOpenFile} />
