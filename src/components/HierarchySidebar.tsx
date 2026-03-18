@@ -130,7 +130,6 @@ function SidebarNode({
             toggleSelect(node.id, node.type)
           } else {
             select(node.id, node.type)
-            if (hasChildren) toggleExpand(node.id)
           }
         }}
         onDoubleClick={() => {
