@@ -337,7 +337,7 @@ function cascadeExpansion(
   }
 }
 
-/** Compute min bounds for a container from its children */
+/** Compute min bounds for a container from its children (lower-right only — upper-left stays fixed) */
 function computeMinBounds(
   map: Map<string, WidgetLayout>,
   parentLayout: WidgetLayout,
@@ -357,6 +357,34 @@ function computeMinBounds(
   return {
     minWidth: maxRight - parentLayout.x + padX,
     minHeight: maxBottom - parentLayout.y + padBottom,
+  }
+}
+
+/** Compute tight bounding box for a container by hugging all four edges of its children */
+function computeTightBounds(
+  map: Map<string, WidgetLayout>,
+  childIds: string[],
+  depth: number,
+): WidgetLayout | null {
+  const { padX, padTop, padBottom } = getPadding(depth)
+  let minLeft = Infinity
+  let minTop = Infinity
+  let maxRight = -Infinity
+  let maxBottom = -Infinity
+  for (const cid of childIds) {
+    const c = map.get(cid)
+    if (!c) continue
+    minLeft = Math.min(minLeft, c.x)
+    minTop = Math.min(minTop, c.y)
+    maxRight = Math.max(maxRight, c.x + c.width)
+    maxBottom = Math.max(maxBottom, c.y + c.height)
+  }
+  if (minLeft === Infinity) return null
+  return {
+    x: minLeft - padX,
+    y: minTop - padTop,
+    width: maxRight - minLeft + padX * 2,
+    height: maxBottom - minTop + padTop + padBottom,
   }
 }
 
@@ -514,8 +542,8 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
         const node = next.get(nid)
         if (!node) return
         const depth = tm.depthMap.get(nid) ?? 0
-        const { minWidth, minHeight } = computeMinBounds(next, node, childIds, depth)
-        next.set(nid, { ...node, width: minWidth, height: minHeight })
+        const tight = computeTightBounds(next, childIds, depth)
+        if (tight) next.set(nid, tight)
       }
 
       shrink(nodeId)
