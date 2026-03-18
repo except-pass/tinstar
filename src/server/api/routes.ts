@@ -1040,14 +1040,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           emitSessionEvent('managed_session.created', { name, state: 'running' })
           log.info('sessions', `session created: ${name}`, { backend, port: sessionPort, state: 'running' })
 
-          if (prompt && backend === 'docker' && !oneshot) {
-            setTimeout(async () => {
-              try {
-                await dockerBackend.sendPrompt(cfg, name, prompt)
-              } catch (err) {
-                log.error('sessions', `failed to send initial prompt to ${name}`, { error: (err as Error).message })
-              }
-            }, 5000)
+          if (prompt && backend === 'docker' && !oneshot && sessionPort) {
+            dockerBackend.sendInitialPrompt(cfg, name, prompt, sessionPort).catch((err: Error) => {
+              log.error('sessions', `failed to send initial prompt to ${name}`, { error: err.message })
+            })
           }
 
           json(res, { ok: true, data: updated }, 201)

@@ -314,6 +314,36 @@ export async function sendPrompt(config: TinstarConfig, sessionName: string, pro
   await docker(['exec', name, 'tmux', 'send-keys', '-t', 'main', '', 'Enter'])
 }
 
+/**
+ * Wait for the container to be ready, then send the initial prompt.
+ * Waits for ttyd health check, adds a buffer for Claude to start,
+ * then retries sendPrompt with backoff if the tmux session isn't ready yet.
+ */
+export async function sendInitialPrompt(
+  config: TinstarConfig,
+  sessionName: string,
+  prompt: string,
+  port: number,
+): Promise<void> {
+  const ready = await healthCheck(port, { timeout: 60_000, interval: 500 })
+  if (!ready) throw new Error(`container ${sessionName} did not become healthy`)
+
+  // Buffer for Claude to start and render its input bar
+  await new Promise(r => setTimeout(r, 2000))
+
+  // Retry sendPrompt — tmux session 'main' may not exist immediately after ttyd is up
+  const maxAttempts = 5
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      await sendPrompt(config, sessionName, prompt)
+      return
+    } catch (err) {
+      if (i === maxAttempts - 1) throw err
+      await new Promise(r => setTimeout(r, 1000 * (i + 1)))
+    }
+  }
+}
+
 export async function healthCheck(port: number, opts: { timeout?: number; interval?: number } = {}): Promise<boolean> {
   const { timeout = 5000, interval = 500 } = opts
   const start = Date.now()
