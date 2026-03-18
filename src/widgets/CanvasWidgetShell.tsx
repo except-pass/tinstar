@@ -204,7 +204,8 @@ export function CanvasWidgetShell({
         top: layout.y,
         width: layout.width,
         height: layout.height,
-        zIndex: isDragging ? 30 : isSelected ? 20 : isHovered ? 10 : undefined,
+        zIndex: registration.isContainer ? undefined
+          : isDragging ? 30 : isSelected ? 20 : isHovered ? 10 : undefined,
       }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
