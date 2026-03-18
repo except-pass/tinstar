@@ -16,15 +16,17 @@ Working with a single AI agent is easy. Working with ten is a different problem 
 
 When you're running multiple Claude Code sessions at once — each on a different task, in a different codebase, at a different stage of completion — the bottleneck isn't compute. It's **you**. Specifically, your attention. Your mental energy. The finite amount of state you can hold in your head about what every agent is doing, what needs a nudge, what's done and waiting for review, what quietly died an hour ago.
 
-The usual tools make this worse. Terminals are headless. Tabs blur together. You find yourself tabbing through sessions, mentally reconstructing context you've already lost.
+The usual tools make this worse. Terminals are headless. Tabs blur together. You find yourself tabbing through sessions, mentally reconstructing context you've already lost.  Tinstar gets that context:
 
-**Out of the brain. On to the pane of glass.**
+**Out of your brain and on to the pane (of glass)!**
 
 Tinstar puts every session on a spatial canvas — a live memory palace where each agent has a place, a face, and a status. You can see what's running, what's idle, what needs your eyes. Arrangement is meaningful: you can cluster sessions by project, by urgency, by phase. The canvas remembers so you don't have to.
 
+![Tinstar screenshot](screenshot.png)
+
 The goal is **doneness at a glance** — you should be able to look at the canvas and immediately know the shape of the work: what's burning, what's waiting, what's done. No context-switching tax. No mental inventory. Just the work, laid out in space.
 
-Attention is the limiting resource. Tinstar is built around that fact.
+Attention is the limiting resource. Tinstar is built around that fact.  Easily switch between sessions, color code them, see where they are and what they're doing, fire off a new prompt, and move on.
 
 ---
 
@@ -50,7 +52,7 @@ The CLI checks for dependencies (Claude Code, tmux, ttyd), offers to register yo
 - **Live terminals** — Embedded ttyd sessions with real-time status updates
 - **Multi-selection** — Marquee select, Ctrl+click, grid arrange
 - **Spaces** — Organize sessions into isolated workspaces
-- **File tree explorer** — Track touched files with live git-diff
+- **File tree explorer** — Track touched files with live git-diff. Drag a file onto the canvas to take a quick look at it.
 - **Drag-and-drop** — Reorder in sidebar, move on canvas, multi-drag
 - **Session lifecycle** — Create, stop, resume, delete sessions with tmux or Docker backends
 - **Real-time state** — SSE-powered status updates (running, idle, needs attention)
