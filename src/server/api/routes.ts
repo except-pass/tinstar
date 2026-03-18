@@ -644,27 +644,30 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
-    const sessDir = ctx.sessionConfig?.dirs.sessions
-    if (!sessDir) {
-      json(res, { error: 'session config unavailable' }, 503)
-      return true
+    // Fast path: host-absolute paths that exist don't need a session lookup
+    let absolutePath: string
+    if (filePath.startsWith('/') && existsSync(filePath)) {
+      absolutePath = filePath
+    } else {
+      const sessDir = ctx.sessionConfig?.dirs.sessions
+      if (!sessDir) {
+        json(res, { error: 'session config unavailable' }, 503)
+        return true
+      }
+      const session = getSession(sessDir, sessionId)
+      if (!session) {
+        json(res, { error: 'session not found' }, 404)
+        return true
+      }
+      const workspacePath = session.workspace?.path ?? null
+      if (!workspacePath) {
+        json(res, { error: 'session workspace unavailable' }, 400)
+        return true
+      }
+      absolutePath = filePath.startsWith('/')
+        ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
+        : resolve(workspacePath, filePath)
     }
-    const session = getSession(sessDir, sessionId)
-    if (!session) {
-      json(res, { error: 'session not found' }, 404)
-      return true
-    }
-    const workspacePath = session.workspace?.path ?? null
-    if (!workspacePath) {
-      json(res, { error: 'session workspace unavailable' }, 400)
-      return true
-    }
-
-    const absolutePath = (() => {
-      if (!filePath.startsWith('/')) return resolve(workspacePath, filePath)
-      if (existsSync(filePath)) return filePath
-      return resolve(workspacePath, filePath.replace(/^\/+/, ''))
-    })()
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
