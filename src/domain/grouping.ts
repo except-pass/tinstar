@@ -226,12 +226,23 @@ export function buildGroupTree(
 
     // Orphan entities of lower dimensions that float up to root:
     // e.g. epics with no initiative when dimensions = ['initiative', 'epic', 'task']
+    // Track all node IDs already present anywhere in the tree (including descendants of
+    // orphan nodes added in earlier iterations) to avoid duplicates like baserepo appearing
+    // both under an orphan epic AND as a standalone orphan task.
+    const addedNodeIds = new Set<string>()
+    function trackNodeIds(n: TreeNode) {
+      addedNodeIds.add(n.id)
+      for (const c of n.children) trackNodeIds(c)
+    }
+    for (const n of nodes) trackNodeIds(n)
+
     for (const lowerDim of dimensions.slice(1)) {
       const orphanEntities = getOrphanEntities(lowerDim, dimension, taxonomy)
       for (const entity of orphanEntities) {
-        // Only add if not already present as a grouped node
+        // Only add if not already present anywhere in the tree (including as a descendant
+        // of an orphan node added in a previous lowerDim iteration)
         const nodeId = `${lowerDim}-${entity.id}`
-        if (!nodes.some(n => n.id === nodeId)) {
+        if (!addedNodeIds.has(nodeId)) {
           // Build sub-tree for this orphan entity's runs
           const entityRuns = orphanRuns.filter(run => {
             const resolved = taxonomy.resolveDimension(run, lowerDim)
@@ -240,7 +251,7 @@ export function buildGroupTree(
           const subDims = dimensions.slice(dimensions.indexOf(lowerDim) + 1)
           const children = buildGroupTree(entityRuns, subDims, taxonomy, false, lowerDim, entity.id)
 
-          nodes.push({
+          const newNode: TreeNode = {
             id: nodeId,
             label: entity.label,
             type: lowerDim,
@@ -250,7 +261,9 @@ export function buildGroupTree(
             activeCount: entityRuns.filter(r => r.status === 'running').length,
             color: entity.color,
             orphan: true,
-          })
+          }
+          nodes.push(newNode)
+          trackNodeIds(newNode)
         }
       }
     }
