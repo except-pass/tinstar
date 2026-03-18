@@ -27,7 +27,15 @@ function resolveProfile(config: TinstarConfig, session: Session): ImageProfile |
 
 /** Resolve the Docker image for a session, respecting profile config. */
 function resolveImage(config: TinstarConfig, session: Session): string {
-  return resolveProfile(config, session)?.image ?? config.container.defaultImage
+  const image = resolveProfile(config, session)?.image ?? config.container.defaultImage
+  if (!image) {
+    throw new Error(
+      session.profile
+        ? `Docker profile '${session.profile}' not found in config — check ~/.config/tinstar/config.json`
+        : `No Docker profile specified and no defaultImage configured — set container.defaultImage in ~/.config/tinstar/config.json or specify a profile`
+    )
+  }
+  return image
 }
 
 /** Resolve the container home directory for a session, checking profile overrides. */

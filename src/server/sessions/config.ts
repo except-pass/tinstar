@@ -56,7 +56,7 @@ function deepMerge(target: Record<string, unknown>, source: Record<string, unkno
 const BASE_CONFIG = {
   container: {
     prefix: 'tinstar-',
-    defaultImage: 'tinstar',
+    defaultImage: '',
     home: '/home/tinstar',
   },
   ports: {
