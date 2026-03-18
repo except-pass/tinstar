@@ -23,6 +23,8 @@ interface HierarchySidebarProps {
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
   onReparent?: (entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => void
   onCollapse?: () => void
+  renamingNodeId?: string | null
+  onRenameComplete?: () => void
 }
 
 /** Return inline style for a colored status dot on run nodes */
@@ -50,6 +52,8 @@ function SidebarNode({
   dragNodeId,
   dropTarget,
   onDragStart,
+  renamingNodeId,
+  onRenameComplete,
 }: {
   node: TreeNode
   depth: number
@@ -62,6 +66,8 @@ function SidebarNode({
   dragNodeId: string | null
   dropTarget: DropTarget | null
   onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
+  renamingNodeId?: string | null
+  onRenameComplete?: () => void
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
   const { slotsForRun } = useHotgroupContext()
@@ -84,13 +90,21 @@ function SidebarNode({
     if (editing) inputRef.current?.focus()
   }, [editing])
 
+  useEffect(() => {
+    if (renamingNodeId === node.id && !editing) {
+      setEditValue(node.label)
+      setEditing(true)
+    }
+  }, [renamingNodeId, node.id, node.label, editing])
+
   const commitRename = useCallback(() => {
     const trimmed = editValue.trim()
     if (trimmed && trimmed !== node.label && node.type !== 'run') {
       onRename(node.entityId, node.type as GroupingDimension, trimmed)
     }
     setEditing(false)
-  }, [editValue, node, onRename])
+    onRenameComplete?.()
+  }, [editValue, node, onRename, onRenameComplete])
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0 || editing) return
@@ -314,6 +328,8 @@ function SidebarNode({
               dragNodeId={dragNodeId}
               dropTarget={dropTarget}
               onDragStart={onDragStart}
+              renamingNodeId={renamingNodeId}
+              onRenameComplete={onRenameComplete}
             />
           ))}
         </div>
@@ -353,6 +369,8 @@ function TreeWithOrphanSeparators({
   dragNodeId,
   dropTarget,
   onDragStart,
+  renamingNodeId,
+  onRenameComplete,
 }: {
   nodes: TreeNode[]
   depth: number
@@ -365,6 +383,8 @@ function TreeWithOrphanSeparators({
   dragNodeId: string | null
   dropTarget: DropTarget | null
   onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
+  renamingNodeId?: string | null
+  onRenameComplete?: () => void
 }) {
   const normal = nodes.filter(n => !n.orphan)
   const orphans = nodes.filter(n => n.orphan)
@@ -385,6 +405,8 @@ function TreeWithOrphanSeparators({
           dragNodeId={dragNodeId}
           dropTarget={dropTarget}
           onDragStart={onDragStart}
+          renamingNodeId={renamingNodeId}
+          onRenameComplete={onRenameComplete}
         />
       ))}
       {orphans.length > 0 && <OrphanSeparator />}
@@ -402,13 +424,15 @@ function TreeWithOrphanSeparators({
           dragNodeId={dragNodeId}
           dropTarget={dropTarget}
           onDragStart={onDragStart}
+          renamingNodeId={renamingNodeId}
+          onRenameComplete={onRenameComplete}
         />
       ))}
     </>
   )
 }
 
-export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onCollapse }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void }) {
+export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
 
@@ -501,6 +525,8 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
             dragNodeId={dragState?.nodeId ?? null}
             dropTarget={dropTarget}
             onDragStart={handleDragStart}
+            renamingNodeId={renamingNodeId}
+            onRenameComplete={onRenameComplete}
           />
         )}
       </div>

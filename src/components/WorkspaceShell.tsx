@@ -136,6 +136,7 @@ function WorkspaceShellInner() {
   const arrangeGridRef = useRef<(() => void) | null>(null)
   const arrangeResetRef = useRef<(() => void) | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(240)
   // Feature-flagged: commit activity buttons disabled for now
   // const [commitViewMode, setCommitViewMode] = useState<'task' | 'unassigned' | 'standup' | null>(null)
@@ -337,10 +338,10 @@ function WorkspaceShellInner() {
   }, [entityMenu])
 
   const handleMenuRename = useCallback(() => {
-    // Trigger inline rename in sidebar — just select the node first
     if (entityMenu) {
       const nodeId = `${entityMenu.entityType}-${entityMenu.entityId}`
       select(nodeId, entityMenu.entityType)
+      setRenamingNodeId(nodeId)
     }
   }, [entityMenu, select])
 
@@ -543,6 +544,8 @@ function WorkspaceShellInner() {
                         onArrangeGrid={() => arrangeGridRef.current?.()}
                         onArrangeReset={() => arrangeResetRef.current?.()}
                         onCollapse={() => setSidebarCollapsed(true)}
+                        renamingNodeId={renamingNodeId}
+                        onRenameComplete={() => setRenamingNodeId(null)}
                       />
                     </div>
                     <div
