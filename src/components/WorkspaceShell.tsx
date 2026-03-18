@@ -48,7 +48,7 @@ function WorkspaceShellInner() {
     return ['initiative', 'epic', 'task']
   })
 
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, connected } = useBackendState()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -137,8 +137,9 @@ function WorkspaceShellInner() {
   const arrangeResetRef = useRef<(() => void) | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(240)
-  const [commitViewMode, setCommitViewMode] = useState<'task' | 'unassigned' | 'standup' | null>(null)
-  const [selectedTaskTag, setSelectedTaskTag] = useState('')
+  // Feature-flagged: commit activity buttons disabled for now
+  // const [commitViewMode, setCommitViewMode] = useState<'task' | 'unassigned' | 'standup' | null>(null)
+  // const [selectedTaskTag, setSelectedTaskTag] = useState('')
   const sidebarResizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
 
   const onSidebarResizePointerDown = useCallback((e: React.PointerEvent) => {
@@ -496,26 +497,12 @@ function WorkspaceShellInner() {
                   >
                     <span className="material-symbols-outlined text-base">settings</span>
                   </button>
-                  <button
-                    className="px-2 py-1 text-2xs bg-white/5 border border-white/10 rounded hover:bg-white/10"
-                    onClick={() => setCommitViewMode(commitViewMode === 'task' ? null : 'task')}
-                  >
-                    Task Activity
-                  </button>
-                  <button
-                    className="px-2 py-1 text-2xs bg-white/5 border border-white/10 rounded hover:bg-white/10"
-                    onClick={() => setCommitViewMode(commitViewMode === 'standup' ? null : 'standup')}
-                  >
-                    Stand-Up
-                  </button>
-                  <button
-                    className="px-2 py-1 text-2xs bg-white/5 border border-white/10 rounded hover:bg-white/10"
-                    onClick={() => setCommitViewMode(commitViewMode === 'unassigned' ? null : 'unassigned')}
-                  >
-                    Unassigned
-                  </button>
-                  <span data-testid="status-area" className="text-xs text-slate-500">
+                  <span data-testid="status-area" className="text-xs text-slate-500 flex items-center gap-2">
                     {runSummaries.size} runs
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full ${connected ? 'bg-green-500 shadow-[0_0_4px_#22c55e]' : 'bg-red-500 shadow-[0_0_4px_#ef4444]'}`}
+                      title={connected ? 'Connected' : 'Disconnected'}
+                    />
                   </span>
                 </div>
               </div>
@@ -590,6 +577,7 @@ function WorkspaceShellInner() {
                 <HotkeysSidebar />
               </div>
 
+              {/* Feature-flagged: commit activity panel disabled for now
               {commitViewMode && (
                 <CommitActivityPanel
                   mode={commitViewMode}
@@ -597,6 +585,7 @@ function WorkspaceShellInner() {
                   onTaskTagChange={setSelectedTaskTag}
                 />
               )}
+              */}
 
               {createDialog && (
                 <CreateEntityDialog
