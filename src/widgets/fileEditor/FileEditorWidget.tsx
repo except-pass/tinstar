@@ -70,6 +70,16 @@ export function FileEditorWidget({ data }: WidgetProps) {
     fetch(`/api/editor-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
   }, [widget.id])
 
+  const [wordWrap, setWordWrap] = useState(false)
+
+  const toggleWordWrap = useCallback(() => {
+    setWordWrap(prev => {
+      const next = !prev
+      editorRef.current?.updateOptions({ wordWrap: next ? 'on' : 'off' })
+      return next
+    })
+  }, [])
+
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!lastUpdatedAt) return
@@ -88,6 +98,13 @@ export function FileEditorWidget({ data }: WidgetProps) {
         <span className="text-2xs font-mono text-slate-400 truncate flex-1">
           {[widget.task, widget.worktree, filename].filter(Boolean).join(' · ')}
         </span>
+        <button
+          onClick={toggleWordWrap}
+          className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${wordWrap ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
+          title="Toggle word wrap"
+        >
+          wrap
+        </button>
         <button
           onClick={handleOpenInEditor}
           className="text-2xs font-mono px-2 py-0.5 rounded border border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60 flex-shrink-0"
@@ -123,7 +140,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
               scrollBeyondLastLine: false,
               fontSize: 11,
               lineNumbers: 'on',
-              wordWrap: 'off',
+              wordWrap: wordWrap ? 'on' : 'off',
             }}
             onMount={handleEditorMount}
           />
