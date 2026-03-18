@@ -566,6 +566,16 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     setLayouts(new Map(layoutsRef.current))
   }, [])
 
+  // Apply many layout updates in a single state transition (no cascadeExpansion —
+  // caller is responsible for computing correct sizes top-down)
+  const batchSetLayouts = useCallback((updates: Map<string, WidgetLayout>) => {
+    setLayouts(prev => {
+      const next = new Map(prev)
+      for (const [id, layout] of updates) next.set(id, layout)
+      return next
+    })
+  }, [])
+
   return {
     layouts,
     treeMaps: treeMapsRef.current,
@@ -577,5 +587,6 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     getLayout,
     arrangeWorkspace,
     insertLayout,
+    batchSetLayouts,
   }
 }

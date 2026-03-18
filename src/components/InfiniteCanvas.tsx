@@ -72,6 +72,66 @@ function collectRunNodeIds(nodes: TreeNode[]): string[] {
   return result
 }
 
+/** Collect nodes whose IDs are in selectedIds (first match per branch, tree order) */
+function collectSelectedNodes(nodes: TreeNode[], selectedIds: Set<string>): TreeNode[] {
+  const result: TreeNode[] = []
+  for (const node of nodes) {
+    if (selectedIds.has(node.id)) {
+      result.push(node)
+    } else {
+      result.push(...collectSelectedNodes(node.children, selectedIds))
+    }
+  }
+  return result
+}
+
+const TREEMAP_HEADER_H = 32  // h-8 drag handle on all container widgets
+const TREEMAP_PAD = 8        // inner padding around children
+
+/**
+ * Compute treemap layouts for a set of nodes within a bounding rect.
+ * Places nodes in an aspect-ratio-aware grid, then recurses into containers.
+ * Returns a flat Map<nodeId, layout> covering every node in the subtree.
+ */
+function computeTreemapLayouts(
+  nodes: TreeNode[],
+  x: number, y: number, w: number, h: number,
+  gap: number,
+): Map<string, import('../hooks/useWidgetLayouts').WidgetLayout> {
+  const result = new Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>()
+  const n = nodes.length
+  if (n === 0 || w <= 0 || h <= 0) return result
+
+  // Aspect-ratio-aware column count: cells will be as square as possible
+  const R = Math.max(0.2, Math.min(5, w / h))
+  const cols = Math.max(1, Math.round(Math.sqrt(n * R)))
+  const rows = Math.ceil(n / cols)
+  const cellW = (w - gap * (cols + 1)) / cols
+  const cellH = (h - gap * (rows + 1)) / rows
+
+  for (let i = 0; i < n; i++) {
+    const node = nodes[i]!
+    const col = i % cols
+    const row = Math.floor(i / cols)
+    const nx = x + gap + col * (cellW + gap)
+    const ny = y + gap + row * (cellH + gap)
+    result.set(node.id, { x: nx, y: ny, width: cellW, height: cellH })
+
+    const isContainer = getWidgetComponent(toWidgetType(node.type))?.isContainer
+    if (isContainer && node.children.length > 0 && cellW > 120 && cellH > 80) {
+      const childGap = Math.max(6, Math.floor(gap * 0.6))
+      const innerX = nx + TREEMAP_PAD
+      const innerY = ny + TREEMAP_HEADER_H
+      const innerW = cellW - TREEMAP_PAD * 2
+      const innerH = cellH - TREEMAP_HEADER_H - TREEMAP_PAD
+      const childLayouts = computeTreemapLayouts(node.children, innerX, innerY, innerW, innerH, childGap)
+      for (const [id, layout] of childLayouts) result.set(id, layout)
+    }
+  }
+
+  return result
+}
+
 /** Collect leaf node IDs that are descendants of the given selected entity node IDs */
 function collectRunsUnderSelected(
   nodes: TreeNode[],
@@ -114,6 +174,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
     getLayout,
     arrangeWorkspace,
     insertLayout,
+    batchSetLayouts,
   } = useWidgetLayouts(tree, activeSpaceId)
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
   const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState, expandAll } = useSelection()
@@ -321,24 +382,20 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
     }
   }, [updateRunPosition])
 
-  // Grid arrange: tile selected (or all) run widgets into a grid filling the viewport
+  // Grid arrange: treemap-style nested layout filling the viewport
   const arrangeGrid = useCallback(() => {
     const el = containerRef.current
     if (!el) return
     const rect = el.getBoundingClientRect()
 
-    // Determine which runs to arrange:
-    // - entity selected (task/epic/initiative/worktree): runs under that entity
-    // - run nodes selected: those specific runs
-    // - nothing selected: all runs
-    let ids: string[]
-    if (selectionState.selectedType !== 'run' && selectionState.selectedIds.size > 0) {
-      ids = collectRunsUnderSelected(tree, selectionState.selectedIds)
+    // Determine root nodes to arrange (selected nodes, or entire tree if nothing selected)
+    let rootNodes: TreeNode[]
+    if (selectionState.selectedIds.size > 0) {
+      rootNodes = collectSelectedNodes(tree, selectionState.selectedIds)
     } else {
-      const selected = runNodeIdsRef.current.filter(id => isSelected(id))
-      ids = selected.length > 0 ? selected : runNodeIdsRef.current
+      rootNodes = tree
     }
-    if (ids.length === 0) return
+    if (rootNodes.length === 0) return
 
     // Viewport in canvas coords
     const vx = -camera.x / camera.zoom
@@ -346,21 +403,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
     const vw = rect.width / camera.zoom
     const vh = rect.height / camera.zoom
 
-    const gap = 20
-    const cols = Math.ceil(Math.sqrt(ids.length))
-    const rows = Math.ceil(ids.length / cols)
-    const cellW = (vw - gap * (cols + 1)) / cols
-    const cellH = (vh - gap * (rows + 1)) / rows
-
-    ids.forEach((nodeId, i) => {
-      const col = i % cols
-      const row = Math.floor(i / cols)
-      const nx = vx + gap + col * (cellW + gap)
-      const ny = vy + gap + row * (cellH + gap)
-      updateRunPosition(nodeId, nx, ny)
-      updateRunSize(nodeId, cellW, cellH)
-    })
-  }, [camera, selectionState, tree, isSelected, updateRunPosition, updateRunSize])
+    const layouts = computeTreemapLayouts(rootNodes, vx, vy, vw, vh, 20)
+    batchSetLayouts(layouts)
+  }, [camera, selectionState, tree, batchSetLayouts])
 
   // Expose arrange functions to parent via refs
   useEffect(() => {
