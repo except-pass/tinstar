@@ -910,7 +910,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, taskId, epicId, initiativeId, color } = JSON.parse(body)
+        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, taskId, epicId, initiativeId, color: colorParam } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, taskId, epicId, initiativeId, color })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
@@ -955,6 +955,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               spaceId: ctx.docStore.activeSpaceId,
             })
           }
+
+          // Resolve run color: explicit param > task > epic > initiative > undefined
+          const color = colorParam
+            ?? (taskId ? ctx.docStore.getTask(taskId)?.settings?.defaultRunColor : undefined)
+            ?? (epicId ? ctx.docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
+            ?? (initiativeId ? ctx.docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
 
           const session = createSession(sessDir, {
             name,
