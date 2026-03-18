@@ -31,10 +31,13 @@ export function FileEditorWidget({ data }: WidgetProps) {
   const widget = data as EditorWidget
   const { content, connected, lastUpdatedAt } = useFileWatch(widget.sessionId, widget.filePath)
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
+  // Ref so handleEditorMount always reads the latest content, avoiding stale closure
+  const contentRef = useRef<string | null>(null)
+  contentRef.current = content
 
   const filename = widget.filePath.split('/').pop() ?? widget.filePath
 
-  // When content arrives, update Monaco and restore scroll
+  // When content updates after Monaco is already mounted, update the editor value
   useEffect(() => {
     const ed = editorRef.current
     if (!ed || content === null) return
@@ -49,10 +52,10 @@ export function FileEditorWidget({ data }: WidgetProps) {
     })
   }, [content])
 
-  // onMount fires once; useEffect above handles subsequent content updates
+  // onMount fires once when Monaco initializes; read contentRef to avoid stale closure
   const handleEditorMount = useCallback((ed: MonacoEditor.IStandaloneCodeEditor) => {
     editorRef.current = ed
-    if (content !== null) ed.setValue(content)
+    if (contentRef.current !== null) ed.setValue(contentRef.current)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOpenInEditor = useCallback(() => {
@@ -73,7 +76,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
     const id = setInterval(() => setNow(Date.now()), 5_000)
     return () => clearInterval(id)
   }, [lastUpdatedAt])
-  const secondsAgo = lastUpdatedAt ? Math.floor((now - lastUpdatedAt.getTime()) / 1000) : null
+  const secondsAgo = lastUpdatedAt ? Math.max(0, Math.floor((now - lastUpdatedAt.getTime()) / 1000)) : null
 
   return (
     <div className="flex flex-col h-full bg-surface-base text-slate-300 overflow-hidden">

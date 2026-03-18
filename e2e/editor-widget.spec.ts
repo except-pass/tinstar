@@ -67,10 +67,41 @@ test('editor widget close button removes it', async ({ page }) => {
   const editorWidget = page.locator('[data-widget-type="file-editor"]').first()
   await expect(editorWidget).toBeVisible({ timeout: 5000 })
 
-  // Delete via API instead of UI to avoid canvas overlap issues in test
+  // Delete via API (canvas widgets may overlap, making click unreliable;
+  // the sidebar × test covers UI click deletion)
   await page.evaluate(async (id: string) => {
     await fetch(`/api/editor-widgets/${id}`, { method: 'DELETE' })
   }, widget.id)
 
+  await expect(page.locator('[data-widget-type="file-editor"]')).toHaveCount(0, { timeout: 5000 })
+})
+
+test('editor widget sidebar × removes it', async ({ page }) => {
+  await page.goto('/')
+  await resetAndWaitForData(page)
+
+  const widget = await createEditorWidget(page)
+  if (!widget?.id) throw new Error('Widget creation failed or returned no id')
+
+  // Editor node might be nested under a task — expand all sidebar chevrons
+  const sidebar = page.getByTestId('hierarchy-sidebar')
+  const chevrons = sidebar.locator('[data-testid^="chevron-"]')
+  for (let i = 0; i < await chevrons.count(); i++) {
+    await chevrons.nth(i).click()
+    await page.waitForTimeout(50)
+  }
+
+  // The editor node appears in the sidebar with id "{widgetId}"
+  const sidebarNode = page.getByTestId(`sidebar-node-${widget.id}`)
+  await expect(sidebarNode).toBeVisible({ timeout: 5000 })
+
+  // Hover to reveal × button, then click it
+  await sidebarNode.hover()
+  const closeBtn = sidebarNode.locator('button:has-text("×")')
+  await expect(closeBtn).toBeVisible({ timeout: 2000 })
+  await closeBtn.click()
+
+  // Both sidebar node and canvas widget should be gone
+  await expect(sidebarNode).not.toBeVisible({ timeout: 5000 })
   await expect(page.locator('[data-widget-type="file-editor"]')).toHaveCount(0, { timeout: 5000 })
 })
