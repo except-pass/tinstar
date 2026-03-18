@@ -547,6 +547,20 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
       }
 
       shrink(nodeId)
+
+      // Cascade tightening upward so ancestor containers also hug their (now-shrunken) children
+      let current = nodeId
+      while (true) {
+        const parentId = tm.parentMap.get(current)
+        if (!parentId) break
+        const parentChildIds = tm.childrenMap.get(parentId) ?? []
+        if (parentChildIds.length === 0) break
+        const parentDepth = tm.depthMap.get(parentId) ?? 0
+        const parentTight = computeTightBounds(next, parentChildIds, parentDepth)
+        if (parentTight) next.set(parentId, parentTight)
+        current = parentId
+      }
+
       return next
     })
   }, [])
