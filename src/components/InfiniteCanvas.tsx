@@ -599,25 +599,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
       if (!resJson.ok || !resJson.data) return
       const widget = resJson.data
 
-      // Calculate spawn position: next to source run widget
-      const run = [...runMap.values()].find(r => r.sessionId === sessionId)
-      const sourceLayout = run ? layouts.get('run-' + run.id) : undefined
-      let spawnLayout: { x: number; y: number; width: number; height: number }
-      if (sourceLayout) {
-        spawnLayout = {
-          x: sourceLayout.x + sourceLayout.width + 16,
-          y: sourceLayout.y,
-          width: 640,
-          height: 480,
-        }
-      } else {
-        const rect = containerRef.current!.getBoundingClientRect()
-        spawnLayout = {
-          x: (e.clientX - rect.left - camera.x) / camera.zoom,
-          y: (e.clientY - rect.top - camera.y) / camera.zoom,
-          width: 640,
-          height: 480,
-        }
+      // Spawn at drop coordinates
+      const rect = containerRef.current!.getBoundingClientRect()
+      const spawnLayout = {
+        x: (e.clientX - rect.left - camera.x) / camera.zoom,
+        y: (e.clientY - rect.top - camera.y) / camera.zoom,
+        width: 640,
+        height: 480,
       }
 
       insertLayout(widget.id, spawnLayout)
