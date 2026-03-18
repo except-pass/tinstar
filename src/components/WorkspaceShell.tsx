@@ -48,7 +48,7 @@ function WorkspaceShellInner() {
     return ['initiative', 'epic', 'task']
   })
 
-  const { runRepo, taxRepo, spaces, activeSpaceId, commits, readyQueue, addOptimistic, editorWidgets } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets } = useBackendState()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -187,12 +187,19 @@ function WorkspaceShellInner() {
     window.history.replaceState(null, '', url)
   }, [])
 
-  const handleCreateSpace = useCallback((name: string) => {
-    fetch('/api/spaces', {
+  const handleCreateSpace = useCallback(async (name: string) => {
+    const res = await fetch('/api/spaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     })
+    if (!res.ok) return
+    const space = await res.json() as { id: string }
+    // Immediately switch to the new space
+    fetch(`/api/spaces/${space.id}/activate`, { method: 'POST' })
+    const url = new URL(location.href)
+    url.searchParams.set('space', space.id)
+    window.history.replaceState(null, '', url)
   }, [])
 
   const handleRenameSpace = useCallback((id: string, name: string) => {
@@ -231,6 +238,10 @@ function WorkspaceShellInner() {
   const handleDelete = useCallback((entityId: string, type: GroupingDimension | string) => {
     if (type === 'run') {
       fetch(`/api/sessions/${entityId}`, { method: 'DELETE' })
+      return
+    }
+    if (type === 'file-editor') {
+      fetch(`/api/editor-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
     const endpointMap: Record<string, string> = {
@@ -520,7 +531,7 @@ function WorkspaceShellInner() {
                     Unassigned
                   </button>
                   <span data-testid="status-area" className="text-xs text-slate-500">
-                    {runSummaries.size} runs · {commits.length} commits
+                    {runSummaries.size} runs
                   </span>
                 </div>
               </div>
@@ -544,7 +555,7 @@ function WorkspaceShellInner() {
                   >
                     <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
                       <HierarchySidebar
-                        tree={sidebarTree}
+                        tree={canvasTree}
                         dimensions={dimensions}
                         spaces={spaces}
                         activeSpaceId={activeSpaceId}
@@ -597,7 +608,6 @@ function WorkspaceShellInner() {
 
               {commitViewMode && (
                 <CommitActivityPanel
-                  commits={commits}
                   mode={commitViewMode}
                   selectedTaskTag={selectedTaskTag}
                   onTaskTagChange={setSelectedTaskTag}

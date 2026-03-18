@@ -1,13 +1,31 @@
+import { useCallback, useEffect, useState } from 'react'
 import type { CommitRecord } from '../types'
 
 interface Props {
-  commits: CommitRecord[]
   mode: 'task' | 'unassigned' | 'standup'
   selectedTaskTag: string
   onTaskTagChange: (tag: string) => void
 }
 
-export function CommitActivityPanel({ commits, mode, selectedTaskTag, onTaskTagChange }: Props) {
+export function CommitActivityPanel({ mode, selectedTaskTag, onTaskTagChange }: Props) {
+  const [commits, setCommits] = useState<CommitRecord[]>([])
+
+  const fetchCommits = useCallback(() => {
+    fetch('/api/commits')
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setCommits(data as CommitRecord[]))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => { fetchCommits() }, [fetchCommits])
+
+  // Refresh when new commit deltas arrive via SSE (listen for custom event)
+  useEffect(() => {
+    const handler = () => fetchCommits()
+    window.addEventListener('tinstar:commit-delta', handler)
+    return () => window.removeEventListener('tinstar:commit-delta', handler)
+  }, [fetchCommits])
+
   const taskTags = Array.from(new Set(commits.flatMap(c => c.taskTags))).sort()
   const sorted = [...commits].sort((a, b) => new Date(b.authorDate).getTime() - new Date(a.authorDate).getTime())
 

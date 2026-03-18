@@ -1,7 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget } from '../domain/types'
-import type { CommitRecord } from '../types'
-
 interface ServerState {
   activeSpaceId: string
   spaces: Space[]
@@ -12,7 +10,6 @@ interface ServerState {
   runs: Run[]
   editorWidgets: EditorWidget[]
   readyQueue: string[]
-  commits: CommitRecord[]
 }
 
 const EMPTY_STATE: ServerState = {
@@ -25,7 +22,6 @@ const EMPTY_STATE: ServerState = {
   runs: [],
   editorWidgets: [],
   readyQueue: [],
-  commits: [],
 }
 
 export function useServerEvents(): {
@@ -182,17 +178,9 @@ export function useServerEvents(): {
         }
 
         if (delta.entity === 'commit') {
-          if (delta.data === null) {
-            return { ...prev, commits: prev.commits.filter(c => c.sha !== delta.id) }
-          }
-          const commit = delta.data as CommitRecord
-          const exists = prev.commits.some(c => c.sha === commit.sha)
-          return {
-            ...prev,
-            commits: exists
-              ? prev.commits.map(c => c.sha === commit.sha ? commit : c)
-              : [...prev.commits, commit],
-          }
+          // Commits are fetched on-demand by CommitActivityPanel; just notify it to refresh
+          window.dispatchEvent(new Event('tinstar:commit-delta'))
+          return prev
         }
 
         return prev

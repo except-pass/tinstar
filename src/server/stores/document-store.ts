@@ -314,7 +314,6 @@ export class DocumentStore {
       tasks: this.getAllTasks().filter(inSpace),
       worktrees: this.getAllWorktrees().filter(inSpace),
       runs: this.getAllRuns().filter(inSpace),
-      commits: this.getAllCommits(),
       editorWidgets: this.getAllEditorWidgets().filter(inSpace),
     }
   }
