@@ -1,5 +1,9 @@
 # CLAUDE.md — Tinstar
 
+## Repository
+
+- **Main branch:** `main` — use this for PRs, not `master`
+
 ## UI Philosophy
 
 The UI must be snappy and responsive. It should feel like playing a video game — fun, juicy, and blazing fast. Every interaction should have immediate visual feedback. No loading spinners where optimistic updates will do. Animations should be short and purposeful (never blocking). If something feels sluggish, that's a bug.
