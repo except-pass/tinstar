@@ -618,8 +618,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       e.preventDefault()
 
       const rect = containerRef.current!.getBoundingClientRect()
-      const dropX = (e.clientX - rect.left - camera.x) / camera.zoom
-      const dropY = (e.clientY - rect.top - camera.y) / camera.zoom
+      const dropX = Math.round((e.clientX - rect.left - camera.x) / camera.zoom)
+      const dropY = Math.round((e.clientY - rect.top - camera.y) / camera.zoom)
 
       const rawEditor = e.dataTransfer.getData('application/tinstar-editor')
       if (rawEditor) {

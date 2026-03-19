@@ -247,15 +247,19 @@ function loadLayouts(tree: TreeNode[], storageKey: string): Map<string, WidgetLa
     if (!raw) return generateDefaultLayouts(tree)
     const parsed = JSON.parse(raw) as Record<string, WidgetLayout>
     const map = new Map<string, WidgetLayout>()
+    const snapLayout = (l: WidgetLayout): WidgetLayout => ({
+      x: Math.round(l.x), y: Math.round(l.y),
+      width: Math.round(l.width), height: Math.round(l.height),
+    })
     for (const id of allIds) {
       const saved = parsed[id]
-      if (saved && typeof saved.x === 'number') map.set(id, saved)
+      if (saved && typeof saved.x === 'number') map.set(id, snapLayout(saved))
     }
     // Also load any saved positions not in the current tree
     // (e.g. editor widgets arriving via SSE after initial mount)
     for (const [id, layout] of Object.entries(parsed)) {
       if (!map.has(id) && typeof (layout as WidgetLayout).x === 'number') {
-        map.set(id, layout as WidgetLayout)
+        map.set(id, snapLayout(layout as WidgetLayout))
       }
     }
     // If >20% missing, regenerate from scratch

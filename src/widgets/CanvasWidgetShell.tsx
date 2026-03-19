@@ -134,7 +134,7 @@ export function CanvasWidgetShell({
         setIsDragging(true)
         onDragStart?.(nodeId)
       }
-      onMove(nodeId, dragStart.current.originX + dx, dragStart.current.originY + dy)
+      onMove(nodeId, Math.round(dragStart.current.originX + dx), Math.round(dragStart.current.originY + dy))
       onDragMove?.(nodeId, e.clientX, e.clientY)
     },
     [nodeId, zoom, onMove, onDragStart, onDragMove],
@@ -183,8 +183,8 @@ export function CanvasWidgetShell({
       resizeMoved.current = true
       onResize(
         nodeId,
-        Math.max(minSize.width, resizeStart.current.originW + dx),
-        Math.max(minSize.height, resizeStart.current.originH + dy),
+        Math.round(Math.max(minSize.width, resizeStart.current.originW + dx)),
+        Math.round(Math.max(minSize.height, resizeStart.current.originH + dy)),
       )
     },
     [nodeId, zoom, onResize, minSize],

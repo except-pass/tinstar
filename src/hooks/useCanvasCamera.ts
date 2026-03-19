@@ -55,8 +55,8 @@ export function useCanvasCamera() {
           const cy = vh / 2
           const ratio = 1 / prev.zoom
           return {
-            x: cx - (cx - prev.x) * ratio,
-            y: cy - (cy - prev.y) * ratio,
+            x: Math.round(cx - (cx - prev.x) * ratio),
+            y: Math.round(cy - (cy - prev.y) * ratio),
             zoom: 1,
           }
         })
@@ -110,16 +110,16 @@ export function useCanvasCamera() {
       const cx = e.clientX - rect.left
       const cy = e.clientY - rect.top
       setCamera({
-        x: cx - (cx - cam.x) * ratio,
-        y: cy - (cy - cam.y) * ratio,
+        x: Math.round(cx - (cx - cam.x) * ratio),
+        y: Math.round(cy - (cy - cam.y) * ratio),
         zoom: newZoom,
       })
     } else {
       // Plain scroll / two-finger swipe → pan
       setCamera(prev => ({
         ...prev,
-        x: prev.x - e.deltaX,
-        y: prev.y - e.deltaY,
+        x: Math.round(prev.x - e.deltaX),
+        y: Math.round(prev.y - e.deltaY),
       }))
     }
   }, [])
@@ -137,8 +137,8 @@ export function useCanvasCamera() {
     if (!isPanning.current) return
     setCamera(prev => ({
       ...prev,
-      x: e.clientX - panStart.current.x,
-      y: e.clientY - panStart.current.y,
+      x: Math.round(e.clientX - panStart.current.x),
+      y: Math.round(e.clientY - panStart.current.y),
     }))
   }, [])
 
@@ -157,8 +157,8 @@ export function useCanvasCamera() {
       )
       const zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fitZoom))
       setCamera({
-        x: viewportW / 2 - (wx + ww / 2) * zoom,
-        y: viewportH / 2 - (wy + wh / 2) * zoom,
+        x: Math.round(viewportW / 2 - (wx + ww / 2) * zoom),
+        y: Math.round(viewportH / 2 - (wy + wh / 2) * zoom),
         zoom,
       })
     },
