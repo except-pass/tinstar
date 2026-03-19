@@ -200,6 +200,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
   // All run node IDs for marquee intersection
   const runNodeIdsRef = useRef<string[]>([])
 
+  // Spawn animation: track which run node IDs are newly created (not present on initial load)
+  const seenRunNodeIdsRef = useRef<Set<string> | null>(null)
+  const [spawnedNodeIds, setSpawnedNodeIds] = useState<Set<string>>(new Set())
+
   // Keep parent map, depth map, and run node IDs in sync with tree
   const parentMapRef = useRef<Map<string, string | null>>(new Map())
   const depthMapRef = useRef<Map<string, number>>(new Map())
@@ -207,6 +211,25 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
     parentMapRef.current = buildParentMap(tree)
     depthMapRef.current = treeMaps.depthMap
     runNodeIdsRef.current = collectRunNodeIds(tree)
+
+    const leafIds = runNodeIdsRef.current
+    if (seenRunNodeIdsRef.current === null) {
+      // First render — mark all as seen without animating
+      seenRunNodeIdsRef.current = new Set(leafIds)
+      return
+    }
+    const newIds = leafIds.filter(id => !seenRunNodeIdsRef.current!.has(id))
+    if (newIds.length === 0) return
+    newIds.forEach(id => seenRunNodeIdsRef.current!.add(id))
+    setSpawnedNodeIds(prev => new Set([...prev, ...newIds]))
+    const timer = setTimeout(() => {
+      setSpawnedNodeIds(prev => {
+        const next = new Set(prev)
+        newIds.forEach(id => next.delete(id))
+        return next
+      })
+    }, 900)
+    return () => clearTimeout(timer)
   }, [tree, treeMaps])
 
   // Center on a widget when focusRunId changes
@@ -650,6 +673,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
         layout={layout}
         zoom={camera.zoom}
         isSelected={isSelected(node.id)}
+        isSpawning={spawnedNodeIds.has(node.id)}
+        spawnColor={node.type === 'run' ? runMap.get(node.entityId)?.color : undefined}
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}

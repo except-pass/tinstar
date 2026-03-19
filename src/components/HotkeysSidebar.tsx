@@ -6,10 +6,10 @@ import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 
 // Tier-1 global bindings — work at any level except inside a terminal (iframe captures keyboard)
 const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
-  { key: ']',         label: 'Next session' },
-  { key: '[',         label: 'Prev session' },
-  { key: 'Shift+]',   label: 'Next (all)' },
-  { key: 'Shift+[',   label: 'Prev (all)' },
+  { key: ']',         label: 'Focus next waiting' },
+  { key: '[',         label: 'Focus prev waiting' },
+  { key: 'Shift+]',   label: 'Focus next session' },
+  { key: 'Shift+[',   label: 'Focus prev session' },
   { key: '?',         label: 'Hotkeys' },
   { key: 'S',         label: 'New session' },
 ]
