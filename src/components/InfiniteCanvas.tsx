@@ -606,8 +606,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
   const handleDoubleClickZoom = useCallback((nodeId: string) => {
     if (onFocusRun && nodeId.startsWith('run-')) {
       onFocusRun(nodeId.slice(4))
+    } else if (nodeId.startsWith('editor-')) {
+      zoomToFitRuns([nodeId])
     }
-  }, [onFocusRun])
+  }, [onFocusRun, zoomToFitRuns])
 
   const handleDrop = useCallback(
     async (e: React.DragEvent<HTMLDivElement>) => {
@@ -684,7 +686,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}
-        onDoubleClickZoom={node.type === 'run' ? handleDoubleClickZoom : undefined}
+        onDoubleClickZoom={node.type === 'run' || node.type === 'file-editor' ? handleDoubleClickZoom : undefined}
         onMove={moveHandler}
         onResize={resizeHandler}
         onDragStart={node.type === 'run' ? handleWidgetDragStart : undefined}
