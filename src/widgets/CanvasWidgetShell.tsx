@@ -108,6 +108,9 @@ export function CanvasWidgetShell({
           originX: layout.x,
           originY: layout.y,
         }
+        // Capture immediately so fast mouse movement never escapes the widget
+        // before the drag threshold is reached
+        containerRef.current?.setPointerCapture(e.pointerId)
       }
     },
     [nodeId, spaceHeldRef, dragHandleSelector, layout.x, layout.y, onSelect],
@@ -128,10 +131,6 @@ export function CanvasWidgetShell({
         return
       if (!dragMoved.current) {
         dragMoved.current = true
-        // Defer setPointerCapture to drag start so dblclick fires on correct element
-        if (dragPointerId.current !== null) {
-          containerRef.current?.setPointerCapture(dragPointerId.current)
-        }
         setIsDragging(true)
         onDragStart?.(nodeId)
       }
