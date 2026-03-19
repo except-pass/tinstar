@@ -198,6 +198,12 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
     setNewProcName('')
   }, [newProcName, draft.procedures, settings])
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [onClose])
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[9999]" onClick={handleCancel}>
       <div
