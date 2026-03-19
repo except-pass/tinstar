@@ -385,6 +385,11 @@ function WorkspaceShellInner() {
       return { id: firstNodeId, type: selectedType, label }
     }
 
+    if (selectedType === 'file-editor') {
+      const label = findNodeLabel(canvasTree, firstNodeId) ?? 'File'
+      return { id: firstNodeId, type: 'file-editor', label }
+    }
+
     return null
   }, [selectionState.selectedIds, selectionState.selectedType, canvasTree])
 
@@ -401,7 +406,7 @@ function WorkspaceShellInner() {
 
   // Register action handler for selected task/epic/initiative
   useEffect(() => {
-    if (!selectedFocusNode || selectedFocusNode.type === 'run-workspace') return
+    if (!selectedFocusNode || selectedFocusNode.type === 'run-workspace' || selectedFocusNode.type === 'file-editor') return
     const { id, type, label } = selectedFocusNode
     const dash = id.indexOf('-')
     if (dash === -1) return

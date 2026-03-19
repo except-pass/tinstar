@@ -158,7 +158,7 @@ export interface Rect {
 
 export interface SelectionState {
   selectedIds: Set<string>
-  selectedType: GroupingDimension | 'run' | null
+  selectedType: GroupingDimension | 'run' | 'file-editor' | null
   expandedIds: Set<string>
   hoveredId: string | null
 }
