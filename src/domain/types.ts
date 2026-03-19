@@ -109,6 +109,15 @@ export interface EditorWidget {
   color?: string
 }
 
+export interface BrowserWidget {
+  id: string
+  spaceId?: string
+  sessionId: string
+  url: string
+  title?: string
+  color?: string
+}
+
 // --- Grouping ---
 
 export type GroupingDimension = 'initiative' | 'epic' | 'task' | 'worktree'

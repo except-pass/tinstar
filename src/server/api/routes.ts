@@ -635,6 +635,62 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST /api/browser-widgets
+  if (method === 'POST' && url === '/api/browser-widgets') {
+    readBody(req).then(body => {
+      const { sessionId, url: widgetUrl = '' } = JSON.parse(body) as { sessionId?: string; url?: string }
+      if (!sessionId) {
+        json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId required' } }, 400)
+        return
+      }
+      const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
+      if (!run) {
+        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }, 404)
+        return
+      }
+      const widget: import('../../domain/types').BrowserWidget = {
+        id: shortId('browser'),
+        spaceId: ctx.docStore.activeSpaceId || undefined,
+        sessionId,
+        url: widgetUrl,
+        color: run.color,
+      }
+      ctx.docStore.upsertBrowserWidget(widget.id, widget)
+      json(res, { ok: true, data: widget })
+    })
+    return true
+  }
+
+  // PATCH /api/browser-widgets/:id
+  if (method === 'PATCH' && url.startsWith('/api/browser-widgets/')) {
+    const id = url.slice('/api/browser-widgets/'.length)
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getAllBrowserWidgets().find(w => w.id === id)
+      if (!existing) {
+        json(res, { ok: false, error: { code: 'NOT_FOUND', message: `BrowserWidget ${id} not found` } }, 404)
+        return
+      }
+      const patch = JSON.parse(body) as { url?: string; title?: string }
+      const updated = { ...existing, ...patch }
+      ctx.docStore.upsertBrowserWidget(id, updated)
+      json(res, { ok: true, data: updated })
+    })
+    return true
+  }
+
+  // DELETE /api/browser-widgets/:id
+  if (method === 'DELETE' && url.startsWith('/api/browser-widgets/')) {
+    const id = url.slice('/api/browser-widgets/'.length)
+    const existing = ctx.docStore.getAllBrowserWidgets().find(w => w.id === id)
+    if (!existing) {
+      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `BrowserWidget ${id} not found` } }, 404)
+      return true
+    }
+    ctx.docStore.deleteBrowserWidget(id)
+    json(res, { ok: true })
+    return true
+  }
+
   // GET /api/file-watch?session=SESSION_ID&path=FILE_PATH
   if (method === 'GET' && url.startsWith('/api/file-watch')) {
     const qs = new URL(url, 'http://localhost').searchParams

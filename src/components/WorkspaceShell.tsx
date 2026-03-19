@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { EditorWidget, GroupingDimension, Run, TreeNode } from '../domain/types'
+import type { BrowserWidget, EditorWidget, GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
@@ -61,7 +61,7 @@ function WorkspaceShellInner() {
     return ['initiative', 'epic', 'task']
   })
 
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, connected } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, connected } = useBackendState()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -98,38 +98,74 @@ function WorkspaceShellInner() {
     return map
   }, [editorWidgets])
 
-  const canvasTree = useMemo(() => {
-    if (syntheticEditorNodes.length === 0) return sidebarTree
+  const syntheticBrowserNodes: TreeNode[] = useMemo(
+    () =>
+      browserWidgets.map(w => ({
+        id: w.id,
+        label: w.title ?? (() => { try { return w.url ? new URL(w.url.startsWith('http') ? w.url : `http://${w.url}`).host : 'Browser' } catch { return 'Browser' } })(),
+        type: 'browser-widget',
+        entityId: w.id,
+        children: [],
+        runCount: 0,
+        activeCount: 0,
+        color: w.color,
+      })),
+    [browserWidgets],
+  )
 
-    // Map taskNodeId → editor nodes to nest inside it
-    const editorsByTaskNode = new Map<string, TreeNode[]>()
-    const orphanEditors: TreeNode[] = []
-    for (const editorNode of syntheticEditorNodes) {
-      const widget = editorWidgets.find(w => w.id === editorNode.entityId)
+  const browserWidgetMap = useMemo(() => {
+    const map = new Map<string, BrowserWidget>()
+    for (const w of browserWidgets) map.set(w.id, w)
+    return map
+  }, [browserWidgets])
+
+  const canvasTree = useMemo(() => {
+    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes]
+    if (allSynthetic.length === 0) return sidebarTree
+
+    // Map taskNodeId → synthetic nodes to nest inside it
+    const byTaskNode = new Map<string, TreeNode[]>()
+    const orphans: TreeNode[] = []
+
+    for (const node of syntheticEditorNodes) {
+      const widget = editorWidgets.find(w => w.id === node.entityId)
       const run = widget ? [...runMap.values()].find(r => r.sessionId === widget.sessionId) : undefined
       const taskNodeId = run?.taskId ? `task-${run.taskId}` : null
       if (taskNodeId) {
-        const list = editorsByTaskNode.get(taskNodeId) ?? []
-        list.push(editorNode)
-        editorsByTaskNode.set(taskNodeId, list)
+        const list = byTaskNode.get(taskNodeId) ?? []
+        list.push(node)
+        byTaskNode.set(taskNodeId, list)
       } else {
-        orphanEditors.push(editorNode)
+        orphans.push(node)
       }
     }
 
-    if (editorsByTaskNode.size === 0) return [...sidebarTree, ...orphanEditors]
+    for (const node of syntheticBrowserNodes) {
+      const widget = browserWidgets.find(w => w.id === node.entityId)
+      const run = widget ? [...runMap.values()].find(r => r.sessionId === widget.sessionId) : undefined
+      const taskNodeId = run?.taskId ? `task-${run.taskId}` : null
+      if (taskNodeId) {
+        const list = byTaskNode.get(taskNodeId) ?? []
+        list.push(node)
+        byTaskNode.set(taskNodeId, list)
+      } else {
+        orphans.push(node)
+      }
+    }
+
+    if (byTaskNode.size === 0) return [...sidebarTree, ...orphans]
 
     function inject(nodes: TreeNode[]): TreeNode[] {
       return nodes.map(node => {
-        const toInject = editorsByTaskNode.get(node.id)
+        const toInject = byTaskNode.get(node.id)
         const injectedChildren = inject(node.children)
         if (!toInject) return injectedChildren === node.children ? node : { ...node, children: injectedChildren }
         return { ...node, children: [...injectedChildren, ...toInject] }
       })
     }
 
-    return [...inject(sidebarTree), ...orphanEditors]
-  }, [sidebarTree, syntheticEditorNodes, editorWidgets, runMap])
+    return [...inject(sidebarTree), ...orphans]
+  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, editorWidgets, browserWidgets, runMap])
 
   const runIds = useMemo(() => Array.from(runMap.keys()), [runMap])
 
@@ -256,6 +292,10 @@ function WorkspaceShellInner() {
     }
     if (type === 'file-editor') {
       fetch(`/api/editor-widgets/${entityId}`, { method: 'DELETE' })
+      return
+    }
+    if (type === 'browser-widget') {
+      fetch(`/api/browser-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
     const endpointMap: Record<string, string> = {
@@ -615,6 +655,7 @@ function WorkspaceShellInner() {
                   <InfiniteCanvas
                     tree={canvasTree}
                     editorWidgetMap={editorWidgetMap}
+                    browserWidgetMap={browserWidgetMap}
                     runMap={runMap}
                     focusRunId={focusRunId}
                     activeSpaceId={activeSpaceId}
@@ -625,6 +666,7 @@ function WorkspaceShellInner() {
                     onMenuOpen={handleMenuOpen}
                     onTaskUpdate={handleTaskUpdate}
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
+                    onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
                   />

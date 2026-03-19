@@ -20,5 +20,5 @@ export function useBackendState() {
     [state.initiatives, state.epics, state.tasks, state.worktrees],
   )
 
-  return { runRepo, taxRepo, spaces: state.spaces, activeSpaceId: state.activeSpaceId, readyQueue: state.readyQueue, editorWidgets: state.editorWidgets, connected, loading, addOptimistic, disconnect }
+  return { runRepo, taxRepo, spaces: state.spaces, activeSpaceId: state.activeSpaceId, readyQueue: state.readyQueue, editorWidgets: state.editorWidgets, browserWidgets: state.browserWidgets, connected, loading, addOptimistic, disconnect }
 }

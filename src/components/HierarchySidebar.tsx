@@ -81,6 +81,7 @@ function SidebarNode({
   const hasChildren = node.children.length > 0
   const isRun = node.type === 'run'
   const isFileEditor = node.type === 'file-editor'
+  const isBrowserWidget = node.type === 'browser-widget'
   const isDragging = dragNodeId === node.id
   const isDropInside = dropTarget?.nodeId === node.id && dropTarget?.position === 'inside'
   const isDropBefore = dropTarget?.nodeId === node.id && dropTarget?.position === 'before'
@@ -172,7 +173,7 @@ function SidebarNode({
 
         {/* Icon */}
         <span className="w-4 text-center" aria-hidden="true">
-          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : isFileEditor ? '📄' : getDimensionIcon(node.type)}
+          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : isFileEditor ? '📄' : isBrowserWidget ? '🌐' : getDimensionIcon(node.type)}
         </span>
 
         {/* Color dot */}

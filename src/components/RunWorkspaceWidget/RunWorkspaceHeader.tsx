@@ -159,6 +159,20 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
               document.body,
             )}
           </div>
+          {/* Browser widget drag chip */}
+          <div
+            draggable
+            onPointerDown={e => e.stopPropagation()}
+            onDragStart={e => {
+              e.stopPropagation()
+              e.dataTransfer.setData('application/tinstar-browser', JSON.stringify({ sessionId: run.sessionId }))
+              e.dataTransfer.effectAllowed = 'copy'
+            }}
+            className="p-1 rounded cursor-grab active:cursor-grabbing text-slate-500 hover:text-slate-300 transition-colors"
+            title="Drag to canvas to create a browser widget"
+          >
+            <span className="material-symbols-outlined text-sm">language</span>
+          </div>
           {/* Session actions */}
           <div className="flex items-center gap-1" onPointerDown={e => e.stopPropagation()}>
             {isLive ? (

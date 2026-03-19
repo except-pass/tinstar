@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import type { EditorWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
+import type { BrowserWidget, EditorWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts, type WidgetLayout } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
@@ -14,6 +14,7 @@ interface Props {
   tree: TreeNode[]
   runMap: Map<string, Run>
   editorWidgetMap?: Map<string, EditorWidget>
+  browserWidgetMap?: Map<string, BrowserWidget>
   focusRunId: string | null
   activeSpaceId?: string
   onFocusHandled: () => void
@@ -23,6 +24,7 @@ interface Props {
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
   onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
   onEditorWidgetCreated?: (widget: EditorWidget) => void
+  onBrowserWidgetCreated?: (widget: BrowserWidget) => void
   arrangeGridRef?: React.MutableRefObject<(() => void) | null>
   arrangeResetRef?: React.MutableRefObject<(() => void) | null>
   zoomToFitRunsRef?: React.MutableRefObject<((runIds: string[]) => void) | null>
@@ -162,7 +164,7 @@ interface MarqueeRect {
 
 const MARQUEE_THRESHOLD = 5
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, arrangeGridRef, arrangeResetRef, zoomToFitRunsRef, panToRunsRef }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, arrangeGridRef, arrangeResetRef, zoomToFitRunsRef, panToRunsRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -606,7 +608,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
   const handleDoubleClickZoom = useCallback((nodeId: string) => {
     if (onFocusRun && nodeId.startsWith('run-')) {
       onFocusRun(nodeId.slice(4))
-    } else if (nodeId.startsWith('editor-')) {
+    } else if (nodeId.startsWith('editor-') || nodeId.startsWith('browser-')) {
       zoomToFitRuns([nodeId])
     }
   }, [onFocusRun, zoomToFitRuns])
@@ -614,34 +616,43 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
   const handleDrop = useCallback(
     async (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault()
-      const raw = e.dataTransfer.getData('application/tinstar-editor')
-      if (!raw) return
-      const { sessionId, filePath } = JSON.parse(raw) as { sessionId: string; filePath: string }
 
-      // Capture drop coordinates before the async POST (clientX/Y are gone after await)
       const rect = containerRef.current!.getBoundingClientRect()
-      const spawnLayout = {
-        x: (e.clientX - rect.left - camera.x) / camera.zoom,
-        y: (e.clientY - rect.top - camera.y) / camera.zoom,
-        width: 640,
-        height: 480,
+      const dropX = (e.clientX - rect.left - camera.x) / camera.zoom
+      const dropY = (e.clientY - rect.top - camera.y) / camera.zoom
+
+      const rawEditor = e.dataTransfer.getData('application/tinstar-editor')
+      if (rawEditor) {
+        const { sessionId, filePath } = JSON.parse(rawEditor) as { sessionId: string; filePath: string }
+        const spawnLayout = { x: dropX, y: dropY, width: 640, height: 480 }
+        const res = await fetch('/api/editor-widgets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, filePath }),
+        })
+        const resJson = await res.json() as { ok: boolean; data?: EditorWidget }
+        if (!resJson.ok || !resJson.data) return
+        onEditorWidgetCreated?.(resJson.data)
+        insertLayout(resJson.data.id, spawnLayout)
+        return
       }
 
-      const res = await fetch('/api/editor-widgets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, filePath }),
-      })
-      const resJson = await res.json() as { ok: boolean; data?: EditorWidget }
-      if (!resJson.ok || !resJson.data) return
-      const widget = resJson.data
-
-      // Optimistically add to local state so the widget appears immediately,
-      // without waiting for the SSE broadcast roundtrip
-      onEditorWidgetCreated?.(widget)
-      insertLayout(widget.id, spawnLayout)
+      const rawBrowser = e.dataTransfer.getData('application/tinstar-browser')
+      if (rawBrowser) {
+        const { sessionId } = JSON.parse(rawBrowser) as { sessionId: string }
+        const spawnLayout = { x: dropX, y: dropY, width: 800, height: 600 }
+        const res = await fetch('/api/browser-widgets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId }),
+        })
+        const resJson = await res.json() as { ok: boolean; data?: BrowserWidget }
+        if (!resJson.ok || !resJson.data) return
+        onBrowserWidgetCreated?.(resJson.data)
+        insertLayout(resJson.data.id, spawnLayout)
+      }
     },
-    [camera, insertLayout, onEditorWidgetCreated],
+    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated],
   )
 
   // Recursive render: groups render behind their children (natural DOM order)
@@ -660,7 +671,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
         ? runMap.get(node.entityId)
         : node.type === 'file-editor'
           ? editorWidgetMap.get(node.entityId)
-          : ({
+          : node.type === 'browser-widget'
+            ? browserWidgetMap.get(node.entityId)
+            : ({
               node,
               depth: depthMapRef.current.get(node.id) ?? 0,
               onShrinkToFit: shrinkNode,
@@ -686,7 +699,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}
-        onDoubleClickZoom={node.type === 'run' || node.type === 'file-editor' ? handleDoubleClickZoom : undefined}
+        onDoubleClickZoom={node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' ? handleDoubleClickZoom : undefined}
         onMove={moveHandler}
         onResize={resizeHandler}
         onDragStart={node.type === 'run' ? handleWidgetDragStart : undefined}
@@ -769,7 +782,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
       onDragOver={(e) => { e.preventDefault() }}
       onDrop={handleDrop}
       onDragEnter={(e) => {
-        if (e.dataTransfer.types.includes('application/tinstar-editor')) {
+        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-browser')) {
           dragEnterCountRef.current++
           setEditorDragActive(true)
         }
