@@ -1,3 +1,6 @@
+/* eslint-disable no-var */
+declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
+
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { SkillDTO, PendingSkill, StoredProcedure } from '../types'
 
@@ -46,7 +49,11 @@ export function useSkills(): SkillsState & SkillsActions {
 
   // Subscribe to skill.drafted and skill.saved SSE events
   useEffect(() => {
-    const es = new EventSource('/api/events')
+    // Bypass Vite proxy in dev mode — same fix as useServerEvents.ts
+    const sseUrl = import.meta.env.DEV && typeof __TINSTAR_BACKEND_PORT__ !== 'undefined'
+      ? `http://${location.hostname}:${__TINSTAR_BACKEND_PORT__}/api/events`
+      : '/api/events'
+    const es = new EventSource(sseUrl)
 
     es.addEventListener('skill.drafted', async (e: MessageEvent) => {
       const { draftId, skillName } = JSON.parse(e.data) as { draftId: string; skillName: string }

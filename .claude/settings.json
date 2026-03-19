@@ -33,6 +33,15 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"$TINSTAR_SESSION_NAME\" ]; then curl -s -X POST http://localhost:5273/api/hooks/active -H 'Content-Type: application/json' -d \"{\\\"session\\\":\\\"$TINSTAR_SESSION_NAME\\\",\\\"conversationId\\\":\\\"$CLAUDE_SESSION_ID\\\"}\"; fi"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit",
         "hooks": [
           {

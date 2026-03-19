@@ -47,7 +47,7 @@ function sessionFile(sessionsDir: string, name: string): string {
   return join(sessionsDir, name, 'session.json')
 }
 
-async function detectBranch(path: string): Promise<string | null> {
+export async function detectBranch(path: string): Promise<string | null> {
   if (!path) return null
   try {
     const { stdout } = await execFileAsync('git', ['-C', path, 'rev-parse', '--abbrev-ref', 'HEAD'])

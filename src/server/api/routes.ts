@@ -9,6 +9,7 @@ import type { SSEBroadcaster } from './sse'
 import type { EventBus } from '../event-bus'
 import type { TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
+import { detectBranch } from '../sessions/session'
 import {
   createSession,
   getSession,
@@ -937,6 +938,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           let branch: string | null = null
           if (worktreePath && projectPath) {
             workspacePath = worktreePath
+            branch = await detectBranch(worktreePath)
           } else if (worktree && projectPath) {
             workspacePath = await createWorktree(projectPath, name)
             branch = name
@@ -1035,7 +1037,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             epic: epicId ?? '',
             task: taskId ?? '',
             repo: project ?? '',
-            worktree: isWorktree ? name : '',
+            worktree: isWorktree ? (branch ?? name) : '',
             touchedFiles: [],
             recapEntries: [],
             rawLogs: '',
