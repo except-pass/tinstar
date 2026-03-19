@@ -147,9 +147,8 @@ function SidebarNode({
           }
         }}
         onDoubleClick={() => {
-          if (onFocusRun) {
-            onFocusRun(node.id)
-          }
+          if (hasChildren) toggleExpand(node.id)
+          if (isRun && onFocusRun) onFocusRun(node.id)
         }}
         onMouseEnter={() => hover(node.id)}
         onMouseLeave={() => hover(null)}
