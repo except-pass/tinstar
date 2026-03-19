@@ -63,6 +63,9 @@ def install(ev, entry):
 install('Stop', {'hooks': [{'type': 'command', 'command': cmd('idle')}]})
 install('PreToolUse', {'matcher': '', 'hooks': [{'type': 'command', 'command': cmd('active')}]})
 install('UserPromptSubmit', {'hooks': [{'type': 'command', 'command': cmd('active')}]})
+# Re-assert running after every tool — sub-agents fire Stop with the same session
+# name when they complete, which would wrongly show the session as idle mid-execution.
+install('PostToolUse', {'matcher': '', 'hooks': [{'type': 'command', 'command': cmd('active')}]})
 s['hooks'] = hooks
 os.makedirs(os.path.join(home, '.claude'), exist_ok=True)
 with open(path, 'w') as f: json.dump(s, f, indent=2)

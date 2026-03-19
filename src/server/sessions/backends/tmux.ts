@@ -371,6 +371,12 @@ export async function installHooks(
       hooks: [{ type: 'command', command: hookCmd('active') }],
     }],
     PostToolUse: [
+      // Re-assert running after every tool — sub-agents fire Stop with the same session
+      // name when they complete, which would wrongly show the session as idle mid-execution.
+      {
+        matcher: '',
+        hooks: [{ type: 'command', command: hookCmd('active') }],
+      },
       {
         matcher: 'Write|Edit',
         hooks: [{ type: 'command', command: fileHookCmd('file-touched') }],
