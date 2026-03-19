@@ -911,7 +911,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
         const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, taskId, epicId, initiativeId, color: colorParam } = JSON.parse(body)
-        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, taskId, epicId, initiativeId, color })
+        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, taskId, epicId, initiativeId, color: colorParam })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
         if (!['docker', 'tmux'].includes(backend)) return json(res, { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }, 400)
@@ -1020,12 +1020,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const updated = getSession(sessDir, name)
 
           // Create a Run in the document store so it appears on the canvas
-          // Start as 'creating' — hooks will update to 'running'/'idle' once Claude is live
+          // If a prompt was given, Claude is immediately executing — 'running'.
+          // If not, Claude opens at the REPL waiting for input — 'idle'.
           const runId = name
+          const initialStatus = prompt ? 'running' : 'idle'
           ctx.docStore.upsertRun(runId, {
             id: runId,
             color,
-            status: 'creating',
+            status: initialStatus,
             sessionId: name,
             initiative: initiativeId ?? '',
             epic: epicId ?? '',
@@ -1043,6 +1045,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             spaceId: ctx.docStore.activeSpaceId,
           })
 
+          ctx.readyQueue.onStatusChange(name, initialStatus)
+          ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
+          ctx.sse.broadcastReadyQueueUpdate()
           emitSessionEvent('managed_session.created', { name, state: 'running' })
           log.info('sessions', `session created: ${name}`, { backend, port: sessionPort, state: 'running' })
 
@@ -1175,9 +1180,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 try { await tmuxBackend.removeHooks(session.workspace.path) } catch { /* best effort */ }
               }
 
-              if (session.workspace?.worktree && session.workspace?.basePath) {
-                await deleteWorktree(session.workspace.basePath, session.name)
-              }
 
             }
           } catch (err) {

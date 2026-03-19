@@ -72,6 +72,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
   const [projects, setProjects] = useState<{ name: string; path: string }[]>([])
   const [profiles, setProfiles] = useState<{ name: string; image: string }[]>([])
+  const [worktrees, setWorktrees] = useState<{ path: string; branch?: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<EntitySettings>({})
   const [saving, setSaving] = useState(false)
@@ -97,6 +98,22 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
     })
   }, [entityId, entityType])
 
+  // Derive the effective project and worktree values (draft takes precedence over server state)
+  const effectiveProject = (draft.project !== undefined ? draft.project : settings?.local.project) ?? settings?.resolved.project
+  const effectiveWorktree = (draft.worktree !== undefined ? draft.worktree : settings?.local.worktree) ?? settings?.resolved.worktree
+
+  // Fetch worktrees when project is set and worktree mode is 'existing'
+  useEffect(() => {
+    if (!effectiveProject || effectiveWorktree !== 'existing') {
+      setWorktrees([])
+      return
+    }
+    fetch(`/api/projects/${encodeURIComponent(effectiveProject)}/worktrees`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.ok && Array.isArray(d.data)) setWorktrees(d.data) })
+      .catch(() => {})
+  }, [effectiveProject, effectiveWorktree])
+
   const hasDraftChanges = Object.keys(draft).length > 0
 
   const handleToggle = useCallback((key: keyof EntitySettings, enabled: boolean) => {
@@ -106,6 +123,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
         project: inherited ?? '',
         backend: inherited ?? 'tmux',
         worktree: inherited ?? 'none',
+        defaultWorktreePath: inherited ?? '',
         skipPermissions: inherited ?? false,
         profile: inherited ?? '',
         defaultRunColor: inherited ?? DEFAULT_RUN_ACCENT,
@@ -236,20 +254,42 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 onValueChange={handleValueChange}
               >
                 {(value, onChange) => (
-                  <div className="flex gap-1">
-                    {(['none', 'new', 'existing'] as const).map(opt => (
-                      <button
-                        key={opt}
-                        className={`px-2 py-1 text-xs rounded border ${
-                          value === opt
-                            ? 'bg-primary/20 border-primary/40 text-primary'
-                            : 'bg-surface-base border-white/10 text-slate-400 hover:border-primary/20'
-                        }`}
-                        onClick={() => onChange(opt)}
-                      >
-                        {opt}
-                      </button>
-                    ))}
+                  <div className="flex flex-col gap-2">
+                    <div className="flex gap-1">
+                      {(['none', 'new', 'existing'] as const).map(opt => (
+                        <button
+                          key={opt}
+                          className={`px-2 py-1 text-xs rounded border ${
+                            value === opt
+                              ? 'bg-primary/20 border-primary/40 text-primary'
+                              : 'bg-surface-base border-white/10 text-slate-400 hover:border-primary/20'
+                          }`}
+                          onClick={() => onChange(opt)}
+                        >
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                    {value === 'existing' && (
+                      worktrees.length === 0 ? (
+                        <span className="text-xs text-slate-500 italic">
+                          {effectiveProject ? 'No worktrees found' : 'Set a project first'}
+                        </span>
+                      ) : (
+                        <select
+                          className="bg-surface-base border border-primary/30 rounded px-2 py-1 text-xs text-primary outline-none"
+                          value={String(draft.defaultWorktreePath ?? settings?.local.defaultWorktreePath ?? settings?.resolved.defaultWorktreePath ?? '')}
+                          onChange={e => handleValueChange('defaultWorktreePath', e.target.value || undefined)}
+                        >
+                          <option value="">Select worktree...</option>
+                          {worktrees.map(wt => (
+                            <option key={wt.path} value={wt.path}>
+                              {wt.branch ?? wt.path.split('/').pop() ?? wt.path}
+                            </option>
+                          ))}
+                        </select>
+                      )
+                    )}
                   </div>
                 )}
               </SettingRow>
@@ -315,7 +355,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                   >
                     <option value="">Select profile...</option>
                     {profiles.map(p => (
-                      <option key={p.name} value={p.image}>{p.name} ({p.image})</option>
+                      <option key={p.name} value={p.name}>{p.name} ({p.image})</option>
                     ))}
                   </select>
                 )}

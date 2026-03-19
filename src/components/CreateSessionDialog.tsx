@@ -6,6 +6,7 @@ export interface SessionPrefill {
   project?: string
   backend?: 'docker' | 'tmux'
   worktreeMode?: 'none' | 'new' | 'existing'
+  defaultWorktreePath?: string
   skipPermissions?: boolean
   profile?: string
   runColor?: string
@@ -125,7 +126,9 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       .then(d => {
         if (d?.ok && Array.isArray(d.data)) {
           setAvailableWorktrees(d.data)
-          if (d.data.length > 0) setWorktreePath(d.data[0].path)
+          const preferred = prefill?.defaultWorktreePath
+          const match = preferred && d.data.find((wt: { path: string }) => wt.path === preferred)
+          setWorktreePath(match ? preferred! : (d.data[0]?.path ?? ''))
         }
       })
       .catch(() => {})

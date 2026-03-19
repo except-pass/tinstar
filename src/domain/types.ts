@@ -23,6 +23,7 @@ import type { RunData, SessionStatus as RunStatus, StoredProcedure } from '../ty
 export interface EntitySettings {
   project?: string
   worktree?: 'none' | 'new' | 'existing'
+  defaultWorktreePath?: string
   backend?: 'docker' | 'tmux'
   skipPermissions?: boolean
   profile?: string

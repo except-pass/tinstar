@@ -204,6 +204,13 @@ export function initBackend(): RouteContext {
             log.warn('reattach', `${session.name}: failed to reattach: ${(err as Error).message}`)
           }
         }
+
+        // Seed the ready queue from all current session states so '[' works immediately after restart
+        for (const session of sessions) {
+          readyQueue.onStatusChange(session.name, session.state)
+        }
+        sse.setReadyQueue(readyQueue.getQueue())
+        sse.broadcastReadyQueueUpdate()
       }).catch(err => log.warn('reconcile', `startup reconciliation failed: ${(err as Error).message}`))
 
       // Periodic session state reconciliation (30s)
