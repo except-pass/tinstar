@@ -27,10 +27,24 @@ const MIN_W = 140
 const MAX_W = 320
 const DEFAULT_W = 180
 
+function formatKey(key: string): string {
+  return key.split('+').map(part => {
+    const keyCode = part.match(/^Key([A-Z])$/)
+    if (keyCode) return keyCode[1]
+    const digit = part.match(/^Digit(\d)$/)
+    if (digit) return digit[1]
+    if (part === 'ArrowUp') return '↑'
+    if (part === 'ArrowDown') return '↓'
+    if (part === 'ArrowLeft') return '←'
+    if (part === 'ArrowRight') return '→'
+    return part
+  }).join('+')
+}
+
 function KeyBadge({ label }: { label: string }) {
   return (
     <span className="inline-flex items-center px-1 py-0 bg-surface-raised border border-white/20 rounded text-2xs font-mono text-slate-300">
-      {label}
+      {formatKey(label)}
     </span>
   )
 }

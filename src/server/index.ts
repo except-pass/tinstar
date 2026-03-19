@@ -223,9 +223,10 @@ export function initBackend(): RouteContext {
           if (!workdir || !convId) continue
           const stateDir = session.backend === 'docker' ? claudeStateDir(cfg.dirs.sessions, session.name) : undefined
           const jsonlStatus = readSessionStatus(workdir, convId, stateDir)
-          if (jsonlStatus && jsonlStatus !== session.state) {
+          // Only correct running → idle (missed Stop hook); never force idle → running
+          if (session.state === 'running' && jsonlStatus === 'idle') {
             onStateChanged(session.name, jsonlStatus)
-            log.info('reconcile', `${session.name}: JSONL corrected ${session.state} → ${jsonlStatus}`)
+            log.info('reconcile', `${session.name}: JSONL corrected running → idle`)
           }
         }
       }).catch(err => log.warn('reconcile', `startup reconciliation failed: ${(err as Error).message}`))
