@@ -81,6 +81,41 @@ export function resetOffset(sessionName: string): void {
   offsets.delete(sessionName)
 }
 
+/**
+ * Read the last JSONL entry and derive session status from it.
+ *
+ * Claude Code JSONL format:
+ *   - type 'assistant' with tool_use content blocks  → agent called tools, still running
+ *   - type 'assistant' with only text blocks          → final response, idle
+ *   - type 'user'                                     → prompt submitted or tool results fed back, running
+ *
+ * Returns null if the file is missing or the last line can't be parsed.
+ */
+export function readSessionStatus(workdir: string, conversationId: string, stateDir?: string): 'running' | 'idle' | null {
+  const path = getTranscriptPath(workdir, conversationId, stateDir)
+  if (!existsSync(path)) return null
+
+  const content = readFileSync(path, 'utf-8')
+  const lines = content.split('\n').filter(l => l.trim())
+  if (lines.length === 0) return null
+
+  try {
+    const obj = JSON.parse(lines[lines.length - 1]!) as Record<string, unknown>
+    if (obj.type === 'assistant') {
+      const msgContent = (obj.message as Record<string, unknown> | undefined)?.content
+      if (Array.isArray(msgContent)) {
+        const hasToolUse = (msgContent as Array<Record<string, unknown>>).some(b => b.type === 'tool_use')
+        return hasToolUse ? 'running' : 'idle'
+      }
+      return 'idle'
+    }
+    // 'user' entries mean a prompt or tool result was just submitted — agent is processing
+    return 'running'
+  } catch {
+    return null
+  }
+}
+
 // --- Record extraction ---
 
 function extractRecord(obj: Record<string, unknown>): { type: 'user' | 'agent'; text: string; timestamp: string } | null {

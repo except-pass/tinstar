@@ -1,12 +1,14 @@
-import { listSessions, setState, type Session, type SessionState } from './session'
+import { join } from 'node:path'
+import { listSessions, setState, claudeStateDir, type Session, type SessionState } from './session'
+import { readSessionStatus } from './transcript-parser'
 
-const NEEDS_ATTENTION_THRESHOLD_MS = 120_000
+const STALE_RUNNING_THRESHOLD_MS = 120_000
 
 export interface ReconcileOpts {
   getContainerState: (sessionName: string) => Promise<string>
   getTmuxSessionState: (sessionName: string) => Promise<'exists' | 'missing'>
   onStateChanged?: (name: string, state: SessionState) => void
-  needsAttentionThresholdMs?: number
+  staleRunningThresholdMs?: number
 }
 
 export async function reconcileSessionStates(
@@ -48,12 +50,27 @@ export async function reconcileSessionStates(
       // If we can't check, assume current state is fine
     }
 
-    // Detect stale 'running' sessions — likely waiting for user input
-    const threshold = opts.needsAttentionThresholdMs ?? NEEDS_ATTENTION_THRESHOLD_MS
+    // Detect stale 'running' sessions — hooks may have been missed.
+    // Check the JSONL transcript for ground truth before falling back to needs_attention.
+    const threshold = opts.staleRunningThresholdMs ?? STALE_RUNNING_THRESHOLD_MS
     if (!newState && session.state === 'running' && session.lastActive) {
       const staleMs = now - new Date(session.lastActive).getTime()
       if (staleMs > threshold) {
-        newState = 'needs_attention'
+        const workdir = session.workspace?.path
+        const convId = session.conversation?.id
+        if (workdir && convId) {
+          const stateDir = session.backend === 'docker' ? claudeStateDir(sessionsDir, session.name) : undefined
+          const jsonlStatus = readSessionStatus(workdir, convId, stateDir)
+          if (jsonlStatus === 'idle') {
+            newState = 'idle'   // Stop hook was missed — correct it
+          } else if (jsonlStatus === 'running') {
+            // Long-running tool, genuinely still active — leave as running
+          } else {
+            newState = 'needs_attention'  // Can't determine from JSONL, use fallback
+          }
+        } else {
+          newState = 'needs_attention'  // No JSONL available, use fallback
+        }
       }
     }
 
