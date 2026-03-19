@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
@@ -679,16 +680,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       res.write(`data: ${JSON.stringify({ type, data })}\n\n`)
     }
 
-    // Send initial content
-    try {
-      const content = readFileSync(absolutePath, 'utf-8')
-      sendEvent('content', content)
-    } catch {
-      sendEvent('error', 'file unavailable')
-      res.end()
-      return true
-    }
-
     // Debounced file watcher
     let debounceTimer: ReturnType<typeof setTimeout> | null = null
     let watcher: ReturnType<typeof watch> | null = null
@@ -700,27 +691,38 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       watcher?.close()
     }
 
-    try {
-      watcher = watch(absolutePath, () => {
-        if (debounceTimer) clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(() => {
-          try {
-            const content = readFileSync(absolutePath, 'utf-8')
-            sendEvent('content', content)
-          } catch {
-            sendEvent('error', 'file unavailable')
-            cleanup()
-            res.end()
-          }
-        }, 50)
-      })
-    } catch {
-      sendEvent('error', 'file unavailable')
-      res.end()
-      return true
-    }
+    // Async setup: read initial content without blocking the event loop
+    void (async () => {
+      try {
+        const content = await readFile(absolutePath, 'utf-8')
+        sendEvent('content', content)
+      } catch {
+        sendEvent('error', 'file unavailable')
+        res.end()
+        return
+      }
 
-    keepalive = setInterval(() => { res.write(': keep-alive\n\n') }, 15_000)
+      try {
+        watcher = watch(absolutePath, () => {
+          if (debounceTimer) clearTimeout(debounceTimer)
+          debounceTimer = setTimeout(() => {
+            readFile(absolutePath, 'utf-8').then(content => {
+              sendEvent('content', content)
+            }).catch(() => {
+              sendEvent('error', 'file unavailable')
+              cleanup()
+              res.end()
+            })
+          }, 50)
+        })
+      } catch {
+        sendEvent('error', 'file unavailable')
+        res.end()
+        return
+      }
+
+      keepalive = setInterval(() => { res.write(': keep-alive\n\n') }, 15_000)
+    })()
 
     req.on('close', () => {
       cleanup()

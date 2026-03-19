@@ -22,6 +22,7 @@ interface Props {
   onDeleteEntity?: (entityId: string, type: string) => void
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
   onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
+  onEditorWidgetCreated?: (widget: EditorWidget) => void
   arrangeGridRef?: React.MutableRefObject<(() => void) | null>
   arrangeResetRef?: React.MutableRefObject<(() => void) | null>
   zoomToFitRunsRef?: React.MutableRefObject<((runIds: string[]) => void) | null>
@@ -161,7 +162,7 @@ interface MarqueeRect {
 
 const MARQUEE_THRESHOLD = 5
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, arrangeGridRef, arrangeResetRef, zoomToFitRunsRef, panToRunsRef }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, arrangeGridRef, arrangeResetRef, zoomToFitRunsRef, panToRunsRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -615,6 +616,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
       if (!raw) return
       const { sessionId, filePath } = JSON.parse(raw) as { sessionId: string; filePath: string }
 
+      // Capture drop coordinates before the async POST (clientX/Y are gone after await)
+      const rect = containerRef.current!.getBoundingClientRect()
+      const spawnLayout = {
+        x: (e.clientX - rect.left - camera.x) / camera.zoom,
+        y: (e.clientY - rect.top - camera.y) / camera.zoom,
+        width: 640,
+        height: 480,
+      }
+
       const res = await fetch('/api/editor-widgets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -624,18 +634,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
       if (!resJson.ok || !resJson.data) return
       const widget = resJson.data
 
-      // Spawn at drop coordinates
-      const rect = containerRef.current!.getBoundingClientRect()
-      const spawnLayout = {
-        x: (e.clientX - rect.left - camera.x) / camera.zoom,
-        y: (e.clientY - rect.top - camera.y) / camera.zoom,
-        width: 640,
-        height: 480,
-      }
-
+      // Optimistically add to local state so the widget appears immediately,
+      // without waiting for the SSE broadcast roundtrip
+      onEditorWidgetCreated?.(widget)
       insertLayout(widget.id, spawnLayout)
     },
-    [runMap, layouts, camera, insertLayout],
+    [camera, insertLayout, onEditorWidgetCreated],
   )
 
   // Recursive render: groups render behind their children (natural DOM order)

@@ -56,6 +56,11 @@ export function useServerEvents(): {
         const exists = prev.tasks.some(t => t.id === task.id)
         return { ...prev, tasks: exists ? prev.tasks.map(t => t.id === task.id ? task : t) : [...prev.tasks, task] }
       }
+      if (entity === 'editorWidget') {
+        const w = data as EditorWidget
+        const exists = prev.editorWidgets.some(x => x.id === w.id)
+        return { ...prev, editorWidgets: exists ? prev.editorWidgets.map(x => x.id === w.id ? w : x) : [...prev.editorWidgets, w] }
+      }
       return prev
     })
   }, [])
