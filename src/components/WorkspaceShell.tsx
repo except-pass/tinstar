@@ -18,7 +18,8 @@ import { EntitySettingsDialog } from './EntitySettingsDialog'
 import { HotgroupProvider } from '../hotkeys/HotgroupContext'
 import { FocusPathProvider, useFocusPath } from '../hotkeys/FocusPathContext'
 import { useContextRouter } from '../hotkeys/contextRouter'
-import { triggerWidgetFlourish } from '../hotkeys/actionHandlerRegistry'
+import { triggerWidgetFlourish, registerActionHandler, deregisterActionHandler } from '../hotkeys/actionHandlerRegistry'
+import type { FocusNode } from '../hotkeys/FocusPathContext'
 import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
 import { HotkeysSidebar } from './HotkeysSidebar'
@@ -37,6 +38,18 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
     return null
   }
   return walk(tree, []) ?? []
+}
+
+/** Find a node's label by its ID in a tree */
+function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
+  for (const node of nodes) {
+    if (node.id === targetId) return node.label
+    if (node.children.length > 0) {
+      const found = findNodeLabel(node.children, targetId)
+      if (found) return found
+    }
+  }
+  return null
 }
 
 function WorkspaceShellInner() {
@@ -347,26 +360,60 @@ function WorkspaceShellInner() {
 
   // Global hotkeys: session cycling
   const allRuns = useMemo(() => Array.from(runMap.values()), [runMap])
+  // Keep raw run ID for session cycling in global hotkeys
   const selectedRunId = useMemo(() => {
     if (selectionState.selectedType !== 'run') return null
     const firstNodeId = [...selectionState.selectedIds][0] ?? null
     if (!firstNodeId) return null
-    // node IDs are prefixed with 'run-', strip the prefix to get the raw run ID
     return firstNodeId.startsWith('run-') ? firstNodeId.slice(4) : firstNodeId
   }, [selectionState.selectedIds, selectionState.selectedType])
 
+  // Derive focus node for any selected entity (run, task, epic, initiative)
+  const selectedFocusNode = useMemo<FocusNode | null>(() => {
+    const { selectedType, selectedIds } = selectionState
+    if (!selectedType || selectedIds.size === 0) return null
+    const firstNodeId = [...selectedIds][0]
+    if (!firstNodeId) return null
+
+    if (selectedType === 'run') {
+      const rawId = firstNodeId.startsWith('run-') ? firstNodeId.slice(4) : firstNodeId
+      return { id: rawId, type: 'run-workspace', label: rawId }
+    }
+
+    if (selectedType === 'task' || selectedType === 'epic' || selectedType === 'initiative') {
+      const label = findNodeLabel(canvasTree, firstNodeId) ?? selectedType
+      return { id: firstNodeId, type: selectedType, label }
+    }
+
+    return null
+  }, [selectionState.selectedIds, selectionState.selectedType, canvasTree])
+
   const { path, chordState, pushFocus, clearFocus, setChord, clearChord } = useFocusPath()
 
-  // Sync selectedRunId → FocusPathContext
+  // Sync selected entity → FocusPathContext
   // useLayoutEffect ensures path is updated synchronously before next user input
   useLayoutEffect(() => {
-    if (selectedRunId) {
-      clearFocus()
-      pushFocus({ id: selectedRunId, type: 'run-workspace', label: selectedRunId })
-    } else {
-      clearFocus()
+    clearFocus()
+    if (selectedFocusNode) {
+      pushFocus(selectedFocusNode)
     }
-  }, [selectedRunId, pushFocus, clearFocus])
+  }, [selectedFocusNode, pushFocus, clearFocus])
+
+  // Register action handler for selected task/epic/initiative
+  useEffect(() => {
+    if (!selectedFocusNode || selectedFocusNode.type === 'run-workspace') return
+    const { id, type, label } = selectedFocusNode
+    const dash = id.indexOf('-')
+    if (dash === -1) return
+    const entityId = id.slice(dash + 1)
+    const entityType = type as GroupingDimension
+    registerActionHandler(id, (action) => {
+      if (action === 'settings') {
+        setEntitySettingsDialog({ entityId, entityType, entityName: label })
+      }
+    })
+    return () => { deregisterActionHandler(id) }
+  }, [selectedFocusNode])
 
   useContextRouter({
     path,
