@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
@@ -8,6 +9,7 @@ import type { SSEBroadcaster } from './sse'
 import type { EventBus } from '../event-bus'
 import type { TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
+import { detectBranch } from '../sessions/session'
 import {
   createSession,
   getSession,
@@ -20,7 +22,7 @@ import {
   registerProject,
   unregisterProject,
   createWorktree,
-  deleteWorktree,
+
   listWorktrees,
   reconcileSessionStates,
   loadSecrets,
@@ -633,6 +635,62 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST /api/browser-widgets
+  if (method === 'POST' && url === '/api/browser-widgets') {
+    readBody(req).then(body => {
+      const { sessionId, url: widgetUrl = '' } = JSON.parse(body) as { sessionId?: string; url?: string }
+      if (!sessionId) {
+        json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId required' } }, 400)
+        return
+      }
+      const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
+      if (!run) {
+        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }, 404)
+        return
+      }
+      const widget: import('../../domain/types').BrowserWidget = {
+        id: shortId('browser'),
+        spaceId: ctx.docStore.activeSpaceId || undefined,
+        sessionId,
+        url: widgetUrl,
+        color: run.color,
+      }
+      ctx.docStore.upsertBrowserWidget(widget.id, widget)
+      json(res, { ok: true, data: widget })
+    })
+    return true
+  }
+
+  // PATCH /api/browser-widgets/:id
+  if (method === 'PATCH' && url.startsWith('/api/browser-widgets/')) {
+    const id = url.slice('/api/browser-widgets/'.length)
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getAllBrowserWidgets().find(w => w.id === id)
+      if (!existing) {
+        json(res, { ok: false, error: { code: 'NOT_FOUND', message: `BrowserWidget ${id} not found` } }, 404)
+        return
+      }
+      const patch = JSON.parse(body) as { url?: string; title?: string }
+      const updated = { ...existing, ...patch }
+      ctx.docStore.upsertBrowserWidget(id, updated)
+      json(res, { ok: true, data: updated })
+    })
+    return true
+  }
+
+  // DELETE /api/browser-widgets/:id
+  if (method === 'DELETE' && url.startsWith('/api/browser-widgets/')) {
+    const id = url.slice('/api/browser-widgets/'.length)
+    const existing = ctx.docStore.getAllBrowserWidgets().find(w => w.id === id)
+    if (!existing) {
+      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `BrowserWidget ${id} not found` } }, 404)
+      return true
+    }
+    ctx.docStore.deleteBrowserWidget(id)
+    json(res, { ok: true })
+    return true
+  }
+
   // GET /api/file-watch?session=SESSION_ID&path=FILE_PATH
   if (method === 'GET' && url.startsWith('/api/file-watch')) {
     const qs = new URL(url, 'http://localhost').searchParams
@@ -679,16 +737,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       res.write(`data: ${JSON.stringify({ type, data })}\n\n`)
     }
 
-    // Send initial content
-    try {
-      const content = readFileSync(absolutePath, 'utf-8')
-      sendEvent('content', content)
-    } catch {
-      sendEvent('error', 'file unavailable')
-      res.end()
-      return true
-    }
-
     // Debounced file watcher
     let debounceTimer: ReturnType<typeof setTimeout> | null = null
     let watcher: ReturnType<typeof watch> | null = null
@@ -700,27 +748,38 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       watcher?.close()
     }
 
-    try {
-      watcher = watch(absolutePath, () => {
-        if (debounceTimer) clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(() => {
-          try {
-            const content = readFileSync(absolutePath, 'utf-8')
-            sendEvent('content', content)
-          } catch {
-            sendEvent('error', 'file unavailable')
-            cleanup()
-            res.end()
-          }
-        }, 50)
-      })
-    } catch {
-      sendEvent('error', 'file unavailable')
-      res.end()
-      return true
-    }
+    // Async setup: read initial content without blocking the event loop
+    void (async () => {
+      try {
+        const content = await readFile(absolutePath, 'utf-8')
+        sendEvent('content', content)
+      } catch {
+        sendEvent('error', 'file unavailable')
+        res.end()
+        return
+      }
 
-    keepalive = setInterval(() => { res.write(': keep-alive\n\n') }, 15_000)
+      try {
+        watcher = watch(absolutePath, () => {
+          if (debounceTimer) clearTimeout(debounceTimer)
+          debounceTimer = setTimeout(() => {
+            readFile(absolutePath, 'utf-8').then(content => {
+              sendEvent('content', content)
+            }).catch(() => {
+              sendEvent('error', 'file unavailable')
+              cleanup()
+              res.end()
+            })
+          }, 50)
+        })
+      } catch {
+        sendEvent('error', 'file unavailable')
+        res.end()
+        return
+      }
+
+      keepalive = setInterval(() => { res.write(': keep-alive\n\n') }, 15_000)
+    })()
 
     req.on('close', () => {
       cleanup()
@@ -910,8 +969,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, taskId, epicId, initiativeId, color } = JSON.parse(body)
-        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, taskId, epicId, initiativeId, color })
+        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, taskId, epicId, initiativeId, color: colorParam } = JSON.parse(body)
+        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, taskId, epicId, initiativeId, color: colorParam })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
         if (!['docker', 'tmux'].includes(backend)) return json(res, { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }, 400)
@@ -935,6 +994,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           let branch: string | null = null
           if (worktreePath && projectPath) {
             workspacePath = worktreePath
+            branch = await detectBranch(worktreePath)
           } else if (worktree && projectPath) {
             workspacePath = await createWorktree(projectPath, name)
             branch = name
@@ -955,6 +1015,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               spaceId: ctx.docStore.activeSpaceId,
             })
           }
+
+          // Resolve run color: explicit param > task > epic > initiative > undefined
+          const color = colorParam
+            ?? (taskId ? ctx.docStore.getTask(taskId)?.settings?.defaultRunColor : undefined)
+            ?? (epicId ? ctx.docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
+            ?? (initiativeId ? ctx.docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
 
           const session = createSession(sessDir, {
             name,
@@ -992,7 +1058,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             updateSession(sessDir, name, { state: 'running' })
           } else if (backend === 'docker') {
             sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
-            await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl })
+            await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: prompt || undefined })
             updateSession(sessDir, name, { port: sessionPort, state: 'running' })
           } else {
             const port = await tmuxBackend.findPort(cfg.ports.hostStart)
@@ -1014,18 +1080,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const updated = getSession(sessDir, name)
 
           // Create a Run in the document store so it appears on the canvas
-          // Start as 'creating' — hooks will update to 'running'/'idle' once Claude is live
+          // If a prompt was given, Claude is immediately executing — 'running'.
+          // If not, Claude opens at the REPL waiting for input — 'idle'.
           const runId = name
+          const initialStatus = prompt ? 'running' : 'idle'
           ctx.docStore.upsertRun(runId, {
             id: runId,
             color,
-            status: 'creating',
+            status: initialStatus,
             sessionId: name,
             initiative: initiativeId ?? '',
             epic: epicId ?? '',
             task: taskId ?? '',
             repo: project ?? '',
-            worktree: isWorktree ? name : '',
+            worktree: isWorktree ? (branch ?? name) : '',
             touchedFiles: [],
             recapEntries: [],
             rawLogs: '',
@@ -1037,14 +1105,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             spaceId: ctx.docStore.activeSpaceId,
           })
 
+          ctx.readyQueue.onStatusChange(name, initialStatus)
+          ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
+          ctx.sse.broadcastReadyQueueUpdate()
           emitSessionEvent('managed_session.created', { name, state: 'running' })
           log.info('sessions', `session created: ${name}`, { backend, port: sessionPort, state: 'running' })
-
-          if (prompt && backend === 'docker' && !oneshot && sessionPort) {
-            dockerBackend.sendInitialPrompt(cfg, name, prompt, sessionPort).catch((err: Error) => {
-              log.error('sessions', `failed to send initial prompt to ${name}`, { error: err.message })
-            })
-          }
 
           json(res, { ok: true, data: updated }, 201)
         } catch (err) {
@@ -1175,9 +1240,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 try { await tmuxBackend.removeHooks(session.workspace.path) } catch { /* best effort */ }
               }
 
-              if (session.workspace?.worktree && session.workspace?.basePath) {
-                await deleteWorktree(session.workspace.basePath, session.name)
-              }
 
             }
           } catch (err) {

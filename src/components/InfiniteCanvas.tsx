@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import type { EditorWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
+import type { BrowserWidget, EditorWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
-import { useWidgetLayouts, type WidgetLayout } from '../hooks/useWidgetLayouts'
+import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
 import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
 import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
@@ -14,6 +14,7 @@ interface Props {
   tree: TreeNode[]
   runMap: Map<string, Run>
   editorWidgetMap?: Map<string, EditorWidget>
+  browserWidgetMap?: Map<string, BrowserWidget>
   focusRunId: string | null
   activeSpaceId?: string
   onFocusHandled: () => void
@@ -22,6 +23,8 @@ interface Props {
   onDeleteEntity?: (entityId: string, type: string) => void
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
   onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
+  onEditorWidgetCreated?: (widget: EditorWidget) => void
+  onBrowserWidgetCreated?: (widget: BrowserWidget) => void
   arrangeGridRef?: React.MutableRefObject<(() => void) | null>
   arrangeResetRef?: React.MutableRefObject<(() => void) | null>
   zoomToFitRunsRef?: React.MutableRefObject<((runIds: string[]) => void) | null>
@@ -132,25 +135,6 @@ function computeTreemapLayouts(
   return result
 }
 
-/** Collect leaf node IDs that are descendants of the given selected entity node IDs */
-function collectRunsUnderSelected(
-  nodes: TreeNode[],
-  selectedIds: Set<string>,
-): string[] {
-  const result: string[] = []
-  for (const node of nodes) {
-    if (selectedIds.has(node.id)) {
-      if (!getWidgetComponent(toWidgetType(node.type))?.isContainer) {
-        result.push(node.id)
-      } else {
-        result.push(...collectRunNodeIds(node.children))
-      }
-    } else {
-      result.push(...collectRunsUnderSelected(node.children, selectedIds))
-    }
-  }
-  return result
-}
 
 interface MarqueeRect {
   startX: number
@@ -161,7 +145,7 @@ interface MarqueeRect {
 
 const MARQUEE_THRESHOLD = 5
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, arrangeGridRef, arrangeResetRef, zoomToFitRunsRef, panToRunsRef }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, arrangeGridRef, arrangeResetRef, zoomToFitRunsRef, panToRunsRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -200,6 +184,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
   // All run node IDs for marquee intersection
   const runNodeIdsRef = useRef<string[]>([])
 
+  // Spawn animation: track which run node IDs are newly created (not present on initial load)
+  const seenRunNodeIdsRef = useRef<Set<string> | null>(null)
+  const [spawnedNodeIds, setSpawnedNodeIds] = useState<Set<string>>(new Set())
+
   // Keep parent map, depth map, and run node IDs in sync with tree
   const parentMapRef = useRef<Map<string, string | null>>(new Map())
   const depthMapRef = useRef<Map<string, number>>(new Map())
@@ -207,6 +195,25 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
     parentMapRef.current = buildParentMap(tree)
     depthMapRef.current = treeMaps.depthMap
     runNodeIdsRef.current = collectRunNodeIds(tree)
+
+    const leafIds = runNodeIdsRef.current
+    if (seenRunNodeIdsRef.current === null) {
+      // First render — mark all as seen without animating
+      seenRunNodeIdsRef.current = new Set(leafIds)
+      return
+    }
+    const newIds = leafIds.filter(id => !seenRunNodeIdsRef.current!.has(id))
+    if (newIds.length === 0) return
+    newIds.forEach(id => seenRunNodeIdsRef.current!.add(id))
+    setSpawnedNodeIds(prev => new Set([...prev, ...newIds]))
+    const timer = setTimeout(() => {
+      setSpawnedNodeIds(prev => {
+        const next = new Set(prev)
+        newIds.forEach(id => next.delete(id))
+        return next
+      })
+    }, 900)
+    return () => clearTimeout(timer)
   }, [tree, treeMaps])
 
   // Center on a widget when focusRunId changes
@@ -228,16 +235,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
     return () => el.removeEventListener('wheel', handler)
   }, [handleWheel])
 
-  /** Convert client coords to canvas coords */
-  const clientToCanvas = useCallback((clientX: number, clientY: number) => {
-    const el = containerRef.current
-    if (!el) return { x: 0, y: 0 }
-    const rect = el.getBoundingClientRect()
-    return {
-      x: (clientX - rect.left - camera.x) / camera.zoom,
-      y: (clientY - rect.top - camera.y) / camera.zoom,
-    }
-  }, [camera])
 
   // --- Pointer handlers: pan OR marquee ---
   const onPointerDown = useCallback(
@@ -511,13 +508,18 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
 
   useCanvasHotkeys({
     onHotgroupSelect: (slot, isDoubleTap) => {
-      // hotgroups stores raw run IDs (e.g. 'R-241'), layouts keys are node IDs ('run-R-241')
-      const nodeIds = hotgroups.runsInSlot(slot).map(id => `run-${id}`).filter(id => layouts.has(id))
-      if (nodeIds.length === 0) return
-      selectMany(nodeIds, 'run')
-      // Expand all ancestors in sidebar so the runs become visible
+      // hotgroups stores full node IDs (e.g. 'run-R-241', 'editor-abc', 'browser-xyz')
+      const slotNodeIds = hotgroups.nodesInSlot(slot).filter(id => layouts.has(id))
+      if (slotNodeIds.length === 0) return
+      // Determine selection type from first node prefix
+      const first = slotNodeIds[0]!
+      const selType = first.startsWith('run-') ? 'run'
+        : first.startsWith('editor-') ? 'file-editor'
+        : 'browser-widget'
+      selectMany(slotNodeIds, selType as import('../domain/types').GroupingDimension | 'run' | 'file-editor' | 'browser-widget')
+      // Expand all ancestors in sidebar so the nodes become visible
       const ancestorIds: string[] = []
-      for (const nodeId of nodeIds) {
+      for (const nodeId of slotNodeIds) {
         let cur = parentMapRef.current.get(nodeId) ?? null
         while (cur) {
           ancestorIds.push(cur)
@@ -526,23 +528,23 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
       }
       if (ancestorIds.length > 0) expandAll(ancestorIds)
       if (isDoubleTap) {
-        zoomToFitRuns(nodeIds)
+        zoomToFitRuns(slotNodeIds)
       } else {
-        panToRuns(nodeIds)
+        panToRuns(slotNodeIds)
       }
     },
     onHotgroupAssign: (slot) => {
-      if (selectionState.selectedType !== 'run') return
-      for (const nodeId of selectionState.selectedIds) {
-        const runId = nodeId.startsWith('run-') ? nodeId.slice(4) : nodeId
-        hotgroups.assign(slot, runId)
+      const { selectedType, selectedIds } = selectionState
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget')) return
+      for (const nodeId of selectedIds) {
+        hotgroups.assign(slot, nodeId)
       }
     },
     onHotgroupRemove: (slot) => {
-      if (selectionState.selectedType !== 'run') return
-      for (const nodeId of selectionState.selectedIds) {
-        const runId = nodeId.startsWith('run-') ? nodeId.slice(4) : nodeId
-        hotgroups.remove(slot, runId)
+      const { selectedType, selectedIds } = selectionState
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget')) return
+      for (const nodeId of selectedIds) {
+        hotgroups.remove(slot, nodeId)
       }
     },
     onArrangeGrid: () => arrangeGridRef?.current?.(),
@@ -566,9 +568,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
   const handleSelect = useCallback((nodeId: string, additive: boolean) => {
     if (nodeId.startsWith('run-') && onSelectRun) {
       onSelectRun(nodeId.slice(4), additive)
-    } else if (!nodeId.startsWith('editor-')) {
+    } else if (nodeId.startsWith('editor-')) {
+      additive ? toggleSelect(nodeId, 'file-editor') : select(nodeId, 'file-editor')
+    } else if (nodeId.startsWith('browser-')) {
+      additive ? toggleSelect(nodeId, 'browser-widget') : select(nodeId, 'browser-widget')
+    } else {
       // Group container click — select it in the shared selection state so hierarchy highlights too
-      // (file-editor widgets do not participate in hierarchy selection)
       const parsed = parseNodeId(nodeId)
       if (parsed) {
         const t = parsed.type as import('../domain/types').GroupingDimension
@@ -580,41 +585,55 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
   const handleDoubleClickZoom = useCallback((nodeId: string) => {
     if (onFocusRun && nodeId.startsWith('run-')) {
       onFocusRun(nodeId.slice(4))
+    } else if (nodeId.startsWith('editor-') || nodeId.startsWith('browser-')) {
+      zoomToFitRuns([nodeId])
     }
-  }, [onFocusRun])
+  }, [onFocusRun, zoomToFitRuns])
 
   const handleDrop = useCallback(
     async (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault()
-      const raw = e.dataTransfer.getData('application/tinstar-editor')
-      if (!raw) return
-      const { sessionId, filePath } = JSON.parse(raw) as { sessionId: string; filePath: string }
 
-      const res = await fetch('/api/editor-widgets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, filePath }),
-      })
-      const resJson = await res.json() as { ok: boolean; data?: EditorWidget }
-      if (!resJson.ok || !resJson.data) return
-      const widget = resJson.data
-
-      // Spawn at drop coordinates
       const rect = containerRef.current!.getBoundingClientRect()
-      const spawnLayout = {
-        x: (e.clientX - rect.left - camera.x) / camera.zoom,
-        y: (e.clientY - rect.top - camera.y) / camera.zoom,
-        width: 640,
-        height: 480,
+      const dropX = Math.round((e.clientX - rect.left - camera.x) / camera.zoom)
+      const dropY = Math.round((e.clientY - rect.top - camera.y) / camera.zoom)
+
+      const rawEditor = e.dataTransfer.getData('application/tinstar-editor')
+      if (rawEditor) {
+        const { sessionId, filePath } = JSON.parse(rawEditor) as { sessionId: string; filePath: string }
+        const spawnLayout = { x: dropX, y: dropY, width: 640, height: 480 }
+        const res = await fetch('/api/editor-widgets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, filePath }),
+        })
+        const resJson = await res.json() as { ok: boolean; data?: EditorWidget }
+        if (!resJson.ok || !resJson.data) return
+        onEditorWidgetCreated?.(resJson.data)
+        insertLayout(resJson.data.id, spawnLayout)
+        return
       }
 
-      insertLayout(widget.id, spawnLayout)
+      const rawBrowser = e.dataTransfer.getData('application/tinstar-browser')
+      if (rawBrowser) {
+        const { sessionId } = JSON.parse(rawBrowser) as { sessionId: string }
+        const spawnLayout = { x: dropX, y: dropY, width: 800, height: 600 }
+        const res = await fetch('/api/browser-widgets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId }),
+        })
+        const resJson = await res.json() as { ok: boolean; data?: BrowserWidget }
+        if (!resJson.ok || !resJson.data) return
+        onBrowserWidgetCreated?.(resJson.data)
+        insertLayout(resJson.data.id, spawnLayout)
+      }
     },
-    [runMap, layouts, camera, insertLayout],
+    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated],
   )
 
   // Recursive render: groups render behind their children (natural DOM order)
-  function renderNode(node: TreeNode, depth: number): React.ReactNode {
+  function renderNode(node: TreeNode, _depth: number): React.ReactNode {
     const widgetType = toWidgetType(node.type)
     const reg = getWidgetComponent(widgetType)
     if (!reg) {
@@ -629,7 +648,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
         ? runMap.get(node.entityId)
         : node.type === 'file-editor'
           ? editorWidgetMap.get(node.entityId)
-          : ({
+          : node.type === 'browser-widget'
+            ? browserWidgetMap.get(node.entityId)
+            : ({
               node,
               depth: depthMapRef.current.get(node.id) ?? 0,
               onShrinkToFit: shrinkNode,
@@ -650,10 +671,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
         layout={layout}
         zoom={camera.zoom}
         isSelected={isSelected(node.id)}
+        isSpawning={spawnedNodeIds.has(node.id)}
+        spawnColor={node.type === 'run' ? runMap.get(node.entityId)?.color : undefined}
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}
-        onDoubleClickZoom={node.type === 'run' ? handleDoubleClickZoom : undefined}
+        onDoubleClickZoom={node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' ? handleDoubleClickZoom : undefined}
         onMove={moveHandler}
         onResize={resizeHandler}
         onDragStart={node.type === 'run' ? handleWidgetDragStart : undefined}
@@ -736,7 +759,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), focu
       onDragOver={(e) => { e.preventDefault() }}
       onDrop={handleDrop}
       onDragEnter={(e) => {
-        if (e.dataTransfer.types.includes('application/tinstar-editor')) {
+        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-browser')) {
           dragEnterCountRef.current++
           setEditorDragActive(true)
         }

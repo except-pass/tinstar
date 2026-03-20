@@ -4,6 +4,7 @@ import type { editor as MonacoEditor } from 'monaco-editor'
 import type { EditorWidget } from '../../domain/types'
 import type { WidgetProps } from '../widgetComponentRegistry'
 import { useFileWatch } from '../../hooks/useFileWatch'
+import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
 
 function getLanguage(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -79,6 +80,15 @@ export function FileEditorWidget({ data }: WidgetProps) {
       return next
     })
   }, [])
+
+  // Register hotkey action handlers for when this widget is the focused context
+  useEffect(() => {
+    registerActionHandler(widget.id, (action) => {
+      if (action === 'open-in-editor') handleOpenInEditor()
+      if (action === 'toggle-word-wrap') toggleWordWrap()
+    })
+    return () => deregisterActionHandler(widget.id)
+  }, [widget.id, handleOpenInEditor, toggleWordWrap])
 
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {

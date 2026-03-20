@@ -132,10 +132,10 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     closePicker()
     addPendingSkill(pending)
 
-    fetch(`/api/sessions/${sessionId}/prompt`, {
+    fetch(`/api/sessions/${sessionId}/enter-prompt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: `Define a new skill [draftId=${draftId}]: ${description}` }),
+      body: JSON.stringify({ prompt: `Define a new skill [draftId=${draftId}]: ${description}` }),
     }).catch(console.error)
   }
 

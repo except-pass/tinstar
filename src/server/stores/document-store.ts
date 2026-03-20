@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 
@@ -14,6 +14,7 @@ export class DocumentStore {
   private spaces = new Map<string, Space>()
   private commits = new Map<string, CommitRecord>()
   private editorWidgets = new Map<string, EditorWidget>()
+  private browserWidgets = new Map<string, BrowserWidget>()
 
   activeSpaceId: string = ''
 
@@ -40,6 +41,7 @@ export class DocumentStore {
       if (data.runs) for (const r of data.runs) this.runs.set(r.id, r)
       if (data.commits) for (const c of data.commits) this.commits.set(c.sha, c)
       if (data.editorWidgets) for (const w of data.editorWidgets) this.editorWidgets.set(w.id, w)
+      if (data.browserWidgets) for (const w of data.browserWidgets) this.browserWidgets.set(w.id, w)
     } catch {
       // No file or corrupt — start fresh
     }
@@ -299,6 +301,22 @@ export class DocumentStore {
     return [...this.editorWidgets.values()]
   }
 
+  // --- BrowserWidgets ---
+
+  upsertBrowserWidget(id: string, data: BrowserWidget): void {
+    this.browserWidgets.set(id, data)
+    this.changes.emit('change', { entity: 'browserWidget', id, data })
+  }
+
+  deleteBrowserWidget(id: string): void {
+    this.browserWidgets.delete(id)
+    this.changes.emit('change', { entity: 'browserWidget', id, data: null })
+  }
+
+  getAllBrowserWidgets(): BrowserWidget[] {
+    return [...this.browserWidgets.values()]
+  }
+
   // --- Snapshot (filtered by active space) ---
   // Include entities that match the active space OR have no spaceId (homeless).
   // This ensures nothing silently vanishes from the UI.
@@ -315,6 +333,7 @@ export class DocumentStore {
       worktrees: this.getAllWorktrees().filter(inSpace),
       runs: this.getAllRuns().filter(inSpace),
       editorWidgets: this.getAllEditorWidgets().filter(inSpace),
+      browserWidgets: this.getAllBrowserWidgets().filter(inSpace),
     }
   }
 
@@ -330,6 +349,7 @@ export class DocumentStore {
       runs: this.getAllRuns(),
       commits: this.getAllCommits(),
       editorWidgets: this.getAllEditorWidgets(),
+      browserWidgets: this.getAllBrowserWidgets(),
     }
   }
 
@@ -343,6 +363,7 @@ export class DocumentStore {
     for (const [id, e] of this.worktrees) if (e.spaceId === spaceId) this.worktrees.delete(id)
     for (const [id, e] of this.runs) if (e.spaceId === spaceId) this.runs.delete(id)
     for (const [id, e] of this.editorWidgets) if (e.spaceId === spaceId) this.editorWidgets.delete(id)
+    for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) this.browserWidgets.delete(id)
     this.changes.emit('change', { entity: 'all', id: '*', data: null })
   }
 
@@ -359,6 +380,7 @@ export class DocumentStore {
       this.worktrees.clear()
       this.runs.clear()
       this.editorWidgets.clear()
+      this.browserWidgets.clear()
       // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
     }

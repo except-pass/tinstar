@@ -6,6 +6,7 @@
 #   SESSION_ID - dictate Claude session ID on first launch (optional)
 #   RESUME_SESSION_ID - resume a previous Claude session by ID (optional)
 #   SKIP_PERMISSIONS - skip Claude permission prompts (optional)
+#   INITIAL_PROMPT - passed as positional argument to claude on first launch (optional)
 
 TITLE="${TINSTAR_SESSION_NAME:-Tinstar}"
 TMUX_SESSION="main"
@@ -33,6 +34,42 @@ if ! tmux has-session -t $TMUX_SESSION 2>/dev/null; then
         CLAUDE_CMD="$CLAUDE_CMD --resume $RESUME_SESSION_ID"
     elif [ -n "$SESSION_ID" ]; then
         CLAUDE_CMD="$CLAUDE_CMD --session-id $SESSION_ID"
+    fi
+    if [ -n "$INITIAL_PROMPT" ]; then
+        CLAUDE_CMD="$CLAUDE_CMD -- $(printf '%q' "$INITIAL_PROMPT")"
+    fi
+
+    # Install Tinstar status hooks so the dashboard can track idle/running state
+    if [ -n "$TINSTAR_DASHBOARD_URL" ] && command -v python3 >/dev/null 2>&1; then
+        python3 - <<'PYEOF'
+import json, os
+home = os.environ.get('HOME', os.path.expanduser('~'))
+path = os.path.join(home, '.claude', 'settings.json')
+url = os.environ.get('TINSTAR_DASHBOARD_URL', '')
+try:
+    with open(path) as f: s = json.load(f)
+except Exception: s = {}
+hooks = s.get('hooks', {})
+def cmd(ep):
+    return ('if [ -n "$TINSTAR_SESSION_NAME" ]; then '
+            f'curl -s -X POST {url}/api/hooks/{ep} '
+            '-H "Content-Type: application/json" '
+            '-d "{\\"session\\":\\"$TINSTAR_SESSION_NAME\\",\\"conversationId\\":\\"$CLAUDE_SESSION_ID\\"}" '
+            '2>/dev/null; fi')
+def install(ev, entry):
+    es = [e for e in hooks.get(ev, []) if not any('/api/hooks/' in str(h.get('command','')) for h in e.get('hooks',[]))]
+    es.append(entry)
+    hooks[ev] = es
+install('Stop', {'hooks': [{'type': 'command', 'command': cmd('idle')}]})
+install('PreToolUse', {'matcher': '', 'hooks': [{'type': 'command', 'command': cmd('active')}]})
+install('UserPromptSubmit', {'hooks': [{'type': 'command', 'command': cmd('active')}]})
+# Re-assert running after every tool — sub-agents fire Stop with the same session
+# name when they complete, which would wrongly show the session as idle mid-execution.
+install('PostToolUse', {'matcher': '', 'hooks': [{'type': 'command', 'command': cmd('active')}]})
+s['hooks'] = hooks
+os.makedirs(os.path.join(home, '.claude'), exist_ok=True)
+with open(path, 'w') as f: json.dump(s, f, indent=2)
+PYEOF
     fi
 
     WORKDIR="${WORKSPACE_DIR:-$HOME}"

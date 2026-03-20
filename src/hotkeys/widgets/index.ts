@@ -3,4 +3,5 @@
 import './canvasWidget'
 import './groupContainerWidget'
 import './runTerminalWidget'
+import './entityWidgets'
 // runWorkspaceWidget is imported directly by RunWorkspaceWidget/index.tsx

@@ -95,6 +95,7 @@ export function useContextRouter(handlers: RouterHandlers) {
       // Check direct bindings
       const binding = def.bindings.find(b => b.key === key && !b.chord)
       if (binding) {
+        if (isEditable(active)) return
         e.preventDefault()
         if (tail) {
           h.onChordAction?.(tail.id)

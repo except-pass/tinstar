@@ -1,64 +1,8 @@
 {
   "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -n \"$TINSTAR_SESSION_NAME\" ]; then curl -s -X POST http://localhost:5273/api/hooks/idle -H 'Content-Type: application/json' -d \"{\\\"session\\\":\\\"$TINSTAR_SESSION_NAME\\\",\\\"conversationId\\\":\\\"$CLAUDE_SESSION_ID\\\"}\"; fi"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -n \"$TINSTAR_SESSION_NAME\" ]; then curl -s -X POST http://localhost:5273/api/hooks/active -H 'Content-Type: application/json' -d \"{\\\"session\\\":\\\"$TINSTAR_SESSION_NAME\\\",\\\"conversationId\\\":\\\"$CLAUDE_SESSION_ID\\\"}\"; fi"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -n \"$TINSTAR_SESSION_NAME\" ]; then curl -s -X POST http://localhost:5273/api/hooks/active -H 'Content-Type: application/json' -d \"{\\\"session\\\":\\\"$TINSTAR_SESSION_NAME\\\",\\\"conversationId\\\":\\\"$CLAUDE_SESSION_ID\\\"}\"; fi"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -n \"$TINSTAR_SESSION_NAME\" ]; then HOOK_INPUT=$(cat); FILE_PATH=$(echo \"$HOOK_INPUT\" | sed -n 's/.*\"file_path\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p'); if [ -n \"$FILE_PATH\" ]; then curl -s -X POST http://localhost:5273/api/hooks/file-touched -H 'Content-Type: application/json' -d \"{\\\"session\\\":\\\"$TINSTAR_SESSION_NAME\\\",\\\"path\\\":\\\"$FILE_PATH\\\"}\"; fi; fi"
-          }
-        ]
-      },
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -n \"$TINSTAR_SESSION_NAME\" ]; then HOOK_INPUT=$(cat); FILE_PATH=$(echo \"$HOOK_INPUT\" | sed -n 's/.*\"file_path\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p'); if [ -n \"$FILE_PATH\" ]; then curl -s -X POST http://localhost:5273/api/hooks/file-read -H 'Content-Type: application/json' -d \"{\\\"session\\\":\\\"$TINSTAR_SESSION_NAME\\\",\\\"path\\\":\\\"$FILE_PATH\\\"}\"; fi; fi"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -n \"$TINSTAR_SESSION_NAME\" ]; then curl -s -X POST http://localhost:5273/api/hooks/file-touched -H 'Content-Type: application/json' -d \"{\\\"session\\\":\\\"$TINSTAR_SESSION_NAME\\\",\\\"conversationId\\\":\\\"$CLAUDE_SESSION_ID\\\"}\"; fi"
-          }
-        ]
-      }
-    ]
+    "Stop": [],
+    "PreToolUse": [],
+    "UserPromptSubmit": [],
+    "PostToolUse": []
   }
 }

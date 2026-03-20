@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { EditorWidget, GroupingDimension, Run, TreeNode } from '../domain/types'
+import type { BrowserWidget, EditorWidget, GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
@@ -18,11 +18,11 @@ import { EntitySettingsDialog } from './EntitySettingsDialog'
 import { HotgroupProvider } from '../hotkeys/HotgroupContext'
 import { FocusPathProvider, useFocusPath } from '../hotkeys/FocusPathContext'
 import { useContextRouter } from '../hotkeys/contextRouter'
-import { triggerWidgetFlourish } from '../hotkeys/actionHandlerRegistry'
+import { triggerWidgetFlourish, registerActionHandler, deregisterActionHandler } from '../hotkeys/actionHandlerRegistry'
+import type { FocusNode } from '../hotkeys/FocusPathContext'
 import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
-import { HotkeysSidebar } from './HotkeysSidebar'
-import { CommitActivityPanel } from './CommitActivityPanel'
+
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
 function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
@@ -39,6 +39,18 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
   return walk(tree, []) ?? []
 }
 
+/** Find a node's label by its ID in a tree */
+function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
+  for (const node of nodes) {
+    if (node.id === targetId) return node.label
+    if (node.children.length > 0) {
+      const found = findNodeLabel(node.children, targetId)
+      if (found) return found
+    }
+  }
+  return null
+}
+
 function WorkspaceShellInner() {
   const [dimensions, setDimensions] = useState<GroupingDimension[]>(() => {
     try {
@@ -48,7 +60,7 @@ function WorkspaceShellInner() {
     return ['initiative', 'epic', 'task']
   })
 
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, connected } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, connected } = useBackendState()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -85,40 +97,81 @@ function WorkspaceShellInner() {
     return map
   }, [editorWidgets])
 
-  const canvasTree = useMemo(() => {
-    if (syntheticEditorNodes.length === 0) return sidebarTree
+  const syntheticBrowserNodes: TreeNode[] = useMemo(
+    () =>
+      browserWidgets.map(w => ({
+        id: w.id,
+        label: w.title ?? (() => { try { return w.url ? new URL(w.url.startsWith('http') ? w.url : `http://${w.url}`).host : 'Browser' } catch { return 'Browser' } })(),
+        type: 'browser-widget',
+        entityId: w.id,
+        children: [],
+        runCount: 0,
+        activeCount: 0,
+        color: w.color,
+      })),
+    [browserWidgets],
+  )
 
-    // Map taskNodeId → editor nodes to nest inside it
-    const editorsByTaskNode = new Map<string, TreeNode[]>()
-    const orphanEditors: TreeNode[] = []
-    for (const editorNode of syntheticEditorNodes) {
-      const widget = editorWidgets.find(w => w.id === editorNode.entityId)
+  const browserWidgetMap = useMemo(() => {
+    const map = new Map<string, BrowserWidget>()
+    for (const w of browserWidgets) map.set(w.id, w)
+    return map
+  }, [browserWidgets])
+
+  const canvasTree = useMemo(() => {
+    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes]
+    if (allSynthetic.length === 0) return sidebarTree
+
+    // Map taskNodeId → synthetic nodes to nest inside it
+    const byTaskNode = new Map<string, TreeNode[]>()
+    const orphans: TreeNode[] = []
+
+    for (const node of syntheticEditorNodes) {
+      const widget = editorWidgets.find(w => w.id === node.entityId)
       const run = widget ? [...runMap.values()].find(r => r.sessionId === widget.sessionId) : undefined
       const taskNodeId = run?.taskId ? `task-${run.taskId}` : null
       if (taskNodeId) {
-        const list = editorsByTaskNode.get(taskNodeId) ?? []
-        list.push(editorNode)
-        editorsByTaskNode.set(taskNodeId, list)
+        const list = byTaskNode.get(taskNodeId) ?? []
+        list.push(node)
+        byTaskNode.set(taskNodeId, list)
       } else {
-        orphanEditors.push(editorNode)
+        orphans.push(node)
       }
     }
 
-    if (editorsByTaskNode.size === 0) return [...sidebarTree, ...orphanEditors]
+    for (const node of syntheticBrowserNodes) {
+      const widget = browserWidgets.find(w => w.id === node.entityId)
+      const run = widget ? [...runMap.values()].find(r => r.sessionId === widget.sessionId) : undefined
+      const taskNodeId = run?.taskId ? `task-${run.taskId}` : null
+      if (taskNodeId) {
+        const list = byTaskNode.get(taskNodeId) ?? []
+        list.push(node)
+        byTaskNode.set(taskNodeId, list)
+      } else {
+        orphans.push(node)
+      }
+    }
+
+    if (byTaskNode.size === 0) return [...sidebarTree, ...orphans]
 
     function inject(nodes: TreeNode[]): TreeNode[] {
       return nodes.map(node => {
-        const toInject = editorsByTaskNode.get(node.id)
+        const toInject = byTaskNode.get(node.id)
         const injectedChildren = inject(node.children)
         if (!toInject) return injectedChildren === node.children ? node : { ...node, children: injectedChildren }
         return { ...node, children: [...injectedChildren, ...toInject] }
       })
     }
 
-    return [...inject(sidebarTree), ...orphanEditors]
-  }, [sidebarTree, syntheticEditorNodes, editorWidgets, runMap])
+    return [...inject(sidebarTree), ...orphans]
+  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, editorWidgets, browserWidgets, runMap])
 
-  const runIds = useMemo(() => Array.from(runMap.keys()), [runMap])
+  const allNodeIds = useMemo(() => {
+    const ids: string[] = Array.from(runMap.keys()).map(id => `run-${id}`)
+    for (const w of editorWidgets) ids.push(w.id)
+    for (const w of browserWidgets) ids.push(w.id)
+    return ids
+  }, [runMap, editorWidgets, browserWidgets])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
@@ -245,6 +298,10 @@ function WorkspaceShellInner() {
       fetch(`/api/editor-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
+    if (type === 'browser-widget') {
+      fetch(`/api/browser-widgets/${entityId}`, { method: 'DELETE' })
+      return
+    }
     const endpointMap: Record<string, string> = {
       initiative: '/api/initiatives',
       epic: '/api/epics',
@@ -347,26 +404,65 @@ function WorkspaceShellInner() {
 
   // Global hotkeys: session cycling
   const allRuns = useMemo(() => Array.from(runMap.values()), [runMap])
+  // Keep raw run ID for session cycling in global hotkeys
   const selectedRunId = useMemo(() => {
     if (selectionState.selectedType !== 'run') return null
     const firstNodeId = [...selectionState.selectedIds][0] ?? null
     if (!firstNodeId) return null
-    // node IDs are prefixed with 'run-', strip the prefix to get the raw run ID
     return firstNodeId.startsWith('run-') ? firstNodeId.slice(4) : firstNodeId
   }, [selectionState.selectedIds, selectionState.selectedType])
 
+  // Derive focus node for any selected entity (run, task, epic, initiative)
+  const selectedFocusNode = useMemo<FocusNode | null>(() => {
+    const { selectedType, selectedIds } = selectionState
+    if (!selectedType || selectedIds.size === 0) return null
+    const firstNodeId = [...selectedIds][0]
+    if (!firstNodeId) return null
+
+    if (selectedType === 'run') {
+      const rawId = firstNodeId.startsWith('run-') ? firstNodeId.slice(4) : firstNodeId
+      return { id: rawId, type: 'run-workspace', label: rawId }
+    }
+
+    if (selectedType === 'task' || selectedType === 'epic' || selectedType === 'initiative') {
+      const label = findNodeLabel(canvasTree, firstNodeId) ?? selectedType
+      return { id: firstNodeId, type: selectedType, label }
+    }
+
+    if (selectedType === 'file-editor') {
+      const label = findNodeLabel(canvasTree, firstNodeId) ?? 'File'
+      return { id: firstNodeId, type: 'file-editor', label }
+    }
+
+    return null
+  }, [selectionState.selectedIds, selectionState.selectedType, canvasTree])
+
   const { path, chordState, pushFocus, clearFocus, setChord, clearChord } = useFocusPath()
 
-  // Sync selectedRunId → FocusPathContext
+  // Sync selected entity → FocusPathContext
   // useLayoutEffect ensures path is updated synchronously before next user input
   useLayoutEffect(() => {
-    if (selectedRunId) {
-      clearFocus()
-      pushFocus({ id: selectedRunId, type: 'run-workspace', label: selectedRunId })
-    } else {
-      clearFocus()
+    clearFocus()
+    if (selectedFocusNode) {
+      pushFocus(selectedFocusNode)
     }
-  }, [selectedRunId, pushFocus, clearFocus])
+  }, [selectedFocusNode, pushFocus, clearFocus])
+
+  // Register action handler for selected task/epic/initiative
+  useEffect(() => {
+    if (!selectedFocusNode || selectedFocusNode.type === 'run-workspace' || selectedFocusNode.type === 'file-editor') return
+    const { id, type, label } = selectedFocusNode
+    const dash = id.indexOf('-')
+    if (dash === -1) return
+    const entityId = id.slice(dash + 1)
+    const entityType = type as GroupingDimension
+    registerActionHandler(id, (action) => {
+      if (action === 'settings') {
+        setEntitySettingsDialog({ entityId, entityType, entityName: label })
+      }
+    })
+    return () => { deregisterActionHandler(id) }
+  }, [selectedFocusNode])
 
   useContextRouter({
     path,
@@ -468,7 +564,7 @@ function WorkspaceShellInner() {
   return (
     <>
       {activeSpaceId ? (
-        <HotgroupProvider spaceId={activeSpaceId} runIds={runIds}>
+        <HotgroupProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
           <SkillsProvider>
             <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
@@ -563,6 +659,7 @@ function WorkspaceShellInner() {
                   <InfiniteCanvas
                     tree={canvasTree}
                     editorWidgetMap={editorWidgetMap}
+                    browserWidgetMap={browserWidgetMap}
                     runMap={runMap}
                     focusRunId={focusRunId}
                     activeSpaceId={activeSpaceId}
@@ -572,12 +669,13 @@ function WorkspaceShellInner() {
                     onDeleteEntity={handleDelete}
                     onMenuOpen={handleMenuOpen}
                     onTaskUpdate={handleTaskUpdate}
+                    onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
+                    onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
                   />
                 </div>
-                {/* Hotkeys sidebar (right) */}
-                <HotkeysSidebar />
+
               </div>
 
               {/* Feature-flagged: commit activity panel disabled for now

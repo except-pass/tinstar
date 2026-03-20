@@ -27,7 +27,15 @@ function resolveProfile(config: TinstarConfig, session: Session): ImageProfile |
 
 /** Resolve the Docker image for a session, respecting profile config. */
 function resolveImage(config: TinstarConfig, session: Session): string {
-  return resolveProfile(config, session)?.image ?? config.container.defaultImage
+  const image = resolveProfile(config, session)?.image ?? config.container.defaultImage
+  if (!image) {
+    throw new Error(
+      session.profile
+        ? `Docker profile '${session.profile}' not found in config — check ~/.config/tinstar/config.json`
+        : `No Docker profile specified and no defaultImage configured — set container.defaultImage in ~/.config/tinstar/config.json or specify a profile`
+    )
+  }
+  return image
 }
 
 /** Resolve the container home directory for a session, checking profile overrides. */
@@ -120,7 +128,7 @@ export function buildExecCommand(
   config: TinstarConfig,
   session: Session,
   secrets: Record<string, string>,
-  opts: { sessionId?: string | null; resume?: boolean; dashboardUrl: string } = { dashboardUrl: '' },
+  opts: { sessionId?: string | null; resume?: boolean; dashboardUrl: string; initialPrompt?: string } = { dashboardUrl: '' },
 ): string[] {
   const name = containerName(config, session.name)
 
@@ -148,6 +156,9 @@ export function buildExecCommand(
     args.push('-e', `RESUME_SESSION_ID=${opts.sessionId}`)
   } else if (opts.sessionId) {
     args.push('-e', `SESSION_ID=${opts.sessionId}`)
+  }
+  if (opts.initialPrompt) {
+    args.push('-e', `INITIAL_PROMPT=${opts.initialPrompt}`)
   }
   if (session.workspace?.path) {
     args.push('-e', `WORKSPACE_DIR=${session.workspace.path}`)
@@ -219,6 +230,7 @@ export async function createContainer(
     secrets: Record<string, string>
     port: number
     dashboardUrl: string
+    initialPrompt?: string
   },
 ): Promise<void> {
   const runArgs = buildDockerRunCommand(config, opts.session, { port: opts.port })
@@ -227,6 +239,7 @@ export async function createContainer(
   const execArgs = buildExecCommand(config, opts.session, opts.secrets, {
     sessionId: opts.session.conversation?.id,
     dashboardUrl: opts.dashboardUrl,
+    initialPrompt: opts.initialPrompt,
   })
   await docker(execArgs)
 }
@@ -314,35 +327,6 @@ export async function sendPrompt(config: TinstarConfig, sessionName: string, pro
   await docker(['exec', name, 'tmux', 'send-keys', '-t', 'main', '', 'Enter'])
 }
 
-/**
- * Wait for the container to be ready, then send the initial prompt.
- * Waits for ttyd health check, adds a buffer for Claude to start,
- * then retries sendPrompt with backoff if the tmux session isn't ready yet.
- */
-export async function sendInitialPrompt(
-  config: TinstarConfig,
-  sessionName: string,
-  prompt: string,
-  port: number,
-): Promise<void> {
-  const ready = await healthCheck(port, { timeout: 60_000, interval: 500 })
-  if (!ready) throw new Error(`container ${sessionName} did not become healthy`)
-
-  // Buffer for Claude to start and render its input bar
-  await new Promise(r => setTimeout(r, 2000))
-
-  // Retry sendPrompt — tmux session 'main' may not exist immediately after ttyd is up
-  const maxAttempts = 5
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      await sendPrompt(config, sessionName, prompt)
-      return
-    } catch (err) {
-      if (i === maxAttempts - 1) throw err
-      await new Promise(r => setTimeout(r, 1000 * (i + 1)))
-    }
-  }
-}
 
 export async function healthCheck(port: number, opts: { timeout?: number; interval?: number } = {}): Promise<boolean> {
   const { timeout = 5000, interval = 500 } = opts

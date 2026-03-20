@@ -23,6 +23,7 @@ import type { RunData, SessionStatus as RunStatus, StoredProcedure } from '../ty
 export interface EntitySettings {
   project?: string
   worktree?: 'none' | 'new' | 'existing'
+  defaultWorktreePath?: string
   backend?: 'docker' | 'tmux'
   skipPermissions?: boolean
   profile?: string
@@ -108,6 +109,15 @@ export interface EditorWidget {
   color?: string
 }
 
+export interface BrowserWidget {
+  id: string
+  spaceId?: string
+  sessionId: string
+  url: string
+  title?: string
+  color?: string
+}
+
 // --- Grouping ---
 
 export type GroupingDimension = 'initiative' | 'epic' | 'task' | 'worktree'
@@ -157,7 +167,7 @@ export interface Rect {
 
 export interface SelectionState {
   selectedIds: Set<string>
-  selectedType: GroupingDimension | 'run' | null
+  selectedType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | null
   expandedIds: Set<string>
   hoveredId: string | null
 }

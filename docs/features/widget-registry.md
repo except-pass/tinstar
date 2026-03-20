@@ -142,6 +142,15 @@ Read-only Monaco editor with live file watching. See [file-editor-widget.md](fil
 - `minSize`: 300 × 200
 - `supportsMinimize`: false
 
+### `browser-widget`
+
+Embedded iframe with an editable URL bar. Agents create via `POST /api/browser-widgets` and push new URLs via `PATCH /api/browser-widgets/:id`. Users drag the globe icon from a RunWorkspace header to create one. See [canvas-widget-ux.md](canvas-widget-ux.md) for UX conventions.
+
+- `isContainer`: false
+- `defaultSize`: 800 × 600
+- `minSize`: 320 × 240
+- `supportsMinimize`: false
+
 ---
 
 ## Adding a New Widget Type

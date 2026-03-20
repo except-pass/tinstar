@@ -4,6 +4,28 @@ import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 
 const DRAG_THRESHOLD = 5
 
+/** Convert a hex color (#rrggbb or #rgb) to an rgba() CSS string */
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace('#', '')
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h
+  const r = parseInt(full.slice(0, 2), 16)
+  const g = parseInt(full.slice(2, 4), 16)
+  const b = parseInt(full.slice(4, 6), 16)
+  if (isNaN(r) || isNaN(g) || isNaN(b)) return `rgba(0,240,255,${alpha})`
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
+/** Build CSS custom properties for the spawn glow animation */
+function spawnGlowVars(color: string): React.CSSProperties {
+  return {
+    '--spawn-glow-0': hexToRgba(color, 0),
+    '--spawn-glow-strong': hexToRgba(color, 0.8),
+    '--spawn-glow-mid': hexToRgba(color, 0.45),
+    '--spawn-glow-subtle': hexToRgba(color, 0.35),
+    '--spawn-glow-faint': hexToRgba(color, 0.2),
+  } as React.CSSProperties
+}
+
 interface CanvasWidgetShellProps {
   registration: WidgetRegistration
   nodeId: string
@@ -13,6 +35,8 @@ interface CanvasWidgetShellProps {
   isSelected: boolean
   isDimmed?: boolean
   isDropTarget?: boolean
+  isSpawning?: boolean
+  spawnColor?: string
   spaceHeldRef: RefObject<boolean>
   onSelect: (id: string, additive: boolean) => void
   onDoubleClickZoom?: (id: string) => void
@@ -32,6 +56,8 @@ export function CanvasWidgetShell({
   isSelected,
   isDimmed = false,
   isDropTarget = false,
+  isSpawning = false,
+  spawnColor,
   spaceHeldRef,
   onSelect,
   onDoubleClickZoom,
@@ -82,6 +108,9 @@ export function CanvasWidgetShell({
           originX: layout.x,
           originY: layout.y,
         }
+        // Capture immediately so fast mouse movement never escapes the widget
+        // before the drag threshold is reached
+        containerRef.current?.setPointerCapture(e.pointerId)
       }
     },
     [nodeId, spaceHeldRef, dragHandleSelector, layout.x, layout.y, onSelect],
@@ -102,14 +131,10 @@ export function CanvasWidgetShell({
         return
       if (!dragMoved.current) {
         dragMoved.current = true
-        // Defer setPointerCapture to drag start so dblclick fires on correct element
-        if (dragPointerId.current !== null) {
-          containerRef.current?.setPointerCapture(dragPointerId.current)
-        }
         setIsDragging(true)
         onDragStart?.(nodeId)
       }
-      onMove(nodeId, dragStart.current.originX + dx, dragStart.current.originY + dy)
+      onMove(nodeId, Math.round(dragStart.current.originX + dx), Math.round(dragStart.current.originY + dy))
       onDragMove?.(nodeId, e.clientX, e.clientY)
     },
     [nodeId, zoom, onMove, onDragStart, onDragMove],
@@ -158,8 +183,8 @@ export function CanvasWidgetShell({
       resizeMoved.current = true
       onResize(
         nodeId,
-        Math.max(minSize.width, resizeStart.current.originW + dx),
-        Math.max(minSize.height, resizeStart.current.originH + dy),
+        Math.round(Math.max(minSize.width, resizeStart.current.originW + dx)),
+        Math.round(Math.max(minSize.height, resizeStart.current.originH + dy)),
       )
     },
     [nodeId, zoom, onResize, minSize],
@@ -198,7 +223,7 @@ export function CanvasWidgetShell({
       data-testid={`canvas-widget-${nodeId}`}
       data-selected={isSelected ? 'true' : undefined}
       data-widget-type={registration.type}
-      className={`absolute ${frameClass} transition-opacity duration-150 ${isDimmed ? 'opacity-40' : 'opacity-100'}`}
+      className={`absolute ${frameClass} ${isSpawning ? 'widget-spawning' : 'transition-opacity duration-150'} ${isDimmed ? 'opacity-40' : 'opacity-100'}`}
       style={{
         left: layout.x,
         top: layout.y,
@@ -206,6 +231,7 @@ export function CanvasWidgetShell({
         height: layout.height,
         zIndex: registration.isContainer ? undefined
           : isDragging ? 30 : isSelected ? 20 : isHovered ? 10 : undefined,
+        ...(isSpawning && spawnColor ? spawnGlowVars(spawnColor) : {}),
       }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

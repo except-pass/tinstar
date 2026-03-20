@@ -67,6 +67,30 @@
   animation: ripple-ring 250ms cubic-bezier(0.2, 0, 0.6, 1) forwards;
 }
 
+/* ── Widget spawn animation ──────────────────────────────────────────── */
+
+@keyframes widget-spawn {
+  0%   { transform: translate(-70px, -55px) scale(0.05) rotate(-8deg); opacity: 0; filter: brightness(5) saturate(0); }
+  18%  { opacity: 1; filter: brightness(2.5) saturate(1.6); }
+  55%  { transform: translate(7px, 5px) scale(1.035) rotate(1.2deg); filter: brightness(1.2) saturate(1); }
+  75%  { transform: translate(-2px, -2px) scale(0.982) rotate(-0.4deg); filter: brightness(1); }
+  90%  { transform: translate(1px, 1px) scale(1.006) rotate(0.1deg); }
+  100% { transform: translate(0, 0) scale(1) rotate(0deg); opacity: 1; filter: brightness(1); }
+}
+
+@keyframes widget-spawn-glow {
+  0%   { box-shadow: 0 0 0 0 var(--spawn-glow-0, rgba(0,240,255,0)), 0 0 0 var(--spawn-glow-0, rgba(0,240,255,0)); }
+  22%  { box-shadow: 0 0 0 3px var(--spawn-glow-strong, rgba(0,240,255,0.8)), 0 8px 60px 4px var(--spawn-glow-mid, rgba(0,240,255,0.45)); }
+  60%  { box-shadow: 0 0 0 1px var(--spawn-glow-subtle, rgba(0,240,255,0.35)), 0 4px 30px 0px var(--spawn-glow-faint, rgba(0,240,255,0.2)); }
+  100% { box-shadow: 0 0 0 0 var(--spawn-glow-0, rgba(0,240,255,0)), 0 0 0 var(--spawn-glow-0, rgba(0,240,255,0)); }
+}
+
+.widget-spawning {
+  animation:
+    widget-spawn 680ms cubic-bezier(0.22, 1, 0.36, 1) both,
+    widget-spawn-glow 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 /* ── Widget frame effects ────────────────────────────────────────────── */
 
 /* Run workspace: drag state — lifted z-index; shadow handled by inner widget (color-aware) */

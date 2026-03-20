@@ -31,7 +31,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   const [palettePos, setPalettePos] = useState<{ top: number; right: number } | null>(null)
   const paletteRef = useRef<HTMLDivElement>(null)
   const paletteButtonRef = useRef<HTMLButtonElement>(null)
-  const { slotsForRun } = useHotgroupContext()
+  const { slotsForNode } = useHotgroupContext()
 
   // Close palette when clicking outside both the dropdown and the toggle button
   useEffect(() => {
@@ -130,7 +130,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       {!compact && (
         <div className="flex items-center gap-3 shrink-0 ml-2">
           {/* Hotgroup badge */}
-          <HotgroupBadge slots={slotsForRun(run.id)} testId={`hotgroup-badge-${run.id}`} />
+          <HotgroupBadge slots={slotsForNode(`run-${run.id}`)} testId={`hotgroup-badge-${run.id}`} />
           {/* Color palette */}
           <div className="relative" ref={paletteRef} onPointerDown={e => e.stopPropagation()}>
             <button
@@ -158,6 +158,20 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
               </div>,
               document.body,
             )}
+          </div>
+          {/* Browser widget drag chip */}
+          <div
+            draggable
+            onPointerDown={e => e.stopPropagation()}
+            onDragStart={e => {
+              e.stopPropagation()
+              e.dataTransfer.setData('application/tinstar-browser', JSON.stringify({ sessionId: run.sessionId }))
+              e.dataTransfer.effectAllowed = 'copy'
+            }}
+            className="p-1 rounded cursor-grab active:cursor-grabbing text-slate-500 hover:text-slate-300 transition-colors"
+            title="Drag to canvas to create a browser widget"
+          >
+            <span className="material-symbols-outlined text-sm">language</span>
           </div>
           {/* Session actions */}
           <div className="flex items-center gap-1" onPointerDown={e => e.stopPropagation()}>

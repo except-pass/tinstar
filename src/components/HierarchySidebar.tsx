@@ -6,6 +6,147 @@ import { useSidebarDrag, type DropTarget } from '../hooks/useSidebarDrag'
 import { SpaceSwitcher } from './SpaceSwitcher'
 import { useHotgroupContext } from '../hotkeys/HotgroupContext'
 import { HotgroupBadge } from './HotgroupBadge'
+import { useHotkeyContext } from '../hotkeys/FocusPathContext'
+import { onBindingFired } from '../hotkeys/bindingFiredBus'
+import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
+
+const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
+  { key: ']',        label: 'Focus next waiting' },
+  { key: '[',        label: 'Focus prev waiting' },
+  { key: 'Shift+]',  label: 'Focus next session' },
+  { key: 'Shift+[',  label: 'Focus prev session' },
+  { key: '?',        label: 'Hotkeys' },
+  { key: 'S',        label: 'New session' },
+]
+
+const CANVAS_KEYS: Array<{ key: string; label: string }> = [
+  { key: 'Ctrl+G',   label: 'Arrange grid' },
+  { key: '1–9',      label: 'Hotgroup select' },
+  { key: 'Ctrl+1–9', label: 'Hotgroup assign' },
+]
+
+function formatKey(key: string): string {
+  return key.split('+').map(part => {
+    const keyCode = part.match(/^Key([A-Z])$/)
+    if (keyCode) return keyCode[1]
+    const digit = part.match(/^Digit(\d)$/)
+    if (digit) return digit[1]
+    if (part === 'ArrowUp') return '↑'
+    if (part === 'ArrowDown') return '↓'
+    if (part === 'ArrowLeft') return '←'
+    if (part === 'ArrowRight') return '→'
+    return part
+  }).join('+')
+}
+
+function KeyBadge({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center px-1 py-0 bg-surface-raised border border-white/20 rounded text-2xs font-mono text-slate-300">
+      {formatKey(label)}
+    </span>
+  )
+}
+
+function BindingRow({ binding, fireCount }: { binding: Binding | { key: string; label: string }; fireCount: number }) {
+  const rowRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = rowRef.current
+    if (!el || fireCount === 0) return
+    const scan = el.querySelector('.flourish-scan-line') as HTMLElement | null
+    const ripple = el.querySelector('.flourish-ripple-ring') as HTMLElement | null
+    el.classList.remove('flourish-ignite')
+    scan?.classList.remove('flourish-scan-active')
+    ripple?.classList.remove('flourish-ripple-active')
+    void el.offsetWidth
+    el.classList.add('flourish-ignite')
+    scan?.classList.add('flourish-scan-active')
+    ripple?.classList.add('flourish-ripple-active')
+    const onEnd = (ev: AnimationEvent) => {
+      if (ev.animationName !== 'ignite') return
+      el.classList.remove('flourish-ignite')
+      scan?.classList.remove('flourish-scan-active')
+      ripple?.classList.remove('flourish-ripple-active')
+      el.removeEventListener('animationend', onEnd)
+    }
+    el.addEventListener('animationend', onEnd)
+    return () => el.removeEventListener('animationend', onEnd)
+  }, [fireCount])
+
+  return (
+    <div ref={rowRef} className="relative flex items-center justify-between gap-2 py-0.5 overflow-hidden rounded-sm">
+      <div className="flourish-scan-line" />
+      <div className="flourish-ripple-ring" style={{ borderRadius: '2px' }} />
+      <span className="text-2xs text-slate-400 truncate">{binding.label}</span>
+      <KeyBadge label={binding.key} />
+    </div>
+  )
+}
+
+const LS_HOTKEYS_HEIGHT = 'tinstar-sidebar-hotkeys-height'
+const DEFAULT_HOTKEYS_HEIGHT = 200
+const MIN_HOTKEYS_HEIGHT = 28
+const MAX_HOTKEYS_HEIGHT = 600
+
+function HotkeysSection({ height }: { height: number }) {
+  const { path, chordState, activeDefinition } = useHotkeyContext()
+  const [firedCounts, setFiredCounts] = useState<Record<string, number>>({})
+
+  useEffect(() => onBindingFired((key) => {
+    setFiredCounts(c => ({ ...c, [key]: (c[key] ?? 0) + 1 }))
+  }), [])
+
+  const contextLabel = activeDefinition?.displayName ?? 'Canvas'
+  const isTerminal = activeDefinition?.type === 'run-terminal'
+
+  const activeBindings: Binding[] = activeDefinition
+    ? (chordState ? activeDefinition.bindings.filter(b => b.chord) : activeDefinition.bindings.filter(b => !b.chord))
+    : []
+  const activeContexts: WidgetContext[] = (!chordState && activeDefinition) ? activeDefinition.contexts : []
+
+  return (
+    <div className="flex-shrink-0 flex flex-col overflow-hidden" style={{ height }}>
+      {/* Section label */}
+      <div className="px-3 py-1.5 flex-shrink-0">
+        <span className={`text-2xs font-mono font-bold uppercase tracking-widest ${chordState ? 'text-primary' : 'text-slate-500'}`}>
+          {chordState ? '⌨ Chord' : contextLabel}
+        </span>
+      </div>
+
+      {/* Scrollable bindings */}
+      <div className="overflow-y-auto scrollbar-thin flex-1 px-2 pb-1.5">
+        {isTerminal ? (
+          <div className="text-2xs text-slate-600 italic py-0.5">terminal owns keyboard</div>
+        ) : (
+          <>
+            {activeContexts.map(c => (
+              <BindingRow key={c.key} binding={{ key: c.key, label: `${c.label} →` }} fireCount={firedCounts[c.key] ?? 0} />
+            ))}
+            {activeBindings.map(b => (
+              <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
+            ))}
+            {activeBindings.length === 0 && activeContexts.length === 0 && (
+              <div className="text-2xs text-slate-600 italic py-0.5">no bindings</div>
+            )}
+            {path.length > 0 && (
+              <BindingRow binding={{ key: '`', label: 'Canvas root' }} fireCount={firedCounts['`'] ?? 0} />
+            )}
+            <div className="border-t border-white/10 my-1" />
+            <div className="text-2xs font-mono font-bold text-slate-600 uppercase tracking-widest mb-1">Global</div>
+            {GLOBAL_KEYS.map(b => (
+              <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
+            ))}
+            <div className="border-t border-white/10 my-1" />
+            <div className="text-2xs font-mono font-bold text-slate-600 uppercase tracking-widest mb-1">Canvas</div>
+            {CANVAS_KEYS.map(b => (
+              <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
 
 interface HierarchySidebarProps {
   tree: TreeNode[]
@@ -70,7 +211,7 @@ function SidebarNode({
   onRenameComplete?: () => void
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
-  const { slotsForRun } = useHotgroupContext()
+  const { slotsForNode } = useHotgroupContext()
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -81,6 +222,7 @@ function SidebarNode({
   const hasChildren = node.children.length > 0
   const isRun = node.type === 'run'
   const isFileEditor = node.type === 'file-editor'
+  const isBrowserWidget = node.type === 'browser-widget'
   const isDragging = dragNodeId === node.id
   const isDropInside = dropTarget?.nodeId === node.id && dropTarget?.position === 'inside'
   const isDropBefore = dropTarget?.nodeId === node.id && dropTarget?.position === 'before'
@@ -141,15 +283,14 @@ function SidebarNode({
         onClick={(e) => {
           if (editing || dragNodeId) return
           if (e.ctrlKey || e.metaKey) {
-            toggleSelect(node.id, node.type)
+            toggleSelect(node.id, node.type as GroupingDimension | 'run' | 'file-editor')
           } else {
-            select(node.id, node.type)
+            select(node.id, node.type as GroupingDimension | 'run' | 'file-editor')
           }
         }}
         onDoubleClick={() => {
-          if (onFocusRun) {
-            onFocusRun(node.id)
-          }
+          if (hasChildren) toggleExpand(node.id)
+          if (isRun && onFocusRun) onFocusRun(node.id)
         }}
         onMouseEnter={() => hover(node.id)}
         onMouseLeave={() => hover(null)}
@@ -173,7 +314,7 @@ function SidebarNode({
 
         {/* Icon */}
         <span className="w-4 text-center" aria-hidden="true">
-          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : isFileEditor ? '📄' : getDimensionIcon(node.type)}
+          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : isFileEditor ? '📄' : isBrowserWidget ? '🌐' : getDimensionIcon(node.type)}
         </span>
 
         {/* Color dot */}
@@ -213,9 +354,9 @@ function SidebarNode({
           </span>
         )}
 
-        {/* Hotgroup badge for runs */}
-        {isRun && !editing && (
-          <HotgroupBadge slots={slotsForRun(node.id.startsWith('run-') ? node.id.slice(4) : node.id)} testId={`sidebar-hotgroup-badge-${node.id.startsWith('run-') ? node.id.slice(4) : node.id}`} />
+        {/* Hotgroup badge for runs, file editors, and browser widgets */}
+        {(isRun || isFileEditor || isBrowserWidget) && !editing && (
+          <HotgroupBadge slots={slotsForNode(node.id)} testId={`sidebar-hotgroup-badge-${node.id}`} />
         )}
 
         {/* Count badge */}
@@ -231,7 +372,7 @@ function SidebarNode({
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-accent-red opacity-0 group-hover:opacity-100"
             onClick={(e) => {
               e.stopPropagation()
-              onDelete(node.entityId, node.type)
+              onDelete(node.entityId, node.type as GroupingDimension)
             }}
             aria-label={`Close ${node.label}`}
             style={{ opacity: hovered ? 1 : undefined }}
@@ -277,10 +418,10 @@ function SidebarNode({
               className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100 hover:!opacity-100"
               onClick={(e) => {
                 e.stopPropagation()
-                onAdd(node.entityId, nextChildType(node.type, dimensions))
+                onAdd(node.entityId, nextChildType(node.type as GroupingDimension | 'run', dimensions))
               }}
               data-testid={`add-child-${node.id}`}
-              aria-label={`Add ${nextChildType(node.type, dimensions)}`}
+              aria-label={`Add ${nextChildType(node.type as GroupingDimension | 'run', dimensions)}`}
               style={{ opacity: hovered ? 1 : undefined }}
             >
               +
@@ -450,15 +591,37 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
     handleDragEnd,
   } = useSidebarDrag(tree, dimensions, isExpanded, (id: string) => expandAll([id]), handleReparent)
 
+  // Hotkeys panel height (resizable by dragging the divider)
+  const [hotkeysHeight, setHotkeysHeight] = useState(() => {
+    const saved = localStorage.getItem(LS_HOTKEYS_HEIGHT)
+    return saved ? Math.max(MIN_HOTKEYS_HEIGHT, Math.min(MAX_HOTKEYS_HEIGHT, parseInt(saved))) : DEFAULT_HOTKEYS_HEIGHT
+  })
+  const hotkeysHeightRef = useRef(hotkeysHeight)
+  hotkeysHeightRef.current = hotkeysHeight
+  const dividerDragRef = useRef<{ startY: number; startH: number } | null>(null)
+
+  const onDividerPointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    dividerDragRef.current = { startY: e.clientY, startH: hotkeysHeightRef.current }
+  }, [])
+
   const onPointerMove = useCallback((e: React.PointerEvent) => {
-    // Check ref directly — dragState may not be set until threshold is met
     if (dragInitiated.current || dragState) {
       handleDragMove(e.clientY, e.clientX)
+    }
+    if (dividerDragRef.current) {
+      // Drag up → increase hotkeys height; drag down → decrease
+      const delta = dividerDragRef.current.startY - e.clientY
+      const newH = Math.max(MIN_HOTKEYS_HEIGHT, Math.min(MAX_HOTKEYS_HEIGHT, dividerDragRef.current.startH + delta))
+      setHotkeysHeight(newH)
+      localStorage.setItem(LS_HOTKEYS_HEIGHT, String(newH))
     }
   }, [dragState, dragInitiated, handleDragMove])
 
   const onPointerUp = useCallback(() => {
     handleDragEnd()
+    dividerDragRef.current = null
   }, [handleDragEnd])
 
   return (
@@ -530,6 +693,15 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
           />
         )}
       </div>
+
+      {/* Drag divider between tree and hotkeys */}
+      <div
+        className="h-1 flex-shrink-0 border-t border-white/10 cursor-row-resize hover:bg-primary/20 active:bg-primary/40 transition-colors"
+        onPointerDown={onDividerPointerDown}
+      />
+
+      {/* Hotkeys section — height controlled by dragging the divider above */}
+      <HotkeysSection height={hotkeysHeight} />
 
       {/* Arrange section */}
       {(onArrangeGrid || onArrangeReset) && (

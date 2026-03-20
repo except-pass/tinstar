@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { DEFAULT_RUN_ACCENT } from './runAccent'
 import type { GroupingDimension, EntitySettings, ResolvedSettings } from '../domain/types'
+import type { StoredProcedure } from '../types'
 import { ColorPalette } from './ColorPalette'
 
 interface Props {
@@ -72,9 +73,11 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
   const [projects, setProjects] = useState<{ name: string; path: string }[]>([])
   const [profiles, setProfiles] = useState<{ name: string; image: string }[]>([])
+  const [worktrees, setWorktrees] = useState<{ path: string; branch?: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<EntitySettings>({})
   const [saving, setSaving] = useState(false)
+  const [newProcName, setNewProcName] = useState('')
 
   useEffect(() => {
     const typeMap: Record<string, string> = { initiative: 'initiatives', epic: 'epics', task: 'tasks' }
@@ -97,6 +100,22 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
     })
   }, [entityId, entityType])
 
+  // Derive the effective project and worktree values (draft takes precedence over server state)
+  const effectiveProject = (draft.project !== undefined ? draft.project : settings?.local.project) ?? settings?.resolved.project
+  const effectiveWorktree = (draft.worktree !== undefined ? draft.worktree : settings?.local.worktree) ?? settings?.resolved.worktree
+
+  // Fetch worktrees when project is set and worktree mode is 'existing'
+  useEffect(() => {
+    if (!effectiveProject || effectiveWorktree !== 'existing') {
+      setWorktrees([])
+      return
+    }
+    fetch(`/api/projects/${encodeURIComponent(effectiveProject)}/worktrees`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.ok && Array.isArray(d.data)) setWorktrees(d.data) })
+      .catch(() => {})
+  }, [effectiveProject, effectiveWorktree])
+
   const hasDraftChanges = Object.keys(draft).length > 0
 
   const handleToggle = useCallback((key: keyof EntitySettings, enabled: boolean) => {
@@ -106,6 +125,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
         project: inherited ?? '',
         backend: inherited ?? 'tmux',
         worktree: inherited ?? 'none',
+        defaultWorktreePath: inherited ?? '',
         skipPermissions: inherited ?? false,
         profile: inherited ?? '',
         defaultRunColor: inherited ?? DEFAULT_RUN_ACCENT,
@@ -147,6 +167,41 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
 
   const handleCancel = useCallback(() => {
     onClose()
+  }, [onClose])
+
+  // Procedures helpers — work on draft.procedures (initialised from local on first edit)
+  const localProcs = (
+    draft.procedures !== undefined ? draft.procedures : settings?.local.procedures
+  ) as StoredProcedure[] | undefined ?? []
+
+  const inheritedProcs = (settings?.resolved.procedures ?? []) as StoredProcedure[]
+  const localNames = new Set(localProcs.map(p => p.skillName))
+  const inheritedOnly = inheritedProcs.filter(p => !localNames.has(p.skillName))
+
+  const removeProc = useCallback((id: string) => {
+    setDraft(prev => ({
+      ...prev,
+      procedures: ((prev.procedures !== undefined ? prev.procedures : settings?.local.procedures) as StoredProcedure[] ?? [])
+        .filter(p => p.id !== id),
+    }))
+  }, [settings])
+
+  const addProc = useCallback(() => {
+    const name = newProcName.trim()
+    if (!name) return
+    const base = (draft.procedures !== undefined ? draft.procedures : settings?.local.procedures) as StoredProcedure[] ?? []
+    if (base.some(p => p.skillName === name)) { setNewProcName(''); return }
+    setDraft(prev => ({
+      ...prev,
+      procedures: [...base, { id: crypto.randomUUID(), skillName: name }],
+    }))
+    setNewProcName('')
+  }, [newProcName, draft.procedures, settings])
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [onClose])
 
   return (
@@ -236,20 +291,42 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 onValueChange={handleValueChange}
               >
                 {(value, onChange) => (
-                  <div className="flex gap-1">
-                    {(['none', 'new', 'existing'] as const).map(opt => (
-                      <button
-                        key={opt}
-                        className={`px-2 py-1 text-xs rounded border ${
-                          value === opt
-                            ? 'bg-primary/20 border-primary/40 text-primary'
-                            : 'bg-surface-base border-white/10 text-slate-400 hover:border-primary/20'
-                        }`}
-                        onClick={() => onChange(opt)}
-                      >
-                        {opt}
-                      </button>
-                    ))}
+                  <div className="flex flex-col gap-2">
+                    <div className="flex gap-1">
+                      {(['none', 'new', 'existing'] as const).map(opt => (
+                        <button
+                          key={opt}
+                          className={`px-2 py-1 text-xs rounded border ${
+                            value === opt
+                              ? 'bg-primary/20 border-primary/40 text-primary'
+                              : 'bg-surface-base border-white/10 text-slate-400 hover:border-primary/20'
+                          }`}
+                          onClick={() => onChange(opt)}
+                        >
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                    {value === 'existing' && (
+                      worktrees.length === 0 ? (
+                        <span className="text-xs text-slate-500 italic">
+                          {effectiveProject ? 'No worktrees found' : 'Set a project first'}
+                        </span>
+                      ) : (
+                        <select
+                          className="bg-surface-base border border-primary/30 rounded px-2 py-1 text-xs text-primary outline-none"
+                          value={String(draft.defaultWorktreePath ?? settings?.local.defaultWorktreePath ?? settings?.resolved.defaultWorktreePath ?? '')}
+                          onChange={e => handleValueChange('defaultWorktreePath', e.target.value || undefined)}
+                        >
+                          <option value="">Select worktree...</option>
+                          {worktrees.map(wt => (
+                            <option key={wt.path} value={wt.path}>
+                              {wt.branch ?? wt.path.split('/').pop() ?? wt.path}
+                            </option>
+                          ))}
+                        </select>
+                      )
+                    )}
                   </div>
                 )}
               </SettingRow>
@@ -315,11 +392,56 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                   >
                     <option value="">Select profile...</option>
                     {profiles.map(p => (
-                      <option key={p.name} value={p.image}>{p.name} ({p.image})</option>
+                      <option key={p.name} value={p.name}>{p.name} ({p.image})</option>
                     ))}
                   </select>
                 )}
               </SettingRow>
+
+              {/* Procedures — manage skills starred at this entity level */}
+              <div className="pt-3 mt-1 border-t border-white/5">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-mono uppercase tracking-wide text-slate-500">Procedures</span>
+                  {inheritedOnly.length > 0 && (
+                    <span className="text-2xs text-slate-600 font-mono">+{inheritedOnly.length} inherited</span>
+                  )}
+                </div>
+
+                {localProcs.map(proc => (
+                  <div key={proc.id} className="flex items-center gap-1.5 py-0.5">
+                    <span className="material-symbols-outlined text-xs text-slate-600">terminal</span>
+                    <span className="flex-1 text-xs font-mono text-slate-300 truncate">{proc.skillName}</span>
+                    <button
+                      onClick={() => removeProc(proc.id)}
+                      className="text-slate-600 hover:text-slate-400 flex-shrink-0"
+                      title="Remove procedure"
+                    >
+                      <span className="material-symbols-outlined text-sm">close</span>
+                    </button>
+                  </div>
+                ))}
+
+                {localProcs.length === 0 && inheritedOnly.length === 0 && (
+                  <p className="text-2xs text-slate-600 italic mb-2">No procedures set</p>
+                )}
+
+                <div className="flex items-center gap-1 mt-2">
+                  <input
+                    value={newProcName}
+                    onChange={e => setNewProcName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') addProc() }}
+                    placeholder="skill name…"
+                    className="flex-1 bg-surface-base border border-white/10 rounded px-2 py-1 text-xs text-slate-300 font-mono outline-none focus:border-primary/30 placeholder-slate-700"
+                  />
+                  <button
+                    onClick={addProc}
+                    disabled={!newProcName.trim()}
+                    className="px-2 py-1 text-xs border border-white/10 rounded text-slate-500 hover:text-slate-300 hover:border-white/20 disabled:opacity-30"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>

@@ -6,10 +6,10 @@ import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 
 // Tier-1 global bindings — work at any level except inside a terminal (iframe captures keyboard)
 const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
-  { key: ']',         label: 'Next session' },
-  { key: '[',         label: 'Prev session' },
-  { key: 'Shift+]',   label: 'Next (all)' },
-  { key: 'Shift+[',   label: 'Prev (all)' },
+  { key: ']',         label: 'Focus next waiting' },
+  { key: '[',         label: 'Focus prev waiting' },
+  { key: 'Shift+]',   label: 'Focus next session' },
+  { key: 'Shift+[',   label: 'Focus prev session' },
   { key: '?',         label: 'Hotkeys' },
   { key: 'S',         label: 'New session' },
 ]
@@ -27,10 +27,24 @@ const MIN_W = 140
 const MAX_W = 320
 const DEFAULT_W = 180
 
+function formatKey(key: string): string {
+  return key.split('+').map(part => {
+    const keyCode = part.match(/^Key([A-Z])$/)
+    if (keyCode) return keyCode[1]
+    const digit = part.match(/^Digit(\d)$/)
+    if (digit) return digit[1]
+    if (part === 'ArrowUp') return '↑'
+    if (part === 'ArrowDown') return '↓'
+    if (part === 'ArrowLeft') return '←'
+    if (part === 'ArrowRight') return '→'
+    return part
+  }).join('+')
+}
+
 function KeyBadge({ label }: { label: string }) {
   return (
     <span className="inline-flex items-center px-1 py-0 bg-surface-raised border border-white/20 rounded text-2xs font-mono text-slate-300">
-      {label}
+      {formatKey(label)}
     </span>
   )
 }
