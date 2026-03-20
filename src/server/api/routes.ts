@@ -664,6 +664,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         return workspacePath ? resolve(workspacePath, filePath.replace(/^\/+/, '')) : filePath
       })()
 
+      if (workspacePath && !absoluteFilePath.startsWith(workspacePath + '/')) {
+        json(res, { ok: false, error: { code: 'PATH_OUTSIDE_WORKSPACE', message: 'filePath must be inside the session workspace' } }, 403)
+        return
+      }
+
       let naturalWidth = 640
       let naturalHeight = 480
       try {
@@ -753,7 +758,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
     const contentType = mimeMap[ext] ?? 'application/octet-stream'
     res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-store' })
-    createReadStream(absolutePath).pipe(res)
+    const stream = createReadStream(absolutePath)
+    req.on('close', () => stream.destroy())
+    stream.pipe(res)
     return true
   }
 

@@ -35,6 +35,7 @@ export function ImageViewerWidget({ data }: WidgetProps) {
   const secondsAgo = lastUpdatedAt ? Math.max(0, Math.floor((now - lastUpdatedAt.getTime()) / 1000)) : null
 
   const [imgError, setImgError] = useState(false)
+  useEffect(() => { setImgError(false) }, [imgSrc])
 
   return (
     <div className="flex flex-col h-full bg-surface-base text-slate-300 overflow-hidden">
