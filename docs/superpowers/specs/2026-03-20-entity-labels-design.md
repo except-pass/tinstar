@@ -9,7 +9,7 @@
 
 Users can rename and re-icon their hierarchy levels (currently hardcoded as Initiative → Epic → Task) and control how many levels are active (1–3). Configuration is per-space and persisted on the Space record. No data migration is required — labels are display-only.
 
-**Example:** A team using "Client → Project → Ticket" renames all three levels and saves. The sidebar, canvas container headers, GroupingControls, and entity creation dialogs all reflect the new names immediately.
+**Example:** A team using "Client → Project → Ticket" renames all three levels and saves. The sidebar, canvas container headers, and entity creation dialogs all reflect the new names immediately.
 
 ---
 
@@ -85,7 +85,7 @@ function autoPlural(word: string): string {
 }
 ```
 
-Used in: sidebar section headers, GroupingControls chips, entity creation dialog titles.
+Used in: sidebar section headers, entity creation dialog titles.
 
 ---
 
@@ -115,15 +115,20 @@ Reads from the active space's `labelConfig.levels`, falling back to defaults. Re
 
 - `dimensions` is derived from `labelConfig.levels.length` via the internal mapping table above
 - It is no longer stored in localStorage
-- `GroupingControls` is retired (level count is now controlled from Settings only)
+- `GroupingControls` is removed. The existing drag-reorder feature is intentionally dropped — level order is always fixed top-to-bottom by the internal mapping, so reordering has no meaning under this model.
 
 ### One-time localStorage migration
 
-On first load, if a space has no `labelConfig`:
+On first load, if the active space has no `labelConfig`:
 1. Read `tinstar-dimensions` from localStorage
-2. Use its length to set the initial `levels` count (with default labels/icons)
-3. Save back to the space via `PATCH /api/spaces/:id`
-4. Remove the `tinstar-dimensions` localStorage key
+2. Use its length (1–3) to set the initial `levels` count, filling with default labels/icons for the appropriate bottom-N levels
+3. `PATCH /api/spaces/:id` with the derived `labelConfig`
+4. Only on successful PATCH: remove the `tinstar-dimensions` localStorage key
+
+**Race / failure handling:**
+- The presence of `space.labelConfig` is the authoritative migration guard — if it already exists, skip migration entirely (idempotent)
+- If the PATCH fails, log a warning but do **not** delete localStorage; the user will retry on next load
+- With multiple tabs open, the second tab will see `labelConfig` already set (from the first tab's PATCH) and skip migration
 
 ### Call sites to update
 
@@ -132,7 +137,7 @@ All reads of `DIMENSION_REGISTRY` / `getDimensionIcon()` / hardcoded dimension s
 | File | Change |
 |------|--------|
 | `src/domain/dimension-meta.ts` | Export `DEFAULT_LEVELS`; `getDimensionIcon` reads from hook context or accepts `LevelMeta[]` |
-| `src/components/GroupingControls.tsx` | **Deleted** — level count moved to Settings |
+| `src/components/GroupingControls.tsx` | **Deleted** — level count and reorder removed; Settings owns level config |
 | `src/components/HierarchySidebar.tsx` | Node icon/label from `useDimensionMeta()` |
 | `src/components/CreateEntityDialog.tsx` | Dialog title uses label from meta (e.g. "New Client" not "New Initiative") |
 | `src/components/WorkspaceShell.tsx` | Derive `dimensions` from `labelConfig`; remove GroupingControls; localStorage migration |
@@ -178,7 +183,7 @@ Entity Labels                              [Work Space ▾]
 
 - **Level 3 (leaf)** marked with a green dot; ✕ button absent/disabled — leaf can never be removed
 - **✕ on Level 1** removes it; levels renumber; preview updates
-- **"+ Add level above leaf"** prepends a new row with defaults (`📦 Group`); hidden when 3 levels exist
+- **"+ Add level above leaf"** prepends a new row with `{ icon: '📦', label: 'Group' }` — always these fixed defaults regardless of how many times it's clicked; hidden when 3 levels already exist
 - **Plural input** placeholder shows the auto-plural of the current singular as a hint
 - **Save button** disabled until any field changes; enables on first keystroke
 - **Live preview** updates as you type; the actual app only updates on Save
@@ -197,10 +202,14 @@ Extend the existing endpoint to accept and persist `labelConfig`:
 { labelConfig: { levels: LevelLabel[] } }
 ```
 
-Validation:
-- `levels` length must be 1–3
-- Each level must have a non-empty `label` and `icon`
-- `plural` is optional
+The existing handler does a shallow merge with no validation. Add explicit server-side validation before persisting:
+
+- `labelConfig.levels` must be an array of length 1–3
+- Each entry must have a non-empty `label` (string) and `icon` (string)
+- `plural` is optional (string or absent)
+- Return `400 Bad Request` with a descriptive message on any violation
+
+The existing shallow merge (`{ ...existing, ...patch }`) works correctly for top-level fields but **does not deep-merge** nested objects. `labelConfig` is always replaced wholesale — partial `labelConfig` patches are not supported.
 
 No new endpoints needed. `GET /api/state` already returns full space records, so `labelConfig` is available to the frontend on bootstrap and space switch.
 
@@ -223,5 +232,6 @@ No new endpoints needed. `GET /api/state` already returns full space records, so
 |------|--------|-------|
 | Active levels | `tinstar-dimensions` localStorage | `space.labelConfig.levels.length` |
 | Level labels/icons | Hardcoded in `dimension-meta.ts` | `space.labelConfig.levels[i]` |
-| GroupingControls | Chip bar at top of screen | Removed |
+| GroupingControls | Chip bar at top of screen (add/remove/reorder) | Removed entirely |
 | Level count UI | GroupingControls add/remove chips | Settings → Entity Labels tab |
+| Dimension reorder | GroupingControls drag-reorder | Removed (fixed top-to-bottom order) |
