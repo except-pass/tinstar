@@ -118,6 +118,21 @@ export interface BrowserWidget {
   color?: string
 }
 
+export interface ImageWidget {
+  id: string
+  spaceId?: string
+  sessionId: string
+  filePath: string
+  task: string
+  epic: string
+  initiative: string
+  worktree: string
+  repo: string
+  color?: string
+  naturalWidth: number
+  naturalHeight: number
+}
+
 // --- Grouping ---
 
 export type GroupingDimension = 'initiative' | 'epic' | 'task' | 'worktree'
@@ -167,7 +182,7 @@ export interface Rect {
 
 export interface SelectionState {
   selectedIds: Set<string>
-  selectedType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | null
+  selectedType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | null
   expandedIds: Set<string>
   hoveredId: string | null
 }
