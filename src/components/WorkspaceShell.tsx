@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { BrowserWidget, EditorWidget, GroupingDimension, Run, TreeNode } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, GroupingDimension, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
@@ -60,7 +60,7 @@ function WorkspaceShellInner() {
     return ['initiative', 'epic', 'task']
   })
 
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, connected } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, connected } = useBackendState()
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -118,8 +118,26 @@ function WorkspaceShellInner() {
     return map
   }, [browserWidgets])
 
+  const syntheticImageNodes: TreeNode[] = useMemo(
+    () =>
+      imageWidgets.map(w => ({
+        id: w.id,
+        label: w.filePath.split('/').pop() ?? w.filePath,
+        type: 'image-viewer' as const,
+        entityId: w.id,
+        children: [],
+      })),
+    [imageWidgets],
+  )
+
+  const imageWidgetMap = useMemo(() => {
+    const map = new Map<string, ImageWidget>()
+    for (const w of imageWidgets) map.set(w.id, w)
+    return map
+  }, [imageWidgets])
+
   const canvasTree = useMemo(() => {
-    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes]
+    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes]
     if (allSynthetic.length === 0) return sidebarTree
 
     // Map taskNodeId → synthetic nodes to nest inside it
@@ -152,6 +170,18 @@ function WorkspaceShellInner() {
       }
     }
 
+    for (const node of syntheticImageNodes) {
+      const widget = imageWidgets.find(w => w.id === node.entityId)
+      const run = widget ? [...runMap.values()].find(r => r.sessionId === widget.sessionId) : undefined
+      const taskNodeId = run?.taskId ? `task-${run.taskId}` : null
+      if (taskNodeId) {
+        const existing = byTaskNode.get(taskNodeId) ?? []
+        byTaskNode.set(taskNodeId, [...existing, node])
+      } else {
+        orphans.push(node)
+      }
+    }
+
     if (byTaskNode.size === 0) return [...sidebarTree, ...orphans]
 
     function inject(nodes: TreeNode[]): TreeNode[] {
@@ -164,14 +194,15 @@ function WorkspaceShellInner() {
     }
 
     return [...inject(sidebarTree), ...orphans]
-  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, editorWidgets, browserWidgets, runMap])
+  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
 
   const allNodeIds = useMemo(() => {
     const ids: string[] = Array.from(runMap.keys()).map(id => `run-${id}`)
     for (const w of editorWidgets) ids.push(w.id)
     for (const w of browserWidgets) ids.push(w.id)
+    for (const w of imageWidgets) ids.push(w.id)
     return ids
-  }, [runMap, editorWidgets, browserWidgets])
+  }, [runMap, editorWidgets, browserWidgets, imageWidgets])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
@@ -300,6 +331,10 @@ function WorkspaceShellInner() {
     }
     if (type === 'browser-widget') {
       fetch(`/api/browser-widgets/${entityId}`, { method: 'DELETE' })
+      return
+    }
+    if (type === 'image-viewer') {
+      fetch(`/api/image-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
     const endpointMap: Record<string, string> = {
