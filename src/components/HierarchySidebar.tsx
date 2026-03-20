@@ -283,9 +283,9 @@ function SidebarNode({
         onClick={(e) => {
           if (editing || dragNodeId) return
           if (e.ctrlKey || e.metaKey) {
-            toggleSelect(node.id, node.type)
+            toggleSelect(node.id, node.type as GroupingDimension | 'run' | 'file-editor')
           } else {
-            select(node.id, node.type)
+            select(node.id, node.type as GroupingDimension | 'run' | 'file-editor')
           }
         }}
         onDoubleClick={() => {
@@ -372,7 +372,7 @@ function SidebarNode({
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-accent-red opacity-0 group-hover:opacity-100"
             onClick={(e) => {
               e.stopPropagation()
-              onDelete(node.entityId, node.type)
+              onDelete(node.entityId, node.type as GroupingDimension)
             }}
             aria-label={`Close ${node.label}`}
             style={{ opacity: hovered ? 1 : undefined }}
@@ -418,10 +418,10 @@ function SidebarNode({
               className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100 hover:!opacity-100"
               onClick={(e) => {
                 e.stopPropagation()
-                onAdd(node.entityId, nextChildType(node.type, dimensions))
+                onAdd(node.entityId, nextChildType(node.type as GroupingDimension | 'run', dimensions))
               }}
               data-testid={`add-child-${node.id}`}
-              aria-label={`Add ${nextChildType(node.type, dimensions)}`}
+              aria-label={`Add ${nextChildType(node.type as GroupingDimension | 'run', dimensions)}`}
               style={{ opacity: hovered ? 1 : undefined }}
             >
               +

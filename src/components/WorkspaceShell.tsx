@@ -23,7 +23,6 @@ import type { FocusNode } from '../hotkeys/FocusPathContext'
 import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
 
-import { CommitActivityPanel } from './CommitActivityPanel'
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
 function findAncestorIds(tree: TreeNode[], targetId: string): string[] {

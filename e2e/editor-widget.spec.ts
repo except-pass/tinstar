@@ -2,7 +2,7 @@ import { test, expect } from './fixtures'
 import { resetAndWaitForData } from './helpers'
 
 /** Helper: create an editor widget via API and return the widget data */
-async function createEditorWidget(page: Parameters<Parameters<typeof test>[1]>[0], filePath = '/etc/hostname') {
+async function createEditorWidget(page: import('@playwright/test').Page, filePath = '/etc/hostname') {
   const state = await page.evaluate(async () => {
     const r = await fetch('/api/state')
     return r.json()

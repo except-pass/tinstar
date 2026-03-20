@@ -1,4 +1,4 @@
-import { test, expect, type Page } from './fixtures'
+import { test, expect } from './fixtures'
 import { resetAndWaitForData } from './helpers'
 
 test.describe('Real-Time SSE Updates', () => {

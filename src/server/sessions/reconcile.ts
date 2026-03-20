@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+
 import { listSessions, setState, claudeStateDir, type Session, type SessionState } from './session'
 import { readSessionStatus } from './transcript-parser'
 

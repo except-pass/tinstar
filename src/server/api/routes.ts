@@ -22,7 +22,7 @@ import {
   registerProject,
   unregisterProject,
   createWorktree,
-  deleteWorktree,
+
   listWorktrees,
   reconcileSessionStates,
   loadSecrets,

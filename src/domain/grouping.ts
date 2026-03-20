@@ -346,7 +346,7 @@ export function computeRollup(node: TreeNode, runs: Run[]): GroupRollupViewModel
   return {
     id: node.id,
     label: node.label,
-    type: groupType,
+    type: groupType as GroupingDimension,
     runCount: nodeRuns.length,
     activeCount: nodeRuns.filter(r => r.status === 'running').length,
     completedCount: nodeRuns.filter(r => r.status === 'stopped').length,

@@ -187,7 +187,7 @@ test.describe('Hotkeys', () => {
         if (!visible) return null
         return w.getAttribute('data-testid')
       }
-      const first = await getSelected()
+      await getSelected()
       await page.keyboard.press(']')
       const second = await getSelected()
       expect(second).not.toBeNull()

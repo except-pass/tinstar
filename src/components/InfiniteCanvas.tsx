@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { BrowserWidget, EditorWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
-import { useWidgetLayouts, type WidgetLayout } from '../hooks/useWidgetLayouts'
+import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
 import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
 import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
@@ -135,25 +135,6 @@ function computeTreemapLayouts(
   return result
 }
 
-/** Collect leaf node IDs that are descendants of the given selected entity node IDs */
-function collectRunsUnderSelected(
-  nodes: TreeNode[],
-  selectedIds: Set<string>,
-): string[] {
-  const result: string[] = []
-  for (const node of nodes) {
-    if (selectedIds.has(node.id)) {
-      if (!getWidgetComponent(toWidgetType(node.type))?.isContainer) {
-        result.push(node.id)
-      } else {
-        result.push(...collectRunNodeIds(node.children))
-      }
-    } else {
-      result.push(...collectRunsUnderSelected(node.children, selectedIds))
-    }
-  }
-  return result
-}
 
 interface MarqueeRect {
   startX: number
@@ -254,16 +235,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => el.removeEventListener('wheel', handler)
   }, [handleWheel])
 
-  /** Convert client coords to canvas coords */
-  const clientToCanvas = useCallback((clientX: number, clientY: number) => {
-    const el = containerRef.current
-    if (!el) return { x: 0, y: 0 }
-    const rect = el.getBoundingClientRect()
-    return {
-      x: (clientX - rect.left - camera.x) / camera.zoom,
-      y: (clientY - rect.top - camera.y) / camera.zoom,
-    }
-  }, [camera])
 
   // --- Pointer handlers: pan OR marquee ---
   const onPointerDown = useCallback(
@@ -656,7 +627,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   )
 
   // Recursive render: groups render behind their children (natural DOM order)
-  function renderNode(node: TreeNode, depth: number): React.ReactNode {
+  function renderNode(node: TreeNode, _depth: number): React.ReactNode {
     const widgetType = toWidgetType(node.type)
     const reg = getWidgetComponent(widgetType)
     if (!reg) {
