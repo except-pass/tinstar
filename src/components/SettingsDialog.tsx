@@ -1,4 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { useDimensionMeta, autoPlural } from '../hooks/useDimensionMeta'
+import { useBackendState } from '../hooks/useBackendState'
+import type { LevelLabel } from '../domain/types'
 
 interface Project {
   name: string
@@ -11,7 +14,7 @@ interface ImageProfile {
   home?: string
 }
 
-type Section = 'projects' | 'docker' | 'editor'
+type Section = 'projects' | 'docker' | 'editor' | 'labels'
 
 interface Props {
   onClose: () => void
@@ -22,6 +25,17 @@ export function SettingsDialog({ onClose }: Props) {
   const projectsRef = useRef<HTMLDivElement>(null)
   const dockerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<HTMLDivElement>(null)
+  const labelsRef = useRef<HTMLDivElement>(null)
+
+  const { activeSpaceId, spaces } = useBackendState()
+  const activeSpace = spaces.find(s => s.id === activeSpaceId)
+  const currentMeta = useDimensionMeta()
+
+  const [labelLevels, setLabelLevels] = useState<LevelLabel[]>(() =>
+    currentMeta.map(m => ({ icon: m.icon, label: m.label, plural: '' }))
+  )
+  const [labelsDirty, setLabelsDirty] = useState(false)
+  const [labelsSaving, setLabelsSaving] = useState(false)
 
   // Projects
   const [projects, setProjects] = useState<Project[]>([])
@@ -140,6 +154,30 @@ export function SettingsDialog({ onClose }: Props) {
     fetchProfiles()
   }, [fetchProfiles])
 
+  const handleSaveLabels = useCallback(async () => {
+    if (!activeSpaceId) return
+    setLabelsSaving(true)
+    try {
+      const res = await fetch(`/api/spaces/${activeSpaceId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ labelConfig: { levels: labelLevels } }),
+      })
+      if (res.ok) setLabelsDirty(false)
+    } finally {
+      setLabelsSaving(false)
+    }
+  }, [activeSpaceId, labelLevels])
+
+  const handleResetLabels = useCallback(() => {
+    setLabelLevels([
+      { icon: '🚀', label: 'Initiative' },
+      { icon: '🏔️', label: 'Epic' },
+      { icon: '🗂️', label: 'Task' },
+    ])
+    setLabelsDirty(true)
+  }, [])
+
   const scrollTo = useCallback((ref: React.RefObject<HTMLDivElement | null>) => {
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [])
@@ -148,6 +186,7 @@ export function SettingsDialog({ onClose }: Props) {
     { key: 'projects', label: 'Projects', icon: 'folder', ref: projectsRef },
     { key: 'docker', label: 'Docker', icon: 'deployed_code', ref: dockerRef },
     { key: 'editor', label: 'Editor', icon: 'edit', ref: editorRef },
+    { key: 'labels', label: 'Entity Labels', icon: 'label', ref: labelsRef },
   ]
 
   return (
@@ -396,6 +435,128 @@ export function SettingsDialog({ onClose }: Props) {
               <span>cursor {'{{path}}'}</span>
               <span>code -g {'{{path}}'}</span>
               <span>subl {'{{path}}'}</span>
+            </div>
+          </div>
+
+          {/* ── Separator ── */}
+          <div className="mx-5 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
+          {/* ── Entity Labels ── */}
+          <div ref={labelsRef} className="px-5 pt-5 pb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-xs font-display uppercase tracking-wider text-slate-300">
+                Entity Labels
+              </h4>
+              {activeSpace && (
+                <span className="text-2xs text-slate-500 bg-surface-raised border border-white/7 rounded px-2 py-0.5">
+                  {activeSpace.name}
+                </span>
+              )}
+            </div>
+
+            {/* Column headers */}
+            <div className="flex items-center gap-2 px-3 mb-1 text-2xs text-slate-600 uppercase tracking-wide">
+              <span style={{minWidth:44}}>Level</span>
+              <span style={{width:30}}>Icon</span>
+              <span className="flex-1">Singular</span>
+              <span style={{width:96}}>Plural</span>
+              <span style={{width:20}}></span>
+            </div>
+
+            {/* Level rows */}
+            <div className="flex flex-col gap-1.5">
+              {labelLevels.map((lvl, i) => {
+                const isLeaf = i === labelLevels.length - 1
+                return (
+                  <div key={i} className="flex items-center gap-2 px-3 py-2 bg-surface-raised border border-white/7 rounded-md">
+                    <span className="text-2xs text-slate-500 font-mono" style={{minWidth:44}}>
+                      Level {i + 1}{isLeaf && <span className="text-green-500 ml-1">●</span>}
+                    </span>
+                    {/* Icon — simple emoji input */}
+                    <input
+                      className="w-8 h-7 text-center bg-surface-panel border border-white/10 rounded text-base cursor-pointer"
+                      value={lvl.icon}
+                      maxLength={2}
+                      onChange={e => {
+                        const next = [...labelLevels]
+                        next[i] = { ...next[i]!, icon: e.target.value }
+                        setLabelLevels(next)
+                        setLabelsDirty(true)
+                      }}
+                      title="Click to change icon (paste any emoji)"
+                    />
+                    {/* Singular */}
+                    <input
+                      className="flex-1 bg-surface-panel border border-white/10 rounded px-2 py-1 text-xs text-slate-200 focus:border-primary/50 outline-none"
+                      value={lvl.label}
+                      placeholder="Label"
+                      onChange={e => {
+                        const next = [...labelLevels]
+                        next[i] = { ...next[i]!, label: e.target.value }
+                        setLabelLevels(next)
+                        setLabelsDirty(true)
+                      }}
+                    />
+                    {/* Plural */}
+                    <input
+                      className="bg-surface-panel border border-white/10 rounded px-2 py-1 text-xs text-slate-400 focus:border-primary/50 outline-none"
+                      style={{width:96}}
+                      value={lvl.plural ?? ''}
+                      placeholder={autoPlural(lvl.label) || 'auto'}
+                      onChange={e => {
+                        const next = [...labelLevels]
+                        next[i] = { ...next[i]!, plural: e.target.value }
+                        setLabelLevels(next)
+                        setLabelsDirty(true)
+                      }}
+                    />
+                    {/* Remove button — only non-leaf */}
+                    <button
+                      className={`text-xs w-5 h-5 flex items-center justify-center rounded transition-colors ${!isLeaf && labelLevels.length > 1 ? 'text-slate-500 hover:text-red-400 hover:bg-red-400/10' : 'opacity-0 pointer-events-none'}`}
+                      onClick={() => {
+                        if (isLeaf || labelLevels.length <= 1) return
+                        setLabelLevels(labelLevels.filter((_, j) => j !== i))
+                        setLabelsDirty(true)
+                      }}
+                      aria-label="Remove level"
+                    >✕</button>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Add level button */}
+            {labelLevels.length < 3 && (
+              <button
+                className="mt-2 w-full py-2 text-xs text-slate-500 border border-dashed border-white/10 rounded-md hover:text-slate-300 hover:border-white/20 transition-colors"
+                onClick={() => {
+                  setLabelLevels([{ icon: '📦', label: 'Group', plural: '' }, ...labelLevels])
+                  setLabelsDirty(true)
+                }}
+              >
+                + Add level above leaf
+              </button>
+            )}
+
+            <p className="text-2xs text-slate-600 mt-3">
+              Labels apply to this space only. Plural is auto-computed if left blank. No data migration needed.
+            </p>
+
+            {/* Footer actions */}
+            <div className="flex items-center justify-between mt-4">
+              <button
+                className="text-2xs text-slate-600 underline decoration-slate-700 hover:text-slate-400"
+                onClick={handleResetLabels}
+              >
+                Reset to defaults
+              </button>
+              <button
+                className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/35 rounded hover:bg-primary/30 disabled:opacity-40 disabled:cursor-default transition-colors"
+                disabled={!labelsDirty || labelsSaving}
+                onClick={handleSaveLabels}
+              >
+                {labelsSaving ? 'Saving…' : 'Save'}
+              </button>
             </div>
           </div>
 
