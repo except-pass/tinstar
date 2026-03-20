@@ -22,7 +22,7 @@ import { triggerWidgetFlourish, registerActionHandler, deregisterActionHandler }
 import type { FocusNode } from '../hotkeys/FocusPathContext'
 import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
-import { HotkeysSidebar } from './HotkeysSidebar'
+
 import { CommitActivityPanel } from './CommitActivityPanel'
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
@@ -671,8 +671,7 @@ function WorkspaceShellInner() {
                     arrangeResetRef={arrangeResetRef}
                   />
                 </div>
-                {/* Hotkeys sidebar (right) */}
-                <HotkeysSidebar />
+
               </div>
 
               {/* Feature-flagged: commit activity panel disabled for now
