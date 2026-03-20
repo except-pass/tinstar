@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 
@@ -15,6 +15,7 @@ export class DocumentStore {
   private commits = new Map<string, CommitRecord>()
   private editorWidgets = new Map<string, EditorWidget>()
   private browserWidgets = new Map<string, BrowserWidget>()
+  private imageWidgets = new Map<string, ImageWidget>()
 
   activeSpaceId: string = ''
 
@@ -42,6 +43,7 @@ export class DocumentStore {
       if (data.commits) for (const c of data.commits) this.commits.set(c.sha, c)
       if (data.editorWidgets) for (const w of data.editorWidgets) this.editorWidgets.set(w.id, w)
       if (data.browserWidgets) for (const w of data.browserWidgets) this.browserWidgets.set(w.id, w)
+      if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
     } catch {
       // No file or corrupt — start fresh
     }
@@ -317,6 +319,22 @@ export class DocumentStore {
     return [...this.browserWidgets.values()]
   }
 
+  // --- Image Widgets ---
+
+  upsertImageWidget(id: string, data: ImageWidget): void {
+    this.imageWidgets.set(id, data)
+    this.changes.emit('change', { entity: 'imageWidget', id, data })
+  }
+
+  deleteImageWidget(id: string): void {
+    this.imageWidgets.delete(id)
+    this.changes.emit('change', { entity: 'imageWidget', id, data: null })
+  }
+
+  getAllImageWidgets(): ImageWidget[] {
+    return [...this.imageWidgets.values()]
+  }
+
   // --- Snapshot (filtered by active space) ---
   // Include entities that match the active space OR have no spaceId (homeless).
   // This ensures nothing silently vanishes from the UI.
@@ -334,6 +352,7 @@ export class DocumentStore {
       runs: this.getAllRuns().filter(inSpace),
       editorWidgets: this.getAllEditorWidgets().filter(inSpace),
       browserWidgets: this.getAllBrowserWidgets().filter(inSpace),
+      imageWidgets: this.getAllImageWidgets().filter(inSpace),
     }
   }
 
@@ -350,6 +369,7 @@ export class DocumentStore {
       commits: this.getAllCommits(),
       editorWidgets: this.getAllEditorWidgets(),
       browserWidgets: this.getAllBrowserWidgets(),
+      imageWidgets: this.getAllImageWidgets(),
     }
   }
 
@@ -364,6 +384,7 @@ export class DocumentStore {
     for (const [id, e] of this.runs) if (e.spaceId === spaceId) this.runs.delete(id)
     for (const [id, e] of this.editorWidgets) if (e.spaceId === spaceId) this.editorWidgets.delete(id)
     for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) this.browserWidgets.delete(id)
+    for (const [id, e] of this.imageWidgets) if (e.spaceId === spaceId) this.imageWidgets.delete(id)
     this.changes.emit('change', { entity: 'all', id: '*', data: null })
   }
 
@@ -381,6 +402,7 @@ export class DocumentStore {
       this.runs.clear()
       this.editorWidgets.clear()
       this.browserWidgets.clear()
+      this.imageWidgets.clear()
       // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
     }
