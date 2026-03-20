@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, GroupingDimension, Run, TreeNode } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
+import { useDimensionMeta } from '../hooks/useDimensionMeta'
+import { DEFAULT_LEVELS } from '../domain/dimension-meta'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
 import { cycleNext, cyclePrev } from '../hooks/useReadyQueue'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
 import { SettingsDialog } from './SettingsDialog'
-import { GroupingControls } from './GroupingControls'
 import HierarchySidebar from './HierarchySidebar'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { SelectionProvider, useSelection } from './SelectionProvider'
@@ -52,15 +53,41 @@ function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
 }
 
 function WorkspaceShellInner() {
-  const [dimensions, setDimensions] = useState<GroupingDimension[]>(() => {
-    try {
-      const stored = localStorage.getItem('tinstar-dimensions')
-      if (stored) return JSON.parse(stored) as GroupingDimension[]
-    } catch { /* ignore */ }
-    return ['initiative', 'epic', 'task']
-  })
-
   const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, connected } = useBackendState()
+
+  const levelMeta = useDimensionMeta()
+  const dimensions = useMemo(
+    () => levelMeta.map(m => m.internalType),
+    [levelMeta],
+  )
+
+  // One-time migration: promote tinstar-dimensions localStorage → space.labelConfig
+  useEffect(() => {
+    if (!activeSpaceId) return
+    const activeSpace = spaces.find(s => s.id === activeSpaceId)
+    if (!activeSpace || activeSpace.labelConfig) return  // already migrated
+
+    const stored = localStorage.getItem('tinstar-dimensions')
+    let count = 3
+    try {
+      const parsed = JSON.parse(stored ?? '[]') as string[]
+      if (parsed.length >= 1 && parsed.length <= 3) count = parsed.length
+    } catch { /* ignore */ }
+
+    // Use bottom-N defaults matching the stored count
+    const levels: LevelLabel[] = DEFAULT_LEVELS.slice(DEFAULT_LEVELS.length - count)
+
+    fetch(`/api/spaces/${activeSpaceId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labelConfig: { levels } }),
+    }).then(r => {
+      if (r.ok) localStorage.removeItem('tinstar-dimensions')
+      else console.warn('[tinstar] labelConfig migration failed; will retry on next load')
+    }).catch(() => {
+      console.warn('[tinstar] labelConfig migration failed; will retry on next load')
+    })
+  }, [activeSpaceId, spaces])
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -297,11 +324,6 @@ function WorkspaceShellInner() {
 
   const handleDeleteSpace = useCallback((id: string) => {
     fetch(`/api/spaces/${id}`, { method: 'DELETE' })
-  }, [])
-
-  const handleDimensionsChange = useCallback((dims: GroupingDimension[]) => {
-    setDimensions(dims)
-    localStorage.setItem('tinstar-dimensions', JSON.stringify(dims))
   }, [])
 
   const handleRename = useCallback((entityId: string, type: GroupingDimension, newName: string) => {
@@ -603,15 +625,11 @@ function WorkspaceShellInner() {
           <TaxonomyProvider taxRepo={taxRepo}>
           <SkillsProvider>
             <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
-              {/* Top bar: GroupingControls + logo + status */}
+              {/* Top bar: logo + status */}
               <div
                 className="flex items-center justify-between px-4 py-2 bg-surface-panel border-b border-white/10 relative"
                 data-testid="controls-bar"
               >
-                <GroupingControls
-                  activeDimensions={dimensions}
-                  onDimensionsChange={handleDimensionsChange}
-                />
                 <img src="/logo.png" alt="Tinstar" className="h-6 absolute left-1/2 -translate-x-1/2 pointer-events-none select-none opacity-80" />
                 <div className="flex items-center gap-3 ml-4 flex-shrink-0">
                   <button
