@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -32,7 +32,7 @@ import {
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import { parseNewEntries } from '../sessions/transcript-parser'
 import { getGitDiffFiles } from '../sessions/git-diff'
-import type { Run, EditorWidget } from '../../domain/types'
+import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import type { FileKind, TouchedFile } from '../../types'
 import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
@@ -42,6 +42,7 @@ import { spec as openapiSpec } from './openapi'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
+import { imageSize } from 'image-size'
 
 function inferFileKind(filePath: string): FileKind {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -632,6 +633,180 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
     ctx.docStore.deleteEditorWidget(id)
     json(res, { ok: true })
+    return true
+  }
+
+  // POST /api/image-widgets
+  if (method === 'POST' && url === '/api/image-widgets') {
+    readBody(req).then(body => {
+      const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
+      if (!sessionId || !filePath) {
+        json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId and filePath required' } }, 400)
+        return
+      }
+      const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
+      if (!run) {
+        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }, 404)
+        return
+      }
+      const task = ctx.docStore.getAllTasks().find(t => t.id === run.taskId)
+      const epic = task ? ctx.docStore.getAllEpics().find(e => e.id === task.epicId) : undefined
+      const initiative = epic ? ctx.docStore.getAllInitiatives().find(i => i.id === epic.initiativeId) : undefined
+      const worktree = ctx.docStore.getAllWorktrees().find(w => w.id === run.worktreeId)
+
+      const sessDir = ctx.sessionConfig?.dirs.sessions ?? ''
+      const session = getSession(sessDir, sessionId)
+      const workspacePath = session?.workspace?.path
+      const absoluteFilePath = (() => {
+        if (!filePath.startsWith('/')) return workspacePath ? resolve(workspacePath, filePath) : filePath
+        if (existsSync(filePath)) return filePath
+        return workspacePath ? resolve(workspacePath, filePath.replace(/^\/+/, '')) : filePath
+      })()
+
+      let naturalWidth = 640
+      let naturalHeight = 480
+      try {
+        const dims = imageSize(absoluteFilePath)
+        naturalWidth = dims.width ?? 640
+        naturalHeight = dims.height ?? 480
+      } catch {
+        // unsupported format or corrupt — use fallback
+      }
+
+      const widget: ImageWidget = {
+        id: shortId('image'),
+        spaceId: ctx.docStore.activeSpaceId || undefined,
+        sessionId,
+        filePath: absoluteFilePath,
+        task: task?.name ?? '',
+        epic: epic?.name ?? '',
+        initiative: initiative?.name ?? '',
+        worktree: worktree?.name ?? '',
+        repo: worktree?.repo ?? run.repo ?? '',
+        color: run.color,
+        naturalWidth,
+        naturalHeight,
+      }
+      ctx.docStore.upsertImageWidget(widget.id, widget)
+      json(res, { ok: true, data: widget })
+    })
+    return true
+  }
+
+  // DELETE /api/image-widgets/:id
+  if (method === 'DELETE' && url.startsWith('/api/image-widgets/')) {
+    const id = url.slice('/api/image-widgets/'.length)
+    const existing = ctx.docStore.getAllImageWidgets().find(w => w.id === id)
+    if (!existing) {
+      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `ImageWidget ${id} not found` } }, 404)
+      return true
+    }
+    ctx.docStore.deleteImageWidget(id)
+    json(res, { ok: true })
+    return true
+  }
+
+  // GET /api/image-file?session=SESSION_ID&path=FILE_PATH
+  if (method === 'GET' && url.startsWith('/api/image-file')) {
+    const qs = new URL(url, 'http://localhost').searchParams
+    const sessionId = qs.get('session')
+    const filePath = qs.get('path')
+
+    if (!sessionId || !filePath) {
+      json(res, { error: 'session and path required' }, 400)
+      return true
+    }
+
+    let absolutePath: string
+    if (filePath.startsWith('/') && existsSync(filePath)) {
+      absolutePath = filePath
+    } else {
+      const sessDir = ctx.sessionConfig?.dirs.sessions
+      if (!sessDir) { json(res, { error: 'session config unavailable' }, 503); return true }
+      const session = getSession(sessDir, sessionId)
+      if (!session) { json(res, { error: 'session not found' }, 404); return true }
+      const workspacePath = session.workspace?.path ?? null
+      if (!workspacePath) { json(res, { error: 'session workspace unavailable' }, 400); return true }
+      absolutePath = filePath.startsWith('/')
+        ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
+        : resolve(workspacePath, filePath)
+    }
+
+    if (!existsSync(absolutePath)) {
+      json(res, { error: 'file not found' }, 404)
+      return true
+    }
+
+    const ext = absolutePath.split('.').pop()?.toLowerCase() ?? ''
+    const mimeMap: Record<string, string> = {
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+      gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+      bmp: 'image/bmp', ico: 'image/x-icon',
+    }
+    const contentType = mimeMap[ext] ?? 'application/octet-stream'
+    res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-store' })
+    createReadStream(absolutePath).pipe(res)
+    return true
+  }
+
+  // GET /api/image-watch?session=SESSION_ID&path=FILE_PATH
+  if (method === 'GET' && url.startsWith('/api/image-watch')) {
+    const qs = new URL(url, 'http://localhost').searchParams
+    const sessionId = qs.get('session')
+    const filePath = qs.get('path')
+
+    if (!sessionId || !filePath) {
+      json(res, { error: 'session and path required' }, 400)
+      return true
+    }
+
+    let absolutePath: string
+    if (filePath.startsWith('/') && existsSync(filePath)) {
+      absolutePath = filePath
+    } else {
+      const sessDir = ctx.sessionConfig?.dirs.sessions
+      if (!sessDir) { json(res, { error: 'session config unavailable' }, 503); return true }
+      const session = getSession(sessDir, sessionId)
+      if (!session) { json(res, { error: 'session not found' }, 404); return true }
+      const workspacePath = session.workspace?.path ?? null
+      if (!workspacePath) { json(res, { error: 'session workspace unavailable' }, 400); return true }
+      absolutePath = filePath.startsWith('/')
+        ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
+        : resolve(workspacePath, filePath)
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    })
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    let watcher: ReturnType<typeof watch> | null = null
+    const keepalive = setInterval(() => { res.write(': keep-alive\n\n') }, 15_000)
+
+    const cleanup = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      clearInterval(keepalive)
+      watcher?.close()
+    }
+
+    try {
+      watcher = watch(absolutePath, () => {
+        if (debounceTimer) clearTimeout(debounceTimer)
+        debounceTimer = setTimeout(() => {
+          res.write(`data: ${JSON.stringify({ type: 'updated', timestamp: Date.now() })}\n\n`)
+        }, 50)
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      res.write(`data: ${JSON.stringify({ type: 'error', data: msg })}\n\n`)
+      cleanup()
+      res.end()
+      return true
+    }
+
+    req.on('close', () => { cleanup(); res.end() })
     return true
   }
 
