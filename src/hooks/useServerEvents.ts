@@ -2,7 +2,7 @@
 declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget } from '../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget } from '../domain/types'
 interface ServerState {
   activeSpaceId: string
   spaces: Space[]
@@ -13,6 +13,7 @@ interface ServerState {
   runs: Run[]
   editorWidgets: EditorWidget[]
   browserWidgets: BrowserWidget[]
+  imageWidgets: ImageWidget[]
   readyQueue: string[]
 }
 
@@ -26,6 +27,7 @@ const EMPTY_STATE: ServerState = {
   runs: [],
   editorWidgets: [],
   browserWidgets: [],
+  imageWidgets: [],
   readyQueue: [],
 }
 
@@ -68,6 +70,11 @@ export function useServerEvents(): {
         const exists = prev.browserWidgets.some(x => x.id === w.id)
         return { ...prev, browserWidgets: exists ? prev.browserWidgets.map(x => x.id === w.id ? w : x) : [...prev.browserWidgets, w] }
       }
+      if (entity === 'imageWidget') {
+        const w = data as ImageWidget
+        const exists = prev.imageWidgets.some(x => x.id === w.id)
+        return { ...prev, imageWidgets: exists ? prev.imageWidgets.map(x => x.id === w.id ? w : x) : [...prev.imageWidgets, w] }
+      }
       return prev
     })
   }, [])
@@ -98,7 +105,7 @@ export function useServerEvents(): {
       setState((prev) => {
         // If entity is 'all' and data is null, it's a clear
         if (delta.entity === 'all' && delta.data === null) {
-          return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [], editorWidgets: [], browserWidgets: [] }
+          return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [], editorWidgets: [], browserWidgets: [], imageWidgets: [] }
         }
 
         if (delta.entity === 'space') {
@@ -208,6 +215,19 @@ export function useServerEvents(): {
           return {
             ...prev,
             browserWidgets: idx >= 0 ? bws.map((x, i) => (i === idx ? w : x)) : [...bws, w],
+          }
+        }
+
+        if (delta.entity === 'imageWidget') {
+          const iws = prev.imageWidgets
+          if (delta.data === null) {
+            return { ...prev, imageWidgets: iws.filter(w => w.id !== delta.id) }
+          }
+          const w = delta.data as ImageWidget
+          const idx = iws.findIndex(x => x.id === w.id)
+          return {
+            ...prev,
+            imageWidgets: idx >= 0 ? iws.map((x, i) => (i === idx ? w : x)) : [...iws, w],
           }
         }
 
