@@ -166,7 +166,12 @@ function WorkspaceShellInner() {
     return [...inject(sidebarTree), ...orphans]
   }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, editorWidgets, browserWidgets, runMap])
 
-  const runIds = useMemo(() => Array.from(runMap.keys()), [runMap])
+  const allNodeIds = useMemo(() => {
+    const ids: string[] = Array.from(runMap.keys()).map(id => `run-${id}`)
+    for (const w of editorWidgets) ids.push(w.id)
+    for (const w of browserWidgets) ids.push(w.id)
+    return ids
+  }, [runMap, editorWidgets, browserWidgets])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
@@ -559,7 +564,7 @@ function WorkspaceShellInner() {
   return (
     <>
       {activeSpaceId ? (
-        <HotgroupProvider spaceId={activeSpaceId} runIds={runIds}>
+        <HotgroupProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
           <SkillsProvider>
             <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">

@@ -167,7 +167,7 @@ export interface Rect {
 
 export interface SelectionState {
   selectedIds: Set<string>
-  selectedType: GroupingDimension | 'run' | 'file-editor' | null
+  selectedType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | null
   expandedIds: Set<string>
   hoveredId: string | null
 }

@@ -508,13 +508,18 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   useCanvasHotkeys({
     onHotgroupSelect: (slot, isDoubleTap) => {
-      // hotgroups stores raw run IDs (e.g. 'R-241'), layouts keys are node IDs ('run-R-241')
-      const nodeIds = hotgroups.runsInSlot(slot).map(id => `run-${id}`).filter(id => layouts.has(id))
-      if (nodeIds.length === 0) return
-      selectMany(nodeIds, 'run')
-      // Expand all ancestors in sidebar so the runs become visible
+      // hotgroups stores full node IDs (e.g. 'run-R-241', 'editor-abc', 'browser-xyz')
+      const slotNodeIds = hotgroups.nodesInSlot(slot).filter(id => layouts.has(id))
+      if (slotNodeIds.length === 0) return
+      // Determine selection type from first node prefix
+      const first = slotNodeIds[0]!
+      const selType = first.startsWith('run-') ? 'run'
+        : first.startsWith('editor-') ? 'file-editor'
+        : 'browser-widget'
+      selectMany(slotNodeIds, selType as import('../domain/types').GroupingDimension | 'run' | 'file-editor' | 'browser-widget')
+      // Expand all ancestors in sidebar so the nodes become visible
       const ancestorIds: string[] = []
-      for (const nodeId of nodeIds) {
+      for (const nodeId of slotNodeIds) {
         let cur = parentMapRef.current.get(nodeId) ?? null
         while (cur) {
           ancestorIds.push(cur)
@@ -523,23 +528,23 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       }
       if (ancestorIds.length > 0) expandAll(ancestorIds)
       if (isDoubleTap) {
-        zoomToFitRuns(nodeIds)
+        zoomToFitRuns(slotNodeIds)
       } else {
-        panToRuns(nodeIds)
+        panToRuns(slotNodeIds)
       }
     },
     onHotgroupAssign: (slot) => {
-      if (selectionState.selectedType !== 'run') return
-      for (const nodeId of selectionState.selectedIds) {
-        const runId = nodeId.startsWith('run-') ? nodeId.slice(4) : nodeId
-        hotgroups.assign(slot, runId)
+      const { selectedType, selectedIds } = selectionState
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget')) return
+      for (const nodeId of selectedIds) {
+        hotgroups.assign(slot, nodeId)
       }
     },
     onHotgroupRemove: (slot) => {
-      if (selectionState.selectedType !== 'run') return
-      for (const nodeId of selectionState.selectedIds) {
-        const runId = nodeId.startsWith('run-') ? nodeId.slice(4) : nodeId
-        hotgroups.remove(slot, runId)
+      const { selectedType, selectedIds } = selectionState
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget')) return
+      for (const nodeId of selectedIds) {
+        hotgroups.remove(slot, nodeId)
       }
     },
     onArrangeGrid: () => arrangeGridRef?.current?.(),
@@ -564,8 +569,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     if (nodeId.startsWith('run-') && onSelectRun) {
       onSelectRun(nodeId.slice(4), additive)
     } else if (nodeId.startsWith('editor-')) {
-      // File-editor widgets participate in selection (for hotkey focus) but not hierarchy
       additive ? toggleSelect(nodeId, 'file-editor') : select(nodeId, 'file-editor')
+    } else if (nodeId.startsWith('browser-')) {
+      additive ? toggleSelect(nodeId, 'browser-widget') : select(nodeId, 'browser-widget')
     } else {
       // Group container click — select it in the shared selection state so hierarchy highlights too
       const parsed = parseNodeId(nodeId)

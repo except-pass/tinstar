@@ -8,14 +8,14 @@ const HotgroupContext = createContext<HotgroupsReturn | null>(null)
 
 export function HotgroupProvider({
   spaceId,
-  runIds,
+  nodeIds,
   children,
 }: {
   spaceId: string
-  runIds: string[]
+  nodeIds: string[]
   children: ReactNode
 }) {
-  const hotgroups = useHotgroups(spaceId, runIds)
+  const hotgroups = useHotgroups(spaceId, nodeIds)
   return <HotgroupContext.Provider value={hotgroups}>{children}</HotgroupContext.Provider>
 }
 

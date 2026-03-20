@@ -31,7 +31,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   const [palettePos, setPalettePos] = useState<{ top: number; right: number } | null>(null)
   const paletteRef = useRef<HTMLDivElement>(null)
   const paletteButtonRef = useRef<HTMLButtonElement>(null)
-  const { slotsForRun } = useHotgroupContext()
+  const { slotsForNode } = useHotgroupContext()
 
   // Close palette when clicking outside both the dropdown and the toggle button
   useEffect(() => {
@@ -130,7 +130,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       {!compact && (
         <div className="flex items-center gap-3 shrink-0 ml-2">
           {/* Hotgroup badge */}
-          <HotgroupBadge slots={slotsForRun(run.id)} testId={`hotgroup-badge-${run.id}`} />
+          <HotgroupBadge slots={slotsForNode(`run-${run.id}`)} testId={`hotgroup-badge-${run.id}`} />
           {/* Color palette */}
           <div className="relative" ref={paletteRef} onPointerDown={e => e.stopPropagation()}>
             <button

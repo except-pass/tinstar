@@ -211,7 +211,7 @@ function SidebarNode({
   onRenameComplete?: () => void
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
-  const { slotsForRun } = useHotgroupContext()
+  const { slotsForNode } = useHotgroupContext()
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -354,9 +354,9 @@ function SidebarNode({
           </span>
         )}
 
-        {/* Hotgroup badge for runs */}
-        {isRun && !editing && (
-          <HotgroupBadge slots={slotsForRun(node.id.startsWith('run-') ? node.id.slice(4) : node.id)} testId={`sidebar-hotgroup-badge-${node.id.startsWith('run-') ? node.id.slice(4) : node.id}`} />
+        {/* Hotgroup badge for runs, file editors, and browser widgets */}
+        {(isRun || isFileEditor || isBrowserWidget) && !editing && (
+          <HotgroupBadge slots={slotsForNode(node.id)} testId={`sidebar-hotgroup-badge-${node.id}`} />
         )}
 
         {/* Count badge */}

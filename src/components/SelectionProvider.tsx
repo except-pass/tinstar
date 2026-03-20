@@ -4,9 +4,9 @@ import type { GroupingDimension, SelectionState } from '../domain/types'
 // --- Actions ---
 
 type SelectionAction =
-  | { type: 'select'; id: string; entityType: GroupingDimension | 'run' | 'file-editor' }
-  | { type: 'toggle'; id: string; entityType: GroupingDimension | 'run' | 'file-editor' }
-  | { type: 'selectMany'; ids: string[]; entityType: GroupingDimension | 'run' | 'file-editor' }
+  | { type: 'select'; id: string; entityType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' }
+  | { type: 'toggle'; id: string; entityType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' }
+  | { type: 'selectMany'; ids: string[]; entityType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' }
   | { type: 'deselect' }
   | { type: 'hover'; id: string | null }
   | { type: 'toggleExpand'; id: string }
@@ -80,9 +80,9 @@ function selectionReducer(state: SelectionState, action: SelectionAction): Selec
 
 interface SelectionContextValue {
   state: SelectionState
-  select: (id: string, type: GroupingDimension | 'run' | 'file-editor') => void
-  toggleSelect: (id: string, type: GroupingDimension | 'run' | 'file-editor') => void
-  selectMany: (ids: string[], type: GroupingDimension | 'run' | 'file-editor') => void
+  select: (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget') => void
+  toggleSelect: (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget') => void
+  selectMany: (ids: string[], type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget') => void
   deselect: () => void
   hover: (id: string | null) => void
   toggleExpand: (id: string) => void
@@ -109,19 +109,19 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(selectionReducer, initialState)
 
   const select = useCallback(
-    (id: string, type: GroupingDimension | 'run' | 'file-editor') =>
+    (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget') =>
       dispatch({ type: 'select', id, entityType: type }),
     [],
   )
 
   const toggleSelect = useCallback(
-    (id: string, type: GroupingDimension | 'run' | 'file-editor') =>
+    (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget') =>
       dispatch({ type: 'toggle', id, entityType: type }),
     [],
   )
 
   const selectMany = useCallback(
-    (ids: string[], type: GroupingDimension | 'run' | 'file-editor') =>
+    (ids: string[], type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget') =>
       dispatch({ type: 'selectMany', ids, entityType: type }),
     [],
   )
