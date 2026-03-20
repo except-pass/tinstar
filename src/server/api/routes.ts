@@ -328,6 +328,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const existing = ctx.docStore.getSpace(id)
       if (!existing) return json(res, { error: 'not found' }, 404)
       const patch = JSON.parse(body)
+
+      // Validate labelConfig if present
+      if (patch.labelConfig !== undefined) {
+        const levels = patch.labelConfig?.levels
+        if (!Array.isArray(levels) || levels.length < 1 || levels.length > 3) {
+          return json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'labelConfig.levels must be an array of length 1–3' } }, 400)
+        }
+        for (const lvl of levels) {
+          if (typeof lvl.label !== 'string' || !lvl.label.trim()) {
+            return json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'Each level must have a non-empty label' } }, 400)
+          }
+          if (typeof lvl.icon !== 'string' || !lvl.icon.trim()) {
+            return json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'Each level must have a non-empty icon' } }, 400)
+          }
+        }
+      }
+
       ctx.docStore.upsertSpace(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getSpace(id) })
     })
