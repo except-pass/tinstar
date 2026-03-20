@@ -109,6 +109,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
           {[widget.task, widget.worktree, filename].filter(Boolean).join(' · ')}
         </span>
         <button
+          onPointerDown={e => e.stopPropagation()}
           onClick={toggleWordWrap}
           className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${wordWrap ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
           title="Toggle word wrap"
@@ -116,12 +117,14 @@ export function FileEditorWidget({ data }: WidgetProps) {
           wrap
         </button>
         <button
+          onPointerDown={e => e.stopPropagation()}
           onClick={handleOpenInEditor}
           className="text-2xs font-mono px-2 py-0.5 rounded border border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60 flex-shrink-0"
         >
           ↗ Open in Editor
         </button>
         <button
+          onPointerDown={e => e.stopPropagation()}
           onClick={handleClose}
           className="text-slate-500 hover:text-slate-300 flex-shrink-0 ml-1"
           title="Close"

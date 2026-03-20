@@ -125,62 +125,9 @@ The backend is a **Vite plugin** (`tinstarBackend()` in `src/server/index.ts`) t
 
 ### REST API
 
-**Entity CRUD** (always available):
-```
-POST/PATCH/DELETE  /api/initiatives
-POST/PATCH/DELETE  /api/epics
-POST/PATCH/DELETE  /api/tasks
-POST/PATCH/DELETE  /api/worktrees
-PATCH              /api/runs/:id
-GET                /api/state          # Full snapshot
-GET                /api/events         # SSE stream
-```
+Full endpoint reference with schemas and examples: **[`/api/docs`](http://localhost:5273/api/docs)** (OpenAPI 3.0 / Scalar UI). Raw spec at `/api/docs/openapi.json`.
 
-**Session management** (when session config exists):
-```
-GET    /api/sessions              # List all
-POST   /api/sessions              # Create new session
-POST   /api/sessions/:name/start  # Resume stopped session
-POST   /api/sessions/:name/stop   # Stop running session
-DELETE /api/sessions/:name        # Delete session
-
-GET    /api/projects              # List registered projects
-POST   /api/projects              # Register project directory
-DELETE /api/projects/:name        # Unregister
-```
-
-**Hooks** (called by Claude from inside sessions):
-```
-POST /api/hooks/active         # Claude became active
-POST /api/hooks/idle           # Claude went idle
-POST /api/hooks/file-touched   # Claude wrote/edited a file
-```
-
-**Settings inheritance**:
-```
-GET /api/initiatives/:id/settings
-GET /api/epics/:id/settings
-GET /api/tasks/:id/settings
-```
-
-Returns `{ resolved, sources, local }` — resolved settings walk the ancestor chain (task < epic < initiative), closest wins.
-
-**Spaces**:
-```
-GET    /api/spaces              # List all
-POST   /api/spaces              # Create (does not auto-activate)
-PATCH  /api/spaces/:id          # Rename
-DELETE /api/spaces/:id          # Delete (cannot delete active or last)
-POST   /api/spaces/:id/activate # Switch active space (triggers fresh SSE snapshot)
-```
-
-**OTel + Simulator**:
-```
-GET  /api/otel/spans?traceId=...
-GET  /api/otel/metrics?name=...
-POST /api/simulator/start
-POST /api/simulator/reset
-```
+Key endpoint groups: Entity CRUD, Sessions, Hooks, Settings, Spaces, OTel, Simulator.
 
 ---
 
