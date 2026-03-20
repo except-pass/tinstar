@@ -27,7 +27,6 @@ interface Props {
   onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
   onEditorWidgetCreated?: (widget: EditorWidget) => void
   onBrowserWidgetCreated?: (widget: BrowserWidget) => void
-  onImageWidgetCreated?: (widget: ImageWidget) => void
   arrangeGridRef?: React.MutableRefObject<(() => void) | null>
   arrangeResetRef?: React.MutableRefObject<(() => void) | null>
   zoomToFitRunsRef?: React.MutableRefObject<((runIds: string[]) => void) | null>
