@@ -704,6 +704,8 @@ function WorkspaceShellInner() {
                     onDeleteEntity={handleDelete}
                     onMenuOpen={handleMenuOpen}
                     onTaskUpdate={handleTaskUpdate}
+                    imageWidgetMap={imageWidgetMap}
+                    onImageWidgetCreated={(widget) => addOptimistic('imageWidget', widget)}
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
                     onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
                     arrangeGridRef={arrangeGridRef}
