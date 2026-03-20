@@ -1,8 +1,16 @@
+import type { LevelLabel } from './types'
+
 export interface DimensionMeta {
   key: string
   label: string
   icon: string
 }
+
+export const DEFAULT_LEVELS: LevelLabel[] = [
+  { icon: '🚀', label: 'Initiative' },
+  { icon: '🏔️', label: 'Epic' },
+  { icon: '🗂️', label: 'Task' },
+]
 
 export const DIMENSION_REGISTRY: DimensionMeta[] = [
   { key: 'initiative', label: 'Initiative', icon: '🚀' },

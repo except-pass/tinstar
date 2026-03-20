@@ -43,6 +43,17 @@ export interface Space {
   id: string
   name: string
   createdAt: string
+  labelConfig?: SpaceLabelConfig
+}
+
+export interface LevelLabel {
+  icon: string
+  label: string
+  plural?: string
+}
+
+export interface SpaceLabelConfig {
+  levels: LevelLabel[]  // length 1–3, top-to-bottom
 }
 
 // --- Taxonomy entities ---
