@@ -3,6 +3,7 @@ import type { WidgetProps, GroupWidgetData } from '../widgetComponentRegistry'
 import { getDimensionIcon } from '../../domain/dimension-meta'
 import type { GroupingDimension } from '../../domain/types'
 import { hexToRgba } from '../../components/runAccent'
+import { useDimensionMeta } from '../../hooks/useDimensionMeta'
 
 const BORDER_OPACITY = [0.15, 0.12, 0.08, 0.05]
 const BG_OPACITY = [0.02, 0.015, 0.01, 0.005]
@@ -28,11 +29,12 @@ export function TaskGroupWidget({ data, isSelected, isDropTarget }: WidgetProps)
     data as GroupWidgetData
   const [editingUrl, setEditingUrl] = useState(false)
   const [urlDraft, setUrlDraft] = useState('')
+  const levelMeta = useDimensionMeta()
 
   const borderOp =
     BORDER_OPACITY[Math.min(depth, BORDER_OPACITY.length - 1)] ?? 0.05
   const bgOp = BG_OPACITY[Math.min(depth, BG_OPACITY.length - 1)] ?? 0.005
-  const icon = getDimensionIcon(node.type as GroupingDimension)
+  const icon = levelMeta.find(m => m.internalType === node.type)?.icon ?? getDimensionIcon(node.type as GroupingDimension)
   const accent = node.color || '#00f0ff'
 
   const handleDoubleClick = useCallback(() => {

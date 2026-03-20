@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import type { TreeNode, GroupingDimension, Space } from '../domain/types'
 import { getDimensionIcon } from '../domain/dimension-meta'
+import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { useSelection } from './SelectionProvider'
 import { useSidebarDrag, type DropTarget } from '../hooks/useSidebarDrag'
 import { SpaceSwitcher } from './SpaceSwitcher'
@@ -185,6 +186,7 @@ function SidebarNode({
   node,
   depth,
   dimensions,
+  dimensionIconMap,
   onAdd,
   onRename,
   onDelete,
@@ -199,6 +201,7 @@ function SidebarNode({
   node: TreeNode
   depth: number
   dimensions: GroupingDimension[]
+  dimensionIconMap: Record<string, string>
   onAdd: HierarchySidebarProps['onAdd']
   onRename: HierarchySidebarProps['onRename']
   onDelete: HierarchySidebarProps['onDelete']
@@ -314,7 +317,7 @@ function SidebarNode({
 
         {/* Icon */}
         <span className="w-4 text-center" aria-hidden="true">
-          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : isFileEditor ? '📄' : isBrowserWidget ? '🌐' : getDimensionIcon(node.type)}
+          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : isFileEditor ? '📄' : isBrowserWidget ? '🌐' : (dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
         </span>
 
         {/* Color dot */}
@@ -461,6 +464,7 @@ function SidebarNode({
               node={child}
               depth={depth + 1}
               dimensions={dimensions}
+              dimensionIconMap={dimensionIconMap}
               onAdd={onAdd}
               onRename={onRename}
               onDelete={onDelete}
@@ -502,6 +506,7 @@ function TreeWithOrphanSeparators({
   nodes,
   depth,
   dimensions,
+  dimensionIconMap,
   onAdd,
   onRename,
   onDelete,
@@ -516,6 +521,7 @@ function TreeWithOrphanSeparators({
   nodes: TreeNode[]
   depth: number
   dimensions: GroupingDimension[]
+  dimensionIconMap: Record<string, string>
   onAdd: HierarchySidebarProps['onAdd']
   onRename: HierarchySidebarProps['onRename']
   onDelete: HierarchySidebarProps['onDelete']
@@ -538,6 +544,7 @@ function TreeWithOrphanSeparators({
           node={node}
           depth={depth}
           dimensions={dimensions}
+          dimensionIconMap={dimensionIconMap}
           onAdd={onAdd}
           onRename={onRename}
           onDelete={onDelete}
@@ -557,6 +564,7 @@ function TreeWithOrphanSeparators({
           node={node}
           depth={depth}
           dimensions={dimensions}
+          dimensionIconMap={dimensionIconMap}
           onAdd={onAdd}
           onRename={onRename}
           onDelete={onDelete}
@@ -576,6 +584,12 @@ function TreeWithOrphanSeparators({
 export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
+
+  const levelMeta = useDimensionMeta()
+  const dimensionIconMap = useMemo(
+    () => Object.fromEntries(levelMeta.map(m => [m.internalType, m.icon])),
+    [levelMeta],
+  )
 
   const handleReparent = useCallback((entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => {
     if (onReparent) onReparent(entityId, entityType, newParentId, newParentType)
@@ -680,6 +694,7 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
             nodes={tree}
             depth={0}
             dimensions={dimensions}
+            dimensionIconMap={dimensionIconMap}
             onAdd={onAdd}
             onRename={onRename}
             onDelete={onDelete}
@@ -740,7 +755,7 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
           }}
           data-testid="drag-ghost"
         >
-          {getDimensionIcon(dragState.nodeType)} {dragState.label}
+          {dimensionIconMap[dragState.nodeType as GroupingDimension] ?? getDimensionIcon(dragState.nodeType)} {dragState.label}
         </div>
       )}
     </div>
