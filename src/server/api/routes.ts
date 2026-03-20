@@ -639,6 +639,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/image-widgets
   if (method === 'POST' && url === '/api/image-widgets') {
     readBody(req).then(body => {
+      try {
       const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
       if (!sessionId || !filePath) {
         json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId and filePath required' } }, 400)
@@ -689,6 +690,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
       ctx.docStore.upsertImageWidget(widget.id, widget)
       json(res, { ok: true, data: widget })
+      } catch {
+        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+      }
     })
     return true
   }
@@ -730,6 +734,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       absolutePath = filePath.startsWith('/')
         ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
         : resolve(workspacePath, filePath)
+      if (!absolutePath.startsWith(workspacePath + '/')) {
+        json(res, { error: 'path outside workspace' }, 403)
+        return true
+      }
     }
 
     if (!existsSync(absolutePath)) {
@@ -773,6 +781,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       absolutePath = filePath.startsWith('/')
         ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
         : resolve(workspacePath, filePath)
+      if (!absolutePath.startsWith(workspacePath + '/')) {
+        json(res, { error: 'path outside workspace' }, 403)
+        return true
+      }
+    }
+
+    if (!existsSync(absolutePath)) {
+      json(res, { error: 'file not found' }, 404)
+      return true
     }
 
     res.writeHead(200, {
