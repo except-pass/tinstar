@@ -1,6 +1,3 @@
-/* eslint-disable no-var */
-declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
-
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { SkillDTO, PendingSkill, StoredProcedure } from '../types'
 
@@ -47,16 +44,10 @@ export function useSkills(): SkillsState & SkillsActions {
     pendingSkillsRef.current = pendingSkills
   }, [pendingSkills])
 
-  // Subscribe to skill.drafted and skill.saved SSE events
+  // Listen for skill events forwarded from the shared SSE connection in useServerEvents
   useEffect(() => {
-    // Bypass Vite proxy in dev mode — same fix as useServerEvents.ts
-    const sseUrl = import.meta.env.DEV && typeof __TINSTAR_BACKEND_PORT__ !== 'undefined'
-      ? `http://${location.hostname}:${__TINSTAR_BACKEND_PORT__}/api/events`
-      : '/api/events'
-    const es = new EventSource(sseUrl)
-
-    es.addEventListener('skill.drafted', async (e: MessageEvent) => {
-      const { draftId, skillName } = JSON.parse(e.data) as { draftId: string; skillName: string }
+    const onDrafted = async (e: Event) => {
+      const { draftId, skillName } = JSON.parse((e as CustomEvent).detail) as { draftId: string; skillName: string }
       // Only handle drafts that this window initiated — multiple dev servers share the
       // same skill-drafts dir on disk, so every server fires the event to all its clients
       const matchingSkill = pendingSkillsRef.current.find(ps => ps.id === draftId)
@@ -111,13 +102,19 @@ export function useSkills(): SkillsState & SkillsActions {
         ))
         setSavingDraft({ draftId, skillName, pendingSkillId: draftId, sessionId: matchingSkill.sessionId })
       }
-    })
+    }
 
-    es.addEventListener('skill.saved', () => {
+    const onSaved = () => {
       // Cache busted server-side; re-fetch will happen on next picker open
-    })
+    }
 
-    return () => es.close()
+    window.addEventListener('tinstar:skill.drafted', onDrafted)
+    window.addEventListener('tinstar:skill.saved', onSaved)
+
+    return () => {
+      window.removeEventListener('tinstar:skill.drafted', onDrafted)
+      window.removeEventListener('tinstar:skill.saved', onSaved)
+    }
   }, [])
 
   const fetchSkills = useCallback(async () => {
