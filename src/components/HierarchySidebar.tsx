@@ -590,6 +590,10 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
     () => Object.fromEntries(levelMeta.map(m => [m.internalType, m.icon])),
     [levelMeta],
   )
+  const dimensionLabelMap = useMemo(
+    () => Object.fromEntries(levelMeta.map(m => [m.internalType, m.label])),
+    [levelMeta],
+  )
 
   const handleReparent = useCallback((entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => {
     if (onReparent) onReparent(entityId, entityType, newParentId, newParentType)
@@ -668,9 +672,18 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
           </button>
         )}
       </div>
-      <div className="flex items-center justify-end px-3 py-1 border-b border-white/5">
+      <div className="flex items-center px-3 py-1 border-b border-white/5">
+        <div className="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
+          {dimensions.map((dim, i) => (
+            <span key={dim} className="flex items-center gap-0.5 shrink-0">
+              {i > 0 && <span className="text-2xs text-slate-600 mx-0.5">&gt;</span>}
+              <span className="text-2xs" aria-hidden>{dimensionIconMap[dim] ?? ''}</span>
+              <span className="text-2xs text-slate-500 truncate">{dimensionLabelMap[dim] ?? dim}</span>
+            </span>
+          ))}
+        </div>
         <button
-          className="text-xs text-slate-500 hover:text-primary"
+          className="text-xs text-slate-500 hover:text-primary shrink-0"
           onClick={() => onAdd(null, rootType)}
           data-testid="add-root"
           aria-label={`Add ${rootType}`}

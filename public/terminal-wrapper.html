@@ -4,35 +4,147 @@
   <meta charset="utf-8">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body, iframe { width: 100%; height: 100%; border: none; display: block; }
+    html, body { width: 100%; height: 100%; border: none; display: block; background: #000; }
+    iframe { width: 100%; height: 100%; border: none; display: block; }
+    #error-overlay {
+      display: none;
+      position: absolute; inset: 0;
+      background: #0a0a0f;
+      color: #94a3b8;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 12px;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      z-index: 10;
+    }
+    #error-overlay.visible { display: flex; }
+    #error-icon { font-size: 28px; opacity: 0.4; }
+    #error-msg { color: #ef4444; max-width: 400px; text-align: center; line-height: 1.5; }
+    #retry-btn {
+      margin-top: 4px;
+      padding: 6px 16px;
+      background: rgba(0, 240, 255, 0.1);
+      border: 1px solid rgba(0, 240, 255, 0.3);
+      color: #00f0ff;
+      font-family: inherit;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      cursor: pointer;
+    }
+    #retry-btn:hover { background: rgba(0, 240, 255, 0.2); }
+    #retry-count { color: #475569; font-size: 10px; }
   </style>
 </head>
 <body>
   <iframe id="term" allow="clipboard-read; clipboard-write"></iframe>
+  <div id="error-overlay">
+    <div id="error-icon">&#9632;</div>
+    <div id="error-msg">Terminal connection failed</div>
+    <button id="retry-btn" onclick="loadTerminal()">Retry</button>
+    <div id="retry-count"></div>
+  </div>
   <script>
-    // Read session URL from query param
-    const params = new URLSearchParams(location.search)
-    const session = params.get('session') ?? ''
-    const port = params.get('port') ?? ''
-    if (session) {
-      // Route through Caddy proxy at /s/<session>/ — works for local and remote access
-      document.getElementById('term').src = `/s/${session}/`
-    } else if (port) {
-      // Fallback: direct ttyd port (local only)
-      document.getElementById('term').src = `http://localhost:${port}/s/${session}/`
+    var params = new URLSearchParams(location.search)
+    var session = params.get('session') || ''
+    var port = params.get('port') || ''
+    var termEl = document.getElementById('term')
+    var errorOverlay = document.getElementById('error-overlay')
+    var errorMsg = document.getElementById('error-msg')
+    var retryCountEl = document.getElementById('retry-count')
+    var loadAttempts = 0
+    var maxAutoRetries = 3
+    var loadTimer = null
+
+    function showError(msg) {
+      errorMsg.textContent = msg
+      errorOverlay.classList.add('visible')
+      termEl.style.display = 'none'
+      retryCountEl.textContent = loadAttempts > 1 ? 'attempt ' + loadAttempts : ''
     }
 
-    // Parent asks us to focus the xterm terminal (e.g. after Ctrl+\ keyboard shortcut).
-    // iframe.focus() alone puts browser focus on this wrapper window but doesn't reach
-    // xterm's internal textarea — term.focus() bridges that gap.
+    function hideError() {
+      errorOverlay.classList.remove('visible')
+      termEl.style.display = 'block'
+    }
+
+    function loadTerminal() {
+      loadAttempts++
+      hideError()
+      if (loadTimer) { clearTimeout(loadTimer); loadTimer = null }
+
+      if (session) {
+        termEl.src = '/s/' + session + '/'
+      } else if (port) {
+        termEl.src = 'http://localhost:' + port + '/'
+      } else {
+        showError('No session or port specified')
+        return
+      }
+
+      // If the iframe doesn't fire 'load' within 8s, something is wrong
+      loadTimer = setTimeout(function() {
+        // Check if iframe loaded anything useful
+        try {
+          var doc = termEl.contentDocument
+          if (!doc || !doc.body || doc.body.innerHTML.length < 50) {
+            handleLoadFailure('Terminal page did not load (timeout)')
+          }
+        } catch(e) {
+          // Cross-origin means it DID load something — that's OK
+        }
+      }, 8000)
+    }
+
+    function handleLoadFailure(msg) {
+      if (loadAttempts < maxAutoRetries) {
+        retryCountEl.textContent = 'retrying... (' + loadAttempts + '/' + maxAutoRetries + ')'
+        setTimeout(loadTerminal, 1500 * loadAttempts)
+      } else {
+        showError(msg || 'Terminal connection failed after ' + loadAttempts + ' attempts')
+      }
+    }
+
+    termEl.addEventListener('load', function() {
+      if (loadTimer) { clearTimeout(loadTimer); loadTimer = null }
+      // Give xterm.js a moment to init, then verify content
+      setTimeout(function() {
+        try {
+          var doc = termEl.contentDocument
+          if (doc && doc.body) {
+            var text = doc.body.textContent || ''
+            // ttyd returns an HTML page; if body is empty or has error text, surface it
+            if (text.indexOf('not found') !== -1 || text.indexOf('proxy error') !== -1) {
+              handleLoadFailure('Session "' + session + '" not reachable: ' + text.trim().slice(0, 80))
+              return
+            }
+          }
+        } catch(e) {
+          // Cross-origin = proxy worked and ttyd responded, which is good
+        }
+        hideError()
+      }, 500)
+    })
+
+    termEl.addEventListener('error', function() {
+      handleLoadFailure('Failed to load terminal iframe')
+    })
+
+    // Start loading
+    loadTerminal()
+
+    // ── Focus forwarding (unchanged) ──
+
+    // Parent asks us to focus the xterm terminal
     window.addEventListener('message', function(e) {
-      if (e.data?.type === 'terminal-focus') {
+      if (e.data && e.data.type === 'terminal-focus') {
         try {
           var win = termEl.contentWindow
           if (win && win.term && win.term.focus) {
             win.term.focus()
           } else {
-            // xterm not ready yet — dispatch a click so the browser propagates focus naturally
             termEl.contentDocument && termEl.contentDocument.body &&
               termEl.contentDocument.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
           }
@@ -41,8 +153,6 @@
     })
 
     // Intercept Ctrl+Shift+\ and notify parent to release terminal focus.
-    // Lock prevents double-fire when both the wrapper-window listener (Layer 1)
-    // and the inner-iframe capture listener (Layer 2) fire for the same keypress.
     var notifyEscapeLocked = false
     function notifyEscape() {
       if (notifyEscapeLocked) return
@@ -51,7 +161,6 @@
       window.parent.postMessage({ type: 'terminal-focus-toggle', sessionName: session }, '*')
     }
 
-    // Layer 1: wrapper window — catches the key when focus is not yet in the terminal
     window.addEventListener('keydown', function(e) {
       if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
         e.preventDefault()
@@ -59,10 +168,7 @@
       }
     })
 
-    var termEl = document.getElementById('term')
-
-    // Layer 2a: xterm.js custom key handler (most reliable — runs before xterm.js
-    // processes the key and before DOM capture/bubble, so can't be stopped by xterm.js)
+    // Layer 2a: xterm.js custom key handler
     function tryAttachXterm() {
       try {
         var win = termEl.contentWindow
@@ -71,7 +177,7 @@
           if (e.type !== 'keydown') return true
           if (e.code === 'Backslash' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
             notifyEscape()
-            return false // tell xterm.js to ignore this key
+            return false
           }
           return true
         })
@@ -79,7 +185,7 @@
       } catch (_) { return false }
     }
 
-    // Layer 2b: capture-phase DOM listener (fallback if window.term isn't available)
+    // Layer 2b: capture-phase DOM listener (fallback)
     function tryAttachKeydown() {
       try {
         termEl.contentWindow.addEventListener('keydown', function(e) {
@@ -94,8 +200,7 @@
     }
 
     termEl.addEventListener('load', function() {
-      tryAttachKeydown() // attach immediately as fallback
-      // Retry xterm handler until window.term is ready (xterm.js initialises after 'load')
+      tryAttachKeydown()
       var attempts = 0
       var timer = setInterval(function() {
         if (tryAttachXterm() || ++attempts > 30) clearInterval(timer)

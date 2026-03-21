@@ -55,16 +55,26 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
     })
   }, [run.id])
 
+  const [actionError, setActionError] = useState<string | null>(null)
+
   const sessionAction = useCallback(async (action: 'stop' | 'delete' | 'start') => {
     setBusy(true)
+    setActionError(null)
     try {
-      if (action === 'delete') {
-        await fetch(`/api/sessions/${run.sessionId}`, { method: 'DELETE' })
-      } else {
-        await fetch(`/api/sessions/${run.sessionId}/${action}`, { method: 'POST' })
+      const url = action === 'delete'
+        ? `/api/sessions/${run.sessionId}`
+        : `/api/sessions/${run.sessionId}/${action}`
+      const res = await fetch(url, { method: action === 'delete' ? 'DELETE' : 'POST' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || (data && !data.ok)) {
+        const msg = data?.error?.message ?? data?.error?.code ?? `${action} failed (${res.status})`
+        setActionError(msg)
       }
-    } catch { /* ignore */ }
-    setBusy(false)
+    } catch (err) {
+      setActionError((err as Error).message ?? `${action} failed`)
+    } finally {
+      setBusy(false)
+    }
   }, [run.sessionId])
 
   const refreshTerminal = useCallback(() => {
@@ -213,6 +223,16 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
               <span className="material-symbols-outlined text-sm">delete</span>
             </button>
           </div>
+          {actionError && (
+            <div
+              className="flex items-center gap-1 px-2 py-0.5 bg-accent-red/10 border border-accent-red/30 rounded text-accent-red text-2xs font-mono max-w-[200px] cursor-pointer"
+              title={actionError}
+              onClick={() => setActionError(null)}
+            >
+              <span className="material-symbols-outlined text-xs">error</span>
+              <span className="truncate">{actionError}</span>
+            </div>
+          )}
           <div className="w-px h-5 bg-white/10" />
           <div className="text-right">
             <div className="text-2xs font-mono text-slate-500 tracking-wide">WORKTREE</div>

@@ -1,7 +1,8 @@
 import { createServer } from 'node:http'
 import { join, extname, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createReadStream, existsSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, statSync, writeFileSync, unlinkSync } from 'node:fs'
+import { homedir } from 'node:os'
 import httpProxy from 'http-proxy'
 import { initBackend } from './index'
 import { handleRequest } from './api/routes'
@@ -134,9 +135,29 @@ export function startServer(opts: ServerOptions) {
     proxy.ws(req, socket, head, { target: `http://localhost:${run.port}` })
   })
 
+  const portFile = join(homedir(), '.config', 'tinstar', 'server.port')
+
+  function writePortFile(port: number) {
+    try { writeFileSync(portFile, String(port)) } catch { /* best effort */ }
+  }
+
+  function removePortFile() {
+    try { unlinkSync(portFile) } catch { /* already gone */ }
+  }
+
+  // Clean up port file on shutdown
+  for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(sig, () => {
+      removePortFile()
+      process.exit(0)
+    })
+  }
+  process.on('exit', removePortFile)
+
   function listen(port: number) {
     server.listen(port, () => {
       const url = `http://localhost:${port}`
+      writePortFile(port)
       log.info('server', `Tinstar running at ${url}`)
       console.log(`\n  Tinstar running at ${url}\n`)
       if (opts.open) {
