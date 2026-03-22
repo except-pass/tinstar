@@ -56,6 +56,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   }, [run.id])
 
   const [actionError, setActionError] = useState<string | null>(null)
+  const [hoveredBtn, setHoveredBtn] = useState<string | null>(null)
 
   const sessionAction = useCallback(async (action: 'stop' | 'delete' | 'start') => {
     setBusy(true)
@@ -85,7 +86,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
 
   return (
     <header
-      className="widget-drag-handle flex items-center justify-between bg-surface-panel px-3 py-1.5 overflow-hidden cursor-grab active:cursor-grabbing select-none"
+      className="widget-drag-handle flex items-center justify-between bg-surface-panel overflow-hidden cursor-grab active:cursor-grabbing select-none"
       style={{ borderBottom: `1px solid ${hexToRgba(runAccent, 0.25)}` }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -94,7 +95,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       onDragStart={e => e.preventDefault()}
     >
       {/* Left: identity */}
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center gap-2 min-w-0 pl-3">
         <div
           className="flex items-center justify-center w-6 h-6 border shrink-0"
           style={{ borderColor: hexToRgba(runAccent, 0.6), backgroundColor: hexToRgba(runAccent, 0.1) }}
@@ -138,11 +139,41 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
 
       {/* Right: actions + meta */}
       {!compact && (
-        <div className="flex items-center gap-3 shrink-0 ml-2">
-          {/* Hotgroup badge */}
-          <HotgroupBadge slots={slotsForNode(`run-${run.id}`)} testId={`hotgroup-badge-${run.id}`} />
+        <div className="flex items-stretch shrink-0 ml-2 h-full" onPointerDown={e => e.stopPropagation()}>
+          {/* Hotgroup badge — currently in the right zone in the source file */}
+          <div className="flex items-center px-2">
+            <HotgroupBadge slots={slotsForNode(`run-${run.id}`)} testId={`hotgroup-badge-${run.id}`} />
+          </div>
+
+          {/* Error banner — shown inline before buttons when present */}
+          {actionError && (
+            <div
+              className="flex items-center gap-1 px-2 my-auto bg-accent-red/10 border border-accent-red/30 rounded text-accent-red text-2xs font-mono max-w-[180px] cursor-pointer"
+              title={actionError}
+              onClick={() => setActionError(null)}
+            >
+              <span className="material-symbols-outlined text-xs">error</span>
+              <span className="truncate">{actionError}</span>
+            </div>
+          )}
+
+          {/* WORKTREE / REPO meta */}
+          <div className="flex items-center gap-4 px-3 border-l border-white/[0.06]">
+            <div className="text-right">
+              <div className="text-2xs font-mono text-slate-500 tracking-wide">WORKTREE</div>
+              <div className="text-2xs font-mono truncate max-w-[80px]" style={{ color: hexToRgba(runAccent, 0.7) }}>{run.worktree}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-2xs font-mono text-slate-500 tracking-wide">REPO</div>
+              <div className="text-2xs font-mono truncate max-w-[80px]" style={{ color: hexToRgba(runAccent, 0.7) }}>{run.repo}</div>
+            </div>
+          </div>
+
+          {/* Separator */}
+          <div className="w-px self-stretch bg-white/[0.07]" />
+
           {/* Color palette */}
-          <div className="relative" ref={paletteRef} onPointerDown={e => e.stopPropagation()}>
+          <div className="relative" ref={paletteRef}>
             <button
               ref={paletteButtonRef}
               onClick={() => {
@@ -152,11 +183,17 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
                 }
                 setPaletteOpen(o => !o)
               }}
-              className="p-1 rounded transition-colors"
-              style={{ color: paletteOpen ? runAccent : undefined }}
+              onMouseEnter={() => setHoveredBtn('color')}
+              onMouseLeave={() => setHoveredBtn(null)}
+              className="flex flex-col items-center justify-center gap-0.5 h-full px-3 transition-colors"
+              style={{
+                color: (paletteOpen || hoveredBtn === 'color') ? runAccent : hexToRgba(runAccent, 0.55),
+                background: hoveredBtn === 'color' ? hexToRgba(runAccent, 0.06) : undefined,
+              }}
               title="Change run color"
             >
-              <span className="material-symbols-outlined text-sm text-slate-500 hover:text-slate-300 transition-colors" style={paletteOpen ? { color: runAccent } : undefined}>palette</span>
+              <span className="material-symbols-outlined" style={{ fontSize: '16px', fontVariationSettings: "'FILL' 0" }}>palette</span>
+              <span className="text-[8px] font-bold tracking-wide leading-none">COLOR</span>
             </button>
             {paletteOpen && palettePos && createPortal(
               <div
@@ -169,79 +206,85 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
               document.body,
             )}
           </div>
-          {/* Browser widget drag chip */}
+
+          {/* Browser drag chip */}
           <div
             draggable
-            onPointerDown={e => e.stopPropagation()}
+            onMouseEnter={() => setHoveredBtn('browser')}
+            onMouseLeave={() => setHoveredBtn(null)}
             onDragStart={e => {
               e.stopPropagation()
               e.dataTransfer.setData('application/tinstar-browser', JSON.stringify({ sessionId: run.sessionId }))
               e.dataTransfer.effectAllowed = 'copy'
             }}
-            className="p-1 rounded cursor-grab active:cursor-grabbing text-slate-500 hover:text-slate-300 transition-colors"
+            className="flex flex-col items-center justify-center gap-0.5 h-full px-3 cursor-grab active:cursor-grabbing transition-colors"
+            style={{
+              color: hoveredBtn === 'browser' ? runAccent : hexToRgba(runAccent, 0.55),
+              background: hoveredBtn === 'browser' ? hexToRgba(runAccent, 0.06) : undefined,
+            }}
             title="Drag to canvas to create a browser widget"
           >
-            <span className="material-symbols-outlined text-sm">language</span>
+            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>language</span>
+            <span className="text-[8px] font-bold tracking-wide leading-none">BROWSER</span>
           </div>
-          {/* Session actions */}
-          <div className="flex items-center gap-1" onPointerDown={e => e.stopPropagation()}>
-            {isLive ? (
-              <button
-                onClick={() => sessionAction('stop')}
-                disabled={busy}
-                className="p-1 rounded text-slate-500 hover:text-accent-red transition-colors disabled:opacity-50"
-                title="Stop session"
-              >
-                <span className="material-symbols-outlined text-sm">stop_circle</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => sessionAction('start')}
-                disabled={busy}
-                className="p-1 rounded text-slate-500 hover:text-accent-green transition-colors disabled:opacity-50"
-                title="Resume session"
-              >
-                <span className="material-symbols-outlined text-sm">play_circle</span>
-              </button>
-            )}
-            {isLive && run.port && (
-              <button
-                onClick={refreshTerminal}
-                className="p-1 rounded text-slate-500 transition-colors"
-                style={{ color: runAccent }}
-                title="Refresh terminal (re-registers proxy route)"
-              >
-                <span className="material-symbols-outlined text-sm">refresh</span>
-              </button>
-            )}
+
+          {/* Separator before Refresh */}
+          <div className="w-px self-stretch bg-white/[0.07]" />
+
+          {/* Refresh — only when live and port exists */}
+          {isLive && run.port && (
             <button
-              onClick={() => sessionAction('delete')}
-              disabled={busy}
-              className="p-1 rounded text-slate-500 hover:text-accent-red transition-colors disabled:opacity-50"
-              title="Delete session"
+              onClick={refreshTerminal}
+              onMouseEnter={() => setHoveredBtn('refresh')}
+              onMouseLeave={() => setHoveredBtn(null)}
+              className="flex flex-col items-center justify-center gap-0.5 h-full px-3 transition-colors"
+              style={{
+                color: runAccent,
+                background: hoveredBtn === 'refresh' ? hexToRgba(runAccent, 0.06) : undefined,
+              }}
+              title="Refresh — re-registers the proxy route so the browser widget can reach this session's port"
             >
-              <span className="material-symbols-outlined text-sm">delete</span>
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>refresh</span>
+              <span className="text-[8px] font-bold tracking-wide leading-none">REFRESH</span>
             </button>
-          </div>
-          {actionError && (
-            <div
-              className="flex items-center gap-1 px-2 py-0.5 bg-accent-red/10 border border-accent-red/30 rounded text-accent-red text-2xs font-mono max-w-[200px] cursor-pointer"
-              title={actionError}
-              onClick={() => setActionError(null)}
-            >
-              <span className="material-symbols-outlined text-xs">error</span>
-              <span className="truncate">{actionError}</span>
-            </div>
           )}
-          <div className="w-px h-5 bg-white/10" />
-          <div className="text-right">
-            <div className="text-2xs font-mono text-slate-500 tracking-wide">WORKTREE</div>
-            <div className="text-2xs font-mono truncate max-w-[100px]" style={{ color: hexToRgba(runAccent, 0.7) }}>{run.worktree}</div>
-          </div>
-          <div className="text-right">
-            <div className="text-2xs font-mono text-slate-500 tracking-wide">REPO</div>
-            <div className="text-2xs font-mono truncate max-w-[100px]" style={{ color: hexToRgba(runAccent, 0.7) }}>{run.repo}</div>
-          </div>
+
+          {/* Separator before danger group */}
+          <div className="w-px self-stretch bg-white/[0.07]" />
+
+          {/* Stop / Resume */}
+          {isLive ? (
+            <button
+              onClick={() => sessionAction('stop')}
+              disabled={busy}
+              className="flex flex-col items-center justify-center gap-0.5 h-full px-3 text-slate-500 transition-colors hover:bg-accent-red/[0.08] hover:text-accent-red disabled:opacity-50"
+              title="Stop session"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>stop_circle</span>
+              <span className="text-[8px] font-bold tracking-wide leading-none">STOP</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => sessionAction('start')}
+              disabled={busy}
+              className="flex flex-col items-center justify-center gap-0.5 h-full px-3 text-slate-500 transition-colors hover:bg-accent-green/[0.08] hover:text-accent-green disabled:opacity-50"
+              title="Resume session"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>play_circle</span>
+              <span className="text-[8px] font-bold tracking-wide leading-none">RESUME</span>
+            </button>
+          )}
+
+          {/* Delete — adjacent to Stop with no separator */}
+          <button
+            onClick={() => sessionAction('delete')}
+            disabled={busy}
+            className="flex flex-col items-center justify-center gap-0.5 h-full px-3 text-slate-500 transition-colors hover:bg-accent-red/[0.08] hover:text-accent-red disabled:opacity-50"
+            title="Delete session"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
+            <span className="text-[8px] font-bold tracking-wide leading-none">DELETE</span>
+          </button>
         </div>
       )}
     </header>
