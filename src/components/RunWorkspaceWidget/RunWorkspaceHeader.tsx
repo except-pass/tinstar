@@ -86,7 +86,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
 
   return (
     <header
-      className="widget-drag-handle flex items-center justify-between bg-surface-panel overflow-hidden cursor-grab active:cursor-grabbing select-none"
+      className="widget-drag-handle flex items-center justify-between bg-surface-panel overflow-hidden cursor-grab active:cursor-grabbing select-none min-h-[44px]"
       style={{ borderBottom: `1px solid ${hexToRgba(runAccent, 0.25)}` }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -228,25 +228,25 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
             <span className="text-[8px] font-bold tracking-wide leading-none">BROWSER</span>
           </div>
 
-          {/* Separator before Refresh */}
-          <div className="w-px self-stretch bg-white/[0.07]" />
-
-          {/* Refresh — only when live and port exists */}
           {isLive && run.port && (
-            <button
-              onClick={refreshTerminal}
-              onMouseEnter={() => setHoveredBtn('refresh')}
-              onMouseLeave={() => setHoveredBtn(null)}
-              className="flex flex-col items-center justify-center gap-0.5 h-full px-3 transition-colors"
-              style={{
-                color: runAccent,
-                background: hoveredBtn === 'refresh' ? hexToRgba(runAccent, 0.06) : undefined,
-              }}
-              title="Refresh — re-registers the proxy route so the browser widget can reach this session's port"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>refresh</span>
-              <span className="text-[8px] font-bold tracking-wide leading-none">REFRESH</span>
-            </button>
+            <>
+              {/* Separator before Refresh */}
+              <div className="w-px self-stretch bg-white/[0.07]" />
+              <button
+                onClick={refreshTerminal}
+                onMouseEnter={() => setHoveredBtn('refresh')}
+                onMouseLeave={() => setHoveredBtn(null)}
+                className="flex flex-col items-center justify-center gap-0.5 h-full px-3 transition-colors"
+                style={{
+                  color: runAccent,
+                  background: hoveredBtn === 'refresh' ? hexToRgba(runAccent, 0.06) : undefined,
+                }}
+                title="Refresh — re-registers the proxy route so the browser widget can reach this session's port"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>refresh</span>
+                <span className="text-[8px] font-bold tracking-wide leading-none">REFRESH</span>
+              </button>
+            </>
           )}
 
           {/* Separator before danger group */}
