@@ -84,26 +84,26 @@ test.describe('Run Widget Header Actions', () => {
 
   test('header shows labeled COLOR button', async ({ page }) => {
     const widget = page.getByTestId('canvas-widget-R-241')
-    await expect(widget.getByText('COLOR')).toBeVisible()
+    await expect(widget.getByText('COLOR', { exact: true })).toBeVisible()
   })
 
   test('header shows labeled BROWSER button', async ({ page }) => {
     const widget = page.getByTestId('canvas-widget-R-241')
-    await expect(widget.getByText('BROWSER')).toBeVisible()
+    await expect(widget.getByText('BROWSER', { exact: true })).toBeVisible()
   })
 
   test('header shows labeled REFRESH button when session is live with port', async ({ page }) => {
     const widget = page.getByTestId('canvas-widget-R-241')
     // Refresh is only shown when isLive && run.port — skip gracefully if absent
-    const visible = await widget.getByText('REFRESH').isVisible().catch(() => false)
+    const visible = await widget.getByText('REFRESH', { exact: true }).isVisible().catch(() => false)
     if (!visible) return // session not live or no port — button intentionally absent
-    await expect(widget.getByText('REFRESH')).toBeVisible()
+    await expect(widget.getByText('REFRESH', { exact: true })).toBeVisible()
   })
 
   test('header shows labeled STOP or RESUME button', async ({ page }) => {
     const widget = page.getByTestId('canvas-widget-R-241')
-    const stop = widget.getByText('STOP')
-    const resume = widget.getByText('RESUME')
+    const stop = widget.getByText('STOP', { exact: true })
+    const resume = widget.getByText('RESUME', { exact: true })
     const stopVisible = await stop.isVisible().catch(() => false)
     const resumeVisible = await resume.isVisible().catch(() => false)
     expect(stopVisible || resumeVisible).toBeTruthy()
@@ -111,7 +111,7 @@ test.describe('Run Widget Header Actions', () => {
 
   test('header shows labeled DELETE button', async ({ page }) => {
     const widget = page.getByTestId('canvas-widget-R-241')
-    await expect(widget.getByText('DELETE')).toBeVisible()
+    await expect(widget.getByText('DELETE', { exact: true })).toBeVisible()
   })
 
   test('REFRESH button has descriptive tooltip when shown', async ({ page }) => {
