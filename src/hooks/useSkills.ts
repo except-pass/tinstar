@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { SkillDTO, PendingSkill, StoredProcedure } from '../types'
+import { randomUUID } from '../uuid'
 
 export interface OptimisticProcedure {
   id: string
@@ -76,7 +77,7 @@ export function useSkills(): SkillsState & SkillsActions {
               const entity = await entityRes.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
               const existing = entity.data?.settings?.procedures ?? []
               if (!existing.some(p => p.skillName === skillName)) {
-                const newProcedure: StoredProcedure = { id: crypto.randomUUID(), skillName }
+                const newProcedure: StoredProcedure = { id: randomUUID(), skillName }
                 await fetch(`/api/${entityPath}/${entityId}`, {
                   method: 'PATCH',
                   headers: { 'Content-Type': 'application/json' },

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { GroupingDimension } from '../domain/types'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
+import { randomUUID } from '../uuid'
 
 export interface CreateDialogState {
   parentId: string | null
@@ -52,7 +53,7 @@ export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate }: Prop
     if (!endpoint) return
 
     const prefix = ID_PREFIX_MAP[dialog.childType] ?? dialog.childType
-    const id = `${prefix}-${crypto.randomUUID().slice(0, 8)}`
+    const id = `${prefix}-${randomUUID().slice(0, 8)}`
 
     const body: Record<string, string> = { name: trimmedName, id }
 

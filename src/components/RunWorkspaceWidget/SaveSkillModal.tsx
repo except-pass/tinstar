@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import type { StoredProcedure } from '../../types'
 import { useSkillsContext } from '../SkillsProvider'
+import { randomUUID } from '../../uuid'
 
 interface Props {
   draftId: string
@@ -43,7 +44,7 @@ export function SaveSkillModal({ draftId, skillName, pendingSkillId, sessionId, 
         if (entityRes.ok) {
           const entity = await entityRes.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
           const existing = entity.data?.settings?.procedures ?? []
-          const newProcedure: StoredProcedure = { id: crypto.randomUUID(), skillName }
+          const newProcedure: StoredProcedure = { id: randomUUID(), skillName }
           await fetch(`/api/${entityPath}/${pendingSkill.entityId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },

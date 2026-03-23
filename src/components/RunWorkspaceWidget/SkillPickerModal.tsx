@@ -1,6 +1,7 @@
 // src/components/RunWorkspaceWidget/SkillPickerModal.tsx
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSkillsContext } from '../SkillsProvider'
+import { randomUUID } from '../../uuid'
 import { useTaxonomy } from '../TaxonomyContext'
 import { resolveEntityProcedures } from '../../domain/procedures'
 import type { SkillDTO, PendingSkill, StoredProcedure } from '../../types'
@@ -79,7 +80,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
 
     // Show optimistic star immediately for snappy UX
-    const newId = crypto.randomUUID()
+    const newId = randomUUID()
     addOptimisticProcedure({ id: newId, entityId, skillName })
     setOptimisticAdded(prev => new Set([...prev, skillName]))
 
@@ -128,7 +129,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     // Sanitize description into a valid skill-file name (lowercase, hyphens only)
     const skillName = description.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '') || 'new-skill'
 
-    const draftId = crypto.randomUUID()
+    const draftId = randomUUID()
     const pending: PendingSkill = {
       id: draftId,
       placeholderName: skillName,
