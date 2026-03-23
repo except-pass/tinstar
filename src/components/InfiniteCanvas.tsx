@@ -210,12 +210,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   // Center on a widget when focusRunId changes
   useEffect(() => {
-    if (!focusRunId || !containerRef.current) return
+    if (!focusRunId) return
+    // Always clear focusRunId so subsequent double-clicks on the same widget
+    // re-trigger this effect (React skips re-render if state value is identical).
+    onFocusHandled()
+    if (!containerRef.current) return
     const layout = getLayout(focusRunId)
     if (!layout) return
     const rect = containerRef.current.getBoundingClientRect()
     centerOn(layout.x, layout.y, layout.width, layout.height, rect.width, rect.height)
-    onFocusHandled()
   }, [focusRunId, getLayout, centerOn, onFocusHandled])
 
   // Attach wheel listener with { passive: false }
