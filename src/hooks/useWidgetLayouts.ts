@@ -30,6 +30,11 @@ function getPadding(depth: number) {
 const CONTAINER_GAP = 40
 const RUN_GAP = 20
 
+/** Snap all layout fields to integer pixels — prevents sub-pixel rendering that blurs text */
+function snap(l: WidgetLayout): WidgetLayout {
+  return { x: Math.round(l.x), y: Math.round(l.y), width: Math.round(l.width), height: Math.round(l.height) }
+}
+
 // --- Tree map construction ---
 
 function buildTreeMaps(tree: TreeNode[]): TreeMaps {
@@ -207,7 +212,7 @@ function placeNewRuns(
     }
 
     if (refY !== null) {
-      placed.set(id, { x: maxRight + RUN_GAP, y: refY, width: w, height: h })
+      placed.set(id, snap({ x: maxRight + RUN_GAP, y: refY, width: w, height: h }))
       continue
     }
 
@@ -216,7 +221,7 @@ function placeNewRuns(
     if (parentLayout) {
       const depth = treeMaps.depthMap.get(parentId!) ?? 0
       const { padX, padTop } = getPadding(depth)
-      placed.set(id, { x: parentLayout.x + padX, y: parentLayout.y + padTop, width: w, height: h })
+      placed.set(id, snap({ x: parentLayout.x + padX, y: parentLayout.y + padTop, width: w, height: h }))
     }
     // else: no reference found — caller will fall back to generateDefaultLayouts
   }
@@ -247,19 +252,15 @@ function loadLayouts(tree: TreeNode[], storageKey: string): Map<string, WidgetLa
     if (!raw) return generateDefaultLayouts(tree)
     const parsed = JSON.parse(raw) as Record<string, WidgetLayout>
     const map = new Map<string, WidgetLayout>()
-    const snapLayout = (l: WidgetLayout): WidgetLayout => ({
-      x: Math.round(l.x), y: Math.round(l.y),
-      width: Math.round(l.width), height: Math.round(l.height),
-    })
     for (const id of allIds) {
       const saved = parsed[id]
-      if (saved && typeof saved.x === 'number') map.set(id, snapLayout(saved))
+      if (saved && typeof saved.x === 'number') map.set(id, snap(saved))
     }
     // Also load any saved positions not in the current tree
     // (e.g. editor widgets arriving via SSE after initial mount)
     for (const [id, layout] of Object.entries(parsed)) {
       if (!map.has(id) && typeof (layout as WidgetLayout).x === 'number') {
-        map.set(id, snapLayout(layout as WidgetLayout))
+        map.set(id, snap(layout as WidgetLayout))
       }
     }
     // If >20% missing, regenerate from scratch
@@ -320,7 +321,7 @@ function enforceContainsChild(
   const neededH = (childLayout.y + childLayout.height + padBottom) - y
   if (neededH > height) { height = neededH; changed = true }
 
-  if (changed) map.set(parentId, { x, y, width, height })
+  if (changed) map.set(parentId, snap({ x, y, width, height }))
 }
 
 /** Walk up parent chain expanding as needed */
@@ -384,12 +385,12 @@ function computeTightBounds(
     maxBottom = Math.max(maxBottom, c.y + c.height)
   }
   if (minLeft === Infinity) return null
-  return {
+  return snap({
     x: minLeft - padX,
     y: minTop - padTop,
     width: maxRight - minLeft + padX * 2,
     height: maxBottom - minTop + padTop + padBottom,
-  }
+  })
 }
 
 // --- The hook ---

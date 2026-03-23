@@ -108,9 +108,9 @@ function computeTreemapLayouts(
     const node = nodes[i]!
     const col = i % cols
     const row = Math.floor(i / cols)
-    const nx = x + gap + col * (cellW + gap)
-    const ny = y + gap + row * (cellH + gap)
-    result.set(node.id, { x: nx, y: ny, width: cellW, height: cellH })
+    const nx = Math.round(x + gap + col * (cellW + gap))
+    const ny = Math.round(y + gap + row * (cellH + gap))
+    result.set(node.id, { x: nx, y: ny, width: Math.round(cellW), height: Math.round(cellH) })
 
     const isContainer = getWidgetComponent(toWidgetType(node.type))?.isContainer
     if (isContainer && node.children.length > 0 && cellW > 120 && cellH > 80) {
