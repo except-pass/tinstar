@@ -49,25 +49,17 @@ export function buildWorkspaceView(
   taxRepo: TaxonomyRepository,
 ): {
   sidebarTree: TreeNode[]
-  treeNodes: TreeNode[]
   runSummaries: Map<string, RunSummaryViewModel>
 } {
   const runs = runRepo.getAll()
-
-  // Build hierarchical tree from runs grouped by dimensions
   const sidebarTree = buildGroupTree(runs, dimensions, taxRepo)
-  const treeNodes = sidebarTree
-
-  // Build run summary lookup
   const runSummaries = new Map<string, RunSummaryViewModel>()
   for (const run of runs) {
     runSummaries.set(run.id, toRunSummary(run, taxRepo))
   }
-
-  return { sidebarTree, treeNodes, runSummaries }
+  return { sidebarTree, runSummaries }
 }
 
-/** Find a node's label by its ID in the tree */
 export function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
   for (const node of nodes) {
     if (node.id === targetId) return node.label
