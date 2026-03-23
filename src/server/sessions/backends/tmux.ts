@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Session } from '../session'
 import type { TinstarConfig } from '../config'
-import { log } from '../logger'
+import { log } from '../../logger'
 
 const execFileAsync = promisify(execFile)
 
