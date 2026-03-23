@@ -1,7 +1,7 @@
 import { useTaxonomy } from '../TaxonomyContext'
 import { useSkillsContext } from '../SkillsProvider'
 import { resolveEntityProcedures } from '../../domain/procedures'
-import type { SessionStatus } from '../../types'
+import type { SessionStatus, StoredProcedure } from '../../types'
 
 interface Props {
   taskId: string
@@ -31,6 +31,22 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse, 
   const inheritedProcs = resolved.filter(p => p.entityType !== 'task')
 
   const isBusy = sessionStatus === 'running'
+
+  async function removeProcedure(skillName: string) {
+    const proc = resolved.find(p => p.skillName === skillName)
+    const entityType = proc?.entityType ?? 'task'
+    const entityId = proc?.entityId ?? taskId
+    const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
+    const res = await fetch(`/api/${entityPath}/${entityId}`)
+    if (!res.ok) return
+    const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
+    const existing = json.data?.settings?.procedures ?? []
+    await fetch(`/api/${entityPath}/${entityId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { procedures: existing.filter(p => p.skillName !== skillName) } }),
+    })
+  }
 
   async function sendToTerminal(skillName: string) {
     if (isBusy) return
@@ -93,6 +109,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse, 
                     name={proc.skillName}
                     isBusy={isBusy}
                     onRun={() => sendToTerminal(proc.skillName)}
+                    onRemove={() => removeProcedure(proc.skillName)}
                   />
                 ))}
               </div>
@@ -110,6 +127,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse, 
             name={proc.skillName}
             isBusy={isBusy}
             onRun={() => sendToTerminal(proc.skillName)}
+            onRemove={() => removeProcedure(proc.skillName)}
           />
         ))}
 
@@ -120,6 +138,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse, 
             name={op.skillName}
             isBusy={isBusy}
             onRun={() => sendToTerminal(op.skillName)}
+            onRemove={() => removeProcedure(op.skillName)}
           />
         ))}
 
@@ -148,7 +167,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse, 
   )
 }
 
-function ProcedureRow({ name, isBusy, onRun }: { name: string; isBusy: boolean; onRun: () => void }) {
+function ProcedureRow({ name, isBusy, onRun, onRemove }: { name: string; isBusy: boolean; onRun: () => void; onRemove: () => void }) {
   return (
     <div
       className="group flex items-center gap-1.5 px-2 py-1.5 hover:bg-primary/5 transition-colors cursor-pointer"
@@ -159,6 +178,13 @@ function ProcedureRow({ name, isBusy, onRun }: { name: string; isBusy: boolean; 
       <span className="flex-1 text-2xs font-mono text-slate-400 group-hover:text-slate-300 truncate transition-colors" title={name}>
         {name}
       </span>
+      <button
+        onClick={e => { e.stopPropagation(); onRemove() }}
+        title="Remove procedure"
+        className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-600 hover:text-accent-red flex-shrink-0"
+      >
+        <span className="material-symbols-outlined text-sm">star</span>
+      </button>
     </div>
   )
 }
