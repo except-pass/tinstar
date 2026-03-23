@@ -763,7 +763,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       let naturalWidth = 640
       let naturalHeight = 480
       try {
-        const dims = imageSize(absoluteFilePath)
+        const buf = readFileSync(absoluteFilePath)
+        const dims = imageSize(buf)
         naturalWidth = dims.width ?? 640
         naturalHeight = dims.height ?? 480
       } catch {

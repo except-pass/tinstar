@@ -153,6 +153,8 @@ function WorkspaceShellInner() {
         type: 'image-viewer' as const,
         entityId: w.id,
         children: [],
+        runCount: 0,
+        activeCount: 0,
       })),
     [imageWidgets],
   )
@@ -373,7 +375,7 @@ function WorkspaceShellInner() {
   const handleAdd = useCallback((parentId: string | null, type: GroupingDimension | 'run') => {
     if (type === 'run') return
     // Determine the parent's type from the dimensions hierarchy
-    const typeIdx = dimensions.indexOf(type)
+    const typeIdx = dimensions.indexOf(type as 'task' | 'epic' | 'initiative')
     const parentType = typeIdx > 0 ? (dimensions[typeIdx - 1] ?? null) : null
     setCreateDialog({ parentId, parentType, childType: type })
   }, [dimensions])
@@ -781,7 +783,7 @@ function WorkspaceShellInner() {
                   }}
                   onAddChild={() => {
                     // Add a child of the next dimension level below this entity
-                    const idx = dimensions.indexOf(entityMenu.entityType)
+                    const idx = dimensions.indexOf(entityMenu.entityType as 'task' | 'epic' | 'initiative')
                     const childType = idx >= 0 && idx < dimensions.length - 1 ? (dimensions[idx + 1] ?? 'run') : 'run'
                     handleAdd(entityMenu.entityId, childType)
                     setEntityMenu(null)

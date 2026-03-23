@@ -16,6 +16,9 @@ const frontendPort = parseInt(process.env.TINSTAR_FRONTEND_PORT ?? '5280')
 
 export default defineConfig({
   plugins: [react(), devTitle()],
+  build: {
+    outDir: 'dist/client',
+  },
   define: {
     // Expose backend port so the SSE EventSource can connect directly,
     // bypassing the Vite proxy (which blocks other requests while SSE is active)

@@ -283,32 +283,42 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
         </div>
 
         {/* Entity picker popover — rendered outside the scrollable div to avoid overflow clipping */}
-        {starPopover && entityLevels().length > 0 && (
-          <div
-            className="fixed z-[60] bg-surface-panel border border-yellow-400/30 rounded-md w-48 shadow-lg overflow-hidden"
-            style={{ top: starPopover.rect.bottom + 4, left: Math.min(starPopover.rect.right - 192, window.innerWidth - 200) }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="px-3 py-1.5 text-2xs font-mono text-slate-600 uppercase tracking-widest border-b border-white/[0.06]">
-              Add to procedures for…
+        {starPopover && (() => {
+          const levels = entityLevels()
+          if (levels.length === 0) return null
+          const popoverHeight = 32 + levels.length * 36
+          const spaceBelow = window.innerHeight - starPopover.rect.bottom - 4
+          const top = spaceBelow >= popoverHeight
+            ? starPopover.rect.bottom + 4
+            : Math.max(8, starPopover.rect.top - popoverHeight - 4)
+          const left = Math.min(starPopover.rect.right - 192, window.innerWidth - 200)
+          return (
+            <div
+              className="fixed z-[60] bg-surface-panel border border-yellow-400/30 rounded-md w-48 shadow-lg overflow-hidden"
+              style={{ top, left }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="px-3 py-1.5 text-2xs font-mono text-slate-600 uppercase tracking-widest border-b border-white/[0.06]">
+                Add to procedures for…
+              </div>
+              {levels.map((level, i) => (
+                <button
+                  key={level.id}
+                  onClick={() => { addProcedureToEntity(starPopover.skillName, level.id, level.type); setStarPopover(null) }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-yellow-400/[0.07] transition-colors"
+                >
+                  <span className="material-symbols-outlined text-xs text-slate-600">
+                    {level.type === 'task' ? 'task_alt' : level.type === 'epic' ? 'layers' : 'rocket_launch'}
+                  </span>
+                  <span className={`flex-1 text-xs font-mono text-left ${i === 0 ? 'text-primary' : 'text-slate-400'}`}>
+                    {level.type.charAt(0).toUpperCase() + level.type.slice(1)}
+                  </span>
+                  <span className="text-2xs text-slate-600 truncate max-w-[80px]">{level.name}</span>
+                </button>
+              ))}
             </div>
-            {entityLevels().map((level, i) => (
-              <button
-                key={level.id}
-                onClick={() => { addProcedureToEntity(starPopover.skillName, level.id, level.type); setStarPopover(null) }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-yellow-400/[0.07] transition-colors"
-              >
-                <span className="material-symbols-outlined text-xs text-slate-600">
-                  {level.type === 'task' ? 'task_alt' : level.type === 'epic' ? 'layers' : 'rocket_launch'}
-                </span>
-                <span className={`flex-1 text-xs font-mono text-left ${i === 0 ? 'text-primary' : 'text-slate-400'}`}>
-                  {level.type.charAt(0).toUpperCase() + level.type.slice(1)}
-                </span>
-                <span className="text-2xs text-slate-600 truncate max-w-[80px]">{level.name}</span>
-              </button>
-            ))}
-          </div>
-        )}
+          )
+        })()}
 
         {/* Footer */}
         <div className="flex items-center gap-3 px-3.5 py-1.5 border-t border-white/[0.06] bg-black/20">
