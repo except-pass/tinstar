@@ -2,10 +2,13 @@ import { useCallback, useState, useEffect } from 'react'
 import type { ImageWidget } from '../../domain/types'
 import type { WidgetProps } from '../widgetComponentRegistry'
 import { useImageWatch } from '../../hooks/useImageWatch'
+import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
+import { HotgroupBadge } from '../../components/HotgroupBadge'
 
 export function ImageViewerWidget({ data }: WidgetProps) {
   const widget = data as ImageWidget
   const { connected, lastUpdatedAt } = useImageWatch(widget.sessionId, widget.filePath)
+  const { slotsForNode } = useHotgroupContext()
 
   const filename = widget.filePath.split('/').pop() ?? widget.filePath
 
@@ -52,6 +55,7 @@ export function ImageViewerWidget({ data }: WidgetProps) {
         >
           ↗ Open
         </button>
+        <HotgroupBadge slots={slotsForNode(`image-${widget.id}`)} />
         <button
           onPointerDown={e => e.stopPropagation()}
           onClick={handleClose}

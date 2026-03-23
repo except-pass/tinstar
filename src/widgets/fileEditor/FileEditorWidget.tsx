@@ -5,6 +5,8 @@ import type { EditorWidget } from '../../domain/types'
 import type { WidgetProps } from '../widgetComponentRegistry'
 import { useFileWatch } from '../../hooks/useFileWatch'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
+import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
+import { HotgroupBadge } from '../../components/HotgroupBadge'
 
 function getLanguage(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -31,6 +33,7 @@ function isBinaryOrLarge(content: string): boolean {
 export function FileEditorWidget({ data }: WidgetProps) {
   const widget = data as EditorWidget
   const { content, connected, lastUpdatedAt } = useFileWatch(widget.sessionId, widget.filePath)
+  const { slotsForNode } = useHotgroupContext()
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
   // Ref so handleEditorMount always reads the latest content, avoiding stale closure
   const contentRef = useRef<string | null>(null)
@@ -123,6 +126,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
         >
           ↗ Open in Editor
         </button>
+        <HotgroupBadge slots={slotsForNode(`editor-${widget.id}`)} />
         <button
           onPointerDown={e => e.stopPropagation()}
           onClick={handleClose}

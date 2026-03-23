@@ -2,10 +2,13 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import type { BrowserWidget } from '../../domain/types'
 import type { WidgetProps } from '../widgetComponentRegistry'
 import { hexToRgba, resolveRunAccent } from '../../components/runAccent'
+import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
+import { HotgroupBadge } from '../../components/HotgroupBadge'
 
 export function BrowserWidget({ data, isSelected, isDragging, isHovered }: WidgetProps) {
   const widget = data as BrowserWidget
   const accent = resolveRunAccent(widget.color)
+  const { slotsForNode } = useHotgroupContext()
 
   const [url, setUrl] = useState(widget.url)
   const [inputValue, setInputValue] = useState(widget.url)
@@ -112,6 +115,7 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
             <span className="material-symbols-outlined text-sm">refresh</span>
           </button>
         )}
+        <HotgroupBadge slots={slotsForNode(`browser-${widget.id}`)} />
         <button
           onPointerDown={e => e.stopPropagation()}
           onClick={handleClose}

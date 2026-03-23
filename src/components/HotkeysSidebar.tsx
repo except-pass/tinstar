@@ -17,8 +17,12 @@ const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
 // Canvas-level bindings — only work when no widget context is active
 const CANVAS_KEYS: Array<{ key: string; label: string }> = [
   { key: 'Ctrl+G',    label: 'Arrange grid' },
-  { key: '1–9',       label: 'Hotgroup select' },
-  { key: 'Ctrl+1–9',  label: 'Hotgroup assign' },
+]
+
+// Quick Draw bindings — assign widgets to slots and jump between them
+const QUICKDRAW_KEYS: Array<{ key: string; label: string }> = [
+  { key: '1–9',       label: 'Quick Draw' },
+  { key: 'Ctrl+1–9',  label: 'Quick Draw assign' },
 ]
 
 const LS_WIDTH = 'tinstar-sidebar-hotkeys-width'
@@ -160,7 +164,7 @@ export function HotkeysSidebar() {
         onClick={toggleCollapse}
         data-testid="hotkeys-sidebar-collapsed"
       >
-        <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr] rotate-180 mt-1">KEYS</span>
+        <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr] rotate-180 mt-1">Quick Draw</span>
       </div>
     )
   }
@@ -248,6 +252,17 @@ export function HotkeysSidebar() {
                 </div>
                 <div>
                   {CANVAS_KEYS.map(b => (
+                    <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
+                  ))}
+                </div>
+              </div>
+              <div className="border-t border-white/10 mx-2" />
+              <div className="px-2 py-1.5 flex-shrink-0">
+                <div className="text-2xs font-mono font-bold text-slate-600 uppercase tracking-widest mb-1">
+                  Quick Draw
+                </div>
+                <div>
+                  {QUICKDRAW_KEYS.map(b => (
                     <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
                   ))}
                 </div>
