@@ -22,6 +22,7 @@ export const spec = {
     { name: 'Config', description: 'User configuration' },
     { name: 'Editor', description: 'Open files in external editor' },
     { name: 'Observability', description: 'OpenTelemetry spans and metrics' },
+    { name: 'Widgets', description: 'Canvas widgets — browser, file editor, image' },
     { name: 'Simulator', description: 'Mock data generator (dev/test only)' },
   ],
   paths: {
@@ -479,6 +480,104 @@ export const spec = {
       },
     },
 
+    // ── Widgets ────────────────────────────────────────────
+    '/api/browser-widgets': {
+      post: {
+        tags: ['Widgets'],
+        summary: 'Create a browser widget on the canvas',
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['sessionId'],
+          properties: {
+            sessionId: { type: 'string', description: 'Session name (must have a running run)' },
+            url: { type: 'string', description: 'Initial URL to load' },
+            headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Custom HTTP headers injected via server-side proxy (like ModHeader)' },
+          },
+        } } } },
+        responses: { 200: { description: 'Created widget', content: { 'application/json': { schema: { $ref: '#/components/schemas/BrowserWidget' } } } } },
+      },
+    },
+    '/api/browser-widgets/{id}': {
+      patch: {
+        tags: ['Widgets'],
+        summary: 'Update a browser widget',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          properties: {
+            url: { type: 'string' },
+            title: { type: 'string' },
+            headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Replace all custom headers (empty object clears them)' },
+          },
+        } } } },
+        responses: { 200: { description: 'Updated widget' } },
+      },
+      delete: {
+        tags: ['Widgets'],
+        summary: 'Delete a browser widget',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' } },
+      },
+    },
+    '/api/proxy/{widgetId}/{path}': {
+      get: {
+        tags: ['Widgets'],
+        summary: 'Header-injection proxy for browser widgets',
+        description: 'Reverse-proxies requests to the browser widget\'s target URL, injecting its configured custom headers on every request. Used automatically when a widget has headers set — the iframe src becomes /api/proxy/{widgetId}/path instead of the direct URL.',
+        parameters: [
+          { name: 'widgetId', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'path', in: 'path', required: true, schema: { type: 'string' }, description: 'Path forwarded to the target origin' },
+        ],
+        responses: { 200: { description: 'Proxied response' }, 502: { description: 'Target unreachable' } },
+      },
+    },
+    '/api/editor-widgets': {
+      post: {
+        tags: ['Widgets'],
+        summary: 'Create a file editor widget on the canvas',
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['sessionId', 'filePath'],
+          properties: {
+            sessionId: { type: 'string' },
+            filePath: { type: 'string', description: 'Absolute or workspace-relative file path' },
+          },
+        } } } },
+        responses: { 200: { description: 'Created widget' } },
+      },
+    },
+    '/api/editor-widgets/{id}': {
+      delete: {
+        tags: ['Widgets'],
+        summary: 'Delete a file editor widget',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' } },
+      },
+    },
+    '/api/image-widgets': {
+      post: {
+        tags: ['Widgets'],
+        summary: 'Create an image widget on the canvas',
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['sessionId', 'filePath'],
+          properties: {
+            sessionId: { type: 'string' },
+            filePath: { type: 'string', description: 'Absolute path to an image file' },
+          },
+        } } } },
+        responses: { 200: { description: 'Created widget' } },
+      },
+    },
+    '/api/image-widgets/{id}': {
+      delete: {
+        tags: ['Widgets'],
+        summary: 'Delete an image widget',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' } },
+      },
+    },
+
     // ── Simulator ────────────────────────────────────────
     '/api/simulator/start': {
       post: {
@@ -608,6 +707,18 @@ export const spec = {
           name: { type: 'string' },
           path: { type: 'string' },
           isDir: { type: 'boolean' },
+        },
+      },
+      BrowserWidget: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          sessionId: { type: 'string' },
+          spaceId: { type: 'string' },
+          url: { type: 'string' },
+          title: { type: 'string' },
+          color: { type: 'string' },
+          headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Custom HTTP headers injected on proxied requests' },
         },
       },
       Error: {

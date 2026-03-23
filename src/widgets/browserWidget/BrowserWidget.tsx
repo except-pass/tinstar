@@ -5,14 +5,25 @@ import { hexToRgba, resolveRunAccent } from '../../components/runAccent'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
 import { HotgroupBadge } from '../../components/HotgroupBadge'
 
+function proxyUrl(widgetId: string, targetUrl: string): string {
+  try {
+    const parsed = new URL(targetUrl)
+    return `/api/proxy/${widgetId}${parsed.pathname}${parsed.search}`
+  } catch {
+    return `/api/proxy/${widgetId}/`
+  }
+}
+
 export function BrowserWidget({ data, isSelected, isDragging, isHovered }: WidgetProps) {
   const widget = data as BrowserWidget
   const accent = resolveRunAccent(widget.color)
   const { slotsForNode } = useHotgroupContext()
+  const hasHeaders = widget.headers && Object.keys(widget.headers).length > 0
 
   const [url, setUrl] = useState(widget.url)
   const [inputValue, setInputValue] = useState(widget.url)
   const [editing, setEditing] = useState(!widget.url)
+  const [headersOpen, setHeadersOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Sync when agent pushes a new URL via SSE
@@ -58,6 +69,8 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
     setUrl('')
     requestAnimationFrame(() => setUrl(current))
   }, [url])
+
+  const iframeSrc = url ? (hasHeaders ? proxyUrl(widget.id, url) : url) : ''
 
   const borderStyle = isDragging
     ? { borderColor: hexToRgba(accent, 0.9), boxShadow: `0 20px 80px ${hexToRgba(accent, 0.4)}, 0 0 0 2px ${hexToRgba(accent, 0.8)}` }
@@ -115,6 +128,14 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
             <span className="material-symbols-outlined text-sm">refresh</span>
           </button>
         )}
+        <button
+          onPointerDown={e => e.stopPropagation()}
+          onClick={() => setHeadersOpen(h => !h)}
+          className={`flex-shrink-0 transition-colors ${hasHeaders ? 'text-primary' : headersOpen ? 'text-slate-300' : 'text-slate-500 hover:text-slate-300'}`}
+          title="Custom headers"
+        >
+          <span className="material-symbols-outlined text-sm">tune</span>
+        </button>
         <HotgroupBadge slots={slotsForNode(`browser-${widget.id}`)} />
         <button
           onPointerDown={e => e.stopPropagation()}
@@ -126,12 +147,21 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
         </button>
       </div>
 
+      {/* Headers editor */}
+      {headersOpen && (
+        <HeadersEditor
+          widgetId={widget.id}
+          headers={widget.headers ?? {}}
+          onClose={() => setHeadersOpen(false)}
+        />
+      )}
+
       {/* Body */}
       <div className="flex-1 min-h-0 relative">
-        {url ? (
+        {iframeSrc ? (
           <iframe
-            key={url}
-            src={url}
+            key={iframeSrc}
+            src={iframeSrc}
             className="w-full h-full border-0"
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
             title={widget.title ?? url}
@@ -143,6 +173,86 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function HeadersEditor({ widgetId, headers, onClose }: { widgetId: string; headers: Record<string, string>; onClose: () => void }) {
+  const [rows, setRows] = useState<Array<{ key: string; value: string }>>(() => {
+    const entries = Object.entries(headers)
+    return entries.length > 0 ? entries.map(([key, value]) => ({ key, value })) : [{ key: '', value: '' }]
+  })
+
+  const save = useCallback((newRows: Array<{ key: string; value: string }>) => {
+    const hdrs: Record<string, string> = {}
+    for (const { key, value } of newRows) {
+      const k = key.trim()
+      if (k) hdrs[k] = value
+    }
+    fetch(`/api/browser-widgets/${widgetId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ headers: hdrs }),
+    }).catch(() => {})
+  }, [widgetId])
+
+  const updateRow = (i: number, field: 'key' | 'value', val: string) => {
+    const next = rows.map((r, j) => j === i ? { ...r, [field]: val } : r)
+    setRows(next)
+  }
+
+  const addRow = () => setRows(r => [...r, { key: '', value: '' }])
+
+  const removeRow = (i: number) => {
+    const next = rows.filter((_, j) => j !== i)
+    const final = next.length === 0 ? [{ key: '', value: '' }] : next
+    setRows(final)
+    save(final)
+  }
+
+  const handleBlur = () => save(rows)
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') { save(rows); onClose() }
+    if (e.key === 'Escape') onClose()
+  }
+
+  return (
+    <div
+      className="bg-surface-base border-b border-white/10 px-3 py-2 flex flex-col gap-1.5"
+      onPointerDown={e => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-2xs font-mono text-slate-500 uppercase tracking-widest">Headers</span>
+        <button onClick={addRow} className="text-slate-600 hover:text-primary text-xs" title="Add header">
+          <span className="material-symbols-outlined text-sm">add</span>
+        </button>
+      </div>
+      {rows.map((row, i) => (
+        <div key={i} className="flex items-center gap-1">
+          <input
+            value={row.key}
+            onChange={e => updateRow(i, 'key', e.target.value)}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            placeholder="Header-Name"
+            className="w-[35%] bg-surface-panel text-2xs font-mono text-slate-300 px-1.5 py-0.5 rounded border border-white/10 outline-none focus:border-primary/50"
+            spellCheck={false}
+          />
+          <input
+            value={row.value}
+            onChange={e => updateRow(i, 'value', e.target.value)}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            placeholder="value"
+            className="flex-1 bg-surface-panel text-2xs font-mono text-slate-300 px-1.5 py-0.5 rounded border border-white/10 outline-none focus:border-primary/50"
+            spellCheck={false}
+          />
+          <button onClick={() => removeRow(i)} className="text-slate-600 hover:text-accent-red flex-shrink-0">
+            <span className="material-symbols-outlined text-sm">close</span>
+          </button>
+        </div>
+      ))}
     </div>
   )
 }

@@ -127,6 +127,7 @@ export interface BrowserWidget {
   url: string
   title?: string
   color?: string
+  headers?: Record<string, string>
 }
 
 export interface ImageWidget {

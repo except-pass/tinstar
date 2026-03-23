@@ -1,6 +1,7 @@
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
+import { request as httpRequest } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
 import type { DocumentStore } from '../stores/document-store'
@@ -926,10 +927,54 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // --- Browser widget header-injection proxy ---
+  // /api/proxy/{widgetId}/... → proxied to widget's target origin with injected headers
+  if (url.startsWith('/api/proxy/')) {
+    const afterProxy = url.slice('/api/proxy/'.length)
+    const slashIdx = afterProxy.indexOf('/')
+    const widgetId = slashIdx === -1 ? afterProxy.split('?')[0]! : afterProxy.slice(0, slashIdx)
+    const proxyPath = slashIdx === -1 ? '/' : afterProxy.slice(slashIdx)
+
+    const widget = ctx.docStore.getAllBrowserWidgets().find(w => w.id === widgetId)
+    if (!widget) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' })
+      res.end('Browser widget not found')
+      return true
+    }
+
+    let origin: string
+    try { origin = new URL(widget.url).origin } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain' })
+      res.end('Invalid widget URL')
+      return true
+    }
+
+    const target = new URL(proxyPath, origin)
+    const fwdHeaders: Record<string, string | string[] | undefined> = { ...req.headers, host: target.host }
+    // Inject custom headers
+    if (widget.headers) {
+      for (const [k, v] of Object.entries(widget.headers)) fwdHeaders[k.toLowerCase()] = v
+    }
+
+    const proxyReq = httpRequest(
+      { hostname: target.hostname, port: target.port || undefined, path: target.pathname + target.search, method: req.method, headers: fwdHeaders },
+      proxyRes => {
+        res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers)
+        proxyRes.pipe(res)
+      },
+    )
+    proxyReq.on('error', (err) => {
+      log.warn('proxy', `browser widget proxy error: ${err.message}`)
+      if (!res.headersSent) { res.writeHead(502, { 'Content-Type': 'text/plain' }); res.end('Proxy error') }
+    })
+    req.pipe(proxyReq)
+    return true
+  }
+
   // POST /api/browser-widgets
   if (method === 'POST' && url === '/api/browser-widgets') {
     readBody(req).then(body => {
-      const { sessionId, url: widgetUrl = '' } = JSON.parse(body) as { sessionId?: string; url?: string }
+      const { sessionId, url: widgetUrl = '', headers: widgetHeaders } = JSON.parse(body) as { sessionId?: string; url?: string; headers?: Record<string, string> }
       if (!sessionId) {
         json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId required' } }, 400)
         return
@@ -945,6 +990,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         sessionId,
         url: widgetUrl,
         color: run.color,
+        ...(widgetHeaders && Object.keys(widgetHeaders).length > 0 ? { headers: widgetHeaders } : {}),
       }
       ctx.docStore.upsertBrowserWidget(widget.id, widget)
       json(res, { ok: true, data: widget })
@@ -961,7 +1007,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         json(res, { ok: false, error: { code: 'NOT_FOUND', message: `BrowserWidget ${id} not found` } }, 404)
         return
       }
-      const patch = JSON.parse(body) as { url?: string; title?: string }
+      const patch = JSON.parse(body) as { url?: string; title?: string; headers?: Record<string, string> }
       const updated = { ...existing, ...patch }
       ctx.docStore.upsertBrowserWidget(id, updated)
       json(res, { ok: true, data: updated })
