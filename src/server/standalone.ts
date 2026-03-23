@@ -1,7 +1,7 @@
 import { createServer } from 'node:http'
 import { join, extname, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createReadStream, existsSync, statSync, writeFileSync, unlinkSync } from 'node:fs'
+import { createReadStream, existsSync, statSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
 import { homedir } from 'node:os'
 import httpProxy from 'http-proxy'
 import { initBackend } from './index'
@@ -135,7 +135,9 @@ export function startServer(opts: ServerOptions) {
     proxy.ws(req, socket, head, { target: `http://localhost:${run.port}` })
   })
 
-  const portFile = join(homedir(), '.config', 'tinstar', 'server.port')
+  const configDir = join(homedir(), '.config', 'tinstar')
+  const portFile = join(configDir, 'server.port')
+  const pidFile = join(configDir, 'server.pid')
 
   function writePortFile(port: number) {
     try { writeFileSync(portFile, String(port)) } catch { /* best effort */ }
@@ -145,19 +147,42 @@ export function startServer(opts: ServerOptions) {
     try { unlinkSync(portFile) } catch { /* already gone */ }
   }
 
-  // Clean up port file on shutdown
+  function writePidFile() {
+    try { writeFileSync(pidFile, String(process.pid)) } catch { /* best effort */ }
+  }
+
+  function removePidFile() {
+    try { unlinkSync(pidFile) } catch { /* already gone */ }
+  }
+
+  function killStalePid(): boolean {
+    try {
+      const raw = readFileSync(pidFile, 'utf8').trim()
+      const pid = parseInt(raw, 10)
+      if (!isNaN(pid) && pid !== process.pid) {
+        process.kill(pid, 'SIGTERM')
+        log.info('server', `killed stale server process ${pid}`)
+        return true
+      }
+    } catch { /* no pid file or process already gone */ }
+    return false
+  }
+
+  // Clean up port and pid files on shutdown
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     process.on(sig, () => {
       removePortFile()
+      removePidFile()
       process.exit(0)
     })
   }
-  process.on('exit', removePortFile)
+  process.on('exit', () => { removePortFile(); removePidFile() })
 
-  function listen(port: number) {
+  function listen(port: number, isRetry = false) {
     server.listen(port, () => {
       const url = `http://localhost:${port}`
       writePortFile(port)
+      writePidFile()
       log.info('server', `Tinstar running at ${url}`)
       console.log(`\n  Tinstar running at ${url}\n`)
       if (opts.open) {
@@ -174,9 +199,14 @@ export function startServer(opts: ServerOptions) {
           process.stderr.write(`[standalone] Port ${port} in use and TINSTAR_NO_PORT_FALLBACK=1 — exiting\n`)
           process.exit(1)
         }
-        log.warn('server', `port ${port} in use, trying ${port + 1}`)
-        console.log(`  Port ${port} in use, trying ${port + 1}...`)
-        listen(port + 1)
+        if (!isRetry && killStalePid()) {
+          // Give the stale process time to release the port, then retry same port
+          setTimeout(() => listen(port, true), 800)
+        } else {
+          log.warn('server', `port ${port} in use, trying ${port + 1}`)
+          console.log(`  Port ${port} in use, trying ${port + 1}...`)
+          listen(port + 1)
+        }
       } else {
         throw err
       }
