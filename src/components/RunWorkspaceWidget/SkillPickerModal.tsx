@@ -304,7 +304,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
               {levels.map((level, i) => (
                 <button
                   key={level.id}
-                  onClick={() => { addProcedureToEntity(starPopover.skillName, level.id, level.type); setStarPopover(null) }}
+                  onClick={() => { addProcedureToEntity(starPopover.skillName, level.id, level.type); onClose(); closePicker() }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-yellow-400/[0.07] transition-colors"
                 >
                   <span className="material-symbols-outlined text-xs text-slate-600">
