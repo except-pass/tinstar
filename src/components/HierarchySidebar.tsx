@@ -22,8 +22,11 @@ const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
 
 const CANVAS_KEYS: Array<{ key: string; label: string }> = [
   { key: 'Ctrl+G',   label: 'Arrange grid' },
-  { key: '1–9',      label: 'Hotgroup select' },
-  { key: 'Ctrl+1–9', label: 'Hotgroup assign' },
+]
+
+const QUICKDRAW_KEYS: Array<{ key: string; label: string }> = [
+  { key: '1–9',      label: 'Quick Draw' },
+  { key: 'Ctrl+1–9', label: 'Quick Draw assign' },
 ]
 
 function formatKey(key: string): string {
@@ -140,6 +143,11 @@ function HotkeysSection({ height }: { height: number }) {
             <div className="border-t border-white/10 my-1" />
             <div className="text-2xs font-mono font-bold text-slate-600 uppercase tracking-widest mb-1">Canvas</div>
             {CANVAS_KEYS.map(b => (
+              <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
+            ))}
+            <div className="border-t border-white/10 my-1" />
+            <div className="text-2xs font-mono font-bold text-slate-600 uppercase tracking-widest mb-1">Quick Draw</div>
+            {QUICKDRAW_KEYS.map(b => (
               <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
             ))}
           </>
