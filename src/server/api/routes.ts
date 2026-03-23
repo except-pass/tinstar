@@ -44,6 +44,80 @@ import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
 
+// ─── Multiplexed file watcher ──────────────────────────────────────────
+// Tracks fs.watch instances keyed by absolute path. Multiple subscribers
+// (image widgets, file editors) share a single watcher per file. Updates
+// are broadcast through the singleton SSE connection, avoiding per-widget
+// EventSource connections that exhaust HTTP/1.1's 6-connection limit.
+
+interface WatcherEntry {
+  watcher: ReturnType<typeof watch>
+  debounceTimer: ReturnType<typeof setTimeout> | null
+  subscribers: Set<string>  // subscriber IDs
+  absolutePath: string
+  mode: 'content' | 'notify'  // content = send file contents (editor), notify = send timestamp (image)
+}
+
+const fileWatchers = new Map<string, WatcherEntry>()
+
+function watcherKey(absolutePath: string): string {
+  return absolutePath
+}
+
+function addFileWatchSubscriber(
+  absolutePath: string,
+  subscriberId: string,
+  mode: 'content' | 'notify',
+  sse: SSEBroadcaster,
+): void {
+  const key = watcherKey(absolutePath)
+  const existing = fileWatchers.get(key)
+  if (existing) {
+    existing.subscribers.add(subscriberId)
+    return
+  }
+
+  const entry: WatcherEntry = {
+    watcher: null!,
+    debounceTimer: null,
+    subscribers: new Set([subscriberId]),
+    absolutePath,
+    mode,
+  }
+
+  try {
+    entry.watcher = watch(absolutePath, () => {
+      if (entry.debounceTimer) clearTimeout(entry.debounceTimer)
+      entry.debounceTimer = setTimeout(() => {
+        if (mode === 'content') {
+          readFile(absolutePath, 'utf-8').then(content => {
+            sse.broadcastEvent('file_watch', { path: absolutePath, type: 'content', data: content })
+          }).catch(() => {
+            sse.broadcastEvent('file_watch', { path: absolutePath, type: 'error', data: 'file unavailable' })
+          })
+        } else {
+          sse.broadcastEvent('file_watch', { path: absolutePath, type: 'updated', timestamp: Date.now() })
+        }
+      }, 50)
+    })
+    fileWatchers.set(key, entry)
+  } catch {
+    // file may not exist yet — that's ok, subscriber will get nothing until it does
+  }
+}
+
+function removeFileWatchSubscriber(absolutePath: string, subscriberId: string): void {
+  const key = watcherKey(absolutePath)
+  const entry = fileWatchers.get(key)
+  if (!entry) return
+  entry.subscribers.delete(subscriberId)
+  if (entry.subscribers.size === 0) {
+    if (entry.debounceTimer) clearTimeout(entry.debounceTimer)
+    entry.watcher.close()
+    fileWatchers.delete(key)
+  }
+}
+
 function inferFileKind(filePath: string): FileKind {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
   const name = filePath.split('/').pop()?.toLowerCase() ?? ''
@@ -781,73 +855,73 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // GET /api/image-watch?session=SESSION_ID&path=FILE_PATH
-  if (method === 'GET' && url.startsWith('/api/image-watch')) {
-    const qs = new URL(url, 'http://localhost').searchParams
-    const sessionId = qs.get('session')
-    const filePath = qs.get('path')
+  // POST /api/file-watch/subscribe — subscribe to file changes via the main SSE
+  if (method === 'POST' && url === '/api/file-watch/subscribe') {
+    readBody(req).then(body => {
+      try {
+        const { sessionId, filePath, subscriberId, mode } = JSON.parse(body) as {
+          sessionId?: string; filePath?: string; subscriberId?: string; mode?: 'content' | 'notify'
+        }
+        if (!sessionId || !filePath || !subscriberId) {
+          json(res, { error: 'sessionId, filePath, and subscriberId required' }, 400)
+          return
+        }
 
-    if (!sessionId || !filePath) {
-      json(res, { error: 'session and path required' }, 400)
-      return true
-    }
+        let absolutePath: string
+        if (filePath.startsWith('/') && existsSync(filePath)) {
+          absolutePath = filePath
+        } else {
+          const sessDir = ctx.sessionConfig?.dirs.sessions
+          if (!sessDir) { json(res, { error: 'session config unavailable' }, 503); return }
+          const session = getSession(sessDir, sessionId)
+          if (!session) { json(res, { error: 'session not found' }, 404); return }
+          const workspacePath = session.workspace?.path ?? null
+          if (!workspacePath) { json(res, { error: 'session workspace unavailable' }, 400); return }
+          absolutePath = filePath.startsWith('/')
+            ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
+            : resolve(workspacePath, filePath)
+          if (!absolutePath.startsWith(workspacePath + '/')) {
+            json(res, { error: 'path outside workspace' }, 403)
+            return
+          }
+        }
 
-    let absolutePath: string
-    if (filePath.startsWith('/') && existsSync(filePath)) {
-      absolutePath = filePath
-    } else {
-      const sessDir = ctx.sessionConfig?.dirs.sessions
-      if (!sessDir) { json(res, { error: 'session config unavailable' }, 503); return true }
-      const session = getSession(sessDir, sessionId)
-      if (!session) { json(res, { error: 'session not found' }, 404); return true }
-      const workspacePath = session.workspace?.path ?? null
-      if (!workspacePath) { json(res, { error: 'session workspace unavailable' }, 400); return true }
-      absolutePath = filePath.startsWith('/')
-        ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
-        : resolve(workspacePath, filePath)
-      if (!absolutePath.startsWith(workspacePath + '/')) {
-        json(res, { error: 'path outside workspace' }, 403)
-        return true
+        addFileWatchSubscriber(absolutePath, subscriberId, mode ?? 'notify', ctx.sse)
+
+        // For content mode, send initial file contents immediately
+        if ((mode ?? 'notify') === 'content' && existsSync(absolutePath)) {
+          readFile(absolutePath, 'utf-8').then(content => {
+            ctx.sse.broadcastEvent('file_watch', { path: absolutePath, type: 'content', data: content })
+          }).catch(() => {
+            // ignore — subscriber will get nothing
+          })
+        }
+
+        json(res, { ok: true, absolutePath })
+      } catch {
+        json(res, { error: 'invalid request body' }, 400)
       }
-    }
-
-    if (!existsSync(absolutePath)) {
-      json(res, { error: 'file not found' }, 404)
-      return true
-    }
-
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
     })
+    return true
+  }
 
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null
-    let watcher: ReturnType<typeof watch> | null = null
-    const keepalive = setInterval(() => { res.write(': keep-alive\n\n') }, 15_000)
-
-    const cleanup = () => {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      clearInterval(keepalive)
-      watcher?.close()
-    }
-
-    try {
-      watcher = watch(absolutePath, () => {
-        if (debounceTimer) clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(() => {
-          res.write(`data: ${JSON.stringify({ type: 'updated', timestamp: Date.now() })}\n\n`)
-        }, 50)
-      })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      res.write(`data: ${JSON.stringify({ type: 'error', data: msg })}\n\n`)
-      cleanup()
-      res.end()
-      return true
-    }
-
-    req.on('close', () => { cleanup(); res.end() })
+  // POST /api/file-watch/unsubscribe
+  if (method === 'POST' && url === '/api/file-watch/unsubscribe') {
+    readBody(req).then(body => {
+      try {
+        const { absolutePath, subscriberId } = JSON.parse(body) as {
+          absolutePath?: string; subscriberId?: string
+        }
+        if (!absolutePath || !subscriberId) {
+          json(res, { error: 'absolutePath and subscriberId required' }, 400)
+          return
+        }
+        removeFileWatchSubscriber(absolutePath, subscriberId)
+        json(res, { ok: true })
+      } catch {
+        json(res, { error: 'invalid request body' }, 400)
+      }
+    })
     return true
   }
 
@@ -907,102 +981,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // GET /api/file-watch?session=SESSION_ID&path=FILE_PATH
-  if (method === 'GET' && url.startsWith('/api/file-watch')) {
-    const qs = new URL(url, 'http://localhost').searchParams
-    const sessionId = qs.get('session')
-    const filePath = qs.get('path')
-
-    if (!sessionId || !filePath) {
-      json(res, { error: 'session and path required' }, 400)
-      return true
-    }
-
-    // Fast path: host-absolute paths that exist don't need a session lookup
-    let absolutePath: string
-    if (filePath.startsWith('/') && existsSync(filePath)) {
-      absolutePath = filePath
-    } else {
-      const sessDir = ctx.sessionConfig?.dirs.sessions
-      if (!sessDir) {
-        json(res, { error: 'session config unavailable' }, 503)
-        return true
-      }
-      const session = getSession(sessDir, sessionId)
-      if (!session) {
-        json(res, { error: 'session not found' }, 404)
-        return true
-      }
-      const workspacePath = session.workspace?.path ?? null
-      if (!workspacePath) {
-        json(res, { error: 'session workspace unavailable' }, 400)
-        return true
-      }
-      absolutePath = filePath.startsWith('/')
-        ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
-        : resolve(workspacePath, filePath)
-    }
-
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    })
-
-    const sendEvent = (type: string, data: string) => {
-      res.write(`data: ${JSON.stringify({ type, data })}\n\n`)
-    }
-
-    // Debounced file watcher
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null
-    let watcher: ReturnType<typeof watch> | null = null
-    let keepalive: ReturnType<typeof setInterval>
-
-    const cleanup = () => {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      clearInterval(keepalive)
-      watcher?.close()
-    }
-
-    // Async setup: read initial content without blocking the event loop
-    void (async () => {
-      try {
-        const content = await readFile(absolutePath, 'utf-8')
-        sendEvent('content', content)
-      } catch {
-        sendEvent('error', 'file unavailable')
-        res.end()
-        return
-      }
-
-      try {
-        watcher = watch(absolutePath, () => {
-          if (debounceTimer) clearTimeout(debounceTimer)
-          debounceTimer = setTimeout(() => {
-            readFile(absolutePath, 'utf-8').then(content => {
-              sendEvent('content', content)
-            }).catch(() => {
-              sendEvent('error', 'file unavailable')
-              cleanup()
-              res.end()
-            })
-          }, 50)
-        })
-      } catch {
-        sendEvent('error', 'file unavailable')
-        res.end()
-        return
-      }
-
-      keepalive = setInterval(() => { res.write(': keep-alive\n\n') }, 15_000)
-    })()
-
-    req.on('close', () => {
-      cleanup()
-    })
-
-    return true
-  }
+  // NOTE: GET /api/file-watch SSE endpoint removed — file watching now goes
+  // through POST /api/file-watch/subscribe and the main SSE connection.
 
   // PATCH /api/runs/:id
   if (method === 'PATCH' && url.startsWith('/api/runs/')) {

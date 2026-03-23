@@ -109,6 +109,10 @@ function startSSE() {
     window.dispatchEvent(new CustomEvent('tinstar:skill.saved', { detail: e.data }))
   })
 
+  es.addEventListener('file_watch', (e: MessageEvent) => {
+    window.dispatchEvent(new CustomEvent('tinstar:file_watch', { detail: JSON.parse(e.data) }))
+  })
+
   es.addEventListener('heartbeat', () => {
     // Keep-alive, no action needed
   })
