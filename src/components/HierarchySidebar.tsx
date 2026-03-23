@@ -169,6 +169,14 @@ interface HierarchySidebarProps {
   onRenameComplete?: () => void
 }
 
+/** Metadata for all Work Widget types — drives sidebar icons, badge, close button, and focus behavior */
+const WORK_WIDGET_META: Record<string, { icon: string; closeable: boolean }> = {
+  'run':            { icon: '▶',  closeable: false },  // icon overridden per-node for docker backend
+  'file-editor':    { icon: '📄', closeable: true  },
+  'browser-widget': { icon: '🌐', closeable: true  },
+  'image-viewer':   { icon: '🖼️', closeable: true  },
+}
+
 /** Return inline style for a colored status dot on run nodes */
 function statusDotStyle(node: TreeNode): React.CSSProperties | undefined {
   if (node.type !== 'run') return undefined
@@ -224,8 +232,7 @@ function SidebarNode({
   const hovered = isHovered(node.id)
   const hasChildren = node.children.length > 0
   const isRun = node.type === 'run'
-  const isFileEditor = node.type === 'file-editor'
-  const isBrowserWidget = node.type === 'browser-widget'
+  const isWorkWidget = node.type in WORK_WIDGET_META
   const isDragging = dragNodeId === node.id
   const isDropInside = dropTarget?.nodeId === node.id && dropTarget?.position === 'inside'
   const isDropBefore = dropTarget?.nodeId === node.id && dropTarget?.position === 'before'
@@ -293,7 +300,7 @@ function SidebarNode({
         }}
         onDoubleClick={() => {
           if (hasChildren) toggleExpand(node.id)
-          if (isRun && onFocusRun) onFocusRun(node.id)
+          if (isWorkWidget && onFocusRun) onFocusRun(node.id)
         }}
         onMouseEnter={() => hover(node.id)}
         onMouseLeave={() => hover(null)}
@@ -317,7 +324,9 @@ function SidebarNode({
 
         {/* Icon */}
         <span className="w-4 text-center" aria-hidden="true">
-          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : isFileEditor ? '📄' : isBrowserWidget ? '🌐' : (dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
+          {node.type === 'run'
+            ? (node.backend === 'docker' ? '🐳' : '▶')
+            : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
         </span>
 
         {/* Color dot */}
@@ -357,8 +366,8 @@ function SidebarNode({
           </span>
         )}
 
-        {/* Hotgroup badge for runs, file editors, and browser widgets */}
-        {(isRun || isFileEditor || isBrowserWidget) && !editing && (
+        {/* Hotgroup badge for all work widgets */}
+        {isWorkWidget && !editing && (
           <HotgroupBadge slots={slotsForNode(node.id)} testId={`sidebar-hotgroup-badge-${node.id}`} />
         )}
 
@@ -369,8 +378,8 @@ function SidebarNode({
           </span>
         )}
 
-        {/* Close button for file-editor nodes */}
-        {isFileEditor && !editing && (
+        {/* Close button for closeable work widgets */}
+        {WORK_WIDGET_META[node.type]?.closeable && !editing && (
           <button
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-accent-red opacity-0 group-hover:opacity-100"
             onClick={(e) => {
@@ -385,7 +394,7 @@ function SidebarNode({
         )}
 
         {/* Kebab menu button */}
-        {!isRun && !isFileEditor && !editing && onMenuOpen && (
+        {!isWorkWidget && !editing && onMenuOpen && (
           <button
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
             onClick={(e) => {
@@ -402,7 +411,7 @@ function SidebarNode({
         )}
 
         {/* Fallback: individual buttons when onMenuOpen is not provided */}
-        {!isRun && !isFileEditor && !editing && !onMenuOpen && (
+        {!isWorkWidget && !editing && !onMenuOpen && (
           <>
             <button
               className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
