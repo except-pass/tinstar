@@ -66,3 +66,15 @@ export function buildWorkspaceView(
 
   return { sidebarTree, treeNodes, runSummaries }
 }
+
+/** Find a node's label by its ID in the tree */
+export function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
+  for (const node of nodes) {
+    if (node.id === targetId) return node.label
+    if (node.children.length > 0) {
+      const found = findNodeLabel(node.children, targetId)
+      if (found) return found
+    }
+  }
+  return null
+}

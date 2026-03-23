@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Session } from '../session'
 import type { TinstarConfig } from '../config'
+import { log } from '../logger'
 
 const execFileAsync = promisify(execFile)
 
@@ -263,13 +264,13 @@ export function startTtyd(opts: {
         managedTtyd.delete(opts.sessionName)
         return
       }
-      console.log(`[ttyd] ${opts.sessionName}: exited (code ${code}), restarting in 2s...`)
+      log.info('ttyd', `${opts.sessionName}: exited (code ${code}), restarting in 2s...`)
       entry.restartTimer = setTimeout(() => {
         startTtyd(opts).then(pid => {
-          console.log(`[ttyd] ${opts.sessionName}: restarted (pid ${pid})`)
+          log.info('ttyd', `${opts.sessionName}: restarted`, { pid })
           if (entry.onRestart && pid) entry.onRestart(pid)
         }).catch(err => {
-          console.error(`[ttyd] ${opts.sessionName}: restart failed:`, (err as Error).message)
+          log.error('ttyd', `${opts.sessionName}: restart failed`, { error: (err as Error).message })
         })
       }, 2000)
     })

@@ -1263,7 +1263,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               onComplete: (exitCode: number) => {
                 setState(sessDir, name, 'idle')
                 emitSessionEvent('managed_session.state_changed', { name, state: 'idle' })
-                console.log(`[oneshot] ${name} exited (code ${exitCode})`)
+                log.info('oneshot', `${name} exited`, { exitCode })
               },
             })
             updateSession(sessDir, name, { state: 'running' })

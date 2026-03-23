@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { BrowserWidget, EditorWidget, ImageWidget, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
-import { buildWorkspaceView } from '../domain/view-models'
+import { buildWorkspaceView, findNodeLabel } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { DEFAULT_LEVELS } from '../domain/dimension-meta'
@@ -40,17 +40,6 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
   return walk(tree, []) ?? []
 }
 
-/** Find a node's label by its ID in a tree */
-function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
-  for (const node of nodes) {
-    if (node.id === targetId) return node.label
-    if (node.children.length > 0) {
-      const found = findNodeLabel(node.children, targetId)
-      if (found) return found
-    }
-  }
-  return null
-}
 
 function WorkspaceShellInner() {
   const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, connected } = useBackendState()

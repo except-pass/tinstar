@@ -38,3 +38,18 @@ export interface WidgetDefinition {
  * can import it after useWidgetHotkeys.ts is deleted.
  */
 export type FocusZone = 'left-tab' | 'file-list' | 'center-tabs' | 'right-panel'
+
+/** Format a key code string for human-readable display in the hotkeys sidebar */
+export function formatKey(key: string): string {
+  return key.split('+').map(part => {
+    const keyCode = part.match(/^Key([A-Z])$/)
+    if (keyCode) return keyCode[1]
+    const digit = part.match(/^Digit(\d)$/)
+    if (digit) return digit[1]
+    if (part === 'ArrowUp') return '↑'
+    if (part === 'ArrowDown') return '↓'
+    if (part === 'ArrowLeft') return '←'
+    if (part === 'ArrowRight') return '→'
+    return part
+  }).join('+')
+}

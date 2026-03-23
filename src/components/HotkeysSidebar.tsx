@@ -3,6 +3,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { useHotkeyContext } from '../hotkeys/FocusPathContext'
 import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
+import { formatKey } from '../hotkeys/widgetTypes'
 
 // Tier-1 global bindings — work at any level except inside a terminal (iframe captures keyboard)
 const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
@@ -32,19 +33,6 @@ const MIN_W = 140
 const MAX_W = 320
 const DEFAULT_W = 180
 
-function formatKey(key: string): string {
-  return key.split('+').map(part => {
-    const keyCode = part.match(/^Key([A-Z])$/)
-    if (keyCode) return keyCode[1]
-    const digit = part.match(/^Digit(\d)$/)
-    if (digit) return digit[1]
-    if (part === 'ArrowUp') return '↑'
-    if (part === 'ArrowDown') return '↓'
-    if (part === 'ArrowLeft') return '←'
-    if (part === 'ArrowRight') return '→'
-    return part
-  }).join('+')
-}
 
 function KeyBadge({ label }: { label: string }) {
   return (

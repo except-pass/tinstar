@@ -10,6 +10,7 @@ import { HotgroupBadge } from './HotgroupBadge'
 import { useHotkeyContext } from '../hotkeys/FocusPathContext'
 import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
+import { formatKey } from '../hotkeys/widgetTypes'
 
 const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
   { key: ']',        label: 'Focus next waiting' },
@@ -30,19 +31,6 @@ const QUICKDRAW_KEYS: Array<{ key: string; label: string }> = [
   { key: 'Ctrl+Shift+1–9', label: 'Quick Draw remove' },
 ]
 
-function formatKey(key: string): string {
-  return key.split('+').map(part => {
-    const keyCode = part.match(/^Key([A-Z])$/)
-    if (keyCode) return keyCode[1]
-    const digit = part.match(/^Digit(\d)$/)
-    if (digit) return digit[1]
-    if (part === 'ArrowUp') return '↑'
-    if (part === 'ArrowDown') return '↓'
-    if (part === 'ArrowLeft') return '←'
-    if (part === 'ArrowRight') return '→'
-    return part
-  }).join('+')
-}
 
 function KeyBadge({ label }: { label: string }) {
   return (

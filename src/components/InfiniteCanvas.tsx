@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { BrowserWidget, EditorWidget, ImageWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
+import { findNodeLabel } from '../domain/view-models'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
@@ -40,17 +41,6 @@ function parseNodeId(nodeId: string): { type: string; entityId: string } | null 
   return { type: nodeId.slice(0, dash), entityId: nodeId.slice(dash + 1) }
 }
 
-/** Find a node's label by its ID in the tree */
-function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
-  for (const node of nodes) {
-    if (node.id === targetId) return node.label
-    if (node.children.length > 0) {
-      const found = findNodeLabel(node.children, targetId)
-      if (found) return found
-    }
-  }
-  return null
-}
 
 /** Build a map from child node ID → immediate parent node ID */
 function buildParentMap(nodes: TreeNode[], parentId: string | null = null): Map<string, string | null> {
