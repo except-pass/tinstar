@@ -21,8 +21,9 @@ const CANVAS_KEYS: Array<{ key: string; label: string }> = [
 
 // Quick Draw bindings — assign widgets to slots and jump between them
 const QUICKDRAW_KEYS: Array<{ key: string; label: string }> = [
-  { key: '1–9',       label: 'Quick Draw' },
-  { key: 'Ctrl+1–9',  label: 'Quick Draw assign' },
+  { key: '1–9',            label: 'Quick Draw' },
+  { key: 'Ctrl+1–9',       label: 'Quick Draw assign' },
+  { key: 'Ctrl+Shift+1–9', label: 'Quick Draw remove' },
 ]
 
 const LS_WIDTH = 'tinstar-sidebar-hotkeys-width'
