@@ -99,13 +99,21 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     })
   }
 
-  async function removeProcedureFromTask(skillName: string) {
-    const res = await fetch(`/api/tasks/${taskId}`)
+  async function removeProcedure(skillName: string) {
+    // Find which entity level (task/epic/initiative) owns this procedure so we
+    // remove from the right place — not always the task.
+    const resolved = resolveEntityProcedures(taskId, taxRepo)
+    const proc = resolved.find(p => p.skillName === skillName)
+    const entityType = proc?.entityType ?? 'task'
+    const entityId = proc?.entityId ?? taskId
+    const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
+
+    const res = await fetch(`/api/${entityPath}/${entityId}`)
     if (!res.ok) return
     const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
     const existing = json.data?.settings?.procedures ?? []
     const updated = existing.filter(p => p.skillName !== skillName)
-    await fetch(`/api/tasks/${taskId}`, {
+    await fetch(`/api/${entityPath}/${entityId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings: { procedures: updated } }),
@@ -117,10 +125,13 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     if (!description) return
     if (!taskId) return
 
+    // Sanitize description into a valid skill-file name (lowercase, hyphens only)
+    const skillName = description.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '') || 'new-skill'
+
     const draftId = crypto.randomUUID()
     const pending: PendingSkill = {
       id: draftId,
-      placeholderName: description,
+      placeholderName: skillName,
       status: 'defining',
       entityId: taskId,
       entityType: 'task',
@@ -132,10 +143,12 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     closePicker()
     addPendingSkill(pending)
 
-    fetch(`/api/sessions/${sessionId}/enter-prompt`, {
+    // Create the skeleton draft file directly — the file watcher picks it up,
+    // fires skill.drafted, and the auto-save flow runs without agent involvement.
+    fetch('/api/skills/create-draft', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: `Define a new skill [draftId=${draftId}]: ${description}` }),
+      body: JSON.stringify({ draftId, name: skillName }),
     }).catch(console.error)
   }
 
@@ -187,7 +200,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
                   inProcedures={allProcedureNames.has(skill.name)}
                   onMouseEnter={() => setActiveIndex(i)}
                   onStarClick={(rect) => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i, rect })}
-                  onRemove={() => removeProcedureFromTask(skill.name)}
+                  onRemove={() => removeProcedure(skill.name)}
                 />
               ))}
             </>
@@ -206,7 +219,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
                   inProcedures={allProcedureNames.has(skill.name)}
                   onMouseEnter={() => setActiveIndex(systemSkills.length + i)}
                   onStarClick={(rect) => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i, rect })}
-                  onRemove={() => removeProcedureFromTask(skill.name)}
+                  onRemove={() => removeProcedure(skill.name)}
                 />
               ))}
             </>

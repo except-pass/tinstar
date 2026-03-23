@@ -36,7 +36,7 @@ import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import type { FileKind, TouchedFile } from '../../types'
 import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
-import { saveDraft, discardDraft, DRAFTS_DIR } from '../sessions/skill-drafts'
+import { saveDraft, discardDraft, DRAFTS_DIR, ensureDraftsDir } from '../sessions/skill-drafts'
 import type { SkillDTO } from '../../types'
 import { spec as openapiSpec } from './openapi'
 import { ReadyQueue } from '../sessions/ReadyQueue'
@@ -1072,6 +1072,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!draftId) { json(res, { error: 'missing draftId' }, 400); return }
       discardDraft(draftId)
       json(res, { ok: true })
+    })
+    return true
+  }
+
+  // POST /api/skills/create-draft — create a skeleton skill draft without agent involvement.
+  // The file watcher in watchDrafts() picks this up and emits skill.drafted to the client.
+  if (method === 'POST' && url === '/api/skills/create-draft') {
+    readBody(req).then((body) => {
+      const { draftId, name } = JSON.parse(body) as { draftId: string; name: string }
+      if (!draftId || !name) { json(res, { error: 'missing draftId or name' }, 400); return }
+      ensureDraftsDir()
+      const filePath = join(DRAFTS_DIR, `${draftId}.md`)
+      writeFileSync(filePath, `---\nname: ${name}\ndescription: ${name}\n---\n\n# ${name}\n`)
+      json(res, { ok: true, draftId })
     })
     return true
   }
