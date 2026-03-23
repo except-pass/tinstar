@@ -4,7 +4,7 @@ import { useSkillsContext } from '../SkillsProvider'
 import { randomUUID } from '../../uuid'
 import { useTaxonomy } from '../TaxonomyContext'
 import { resolveEntityProcedures } from '../../domain/procedures'
-import type { SkillDTO, PendingSkill, StoredProcedure } from '../../types'
+import type { SkillDTO, StoredProcedure } from '../../types'
 
 interface Props {
   taskId: string
@@ -15,7 +15,7 @@ interface Props {
 type EntityLevel = { id: string; type: 'task' | 'epic' | 'initiative'; name: string }
 
 export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
-  const { skills, loading, fetchSkills, addPendingSkill, closePicker, addOptimisticProcedure } = useSkillsContext()
+  const { skills, loading, fetchSkills, closePicker, addOptimisticProcedure } = useSkillsContext()
   const taxRepo = useTaxonomy()
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
@@ -123,33 +123,19 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
 
   function handleDefine(location: 'system' | 'repo') {
     const description = query.trim()
-    if (!description) return
-    if (!taskId) return
+    if (!description || !sessionId) return
 
-    // Sanitize description into a valid skill-file name (lowercase, hyphens only)
-    const skillName = description.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '') || 'new-skill'
-
-    const draftId = randomUUID()
-    const pending: PendingSkill = {
-      id: draftId,
-      placeholderName: skillName,
-      status: 'defining',
-      entityId: taskId,
-      entityType: 'task',
-      sessionId,
-      preferredLocation: location,
-    }
+    const locationPath = location === 'system' ? '~/.claude/skills/' : '.claude/skills/'
+    const prompt = `Create a skill that: ${description}. Save it to ${locationPath}`
 
     onClose()
     closePicker()
-    addPendingSkill(pending)
 
-    // Create the skeleton draft file directly — the file watcher picks it up,
-    // fires skill.drafted, and the auto-save flow runs without agent involvement.
-    fetch('/api/skills/create-draft', {
+    // Type the prompt into the session terminal without submitting — user can revise before Enter
+    fetch(`/api/sessions/${sessionId}/send-keys`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ draftId, name: skillName }),
+      body: JSON.stringify({ keys: [prompt] }),
     }).catch(console.error)
   }
 
