@@ -1,4 +1,5 @@
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import { request as httpRequest } from 'node:http'
@@ -964,7 +965,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     )
     proxyReq.on('error', (err) => {
       log.warn('proxy', `browser widget proxy error: ${err.message}`)
-      if (!res.headersSent) { res.writeHead(502, { 'Content-Type': 'text/plain' }); res.end('Proxy error') }
+      if (!res.headersSent) {
+        const hint = err.message.includes('ECONNREFUSED')
+          ? `Nothing is listening on ${target.host}. Is the server running?`
+          : err.message
+        res.writeHead(502, { 'Content-Type': 'text/html' })
+        res.end(`<!DOCTYPE html><html><body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0a0a0a;color:#94a3b8;font-family:ui-monospace,monospace;font-size:13px;text-align:center;padding:2rem"><div><div style="font-size:2rem;margin-bottom:1rem;opacity:0.3">⚠</div><div style="color:#e2e8f0;margin-bottom:0.5rem">Cannot reach <code style="color:#f59e0b">${target.host}</code></div><div style="opacity:0.6;max-width:400px">${hint}</div></div></body></html>`)
+      }
     })
     req.pipe(proxyReq)
     return true
@@ -1340,6 +1347,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // If not, Claude opens at the REPL waiting for input — 'idle'.
           const runId = name
           const initialStatus = prompt ? 'running' : 'idle'
+          // Build backend info for tooltip
+          let backendInfo: string | undefined
+          if (backend === 'docker') {
+            const container = dockerBackend.containerName(cfg, name)
+            const imageProfile = profile ? cfg.profiles.find(p => p.name === profile) : undefined
+            const image = imageProfile?.image ?? cfg.container.defaultImage
+            backendInfo = `container: ${container}\nimage: ${image}`
+          } else {
+            backendInfo = `tmux session: ${name}`
+          }
+
           ctx.docStore.upsertRun(runId, {
             id: runId,
             color,
@@ -1355,6 +1373,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             rawLogs: '',
             port: sessionPort ?? null,
             backend,
+            backendInfo,
             taskId: taskId ?? '',
             worktreeId: worktreeEntityId,
             createdAt: new Date().toISOString(),
@@ -1846,6 +1865,32 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       })
       return true
     }
+  }
+
+  // POST /api/dev/restart — rebuild and restart the server
+  if (method === 'POST' && url === '/api/dev/restart') {
+    // Detect project root (where package.json lives)
+    const projectRoot = join(__dirname, '../../..')
+    const portArgs = process.argv.slice(2)
+    const portIdx = portArgs.indexOf('--port')
+    const port = portIdx !== -1 ? portArgs[portIdx + 1] : '5273'
+
+    json(res, { ok: true, message: 'Rebuilding and restarting...' })
+    log.info('dev', `restart requested — rebuilding in ${projectRoot} then starting on port ${port}`)
+
+    // Spawn a detached process that waits for us to die, rebuilds, and restarts
+    const child = spawn('bash', ['-c',
+      `sleep 1 && npm run build:all && node bin/tinstar.js --no-open --port ${port}`,
+    ], {
+      cwd: projectRoot,
+      detached: true,
+      stdio: 'ignore',
+    })
+    child.unref()
+
+    // Give the response time to flush, then exit
+    setTimeout(() => process.exit(0), 200)
+    return true
   }
 
   return false

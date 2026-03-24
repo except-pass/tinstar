@@ -99,6 +99,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
         <div
           className="flex items-center justify-center w-6 h-6 border shrink-0"
           style={{ borderColor: hexToRgba(runAccent, 0.6), backgroundColor: hexToRgba(runAccent, 0.1) }}
+          title={run.backendInfo ?? (run.backend ?? 'unknown')}
         >
           <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1", color: runAccent }}>
             {run.backend === 'docker' ? 'deployed_code' : 'terminal'}

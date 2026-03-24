@@ -70,7 +70,10 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
     requestAnimationFrame(() => setUrl(current))
   }, [url])
 
-  const iframeSrc = url ? (hasHeaders ? proxyUrl(widget.id, url) : url) : ''
+  // Always proxy so the iframe works when Tinstar is accessed via a remote hostname
+  // (e.g. Tailscale) — without proxying, localhost URLs would resolve on the user's
+  // browser machine instead of the server.
+  const iframeSrc = url ? proxyUrl(widget.id, url) : ''
 
   const borderStyle = isDragging
     ? { borderColor: hexToRgba(accent, 0.9), boxShadow: `0 20px 80px ${hexToRgba(accent, 0.4)}, 0 0 0 2px ${hexToRgba(accent, 0.8)}` }

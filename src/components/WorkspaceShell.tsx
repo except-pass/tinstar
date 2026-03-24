@@ -237,6 +237,7 @@ function WorkspaceShellInner() {
   const { select, toggleSelect, expandAll, selectedCount: _selectedCount, state: selectionState } = useSelection()
   const arrangeGridRef = useRef<(() => void) | null>(null)
   const arrangeResetRef = useRef<(() => void) | null>(null)
+  const arrangeSwimlanesRef = useRef<(() => void) | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(240)
@@ -683,6 +684,7 @@ function WorkspaceShellInner() {
                         onReparent={handleReparent}
                         onArrangeGrid={() => arrangeGridRef.current?.()}
                         onArrangeReset={() => arrangeResetRef.current?.()}
+                        onArrangeSwimlanes={() => arrangeSwimlanesRef.current?.()}
                         onCollapse={() => setSidebarCollapsed(true)}
                         renamingNodeId={renamingNodeId}
                         onRenameComplete={() => setRenamingNodeId(null)}
@@ -719,6 +721,7 @@ function WorkspaceShellInner() {
                     onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
+                    arrangeSwimlanesRef={arrangeSwimlanesRef}
                   />
                 </div>
 

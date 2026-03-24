@@ -13,6 +13,7 @@ const RESERVED_KEYS = new Set([
   'KeyS',                // new session
   'Ctrl+KeyG',           // arrange grid
   'Ctrl+Shift+KeyG',     // arrange reset
+  'Ctrl+KeyL',           // arrange swim lanes
   'Ctrl+Digit1', 'Ctrl+Digit2', 'Ctrl+Digit3', 'Ctrl+Digit4', 'Ctrl+Digit5',
   'Ctrl+Digit6', 'Ctrl+Digit7', 'Ctrl+Digit8', 'Ctrl+Digit9', 'Ctrl+Digit0',
   'Ctrl+Shift+Digit1', 'Ctrl+Shift+Digit2', 'Ctrl+Shift+Digit3', 'Ctrl+Shift+Digit4', 'Ctrl+Shift+Digit5',

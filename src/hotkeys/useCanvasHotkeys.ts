@@ -18,6 +18,7 @@ export interface CanvasHotkeyHandlers {
   onHotgroupRemove: (slot: HotgroupSlot) => void
   onArrangeGrid: () => void
   onArrangeReset: () => void
+  onArrangeSwimlanes: () => void
 }
 
 export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
@@ -45,6 +46,14 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
       if (e.code === 'KeyG' && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey) {
         e.preventDefault()
         h.onArrangeReset()
+        return
+      }
+
+      // Ctrl+L — swim lanes
+      if (e.code === 'KeyL' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+        e.preventDefault()
+        h.onArrangeSwimlanes()
+        emitBindingFired('Ctrl+L')
         return
       }
 

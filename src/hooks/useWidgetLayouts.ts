@@ -17,8 +17,8 @@ export interface TreeMaps {
 }
 
 const STORAGE_KEY_PREFIX = 'tinstar-layouts-v3'
-const DEFAULT_RUN_WIDTH = 880
-const DEFAULT_RUN_HEIGHT = 820
+const DEFAULT_RUN_WIDTH = 1560
+const DEFAULT_RUN_HEIGHT = 1410
 const MIN_WIDTH = 300
 const MIN_HEIGHT = 150
 

@@ -523,7 +523,7 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void }) {
+export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
 
@@ -674,7 +674,7 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
       <HotkeysSection height={hotkeysHeight} />
 
       {/* Arrange section */}
-      {(onArrangeGrid || onArrangeReset) && (
+      {(onArrangeGrid || onArrangeReset || onArrangeSwimlanes) && (
         <div className="border-t border-white/10 px-3 py-2 flex items-center gap-2">
           <span className="text-2xs text-slate-500 uppercase tracking-wider">Arrange</span>
           {onArrangeGrid && (
@@ -684,6 +684,15 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
               title="Tile selected in grid (or all if none selected)"
             >
               <span className="material-symbols-outlined text-base">grid_view</span>
+            </button>
+          )}
+          {onArrangeSwimlanes && (
+            <button
+              className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+              onClick={onArrangeSwimlanes}
+              title="Swim lanes — rows by task (Ctrl+L)"
+            >
+              <span className="material-symbols-outlined text-base">view_agenda</span>
             </button>
           )}
           {onArrangeReset && (
