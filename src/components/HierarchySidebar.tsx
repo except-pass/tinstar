@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import type { TreeNode, GroupingDimension, Space } from '../domain/types'
 import { getDimensionIcon } from '../domain/dimension-meta'
+import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { useSelection } from './SelectionProvider'
 import { useSidebarDrag, type DropTarget } from '../hooks/useSidebarDrag'
 import { SpaceSwitcher } from './SpaceSwitcher'
@@ -9,79 +10,7 @@ import { HotgroupBadge } from './HotgroupBadge'
 import { useHotkeyContext } from '../hotkeys/FocusPathContext'
 import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
-
-const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
-  { key: ']',        label: 'Focus next waiting' },
-  { key: '[',        label: 'Focus prev waiting' },
-  { key: 'Shift+]',  label: 'Focus next session' },
-  { key: 'Shift+[',  label: 'Focus prev session' },
-  { key: '?',        label: 'Hotkeys' },
-  { key: 'S',        label: 'New session' },
-]
-
-const CANVAS_KEYS: Array<{ key: string; label: string }> = [
-  { key: 'Ctrl+G',   label: 'Arrange grid' },
-  { key: '1–9',      label: 'Hotgroup select' },
-  { key: 'Ctrl+1–9', label: 'Hotgroup assign' },
-]
-
-function formatKey(key: string): string {
-  return key.split('+').map(part => {
-    const keyCode = part.match(/^Key([A-Z])$/)
-    if (keyCode) return keyCode[1]
-    const digit = part.match(/^Digit(\d)$/)
-    if (digit) return digit[1]
-    if (part === 'ArrowUp') return '↑'
-    if (part === 'ArrowDown') return '↓'
-    if (part === 'ArrowLeft') return '←'
-    if (part === 'ArrowRight') return '→'
-    return part
-  }).join('+')
-}
-
-function KeyBadge({ label }: { label: string }) {
-  return (
-    <span className="inline-flex items-center px-1 py-0 bg-surface-raised border border-white/20 rounded text-2xs font-mono text-slate-300">
-      {formatKey(label)}
-    </span>
-  )
-}
-
-function BindingRow({ binding, fireCount }: { binding: Binding | { key: string; label: string }; fireCount: number }) {
-  const rowRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const el = rowRef.current
-    if (!el || fireCount === 0) return
-    const scan = el.querySelector('.flourish-scan-line') as HTMLElement | null
-    const ripple = el.querySelector('.flourish-ripple-ring') as HTMLElement | null
-    el.classList.remove('flourish-ignite')
-    scan?.classList.remove('flourish-scan-active')
-    ripple?.classList.remove('flourish-ripple-active')
-    void el.offsetWidth
-    el.classList.add('flourish-ignite')
-    scan?.classList.add('flourish-scan-active')
-    ripple?.classList.add('flourish-ripple-active')
-    const onEnd = (ev: AnimationEvent) => {
-      if (ev.animationName !== 'ignite') return
-      el.classList.remove('flourish-ignite')
-      scan?.classList.remove('flourish-scan-active')
-      ripple?.classList.remove('flourish-ripple-active')
-      el.removeEventListener('animationend', onEnd)
-    }
-    el.addEventListener('animationend', onEnd)
-    return () => el.removeEventListener('animationend', onEnd)
-  }, [fireCount])
-
-  return (
-    <div ref={rowRef} className="relative flex items-center justify-between gap-2 py-0.5 overflow-hidden rounded-sm">
-      <div className="flourish-scan-line" />
-      <div className="flourish-ripple-ring" style={{ borderRadius: '2px' }} />
-      <span className="text-2xs text-slate-400 truncate">{binding.label}</span>
-      <KeyBadge label={binding.key} />
-    </div>
-  )
-}
+import { BindingRow, GLOBAL_KEYS, CANVAS_KEYS, QUICKDRAW_KEYS } from './HotkeyBindingRow'
 
 const LS_HOTKEYS_HEIGHT = 'tinstar-sidebar-hotkeys-height'
 const DEFAULT_HOTKEYS_HEIGHT = 200
@@ -141,6 +70,11 @@ function HotkeysSection({ height }: { height: number }) {
             {CANVAS_KEYS.map(b => (
               <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
             ))}
+            <div className="border-t border-white/10 my-1" />
+            <div className="text-2xs font-mono font-bold text-slate-600 uppercase tracking-widest mb-1">Quick Draw</div>
+            {QUICKDRAW_KEYS.map(b => (
+              <BindingRow key={b.key} binding={b} fireCount={firedCounts[b.key] ?? 0} />
+            ))}
           </>
         )}
       </div>
@@ -168,6 +102,14 @@ interface HierarchySidebarProps {
   onRenameComplete?: () => void
 }
 
+/** Metadata for all Work Widget types — drives sidebar icons, badge, close button, and focus behavior */
+const WORK_WIDGET_META: Record<string, { icon: string; closeable: boolean }> = {
+  'run':            { icon: '▶',  closeable: false },  // icon overridden per-node for docker backend
+  'file-editor':    { icon: '📄', closeable: true  },
+  'browser-widget': { icon: '🌐', closeable: true  },
+  'image-viewer':   { icon: '🖼️', closeable: true  },
+}
+
 /** Return inline style for a colored status dot on run nodes */
 function statusDotStyle(node: TreeNode): React.CSSProperties | undefined {
   if (node.type !== 'run') return undefined
@@ -185,6 +127,7 @@ function SidebarNode({
   node,
   depth,
   dimensions,
+  dimensionIconMap,
   onAdd,
   onRename,
   onDelete,
@@ -199,6 +142,7 @@ function SidebarNode({
   node: TreeNode
   depth: number
   dimensions: GroupingDimension[]
+  dimensionIconMap: Record<string, string>
   onAdd: HierarchySidebarProps['onAdd']
   onRename: HierarchySidebarProps['onRename']
   onDelete: HierarchySidebarProps['onDelete']
@@ -221,8 +165,7 @@ function SidebarNode({
   const hovered = isHovered(node.id)
   const hasChildren = node.children.length > 0
   const isRun = node.type === 'run'
-  const isFileEditor = node.type === 'file-editor'
-  const isBrowserWidget = node.type === 'browser-widget'
+  const isWorkWidget = node.type in WORK_WIDGET_META
   const isDragging = dragNodeId === node.id
   const isDropInside = dropTarget?.nodeId === node.id && dropTarget?.position === 'inside'
   const isDropBefore = dropTarget?.nodeId === node.id && dropTarget?.position === 'before'
@@ -290,7 +233,7 @@ function SidebarNode({
         }}
         onDoubleClick={() => {
           if (hasChildren) toggleExpand(node.id)
-          if (isRun && onFocusRun) onFocusRun(node.id)
+          if (isWorkWidget && onFocusRun) onFocusRun(node.id)
         }}
         onMouseEnter={() => hover(node.id)}
         onMouseLeave={() => hover(null)}
@@ -314,7 +257,9 @@ function SidebarNode({
 
         {/* Icon */}
         <span className="w-4 text-center" aria-hidden="true">
-          {node.type === 'run' ? (node.backend === 'docker' ? '🐳' : '▶') : isFileEditor ? '📄' : isBrowserWidget ? '🌐' : getDimensionIcon(node.type)}
+          {node.type === 'run'
+            ? (node.backend === 'docker' ? '🐳' : '▶')
+            : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
         </span>
 
         {/* Color dot */}
@@ -354,8 +299,8 @@ function SidebarNode({
           </span>
         )}
 
-        {/* Hotgroup badge for runs, file editors, and browser widgets */}
-        {(isRun || isFileEditor || isBrowserWidget) && !editing && (
+        {/* Hotgroup badge for all work widgets */}
+        {isWorkWidget && !editing && (
           <HotgroupBadge slots={slotsForNode(node.id)} testId={`sidebar-hotgroup-badge-${node.id}`} />
         )}
 
@@ -366,8 +311,8 @@ function SidebarNode({
           </span>
         )}
 
-        {/* Close button for file-editor nodes */}
-        {isFileEditor && !editing && (
+        {/* Close button for closeable work widgets */}
+        {WORK_WIDGET_META[node.type]?.closeable && !editing && (
           <button
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-accent-red opacity-0 group-hover:opacity-100"
             onClick={(e) => {
@@ -382,7 +327,7 @@ function SidebarNode({
         )}
 
         {/* Kebab menu button */}
-        {!isRun && !isFileEditor && !editing && onMenuOpen && (
+        {!isWorkWidget && !editing && onMenuOpen && (
           <button
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
             onClick={(e) => {
@@ -399,7 +344,7 @@ function SidebarNode({
         )}
 
         {/* Fallback: individual buttons when onMenuOpen is not provided */}
-        {!isRun && !isFileEditor && !editing && !onMenuOpen && (
+        {!isWorkWidget && !editing && !onMenuOpen && (
           <>
             <button
               className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
@@ -461,6 +406,7 @@ function SidebarNode({
               node={child}
               depth={depth + 1}
               dimensions={dimensions}
+              dimensionIconMap={dimensionIconMap}
               onAdd={onAdd}
               onRename={onRename}
               onDelete={onDelete}
@@ -502,6 +448,7 @@ function TreeWithOrphanSeparators({
   nodes,
   depth,
   dimensions,
+  dimensionIconMap,
   onAdd,
   onRename,
   onDelete,
@@ -516,6 +463,7 @@ function TreeWithOrphanSeparators({
   nodes: TreeNode[]
   depth: number
   dimensions: GroupingDimension[]
+  dimensionIconMap: Record<string, string>
   onAdd: HierarchySidebarProps['onAdd']
   onRename: HierarchySidebarProps['onRename']
   onDelete: HierarchySidebarProps['onDelete']
@@ -538,6 +486,7 @@ function TreeWithOrphanSeparators({
           node={node}
           depth={depth}
           dimensions={dimensions}
+          dimensionIconMap={dimensionIconMap}
           onAdd={onAdd}
           onRename={onRename}
           onDelete={onDelete}
@@ -557,6 +506,7 @@ function TreeWithOrphanSeparators({
           node={node}
           depth={depth}
           dimensions={dimensions}
+          dimensionIconMap={dimensionIconMap}
           onAdd={onAdd}
           onRename={onRename}
           onDelete={onDelete}
@@ -573,9 +523,19 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void }) {
+export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
+
+  const levelMeta = useDimensionMeta()
+  const dimensionIconMap = useMemo(
+    () => Object.fromEntries(levelMeta.map(m => [m.internalType, m.icon])),
+    [levelMeta],
+  )
+  const dimensionLabelMap = useMemo(
+    () => Object.fromEntries(levelMeta.map(m => [m.internalType, m.label])),
+    [levelMeta],
+  )
 
   const handleReparent = useCallback((entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => {
     if (onReparent) onReparent(entityId, entityType, newParentId, newParentType)
@@ -654,9 +614,18 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
           </button>
         )}
       </div>
-      <div className="flex items-center justify-end px-3 py-1 border-b border-white/5">
+      <div className="flex items-center px-3 py-1 border-b border-white/5">
+        <div className="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
+          {dimensions.map((dim, i) => (
+            <span key={dim} className="flex items-center gap-0.5 shrink-0">
+              {i > 0 && <span className="text-2xs text-slate-600 mx-0.5">&gt;</span>}
+              <span className="text-2xs" aria-hidden>{dimensionIconMap[dim] ?? ''}</span>
+              <span className="text-2xs text-slate-500 truncate">{dimensionLabelMap[dim] ?? dim}</span>
+            </span>
+          ))}
+        </div>
         <button
-          className="text-xs text-slate-500 hover:text-primary"
+          className="text-xs text-slate-500 hover:text-primary shrink-0"
           onClick={() => onAdd(null, rootType)}
           data-testid="add-root"
           aria-label={`Add ${rootType}`}
@@ -680,6 +649,7 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
             nodes={tree}
             depth={0}
             dimensions={dimensions}
+            dimensionIconMap={dimensionIconMap}
             onAdd={onAdd}
             onRename={onRename}
             onDelete={onDelete}
@@ -704,7 +674,7 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
       <HotkeysSection height={hotkeysHeight} />
 
       {/* Arrange section */}
-      {(onArrangeGrid || onArrangeReset) && (
+      {(onArrangeGrid || onArrangeReset || onArrangeSwimlanes) && (
         <div className="border-t border-white/10 px-3 py-2 flex items-center gap-2">
           <span className="text-2xs text-slate-500 uppercase tracking-wider">Arrange</span>
           {onArrangeGrid && (
@@ -714,6 +684,15 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
               title="Tile selected in grid (or all if none selected)"
             >
               <span className="material-symbols-outlined text-base">grid_view</span>
+            </button>
+          )}
+          {onArrangeSwimlanes && (
+            <button
+              className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+              onClick={onArrangeSwimlanes}
+              title="Swim lanes — rows by task (Ctrl+L)"
+            >
+              <span className="material-symbols-outlined text-base">view_agenda</span>
             </button>
           )}
           {onArrangeReset && (
@@ -740,7 +719,7 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
           }}
           data-testid="drag-ghost"
         >
-          {getDimensionIcon(dragState.nodeType)} {dragState.label}
+          {dimensionIconMap[dragState.nodeType as GroupingDimension] ?? getDimensionIcon(dragState.nodeType)} {dragState.label}
         </div>
       )}
     </div>

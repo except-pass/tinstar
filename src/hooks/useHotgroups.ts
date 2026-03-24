@@ -1,5 +1,5 @@
 // src/hooks/useHotgroups.ts
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 
 export type HotgroupSlot = '1'|'2'|'3'|'4'|'5'|'6'|'7'|'8'|'9'|'0'
 type HotgroupStore = Record<string, string[]> // slot → nodeId[]
@@ -68,12 +68,23 @@ export function useHotgroups(spaceId: string, nodeIds: string[]) {
     })
   }, [spaceId])
 
+  // Inverted index: nodeId → slots[], recomputed only when store changes
+  const nodeToSlots = useMemo(() => {
+    const map = new Map<string, HotgroupSlot[]>()
+    for (const [slot, ids] of Object.entries(store) as [HotgroupSlot, string[]][]) {
+      for (const id of ids) {
+        const existing = map.get(id)
+        if (existing) existing.push(slot)
+        else map.set(id, [slot])
+      }
+    }
+    return map
+  }, [store])
+
   /** Returns all slots a given node belongs to */
   const slotsForNode = useCallback((nodeId: string): HotgroupSlot[] => {
-    return (Object.entries(store) as [HotgroupSlot, string[]][])
-      .filter(([, ids]) => ids.includes(nodeId))
-      .map(([slot]) => slot)
-  }, [store])
+    return nodeToSlots.get(nodeId) ?? []
+  }, [nodeToSlots])
 
   /** Returns all node IDs in a slot */
   const nodesInSlot = useCallback((slot: HotgroupSlot): string[] => {

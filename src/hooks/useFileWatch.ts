@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 
 interface FileWatchState {
   content: string | null
@@ -6,36 +6,60 @@ interface FileWatchState {
   lastUpdatedAt: Date | null
 }
 
+let nextId = 0
+
 export function useFileWatch(sessionId: string, filePath: string): FileWatchState {
   const [content, setContent] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null)
+  const absolutePathRef = useRef<string | null>(null)
+  const subscriberIdRef = useRef(`file-watch-${nextId++}`)
 
   useEffect(() => {
-    const url = `/api/file-watch?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(filePath)}`
-    const es = new EventSource(url)
+    const subscriberId = subscriberIdRef.current
+    let cancelled = false
 
-    es.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data) as { type: string; data: string }
-        if (msg.type === 'content') {
-          setContent(msg.data)
+    fetch('/api/file-watch/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, filePath, subscriberId, mode: 'content' }),
+    })
+      .then(r => r.json())
+      .then((data: { ok?: boolean; absolutePath?: string }) => {
+        if (cancelled) return
+        if (data.ok && data.absolutePath) {
+          absolutePathRef.current = data.absolutePath
           setConnected(true)
-          setLastUpdatedAt(new Date())
-        } else if (msg.type === 'error') {
-          setConnected(false)
         }
-      } catch {
-        // ignore malformed
+      })
+      .catch(() => {
+        if (!cancelled) setConnected(false)
+      })
+
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { path: string; type: string; data?: string }
+      if (detail.path !== absolutePathRef.current) return
+      if (detail.type === 'content' && detail.data !== undefined) {
+        setContent(detail.data)
+        setConnected(true)
+        setLastUpdatedAt(new Date())
+      } else if (detail.type === 'error') {
+        setConnected(false)
       }
     }
-
-    es.onerror = () => {
-      setConnected(false)
-    }
+    window.addEventListener('tinstar:file_watch', handler)
 
     return () => {
-      es.close()
+      cancelled = true
+      window.removeEventListener('tinstar:file_watch', handler)
+      const absPath = absolutePathRef.current
+      if (absPath) {
+        fetch('/api/file-watch/unsubscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ absolutePath: absPath, subscriberId }),
+        }).catch(() => {})
+      }
     }
   }, [sessionId, filePath])
 

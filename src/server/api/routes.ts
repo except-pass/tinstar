@@ -1,6 +1,8 @@
-import { existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
+import { request as httpRequest } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
 import type { DocumentStore } from '../stores/document-store'
@@ -30,18 +32,92 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import { parseNewEntries } from '../sessions/transcript-parser'
 import { getGitDiffFiles } from '../sessions/git-diff'
-import type { Run, EditorWidget } from '../../domain/types'
+import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import type { FileKind, TouchedFile } from '../../types'
 import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
-import { saveDraft, discardDraft, DRAFTS_DIR } from '../sessions/skill-drafts'
+import { saveDraft, discardDraft, DRAFTS_DIR, ensureDraftsDir } from '../sessions/skill-drafts'
 import type { SkillDTO } from '../../types'
 import { spec as openapiSpec } from './openapi'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
+import { imageSize } from 'image-size'
+
+// ─── Multiplexed file watcher ──────────────────────────────────────────
+// Tracks fs.watch instances keyed by absolute path. Multiple subscribers
+// (image widgets, file editors) share a single watcher per file. Updates
+// are broadcast through the singleton SSE connection, avoiding per-widget
+// EventSource connections that exhaust HTTP/1.1's 6-connection limit.
+
+interface WatcherEntry {
+  watcher: ReturnType<typeof watch>
+  debounceTimer: ReturnType<typeof setTimeout> | null
+  subscribers: Set<string>  // subscriber IDs
+  absolutePath: string
+  mode: 'content' | 'notify'  // content = send file contents (editor), notify = send timestamp (image)
+}
+
+const fileWatchers = new Map<string, WatcherEntry>()
+
+function watcherKey(absolutePath: string): string {
+  return absolutePath
+}
+
+function addFileWatchSubscriber(
+  absolutePath: string,
+  subscriberId: string,
+  mode: 'content' | 'notify',
+  sse: SSEBroadcaster,
+): void {
+  const key = watcherKey(absolutePath)
+  const existing = fileWatchers.get(key)
+  if (existing) {
+    existing.subscribers.add(subscriberId)
+    return
+  }
+
+  const entry: WatcherEntry = {
+    watcher: null!,
+    debounceTimer: null,
+    subscribers: new Set([subscriberId]),
+    absolutePath,
+    mode,
+  }
+
+  try {
+    entry.watcher = watch(absolutePath, () => {
+      if (entry.debounceTimer) clearTimeout(entry.debounceTimer)
+      entry.debounceTimer = setTimeout(() => {
+        if (mode === 'content') {
+          readFile(absolutePath, 'utf-8').then(content => {
+            sse.broadcastEvent('file_watch', { path: absolutePath, type: 'content', data: content })
+          }).catch(() => {
+            sse.broadcastEvent('file_watch', { path: absolutePath, type: 'error', data: 'file unavailable' })
+          })
+        } else {
+          sse.broadcastEvent('file_watch', { path: absolutePath, type: 'updated', timestamp: Date.now() })
+        }
+      }, 50)
+    })
+    fileWatchers.set(key, entry)
+  } catch {
+    // file may not exist yet — that's ok, subscriber will get nothing until it does
+  }
+}
+
+function removeFileWatchSubscriber(absolutePath: string, subscriberId: string): void {
+  const key = watcherKey(absolutePath)
+  const entry = fileWatchers.get(key)
+  if (!entry) return
+  entry.subscribers.delete(subscriberId)
+  if (entry.subscribers.size === 0) {
+    if (entry.debounceTimer) clearTimeout(entry.debounceTimer)
+    entry.watcher.close()
+    fileWatchers.delete(key)
+  }
+}
 
 function inferFileKind(filePath: string): FileKind {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -327,6 +403,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const existing = ctx.docStore.getSpace(id)
       if (!existing) return json(res, { error: 'not found' }, 404)
       const patch = JSON.parse(body)
+
+      // Validate labelConfig if present
+      if (patch.labelConfig !== undefined) {
+        const levels = patch.labelConfig?.levels
+        if (!Array.isArray(levels) || levels.length < 1 || levels.length > 3) {
+          return json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'labelConfig.levels must be an array of length 1–3' } }, 400)
+        }
+        for (const lvl of levels) {
+          if (typeof lvl.label !== 'string' || !lvl.label.trim()) {
+            return json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'Each level must have a non-empty label' } }, 400)
+          }
+          if (typeof lvl.icon !== 'string' || !lvl.icon.trim()) {
+            return json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'Each level must have a non-empty icon' } }, 400)
+          }
+        }
+      }
+
       ctx.docStore.upsertSpace(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getSpace(id) })
     })
@@ -635,10 +728,259 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST /api/image-widgets
+  if (method === 'POST' && url === '/api/image-widgets') {
+    readBody(req).then(body => {
+      try {
+      const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
+      if (!sessionId || !filePath) {
+        json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId and filePath required' } }, 400)
+        return
+      }
+      const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
+      if (!run) {
+        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }, 404)
+        return
+      }
+      const task = ctx.docStore.getAllTasks().find(t => t.id === run.taskId)
+      const epic = task ? ctx.docStore.getAllEpics().find(e => e.id === task.epicId) : undefined
+      const initiative = epic ? ctx.docStore.getAllInitiatives().find(i => i.id === epic.initiativeId) : undefined
+      const worktree = ctx.docStore.getAllWorktrees().find(w => w.id === run.worktreeId)
+
+      const sessDir = ctx.sessionConfig?.dirs.sessions ?? ''
+      const session = getSession(sessDir, sessionId)
+      const workspacePath = session?.workspace?.path
+      const absoluteFilePath = (() => {
+        if (!filePath.startsWith('/')) return workspacePath ? resolve(workspacePath, filePath) : filePath
+        if (existsSync(filePath)) return filePath
+        return workspacePath ? resolve(workspacePath, filePath.replace(/^\/+/, '')) : filePath
+      })()
+
+      if (workspacePath && !absoluteFilePath.startsWith(workspacePath + '/')) {
+        json(res, { ok: false, error: { code: 'PATH_OUTSIDE_WORKSPACE', message: 'filePath must be inside the session workspace' } }, 403)
+        return
+      }
+
+      let naturalWidth = 640
+      let naturalHeight = 480
+      try {
+        const buf = readFileSync(absoluteFilePath)
+        const dims = imageSize(buf)
+        naturalWidth = dims.width ?? 640
+        naturalHeight = dims.height ?? 480
+      } catch {
+        // unsupported format or corrupt — use fallback
+      }
+
+      const widget: ImageWidget = {
+        id: shortId('image'),
+        spaceId: ctx.docStore.activeSpaceId || undefined,
+        sessionId,
+        filePath: absoluteFilePath,
+        task: task?.name ?? '',
+        epic: epic?.name ?? '',
+        initiative: initiative?.name ?? '',
+        worktree: worktree?.name ?? '',
+        repo: worktree?.repo ?? run.repo ?? '',
+        color: run.color,
+        naturalWidth,
+        naturalHeight,
+      }
+      ctx.docStore.upsertImageWidget(widget.id, widget)
+      json(res, { ok: true, data: widget })
+      } catch {
+        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+      }
+    })
+    return true
+  }
+
+  // DELETE /api/image-widgets/:id
+  if (method === 'DELETE' && url.startsWith('/api/image-widgets/')) {
+    const id = url.slice('/api/image-widgets/'.length)
+    const existing = ctx.docStore.getAllImageWidgets().find(w => w.id === id)
+    if (!existing) {
+      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `ImageWidget ${id} not found` } }, 404)
+      return true
+    }
+    ctx.docStore.deleteImageWidget(id)
+    json(res, { ok: true })
+    return true
+  }
+
+  // GET /api/image-file?session=SESSION_ID&path=FILE_PATH
+  if (method === 'GET' && url.startsWith('/api/image-file')) {
+    const qs = new URL(url, 'http://localhost').searchParams
+    const sessionId = qs.get('session')
+    const filePath = qs.get('path')
+
+    if (!sessionId || !filePath) {
+      json(res, { error: 'session and path required' }, 400)
+      return true
+    }
+
+    let absolutePath: string
+    if (filePath.startsWith('/') && existsSync(filePath)) {
+      absolutePath = filePath
+    } else {
+      const sessDir = ctx.sessionConfig?.dirs.sessions
+      if (!sessDir) { json(res, { error: 'session config unavailable' }, 503); return true }
+      const session = getSession(sessDir, sessionId)
+      if (!session) { json(res, { error: 'session not found' }, 404); return true }
+      const workspacePath = session.workspace?.path ?? null
+      if (!workspacePath) { json(res, { error: 'session workspace unavailable' }, 400); return true }
+      absolutePath = filePath.startsWith('/')
+        ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
+        : resolve(workspacePath, filePath)
+      if (!absolutePath.startsWith(workspacePath + '/')) {
+        json(res, { error: 'path outside workspace' }, 403)
+        return true
+      }
+    }
+
+    if (!existsSync(absolutePath)) {
+      json(res, { error: 'file not found' }, 404)
+      return true
+    }
+
+    const ext = absolutePath.split('.').pop()?.toLowerCase() ?? ''
+    const mimeMap: Record<string, string> = {
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+      gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+      bmp: 'image/bmp', ico: 'image/x-icon',
+    }
+    const contentType = mimeMap[ext] ?? 'application/octet-stream'
+    res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-store' })
+    const stream = createReadStream(absolutePath)
+    req.on('close', () => stream.destroy())
+    stream.pipe(res)
+    return true
+  }
+
+  // POST /api/file-watch/subscribe — subscribe to file changes via the main SSE
+  if (method === 'POST' && url === '/api/file-watch/subscribe') {
+    readBody(req).then(body => {
+      try {
+        const { sessionId, filePath, subscriberId, mode } = JSON.parse(body) as {
+          sessionId?: string; filePath?: string; subscriberId?: string; mode?: 'content' | 'notify'
+        }
+        if (!sessionId || !filePath || !subscriberId) {
+          json(res, { error: 'sessionId, filePath, and subscriberId required' }, 400)
+          return
+        }
+
+        let absolutePath: string
+        if (filePath.startsWith('/') && existsSync(filePath)) {
+          absolutePath = filePath
+        } else {
+          const sessDir = ctx.sessionConfig?.dirs.sessions
+          if (!sessDir) { json(res, { error: 'session config unavailable' }, 503); return }
+          const session = getSession(sessDir, sessionId)
+          if (!session) { json(res, { error: 'session not found' }, 404); return }
+          const workspacePath = session.workspace?.path ?? null
+          if (!workspacePath) { json(res, { error: 'session workspace unavailable' }, 400); return }
+          absolutePath = filePath.startsWith('/')
+            ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
+            : resolve(workspacePath, filePath)
+          if (!absolutePath.startsWith(workspacePath + '/')) {
+            json(res, { error: 'path outside workspace' }, 403)
+            return
+          }
+        }
+
+        addFileWatchSubscriber(absolutePath, subscriberId, mode ?? 'notify', ctx.sse)
+
+        // For content mode, send initial file contents immediately
+        if ((mode ?? 'notify') === 'content' && existsSync(absolutePath)) {
+          readFile(absolutePath, 'utf-8').then(content => {
+            ctx.sse.broadcastEvent('file_watch', { path: absolutePath, type: 'content', data: content })
+          }).catch(() => {
+            // ignore — subscriber will get nothing
+          })
+        }
+
+        json(res, { ok: true, absolutePath })
+      } catch {
+        json(res, { error: 'invalid request body' }, 400)
+      }
+    })
+    return true
+  }
+
+  // POST /api/file-watch/unsubscribe
+  if (method === 'POST' && url === '/api/file-watch/unsubscribe') {
+    readBody(req).then(body => {
+      try {
+        const { absolutePath, subscriberId } = JSON.parse(body) as {
+          absolutePath?: string; subscriberId?: string
+        }
+        if (!absolutePath || !subscriberId) {
+          json(res, { error: 'absolutePath and subscriberId required' }, 400)
+          return
+        }
+        removeFileWatchSubscriber(absolutePath, subscriberId)
+        json(res, { ok: true })
+      } catch {
+        json(res, { error: 'invalid request body' }, 400)
+      }
+    })
+    return true
+  }
+
+  // --- Browser widget header-injection proxy ---
+  // /api/proxy/{widgetId}/... → proxied to widget's target origin with injected headers
+  if (url.startsWith('/api/proxy/')) {
+    const afterProxy = url.slice('/api/proxy/'.length)
+    const slashIdx = afterProxy.indexOf('/')
+    const widgetId = slashIdx === -1 ? afterProxy.split('?')[0]! : afterProxy.slice(0, slashIdx)
+    const proxyPath = slashIdx === -1 ? '/' : afterProxy.slice(slashIdx)
+
+    const widget = ctx.docStore.getAllBrowserWidgets().find(w => w.id === widgetId)
+    if (!widget) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' })
+      res.end('Browser widget not found')
+      return true
+    }
+
+    let origin: string
+    try { origin = new URL(widget.url).origin } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain' })
+      res.end('Invalid widget URL')
+      return true
+    }
+
+    const target = new URL(proxyPath, origin)
+    const fwdHeaders: Record<string, string | string[] | undefined> = { ...req.headers, host: target.host }
+    // Inject custom headers
+    if (widget.headers) {
+      for (const [k, v] of Object.entries(widget.headers)) fwdHeaders[k.toLowerCase()] = v
+    }
+
+    const proxyReq = httpRequest(
+      { hostname: target.hostname, port: target.port || undefined, path: target.pathname + target.search, method: req.method, headers: fwdHeaders },
+      proxyRes => {
+        res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers)
+        proxyRes.pipe(res)
+      },
+    )
+    proxyReq.on('error', (err) => {
+      log.warn('proxy', `browser widget proxy error: ${err.message}`)
+      if (!res.headersSent) {
+        const hint = err.message.includes('ECONNREFUSED')
+          ? `Nothing is listening on ${target.host}. Is the server running?`
+          : err.message
+        res.writeHead(502, { 'Content-Type': 'text/html' })
+        res.end(`<!DOCTYPE html><html><body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0a0a0a;color:#94a3b8;font-family:ui-monospace,monospace;font-size:13px;text-align:center;padding:2rem"><div><div style="font-size:2rem;margin-bottom:1rem;opacity:0.3">⚠</div><div style="color:#e2e8f0;margin-bottom:0.5rem">Cannot reach <code style="color:#f59e0b">${target.host}</code></div><div style="opacity:0.6;max-width:400px">${hint}</div></div></body></html>`)
+      }
+    })
+    req.pipe(proxyReq)
+    return true
+  }
+
   // POST /api/browser-widgets
   if (method === 'POST' && url === '/api/browser-widgets') {
     readBody(req).then(body => {
-      const { sessionId, url: widgetUrl = '' } = JSON.parse(body) as { sessionId?: string; url?: string }
+      const { sessionId, url: widgetUrl = '', headers: widgetHeaders } = JSON.parse(body) as { sessionId?: string; url?: string; headers?: Record<string, string> }
       if (!sessionId) {
         json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId required' } }, 400)
         return
@@ -654,6 +996,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         sessionId,
         url: widgetUrl,
         color: run.color,
+        ...(widgetHeaders && Object.keys(widgetHeaders).length > 0 ? { headers: widgetHeaders } : {}),
       }
       ctx.docStore.upsertBrowserWidget(widget.id, widget)
       json(res, { ok: true, data: widget })
@@ -670,7 +1013,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         json(res, { ok: false, error: { code: 'NOT_FOUND', message: `BrowserWidget ${id} not found` } }, 404)
         return
       }
-      const patch = JSON.parse(body) as { url?: string; title?: string }
+      const patch = JSON.parse(body) as { url?: string; title?: string; headers?: Record<string, string> }
       const updated = { ...existing, ...patch }
       ctx.docStore.upsertBrowserWidget(id, updated)
       json(res, { ok: true, data: updated })
@@ -691,102 +1034,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // GET /api/file-watch?session=SESSION_ID&path=FILE_PATH
-  if (method === 'GET' && url.startsWith('/api/file-watch')) {
-    const qs = new URL(url, 'http://localhost').searchParams
-    const sessionId = qs.get('session')
-    const filePath = qs.get('path')
-
-    if (!sessionId || !filePath) {
-      json(res, { error: 'session and path required' }, 400)
-      return true
-    }
-
-    // Fast path: host-absolute paths that exist don't need a session lookup
-    let absolutePath: string
-    if (filePath.startsWith('/') && existsSync(filePath)) {
-      absolutePath = filePath
-    } else {
-      const sessDir = ctx.sessionConfig?.dirs.sessions
-      if (!sessDir) {
-        json(res, { error: 'session config unavailable' }, 503)
-        return true
-      }
-      const session = getSession(sessDir, sessionId)
-      if (!session) {
-        json(res, { error: 'session not found' }, 404)
-        return true
-      }
-      const workspacePath = session.workspace?.path ?? null
-      if (!workspacePath) {
-        json(res, { error: 'session workspace unavailable' }, 400)
-        return true
-      }
-      absolutePath = filePath.startsWith('/')
-        ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
-        : resolve(workspacePath, filePath)
-    }
-
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    })
-
-    const sendEvent = (type: string, data: string) => {
-      res.write(`data: ${JSON.stringify({ type, data })}\n\n`)
-    }
-
-    // Debounced file watcher
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null
-    let watcher: ReturnType<typeof watch> | null = null
-    let keepalive: ReturnType<typeof setInterval>
-
-    const cleanup = () => {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      clearInterval(keepalive)
-      watcher?.close()
-    }
-
-    // Async setup: read initial content without blocking the event loop
-    void (async () => {
-      try {
-        const content = await readFile(absolutePath, 'utf-8')
-        sendEvent('content', content)
-      } catch {
-        sendEvent('error', 'file unavailable')
-        res.end()
-        return
-      }
-
-      try {
-        watcher = watch(absolutePath, () => {
-          if (debounceTimer) clearTimeout(debounceTimer)
-          debounceTimer = setTimeout(() => {
-            readFile(absolutePath, 'utf-8').then(content => {
-              sendEvent('content', content)
-            }).catch(() => {
-              sendEvent('error', 'file unavailable')
-              cleanup()
-              res.end()
-            })
-          }, 50)
-        })
-      } catch {
-        sendEvent('error', 'file unavailable')
-        res.end()
-        return
-      }
-
-      keepalive = setInterval(() => { res.write(': keep-alive\n\n') }, 15_000)
-    })()
-
-    req.on('close', () => {
-      cleanup()
-    })
-
-    return true
-  }
+  // NOTE: GET /api/file-watch SSE endpoint removed — file watching now goes
+  // through POST /api/file-watch/subscribe and the main SSE connection.
 
   // PATCH /api/runs/:id
   if (method === 'PATCH' && url.startsWith('/api/runs/')) {
@@ -876,6 +1125,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!draftId) { json(res, { error: 'missing draftId' }, 400); return }
       discardDraft(draftId)
       json(res, { ok: true })
+    })
+    return true
+  }
+
+  // POST /api/skills/create-draft — create a skeleton skill draft without agent involvement.
+  // The file watcher in watchDrafts() picks this up and emits skill.drafted to the client.
+  if (method === 'POST' && url === '/api/skills/create-draft') {
+    readBody(req).then((body) => {
+      const { draftId, name } = JSON.parse(body) as { draftId: string; name: string }
+      if (!draftId || !name) { json(res, { error: 'missing draftId or name' }, 400); return }
+      ensureDraftsDir()
+      const filePath = join(DRAFTS_DIR, `${draftId}.md`)
+      writeFileSync(filePath, `---\nname: ${name}\ndescription: ${name}\n---\n\n# ${name}\n`)
+      json(res, { ok: true, draftId })
     })
     return true
   }
@@ -1052,7 +1315,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               onComplete: (exitCode: number) => {
                 setState(sessDir, name, 'idle')
                 emitSessionEvent('managed_session.state_changed', { name, state: 'idle' })
-                console.log(`[oneshot] ${name} exited (code ${exitCode})`)
+                log.info('oneshot', `${name} exited`, { exitCode })
               },
             })
             updateSession(sessDir, name, { state: 'running' })
@@ -1084,6 +1347,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // If not, Claude opens at the REPL waiting for input — 'idle'.
           const runId = name
           const initialStatus = prompt ? 'running' : 'idle'
+          // Build backend info for tooltip
+          let backendInfo: string | undefined
+          if (backend === 'docker') {
+            const container = dockerBackend.containerName(cfg, name)
+            const imageProfile = profile ? cfg.profiles.find(p => p.name === profile) : undefined
+            const image = imageProfile?.image ?? cfg.container.defaultImage
+            backendInfo = `container: ${container}\nimage: ${image}`
+          } else {
+            backendInfo = `tmux session: ${name}`
+          }
+
           ctx.docStore.upsertRun(runId, {
             id: runId,
             color,
@@ -1099,6 +1373,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             rawLogs: '',
             port: sessionPort ?? null,
             backend,
+            backendInfo,
             taskId: taskId ?? '',
             worktreeId: worktreeEntityId,
             createdAt: new Date().toISOString(),
@@ -1451,63 +1726,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
     // --- Hooks (called by Claude Code inside sessions) ---
 
-    // POST /api/hooks/idle
-    if (method === 'POST' && url === '/api/hooks/idle') {
-      readBody(req).then((body) => {
-        const { session: name, conversationId } = JSON.parse(body)
-        if (!name) return json(res, { ok: false, error: { code: 'MISSING_SESSION', message: 'Session name required' } }, 400)
-
-        setState(sessDir, name, 'idle')
-        ctx.docStore.updateRunStatus(name, 'idle')
-        emitSessionEvent('managed_session.state_changed', { name, state: 'idle' })
-        ctx.readyQueue.onStatusChange(name, 'idle')
-        ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
-        ctx.sse.broadcastReadyQueueUpdate()
-        json(res, { ok: true })
-
-        // Async transcript parsing (fire-and-forget, after response)
-        try {
-          const session = getSession(sessDir, name)
-          const workdir = session?.workspace?.path
-          // Use conversationId from hook payload, or fall back to session file
-          const convId = conversationId || session?.conversation?.id
-          if (workdir && convId) {
-            // Docker sessions store claude-state in the session's state dir
-            const stateDir = session?.backend === 'docker'
-              ? join(sessDir, name, 'claude-state')
-              : undefined
-            const entries = parseNewEntries(name, workdir, convId, stateDir)
-            for (const entry of entries) {
-              ctx.docStore.addRecapEntry(name, entry)
-            }
-          }
-        } catch (err) {
-          log.warn('transcript-parse', `Failed to parse transcript for ${name}: ${err}`)
-        }
-      })
-      return true
-    }
-
-    // POST /api/hooks/active
-    if (method === 'POST' && url === '/api/hooks/active') {
-      readBody(req).then((body) => {
-        const { session: name } = JSON.parse(body)
-        if (!name) return json(res, { ok: false, error: { code: 'MISSING_SESSION', message: 'Session name required' } }, 400)
-
-        const prev = getSession(sessDir, name)
-        setState(sessDir, name, 'running')
-        ctx.docStore.updateRunStatus(name, 'running')
-        if (!prev || prev.state !== 'running') {
-          emitSessionEvent('managed_session.state_changed', { name, state: 'running' })
-        }
-        ctx.readyQueue.onStatusChange(name, 'running')
-        ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
-        ctx.sse.broadcastReadyQueueUpdate()
-        json(res, { ok: true })
-      })
-      return true
-    }
-
     // POST /api/hooks/file-touched
     if (method === 'POST' && url === '/api/hooks/file-touched') {
       readBody(req).then(async (body) => {
@@ -1647,6 +1865,32 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       })
       return true
     }
+  }
+
+  // POST /api/dev/restart — rebuild and restart the server
+  if (method === 'POST' && url === '/api/dev/restart') {
+    // process.cwd() is the project root — tinstar is always launched from there
+    const projectRoot = process.cwd()
+    const portArgs = process.argv.slice(2)
+    const portIdx = portArgs.indexOf('--port')
+    const port = portIdx !== -1 ? portArgs[portIdx + 1] : '5273'
+
+    json(res, { ok: true, message: 'Rebuilding and restarting...' })
+    log.info('dev', `restart requested — rebuilding in ${projectRoot} then starting on port ${port}`)
+
+    // Spawn a detached process that waits for us to die, rebuilds, and restarts
+    const child = spawn('bash', ['-c',
+      `sleep 1 && npm run build:all && node bin/tinstar.js --no-open --port ${port}`,
+    ], {
+      cwd: projectRoot,
+      detached: true,
+      stdio: 'ignore',
+    })
+    child.unref()
+
+    // Give the response time to flush, then exit
+    setTimeout(() => process.exit(0), 200)
+    return true
   }
 
   return false

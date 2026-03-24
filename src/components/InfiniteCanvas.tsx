@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import type { BrowserWidget, EditorWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
+import { findNodeLabel } from '../domain/view-models'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
@@ -15,6 +16,8 @@ interface Props {
   runMap: Map<string, Run>
   editorWidgetMap?: Map<string, EditorWidget>
   browserWidgetMap?: Map<string, BrowserWidget>
+  imageWidgetMap?: Map<string, ImageWidget>
+  onImageWidgetCreated?: (widget: ImageWidget) => void
   focusRunId: string | null
   activeSpaceId?: string
   onFocusHandled: () => void
@@ -27,6 +30,7 @@ interface Props {
   onBrowserWidgetCreated?: (widget: BrowserWidget) => void
   arrangeGridRef?: React.MutableRefObject<(() => void) | null>
   arrangeResetRef?: React.MutableRefObject<(() => void) | null>
+  arrangeSwimlanesRef?: React.MutableRefObject<(() => void) | null>
   zoomToFitRunsRef?: React.MutableRefObject<((runIds: string[]) => void) | null>
   panToRunsRef?: React.MutableRefObject<((runIds: string[]) => void) | null>
 }
@@ -38,17 +42,6 @@ function parseNodeId(nodeId: string): { type: string; entityId: string } | null 
   return { type: nodeId.slice(0, dash), entityId: nodeId.slice(dash + 1) }
 }
 
-/** Find a node's label by its ID in the tree */
-function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
-  for (const node of nodes) {
-    if (node.id === targetId) return node.label
-    if (node.children.length > 0) {
-      const found = findNodeLabel(node.children, targetId)
-      if (found) return found
-    }
-  }
-  return null
-}
 
 /** Build a map from child node ID → immediate parent node ID */
 function buildParentMap(nodes: TreeNode[], parentId: string | null = null): Map<string, string | null> {
@@ -116,9 +109,9 @@ function computeTreemapLayouts(
     const node = nodes[i]!
     const col = i % cols
     const row = Math.floor(i / cols)
-    const nx = x + gap + col * (cellW + gap)
-    const ny = y + gap + row * (cellH + gap)
-    result.set(node.id, { x: nx, y: ny, width: cellW, height: cellH })
+    const nx = Math.round(x + gap + col * (cellW + gap))
+    const ny = Math.round(y + gap + row * (cellH + gap))
+    result.set(node.id, { x: nx, y: ny, width: Math.round(cellW), height: Math.round(cellH) })
 
     const isContainer = getWidgetComponent(toWidgetType(node.type))?.isContainer
     if (isContainer && node.children.length > 0 && cellW > 120 && cellH > 80) {
@@ -145,7 +138,7 @@ interface MarqueeRect {
 
 const MARQUEE_THRESHOLD = 5
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, arrangeGridRef, arrangeResetRef, zoomToFitRunsRef, panToRunsRef }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -218,12 +211,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   // Center on a widget when focusRunId changes
   useEffect(() => {
-    if (!focusRunId || !containerRef.current) return
+    if (!focusRunId) return
+    // Always clear focusRunId so subsequent double-clicks on the same widget
+    // re-trigger this effect (React skips re-render if state value is identical).
+    onFocusHandled()
+    if (!containerRef.current) return
     const layout = getLayout(focusRunId)
     if (!layout) return
     const rect = containerRef.current.getBoundingClientRect()
     centerOn(layout.x, layout.y, layout.width, layout.height, rect.width, rect.height)
-    onFocusHandled()
   }, [focusRunId, getLayout, centerOn, onFocusHandled])
 
   // Attach wheel listener with { passive: false }
@@ -430,6 +426,127 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     batchSetLayouts(layouts)
   }, [camera, selectionState, tree, batchSetLayouts])
 
+  // Swim lanes: rows of runs grouped by task, stacked by epic/initiative
+  const arrangeSwimlanes = useCallback(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    const GAP = 24
+    const EMPTY_H = 60  // thin placeholder bar for empty containers
+    const updates = new Map<string, { x: number; y: number; width: number; height: number }>()
+
+    const getLeafSize = (id: string) => {
+      const l = layouts.get(id)
+      return l ? { w: l.width, h: l.height } : { w: 1560, h: 1410 }
+    }
+
+    // Viewport origin in canvas coords
+    const rect = el.getBoundingClientRect()
+    const startX = -camera.x / camera.zoom
+    const startY = -camera.y / camera.zoom
+    // Track the widest row so empty containers can match
+    let maxRowWidth = 400
+
+    let cursorY = startY
+
+    function collectLeaves(node: TreeNode): string[] {
+      const reg = getWidgetComponent(toWidgetType(node.type))
+      if (!reg?.isContainer) return [node.id]
+      const ids: string[] = []
+      for (const child of node.children) ids.push(...collectLeaves(child))
+      return ids
+    }
+
+    function layoutRow(leafIds: string[], x: number, y: number): { width: number; height: number } {
+      let cx = x
+      let maxH = 0
+      for (const id of leafIds) {
+        const sz = getLeafSize(id)
+        updates.set(id, { x: Math.round(cx), y: Math.round(y), width: Math.round(sz.w), height: Math.round(sz.h) })
+        cx += sz.w + GAP
+        maxH = Math.max(maxH, sz.h)
+      }
+      const totalW = cx - x - (leafIds.length > 0 ? GAP : 0)
+      if (totalW > maxRowWidth) maxRowWidth = totalW
+      return { width: totalW, height: maxH }
+    }
+
+    // First pass: layout all rows, collecting empty containers
+    const emptyContainers: TreeNode[] = []
+
+    function layoutGroup(nodes: TreeNode[], baseX: number): void {
+      for (const node of nodes) {
+        const reg = getWidgetComponent(toWidgetType(node.type))
+        if (!reg?.isContainer) continue
+
+        const allLeaves = collectLeaves(node)
+
+        // Empty container — defer to end
+        if (allLeaves.length === 0) {
+          emptyContainers.push(node)
+          continue
+        }
+
+        const directLeaves: string[] = []
+        const subContainers: TreeNode[] = []
+        for (const child of node.children) {
+          const childReg = getWidgetComponent(toWidgetType(child.type))
+          if (childReg?.isContainer) {
+            subContainers.push(child)
+          } else {
+            directLeaves.push(child.id)
+          }
+        }
+
+        if (subContainers.length > 0) {
+          // Has sub-containers: recurse (e.g. initiative → epics, epic → tasks)
+          // But also lay out any direct leaves first
+          if (directLeaves.length > 0) {
+            const row = layoutRow(directLeaves, baseX, cursorY)
+            cursorY += row.height + GAP
+          }
+          layoutGroup(node.children, baseX)
+        } else {
+          const row = layoutRow(directLeaves, baseX, cursorY)
+          if (directLeaves.length > 0) cursorY += row.height + GAP
+        }
+      }
+    }
+
+    // Separate top-level nodes into containers and loose leaves
+    const topContainers: TreeNode[] = []
+    const topLeaves: string[] = []
+    for (const node of tree) {
+      const reg = getWidgetComponent(toWidgetType(node.type))
+      if (reg?.isContainer) {
+        topContainers.push(node)
+      } else {
+        topLeaves.push(node.id)
+      }
+    }
+
+    // Layout grouped containers first
+    layoutGroup(topContainers, startX)
+
+    // Then ungrouped leaves in a single row at the bottom
+    if (topLeaves.length > 0) {
+      const row = layoutRow(topLeaves, startX, cursorY)
+      cursorY += row.height + GAP
+    }
+
+    // Empty containers: collapse to thin placeholder bars in a row
+    if (emptyContainers.length > 0) {
+      let cx = startX
+      for (const node of emptyContainers) {
+        updates.set(node.id, { x: Math.round(cx), y: Math.round(cursorY), width: Math.round(maxRowWidth / emptyContainers.length - GAP), height: EMPTY_H })
+        cx += maxRowWidth / emptyContainers.length
+      }
+      cursorY += EMPTY_H + GAP
+    }
+
+    if (updates.size > 0) batchSetLayouts(updates)
+  }, [camera, tree, layouts, batchSetLayouts])
+
   // Expose arrange functions to parent via refs
   useEffect(() => {
     if (arrangeGridRef) arrangeGridRef.current = arrangeGrid
@@ -440,6 +557,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     if (arrangeResetRef) arrangeResetRef.current = arrangeWorkspace
     return () => { if (arrangeResetRef) arrangeResetRef.current = null }
   }, [arrangeResetRef, arrangeWorkspace])
+
+  useEffect(() => {
+    if (arrangeSwimlanesRef) arrangeSwimlanesRef.current = arrangeSwimlanes
+    return () => { if (arrangeSwimlanesRef) arrangeSwimlanesRef.current = null }
+  }, [arrangeSwimlanesRef, arrangeSwimlanes])
 
   // Compute bounding box of a set of run node IDs using current layouts
   const getBoundingBox = useCallback((runIds: string[]): { x: number; y: number; w: number; h: number } | null => {
@@ -515,8 +637,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const first = slotNodeIds[0]!
       const selType = first.startsWith('run-') ? 'run'
         : first.startsWith('editor-') ? 'file-editor'
+        : first.startsWith('image-') ? 'image-viewer'
         : 'browser-widget'
-      selectMany(slotNodeIds, selType as import('../domain/types').GroupingDimension | 'run' | 'file-editor' | 'browser-widget')
+      selectMany(slotNodeIds, selType as import('../domain/types').GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer')
       // Expand all ancestors in sidebar so the nodes become visible
       const ancestorIds: string[] = []
       for (const nodeId of slotNodeIds) {
@@ -535,20 +658,21 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     },
     onHotgroupAssign: (slot) => {
       const { selectedType, selectedIds } = selectionState
-      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget')) return
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer')) return
       for (const nodeId of selectedIds) {
         hotgroups.assign(slot, nodeId)
       }
     },
     onHotgroupRemove: (slot) => {
       const { selectedType, selectedIds } = selectionState
-      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget')) return
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer')) return
       for (const nodeId of selectedIds) {
         hotgroups.remove(slot, nodeId)
       }
     },
     onArrangeGrid: () => arrangeGridRef?.current?.(),
     onArrangeReset: () => arrangeResetRef?.current?.(),
+    onArrangeSwimlanes: () => arrangeSwimlanesRef?.current?.(),
   })
 
   const handleDeleteGroup = useCallback((nodeId: string) => {
@@ -572,6 +696,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       additive ? toggleSelect(nodeId, 'file-editor') : select(nodeId, 'file-editor')
     } else if (nodeId.startsWith('browser-')) {
       additive ? toggleSelect(nodeId, 'browser-widget') : select(nodeId, 'browser-widget')
+    } else if (nodeId.startsWith('image-')) {
+      additive ? toggleSelect(nodeId, 'image-viewer') : select(nodeId, 'image-viewer')
     } else {
       // Group container click — select it in the shared selection state so hierarchy highlights too
       const parsed = parseNodeId(nodeId)
@@ -582,10 +708,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     }
   }, [onSelectRun, select, toggleSelect])
 
+  const handleDoubleClickShrink = useCallback((nodeId: string) => {
+    shrinkNode(nodeId)
+  }, [shrinkNode])
+
   const handleDoubleClickZoom = useCallback((nodeId: string) => {
     if (onFocusRun && nodeId.startsWith('run-')) {
       onFocusRun(nodeId.slice(4))
-    } else if (nodeId.startsWith('editor-') || nodeId.startsWith('browser-')) {
+    } else if (nodeId.startsWith('editor-') || nodeId.startsWith('browser-') || nodeId.startsWith('image-')) {
       zoomToFitRuns([nodeId])
     }
   }, [onFocusRun, zoomToFitRuns])
@@ -601,16 +731,38 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const rawEditor = e.dataTransfer.getData('application/tinstar-editor')
       if (rawEditor) {
         const { sessionId, filePath } = JSON.parse(rawEditor) as { sessionId: string; filePath: string }
+        const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico']
+        const isImage = imageExts.some(ext => filePath.toLowerCase().endsWith(ext))
+
+        if (isImage) {
+          const imageRes = await fetch('/api/image-widgets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId, filePath }),
+          })
+          const imageJson = await imageRes.json() as { ok: boolean; data?: ImageWidget }
+          if (!imageJson.ok || !imageJson.data) return
+          onImageWidgetCreated?.(imageJson.data)
+          const { naturalWidth, naturalHeight } = imageJson.data
+          const spawnLayout = {
+            x: dropX, y: dropY,
+            width: Math.min(naturalWidth, 1200),
+            height: Math.min(naturalHeight, 900),
+          }
+          insertLayout(imageJson.data.id, spawnLayout)
+          return
+        }
+
         const spawnLayout = { x: dropX, y: dropY, width: 640, height: 480 }
-        const res = await fetch('/api/editor-widgets', {
+        const editorRes = await fetch('/api/editor-widgets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId, filePath }),
         })
-        const resJson = await res.json() as { ok: boolean; data?: EditorWidget }
-        if (!resJson.ok || !resJson.data) return
-        onEditorWidgetCreated?.(resJson.data)
-        insertLayout(resJson.data.id, spawnLayout)
+        const editorJson = await editorRes.json() as { ok: boolean; data?: EditorWidget }
+        if (!editorJson.ok || !editorJson.data) return
+        onEditorWidgetCreated?.(editorJson.data)
+        insertLayout(editorJson.data.id, spawnLayout)
         return
       }
 
@@ -629,7 +781,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         insertLayout(resJson.data.id, spawnLayout)
       }
     },
-    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated],
+    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated],
   )
 
   // Recursive render: groups render behind their children (natural DOM order)
@@ -650,7 +802,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           ? editorWidgetMap.get(node.entityId)
           : node.type === 'browser-widget'
             ? browserWidgetMap.get(node.entityId)
-            : ({
+            : node.type === 'image-viewer'
+              ? imageWidgetMap.get(node.entityId)
+              : ({
               node,
               depth: depthMapRef.current.get(node.id) ?? 0,
               onShrinkToFit: shrinkNode,
@@ -676,7 +830,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}
-        onDoubleClickZoom={node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' ? handleDoubleClickZoom : undefined}
+        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' ? handleDoubleClickZoom : undefined)}
         onMove={moveHandler}
         onResize={resizeHandler}
         onDragStart={node.type === 'run' ? handleWidgetDragStart : undefined}

@@ -36,6 +36,12 @@ async function ask(question) {
 }
 
 async function main() {
+  // Subcommand: doctor
+  if (process.argv[2] === 'doctor') {
+    const { doctor } = await import('./doctor.js')
+    return doctor()
+  }
+
   console.log(`\n${BOLD}Tinstar${RESET} — Agent Orchestrator\n`)
 
   // Pre-flight checks

@@ -24,8 +24,7 @@ import {
 } from './sessions'
 import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
-import { readSessionStatus } from './sessions/transcript-parser'
-import { claudeStateDir } from './sessions/session'
+import { StatusWatcher } from './sessions/status-watcher'
 import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
 import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
@@ -214,21 +213,18 @@ export function initBackend(): RouteContext {
         sse.setReadyQueue(readyQueue.getQueue())
         sse.broadcastReadyQueueUpdate()
 
-        // JSONL startup correction: reconcile can't distinguish a running-at-crash session
-        // from a genuinely idle one. Read the transcript tail for ground truth.
-        for (const session of sessions) {
-          if (session.state !== 'running' && session.state !== 'idle') continue
-          const workdir = session.workspace?.path
-          const convId = session.conversation?.id
-          if (!workdir || !convId) continue
-          const stateDir = session.backend === 'docker' ? claudeStateDir(cfg.dirs.sessions, session.name) : undefined
-          const jsonlStatus = readSessionStatus(workdir, convId, stateDir)
-          // Only correct running → idle (missed Stop hook); never force idle → running
-          if (session.state === 'running' && jsonlStatus === 'idle') {
-            onStateChanged(session.name, jsonlStatus)
-            log.info('reconcile', `${session.name}: JSONL corrected running → idle`)
-          }
-        }
+        // Start JSONL status watcher — polls transcript files to derive running/idle
+        // status directly, replacing the hook-based approach.
+        const watcher = new StatusWatcher({
+          sessionsDir: cfg.dirs.sessions,
+          onStatusChanged: onStateChanged,
+          onRecapEntries: (name, entries) => {
+            for (const entry of entries) {
+              docStore.addRecapEntry(name, entry)
+            }
+          },
+        })
+        watcher.start()
       }).catch(err => log.warn('reconcile', `startup reconciliation failed: ${(err as Error).message}`))
 
       // Periodic session state reconciliation (30s)

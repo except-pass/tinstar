@@ -219,8 +219,21 @@ export function buildOneShotRunCommand(
 // --- Docker operations ---
 
 async function docker(args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('docker', args, { encoding: 'utf-8' })
-  return (stdout as string).trim()
+  try {
+    const { stdout } = await execFileAsync('docker', args, { encoding: 'utf-8' })
+    return (stdout as string).trim()
+  } catch (err: unknown) {
+    const msg = (err as Error).message ?? ''
+    // Detect "image not found" errors and provide actionable guidance
+    const imageMatch = msg.match(/Unable to find image '([^']+)'/i)
+      ?? msg.match(/pull access denied for ([^\s,]+)/i)
+    if (imageMatch) {
+      const image = imageMatch[1]
+      throw new Error(
+        `Docker image '${image}' not found locally. Build it first (e.g. scripts/build.sh ${image.replace(/^rf-/, '').replace(/:.*$/, '')}) or set a valid image in ~/.config/tinstar/config.json`)
+    }
+    throw err
+  }
 }
 
 export async function createContainer(

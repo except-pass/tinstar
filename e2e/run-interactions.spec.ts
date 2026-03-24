@@ -8,7 +8,7 @@ test.describe('Run Widget Interactions', () => {
   })
 
   test('clicking a run widget selects it in the sidebar', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-R-241')
+    const widget = page.getByTestId('canvas-widget-run-R-241')
     await widget.click()
     await page.waitForTimeout(200)
 
@@ -36,18 +36,18 @@ test.describe('Run Widget Interactions', () => {
     await page.waitForTimeout(500)
 
     // Widget should still be visible after zoom-to-fit
-    await expect(page.getByTestId('canvas-widget-R-241')).toBeVisible()
+    await expect(page.getByTestId('canvas-widget-run-R-241')).toBeVisible()
   })
 
   test('run widget has drag handle header', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-R-241')
+    const widget = page.getByTestId('canvas-widget-run-R-241')
     await expect(widget).toBeVisible()
     const header = widget.locator('[class*="cursor-grab"]').first()
     await expect(header).toBeVisible()
   })
 
   test('run widget has resize handle', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-R-241')
+    const widget = page.getByTestId('canvas-widget-run-R-241')
     const resizeHandle = widget.locator('.cursor-se-resize')
     await expect(resizeHandle).toBeVisible()
   })
@@ -60,13 +60,13 @@ test.describe('Run Widget Panels', () => {
   })
 
   test('run widget has session panel with Recap tab', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-R-241')
+    const widget = page.getByTestId('canvas-widget-run-R-241')
     // Session panel shows Recap tab
     await expect(widget.getByText('Recap')).toBeVisible()
   })
 
   test('run widget has collapsed files panel', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-R-241')
+    const widget = page.getByTestId('canvas-widget-run-R-241')
     // Files panel is either expanded (showing FILES label) or collapsed (showing vertical "Files" text)
     const filesExpanded = widget.locator('[data-testid="collapsed-files"]')
     const filesLabel = widget.getByText('Files')
@@ -77,7 +77,7 @@ test.describe('Run Widget Panels', () => {
   })
 
   test('run widget has collapsed procedures panel', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-R-241')
+    const widget = page.getByTestId('canvas-widget-run-R-241')
     // Procedures panel starts collapsed, showing "Procs" text
     const collapsedProcs = widget.getByTestId('collapsed-procedures')
     await expect(collapsedProcs).toBeVisible()
@@ -85,7 +85,7 @@ test.describe('Run Widget Panels', () => {
   })
 
   test('clicking collapsed procedures panel expands it', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-R-241')
+    const widget = page.getByTestId('canvas-widget-run-R-241')
 
     // Click collapsed procedures to expand
     await widget.getByTestId('collapsed-procedures').click()
@@ -103,7 +103,7 @@ test.describe('File Panel Interactions', () => {
   })
 
   test('double-click on touched file does not zoom the canvas widget', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-R-241')
+    const widget = page.getByTestId('canvas-widget-run-R-241')
 
     // Expand files panel if collapsed
     const collapsedFiles = widget.getByTestId('collapsed-files')
@@ -138,7 +138,7 @@ test.describe('File Panel Interactions', () => {
   })
 
   test('switching between Changed and Explorer tabs works', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-R-241')
+    const widget = page.getByTestId('canvas-widget-run-R-241')
 
     // Expand files panel if collapsed
     const collapsedFiles = widget.getByTestId('collapsed-files')
@@ -164,7 +164,7 @@ test.describe('File Panel Interactions', () => {
   })
 
   test('file panel collapse button works', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-R-241')
+    const widget = page.getByTestId('canvas-widget-run-R-241')
 
     // Expand files panel if collapsed
     const collapsedFiles = widget.getByTestId('collapsed-files')

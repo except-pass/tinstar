@@ -50,25 +50,65 @@ export function SessionsList({ onOpenSession }: Props) {
     return () => clearInterval(interval)
   }, [fetchSessions])
 
+  const [actionError, setActionError] = useState<{ name: string; msg: string } | null>(null)
+
   const handleStop = useCallback(async (name: string) => {
-    await fetch(`/api/sessions/${encodeURIComponent(name)}/stop`, { method: 'POST' })
+    setActionError(null)
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(name)}/stop`, { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || (data && !data.ok)) {
+        setActionError({ name, msg: data?.error?.message ?? `Stop failed (${res.status})` })
+        return
+      }
+    } catch (err) {
+      setActionError({ name, msg: (err as Error).message })
+      return
+    }
     fetchSessions()
   }, [fetchSessions])
 
   const handleStart = useCallback(async (name: string) => {
-    await fetch(`/api/sessions/${encodeURIComponent(name)}/start`, { method: 'POST' })
+    setActionError(null)
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(name)}/start`, { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || (data && !data.ok)) {
+        setActionError({ name, msg: data?.error?.message ?? `Start failed (${res.status})` })
+        return
+      }
+    } catch (err) {
+      setActionError({ name, msg: (err as Error).message })
+      return
+    }
     fetchSessions()
   }, [fetchSessions])
 
   const handleDelete = useCallback(async (name: string) => {
+    setActionError(null)
     // Optimistic removal — dir deletion is async on the server, so filtering here
     // prevents the session from reappearing on the next poll before cleanup finishes
     deletingRef.current.add(name)
     setSessions(prev => prev.filter(s => s.name !== name))
-    await fetch(`/api/sessions/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || (data && !data.ok)) {
+        // Undo optimistic removal
+        deletingRef.current.delete(name)
+        fetchSessions()
+        setActionError({ name, msg: data?.error?.message ?? `Delete failed (${res.status})` })
+        return
+      }
+    } catch (err) {
+      deletingRef.current.delete(name)
+      fetchSessions()
+      setActionError({ name, msg: (err as Error).message })
+      return
+    }
     // Clear the deleting marker after enough time for background cleanup to finish
     setTimeout(() => deletingRef.current.delete(name), 15_000)
-  }, [])
+  }, [fetchSessions])
 
   if (loading) {
     return <div className="px-3 py-2 text-2xs text-slate-500">Loading sessions...</div>
@@ -80,6 +120,15 @@ export function SessionsList({ onOpenSession }: Props) {
 
   return (
     <div className="space-y-0.5">
+      {actionError && (
+        <div
+          className="mx-3 mb-1 px-2 py-1.5 flex items-center gap-1.5 bg-accent-red/10 border border-accent-red/30 rounded text-accent-red text-2xs font-mono cursor-pointer"
+          onClick={() => setActionError(null)}
+        >
+          <span className="material-symbols-outlined text-xs">error</span>
+          <span className="truncate">{actionError.name}: {actionError.msg}</span>
+        </div>
+      )}
       {sessions.map(s => (
         <div
           key={s.name}

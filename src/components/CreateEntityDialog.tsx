@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { GroupingDimension } from '../domain/types'
-import { getDimensionLabel } from '../domain/dimension-meta'
+import { useDimensionMeta } from '../hooks/useDimensionMeta'
+import { randomUUID } from '../uuid'
 
 export interface CreateDialogState {
   parentId: string | null
@@ -38,6 +39,7 @@ export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate }: Prop
   const [name, setName] = useState('')
   const [color, setColor] = useState('#00f0ff')
   const inputRef = useRef<HTMLInputElement>(null)
+  const levelMeta = useDimensionMeta()
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -51,7 +53,7 @@ export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate }: Prop
     if (!endpoint) return
 
     const prefix = ID_PREFIX_MAP[dialog.childType] ?? dialog.childType
-    const id = `${prefix}-${crypto.randomUUID().slice(0, 8)}`
+    const id = `${prefix}-${randomUUID().slice(0, 8)}`
 
     const body: Record<string, string> = { name: trimmedName, id }
 
@@ -97,7 +99,7 @@ export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate }: Prop
     if (e.key === 'Escape') onClose()
   }, [handleSubmit, onClose])
 
-  const label = getDimensionLabel(dialog.childType)
+  const label = levelMeta.find(m => m.internalType === dialog.childType)?.label ?? dialog.childType
 
   return (
     <div

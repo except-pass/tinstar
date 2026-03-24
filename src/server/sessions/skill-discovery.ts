@@ -178,7 +178,12 @@ export function getSkills(projectRoot?: string): Skill[] {
     : []
   const plugins = scanPlugins()
 
-  const skills = [...system, ...repo, ...plugins]
+  const seen = new Set<string>()
+  const skills = [...system, ...repo, ...plugins].filter(s => {
+    if (seen.has(s.name)) return false
+    seen.add(s.name)
+    return true
+  })
   cache = { skills, expiresAt: now + TTL_MS }
   return skills
 }

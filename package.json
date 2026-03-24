@@ -1,6 +1,6 @@
 {
   "name": "tinstar",
-  "version": "3.3.0",
+  "version": "3.5.0",
   "description": "Agent orchestrator — manage multiple Claude Code sessions from a visual canvas",
   "type": "module",
   "bin": {
@@ -23,7 +23,7 @@
   "scripts": {
     "dev:backend": "tsx watch src/server/standalone.ts --port 5281 --no-open",
     "dev:frontend": "vite",
-    "dev": "concurrently -n be,fe -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev": "concurrently --kill-others -n be,fe -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
     "build": "tsc -b && vite build",
     "build:server": "npx esbuild src/server/standalone.ts --bundle --platform=node --format=esm --outdir=dist/server --external:http-proxy",
     "build:all": "vite build --outDir dist/client && npm run build:server",
@@ -36,6 +36,7 @@
     "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/typography": "^0.5.19",
     "http-proxy": "^1.18.1",
+    "image-size": "^2.0.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0"

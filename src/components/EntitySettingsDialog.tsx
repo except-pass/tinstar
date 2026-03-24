@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { DEFAULT_RUN_ACCENT } from './runAccent'
 import type { GroupingDimension, EntitySettings, ResolvedSettings } from '../domain/types'
 import type { StoredProcedure } from '../types'
+import { randomUUID } from '../uuid'
 import { ColorPalette } from './ColorPalette'
 
 interface Props {
@@ -193,7 +194,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
     if (base.some(p => p.skillName === name)) { setNewProcName(''); return }
     setDraft(prev => ({
       ...prev,
-      procedures: [...base, { id: crypto.randomUUID(), skillName: name }],
+      procedures: [...base, { id: randomUUID(), skillName: name }],
     }))
     setNewProcName('')
   }, [newProcName, draft.procedures, settings])

@@ -1,23 +1,25 @@
 
-import { listSessions, setState, claudeStateDir, type Session, type SessionState } from './session'
-import { readSessionStatus } from './transcript-parser'
-
-const STALE_RUNNING_THRESHOLD_MS = 120_000
+import { listSessions, setState, type Session, type SessionState } from './session'
 
 export interface ReconcileOpts {
   getContainerState: (sessionName: string) => Promise<string>
   getTmuxSessionState: (sessionName: string) => Promise<'exists' | 'missing'>
   onStateChanged?: (name: string, state: SessionState) => void
-  staleRunningThresholdMs?: number
 }
 
+/**
+ * Reconcile session states with container/tmux liveness.
+ *
+ * This only handles the "process died" case (running/idle → stopped).
+ * The running ↔ idle transitions are handled by the StatusWatcher which
+ * polls JSONL transcript files directly — no hooks needed.
+ */
 export async function reconcileSessionStates(
   sessionsDir: string,
   opts: ReconcileOpts,
 ): Promise<Session[]> {
   const sessions = await listSessions(sessionsDir)
   const updated: Session[] = []
-  const now = Date.now()
 
   for (const session of sessions) {
     // Skip states that don't need reconciliation
@@ -32,10 +34,7 @@ export async function reconcileSessionStates(
         const actual = await opts.getContainerState(session.name)
         if (actual === 'running') {
           // Container alive — no change
-        } else if (actual === 'exited') {
-          newState = 'stopped'
         } else {
-          // Container missing entirely
           newState = 'stopped'
         }
       } else {
@@ -48,30 +47,6 @@ export async function reconcileSessionStates(
       }
     } catch {
       // If we can't check, assume current state is fine
-    }
-
-    // Detect stale 'running' sessions — hooks may have been missed.
-    // Check the JSONL transcript for ground truth before falling back to needs_attention.
-    const threshold = opts.staleRunningThresholdMs ?? STALE_RUNNING_THRESHOLD_MS
-    if (!newState && session.state === 'running' && session.lastActive) {
-      const staleMs = now - new Date(session.lastActive).getTime()
-      if (staleMs > threshold) {
-        const workdir = session.workspace?.path
-        const convId = session.conversation?.id
-        if (workdir && convId) {
-          const stateDir = session.backend === 'docker' ? claudeStateDir(sessionsDir, session.name) : undefined
-          const jsonlStatus = readSessionStatus(workdir, convId, stateDir)
-          if (jsonlStatus === 'idle') {
-            newState = 'idle'   // Stop hook was missed — correct it
-          } else if (jsonlStatus === 'running') {
-            // Long-running tool, genuinely still active — leave as running
-          } else {
-            newState = 'needs_attention'  // Can't determine from JSONL, use fallback
-          }
-        } else {
-          newState = 'needs_attention'  // No JSONL available, use fallback
-        }
-      }
     }
 
     if (newState) {

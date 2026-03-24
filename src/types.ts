@@ -81,6 +81,7 @@ export interface RunData {
   rawLogs: string
   port: number | null
   backend: 'docker' | 'tmux' | null
+  backendInfo?: string
 }
 
 

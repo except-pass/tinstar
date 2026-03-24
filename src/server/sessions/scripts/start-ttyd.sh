@@ -23,9 +23,46 @@ if ! tmux has-session -t $TMUX_SESSION 2>/dev/null; then
     tmux bind-key -n C-h send-keys C-w
 
     # Forward secrets into tmux environment
-    for var in CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN GH_APP_ID GH_INSTALLATION_ID GH_APP_KEY; do
+    for var in CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN GH_APP_ID GH_INSTALLATION_ID GH_APP_KEY \
+               AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION AWS_REGION \
+               AWS_ROLE_ARN_DEV AWS_ROLE_ARN_PROD; do
         [ -n "${!var}" ] && tmux set-environment -t $TMUX_SESSION "$var" "${!var}"
     done
+
+    # Generate ~/.aws/config if AWS role ARN env vars are present but no config exists
+    if [ ! -f "$HOME/.aws/config" ] && [ -n "$AWS_ACCESS_KEY_ID" ]; then
+        mkdir -p "$HOME/.aws"
+        cat > "$HOME/.aws/config" <<AWSEOF
+[profile base]
+region = ${AWS_DEFAULT_REGION:-us-east-1}
+output = json
+AWSEOF
+        cat > "$HOME/.aws/credentials" <<AWSEOF
+[base]
+aws_access_key_id = ${AWS_ACCESS_KEY_ID}
+aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}
+AWSEOF
+        # Add role profiles for each AWS_ROLE_ARN_* env var
+        for var in $(env | grep '^AWS_ROLE_ARN_' | sort); do
+            name="${var%%=*}"             # AWS_ROLE_ARN_DEV
+            arn="${var#*=}"               # arn:aws:iam::...
+            suffix="${name#AWS_ROLE_ARN_}" # DEV
+            profile=$(echo "$suffix" | tr '[:upper:]' '[:lower:]') # dev
+            cat >> "$HOME/.aws/config" <<AWSEOF
+
+[profile ${profile}]
+role_arn = ${arn}
+source_profile = base
+region = ${AWS_DEFAULT_REGION:-us-east-1}
+AWSEOF
+        done
+        # Default to the first role profile
+        first_profile=$(grep '^\[profile ' "$HOME/.aws/config" | head -2 | tail -1 | sed 's/\[profile //;s/\]//')
+        if [ -n "$first_profile" ] && [ "$first_profile" != "base" ]; then
+            tmux set-environment -t $TMUX_SESSION "AWS_PROFILE" "$first_profile"
+        fi
+        chmod 600 "$HOME/.aws/credentials"
+    fi
 
     # Build claude command
     CLAUDE_CMD="claude"
@@ -37,39 +74,6 @@ if ! tmux has-session -t $TMUX_SESSION 2>/dev/null; then
     fi
     if [ -n "$INITIAL_PROMPT" ]; then
         CLAUDE_CMD="$CLAUDE_CMD -- $(printf '%q' "$INITIAL_PROMPT")"
-    fi
-
-    # Install Tinstar status hooks so the dashboard can track idle/running state
-    if [ -n "$TINSTAR_DASHBOARD_URL" ] && command -v python3 >/dev/null 2>&1; then
-        python3 - <<'PYEOF'
-import json, os
-home = os.environ.get('HOME', os.path.expanduser('~'))
-path = os.path.join(home, '.claude', 'settings.json')
-url = os.environ.get('TINSTAR_DASHBOARD_URL', '')
-try:
-    with open(path) as f: s = json.load(f)
-except Exception: s = {}
-hooks = s.get('hooks', {})
-def cmd(ep):
-    return ('if [ -n "$TINSTAR_SESSION_NAME" ]; then '
-            f'curl -s -X POST {url}/api/hooks/{ep} '
-            '-H "Content-Type: application/json" '
-            '-d "{\\"session\\":\\"$TINSTAR_SESSION_NAME\\",\\"conversationId\\":\\"$CLAUDE_SESSION_ID\\"}" '
-            '2>/dev/null; fi')
-def install(ev, entry):
-    es = [e for e in hooks.get(ev, []) if not any('/api/hooks/' in str(h.get('command','')) for h in e.get('hooks',[]))]
-    es.append(entry)
-    hooks[ev] = es
-install('Stop', {'hooks': [{'type': 'command', 'command': cmd('idle')}]})
-install('PreToolUse', {'matcher': '', 'hooks': [{'type': 'command', 'command': cmd('active')}]})
-install('UserPromptSubmit', {'hooks': [{'type': 'command', 'command': cmd('active')}]})
-# Re-assert running after every tool — sub-agents fire Stop with the same session
-# name when they complete, which would wrongly show the session as idle mid-execution.
-install('PostToolUse', {'matcher': '', 'hooks': [{'type': 'command', 'command': cmd('active')}]})
-s['hooks'] = hooks
-os.makedirs(os.path.join(home, '.claude'), exist_ok=True)
-with open(path, 'w') as f: json.dump(s, f, indent=2)
-PYEOF
     fi
 
     WORKDIR="${WORKSPACE_DIR:-$HOME}"

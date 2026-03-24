@@ -21,17 +21,19 @@ export function saveDraft(draftId: string, location: 'system' | 'repo', projectR
   const fm = parseFrontmatter(content)
   const skillName = fm.name ?? draftId
 
-  let destDir: string
+  let destPath: string
   if (location === 'system') {
-    destDir = join(homedir(), '.claude', 'commands')
+    // Save as a skills subdir: ~/.claude/skills/{name}/SKILL.md
+    const skillDir = join(homedir(), '.claude', 'skills', skillName)
+    mkdirSync(skillDir, { recursive: true })
+    destPath = join(skillDir, 'SKILL.md')
   } else {
     if (!projectRoot) throw new Error('projectRoot required for repo-level skills')
-    destDir = join(projectRoot, '.claude', 'commands')
+    const destDir = join(projectRoot, '.claude', 'commands')
+    mkdirSync(destDir, { recursive: true })
+    destPath = join(destDir, `${skillName}.md`)
   }
 
-  mkdirSync(destDir, { recursive: true })
-
-  const destPath = join(destDir, `${skillName}.md`)
   if (existsSync(destPath)) {
     throw Object.assign(new Error('skill-name-conflict'), { existingPath: destPath })
   }

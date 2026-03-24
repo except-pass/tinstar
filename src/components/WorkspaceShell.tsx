@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { BrowserWidget, EditorWidget, GroupingDimension, Run, TreeNode } from '../domain/types'
-import { buildWorkspaceView } from '../domain/view-models'
+import type { BrowserWidget, EditorWidget, ImageWidget, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
+import { buildWorkspaceView, findNodeLabel } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
+import { useDimensionMeta } from '../hooks/useDimensionMeta'
+import { DEFAULT_LEVELS } from '../domain/dimension-meta'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
 import { cycleNext, cyclePrev } from '../hooks/useReadyQueue'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
 import { SettingsDialog } from './SettingsDialog'
-import { GroupingControls } from './GroupingControls'
 import HierarchySidebar from './HierarchySidebar'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { SelectionProvider, useSelection } from './SelectionProvider'
@@ -39,28 +40,43 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
   return walk(tree, []) ?? []
 }
 
-/** Find a node's label by its ID in a tree */
-function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
-  for (const node of nodes) {
-    if (node.id === targetId) return node.label
-    if (node.children.length > 0) {
-      const found = findNodeLabel(node.children, targetId)
-      if (found) return found
-    }
-  }
-  return null
-}
 
 function WorkspaceShellInner() {
-  const [dimensions, setDimensions] = useState<GroupingDimension[]>(() => {
-    try {
-      const stored = localStorage.getItem('tinstar-dimensions')
-      if (stored) return JSON.parse(stored) as GroupingDimension[]
-    } catch { /* ignore */ }
-    return ['initiative', 'epic', 'task']
-  })
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, connected } = useBackendState()
 
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, connected } = useBackendState()
+  const levelMeta = useDimensionMeta()
+  const dimensions = useMemo(
+    () => levelMeta.map(m => m.internalType),
+    [levelMeta],
+  )
+
+  // One-time migration: promote tinstar-dimensions localStorage → space.labelConfig
+  useEffect(() => {
+    if (!activeSpaceId) return
+    const activeSpace = spaces.find(s => s.id === activeSpaceId)
+    if (!activeSpace || activeSpace.labelConfig) return  // already migrated
+
+    const stored = localStorage.getItem('tinstar-dimensions')
+    let count = 3
+    try {
+      const parsed = JSON.parse(stored ?? '[]') as string[]
+      if (parsed.length >= 1 && parsed.length <= 3) count = parsed.length
+    } catch { /* ignore */ }
+
+    // Use bottom-N defaults matching the stored count
+    const levels: LevelLabel[] = DEFAULT_LEVELS.slice(DEFAULT_LEVELS.length - count)
+
+    fetch(`/api/spaces/${activeSpaceId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labelConfig: { levels } }),
+    }).then(r => {
+      if (r.ok) localStorage.removeItem('tinstar-dimensions')
+      else console.warn('[tinstar] labelConfig migration failed; will retry on next load')
+    }).catch(() => {
+      console.warn('[tinstar] labelConfig migration failed; will retry on next load')
+    })
+  }, [activeSpaceId, spaces])
 
   const { sidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
@@ -118,8 +134,28 @@ function WorkspaceShellInner() {
     return map
   }, [browserWidgets])
 
+  const syntheticImageNodes: TreeNode[] = useMemo(
+    () =>
+      imageWidgets.map(w => ({
+        id: w.id,
+        label: w.filePath.split('/').pop() ?? w.filePath,
+        type: 'image-viewer' as const,
+        entityId: w.id,
+        children: [],
+        runCount: 0,
+        activeCount: 0,
+      })),
+    [imageWidgets],
+  )
+
+  const imageWidgetMap = useMemo(() => {
+    const map = new Map<string, ImageWidget>()
+    for (const w of imageWidgets) map.set(w.id, w)
+    return map
+  }, [imageWidgets])
+
   const canvasTree = useMemo(() => {
-    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes]
+    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes]
     if (allSynthetic.length === 0) return sidebarTree
 
     // Map taskNodeId → synthetic nodes to nest inside it
@@ -152,6 +188,18 @@ function WorkspaceShellInner() {
       }
     }
 
+    for (const node of syntheticImageNodes) {
+      const widget = imageWidgets.find(w => w.id === node.entityId)
+      const run = widget ? [...runMap.values()].find(r => r.sessionId === widget.sessionId) : undefined
+      const taskNodeId = run?.taskId ? `task-${run.taskId}` : null
+      if (taskNodeId) {
+        const existing = byTaskNode.get(taskNodeId) ?? []
+        byTaskNode.set(taskNodeId, [...existing, node])
+      } else {
+        orphans.push(node)
+      }
+    }
+
     if (byTaskNode.size === 0) return [...sidebarTree, ...orphans]
 
     function inject(nodes: TreeNode[]): TreeNode[] {
@@ -164,14 +212,15 @@ function WorkspaceShellInner() {
     }
 
     return [...inject(sidebarTree), ...orphans]
-  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, editorWidgets, browserWidgets, runMap])
+  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
 
   const allNodeIds = useMemo(() => {
     const ids: string[] = Array.from(runMap.keys()).map(id => `run-${id}`)
     for (const w of editorWidgets) ids.push(w.id)
     for (const w of browserWidgets) ids.push(w.id)
+    for (const w of imageWidgets) ids.push(w.id)
     return ids
-  }, [runMap, editorWidgets, browserWidgets])
+  }, [runMap, editorWidgets, browserWidgets, imageWidgets])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
@@ -188,6 +237,7 @@ function WorkspaceShellInner() {
   const { select, toggleSelect, expandAll, selectedCount: _selectedCount, state: selectionState } = useSelection()
   const arrangeGridRef = useRef<(() => void) | null>(null)
   const arrangeResetRef = useRef<(() => void) | null>(null)
+  const arrangeSwimlanesRef = useRef<(() => void) | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(240)
@@ -268,11 +318,6 @@ function WorkspaceShellInner() {
     fetch(`/api/spaces/${id}`, { method: 'DELETE' })
   }, [])
 
-  const handleDimensionsChange = useCallback((dims: GroupingDimension[]) => {
-    setDimensions(dims)
-    localStorage.setItem('tinstar-dimensions', JSON.stringify(dims))
-  }, [])
-
   const handleRename = useCallback((entityId: string, type: GroupingDimension, newName: string) => {
     const endpointMap: Record<string, string> = {
       initiative: '/api/initiatives',
@@ -302,6 +347,10 @@ function WorkspaceShellInner() {
       fetch(`/api/browser-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
+    if (type === 'image-viewer') {
+      fetch(`/api/image-widgets/${entityId}`, { method: 'DELETE' })
+      return
+    }
     const endpointMap: Record<string, string> = {
       initiative: '/api/initiatives',
       epic: '/api/epics',
@@ -316,7 +365,7 @@ function WorkspaceShellInner() {
   const handleAdd = useCallback((parentId: string | null, type: GroupingDimension | 'run') => {
     if (type === 'run') return
     // Determine the parent's type from the dimensions hierarchy
-    const typeIdx = dimensions.indexOf(type)
+    const typeIdx = dimensions.indexOf(type as 'task' | 'epic' | 'initiative')
     const parentType = typeIdx > 0 ? (dimensions[typeIdx - 1] ?? null) : null
     setCreateDialog({ parentId, parentType, childType: type })
   }, [dimensions])
@@ -567,62 +616,58 @@ function WorkspaceShellInner() {
         <HotgroupProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
           <SkillsProvider>
-            <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
-              {/* Top bar: GroupingControls + logo + status */}
-              <div
-                className="flex items-center justify-between px-4 py-2 bg-surface-panel border-b border-white/10 relative"
-                data-testid="controls-bar"
-              >
-                <GroupingControls
-                  activeDimensions={dimensions}
-                  onDimensionsChange={handleDimensionsChange}
-                />
-                <img src="/logo.png" alt="Tinstar" className="h-6 absolute left-1/2 -translate-x-1/2 pointer-events-none select-none opacity-80" />
-                <div className="flex items-center gap-3 ml-4 flex-shrink-0">
-                  <button
-                    className="px-3 py-1 text-xs bg-primary/20 text-primary border border-primary/40 rounded-full hover:bg-primary/30"
-                    onClick={() => setShowSessionDialog(true)}
-                    data-testid="new-session-btn"
-                  >
-                    + Session
-                  </button>
-                  <button
-                    className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-                    onClick={() => setShowSettings(true)}
-                    data-testid="settings-btn"
-                    aria-label="Settings"
-                  >
-                    <span className="material-symbols-outlined text-base">settings</span>
-                  </button>
-                  <span data-testid="status-area" className="text-xs text-slate-500 flex items-center gap-2">
-                    {runSummaries.size} runs
-                    <span
-                      className={`inline-block w-2 h-2 rounded-full ${connected ? 'bg-green-500 shadow-[0_0_4px_#22c55e]' : 'bg-red-500 shadow-[0_0_4px_#ef4444]'}`}
-                      title={connected ? 'Connected' : 'Disconnected'}
-                    />
-                  </span>
+            <div className="flex h-screen w-screen bg-surface-base text-slate-200 font-mono">
+              {/* Left column: top bar + sidebar stacked — canvas gets full height */}
+              {sidebarCollapsed ? (
+                <div
+                  className="w-6 flex-shrink-0 flex flex-col items-center justify-center bg-surface-panel border-r border-white/10 cursor-pointer hover:bg-surface-hover"
+                  onClick={() => setSidebarCollapsed(false)}
+                  data-testid="collapsed-sidebar"
+                >
+                  <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr] rotate-180">Hierarchy</span>
                 </div>
-              </div>
-
-              {/* Main area: sidebar + canvas */}
-              <div className="flex flex-1 overflow-hidden">
-                {/* Sidebar */}
-                {sidebarCollapsed ? (
+              ) : (
+                <div
+                  className="flex-shrink-0 bg-surface-panel border-r border-white/10 relative flex flex-col"
+                  style={{ width: sidebarWidth }}
+                  data-testid="sidebar-slot"
+                >
+                  {/* Top bar — lives only above the sidebar.
+                      flex-row-reverse + overflow-hidden: items are anchored right-to-left,
+                      so as the sidebar narrows the logo (DOM-last) clips off the left first. */}
                   <div
-                    className="w-6 flex-shrink-0 flex flex-col items-center justify-center bg-surface-panel border-r border-white/10 cursor-pointer hover:bg-surface-hover"
-                    onClick={() => setSidebarCollapsed(false)}
-                    data-testid="collapsed-sidebar"
+                    className="flex flex-row-reverse items-center gap-2 px-2 py-1.5 border-b border-white/10 overflow-hidden flex-shrink-0"
+                    data-testid="controls-bar"
                   >
-                    <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr] rotate-180">Hierarchy</span>
+                    {/* online dot — most important, never clips (DOM first = rightmost) */}
+                    <span data-testid="status-area" className="flex items-center flex-shrink-0">
+                      <span
+                        className={`w-2 h-2 rounded-full flex-shrink-0 ${connected ? 'bg-green-500 shadow-[0_0_4px_#22c55e]' : 'bg-red-500 shadow-[0_0_4px_#ef4444]'}`}
+                        title={connected ? 'Connected' : 'Disconnected'}
+                      />
+                    </span>
+                    <button
+                      className="px-2 py-0.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded-full hover:bg-primary/30 flex-shrink-0 whitespace-nowrap"
+                      onClick={() => setShowSessionDialog(true)}
+                      data-testid="new-session-btn"
+                    >
+                      + Session
+                    </button>
+                    <span className="text-2xs font-mono text-slate-500 flex-shrink-0 whitespace-nowrap">{runSummaries.size} runs</span>
+                    <button
+                      className="w-6 h-6 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors flex-shrink-0"
+                      onClick={() => setShowSettings(true)}
+                      data-testid="settings-btn"
+                      aria-label="Settings"
+                    >
+                      <span className="material-symbols-outlined text-sm">settings</span>
+                    </button>
+                    {/* logo — last in DOM = leftmost visually = clips first when narrow */}
+                    <img src="/logo.png" alt="Tinstar" className="h-5 pointer-events-none select-none opacity-80 flex-shrink-0" />
                   </div>
-                ) : (
-                  <div
-                    className="flex-shrink-0 bg-surface-panel border-r border-white/10 relative flex flex-col"
-                    style={{ width: sidebarWidth }}
-                    data-testid="sidebar-slot"
-                  >
-                    <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
-                      <HierarchySidebar
+
+                  <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
+                    <HierarchySidebar
                         tree={canvasTree}
                         dimensions={dimensions}
                         spaces={spaces}
@@ -639,6 +684,7 @@ function WorkspaceShellInner() {
                         onReparent={handleReparent}
                         onArrangeGrid={() => arrangeGridRef.current?.()}
                         onArrangeReset={() => arrangeResetRef.current?.()}
+                        onArrangeSwimlanes={() => arrangeSwimlanesRef.current?.()}
                         onCollapse={() => setSidebarCollapsed(true)}
                         renamingNodeId={renamingNodeId}
                         onRenameComplete={() => setRenamingNodeId(null)}
@@ -669,14 +715,15 @@ function WorkspaceShellInner() {
                     onDeleteEntity={handleDelete}
                     onMenuOpen={handleMenuOpen}
                     onTaskUpdate={handleTaskUpdate}
+                    imageWidgetMap={imageWidgetMap}
+                    onImageWidgetCreated={(widget) => addOptimistic('imageWidget', widget)}
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
                     onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
+                    arrangeSwimlanesRef={arrangeSwimlanesRef}
                   />
                 </div>
-
-              </div>
 
               {/* Feature-flagged: commit activity panel disabled for now
               {commitViewMode && (
@@ -728,7 +775,7 @@ function WorkspaceShellInner() {
                   }}
                   onAddChild={() => {
                     // Add a child of the next dimension level below this entity
-                    const idx = dimensions.indexOf(entityMenu.entityType)
+                    const idx = dimensions.indexOf(entityMenu.entityType as 'task' | 'epic' | 'initiative')
                     const childType = idx >= 0 && idx < dimensions.length - 1 ? (dimensions[idx + 1] ?? 'run') : 'run'
                     handleAdd(entityMenu.entityId, childType)
                     setEntityMenu(null)

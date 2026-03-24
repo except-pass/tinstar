@@ -43,6 +43,17 @@ export interface Space {
   id: string
   name: string
   createdAt: string
+  labelConfig?: SpaceLabelConfig
+}
+
+export interface LevelLabel {
+  icon: string
+  label: string
+  plural?: string
+}
+
+export interface SpaceLabelConfig {
+  levels: LevelLabel[]  // length 1–3, top-to-bottom
 }
 
 // --- Taxonomy entities ---
@@ -116,6 +127,22 @@ export interface BrowserWidget {
   url: string
   title?: string
   color?: string
+  headers?: Record<string, string>
+}
+
+export interface ImageWidget {
+  id: string
+  spaceId?: string
+  sessionId: string
+  filePath: string
+  task: string
+  epic: string
+  initiative: string
+  worktree: string
+  repo: string
+  color?: string
+  naturalWidth: number
+  naturalHeight: number
 }
 
 // --- Grouping ---
@@ -167,7 +194,7 @@ export interface Rect {
 
 export interface SelectionState {
   selectedIds: Set<string>
-  selectedType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | null
+  selectedType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | null
   expandedIds: Set<string>
   hoveredId: string | null
 }

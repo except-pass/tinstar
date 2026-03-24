@@ -1,8 +1,27 @@
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { RecapEntry } from '../../types'
 import { randomUUID } from 'node:crypto'
+
+/** Read the last N lines of a file without reading the entire thing. */
+function readTail(filePath: string, maxLines: number): string[] {
+  const CHUNK = 16_384 // 16 KB — JSONL lines are typically 1-5 KB each
+  const size = statSync(filePath).size
+  if (size === 0) return []
+
+  const fd = openSync(filePath, 'r')
+  try {
+    const readFrom = Math.max(0, size - CHUNK)
+    const buf = Buffer.alloc(Math.min(CHUNK, size))
+    readSync(fd, buf, 0, buf.length, readFrom)
+    const text = buf.toString('utf-8')
+    const lines = text.split('\n').filter(l => l.trim())
+    return lines.slice(-maxLines)
+  } finally {
+    closeSync(fd)
+  }
+}
 
 /** Encode a workdir path the same way Claude Code does for project directories */
 function encodeWorkdir(workdir: string): string {
@@ -95,25 +114,35 @@ export function readSessionStatus(workdir: string, conversationId: string, state
   const path = getTranscriptPath(workdir, conversationId, stateDir)
   if (!existsSync(path)) return null
 
-  const content = readFileSync(path, 'utf-8')
-  const lines = content.split('\n').filter(l => l.trim())
+  // Read only the tail of the file — metadata entries (system, progress, etc.)
+  // after the last conversation turn are typically <10 lines.
+  const lines = readTail(path, 20)
   if (lines.length === 0) return null
 
-  try {
-    const obj = JSON.parse(lines[lines.length - 1]!) as Record<string, unknown>
-    if (obj.type === 'assistant') {
-      const msgContent = (obj.message as Record<string, unknown> | undefined)?.content
-      if (Array.isArray(msgContent)) {
-        const hasToolUse = (msgContent as Array<Record<string, unknown>>).some(b => b.type === 'tool_use')
-        return hasToolUse ? 'running' : 'idle'
+  // Scan backwards to find the last assistant or user entry.
+  // Skip metadata types (system, progress, file-history-snapshot, last-prompt, etc.)
+  // that Claude Code appends after the conversation turn ends.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const obj = JSON.parse(lines[i]!) as Record<string, unknown>
+      if (obj.type === 'assistant') {
+        const msgContent = (obj.message as Record<string, unknown> | undefined)?.content
+        if (Array.isArray(msgContent)) {
+          const hasToolUse = (msgContent as Array<Record<string, unknown>>).some(b => b.type === 'tool_use')
+          return hasToolUse ? 'running' : 'idle'
+        }
+        return 'idle'
       }
-      return 'idle'
+      if (obj.type === 'user') {
+        // user entry = prompt submitted or tool results fed back → running
+        return 'running'
+      }
+      // Skip non-conversation entries (system, progress, file-history-snapshot, etc.)
+    } catch {
+      // Skip malformed lines
     }
-    // 'user' entries mean a prompt or tool result was just submitted — agent is processing
-    return 'running'
-  } catch {
-    return null
   }
+  return null
 }
 
 // --- Record extraction ---

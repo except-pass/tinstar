@@ -1,9 +1,10 @@
 // src/components/RunWorkspaceWidget/SkillPickerModal.tsx
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSkillsContext } from '../SkillsProvider'
+import { randomUUID } from '../../uuid'
 import { useTaxonomy } from '../TaxonomyContext'
 import { resolveEntityProcedures } from '../../domain/procedures'
-import type { SkillDTO, PendingSkill, StoredProcedure } from '../../types'
+import type { SkillDTO, StoredProcedure } from '../../types'
 
 interface Props {
   taskId: string
@@ -14,7 +15,7 @@ interface Props {
 type EntityLevel = { id: string; type: 'task' | 'epic' | 'initiative'; name: string }
 
 export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
-  const { skills, loading, fetchSkills, addPendingSkill, closePicker, addOptimisticProcedure } = useSkillsContext()
+  const { skills, loading, fetchSkills, closePicker, addOptimisticProcedure } = useSkillsContext()
   const taxRepo = useTaxonomy()
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
@@ -79,7 +80,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
 
     // Show optimistic star immediately for snappy UX
-    const newId = crypto.randomUUID()
+    const newId = randomUUID()
     addOptimisticProcedure({ id: newId, entityId, skillName })
     setOptimisticAdded(prev => new Set([...prev, skillName]))
 
@@ -99,13 +100,21 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     })
   }
 
-  async function removeProcedureFromTask(skillName: string) {
-    const res = await fetch(`/api/tasks/${taskId}`)
+  async function removeProcedure(skillName: string) {
+    // Find which entity level (task/epic/initiative) owns this procedure so we
+    // remove from the right place — not always the task.
+    const resolved = resolveEntityProcedures(taskId, taxRepo)
+    const proc = resolved.find(p => p.skillName === skillName)
+    const entityType = proc?.entityType ?? 'task'
+    const entityId = proc?.entityId ?? taskId
+    const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
+
+    const res = await fetch(`/api/${entityPath}/${entityId}`)
     if (!res.ok) return
     const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
     const existing = json.data?.settings?.procedures ?? []
     const updated = existing.filter(p => p.skillName !== skillName)
-    await fetch(`/api/tasks/${taskId}`, {
+    await fetch(`/api/${entityPath}/${entityId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings: { procedures: updated } }),
@@ -114,28 +123,19 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
 
   function handleDefine(location: 'system' | 'repo') {
     const description = query.trim()
-    if (!description) return
-    if (!taskId) return
+    if (!description || !sessionId) return
 
-    const draftId = crypto.randomUUID()
-    const pending: PendingSkill = {
-      id: draftId,
-      placeholderName: description,
-      status: 'defining',
-      entityId: taskId,
-      entityType: 'task',
-      sessionId,
-      preferredLocation: location,
-    }
+    const locationPath = location === 'system' ? '~/.claude/skills/' : '.claude/skills/'
+    const prompt = `Create a skill that: ${description}. Save it to ${locationPath}`
 
     onClose()
     closePicker()
-    addPendingSkill(pending)
 
-    fetch(`/api/sessions/${sessionId}/enter-prompt`, {
+    // Type the prompt into the session terminal without submitting — user can revise before Enter
+    fetch(`/api/sessions/${sessionId}/send-keys`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: `Define a new skill [draftId=${draftId}]: ${description}` }),
+      body: JSON.stringify({ keys: [prompt] }),
     }).catch(console.error)
   }
 
@@ -187,7 +187,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
                   inProcedures={allProcedureNames.has(skill.name)}
                   onMouseEnter={() => setActiveIndex(i)}
                   onStarClick={(rect) => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i, rect })}
-                  onRemove={() => removeProcedureFromTask(skill.name)}
+                  onRemove={() => removeProcedure(skill.name)}
                 />
               ))}
             </>
@@ -206,7 +206,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
                   inProcedures={allProcedureNames.has(skill.name)}
                   onMouseEnter={() => setActiveIndex(systemSkills.length + i)}
                   onStarClick={(rect) => setStarPopover(prev => prev?.skillName === skill.name ? null : { skillName: skill.name, index: i, rect })}
-                  onRemove={() => removeProcedureFromTask(skill.name)}
+                  onRemove={() => removeProcedure(skill.name)}
                 />
               ))}
             </>
@@ -270,32 +270,42 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
         </div>
 
         {/* Entity picker popover — rendered outside the scrollable div to avoid overflow clipping */}
-        {starPopover && entityLevels().length > 0 && (
-          <div
-            className="fixed z-[60] bg-surface-panel border border-yellow-400/30 rounded-md w-48 shadow-lg overflow-hidden"
-            style={{ top: starPopover.rect.bottom + 4, left: Math.min(starPopover.rect.right - 192, window.innerWidth - 200) }}
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="px-3 py-1.5 text-2xs font-mono text-slate-600 uppercase tracking-widest border-b border-white/[0.06]">
-              Add to procedures for…
+        {starPopover && (() => {
+          const levels = entityLevels()
+          if (levels.length === 0) return null
+          const popoverHeight = 32 + levels.length * 36
+          const spaceBelow = window.innerHeight - starPopover.rect.bottom - 4
+          const top = spaceBelow >= popoverHeight
+            ? starPopover.rect.bottom + 4
+            : Math.max(8, starPopover.rect.top - popoverHeight - 4)
+          const left = Math.min(starPopover.rect.right - 192, window.innerWidth - 200)
+          return (
+            <div
+              className="fixed z-[60] bg-surface-panel border border-yellow-400/30 rounded-md w-48 shadow-lg overflow-hidden"
+              style={{ top, left }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="px-3 py-1.5 text-2xs font-mono text-slate-600 uppercase tracking-widest border-b border-white/[0.06]">
+                Add to procedures for…
+              </div>
+              {levels.map((level, i) => (
+                <button
+                  key={level.id}
+                  onClick={() => { addProcedureToEntity(starPopover.skillName, level.id, level.type); onClose(); closePicker() }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-yellow-400/[0.07] transition-colors"
+                >
+                  <span className="material-symbols-outlined text-xs text-slate-600">
+                    {level.type === 'task' ? 'task_alt' : level.type === 'epic' ? 'layers' : 'rocket_launch'}
+                  </span>
+                  <span className={`flex-1 text-xs font-mono text-left ${i === 0 ? 'text-primary' : 'text-slate-400'}`}>
+                    {level.type.charAt(0).toUpperCase() + level.type.slice(1)}
+                  </span>
+                  <span className="text-2xs text-slate-600 truncate max-w-[80px]">{level.name}</span>
+                </button>
+              ))}
             </div>
-            {entityLevels().map((level, i) => (
-              <button
-                key={level.id}
-                onClick={() => { addProcedureToEntity(starPopover.skillName, level.id, level.type); setStarPopover(null) }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-yellow-400/[0.07] transition-colors"
-              >
-                <span className="material-symbols-outlined text-xs text-slate-600">
-                  {level.type === 'task' ? 'task_alt' : level.type === 'epic' ? 'layers' : 'rocket_launch'}
-                </span>
-                <span className={`flex-1 text-xs font-mono text-left ${i === 0 ? 'text-primary' : 'text-slate-400'}`}>
-                  {level.type.charAt(0).toUpperCase() + level.type.slice(1)}
-                </span>
-                <span className="text-2xs text-slate-600 truncate max-w-[80px]">{level.name}</span>
-              </button>
-            ))}
-          </div>
-        )}
+          )
+        })()}
 
         {/* Footer */}
         <div className="flex items-center gap-3 px-3.5 py-1.5 border-t border-white/[0.06] bg-black/20">
