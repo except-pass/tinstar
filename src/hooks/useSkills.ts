@@ -1,3 +1,6 @@
+/* eslint-disable no-var */
+declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
+
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { SkillDTO, PendingSkill, StoredProcedure } from '../types'
 import { randomUUID } from '../uuid'
