@@ -339,23 +339,6 @@ export const spec = {
       },
     },
     // ── Hooks ────────────────────────────────────────────
-    '/api/hooks/idle': {
-      post: {
-        tags: ['Hooks'],
-        summary: 'Session went idle',
-        description: 'Called by Claude Code Stop hook. Triggers transcript parsing.',
-        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['session'], properties: { session: { type: 'string' }, conversationId: { type: 'string' } } } } } },
-        responses: { 200: { description: 'Acknowledged' } },
-      },
-    },
-    '/api/hooks/active': {
-      post: {
-        tags: ['Hooks'],
-        summary: 'Session became active',
-        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['session'], properties: { session: { type: 'string' }, conversationId: { type: 'string' } } } } } },
-        responses: { 200: { description: 'Acknowledged' } },
-      },
-    },
     '/api/hooks/file-touched': {
       post: {
         tags: ['Hooks'],

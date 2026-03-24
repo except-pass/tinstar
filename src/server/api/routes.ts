@@ -31,7 +31,6 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import { parseNewEntries } from '../sessions/transcript-parser'
 import { getGitDiffFiles } from '../sessions/git-diff'
 import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
@@ -1707,63 +1706,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
 
     // --- Hooks (called by Claude Code inside sessions) ---
-
-    // POST /api/hooks/idle
-    if (method === 'POST' && url === '/api/hooks/idle') {
-      readBody(req).then((body) => {
-        const { session: name, conversationId } = JSON.parse(body)
-        if (!name) return json(res, { ok: false, error: { code: 'MISSING_SESSION', message: 'Session name required' } }, 400)
-
-        setState(sessDir, name, 'idle')
-        ctx.docStore.updateRunStatus(name, 'idle')
-        emitSessionEvent('managed_session.state_changed', { name, state: 'idle' })
-        ctx.readyQueue.onStatusChange(name, 'idle')
-        ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
-        ctx.sse.broadcastReadyQueueUpdate()
-        json(res, { ok: true })
-
-        // Async transcript parsing (fire-and-forget, after response)
-        try {
-          const session = getSession(sessDir, name)
-          const workdir = session?.workspace?.path
-          // Use conversationId from hook payload, or fall back to session file
-          const convId = conversationId || session?.conversation?.id
-          if (workdir && convId) {
-            // Docker sessions store claude-state in the session's state dir
-            const stateDir = session?.backend === 'docker'
-              ? join(sessDir, name, 'claude-state')
-              : undefined
-            const entries = parseNewEntries(name, workdir, convId, stateDir)
-            for (const entry of entries) {
-              ctx.docStore.addRecapEntry(name, entry)
-            }
-          }
-        } catch (err) {
-          log.warn('transcript-parse', `Failed to parse transcript for ${name}: ${err}`)
-        }
-      })
-      return true
-    }
-
-    // POST /api/hooks/active
-    if (method === 'POST' && url === '/api/hooks/active') {
-      readBody(req).then((body) => {
-        const { session: name } = JSON.parse(body)
-        if (!name) return json(res, { ok: false, error: { code: 'MISSING_SESSION', message: 'Session name required' } }, 400)
-
-        const prev = getSession(sessDir, name)
-        setState(sessDir, name, 'running')
-        ctx.docStore.updateRunStatus(name, 'running')
-        if (!prev || prev.state !== 'running') {
-          emitSessionEvent('managed_session.state_changed', { name, state: 'running' })
-        }
-        ctx.readyQueue.onStatusChange(name, 'running')
-        ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
-        ctx.sse.broadcastReadyQueueUpdate()
-        json(res, { ok: true })
-      })
-      return true
-    }
 
     // POST /api/hooks/file-touched
     if (method === 'POST' && url === '/api/hooks/file-touched') {
