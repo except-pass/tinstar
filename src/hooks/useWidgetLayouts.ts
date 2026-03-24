@@ -543,9 +543,13 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
         for (const cid of childIds) {
           if ((tm.childrenMap.get(cid) ?? []).length > 0) shrink(cid)
         }
-        if (childIds.length === 0) return
         const node = next.get(nid)
         if (!node) return
+        if (childIds.length === 0) {
+          // Empty container — collapse to compact size, keep position
+          next.set(nid, snap({ x: node.x, y: node.y, width: MIN_WIDTH, height: MIN_HEIGHT }))
+          return
+        }
         const depth = tm.depthMap.get(nid) ?? 0
         const tight = computeTightBounds(next, childIds, depth)
         if (tight) next.set(nid, tight)

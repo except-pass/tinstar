@@ -1869,8 +1869,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // POST /api/dev/restart — rebuild and restart the server
   if (method === 'POST' && url === '/api/dev/restart') {
-    // Detect project root (where package.json lives)
-    const projectRoot = join(__dirname, '../../..')
+    // process.cwd() is the project root — tinstar is always launched from there
+    const projectRoot = process.cwd()
     const portArgs = process.argv.slice(2)
     const portIdx = portArgs.indexOf('--port')
     const port = portIdx !== -1 ? portArgs[portIdx + 1] : '5273'
