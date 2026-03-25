@@ -21,9 +21,11 @@ interface Props {
   onPointerMove?: (e: ReactPointerEvent) => void
   onPointerUp?: (e: ReactPointerEvent) => void
   onRefreshTerminal?: () => void
+  activeTab?: 'recap' | 'terminal'
+  onActiveTabChange?: (tab: 'recap' | 'terminal') => void
 }
 
-export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp, onRefreshTerminal }: Props) {
+export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp, onRefreshTerminal, activeTab, onActiveTabChange }: Props) {
   const status = statusConfig[run.status]
   const runAccent = resolveRunAccent(run.color)
   const [busy, setBusy] = useState(false)
@@ -155,6 +157,30 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
             >
               <span className="material-symbols-outlined text-xs">error</span>
               <span className="truncate">{actionError}</span>
+            </div>
+          )}
+
+          {/* Recap / Terminal toggle */}
+          {activeTab && onActiveTabChange && (
+            <div className="flex items-center px-2">
+              <div className="flex rounded-sm overflow-hidden border" style={{ borderColor: hexToRgba(runAccent, 0.25) }}>
+                {([
+                  { key: 'recap' as const, label: 'Recap' },
+                  { key: 'terminal' as const, label: run.port ? 'Terminal' : 'Logs' },
+                ] as const).map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => onActiveTabChange(key)}
+                    className="px-3 py-0.5 text-2xs font-bold font-display tracking-[0.12em] uppercase transition-all"
+                    style={activeTab === key
+                      ? { background: runAccent, color: 'var(--surface-base)' }
+                      : { color: hexToRgba(runAccent, 0.5) }
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 

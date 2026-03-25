@@ -34,6 +34,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
   const [procsCollapsed, setProcsCollapsed] = useState(true)
+  const [sessionTab, setSessionTab] = useState<'recap' | 'terminal'>(run.port ? 'terminal' : 'recap')
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
   const [termTick, bumpTerm] = useReducer((n: number) => n + 1, 0)
@@ -181,6 +182,8 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
           run={run}
           compact={compact}
           onRefreshTerminal={bumpTerm}
+          activeTab={sessionTab}
+          onActiveTabChange={setSessionTab}
         />
       )}
 
@@ -284,6 +287,8 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
               pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
             }}
             activeTabIndex={focusZone === 'center-tabs' ? centerTabIndex : undefined}
+            controlledTab={sessionTab}
+            onControlledTabChange={setSessionTab}
           />
         </div>
         <div
