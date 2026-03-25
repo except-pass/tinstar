@@ -14,6 +14,13 @@ function proxyUrl(widgetId: string, targetUrl: string): string {
   }
 }
 
+interface ConsoleEntry {
+  id: number
+  level: 'log' | 'warn' | 'error'
+  args: string[]
+  ts: number
+}
+
 export function BrowserWidget({ data, isSelected, isDragging, isHovered }: WidgetProps) {
   const widget = data as BrowserWidget
   const accent = resolveRunAccent(widget.color)
@@ -24,7 +31,27 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
   const [inputValue, setInputValue] = useState(widget.url)
   const [editing, setEditing] = useState(!widget.url)
   const [headersOpen, setHeadersOpen] = useState(false)
+  const [consoleOpen, setConsoleOpen] = useState(false)
+  const [consoleEntries, setConsoleEntries] = useState<ConsoleEntry[]>([])
+  const nextIdRef = useRef(0)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // Listen for console messages from the proxied iframe
+  useEffect(() => {
+    function handler(e: MessageEvent) {
+      if (e.data?.type === 'bw-console' && e.data.wid === widget.id) {
+        setConsoleEntries(prev => {
+          const next = [...prev, { id: nextIdRef.current++, level: e.data.lvl, args: e.data.args, ts: e.data.ts }]
+          return next.length > 200 ? next.slice(-200) : next
+        })
+      }
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [widget.id])
+
+  const errorCount = consoleEntries.filter(e => e.level === 'error').length
+  const warnCount = consoleEntries.filter(e => e.level === 'warn').length
 
   // Sync when agent pushes a new URL via SSE
   useEffect(() => {
@@ -139,6 +166,22 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
         >
           <span className="material-symbols-outlined text-sm">tune</span>
         </button>
+        <button
+          onPointerDown={e => e.stopPropagation()}
+          onClick={() => setConsoleOpen(c => !c)}
+          className={`flex-shrink-0 relative transition-colors ${
+            errorCount > 0 ? 'text-red-400' : warnCount > 0 ? 'text-yellow-400'
+            : consoleOpen ? 'text-slate-300' : 'text-slate-500 hover:text-slate-300'
+          }`}
+          title={`Console${errorCount ? ` (${errorCount} error${errorCount > 1 ? 's' : ''})` : ''}`}
+        >
+          <span className="material-symbols-outlined text-sm">terminal</span>
+          {errorCount > 0 && (
+            <span className="absolute -top-1 -right-1.5 min-w-[14px] h-[14px] bg-red-500 rounded-full text-[8px] text-white flex items-center justify-center px-0.5 font-mono leading-none">
+              {errorCount > 99 ? '!' : errorCount}
+            </span>
+          )}
+        </button>
         <HotgroupBadge slots={slotsForNode(`browser-${widget.id}`)} />
         <button
           onPointerDown={e => e.stopPropagation()}
@@ -175,6 +218,56 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
             <span className="text-xs font-mono text-slate-600">enter a URL above or wait for an agent to push one</span>
           </div>
         )}
+      </div>
+
+      {/* Console panel */}
+      {consoleOpen && (
+        <ConsolePanel
+          entries={consoleEntries}
+          onClear={() => setConsoleEntries([])}
+        />
+      )}
+    </div>
+  )
+}
+
+function ConsolePanel({ entries, onClear }: { entries: ConsoleEntry[]; onClear: () => void }) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [entries.length])
+
+  return (
+    <div className="flex flex-col border-t border-white/10 bg-[#08080c] flex-shrink-0" style={{ height: 160 }}>
+      <div className="flex items-center justify-between px-2 py-1 border-b border-white/5 flex-shrink-0">
+        <span className="text-2xs font-mono text-slate-500 uppercase tracking-widest">Console</span>
+        <div className="flex items-center gap-2">
+          <span className="text-2xs font-mono text-slate-600">{entries.length}</span>
+          <button onClick={onClear} className="text-slate-600 hover:text-slate-400">
+            <span className="material-symbols-outlined text-xs">delete</span>
+          </button>
+        </div>
+      </div>
+      <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden font-mono text-2xs select-text">
+        {entries.length === 0 ? (
+          <div className="flex items-center justify-center h-full text-slate-700">no console output</div>
+        ) : entries.map(e => (
+          <div
+            key={e.id}
+            className={`flex gap-2 px-2 py-[3px] border-b border-white/[0.02] ${
+              e.level === 'error' ? 'text-red-400 bg-red-500/[0.04]' :
+              e.level === 'warn' ? 'text-yellow-400 bg-yellow-500/[0.04]' :
+              'text-slate-500'
+            }`}
+          >
+            <span className="text-slate-600 flex-shrink-0 tabular-nums">
+              {new Date(e.ts).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
+            <span className="break-all whitespace-pre-wrap">{e.args.join(' ')}</span>
+          </div>
+        ))}
       </div>
     </div>
   )

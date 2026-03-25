@@ -975,6 +975,25 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // Rewrite unquoted url() in CSS: url(/foo) → url(/api/proxy/{id}/foo)
           body = body.replace(/url\(\/((?!\/)[^)]*)\)/g, `url(${proxyBase}/$1)`)
 
+          // Inject console-capture script into HTML so the widget can show a dev console
+          if (ct.includes('text/html')) {
+            const capture = `<script>(function(){` +
+              `var W='${widgetId}',O={l:console.log,w:console.warn,e:console.error};` +
+              `function s(l,a){try{var r=[];for(var i=0;i<a.length;i++){var v=a[i];` +
+              `r.push(v instanceof Error?(v.stack||v.message):typeof v==='object'?` +
+              `(function(){try{return JSON.stringify(v)}catch(e){return String(v)}})():String(v))}` +
+              `window.parent.postMessage({type:'bw-console',wid:W,lvl:l,args:r,ts:Date.now()},'*')}catch(e){}}` +
+              `console.log=function(){s('log',arguments);O.l.apply(console,arguments)};` +
+              `console.warn=function(){s('warn',arguments);O.w.apply(console,arguments)};` +
+              `console.error=function(){s('error',arguments);O.e.apply(console,arguments)};` +
+              `window.addEventListener('error',function(e){s('error',[e.message+' at '+e.filename+':'+e.lineno+':'+e.colno])});` +
+              `window.addEventListener('unhandledrejection',function(e){s('error',['Unhandled rejection: '+(e.reason&&(e.reason.stack||e.reason))])})` +
+              `})()</script>`
+            const headMatch = body.match(/<head[^>]*>/i)
+            if (headMatch) body = body.replace(headMatch[0], headMatch[0] + capture)
+            else body = capture + body
+          }
+
           const headers: Record<string, string | string[] | undefined> = { ...proxyRes.headers }
           delete headers['content-encoding']
           delete headers['transfer-encoding']
