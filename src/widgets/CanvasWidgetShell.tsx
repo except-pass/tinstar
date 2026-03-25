@@ -225,10 +225,10 @@ export function CanvasWidgetShell({
       data-widget-type={registration.type}
       className={`absolute ${frameClass} ${isSpawning ? 'widget-spawning' : 'transition-opacity duration-150'} ${isDimmed ? 'opacity-40' : 'opacity-100'}`}
       style={{
-        left: layout.x,
-        top: layout.y,
-        width: layout.width,
-        height: layout.height,
+        left: Math.round(layout.x),
+        top: Math.round(layout.y),
+        width: Math.round(layout.width),
+        height: Math.round(layout.height),
         zIndex: registration.isContainer ? undefined
           : isDragging ? 30 : isSelected ? 20 : isHovered ? 10 : undefined,
         ...(isSpawning && spawnColor ? spawnGlowVars(spawnColor) : {}),
