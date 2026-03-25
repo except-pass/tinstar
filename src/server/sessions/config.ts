@@ -10,9 +10,12 @@ export interface ImageProfile {
   home?: string
 }
 
+export type AdapterType = 'claude' | 'codex' | 'generic'
+
 export interface CliTemplate {
   name: string
   icon?: string
+  adapter?: AdapterType
   startCmd: string
   resumeCmd: string
 }
@@ -65,18 +68,21 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
   {
     name: 'Claude (auto)',
     icon: '✦',
+    adapter: 'claude',
     startCmd: 'claude --dangerously-skip-permissions --session-id {sessionId} -- {prompt}',
     resumeCmd: 'claude --dangerously-skip-permissions --resume {sessionId}',
   },
   {
     name: 'Claude (interactive)',
     icon: '✦',
+    adapter: 'claude',
     startCmd: 'claude --session-id {sessionId} -- {prompt}',
     resumeCmd: 'claude --resume {sessionId}',
   },
   {
     name: 'Codex (full auto)',
     icon: '◎',
+    adapter: 'codex',
     startCmd: 'codex --full-auto -- {prompt}',
     resumeCmd: 'codex resume --last --full-auto',
   },

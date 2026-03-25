@@ -62,6 +62,17 @@ export class StatusWatcher {
   }
 
   private checkSession(session: Session): void {
+    const adapter = (session as Session & { adapter?: string | null }).adapter ?? 'claude'
+
+    // Non-claude adapters: skip JSONL parsing, use process-tree only
+    if (adapter !== 'claude' && session.backend === 'tmux') {
+      if (this.processTreeOverride.has(session.name)) {
+        return // already determined blocked
+      }
+      this.checkProcessTree(session)
+      return
+    }
+
     const workdir = session.workspace?.path
     const convId = session.conversation?.id
     if (!workdir || !convId) return

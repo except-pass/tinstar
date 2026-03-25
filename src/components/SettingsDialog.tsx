@@ -17,6 +17,7 @@ interface ImageProfile {
 interface CliTemplate {
   name: string
   icon?: string
+  adapter?: string
   startCmd: string
   resumeCmd: string
 }
@@ -61,6 +62,7 @@ export function SettingsDialog({ onClose }: Props) {
   const [templates, setTemplates] = useState<CliTemplate[]>([])
   const [newTplName, setNewTplName] = useState('')
   const [newTplIcon, setNewTplIcon] = useState('')
+  const [newTplAdapter, setNewTplAdapter] = useState('generic')
   const [newTplStart, setNewTplStart] = useState('')
   const [newTplResume, setNewTplResume] = useState('')
   const [templateError, setTemplateError] = useState<string | null>(null)
@@ -159,7 +161,7 @@ export function SettingsDialog({ onClose }: Props) {
     const res = await fetch('/api/cli-templates', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: trimName, icon: newTplIcon.trim() || undefined, startCmd: trimStart, resumeCmd: trimResume }),
+      body: JSON.stringify({ name: trimName, icon: newTplIcon.trim() || undefined, adapter: newTplAdapter, startCmd: trimStart, resumeCmd: trimResume }),
     })
     const data = await res.json()
     if (!data.ok) {
@@ -168,6 +170,7 @@ export function SettingsDialog({ onClose }: Props) {
     }
     setNewTplName('')
     setNewTplIcon('')
+    setNewTplAdapter('generic')
     setNewTplStart('')
     setNewTplResume('')
     fetchTemplates()
@@ -389,6 +392,9 @@ export function SettingsDialog({ onClose }: Props) {
                       <span className="text-xs text-primary font-display uppercase tracking-wider flex-shrink-0">
                         {t.name}
                       </span>
+                      {t.adapter && (
+                        <span className="text-2xs text-slate-600 font-mono">{t.adapter}</span>
+                      )}
                       <span className="flex-1" />
                       <button
                         className="text-xs text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
@@ -431,6 +437,18 @@ export function SettingsDialog({ onClose }: Props) {
                     placeholder="▶"
                     className="w-full px-2 py-1.5 bg-surface-base border border-white/10 rounded text-sm text-center text-slate-200 placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
                   />
+                </div>
+                <div className="w-24">
+                  <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Adapter</label>
+                  <select
+                    value={newTplAdapter}
+                    onChange={e => setNewTplAdapter(e.target.value)}
+                    className="w-full px-2 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
+                  >
+                    <option value="claude">claude</option>
+                    <option value="codex">codex</option>
+                    <option value="generic">generic</option>
+                  </select>
                 </div>
               </div>
               <div>

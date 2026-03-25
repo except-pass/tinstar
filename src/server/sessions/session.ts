@@ -33,6 +33,8 @@ export interface Session {
   skipPermissions: boolean
   /** CLI template name (from config.cliTemplates). Overrides skipPermissions/backend for command building. */
   cliTemplate: string | null
+  /** Transcript adapter type — determines how to find and parse agent logs */
+  adapter: string | null
   port: number | null
   ttydPid: number | null
   created: string
@@ -71,6 +73,7 @@ export interface CreateSessionOpts {
   oneshot?: boolean
   skipPermissions?: boolean
   cliTemplate?: string | null
+  adapter?: string | null
 }
 
 export function createSession(sessionsDir: string, opts: CreateSessionOpts): Session {
@@ -95,6 +98,7 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
     oneshot: opts.oneshot ?? false,
     skipPermissions: opts.skipPermissions ?? false,
     cliTemplate: opts.cliTemplate ?? null,
+    adapter: opts.adapter ?? null,
     port: null,
     ttydPid: null,
     created: now,
