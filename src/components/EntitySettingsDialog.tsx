@@ -74,6 +74,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
   const [projects, setProjects] = useState<{ name: string; path: string }[]>([])
   const [profiles, setProfiles] = useState<{ name: string; image: string }[]>([])
+  const [cliTemplateOptions, setCliTemplateOptions] = useState<{ name: string; icon?: string }[]>([])
   const [worktrees, setWorktrees] = useState<{ path: string; branch?: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<EntitySettings>({})
@@ -89,13 +90,17 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       fetch(`/api/${endpoint}/${entityId}/settings`).then(r => r.json()),
       fetch('/api/projects').then(r => r.json()),
       fetch('/api/docker/profiles').then(r => r.json()),
-    ]).then(([settingsRes, projectsRes, profilesRes]) => {
+      fetch('/api/cli-templates').then(r => r.json()),
+    ]).then(([settingsRes, projectsRes, profilesRes, templatesRes]) => {
       if (settingsRes.ok) setSettings(settingsRes.data)
       if (projectsRes?.ok && projectsRes.data && typeof projectsRes.data === 'object') {
         setProjects(Object.entries(projectsRes.data).map(([name, path]) => ({ name, path: path as string })))
       }
       if (profilesRes?.ok && Array.isArray(profilesRes.data)) {
         setProfiles(profilesRes.data)
+      }
+      if (templatesRes?.ok && Array.isArray(templatesRes.data)) {
+        setCliTemplateOptions(templatesRes.data)
       }
       setLoading(false)
     })
@@ -128,6 +133,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
         worktree: inherited ?? 'none',
         defaultWorktreePath: inherited ?? '',
         skipPermissions: inherited ?? false,
+        cliTemplate: inherited ?? '',
         profile: inherited ?? '',
         defaultRunColor: inherited ?? DEFAULT_RUN_ACCENT,
         procedures: inherited ?? [],
@@ -257,29 +263,39 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
               </SettingRow>
 
               <SettingRow
-                label="Backend"
-                settingKey="backend"
+                label="Agent"
+                settingKey="cliTemplate"
                 resolved={settings}
                 draft={draft}
                 onToggle={handleToggle}
                 onValueChange={handleValueChange}
               >
                 {(value, onChange) => (
-                  <div className="flex gap-1">
-                    {(['docker', 'tmux'] as const).map(opt => (
-                      <button
-                        key={opt}
-                        className={`px-2 py-1 text-xs rounded border ${
-                          value === opt
-                            ? 'bg-primary/20 border-primary/40 text-primary'
-                            : 'bg-surface-base border-white/10 text-slate-400 hover:border-primary/20'
-                        }`}
-                        onClick={() => onChange(opt)}
-                      >
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
+                  <select
+                    className="bg-surface-base border border-primary/30 rounded px-2 py-1 text-xs text-primary outline-none"
+                    value={String(value ?? '')}
+                    onChange={e => onChange(e.target.value || undefined)}
+                  >
+                    <option value="">Default</option>
+                    {cliTemplateOptions.length > 0 && (
+                      <optgroup label="🖥 CLI">
+                        {cliTemplateOptions.map(t => (
+                          <option key={t.name} value={t.name}>
+                            {t.icon ? `${t.icon} ` : ''}{t.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {profiles.length > 0 && (
+                      <optgroup label="🐳 Docker">
+                        {profiles.map(p => (
+                          <option key={`docker:${p.name}`} value={`docker:${p.name}`}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
                 )}
               </SettingRow>
 
@@ -332,25 +348,17 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 )}
               </SettingRow>
 
+              {/* Skip Perms and Profile are now handled by the Agent template selection above */}
               <SettingRow
-                label="Skip Perms"
-                settingKey="skipPermissions"
+                label="Profile"
+                settingKey="profile"
                 resolved={settings}
                 draft={draft}
                 onToggle={handleToggle}
                 onValueChange={handleValueChange}
               >
-                {(value, onChange) => (
-                  <button
-                    className={`px-2 py-1 text-xs rounded border ${
-                      value
-                        ? 'bg-primary/20 border-primary/40 text-primary'
-                        : 'bg-surface-base border-white/10 text-slate-400'
-                    }`}
-                    onClick={() => onChange(!value)}
-                  >
-                    {value ? 'Yes' : 'No'}
-                  </button>
+                {(_value, _onChange) => (
+                  <span className="text-2xs text-slate-500 italic">Legacy — use Agent setting</span>
                 )}
               </SettingRow>
 
