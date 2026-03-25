@@ -164,6 +164,7 @@ export interface TreeNode {
   color?: string
   orphan?: boolean
   backend?: 'docker' | 'tmux' | null
+  agentIcon?: string
   percentDone?: number | null
   status?: string
   externalUrl?: string | null

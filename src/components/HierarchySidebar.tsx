@@ -258,7 +258,7 @@ function SidebarNode({
         {/* Icon */}
         <span className="w-4 text-center" aria-hidden="true">
           {node.type === 'run'
-            ? (node.backend === 'docker' ? '🐳' : '▶')
+            ? (node.agentIcon ?? (node.backend === 'docker' ? '🐳' : '▶'))
             : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
         </span>
 

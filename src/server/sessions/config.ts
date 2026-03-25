@@ -12,6 +12,7 @@ export interface ImageProfile {
 
 export interface CliTemplate {
   name: string
+  icon?: string
   startCmd: string
   resumeCmd: string
 }
@@ -63,16 +64,19 @@ function deepMerge(target: Record<string, unknown>, source: Record<string, unkno
 const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
   {
     name: 'Claude (auto)',
+    icon: '✦',
     startCmd: 'claude --dangerously-skip-permissions --session-id {sessionId} -- {prompt}',
     resumeCmd: 'claude --dangerously-skip-permissions --resume {sessionId}',
   },
   {
     name: 'Claude (interactive)',
+    icon: '✦',
     startCmd: 'claude --session-id {sessionId} -- {prompt}',
     resumeCmd: 'claude --resume {sessionId}',
   },
   {
     name: 'Codex (full auto)',
+    icon: '◎',
     startCmd: 'codex --full-auto -- {prompt}',
     resumeCmd: 'codex resume --last --full-auto',
   },

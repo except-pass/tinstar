@@ -82,6 +82,7 @@ export interface RunData {
   port: number | null
   backend: 'docker' | 'tmux' | null
   backendInfo?: string
+  agentIcon?: string
 }
 
 
