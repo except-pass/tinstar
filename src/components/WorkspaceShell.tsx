@@ -78,9 +78,29 @@ function WorkspaceShellInner() {
     })
   }, [activeSpaceId, spaces])
 
-  const { sidebarTree, runSummaries } = useMemo(
+  const { sidebarTree: rawSidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
     [dimensions, runRepo, taxRepo],
+  )
+
+  // Filter out empty entity containers when showEmptyEntities is false
+  const filterEmptyNodes = useCallback((nodes: TreeNode[]): TreeNode[] => {
+    return nodes.reduce<TreeNode[]>((acc, node) => {
+      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer') {
+        acc.push(node)
+        return acc
+      }
+      const filteredChildren = filterEmptyNodes(node.children)
+      if (node.runCount > 0 || filteredChildren.length > 0) {
+        acc.push({ ...node, children: filteredChildren })
+      }
+      return acc
+    }, [])
+  }, [])
+
+  const sidebarTree = useMemo(
+    () => showEmptyEntities ? rawSidebarTree : filterEmptyNodes(rawSidebarTree),
+    [rawSidebarTree, showEmptyEntities, filterEmptyNodes],
   )
 
   // Build runs map for InfiniteCanvas
@@ -222,6 +242,7 @@ function WorkspaceShellInner() {
     return ids
   }, [runMap, editorWidgets, browserWidgets, imageWidgets])
 
+  const [showEmptyEntities, setShowEmptyEntities] = useState(() => localStorage.getItem('tinstar-show-empty-entities') !== 'false')
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
   const [showSessionDialog, setShowSessionDialog] = useState(false)
@@ -697,9 +718,16 @@ function WorkspaceShellInner() {
                   <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
                     <HierarchySidebar
                         tree={canvasTree}
+                        unfilteredTree={rawSidebarTree}
                         dimensions={dimensions}
                         spaces={spaces}
                         activeSpaceId={activeSpaceId}
+                        showEmptyEntities={showEmptyEntities}
+                        onToggleShowEmpty={() => {
+                          const next = !showEmptyEntities
+                          setShowEmptyEntities(next)
+                          localStorage.setItem('tinstar-show-empty-entities', String(next))
+                        }}
                         onActivateSpace={handleActivateSpace}
                         onCreateSpace={handleCreateSpace}
                         onRenameSpace={handleRenameSpace}
