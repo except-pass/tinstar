@@ -572,6 +572,21 @@ function WorkspaceShellInner() {
       }
       setShowSessionDialog(true)
     }, [selectionState]),
+    onEntitySettings: useCallback(() => {
+      const { selectedType, selectedIds } = selectionState
+      const firstNodeId = [...selectedIds][0] ?? null
+      if (!firstNodeId || !selectedType) return
+      // Only open settings for entity types (initiative, epic, task), not runs
+      if (!['initiative', 'epic', 'task'].includes(selectedType)) return
+      const rawId = firstNodeId.includes('-') ? firstNodeId.slice(firstNodeId.indexOf('-') + 1) : firstNodeId
+      const entityType = selectedType as GroupingDimension
+      // Look up entity name from the taxonomy
+      const entity = entityType === 'task' ? taxRepo.getTaskById(rawId)
+        : entityType === 'epic' ? taxRepo.getEpicById(rawId)
+        : entityType === 'initiative' ? taxRepo.getInitiativeById(rawId)
+        : null
+      setEntitySettingsDialog({ entityId: rawId, entityType, entityName: entity?.name ?? rawId })
+    }, [selectionState, taxRepo]),
     onPaletteOpen: () => setPaletteOpen(true),
   })
 
