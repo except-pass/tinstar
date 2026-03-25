@@ -110,7 +110,17 @@ export function resetOffset(sessionName: string): void {
  *
  * Returns null if the file is missing or the last line can't be parsed.
  */
+export type SessionStatusDetail = {
+  state: 'running' | 'idle'
+  /** True when running because assistant emitted tool_use (vs model thinking after user input) */
+  toolPending: boolean
+}
+
 export function readSessionStatus(workdir: string, conversationId: string, stateDir?: string): 'running' | 'idle' | null {
+  return readSessionStatusDetail(workdir, conversationId, stateDir)?.state ?? null
+}
+
+export function readSessionStatusDetail(workdir: string, conversationId: string, stateDir?: string): SessionStatusDetail | null {
   const path = getTranscriptPath(workdir, conversationId, stateDir)
   if (!existsSync(path)) return null
 
@@ -129,13 +139,15 @@ export function readSessionStatus(workdir: string, conversationId: string, state
         const msgContent = (obj.message as Record<string, unknown> | undefined)?.content
         if (Array.isArray(msgContent)) {
           const hasToolUse = (msgContent as Array<Record<string, unknown>>).some(b => b.type === 'tool_use')
-          return hasToolUse ? 'running' : 'idle'
+          return hasToolUse
+            ? { state: 'running', toolPending: true }
+            : { state: 'idle', toolPending: false }
         }
-        return 'idle'
+        return { state: 'idle', toolPending: false }
       }
       if (obj.type === 'user') {
         // user entry = prompt submitted or tool results fed back → running
-        return 'running'
+        return { state: 'running', toolPending: false }
       }
       // Skip non-conversation entries (system, progress, file-history-snapshot, etc.)
     } catch {

@@ -32,10 +32,8 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import { getGitDiffFiles } from '../sessions/git-diff'
 import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
-import type { FileKind, TouchedFile } from '../../types'
 import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
 import { saveDraft, discardDraft, DRAFTS_DIR, ensureDraftsDir } from '../sessions/skill-drafts'
 import type { SkillDTO } from '../../types'
@@ -119,15 +117,6 @@ function removeFileWatchSubscriber(absolutePath: string, subscriberId: string): 
   }
 }
 
-function inferFileKind(filePath: string): FileKind {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
-  const name = filePath.split('/').pop()?.toLowerCase() ?? ''
-  if (name.includes('.test.') || name.includes('.spec.') || name.startsWith('test_') || filePath.includes('__tests__') || filePath.includes('/e2e/')) return 'test'
-  if (['sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd'].includes(ext)) return 'script'
-  if (['md', 'txt', 'rst', 'adoc'].includes(ext)) return 'doc'
-  if (['json', 'yaml', 'yml', 'toml', 'ini', 'env', 'cfg', 'conf'].includes(ext) || name.startsWith('.')) return 'config'
-  return 'code'
-}
 
 export interface RouteContext {
   docStore: DocumentStore
@@ -890,16 +879,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         addFileWatchSubscriber(absolutePath, subscriberId, mode ?? 'notify', ctx.sse)
 
-        // For content mode, send initial file contents immediately
+        // For content mode, read and return initial file contents in the response
+        // to avoid a race between the HTTP response (which sets absolutePath)
+        // and a separate SSE broadcast (which the client would ignore if
+        // absolutePath isn't set yet).
         if ((mode ?? 'notify') === 'content' && existsSync(absolutePath)) {
           readFile(absolutePath, 'utf-8').then(content => {
-            ctx.sse.broadcastEvent('file_watch', { path: absolutePath, type: 'content', data: content })
+            json(res, { ok: true, absolutePath, content })
           }).catch(() => {
-            // ignore — subscriber will get nothing
+            json(res, { ok: true, absolutePath })
           })
+        } else {
+          json(res, { ok: true, absolutePath })
         }
-
-        json(res, { ok: true, absolutePath })
       } catch {
         json(res, { error: 'invalid request body' }, 400)
       }
@@ -1327,11 +1319,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const port = await tmuxBackend.findPort(cfg.ports.hostStart)
             if (prompt) enriched.initialPrompt = prompt
 
-            // Install state-detection hooks for tmux sessions
-            if (session.workspace?.path) {
-              await tmuxBackend.installHooks(session.workspace.path, session.name, dashboardUrl)
-            }
-
             const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port })
             sessionPort = result.port
             updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
@@ -1456,9 +1443,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               tmuxBackend.onTtydRestart(session.name, (newPid) => {
                 updateSession(sessDir, session.name, { ttydPid: newPid })
               })
-              if (session.workspace?.path) {
-                await tmuxBackend.installHooks(session.workspace.path, session.name, dashboardUrl)
-              }
             }
 
             // Re-read session to get updated port
@@ -1509,10 +1493,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               } else {
                 await tmuxBackend.deleteTmuxSession(cfg, session)
                 if (session.port) tmuxBackend.releasePort(session.port)
-              }
-
-              if (session.backend === 'tmux' && session.workspace?.path) {
-                try { await tmuxBackend.removeHooks(session.workspace.path) } catch { /* best effort */ }
               }
 
 
@@ -1721,65 +1701,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       data.profiles = profiles
       writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
       json(res, { ok: true })
-      return true
-    }
-
-    // --- Hooks (called by Claude Code inside sessions) ---
-
-    // POST /api/hooks/file-touched
-    if (method === 'POST' && url === '/api/hooks/file-touched') {
-      readBody(req).then(async (body) => {
-        const { session: name } = JSON.parse(body)
-        if (!name) return json(res, { ok: false, error: { code: 'MISSING_SESSION', message: 'Session name required' } }, 400)
-
-        // Respond immediately, then reconcile git state async
-        json(res, { ok: true })
-
-        // Reconcile: get real git diff stats for the session's workdir
-        try {
-          const session = getSession(sessDir, name)
-          const workdir = session?.workspace?.path
-          if (workdir) {
-            const files = await getGitDiffFiles(workdir)
-            ctx.docStore.reconcileFiles(name, files)
-          }
-        } catch (err) {
-          log.warn('file-touched', `git diff failed for ${name}: ${(err as Error).message}`)
-        }
-      })
-      return true
-    }
-
-    // POST /api/hooks/file-read — record a read-only file access (no git diff trigger)
-    if (method === 'POST' && url === '/api/hooks/file-read') {
-      readBody(req).then((body) => {
-        const { session: name, path: filePath } = JSON.parse(body)
-        if (!name || !filePath) return json(res, { ok: true })
-
-        // Normalize container-absolute paths to host-absolute paths
-        const sessDir = ctx.sessionConfig?.dirs.sessions ?? ''
-        const session = getSession(sessDir, name)
-        const workspacePath = session?.workspace?.path
-        const resolvedPath = (() => {
-          if (!filePath.startsWith('/')) return filePath
-          if (existsSync(filePath)) return filePath
-          return workspacePath ? resolve(workspacePath, filePath.replace(/^\/+/, '')) : filePath
-        })()
-
-        const fileName = resolvedPath.split('/').pop() ?? resolvedPath
-        const kind = inferFileKind(resolvedPath)
-        const file: TouchedFile = {
-          id: resolvedPath,
-          name: fileName,
-          path: resolvedPath,
-          additions: 0,
-          deletions: 0,
-          kind,
-          readOnly: true,
-        }
-        ctx.docStore.addFileTouched(name, file)
-        json(res, { ok: true })
-      })
       return true
     }
 
