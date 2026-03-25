@@ -943,16 +943,46 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
     const target = new URL(proxyPath, origin)
     const fwdHeaders: Record<string, string | string[] | undefined> = { ...req.headers, host: target.host }
+    // Request uncompressed so we can rewrite text responses
+    delete fwdHeaders['accept-encoding']
     // Inject custom headers
     if (widget.headers) {
       for (const [k, v] of Object.entries(widget.headers)) fwdHeaders[k.toLowerCase()] = v
     }
 
+    const proxyBase = `/api/proxy/${widgetId}`
+
     const proxyReq = httpRequest(
       { hostname: target.hostname, port: target.port || undefined, path: target.pathname + target.search, method: req.method, headers: fwdHeaders },
       proxyRes => {
-        res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers)
-        proxyRes.pipe(res)
+        const ct = (proxyRes.headers['content-type'] || '').toLowerCase()
+        const isRewritable = ct.includes('text/') || ct.includes('javascript') || ct.includes('json')
+
+        if (!isRewritable) {
+          res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers)
+          proxyRes.pipe(res)
+          return
+        }
+
+        // Buffer text responses and rewrite root-relative paths to route through proxy
+        const chunks: Buffer[] = []
+        proxyRes.on('data', (c: Buffer) => chunks.push(c))
+        proxyRes.on('end', () => {
+          let body = Buffer.concat(chunks).toString('utf-8')
+          // Rewrite quoted root-relative paths: "/foo" → "/api/proxy/{id}/foo"
+          // Skip protocol-relative "//..." URLs
+          body = body.replace(/(["'])\/((?!\/)[^"']*)/g, `$1${proxyBase}/$2`)
+          // Rewrite unquoted url() in CSS: url(/foo) → url(/api/proxy/{id}/foo)
+          body = body.replace(/url\(\/((?!\/)[^)]*)\)/g, `url(${proxyBase}/$1)`)
+
+          const headers: Record<string, string | string[] | undefined> = { ...proxyRes.headers }
+          delete headers['content-encoding']
+          delete headers['transfer-encoding']
+          headers['content-length'] = String(Buffer.byteLength(body))
+
+          res.writeHead(proxyRes.statusCode ?? 502, headers)
+          res.end(body)
+        })
       },
     )
     proxyReq.on('error', (err) => {
