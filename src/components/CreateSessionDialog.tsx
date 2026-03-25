@@ -8,6 +8,7 @@ export interface SessionPrefill {
   worktreeMode?: 'none' | 'new' | 'existing'
   defaultWorktreePath?: string
   skipPermissions?: boolean
+  cliTemplate?: string
   profile?: string
   runColor?: string
   taskId?: string
@@ -58,6 +59,8 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [backend, setBackend] = useState<Backend>(prefill?.backend ?? 'tmux')
   const [profile, setProfile] = useState(prefill?.profile ?? '')
   const [profiles, setProfiles] = useState<Array<{ name: string; image: string }>>([])
+  const [cliTemplate, setCliTemplate] = useState(prefill?.cliTemplate ?? '')
+  const [cliTemplates, setCliTemplates] = useState<Array<{ name: string }>>([])
   const [project, setProject] = useState(prefill?.project ?? '')
   const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
   const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>(prefill?.worktreeMode ?? 'none')
@@ -86,6 +89,19 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       .then(d => {
         if (d?.ok && d.data && typeof d.data === 'object') {
           setProjects(Object.entries(d.data).map(([name, path]) => ({ name, path: path as string })))
+        }
+      })
+      .catch(() => {})
+
+    fetch('/api/cli-templates')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.ok && Array.isArray(d.data)) {
+          setCliTemplates(d.data)
+          // Default to first template if none prefilled
+          if (!prefill?.cliTemplate && d.data.length > 0) {
+            setCliTemplate(d.data[0].name)
+          }
         }
       })
       .catch(() => {})
@@ -146,6 +162,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       backend,
       skipPermissions,
     }
+    if (cliTemplate) body.cliTemplate = cliTemplate
     if (profile) body.profile = profile
     if (project) body.project = project
     if (worktreeMode === 'new') body.worktree = true
@@ -173,7 +190,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       setError((err as Error).message)
       setSubmitting(false)
     }
-  }, [effectiveName, backend, profile, project, worktreeMode, worktreePath, skipPermissions, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
+  }, [effectiveName, backend, profile, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -210,29 +227,22 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
           />
         </div>
 
-        {/* Backend + Project row */}
+        {/* CLI Template + Project row */}
         <div className="flex gap-3 mb-3">
-          {/* Backend toggle */}
+          {/* CLI Template picker */}
           <div className="flex-1">
             <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">
-              Backend<InheritedFrom source={sources.backend} />
+              Agent<InheritedFrom source={sources.cliTemplate ?? sources.backend} />
             </label>
-            <div className="flex rounded border border-white/10 overflow-hidden">
-              {(['docker', 'tmux'] as Backend[]).map(b => (
-                <button
-                  key={b}
-                  className={[
-                    'flex-1 px-3 py-1.5 text-xs transition-colors',
-                    backend === b
-                      ? 'bg-primary/20 text-primary border-primary/40'
-                      : 'bg-surface-base text-slate-400 hover:text-slate-200',
-                  ].join(' ')}
-                  onClick={() => setBackend(b)}
-                >
-                  {b.charAt(0).toUpperCase() + b.slice(1)}
-                </button>
+            <select
+              value={cliTemplate}
+              onChange={e => setCliTemplate(e.target.value)}
+              className="w-full px-3 py-2 bg-surface-base border border-white/10 rounded text-sm text-slate-200 focus:border-primary/50 focus:outline-none"
+            >
+              {cliTemplates.map(t => (
+                <option key={t.name} value={t.name}>{t.name}</option>
               ))}
-            </div>
+            </select>
           </div>
 
           {/* Project picker */}
@@ -394,22 +404,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
           </div>
         </div>
 
-        {/* Skip permissions */}
-        <div className="flex items-center gap-2 mb-3">
-          <input
-            type="checkbox"
-            id="skip-perms"
-            checked={skipPermissions}
-            onChange={e => setSkipPermissions(e.target.checked)}
-            className="accent-primary"
-          />
-          <label htmlFor="skip-perms" className="text-xs text-slate-300 cursor-pointer">
-            Skip permissions<InheritedFrom source={sources.skipPermissions} />
-          </label>
-          <span className="text-2xs text-slate-500">
-            (--dangerously-skip-permissions)
-          </span>
-        </div>
 
         {/* Starting prompt */}
         <div className="mb-4">

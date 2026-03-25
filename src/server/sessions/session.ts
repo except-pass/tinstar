@@ -31,6 +31,8 @@ export interface Session {
   profile: string | null
   oneshot: boolean
   skipPermissions: boolean
+  /** CLI template name (from config.cliTemplates). Overrides skipPermissions/backend for command building. */
+  cliTemplate: string | null
   port: number | null
   ttydPid: number | null
   created: string
@@ -68,6 +70,7 @@ export interface CreateSessionOpts {
   profile?: string | null
   oneshot?: boolean
   skipPermissions?: boolean
+  cliTemplate?: string | null
 }
 
 export function createSession(sessionsDir: string, opts: CreateSessionOpts): Session {
@@ -91,6 +94,7 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
     profile: opts.profile ?? null,
     oneshot: opts.oneshot ?? false,
     skipPermissions: opts.skipPermissions ?? false,
+    cliTemplate: opts.cliTemplate ?? null,
     port: null,
     ttydPid: null,
     created: now,

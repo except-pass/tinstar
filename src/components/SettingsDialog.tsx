@@ -14,7 +14,13 @@ interface ImageProfile {
   home?: string
 }
 
-type Section = 'projects' | 'docker' | 'editor' | 'labels'
+interface CliTemplate {
+  name: string
+  startCmd: string
+  resumeCmd: string
+}
+
+type Section = 'projects' | 'agents' | 'docker' | 'editor' | 'labels'
 
 interface Props {
   onClose: () => void
@@ -23,6 +29,7 @@ interface Props {
 export function SettingsDialog({ onClose }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const projectsRef = useRef<HTMLDivElement>(null)
+  const agentsRef = useRef<HTMLDivElement>(null)
   const dockerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<HTMLDivElement>(null)
   const labelsRef = useRef<HTMLDivElement>(null)
@@ -48,6 +55,13 @@ export function SettingsDialog({ onClose }: Props) {
   // Editor
   const [editorCmd, setEditorCmd] = useState('')
   const [editorSaved, setEditorSaved] = useState(false)
+
+  // CLI templates (agent backends)
+  const [templates, setTemplates] = useState<CliTemplate[]>([])
+  const [newTplName, setNewTplName] = useState('')
+  const [newTplStart, setNewTplStart] = useState('')
+  const [newTplResume, setNewTplResume] = useState('')
+  const [templateError, setTemplateError] = useState<string | null>(null)
 
   // Docker image profiles
   const [profiles, setProfiles] = useState<ImageProfile[]>([])
@@ -75,6 +89,13 @@ export function SettingsDialog({ onClose }: Props) {
       })
   }, [])
 
+  const fetchTemplates = useCallback(() => {
+    fetch('/api/cli-templates')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.ok) setTemplates(d.data ?? []) })
+      .catch(() => {})
+  }, [])
+
   const fetchProfiles = useCallback(() => {
     fetch('/api/docker/profiles')
       .then(r => r.ok ? r.json() : null)
@@ -91,13 +112,14 @@ export function SettingsDialog({ onClose }: Props) {
 
   useEffect(() => {
     fetchProjects()
+    fetchTemplates()
     fetchProfiles()
     fetchDockerImages()
     fetch('/api/config')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.ok && typeof d.data?.editor === 'string') setEditorCmd(d.data.editor) })
       .catch(() => {})
-  }, [fetchProjects, fetchProfiles, fetchDockerImages])
+  }, [fetchProjects, fetchTemplates, fetchProfiles, fetchDockerImages])
 
   const handleAdd = useCallback(async () => {
     const trimName = newName.trim()
@@ -124,6 +146,34 @@ export function SettingsDialog({ onClose }: Props) {
     await fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' })
     fetchProjects()
   }, [fetchProjects])
+
+  const handleAddTemplate = useCallback(async () => {
+    const trimName = newTplName.trim()
+    const trimStart = newTplStart.trim()
+    const trimResume = newTplResume.trim()
+    if (!trimName || !trimStart || !trimResume) return
+    setTemplateError(null)
+
+    const res = await fetch('/api/cli-templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: trimName, startCmd: trimStart, resumeCmd: trimResume }),
+    })
+    const data = await res.json()
+    if (!data.ok) {
+      setTemplateError(data.error?.message ?? 'Failed to add template')
+      return
+    }
+    setNewTplName('')
+    setNewTplStart('')
+    setNewTplResume('')
+    fetchTemplates()
+  }, [newTplName, newTplStart, newTplResume, fetchTemplates])
+
+  const handleDeleteTemplate = useCallback(async (name: string) => {
+    await fetch(`/api/cli-templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    fetchTemplates()
+  }, [fetchTemplates])
 
   const handleAddProfile = useCallback(async () => {
     const trimName = newProfileName.trim()
@@ -184,6 +234,7 @@ export function SettingsDialog({ onClose }: Props) {
 
   const sections: { key: Section; label: string; icon: string; ref: React.RefObject<HTMLDivElement | null> }[] = [
     { key: 'projects', label: 'Projects', icon: 'folder', ref: projectsRef },
+    { key: 'agents', label: 'Agents', icon: 'terminal', ref: agentsRef },
     { key: 'docker', label: 'Docker', icon: 'deployed_code', ref: dockerRef },
     { key: 'editor', label: 'Editor', icon: 'edit', ref: editorRef },
     { key: 'labels', label: 'Entity Labels', icon: 'label', ref: labelsRef },
@@ -305,6 +356,98 @@ export function SettingsDialog({ onClose }: Props) {
             {error && (
               <div className="mt-2 text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded px-3 py-1.5">
                 {error}
+              </div>
+            )}
+          </div>
+
+          {/* ── Separator ── */}
+          <div className="mx-5 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
+          {/* ── Agent CLI Templates ── */}
+          <div ref={agentsRef} className="px-5 pt-5 pb-6">
+            <h4 className="text-xs font-display uppercase tracking-wider text-slate-300 mb-1">
+              Agent CLI Templates
+            </h4>
+            <p className="text-2xs text-slate-500 mb-4">
+              Named CLI commands for agent backends. Use <code className="text-slate-400">{'{sessionId}'}</code> and <code className="text-slate-400">{'{prompt}'}</code> as placeholders.
+            </p>
+
+            <div className="space-y-1 mb-4">
+              {templates.length === 0 ? (
+                <div className="text-xs text-slate-500 py-2">No templates configured.</div>
+              ) : (
+                templates.map(t => (
+                  <div
+                    key={t.name}
+                    className="px-3 py-2 bg-surface-base rounded border border-white/5 group"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-primary font-display uppercase tracking-wider flex-shrink-0">
+                        {t.name}
+                      </span>
+                      <span className="flex-1" />
+                      <button
+                        className="text-xs text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                        onClick={() => handleDeleteTemplate(t.name)}
+                        aria-label={`Remove ${t.name}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="text-2xs text-slate-500 font-mono mt-1 truncate" title={t.startCmd}>
+                      start: {t.startCmd}
+                    </div>
+                    <div className="text-2xs text-slate-500 font-mono truncate" title={t.resumeCmd}>
+                      resume: {t.resumeCmd}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <div>
+                <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Name</label>
+                <input
+                  type="text"
+                  value={newTplName}
+                  onChange={e => setNewTplName(e.target.value)}
+                  placeholder="My Agent"
+                  className="w-full px-2 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Start command</label>
+                <input
+                  type="text"
+                  value={newTplStart}
+                  onChange={e => setNewTplStart(e.target.value)}
+                  placeholder="agent --auto --session-id {sessionId} -- {prompt}"
+                  className="w-full px-2 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 font-mono placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Resume command</label>
+                <input
+                  type="text"
+                  value={newTplResume}
+                  onChange={e => setNewTplResume(e.target.value)}
+                  placeholder="agent --auto --resume {sessionId}"
+                  className="w-full px-2 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 font-mono placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
+                />
+              </div>
+              <button
+                className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30 disabled:opacity-50"
+                onClick={handleAddTemplate}
+                disabled={!newTplName.trim() || !newTplStart.trim() || !newTplResume.trim()}
+              >
+                Add
+              </button>
+            </div>
+
+            {templateError && (
+              <div className="mt-2 text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded px-3 py-1.5">
+                {templateError}
               </div>
             )}
           </div>

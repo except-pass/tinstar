@@ -1224,8 +1224,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, taskId, epicId, initiativeId, color: colorParam } = JSON.parse(body)
-        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, taskId, epicId, initiativeId, color: colorParam })
+        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam } = JSON.parse(body)
+        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
         if (!['docker', 'tmux'].includes(backend)) return json(res, { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }, 400)
@@ -1277,9 +1277,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             ?? (epicId ? ctx.docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
             ?? (initiativeId ? ctx.docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
 
+          // Resolve CLI template
+          const resolvedTemplate = cliTemplateName
+            ? cfg.cliTemplates.find(t => t.name === cliTemplateName) ?? null
+            : null
+
           const session = createSession(sessDir, {
             name,
-            backend,
+            backend: resolvedTemplate ? 'tmux' : backend,
             project,
             workspace: {
               path: workspacePath,
@@ -1290,6 +1295,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             profile,
             oneshot,
             skipPermissions,
+            cliTemplate: cliTemplateName ?? null,
           })
 
           // Enrich session with state dir for Docker backend
@@ -1319,7 +1325,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const port = await tmuxBackend.findPort(cfg.ports.hostStart)
             if (prompt) enriched.initialPrompt = prompt
 
-            const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port })
+            const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate })
             sessionPort = result.port
             updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
             tmuxBackend.onTtydRestart(name, (newPid) => {
@@ -1438,7 +1444,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               updateSession(sessDir, session.name, { port })
             } else {
               const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
-              const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port })
+              const resumeTemplate = session.cliTemplate
+                ? cfg.cliTemplates.find(t => t.name === session.cliTemplate) ?? null
+                : null
+              const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port, template: resumeTemplate })
               updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
               tmuxBackend.onTtydRestart(session.name, (newPid) => {
                 updateSession(sessDir, session.name, { ttydPid: newPid })
@@ -1639,6 +1648,46 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         return true
       }
+    }
+
+    // GET /api/cli-templates — configured CLI templates for agent backends
+    if (method === 'GET' && url === '/api/cli-templates') {
+      json(res, { ok: true, data: cfg.cliTemplates })
+      return true
+    }
+
+    // POST /api/cli-templates — add or update a CLI template
+    if (method === 'POST' && url === '/api/cli-templates') {
+      readBody(req).then((body) => {
+        const { name, startCmd, resumeCmd } = JSON.parse(body)
+        if (!name || !startCmd || !resumeCmd) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name, startCmd, and resumeCmd are required' } }, 400)
+
+        let data: Record<string, unknown> = {}
+        try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
+        const templates: Array<{ name: string; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+        const idx = templates.findIndex(t => t.name === name)
+        if (idx >= 0) templates[idx] = { name, startCmd, resumeCmd }
+        else templates.push({ name, startCmd, resumeCmd })
+        data.cliTemplates = templates
+        writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+        json(res, { ok: true, data: { name, startCmd, resumeCmd } })
+      }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+      return true
+    }
+
+    // DELETE /api/cli-templates/:name — remove a CLI template
+    if (method === 'DELETE' && url.startsWith('/api/cli-templates/')) {
+      const name = decodeURIComponent(url.slice('/api/cli-templates/'.length))
+      let data: Record<string, unknown> = {}
+      try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
+      const templates: Array<{ name: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+      const idx = templates.findIndex(t => t.name === name)
+      if (idx === -1) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Template "${name}" not found` } }, 404), true
+      templates.splice(idx, 1)
+      data.cliTemplates = templates
+      writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+      json(res, { ok: true })
+      return true
     }
 
     // GET /api/docker/profiles — configured image profiles (read from disk for freshness)

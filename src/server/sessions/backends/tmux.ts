@@ -2,7 +2,7 @@ import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import type { Session } from '../session'
-import type { TinstarConfig } from '../config'
+import type { TinstarConfig, CliTemplate } from '../config'
 import { log } from '../../logger'
 
 const execFileAsync = promisify(execFile)
@@ -54,24 +54,52 @@ export function releasePort(port: number): void {
 
 // --- Command builders ---
 
-export function buildClaudeCommand(opts: {
+/**
+ * Interpolate a CLI template string, replacing {sessionId} and {prompt} placeholders.
+ * Unused placeholders are stripped so the command stays clean.
+ */
+function interpolateTemplate(
+  template: string,
+  vars: { sessionId?: string | null; prompt?: string | null },
+): string {
+  let cmd = template
+  if (vars.sessionId) {
+    cmd = cmd.replace(/\{sessionId\}/g, vars.sessionId)
+  } else {
+    // Remove the placeholder and any preceding flag (e.g. "--session-id {sessionId}")
+    cmd = cmd.replace(/\s*\S*\s*\{sessionId\}/g, '')
+  }
+  if (vars.prompt) {
+    cmd = cmd.replace(/\{prompt\}/g, JSON.stringify(vars.prompt))
+  } else {
+    // Remove "-- {prompt}" or just "{prompt}"
+    cmd = cmd.replace(/\s*--\s*\{prompt\}/g, '')
+    cmd = cmd.replace(/\s*\{prompt\}/g, '')
+  }
+  return cmd.replace(/\s{2,}/g, ' ').trim()
+}
+
+/** Build the agent CLI command from a template or legacy skipPermissions flag. */
+export function buildAgentCommand(opts: {
+  template?: CliTemplate | null
   skipPermissions?: boolean
   sessionId?: string | null
   resume?: boolean
   initialPrompt?: string | null
-} = {}): string {
+}): string {
+  if (opts.template) {
+    const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
+    return interpolateTemplate(tmpl, {
+      sessionId: opts.sessionId,
+      prompt: opts.resume ? null : opts.initialPrompt,
+    })
+  }
+  // Legacy fallback: build claude command from flags
   let cmd = 'claude'
-  if (opts.skipPermissions) {
-    cmd += ' --dangerously-skip-permissions'
-  }
-  if (opts.resume && opts.sessionId) {
-    cmd += ` --resume ${opts.sessionId}`
-  } else if (opts.sessionId) {
-    cmd += ` --session-id ${opts.sessionId}`
-  }
-  if (opts.initialPrompt) {
-    cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
-  }
+  if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
+  if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
+  else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
+  if (opts.initialPrompt) cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
   return cmd
 }
 
@@ -84,6 +112,7 @@ export async function createTmuxSession(
     secrets: Record<string, string>
     port: number
     resume?: boolean
+    template?: CliTemplate | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
@@ -108,17 +137,18 @@ export async function createTmuxSession(
     }
   }
 
-  // Build and send claude command
-  const claudeParts = ['eval "$(tmux show-environment -s)"']
-  const claudeCmd = buildClaudeCommand({
+  // Build and send agent command
+  const parts = ['eval "$(tmux show-environment -s)"']
+  const agentCmd = buildAgentCommand({
+    template: opts.template,
     skipPermissions: opts.session.skipPermissions,
     sessionId: opts.session.conversation?.id,
     resume: opts.resume,
     initialPrompt: opts.resume ? undefined : opts.session.initialPrompt,
   })
-  claudeParts.push(claudeCmd)
+  parts.push(agentCmd)
 
-  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, claudeParts.join(' && '), 'Enter'])
+  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
 
   // Start ttyd
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
@@ -132,6 +162,7 @@ export async function startTmuxSession(
     session: Session & { initialPrompt?: string }
     secrets: Record<string, string>
     port: number
+    template?: CliTemplate | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
@@ -141,15 +172,16 @@ export async function startTmuxSession(
     return createTmuxSession(config, { ...opts, resume: true })
   }
 
-  // Tmux session exists but Claude may have exited — re-send the claude command
-  const claudeParts = ['eval "$(tmux show-environment -s)"']
-  const claudeCmd = buildClaudeCommand({
+  // Tmux session exists but agent may have exited — re-send the command
+  const parts = ['eval "$(tmux show-environment -s)"']
+  const agentCmd = buildAgentCommand({
+    template: opts.template,
     skipPermissions: opts.session.skipPermissions,
     sessionId: opts.session.conversation?.id,
     resume: true,
   })
-  claudeParts.push(claudeCmd)
-  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, claudeParts.join(' && '), 'Enter'])
+  parts.push(agentCmd)
+  await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
 
   // Restart ttyd
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
