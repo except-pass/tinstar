@@ -526,6 +526,7 @@ function TreeWithOrphanSeparators({
 export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
+  const [showEmpty, setShowEmpty] = useState(() => localStorage.getItem('tinstar-show-empty-entities') !== 'false')
 
   const levelMeta = useDimensionMeta()
   const dimensionIconMap = useMemo(
@@ -541,6 +542,29 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
     if (onReparent) onReparent(entityId, entityType, newParentId, newParentType)
   }, [onReparent])
 
+  // Filter tree to hide empty containers when toggle is off
+  const filterEmpty = useCallback((nodes: TreeNode[]): TreeNode[] => {
+    return nodes.reduce<TreeNode[]>((acc, node) => {
+      // Always show run/file/browser/image nodes
+      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer') {
+        acc.push(node)
+        return acc
+      }
+      // Filter children recursively
+      const filteredChildren = filterEmpty(node.children)
+      // Keep if it has runs or filtered children
+      if (node.runCount > 0 || filteredChildren.length > 0) {
+        acc.push({ ...node, children: filteredChildren })
+      }
+      return acc
+    }, [])
+  }, [])
+
+  const filteredTree = useMemo(
+    () => showEmpty ? tree : filterEmpty(tree),
+    [tree, showEmpty, filterEmpty],
+  )
+
   const {
     dragState,
     dropTarget,
@@ -549,7 +573,7 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
     handleDragStart,
     handleDragMove,
     handleDragEnd,
-  } = useSidebarDrag(tree, dimensions, isExpanded, (id: string) => expandAll([id]), handleReparent)
+  } = useSidebarDrag(filteredTree, dimensions, isExpanded, (id: string) => expandAll([id]), handleReparent)
 
   // Hotkeys panel height (resizable by dragging the divider)
   const [hotkeysHeight, setHotkeysHeight] = useState(() => {
@@ -625,6 +649,18 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
           ))}
         </div>
         <button
+          className={`text-xs shrink-0 mr-1 transition-colors ${showEmpty ? 'text-slate-500 hover:text-primary' : 'text-slate-600 opacity-40 hover:opacity-100'}`}
+          onClick={() => {
+            const next = !showEmpty
+            setShowEmpty(next)
+            localStorage.setItem('tinstar-show-empty-entities', String(next))
+          }}
+          title={showEmpty ? 'Hide empty entities' : 'Show empty entities'}
+          aria-label="Toggle empty entities"
+        >
+          <span className="material-symbols-outlined text-sm">filter_list</span>
+        </button>
+        <button
           className="text-xs text-slate-500 hover:text-primary shrink-0"
           onClick={() => onAdd(null, rootType)}
           data-testid="add-root"
@@ -640,13 +676,13 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
         className="flex-1 overflow-y-auto scrollbar-thin py-1"
         style={{ cursor: dragState ? 'grabbing' : undefined }}
       >
-        {tree.length === 0 ? (
+        {filteredTree.length === 0 ? (
           <div className="px-3 py-4 text-xs text-slate-500 text-center">
-            No items. Click + to create.
+            {tree.length === 0 ? 'No items. Click + to create.' : 'All entities empty. Click filter to show.'}
           </div>
         ) : (
           <TreeWithOrphanSeparators
-            nodes={tree}
+            nodes={filteredTree}
             depth={0}
             dimensions={dimensions}
             dimensionIconMap={dimensionIconMap}
