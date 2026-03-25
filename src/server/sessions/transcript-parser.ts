@@ -5,7 +5,7 @@ import type { RecapEntry } from '../../types'
 import { randomUUID } from 'node:crypto'
 
 /** Read the last N lines of a file without reading the entire thing. */
-function readTail(filePath: string, maxLines: number): string[] {
+export function readTail(filePath: string, maxLines: number): string[] {
   const CHUNK = 16_384 // 16 KB — JSONL lines are typically 1-5 KB each
   const size = statSync(filePath).size
   if (size === 0) return []

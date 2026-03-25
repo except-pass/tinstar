@@ -1,5 +1,7 @@
+import { existsSync } from 'node:fs'
 import { listSessions, setState, claudeStateDir, type Session, type SessionState } from './session'
 import { readSessionStatusDetail, parseNewEntries } from './transcript-parser'
+import { discoverTranscript, readCodexStatus, parseCodexRecapEntries } from './codex-transcript'
 import { log } from '../logger'
 import { execFile } from 'node:child_process'
 
@@ -29,6 +31,8 @@ export class StatusWatcher {
   private readonly idleStreak = new Map<string, number>()
   /** Sessions where process-tree check has overridden JSONL to idle */
   private readonly processTreeOverride = new Set<string>()
+  /** Cached Codex transcript paths per session */
+  private readonly codexTranscripts = new Map<string, string>()
 
   constructor(opts: StatusWatcherOpts) {
     this.opts = opts
@@ -64,10 +68,16 @@ export class StatusWatcher {
   private checkSession(session: Session): void {
     const adapter = (session as Session & { adapter?: string | null }).adapter ?? 'claude'
 
-    // Non-claude adapters: skip JSONL parsing, use process-tree only
+    // Codex adapter: discover transcript, then parse status from it
+    if (adapter === 'codex' && session.backend === 'tmux') {
+      this.checkCodexSession(session)
+      return
+    }
+
+    // Generic/unknown adapters: process-tree only
     if (adapter !== 'claude' && session.backend === 'tmux') {
       if (this.processTreeOverride.has(session.name)) {
-        return // already determined blocked
+        return
       }
       this.checkProcessTree(session)
       return
@@ -118,6 +128,64 @@ export class StatusWatcher {
     } else {
       // State unchanged — reset idle streak
       this.idleStreak.delete(session.name)
+    }
+  }
+
+  private async checkCodexSession(session: Session): Promise<void> {
+    const workdir = session.workspace?.path
+    if (!workdir) return
+
+    // Try cached path first
+    let transcriptPath = this.codexTranscripts.get(session.name)
+
+    // Validate cache — clear if file doesn't exist
+    if (transcriptPath && !existsSync(transcriptPath)) {
+      this.codexTranscripts.delete(session.name)
+      transcriptPath = undefined
+    }
+
+    // Discover if no cache
+    if (!transcriptPath) {
+      const tmuxTarget = `tinstar-${session.name}`
+      const discovered = await discoverTranscript(
+        session.name,
+        workdir,
+        session.created,
+        tmuxTarget,
+      )
+      if (discovered) {
+        this.codexTranscripts.set(session.name, discovered)
+        transcriptPath = discovered
+        log.info('status-watcher', `${session.name}: codex transcript discovered`)
+      }
+    }
+
+    if (!transcriptPath) {
+      // No transcript found yet — fall back to process-tree
+      if (!this.processTreeOverride.has(session.name)) {
+        this.checkProcessTree(session)
+      }
+      return
+    }
+
+    // Parse status from Codex JSONL
+    const status = readCodexStatus(transcriptPath)
+    if (!status) return
+
+    if (status !== session.state) {
+      this.transitionState(session, status)
+    }
+
+    // Parse recap entries on idle transitions
+    if (status === 'idle' && this.opts.onRecapEntries) {
+      try {
+        const entries = parseCodexRecapEntries(session.name, transcriptPath)
+        if (entries.length > 0) {
+          this.opts.onRecapEntries(session.name, entries)
+        }
+      } catch (err) {
+        log.warn('status-watcher', `codex recap parse failed for ${session.name}: ${err}`)
+      }
     }
   }
 
