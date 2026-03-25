@@ -11,6 +11,7 @@ export const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
   { key: '?',         label: 'Hotkeys' },
   { key: 'S',         label: 'New session' },
   { key: 'E',         label: 'Entity settings' },
+  { key: '+',         label: 'Add child entity' },
 ]
 
 export const CANVAS_KEYS: Array<{ key: string; label: string }> = [

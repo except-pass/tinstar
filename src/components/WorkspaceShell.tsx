@@ -572,6 +572,19 @@ function WorkspaceShellInner() {
       }
       setShowSessionDialog(true)
     }, [selectionState]),
+    onCreateChild: useCallback(() => {
+      const { selectedType, selectedIds } = selectionState
+      const firstNodeId = [...selectedIds][0] ?? null
+      if (!firstNodeId || !selectedType) return
+      if (!['initiative', 'epic', 'task'].includes(selectedType)) return
+      const rawId = firstNodeId.includes('-') ? firstNodeId.slice(firstNodeId.indexOf('-') + 1) : firstNodeId
+      // Determine child type from the hierarchy
+      const typeIdx = dimensions.indexOf(selectedType as 'task' | 'epic' | 'initiative')
+      if (typeIdx < 0 || typeIdx >= dimensions.length - 1) return // can't add child below leaf
+      const childType = dimensions[typeIdx + 1]
+      if (!childType) return
+      setCreateDialog({ parentId: rawId, parentType: selectedType as GroupingDimension, childType })
+    }, [selectionState, dimensions]),
     onEntitySettings: useCallback(() => {
       const { selectedType, selectedIds } = selectionState
       const firstNodeId = [...selectedIds][0] ?? null
@@ -755,6 +768,9 @@ function WorkspaceShellInner() {
                   dialog={createDialog}
                   onClose={() => setCreateDialog(null)}
                   onOptimisticCreate={addOptimistic}
+                  onCreated={(entityId, entityType, entityName) => {
+                    setEntitySettingsDialog({ entityId, entityType, entityName })
+                  }}
                 />
               )}
 

@@ -13,6 +13,7 @@ interface Props {
   dialog: CreateDialogState
   onClose: () => void
   onOptimisticCreate?: (entity: string, data: unknown) => void
+  onCreated?: (entityId: string, entityType: GroupingDimension, entityName: string) => void
 }
 
 const ENDPOINT_MAP: Record<string, string> = {
@@ -35,7 +36,7 @@ function parentKeyField(parentType: GroupingDimension | null): string | null {
   return `${parentType}Id`
 }
 
-export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate }: Props) {
+export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate, onCreated }: Props) {
   const [name, setName] = useState('')
   const [color, setColor] = useState('#00f0ff')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -86,13 +87,14 @@ export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate }: Prop
     }
 
     onClose()
+    onCreated?.(id, dialog.childType, trimmedName)
 
     fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-  }, [name, color, dialog, onClose, onOptimisticCreate])
+  }, [name, color, dialog, onClose, onOptimisticCreate, onCreated])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSubmit()

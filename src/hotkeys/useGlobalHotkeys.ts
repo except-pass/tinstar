@@ -10,6 +10,7 @@ export interface GlobalHotkeyHandlers {
   onCycleAllPrev: () => void
   onSessionQuick: () => void
   onEntitySettings: () => void
+  onCreateChild: () => void
   onPaletteOpen: () => void
 }
 
@@ -46,6 +47,15 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
         e.preventDefault()
         h.onEntitySettings()
         emitBindingFired('E')
+        return
+      }
+
+      // +: create child entity under the selected entity
+      if (e.key === '+' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (isEditable(active) || active?.tagName === 'IFRAME') return
+        e.preventDefault()
+        h.onCreateChild()
+        emitBindingFired('+')
         return
       }
 
