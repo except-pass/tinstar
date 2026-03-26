@@ -251,8 +251,11 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
         {/* Content */}
         <div className="px-4 py-3 overflow-y-auto flex-1">
           {/* External link */}
-          <div className="flex items-center gap-2 mb-3">
-            <span className="material-symbols-outlined text-sm text-slate-500">link</span>
+          <div className="flex items-center gap-2 mb-3 group/link relative">
+            <span className="material-symbols-outlined text-sm text-slate-500 cursor-default">link</span>
+            <div className="pointer-events-none absolute left-0 top-full mt-1 z-50 hidden group-hover/link:block w-56 px-2 py-1.5 rounded bg-slate-800 border border-white/10 text-2xs text-slate-300 leading-relaxed shadow-lg">
+              Link to an external tool — Jira, Notion, Monday, GitHub, etc. Opens in a new tab from the hierarchy sidebar.
+            </div>
             <input
               type="text"
               value={externalUrl}
