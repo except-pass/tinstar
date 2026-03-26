@@ -11,6 +11,7 @@ export interface GlobalHotkeyHandlers {
   onSessionQuick: () => void
   onEntitySettings: () => void
   onCreateChild: () => void
+  onToggleEmptyEntities: () => void
   onPaletteOpen: () => void
 }
 
@@ -56,6 +57,15 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
         e.preventDefault()
         h.onCreateChild()
         emitBindingFired('+')
+        return
+      }
+
+      // H: toggle show/hide empty entity containers
+      if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (isEditable(active) || active?.tagName === 'IFRAME') return
+        e.preventDefault()
+        h.onToggleEmptyEntities()
+        emitBindingFired('H')
         return
       }
 

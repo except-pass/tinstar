@@ -98,6 +98,8 @@ function WorkspaceShellInner() {
     }, [])
   }, [])
 
+  const [showEmptyEntities, setShowEmptyEntities] = useState(() => localStorage.getItem('tinstar-show-empty-entities') !== 'false')
+
   const sidebarTree = useMemo(
     () => showEmptyEntities ? rawSidebarTree : filterEmptyNodes(rawSidebarTree),
     [rawSidebarTree, showEmptyEntities, filterEmptyNodes],
@@ -242,7 +244,6 @@ function WorkspaceShellInner() {
     return ids
   }, [runMap, editorWidgets, browserWidgets, imageWidgets])
 
-  const [showEmptyEntities, setShowEmptyEntities] = useState(() => localStorage.getItem('tinstar-show-empty-entities') !== 'false')
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
   const [showSessionDialog, setShowSessionDialog] = useState(false)
@@ -606,6 +607,11 @@ function WorkspaceShellInner() {
       if (!childType) return
       setCreateDialog({ parentId: rawId, parentType: selectedType as GroupingDimension, childType })
     }, [selectionState, dimensions]),
+    onToggleEmptyEntities: useCallback(() => {
+      const next = !showEmptyEntities
+      setShowEmptyEntities(next)
+      localStorage.setItem('tinstar-show-empty-entities', String(next))
+    }, [showEmptyEntities]),
     onEntitySettings: useCallback(() => {
       const { selectedType, selectedIds } = selectionState
       const firstNodeId = [...selectedIds][0] ?? null
