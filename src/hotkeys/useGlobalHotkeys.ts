@@ -60,9 +60,9 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
         return
       }
 
-      // H: toggle show/hide empty entity containers
+      // H: toggle show/hide empty entity containers (fires even from iframe)
       if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (isEditable(active) || active?.tagName === 'IFRAME') return
+        if (isEditable(active)) return
         e.preventDefault()
         h.onToggleEmptyEntities()
         emitBindingFired('H')
