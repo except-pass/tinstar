@@ -80,6 +80,8 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
   const [draft, setDraft] = useState<EntitySettings>({})
   const [saving, setSaving] = useState(false)
   const [newProcName, setNewProcName] = useState('')
+  const [externalUrl, setExternalUrl] = useState<string>('')
+  const [urlDirty, setUrlDirty] = useState(false)
 
   useEffect(() => {
     const typeMap: Record<string, string> = { initiative: 'initiatives', epic: 'epics', task: 'tasks' }
@@ -91,7 +93,8 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       fetch('/api/projects').then(r => r.json()),
       fetch('/api/docker/profiles').then(r => r.json()),
       fetch('/api/cli-templates').then(r => r.json()),
-    ]).then(([settingsRes, projectsRes, profilesRes, templatesRes]) => {
+      fetch(`/api/state`).then(r => r.json()),
+    ]).then(([settingsRes, projectsRes, profilesRes, templatesRes, stateRes]) => {
       if (settingsRes.ok) setSettings(settingsRes.data)
       if (projectsRes?.ok && projectsRes.data && typeof projectsRes.data === 'object') {
         setProjects(Object.entries(projectsRes.data).map(([name, path]) => ({ name, path: path as string })))
@@ -101,6 +104,12 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       }
       if (templatesRes?.ok && Array.isArray(templatesRes.data)) {
         setCliTemplateOptions(templatesRes.data)
+      }
+      // Load externalUrl from the entity
+      if (stateRes) {
+        const entities = stateRes[endpoint] as Array<{ id: string; externalUrl?: string | null }> | undefined
+        const entity = entities?.find(e => e.id === entityId)
+        if (entity?.externalUrl) setExternalUrl(entity.externalUrl)
       }
       setLoading(false)
     })
@@ -122,7 +131,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       .catch(() => {})
   }, [effectiveProject, effectiveWorktree])
 
-  const hasDraftChanges = Object.keys(draft).length > 0
+  const hasDraftChanges = Object.keys(draft).length > 0 || urlDirty
 
   const handleToggle = useCallback((key: keyof EntitySettings, enabled: boolean) => {
     if (enabled) {
@@ -162,15 +171,20 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       patch[key] = value === undefined ? null : value
     }
 
+    const body: Record<string, unknown> = { settings: patch }
+    if (urlDirty) {
+      body.externalUrl = externalUrl.trim() || null
+    }
+
     await fetch(`/api/${endpoint}/${entityId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ settings: patch }),
+      body: JSON.stringify(body),
     })
 
     setSaving(false)
     onClose()
-  }, [entityId, entityType, draft, onClose])
+  }, [entityId, entityType, draft, externalUrl, urlDirty, onClose])
 
   const handleCancel = useCallback(() => {
     onClose()
@@ -236,6 +250,31 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
 
         {/* Content */}
         <div className="px-4 py-3 overflow-y-auto flex-1">
+          {/* External link */}
+          <div className="flex items-center gap-2 mb-3">
+            <span className="material-symbols-outlined text-sm text-slate-500">link</span>
+            <input
+              type="text"
+              value={externalUrl}
+              onChange={e => { setExternalUrl(e.target.value); setUrlDirty(true) }}
+              placeholder="https://fortresspower.atlassian.net/browse/CMT-..."
+              className="flex-1 px-2 py-1 bg-surface-base border border-white/10 rounded text-xs font-mono text-slate-300 placeholder:text-slate-600 focus:border-primary/50 focus:outline-none"
+              spellCheck={false}
+            />
+            {externalUrl && (
+              <a
+                href={externalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-slate-500 hover:text-primary flex-shrink-0"
+                title="Open link"
+                onClick={e => e.stopPropagation()}
+              >
+                <span className="material-symbols-outlined text-sm">open_in_new</span>
+              </a>
+            )}
+          </div>
+
           {loading || !settings ? (
             <div className="text-xs text-slate-500 py-4 text-center">Loading...</div>
           ) : (

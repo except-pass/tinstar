@@ -67,6 +67,7 @@ export interface Initiative {
   summary: string
   settings?: EntitySettings
   spaceId?: string
+  externalUrl?: string | null
 }
 
 export interface Epic {
@@ -77,6 +78,7 @@ export interface Epic {
   summary: string
   settings?: EntitySettings
   spaceId?: string
+  externalUrl?: string | null
 }
 
 export interface Task {

@@ -444,7 +444,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/initiatives
   if (method === 'POST' && url === '/api/initiatives') {
     readBody(req).then(body => {
-      const { name, color, status, summary, id: providedId } = JSON.parse(body)
+      const { name, color, status, summary, id: providedId, externalUrl } = JSON.parse(body)
       const entity = {
         id: providedId ?? shortId('init'),
         name: name ?? 'Untitled Initiative',
@@ -452,6 +452,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         status: status ?? 'active',
         summary: summary ?? '',
         spaceId: ctx.docStore.activeSpaceId,
+        externalUrl: externalUrl ?? null,
       }
       ctx.docStore.upsertInitiative(entity.id, entity)
       json(res, entity, 201)
@@ -462,7 +463,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/epics
   if (method === 'POST' && url === '/api/epics') {
     readBody(req).then(body => {
-      const { name, initiativeId, status, summary, id: providedId } = JSON.parse(body)
+      const { name, initiativeId, status, summary, id: providedId, externalUrl } = JSON.parse(body)
       const entity = {
         id: providedId ?? shortId('epic'),
         name: name ?? 'Untitled Epic',
@@ -470,6 +471,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         status: status ?? 'active',
         summary: summary ?? '',
         spaceId: ctx.docStore.activeSpaceId,
+        externalUrl: externalUrl ?? null,
       }
       ctx.docStore.upsertEpic(entity.id, entity)
       json(res, entity, 201)
