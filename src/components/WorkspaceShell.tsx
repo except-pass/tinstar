@@ -386,11 +386,14 @@ function WorkspaceShellInner() {
 
   const handleAdd = useCallback((parentId: string | null, type: GroupingDimension | 'run') => {
     if (type === 'run') return
-    // Determine the parent's type from the dimensions hierarchy
+    if (!showEmptyEntities) {
+      setShowEmptyEntities(true)
+      localStorage.setItem('tinstar-show-empty-entities', 'true')
+    }
     const typeIdx = dimensions.indexOf(type as 'task' | 'epic' | 'initiative')
     const parentType = typeIdx > 0 ? (dimensions[typeIdx - 1] ?? null) : null
     setCreateDialog({ parentId, parentType, childType: type })
-  }, [dimensions])
+  }, [dimensions, showEmptyEntities])
 
   const handleReparent = useCallback((entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => {
     const endpointMap: Record<string, string> = {
@@ -605,8 +608,12 @@ function WorkspaceShellInner() {
       if (typeIdx < 0 || typeIdx >= dimensions.length - 1) return // can't add child below leaf
       const childType = dimensions[typeIdx + 1]
       if (!childType) return
+      if (!showEmptyEntities) {
+        setShowEmptyEntities(true)
+        localStorage.setItem('tinstar-show-empty-entities', 'true')
+      }
       setCreateDialog({ parentId: rawId, parentType: selectedType as GroupingDimension, childType })
-    }, [selectionState, dimensions]),
+    }, [selectionState, dimensions, showEmptyEntities]),
     onToggleEmptyEntities: useCallback(() => {
       const next = !showEmptyEntities
       setShowEmptyEntities(next)
