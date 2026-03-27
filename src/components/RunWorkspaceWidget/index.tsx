@@ -38,6 +38,10 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
   const [termTick, bumpTerm] = useReducer((n: number) => n + 1, 0)
+  const [promptComposerExpanded, setPromptComposerExpanded] = useState(() =>
+    localStorage.getItem('tinstar-prompt-composer-default') === 'true'
+  )
+  const [composerFocusTrigger, bumpComposerFocus] = useReducer((n: number) => n + 1, 0)
 
   const rootRef = useRef<HTMLDivElement>(null)
   const [focusZone, setFocusZone] = useState<FocusZone | null>(null)
@@ -104,6 +108,13 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
     return () => window.removeEventListener('focus', onWindowFocus)
   }, [popFocus])
 
+  // When widget becomes selected and prompt composer is open, focus the composer
+  useEffect(() => {
+    if (isSelected && promptComposerExpanded) {
+      bumpComposerFocus()
+    }
+  }, [isSelected, promptComposerExpanded])
+
   // Expose action dispatch so context router can trigger widget actions
   const { triggerHollywoodHit, triggerScanLine } = useFlourish(rootRef)
 
@@ -125,6 +136,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
         case 'tab-next':        setCenterTabIndex(i => (i + 1) % 2);             break
         case 'tab-prev':        setCenterTabIndex(i => (i - 1 + 2) % 2);        break
         case 'activate':        /* no-op for now */                               break
+        case 'toggle-prompt':   setPromptComposerExpanded(e => !e);              break
       }
     })
     return () => deregisterActionHandler(run.id)
@@ -289,6 +301,9 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
             activeTabIndex={focusZone === 'center-tabs' ? centerTabIndex : undefined}
             controlledTab={sessionTab}
             onControlledTabChange={setSessionTab}
+            promptComposerExpanded={promptComposerExpanded}
+            onPromptComposerToggle={() => setPromptComposerExpanded(e => !e)}
+            composerFocusTrigger={composerFocusTrigger}
           />
         </div>
         <div

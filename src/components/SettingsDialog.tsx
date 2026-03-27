@@ -22,7 +22,7 @@ interface CliTemplate {
   resumeCmd: string
 }
 
-type Section = 'projects' | 'agents' | 'docker' | 'editor' | 'labels'
+type Section = 'projects' | 'agents' | 'docker' | 'editor' | 'labels' | 'widgets'
 
 interface Props {
   onClose: () => void
@@ -35,6 +35,7 @@ export function SettingsDialog({ onClose }: Props) {
   const dockerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<HTMLDivElement>(null)
   const labelsRef = useRef<HTMLDivElement>(null)
+  const widgetsRef = useRef<HTMLDivElement>(null)
 
   const { activeSpaceId, spaces } = useBackendState()
   const activeSpace = spaces.find(s => s.id === activeSpaceId)
@@ -66,6 +67,8 @@ export function SettingsDialog({ onClose }: Props) {
   const [newTplStart, setNewTplStart] = useState('')
   const [newTplResume, setNewTplResume] = useState('')
   const [templateError, setTemplateError] = useState<string | null>(null)
+  const [editingTemplate, setEditingTemplate] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState<CliTemplate | null>(null)
 
   // Docker image profiles
   const [profiles, setProfiles] = useState<ImageProfile[]>([])
@@ -73,6 +76,11 @@ export function SettingsDialog({ onClose }: Props) {
   const [newProfileName, setNewProfileName] = useState('')
   const [selectedImage, setSelectedImage] = useState('')
   const [profileError, setProfileError] = useState<string | null>(null)
+
+  // Widget settings (localStorage)
+  const [promptComposerDefault, setPromptComposerDefault] = useState(() =>
+    localStorage.getItem('tinstar-prompt-composer-default') === 'true'
+  )
 
   const fetchProjects = useCallback(() => {
     fetch('/api/projects')
@@ -181,6 +189,34 @@ export function SettingsDialog({ onClose }: Props) {
     fetchTemplates()
   }, [fetchTemplates])
 
+  const handleEditTemplate = useCallback((t: CliTemplate) => {
+    setEditingTemplate(t.name)
+    setEditDraft({ ...t })
+  }, [])
+
+  const handleSaveTemplate = useCallback(async () => {
+    if (!editDraft || !editingTemplate) return
+    setTemplateError(null)
+    const res = await fetch(`/api/cli-templates/${encodeURIComponent(editingTemplate)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editDraft),
+    })
+    const data = await res.json()
+    if (!data.ok) {
+      setTemplateError(data.error?.message ?? 'Failed to save template')
+      return
+    }
+    setEditingTemplate(null)
+    setEditDraft(null)
+    fetchTemplates()
+  }, [editDraft, editingTemplate, fetchTemplates])
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingTemplate(null)
+    setEditDraft(null)
+  }, [])
+
   const handleAddProfile = useCallback(async () => {
     const trimName = newProfileName.trim()
     if (!trimName || !selectedImage) return
@@ -244,6 +280,7 @@ export function SettingsDialog({ onClose }: Props) {
     { key: 'docker', label: 'Docker', icon: 'deployed_code', ref: dockerRef },
     { key: 'editor', label: 'Editor', icon: 'edit', ref: editorRef },
     { key: 'labels', label: 'Entity Labels', icon: 'label', ref: labelsRef },
+    { key: 'widgets', label: 'Widgets', icon: 'widgets', ref: widgetsRef },
   ]
 
   return (
@@ -382,10 +419,82 @@ export function SettingsDialog({ onClose }: Props) {
               {templates.length === 0 ? (
                 <div className="text-xs text-slate-500 py-2">No templates configured.</div>
               ) : (
-                templates.map(t => (
+                templates.map(t => editingTemplate === t.name && editDraft ? (
                   <div
                     key={t.name}
-                    className="px-3 py-2 bg-surface-base rounded border border-white/5 group"
+                    className="px-3 py-3 bg-surface-base rounded border border-primary/30 space-y-2"
+                  >
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Name</label>
+                        <input
+                          type="text"
+                          value={editDraft.name}
+                          onChange={e => setEditDraft({ ...editDraft, name: e.target.value })}
+                          className="w-full px-2 py-1.5 bg-surface-panel border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
+                        />
+                      </div>
+                      <div className="w-14">
+                        <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Icon</label>
+                        <input
+                          type="text"
+                          value={editDraft.icon ?? ''}
+                          onChange={e => setEditDraft({ ...editDraft, icon: e.target.value })}
+                          maxLength={2}
+                          className="w-full px-2 py-1.5 bg-surface-panel border border-white/10 rounded text-sm text-center text-slate-200 focus:border-primary/50 focus:outline-none"
+                        />
+                      </div>
+                      <div className="w-24">
+                        <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Adapter</label>
+                        <select
+                          value={editDraft.adapter ?? 'generic'}
+                          onChange={e => setEditDraft({ ...editDraft, adapter: e.target.value })}
+                          className="w-full px-2 py-1.5 bg-surface-panel border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
+                        >
+                          <option value="claude">claude</option>
+                          <option value="codex">codex</option>
+                          <option value="generic">generic</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Start command</label>
+                      <input
+                        type="text"
+                        value={editDraft.startCmd}
+                        onChange={e => setEditDraft({ ...editDraft, startCmd: e.target.value })}
+                        className="w-full px-2 py-1.5 bg-surface-panel border border-white/10 rounded text-xs text-slate-200 font-mono focus:border-primary/50 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Resume command</label>
+                      <input
+                        type="text"
+                        value={editDraft.resumeCmd}
+                        onChange={e => setEditDraft({ ...editDraft, resumeCmd: e.target.value })}
+                        className="w-full px-2 py-1.5 bg-surface-panel border border-white/10 rounded text-xs text-slate-200 font-mono focus:border-primary/50 focus:outline-none"
+                      />
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30"
+                        onClick={handleSaveTemplate}
+                      >
+                        Save
+                      </button>
+                      <button
+                        className="px-3 py-1.5 text-xs text-slate-400 border border-white/10 rounded hover:bg-white/5"
+                        onClick={handleCancelEdit}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    key={t.name}
+                    className="px-3 py-2 bg-surface-base rounded border border-white/5 group cursor-pointer hover:border-white/10"
+                    onClick={() => handleEditTemplate(t)}
                   >
                     <div className="flex items-center gap-2">
                       {t.icon && <span className="text-sm flex-shrink-0">{t.icon}</span>}
@@ -397,8 +506,15 @@ export function SettingsDialog({ onClose }: Props) {
                       )}
                       <span className="flex-1" />
                       <button
+                        className="text-xs text-slate-500 hover:text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mr-1"
+                        onClick={e => { e.stopPropagation(); handleEditTemplate(t) }}
+                        aria-label={`Edit ${t.name}`}
+                      >
+                        <span className="material-symbols-outlined text-xs">edit</span>
+                      </button>
+                      <button
                         className="text-xs text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-                        onClick={() => handleDeleteTemplate(t.name)}
+                        onClick={e => { e.stopPropagation(); handleDeleteTemplate(t.name) }}
                         aria-label={`Remove ${t.name}`}
                       >
                         ×
@@ -735,6 +851,41 @@ export function SettingsDialog({ onClose }: Props) {
               >
                 {labelsSaving ? 'Saving…' : 'Save'}
               </button>
+            </div>
+          </div>
+
+          {/* ── Separator ── */}
+          <div className="mx-5 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
+          {/* ── Widgets ── */}
+          <div ref={widgetsRef} className="px-5 pt-5 pb-6">
+            <h4 className="text-xs font-display uppercase tracking-wider text-slate-300 mb-4">
+              Widgets
+            </h4>
+
+            {/* Run Session Widget */}
+            <div className="mb-4">
+              <h5 className="text-2xs font-mono uppercase tracking-wider text-slate-500 mb-2">
+                Run Session
+              </h5>
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={promptComposerDefault}
+                  onChange={e => {
+                    const val = e.target.checked
+                    setPromptComposerDefault(val)
+                    localStorage.setItem('tinstar-prompt-composer-default', String(val))
+                  }}
+                  className="w-4 h-4 rounded border border-white/20 bg-surface-base accent-primary cursor-pointer"
+                />
+                <span className="text-xs text-slate-300 group-hover:text-slate-100 transition-colors">
+                  Prompt composer open by default
+                </span>
+              </label>
+              <p className="text-2xs text-slate-600 mt-1 ml-7">
+                When enabled, new session widgets will have the prompt composer expanded.
+              </p>
             </div>
           </div>
 

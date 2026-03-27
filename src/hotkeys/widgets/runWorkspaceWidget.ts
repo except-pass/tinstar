@@ -15,5 +15,6 @@ registerWidget({
     { key: 'ArrowRight', label: 'Next tab',          action: 'tab-next' },
     { key: 'ArrowLeft',  label: 'Prev tab',          action: 'tab-prev' },
     { key: 'Enter',      label: 'Activate',          action: 'activate' },
+    { key: 'KeyP',       label: 'Prompt composer',   action: 'toggle-prompt' },
   ],
 })

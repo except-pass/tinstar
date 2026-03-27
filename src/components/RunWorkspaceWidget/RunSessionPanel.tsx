@@ -160,6 +160,118 @@ function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus }:
   )
 }
 
+/** Collapsible prompt composer for sending text to the terminal */
+function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTrigger }: { sessionId?: string; accent: string; status?: SessionStatus; expanded?: boolean; onToggle?: () => void; focusTrigger?: number }) {
+  const [internalExpanded, setInternalExpanded] = useState(false)
+  const isExpanded = expanded ?? internalExpanded
+  const toggleExpanded = onToggle ?? (() => setInternalExpanded(e => !e))
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Focus when trigger changes (from parent selecting widget)
+  useEffect(() => {
+    if (focusTrigger && isExpanded) textareaRef.current?.focus({ preventScroll: true })
+  }, [focusTrigger, isExpanded])
+
+  const canSend = sessionId && status === 'idle' && text.trim().length > 0
+
+  const handleSend = useCallback(async () => {
+    if (!canSend || sending) return
+    setError(null)
+    setSending(true)
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text.trim() }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        setText('')
+      } else {
+        setError(data.error?.message ?? data.error ?? 'Failed to send')
+      }
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSending(false)
+    }
+  }, [sessionId, text, canSend, sending])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      handleSend()
+    }
+  }, [handleSend])
+
+  // Focus textarea when expanded
+  useEffect(() => {
+    if (isExpanded) textareaRef.current?.focus({ preventScroll: true })
+  }, [isExpanded])
+
+  return (
+    <div className="border-t" style={{ borderColor: hexToRgba(accent, 0.2) }}>
+      <button
+        onClick={toggleExpanded}
+        className="w-full flex items-center gap-2 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider transition-colors hover:bg-primary/5"
+        style={{ color: hexToRgba(accent, 0.6) }}
+      >
+        <span
+          className="material-symbols-outlined text-sm transition-transform"
+          style={{ transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+        >
+          expand_less
+        </span>
+        Prompt Composer
+        <span className="text-slate-600 text-2xs normal-case tracking-normal ml-1">(P)</span>
+        {status !== 'idle' && (
+          <span className="ml-auto text-slate-500 normal-case tracking-normal">
+            (session {status === 'running' ? 'busy' : status})
+          </span>
+        )}
+      </button>
+
+      {isExpanded && (
+        <div className="px-3 pb-3 space-y-2">
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Enter prompt text... (Ctrl+Enter to send)"
+            className="w-full h-24 px-2 py-1.5 bg-surface-base border rounded text-xs font-mono text-slate-200 placeholder:text-slate-600 resize-y outline-none focus:border-primary/50"
+            style={{ borderColor: hexToRgba(accent, 0.2) }}
+          />
+          {error && (
+            <p className="text-2xs font-mono text-accent-red">{error}</p>
+          )}
+          <div className="flex items-center justify-between">
+            <span className="text-2xs text-slate-600 font-mono">
+              {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
+            </span>
+            <button
+              onClick={handleSend}
+              disabled={!canSend || sending}
+              className="flex items-center gap-1.5 px-3 py-1 text-2xs font-mono uppercase tracking-wider rounded transition-colors disabled:opacity-40"
+              style={{
+                background: hexToRgba(accent, 0.15),
+                color: accent,
+                border: `1px solid ${hexToRgba(accent, 0.3)}`,
+              }}
+            >
+              <span className="material-symbols-outlined text-sm">send</span>
+              {sending ? 'Sending...' : 'Send'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface Props {
   recapEntries: RecapEntry[]
   rawLogs: string
@@ -178,9 +290,14 @@ interface Props {
   /** When provided, the tab toggle is hidden (rendered in the header instead) */
   controlledTab?: 'recap' | 'terminal'
   onControlledTabChange?: (tab: 'recap' | 'terminal') => void
+  /** Controlled prompt composer state */
+  promptComposerExpanded?: boolean
+  onPromptComposerToggle?: () => void
+  /** Increment to focus the prompt composer textarea */
+  composerFocusTrigger?: number
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, color, termTick = 0, terminalFocused, zoom, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange, controlledTab, onControlledTabChange }: Props) {
+export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, color, termTick = 0, terminalFocused, zoom, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange, controlledTab, onControlledTabChange, promptComposerExpanded, onPromptComposerToggle, composerFocusTrigger }: Props) {
   const accent = resolveRunAccent(color)
   const TABS = ['recap', 'terminal'] as const
   const [internalActiveTab, setInternalActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
@@ -349,6 +466,10 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
         </div>
       )}
 
+      {/* Prompt composer — only show when terminal is available */}
+      {port && activeTab === 'terminal' && !isTerminated && (
+        <PromptComposer sessionId={sessionId} accent={accent} status={status} expanded={promptComposerExpanded} onToggle={onPromptComposerToggle} focusTrigger={composerFocusTrigger} />
+      )}
     </section>
   )
 }

@@ -73,7 +73,6 @@ function SettingRow({ label, settingKey, resolved, draft, children, onToggle, on
 export function EntitySettingsDialog({ entityId, entityType, entityName, onClose }: Props) {
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
   const [projects, setProjects] = useState<{ name: string; path: string }[]>([])
-  const [profiles, setProfiles] = useState<{ name: string; image: string }[]>([])
   const [cliTemplateOptions, setCliTemplateOptions] = useState<{ name: string; icon?: string }[]>([])
   const [worktrees, setWorktrees] = useState<{ path: string; branch?: string }[]>([])
   const [loading, setLoading] = useState(true)
@@ -91,16 +90,12 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
     Promise.all([
       fetch(`/api/${endpoint}/${entityId}/settings`).then(r => r.json()),
       fetch('/api/projects').then(r => r.json()),
-      fetch('/api/docker/profiles').then(r => r.json()),
       fetch('/api/cli-templates').then(r => r.json()),
       fetch(`/api/state`).then(r => r.json()),
-    ]).then(([settingsRes, projectsRes, profilesRes, templatesRes, stateRes]) => {
+    ]).then(([settingsRes, projectsRes, templatesRes, stateRes]) => {
       if (settingsRes.ok) setSettings(settingsRes.data)
       if (projectsRes?.ok && projectsRes.data && typeof projectsRes.data === 'object') {
         setProjects(Object.entries(projectsRes.data).map(([name, path]) => ({ name, path: path as string })))
-      }
-      if (profilesRes?.ok && Array.isArray(profilesRes.data)) {
-        setProfiles(profilesRes.data)
       }
       if (templatesRes?.ok && Array.isArray(templatesRes.data)) {
         setCliTemplateOptions(templatesRes.data)
@@ -143,7 +138,6 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
         defaultWorktreePath: inherited ?? '',
         skipPermissions: inherited ?? false,
         cliTemplate: inherited ?? '',
-        profile: inherited ?? '',
         defaultRunColor: inherited ?? DEFAULT_RUN_ACCENT,
         procedures: inherited ?? [],
       }
@@ -390,21 +384,6 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                 )}
               </SettingRow>
 
-              {/* Skip Perms and Profile are now handled by the Agent template selection above */}
-              <SettingRow
-                label="Profile"
-                settingKey="profile"
-                resolved={settings}
-                draft={draft}
-                onToggle={handleToggle}
-                onValueChange={handleValueChange}
-              >
-                {(_value, _onChange) => (
-                  <span className="text-2xs text-slate-500 italic">Legacy — use Agent setting</span>
-                )}
-              </SettingRow>
-
-
               <SettingRow
                 label="Run Color"
                 settingKey="defaultRunColor"
@@ -425,28 +404,6 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                     </div>
                   )
                 }}
-              </SettingRow>
-
-              <SettingRow
-                label="Profile"
-                settingKey="profile"
-                resolved={settings}
-                draft={draft}
-                onToggle={handleToggle}
-                onValueChange={handleValueChange}
-              >
-                {(value, onChange) => (
-                  <select
-                    className="bg-surface-base border border-primary/30 rounded px-2 py-1 text-xs text-primary outline-none"
-                    value={String(value ?? '')}
-                    onChange={(e) => onChange(e.target.value || undefined)}
-                  >
-                    <option value="">Select profile...</option>
-                    {profiles.map(p => (
-                      <option key={p.name} value={p.name}>{p.name} ({p.image})</option>
-                    ))}
-                  </select>
-                )}
               </SettingRow>
 
               {/* Procedures — manage skills starred at this entity level */}

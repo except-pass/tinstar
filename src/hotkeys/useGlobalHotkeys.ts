@@ -71,35 +71,38 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
 
       // Session cycling: fire even from iframe (steals focus)
       // Use e.code to distinguish [ from { (Shift+[)
-      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (e.code === 'BracketRight' && !e.shiftKey) {
-          if (isEditable(active)) return
-          e.preventDefault()
-          h.onCycleReadyNext()
-          emitBindingFired(']')
-          return
-        }
-        if (e.code === 'BracketLeft' && !e.shiftKey) {
-          if (isEditable(active)) return
-          e.preventDefault()
-          h.onCycleReadyPrev()
-          emitBindingFired('[')
-          return
-        }
-        if (e.code === 'BracketRight' && e.shiftKey) {
-          if (isEditable(active)) return
-          e.preventDefault()
-          h.onCycleAllNext()
-          emitBindingFired('Shift+]')
-          return
-        }
-        if (e.code === 'BracketLeft' && e.shiftKey) {
-          if (isEditable(active)) return
-          e.preventDefault()
-          h.onCycleAllPrev()
-          emitBindingFired('Shift+[')
-          return
-        }
+      // Bare brackets blocked in editable; Ctrl+brackets work everywhere (for prompt composer)
+      if (e.code === 'BracketRight' && !e.shiftKey && !e.altKey) {
+        const hasCtrl = e.ctrlKey || e.metaKey
+        if (!hasCtrl && isEditable(active)) return
+        e.preventDefault()
+        h.onCycleReadyNext()
+        emitBindingFired(hasCtrl ? 'Ctrl+]' : ']')
+        return
+      }
+      if (e.code === 'BracketLeft' && !e.shiftKey && !e.altKey) {
+        const hasCtrl = e.ctrlKey || e.metaKey
+        if (!hasCtrl && isEditable(active)) return
+        e.preventDefault()
+        h.onCycleReadyPrev()
+        emitBindingFired(hasCtrl ? 'Ctrl+[' : '[')
+        return
+      }
+      if (e.code === 'BracketRight' && e.shiftKey && !e.altKey) {
+        const hasCtrl = e.ctrlKey || e.metaKey
+        if (!hasCtrl && isEditable(active)) return
+        e.preventDefault()
+        h.onCycleAllNext()
+        emitBindingFired(hasCtrl ? 'Ctrl+Shift+]' : 'Shift+]')
+        return
+      }
+      if (e.code === 'BracketLeft' && e.shiftKey && !e.altKey) {
+        const hasCtrl = e.ctrlKey || e.metaKey
+        if (!hasCtrl && isEditable(active)) return
+        e.preventDefault()
+        h.onCycleAllPrev()
+        emitBindingFired(hasCtrl ? 'Ctrl+Shift+[' : 'Shift+[')
+        return
       }
     }
 

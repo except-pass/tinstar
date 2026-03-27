@@ -599,7 +599,6 @@ export const spec = {
         properties: {
           project: { type: 'string', nullable: true },
           backend: { type: 'string', enum: ['docker', 'tmux'], nullable: true },
-          profile: { type: 'string', nullable: true },
           worktreeMode: { type: 'string', enum: ['none', 'new', 'existing'], nullable: true },
           skipPermissions: { type: 'boolean', nullable: true },
           prompt: { type: 'string', nullable: true },
