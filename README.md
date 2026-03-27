@@ -48,15 +48,39 @@ The CLI checks for dependencies (Claude Code, tmux, ttyd), offers to register yo
 
 ## Features
 
-- **Infinite canvas** — Figma-style pan, zoom, and spatial arrangement
-- **Live terminals** — Embedded ttyd sessions with real-time status updates
-- **Multi-selection** — Marquee select, Ctrl+click, grid arrange
-- **Spaces** — Organize sessions into isolated workspaces
-- **File tree explorer** — Track touched files with live git-diff. Drag a file onto the canvas to take a quick look at it.
+### Canvas & Navigation
+- **Infinite canvas** — Figma-style pan, zoom, and spatial arrangement; canvas now fills full screen height
+- **Multi-selection** — Marquee select, Ctrl+click, grid arrange, swim lane layout
+- **Spaces** — Organize sessions into isolated workspaces with custom entity label names per space
+- **Show/hide empty containers** — Toggle empty entity containers on/off (H hotkey) to reduce visual clutter
 - **Drag-and-drop** — Reorder in sidebar, move on canvas, multi-drag
+
+### Sessions & Agents
+- **Live terminals** — Embedded ttyd sessions with real-time status updates and crisp sub-pixel rendering
+- **CLI Templates** — Define reusable launch configs for any agent backend; unified agent dropdown across tmux, Docker, and custom profiles
+- **Multi-agent support** — Run Claude Code and Codex sessions side-by-side; Codex transcript adapter handles discovery, status, and recap parsing
+- **Configurable agent icons** — Set per-agent icons on run nodes in the hierarchy sidebar
 - **Session lifecycle** — Create, stop, resume, delete sessions with tmux or Docker backends
 - **Real-time state** — SSE-powered status updates (running, idle, needs attention)
-- **Grouping** — Nest sessions into recursive group containers
+- **`tinstar doctor`** — Health check command that validates all dependencies and reports actionable errors
+
+### Widgets
+- **Browser widget** — Embed live browser views directly on the canvas, with a header injection proxy (inject auth headers, cookies, or custom headers — no browser extension needed) and a built-in dev console panel to capture logs without opening DevTools
+- **File editor widget** — Drag files onto the canvas to view and edit; double-click to zoom full-screen; E/W hotkey bindings
+- **Image viewer widget** — Live-updating image display on canvas; watches files via SSE and refreshes automatically
+- **File tree explorer** — Track touched files with live git-diff; toggle to hide viewed-only files
+
+### Hierarchy & Hotkeys
+- **Entity Labels** — Rename Initiative / Epic / Task to any terminology per space (e.g. Project / Feature / Story); configured in the Entity Labels tab of Space Settings
+- **Grouping** — Nest sessions into recursive group containers; double-click to expand/collapse in sidebar
+- **External URL** — Attach a link to any entity (initiative, epic, task); opens in a new tab from the settings dialog
+- **Quick Draw** — Hotgroup badges on all work widgets; assign sessions to groups with Ctrl+1–9, jump with 1–9, remove with Ctrl+Shift+1–9
+- **Keyboard shortcuts** — H: toggle empty containers, E: open entity settings, +: create child entity (settings auto-opens), plus full hotkey reference in the sidebar
+- **Procedures sidebar** — Star skills as procedures for instant access; remove procedures directly from the sidebar; define-skill types prompt into the session terminal
+
+### Commands
+- **`/ship`** — Release workflow command
+- **`/tinstar-conventions`** — Project conventions reference
 
 ## Prerequisites
 
