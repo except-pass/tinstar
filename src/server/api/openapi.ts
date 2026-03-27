@@ -338,26 +338,6 @@ export const spec = {
         responses: { 200: { description: 'Prompt submitted' }, 400: { description: 'Missing prompt' }, 404: { description: 'Session not found' } },
       },
     },
-    // ── Hooks ────────────────────────────────────────────
-    '/api/hooks/file-touched': {
-      post: {
-        tags: ['Hooks'],
-        summary: 'File was written/edited',
-        description: 'Triggers async git diff reconciliation.',
-        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['session'], properties: { session: { type: 'string' }, path: { type: 'string' } } } } } },
-        responses: { 200: { description: 'Acknowledged' } },
-      },
-    },
-    '/api/hooks/file-read': {
-      post: {
-        tags: ['Hooks'],
-        summary: 'File was read',
-        description: 'Records file as read-only in the run\'s touched files.',
-        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['session', 'path'], properties: { session: { type: 'string' }, path: { type: 'string' } } } } } },
-        responses: { 200: { description: 'Acknowledged' } },
-      },
-    },
-
     // ── Projects ─────────────────────────────────────────
     '/api/projects': {
       get: {

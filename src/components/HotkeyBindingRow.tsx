@@ -10,6 +10,9 @@ export const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
   { key: 'Shift+[',   label: 'Focus prev session' },
   { key: '?',         label: 'Hotkeys' },
   { key: 'S',         label: 'New session' },
+  { key: 'E',         label: 'Entity settings' },
+  { key: '+',         label: 'Add child entity' },
+  { key: 'H',         label: 'Toggle empty entities' },
 ]
 
 export const CANVAS_KEYS: Array<{ key: string; label: string }> = [

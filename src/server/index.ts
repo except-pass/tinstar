@@ -120,6 +120,7 @@ export function initBackend(): RouteContext {
         if (!sess) continue
         const existingRun = docStore.getRun(sess.name)
         if (!existingRun) {
+          const tpl = sess.cliTemplate ? sessionConfig.cliTemplates.find(t => t.name === sess.cliTemplate) : null
           docStore.upsertRun(sess.name, {
             id: sess.name,
             status: sess.state,
@@ -134,6 +135,7 @@ export function initBackend(): RouteContext {
             rawLogs: '',
             port: sess.port ?? null,
             backend: sess.backend ?? null,
+            agentIcon: tpl?.icon,
             taskId: '',
             worktreeId: '',
             createdAt: sess.created ?? new Date().toISOString(),

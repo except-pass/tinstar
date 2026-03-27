@@ -10,9 +10,20 @@ export interface ImageProfile {
   home?: string
 }
 
+export type AdapterType = 'claude' | 'codex' | 'generic'
+
+export interface CliTemplate {
+  name: string
+  icon?: string
+  adapter?: AdapterType
+  startCmd: string
+  resumeCmd: string
+}
+
 export interface TinstarConfig {
   container: { prefix: string; defaultImage: string; home: string }
   profiles: ImageProfile[]
+  cliTemplates: CliTemplate[]
   editor: string
   ports: { ttyd: number; hostStart: number }
   dirs: { root: string; secrets: string; sessions: string }
@@ -50,6 +61,32 @@ function deepMerge(target: Record<string, unknown>, source: Record<string, unkno
   }
   return result
 }
+
+// --- Default CLI templates ---
+
+const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
+  {
+    name: 'Claude (auto)',
+    icon: '✦',
+    adapter: 'claude',
+    startCmd: 'claude --dangerously-skip-permissions --session-id {sessionId} -- {prompt}',
+    resumeCmd: 'claude --dangerously-skip-permissions --resume {sessionId}',
+  },
+  {
+    name: 'Claude (interactive)',
+    icon: '✦',
+    adapter: 'claude',
+    startCmd: 'claude --session-id {sessionId} -- {prompt}',
+    resumeCmd: 'claude --resume {sessionId}',
+  },
+  {
+    name: 'Codex (full auto)',
+    icon: '◎',
+    adapter: 'codex',
+    startCmd: 'codex --full-auto -- {prompt}',
+    resumeCmd: 'codex resume --last --full-auto',
+  },
+]
 
 // --- Base config (hardcoded defaults) ---
 
@@ -91,11 +128,23 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
     ? userConfig.profiles as ImageProfile[]
     : []
 
+  // CLI templates: user list extends defaults (user can override by name)
+  const userTemplates = Array.isArray(userConfig.cliTemplates)
+    ? userConfig.cliTemplates as CliTemplate[]
+    : []
+  const cliTemplates = [...DEFAULT_CLI_TEMPLATES]
+  for (const ut of userTemplates) {
+    const idx = cliTemplates.findIndex(t => t.name === ut.name)
+    if (idx >= 0) cliTemplates[idx] = ut
+    else cliTemplates.push(ut)
+  }
+
   const editor = typeof userConfig.editor === 'string' ? userConfig.editor : 'cursor {{path}}'
 
   const config: TinstarConfig = {
     container: merged.container,
     profiles,
+    cliTemplates,
     editor,
     ports: merged.ports,
     dirs: {

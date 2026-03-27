@@ -78,9 +78,31 @@ function WorkspaceShellInner() {
     })
   }, [activeSpaceId, spaces])
 
-  const { sidebarTree, runSummaries } = useMemo(
+  const { sidebarTree: rawSidebarTree, runSummaries } = useMemo(
     () => buildWorkspaceView(dimensions, runRepo, taxRepo),
     [dimensions, runRepo, taxRepo],
+  )
+
+  // Filter out empty entity containers when showEmptyEntities is false
+  const filterEmptyNodes = useCallback((nodes: TreeNode[]): TreeNode[] => {
+    return nodes.reduce<TreeNode[]>((acc, node) => {
+      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer') {
+        acc.push(node)
+        return acc
+      }
+      const filteredChildren = filterEmptyNodes(node.children)
+      if (node.runCount > 0 || filteredChildren.length > 0) {
+        acc.push({ ...node, children: filteredChildren })
+      }
+      return acc
+    }, [])
+  }, [])
+
+  const [showEmptyEntities, setShowEmptyEntities] = useState(() => localStorage.getItem('tinstar-show-empty-entities') !== 'false')
+
+  const sidebarTree = useMemo(
+    () => showEmptyEntities ? rawSidebarTree : filterEmptyNodes(rawSidebarTree),
+    [rawSidebarTree, showEmptyEntities, filterEmptyNodes],
   )
 
   // Build runs map for InfiniteCanvas
@@ -364,11 +386,14 @@ function WorkspaceShellInner() {
 
   const handleAdd = useCallback((parentId: string | null, type: GroupingDimension | 'run') => {
     if (type === 'run') return
-    // Determine the parent's type from the dimensions hierarchy
+    if (!showEmptyEntities) {
+      setShowEmptyEntities(true)
+      localStorage.setItem('tinstar-show-empty-entities', 'true')
+    }
     const typeIdx = dimensions.indexOf(type as 'task' | 'epic' | 'initiative')
     const parentType = typeIdx > 0 ? (dimensions[typeIdx - 1] ?? null) : null
     setCreateDialog({ parentId, parentType, childType: type })
-  }, [dimensions])
+  }, [dimensions, showEmptyEntities])
 
   const handleReparent = useCallback((entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => {
     const endpointMap: Record<string, string> = {
@@ -572,6 +597,43 @@ function WorkspaceShellInner() {
       }
       setShowSessionDialog(true)
     }, [selectionState]),
+    onCreateChild: useCallback(() => {
+      const { selectedType, selectedIds } = selectionState
+      const firstNodeId = [...selectedIds][0] ?? null
+      if (!firstNodeId || !selectedType) return
+      if (!['initiative', 'epic', 'task'].includes(selectedType)) return
+      const rawId = firstNodeId.includes('-') ? firstNodeId.slice(firstNodeId.indexOf('-') + 1) : firstNodeId
+      // Determine child type from the hierarchy
+      const typeIdx = dimensions.indexOf(selectedType as 'task' | 'epic' | 'initiative')
+      if (typeIdx < 0 || typeIdx >= dimensions.length - 1) return // can't add child below leaf
+      const childType = dimensions[typeIdx + 1]
+      if (!childType) return
+      if (!showEmptyEntities) {
+        setShowEmptyEntities(true)
+        localStorage.setItem('tinstar-show-empty-entities', 'true')
+      }
+      setCreateDialog({ parentId: rawId, parentType: selectedType as GroupingDimension, childType })
+    }, [selectionState, dimensions, showEmptyEntities]),
+    onToggleEmptyEntities: useCallback(() => {
+      const next = !showEmptyEntities
+      setShowEmptyEntities(next)
+      localStorage.setItem('tinstar-show-empty-entities', String(next))
+    }, [showEmptyEntities]),
+    onEntitySettings: useCallback(() => {
+      const { selectedType, selectedIds } = selectionState
+      const firstNodeId = [...selectedIds][0] ?? null
+      if (!firstNodeId || !selectedType) return
+      // Only open settings for entity types (initiative, epic, task), not runs
+      if (!['initiative', 'epic', 'task'].includes(selectedType)) return
+      const rawId = firstNodeId.includes('-') ? firstNodeId.slice(firstNodeId.indexOf('-') + 1) : firstNodeId
+      const entityType = selectedType as GroupingDimension
+      // Look up entity name from the taxonomy
+      const entity = entityType === 'task' ? taxRepo.getTaskById(rawId)
+        : entityType === 'epic' ? taxRepo.getEpicById(rawId)
+        : entityType === 'initiative' ? taxRepo.getInitiativeById(rawId)
+        : null
+      setEntitySettingsDialog({ entityId: rawId, entityType, entityName: entity?.name ?? rawId })
+    }, [selectionState, taxRepo]),
     onPaletteOpen: () => setPaletteOpen(true),
   })
 
@@ -669,9 +731,16 @@ function WorkspaceShellInner() {
                   <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
                     <HierarchySidebar
                         tree={canvasTree}
+                        unfilteredTree={rawSidebarTree}
                         dimensions={dimensions}
                         spaces={spaces}
                         activeSpaceId={activeSpaceId}
+                        showEmptyEntities={showEmptyEntities}
+                        onToggleShowEmpty={() => {
+                          const next = !showEmptyEntities
+                          setShowEmptyEntities(next)
+                          localStorage.setItem('tinstar-show-empty-entities', String(next))
+                        }}
                         onActivateSpace={handleActivateSpace}
                         onCreateSpace={handleCreateSpace}
                         onRenameSpace={handleRenameSpace}
@@ -740,6 +809,9 @@ function WorkspaceShellInner() {
                   dialog={createDialog}
                   onClose={() => setCreateDialog(null)}
                   onOptimisticCreate={addOptimistic}
+                  onCreated={(entityId, entityType, entityName) => {
+                    setEntitySettingsDialog({ entityId, entityType, entityName })
+                  }}
                 />
               )}
 

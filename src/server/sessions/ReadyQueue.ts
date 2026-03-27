@@ -1,6 +1,6 @@
 import type { SessionStatus } from '../../types'
 
-// Statuses that mean "ready for input"
+// Statuses that mean "ready for input" — sessions that need human attention
 const READY_STATUSES = new Set<SessionStatus>(['idle', 'creating', 'needs_attention'])
 
 export class ReadyQueue {

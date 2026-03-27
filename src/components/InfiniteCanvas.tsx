@@ -941,7 +941,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       <div
         style={{
           transformOrigin: '0 0',
-          transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
+          transform: `translate(${Math.round(camera.x)}px, ${Math.round(camera.y)}px) scale(${camera.zoom})`,
           position: 'absolute',
           top: 0,
           left: 0,

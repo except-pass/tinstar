@@ -26,6 +26,7 @@ export interface EntitySettings {
   defaultWorktreePath?: string
   backend?: 'docker' | 'tmux'
   skipPermissions?: boolean
+  cliTemplate?: string
   profile?: string
   defaultRunColor?: string
   procedures?: StoredProcedure[]
@@ -66,6 +67,7 @@ export interface Initiative {
   summary: string
   settings?: EntitySettings
   spaceId?: string
+  externalUrl?: string | null
 }
 
 export interface Epic {
@@ -76,6 +78,7 @@ export interface Epic {
   summary: string
   settings?: EntitySettings
   spaceId?: string
+  externalUrl?: string | null
 }
 
 export interface Task {
@@ -164,6 +167,7 @@ export interface TreeNode {
   color?: string
   orphan?: boolean
   backend?: 'docker' | 'tmux' | null
+  agentIcon?: string
   percentDone?: number | null
   status?: string
   externalUrl?: string | null

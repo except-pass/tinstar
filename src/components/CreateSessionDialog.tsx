@@ -8,6 +8,7 @@ export interface SessionPrefill {
   worktreeMode?: 'none' | 'new' | 'existing'
   defaultWorktreePath?: string
   skipPermissions?: boolean
+  cliTemplate?: string
   profile?: string
   runColor?: string
   taskId?: string
@@ -58,7 +59,28 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [backend, setBackend] = useState<Backend>(prefill?.backend ?? 'tmux')
   const [profile, setProfile] = useState(prefill?.profile ?? '')
   const [profiles, setProfiles] = useState<Array<{ name: string; image: string }>>([])
+  const [cliTemplate, setCliTemplate] = useState(prefill?.cliTemplate ?? '')
+  const [cliTemplates, setCliTemplates] = useState<Array<{ name: string; icon?: string }>>([])
   const [project, setProject] = useState(prefill?.project ?? '')
+
+  // Combined agent key: "tmux:<template>" or "docker:<profile>"
+  const agentKey = backend === 'docker' && profile
+    ? `docker:${profile}`
+    : cliTemplate ? `tmux:${cliTemplate}` : ''
+
+  const handleAgentChange = (key: string) => {
+    if (key.startsWith('docker:')) {
+      const p = key.slice('docker:'.length)
+      setBackend('docker')
+      setProfile(p)
+      setCliTemplate('')
+    } else if (key.startsWith('tmux:')) {
+      const t = key.slice('tmux:'.length)
+      setBackend('tmux')
+      setCliTemplate(t)
+      setProfile('')
+    }
+  }
   const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
   const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>(prefill?.worktreeMode ?? 'none')
   const [worktreePath, setWorktreePath] = useState('')
@@ -90,6 +112,19 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       })
       .catch(() => {})
 
+    fetch('/api/cli-templates')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.ok && Array.isArray(d.data)) {
+          setCliTemplates(d.data)
+          // Default to first template if none prefilled
+          if (!prefill?.cliTemplate && d.data.length > 0) {
+            setCliTemplate(d.data[0].name)
+          }
+        }
+      })
+      .catch(() => {})
+
     fetch('/api/state')
       .then(r => r.ok ? r.json() : null)
       .then(state => {
@@ -103,16 +138,15 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       .catch(() => {})
   }, [])
 
-  // Fetch configured image profiles when backend is docker
+  // Fetch docker image profiles (always, so they appear in the unified dropdown)
   useEffect(() => {
-    if (backend !== 'docker') return
     fetch('/api/docker/profiles')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.ok && Array.isArray(d.data)) setProfiles(d.data)
       })
       .catch(() => {})
-  }, [backend])
+  }, [])
 
   // Fetch existing worktrees when project is selected and mode is 'existing'
   useEffect(() => {
@@ -146,6 +180,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       backend,
       skipPermissions,
     }
+    if (cliTemplate) body.cliTemplate = cliTemplate
     if (profile) body.profile = profile
     if (project) body.project = project
     if (worktreeMode === 'new') body.worktree = true
@@ -173,7 +208,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       setError((err as Error).message)
       setSubmitting(false)
     }
-  }, [effectiveName, backend, profile, project, worktreeMode, worktreePath, skipPermissions, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
+  }, [effectiveName, backend, profile, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -210,29 +245,37 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
           />
         </div>
 
-        {/* Backend + Project row */}
+        {/* Agent + Project row */}
         <div className="flex gap-3 mb-3">
-          {/* Backend toggle */}
+          {/* Agent picker (CLI templates + Docker profiles) */}
           <div className="flex-1">
             <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">
-              Backend<InheritedFrom source={sources.backend} />
+              Agent<InheritedFrom source={sources.cliTemplate ?? sources.backend} />
             </label>
-            <div className="flex rounded border border-white/10 overflow-hidden">
-              {(['docker', 'tmux'] as Backend[]).map(b => (
-                <button
-                  key={b}
-                  className={[
-                    'flex-1 px-3 py-1.5 text-xs transition-colors',
-                    backend === b
-                      ? 'bg-primary/20 text-primary border-primary/40'
-                      : 'bg-surface-base text-slate-400 hover:text-slate-200',
-                  ].join(' ')}
-                  onClick={() => setBackend(b)}
-                >
-                  {b.charAt(0).toUpperCase() + b.slice(1)}
-                </button>
-              ))}
-            </div>
+            <select
+              value={agentKey}
+              onChange={e => handleAgentChange(e.target.value)}
+              className="w-full px-3 py-2 bg-surface-base border border-white/10 rounded text-sm text-slate-200 focus:border-primary/50 focus:outline-none"
+            >
+              {cliTemplates.length > 0 && (
+                <optgroup label="🖥 CLI">
+                  {cliTemplates.map(t => (
+                    <option key={`tmux:${t.name}`} value={`tmux:${t.name}`}>
+                      {t.icon ? `${t.icon} ` : ''}{t.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {profiles.length > 0 && (
+                <optgroup label="🐳 Docker">
+                  {profiles.map(p => (
+                    <option key={`docker:${p.name}`} value={`docker:${p.name}`}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
           </div>
 
           {/* Project picker */}
@@ -297,25 +340,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
             )}
           </div>
         </div>
-
-        {/* Docker image profile */}
-        {backend === 'docker' && profiles.length > 0 && (
-          <div className="mb-3">
-            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">
-              Image<InheritedFrom source={sources.profile} />
-            </label>
-            <select
-              value={profile}
-              onChange={e => setProfile(e.target.value)}
-              className="w-full px-3 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
-            >
-              <option value="">Default</option>
-              {profiles.map(p => (
-                <option key={p.name} value={p.name}>{p.name} ({p.image})</option>
-              ))}
-            </select>
-          </div>
-        )}
 
         {/* Worktree mode */}
         {project && (
@@ -394,22 +418,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
           </div>
         </div>
 
-        {/* Skip permissions */}
-        <div className="flex items-center gap-2 mb-3">
-          <input
-            type="checkbox"
-            id="skip-perms"
-            checked={skipPermissions}
-            onChange={e => setSkipPermissions(e.target.checked)}
-            className="accent-primary"
-          />
-          <label htmlFor="skip-perms" className="text-xs text-slate-300 cursor-pointer">
-            Skip permissions<InheritedFrom source={sources.skipPermissions} />
-          </label>
-          <span className="text-2xs text-slate-500">
-            (--dangerously-skip-permissions)
-          </span>
-        </div>
 
         {/* Starting prompt */}
         <div className="mb-4">

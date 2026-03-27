@@ -19,11 +19,14 @@ interface Props {
 
 export function TouchedFilesPanel({ files, sessionId, onFileSelect, onOpenFile, onCollapse: _onCollapse }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(files[2]?.id ?? null)
+  const [showReadOnly, setShowReadOnly] = useState(true)
 
   // Only count reconciled files in header totals
   const reconciledFiles = files.filter(f => !f.pending)
   const totalAdded = reconciledFiles.reduce((s, f) => s + f.additions, 0)
   const totalRemoved = reconciledFiles.reduce((s, f) => s + f.deletions, 0)
+
+  const visibleFiles = showReadOnly ? files : files.filter(f => f.additions > 0 || f.deletions > 0 || f.pending)
 
   return (
     <div className="flex flex-col h-full">
@@ -31,6 +34,15 @@ export function TouchedFilesPanel({ files, sessionId, onFileSelect, onOpenFile, 
       <div className="px-3 py-1.5 border-b border-primary/10 bg-surface-base/50 flex items-center justify-between">
         <span className="text-2xs font-mono text-slate-500">{files.length} files</span>
         <div className="flex items-center gap-1.5 text-2xs font-mono">
+          <label className="flex items-center gap-1 cursor-pointer" title={showReadOnly ? 'Hide viewed-only files' : 'Show viewed-only files'}>
+            <input
+              type="checkbox"
+              checked={showReadOnly}
+              onChange={e => setShowReadOnly(e.target.checked)}
+              className="hidden"
+            />
+            <span className={`text-sm select-none ${showReadOnly ? '' : 'opacity-30'}`}>&#128083;</span>
+          </label>
           <span className="text-accent-green">+{totalAdded}</span>
           <span className="text-accent-red">-{totalRemoved}</span>
         </div>
@@ -38,7 +50,7 @@ export function TouchedFilesPanel({ files, sessionId, onFileSelect, onOpenFile, 
 
       {/* File list */}
       <div data-scrollable className="flex-1 overflow-y-auto scrollbar-thin">
-        {files.map((file) => {
+        {visibleFiles.map((file) => {
           const isSelected = selectedId === file.id
           return (
             <button

@@ -9,6 +9,9 @@ export interface GlobalHotkeyHandlers {
   onCycleAllNext: () => void
   onCycleAllPrev: () => void
   onSessionQuick: () => void
+  onEntitySettings: () => void
+  onCreateChild: () => void
+  onToggleEmptyEntities: () => void
   onPaletteOpen: () => void
 }
 
@@ -36,6 +39,33 @@ export function useGlobalHotkeys(handlers: GlobalHotkeyHandlers) {
         e.preventDefault()
         h.onSessionQuick()
         emitBindingFired('S')
+        return
+      }
+
+      // E: entity settings — opens settings for the selected entity
+      if ((e.key === 'e' || e.key === 'E') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (isEditable(active) || active?.tagName === 'IFRAME') return
+        e.preventDefault()
+        h.onEntitySettings()
+        emitBindingFired('E')
+        return
+      }
+
+      // +: create child entity under the selected entity
+      if (e.key === '+' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (isEditable(active) || active?.tagName === 'IFRAME') return
+        e.preventDefault()
+        h.onCreateChild()
+        emitBindingFired('+')
+        return
+      }
+
+      // H: toggle show/hide empty entity containers (fires even from iframe)
+      if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (isEditable(active)) return
+        e.preventDefault()
+        h.onToggleEmptyEntities()
+        emitBindingFired('H')
         return
       }
 

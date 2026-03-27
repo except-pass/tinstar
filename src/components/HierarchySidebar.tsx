@@ -84,9 +84,12 @@ function HotkeysSection({ height }: { height: number }) {
 
 interface HierarchySidebarProps {
   tree: TreeNode[]
+  unfilteredTree?: TreeNode[]
   dimensions: GroupingDimension[]
   spaces: Space[]
   activeSpaceId: string
+  showEmptyEntities?: boolean
+  onToggleShowEmpty?: () => void
   onActivateSpace: (id: string) => void
   onCreateSpace: (name: string) => void
   onRenameSpace: (id: string, name: string) => void
@@ -258,7 +261,7 @@ function SidebarNode({
         {/* Icon */}
         <span className="w-4 text-center" aria-hidden="true">
           {node.type === 'run'
-            ? (node.backend === 'docker' ? '🐳' : '▶')
+            ? (node.agentIcon ?? (node.backend === 'docker' ? '🐳' : '▶'))
             : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
         </span>
 
@@ -523,9 +526,10 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, dimensions, spaces, activeSpaceId, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
+export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
+  const showEmpty = showEmptyEntities ?? true
 
   const levelMeta = useDimensionMeta()
   const dimensionIconMap = useMemo(
@@ -624,6 +628,16 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
             </span>
           ))}
         </div>
+        {onToggleShowEmpty && (
+          <button
+            className={`text-xs shrink-0 mr-1 transition-colors ${showEmpty ? 'text-slate-500 hover:text-primary' : 'text-slate-600 opacity-40 hover:opacity-100'}`}
+            onClick={onToggleShowEmpty}
+            title={showEmpty ? 'Hide empty entities' : 'Show empty entities'}
+            aria-label="Toggle empty entities"
+          >
+            <span className="material-symbols-outlined text-sm">filter_list</span>
+          </button>
+        )}
         <button
           className="text-xs text-slate-500 hover:text-primary shrink-0"
           onClick={() => onAdd(null, rootType)}
@@ -642,7 +656,7 @@ export default function HierarchySidebar({ tree, dimensions, spaces, activeSpace
       >
         {tree.length === 0 ? (
           <div className="px-3 py-4 text-xs text-slate-500 text-center">
-            No items. Click + to create.
+            {(unfilteredTree ?? tree).length === 0 ? 'No items. Click + to create.' : 'All entities empty. Click filter to show.'}
           </div>
         ) : (
           <TreeWithOrphanSeparators

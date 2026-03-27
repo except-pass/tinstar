@@ -32,10 +32,8 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import { getGitDiffFiles } from '../sessions/git-diff'
 import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
-import type { FileKind, TouchedFile } from '../../types'
 import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
 import { saveDraft, discardDraft, DRAFTS_DIR, ensureDraftsDir } from '../sessions/skill-drafts'
 import type { SkillDTO } from '../../types'
@@ -119,15 +117,6 @@ function removeFileWatchSubscriber(absolutePath: string, subscriberId: string): 
   }
 }
 
-function inferFileKind(filePath: string): FileKind {
-  const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
-  const name = filePath.split('/').pop()?.toLowerCase() ?? ''
-  if (name.includes('.test.') || name.includes('.spec.') || name.startsWith('test_') || filePath.includes('__tests__') || filePath.includes('/e2e/')) return 'test'
-  if (['sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd'].includes(ext)) return 'script'
-  if (['md', 'txt', 'rst', 'adoc'].includes(ext)) return 'doc'
-  if (['json', 'yaml', 'yml', 'toml', 'ini', 'env', 'cfg', 'conf'].includes(ext) || name.startsWith('.')) return 'config'
-  return 'code'
-}
 
 export interface RouteContext {
   docStore: DocumentStore
@@ -455,7 +444,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/initiatives
   if (method === 'POST' && url === '/api/initiatives') {
     readBody(req).then(body => {
-      const { name, color, status, summary, id: providedId } = JSON.parse(body)
+      const { name, color, status, summary, id: providedId, externalUrl } = JSON.parse(body)
       const entity = {
         id: providedId ?? shortId('init'),
         name: name ?? 'Untitled Initiative',
@@ -463,6 +452,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         status: status ?? 'active',
         summary: summary ?? '',
         spaceId: ctx.docStore.activeSpaceId,
+        externalUrl: externalUrl ?? null,
       }
       ctx.docStore.upsertInitiative(entity.id, entity)
       json(res, entity, 201)
@@ -473,7 +463,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/epics
   if (method === 'POST' && url === '/api/epics') {
     readBody(req).then(body => {
-      const { name, initiativeId, status, summary, id: providedId } = JSON.parse(body)
+      const { name, initiativeId, status, summary, id: providedId, externalUrl } = JSON.parse(body)
       const entity = {
         id: providedId ?? shortId('epic'),
         name: name ?? 'Untitled Epic',
@@ -481,6 +471,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         status: status ?? 'active',
         summary: summary ?? '',
         spaceId: ctx.docStore.activeSpaceId,
+        externalUrl: externalUrl ?? null,
       }
       ctx.docStore.upsertEpic(entity.id, entity)
       json(res, entity, 201)
@@ -890,16 +881,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         addFileWatchSubscriber(absolutePath, subscriberId, mode ?? 'notify', ctx.sse)
 
-        // For content mode, send initial file contents immediately
+        // For content mode, read and return initial file contents in the response
+        // to avoid a race between the HTTP response (which sets absolutePath)
+        // and a separate SSE broadcast (which the client would ignore if
+        // absolutePath isn't set yet).
         if ((mode ?? 'notify') === 'content' && existsSync(absolutePath)) {
           readFile(absolutePath, 'utf-8').then(content => {
-            ctx.sse.broadcastEvent('file_watch', { path: absolutePath, type: 'content', data: content })
+            json(res, { ok: true, absolutePath, content })
           }).catch(() => {
-            // ignore — subscriber will get nothing
+            json(res, { ok: true, absolutePath })
           })
+        } else {
+          json(res, { ok: true, absolutePath })
         }
-
-        json(res, { ok: true, absolutePath })
       } catch {
         json(res, { error: 'invalid request body' }, 400)
       }
@@ -951,16 +945,65 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
     const target = new URL(proxyPath, origin)
     const fwdHeaders: Record<string, string | string[] | undefined> = { ...req.headers, host: target.host }
+    // Request uncompressed so we can rewrite text responses
+    delete fwdHeaders['accept-encoding']
     // Inject custom headers
     if (widget.headers) {
       for (const [k, v] of Object.entries(widget.headers)) fwdHeaders[k.toLowerCase()] = v
     }
 
+    const proxyBase = `/api/proxy/${widgetId}`
+
     const proxyReq = httpRequest(
       { hostname: target.hostname, port: target.port || undefined, path: target.pathname + target.search, method: req.method, headers: fwdHeaders },
       proxyRes => {
-        res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers)
-        proxyRes.pipe(res)
+        const ct = (proxyRes.headers['content-type'] || '').toLowerCase()
+        const isRewritable = ct.includes('text/') || ct.includes('javascript') || ct.includes('json')
+
+        if (!isRewritable) {
+          res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers)
+          proxyRes.pipe(res)
+          return
+        }
+
+        // Buffer text responses and rewrite root-relative paths to route through proxy
+        const chunks: Buffer[] = []
+        proxyRes.on('data', (c: Buffer) => chunks.push(c))
+        proxyRes.on('end', () => {
+          let body = Buffer.concat(chunks).toString('utf-8')
+          // Rewrite quoted root-relative paths: "/foo" → "/api/proxy/{id}/foo"
+          // Skip protocol-relative "//..." URLs
+          body = body.replace(/(["'])\/((?!\/)[^"']*)/g, `$1${proxyBase}/$2`)
+          // Rewrite unquoted url() in CSS: url(/foo) → url(/api/proxy/{id}/foo)
+          body = body.replace(/url\(\/((?!\/)[^)]*)\)/g, `url(${proxyBase}/$1)`)
+
+          // Inject console-capture script into HTML so the widget can show a dev console
+          if (ct.includes('text/html')) {
+            const capture = `<script>(function(){` +
+              `var W='${widgetId}',O={l:console.log,w:console.warn,e:console.error};` +
+              `function s(l,a){try{var r=[];for(var i=0;i<a.length;i++){var v=a[i];` +
+              `r.push(v instanceof Error?(v.stack||v.message):typeof v==='object'?` +
+              `(function(){try{return JSON.stringify(v)}catch(e){return String(v)}})():String(v))}` +
+              `window.parent.postMessage({type:'bw-console',wid:W,lvl:l,args:r,ts:Date.now()},'*')}catch(e){}}` +
+              `console.log=function(){s('log',arguments);O.l.apply(console,arguments)};` +
+              `console.warn=function(){s('warn',arguments);O.w.apply(console,arguments)};` +
+              `console.error=function(){s('error',arguments);O.e.apply(console,arguments)};` +
+              `window.addEventListener('error',function(e){s('error',[e.message+' at '+e.filename+':'+e.lineno+':'+e.colno])});` +
+              `window.addEventListener('unhandledrejection',function(e){s('error',['Unhandled rejection: '+(e.reason&&(e.reason.stack||e.reason))])})` +
+              `})()</script>`
+            const headMatch = body.match(/<head[^>]*>/i)
+            if (headMatch) body = body.replace(headMatch[0], headMatch[0] + capture)
+            else body = capture + body
+          }
+
+          const headers: Record<string, string | string[] | undefined> = { ...proxyRes.headers }
+          delete headers['content-encoding']
+          delete headers['transfer-encoding']
+          headers['content-length'] = String(Buffer.byteLength(body))
+
+          res.writeHead(proxyRes.statusCode ?? 502, headers)
+          res.end(body)
+        })
       },
     )
     proxyReq.on('error', (err) => {
@@ -1232,8 +1275,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, taskId, epicId, initiativeId, color: colorParam } = JSON.parse(body)
-        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, taskId, epicId, initiativeId, color: colorParam })
+        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam } = JSON.parse(body)
+        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
         if (!['docker', 'tmux'].includes(backend)) return json(res, { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }, 400)
@@ -1285,9 +1328,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             ?? (epicId ? ctx.docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
             ?? (initiativeId ? ctx.docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
 
+          // Resolve CLI template
+          const resolvedTemplate = cliTemplateName
+            ? cfg.cliTemplates.find(t => t.name === cliTemplateName) ?? null
+            : null
+
           const session = createSession(sessDir, {
             name,
-            backend,
+            backend: resolvedTemplate ? 'tmux' : backend,
             project,
             workspace: {
               path: workspacePath,
@@ -1298,6 +1346,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             profile,
             oneshot,
             skipPermissions,
+            cliTemplate: cliTemplateName ?? null,
+            adapter: resolvedTemplate?.adapter ?? null,
           })
 
           // Enrich session with state dir for Docker backend
@@ -1327,12 +1377,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const port = await tmuxBackend.findPort(cfg.ports.hostStart)
             if (prompt) enriched.initialPrompt = prompt
 
-            // Install state-detection hooks for tmux sessions
-            if (session.workspace?.path) {
-              await tmuxBackend.installHooks(session.workspace.path, session.name, dashboardUrl)
-            }
-
-            const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port })
+            const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate })
             sessionPort = result.port
             updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
             tmuxBackend.onTtydRestart(name, (newPid) => {
@@ -1374,6 +1419,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             port: sessionPort ?? null,
             backend,
             backendInfo,
+            agentIcon: resolvedTemplate?.icon ?? undefined,
             taskId: taskId ?? '',
             worktreeId: worktreeEntityId,
             createdAt: new Date().toISOString(),
@@ -1451,14 +1497,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               updateSession(sessDir, session.name, { port })
             } else {
               const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
-              const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port })
+              const resumeTemplate = session.cliTemplate
+                ? cfg.cliTemplates.find(t => t.name === session.cliTemplate) ?? null
+                : null
+              const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port, template: resumeTemplate })
               updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
               tmuxBackend.onTtydRestart(session.name, (newPid) => {
                 updateSession(sessDir, session.name, { ttydPid: newPid })
               })
-              if (session.workspace?.path) {
-                await tmuxBackend.installHooks(session.workspace.path, session.name, dashboardUrl)
-              }
             }
 
             // Re-read session to get updated port
@@ -1509,10 +1555,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               } else {
                 await tmuxBackend.deleteTmuxSession(cfg, session)
                 if (session.port) tmuxBackend.releasePort(session.port)
-              }
-
-              if (session.backend === 'tmux' && session.workspace?.path) {
-                try { await tmuxBackend.removeHooks(session.workspace.path) } catch { /* best effort */ }
               }
 
 
@@ -1661,6 +1703,47 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
     }
 
+    // GET /api/cli-templates — configured CLI templates for agent backends
+    if (method === 'GET' && url === '/api/cli-templates') {
+      json(res, { ok: true, data: cfg.cliTemplates })
+      return true
+    }
+
+    // POST /api/cli-templates — add or update a CLI template
+    if (method === 'POST' && url === '/api/cli-templates') {
+      readBody(req).then((body) => {
+        const { name, icon, adapter, startCmd, resumeCmd } = JSON.parse(body)
+        if (!name || !startCmd || !resumeCmd) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name, startCmd, and resumeCmd are required' } }, 400)
+
+        let data: Record<string, unknown> = {}
+        try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
+        const templates: Array<{ name: string; icon?: string; adapter?: string; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+        const entry = { name, startCmd, resumeCmd, ...(icon ? { icon } : {}), ...(adapter ? { adapter } : {}) }
+        const idx = templates.findIndex(t => t.name === name)
+        if (idx >= 0) templates[idx] = entry
+        else templates.push(entry)
+        data.cliTemplates = templates
+        writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+        json(res, { ok: true, data: { name, startCmd, resumeCmd } })
+      }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+      return true
+    }
+
+    // DELETE /api/cli-templates/:name — remove a CLI template
+    if (method === 'DELETE' && url.startsWith('/api/cli-templates/')) {
+      const name = decodeURIComponent(url.slice('/api/cli-templates/'.length))
+      let data: Record<string, unknown> = {}
+      try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
+      const templates: Array<{ name: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+      const idx = templates.findIndex(t => t.name === name)
+      if (idx === -1) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Template "${name}" not found` } }, 404), true
+      templates.splice(idx, 1)
+      data.cliTemplates = templates
+      writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+      json(res, { ok: true })
+      return true
+    }
+
     // GET /api/docker/profiles — configured image profiles (read from disk for freshness)
     if (method === 'GET' && url === '/api/docker/profiles') {
       let profiles = cfg.profiles
@@ -1721,65 +1804,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       data.profiles = profiles
       writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
       json(res, { ok: true })
-      return true
-    }
-
-    // --- Hooks (called by Claude Code inside sessions) ---
-
-    // POST /api/hooks/file-touched
-    if (method === 'POST' && url === '/api/hooks/file-touched') {
-      readBody(req).then(async (body) => {
-        const { session: name } = JSON.parse(body)
-        if (!name) return json(res, { ok: false, error: { code: 'MISSING_SESSION', message: 'Session name required' } }, 400)
-
-        // Respond immediately, then reconcile git state async
-        json(res, { ok: true })
-
-        // Reconcile: get real git diff stats for the session's workdir
-        try {
-          const session = getSession(sessDir, name)
-          const workdir = session?.workspace?.path
-          if (workdir) {
-            const files = await getGitDiffFiles(workdir)
-            ctx.docStore.reconcileFiles(name, files)
-          }
-        } catch (err) {
-          log.warn('file-touched', `git diff failed for ${name}: ${(err as Error).message}`)
-        }
-      })
-      return true
-    }
-
-    // POST /api/hooks/file-read — record a read-only file access (no git diff trigger)
-    if (method === 'POST' && url === '/api/hooks/file-read') {
-      readBody(req).then((body) => {
-        const { session: name, path: filePath } = JSON.parse(body)
-        if (!name || !filePath) return json(res, { ok: true })
-
-        // Normalize container-absolute paths to host-absolute paths
-        const sessDir = ctx.sessionConfig?.dirs.sessions ?? ''
-        const session = getSession(sessDir, name)
-        const workspacePath = session?.workspace?.path
-        const resolvedPath = (() => {
-          if (!filePath.startsWith('/')) return filePath
-          if (existsSync(filePath)) return filePath
-          return workspacePath ? resolve(workspacePath, filePath.replace(/^\/+/, '')) : filePath
-        })()
-
-        const fileName = resolvedPath.split('/').pop() ?? resolvedPath
-        const kind = inferFileKind(resolvedPath)
-        const file: TouchedFile = {
-          id: resolvedPath,
-          name: fileName,
-          path: resolvedPath,
-          additions: 0,
-          deletions: 0,
-          kind,
-          readOnly: true,
-        }
-        ctx.docStore.addFileTouched(name, file)
-        json(res, { ok: true })
-      })
       return true
     }
 

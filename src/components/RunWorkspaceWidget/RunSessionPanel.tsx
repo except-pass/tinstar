@@ -175,17 +175,21 @@ interface Props {
   /** Controlled active tab (0=recap, 1=terminal/logs) for keyboard navigation */
   activeTabIndex?: number
   onActiveTabChange?: (tab: 'recap' | 'terminal') => void
+  /** When provided, the tab toggle is hidden (rendered in the header instead) */
+  controlledTab?: 'recap' | 'terminal'
+  onControlledTabChange?: (tab: 'recap' | 'terminal') => void
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, color, termTick = 0, terminalFocused, zoom, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange }: Props) {
+export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, color, termTick = 0, terminalFocused, zoom, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange, controlledTab, onControlledTabChange }: Props) {
   const accent = resolveRunAccent(color)
   const TABS = ['recap', 'terminal'] as const
   const [internalActiveTab, setInternalActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
-  // Use controlled tab when provided (keyboard navigation), otherwise internal state
-  const activeTab = activeTabIndex !== undefined ? (TABS[activeTabIndex % TABS.length] ?? 'recap') : internalActiveTab
+  // Priority: controlled tab from header > keyboard nav > internal state
+  const activeTab = controlledTab ?? (activeTabIndex !== undefined ? (TABS[activeTabIndex % TABS.length] ?? 'recap') : internalActiveTab)
   const setActiveTab = (tab: 'recap' | 'terminal') => {
     setInternalActiveTab(tab)
     onActiveTabChange?.(tab)
+    onControlledTabChange?.(tab)
   }
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
@@ -248,28 +252,30 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
 
   return (
     <section className="flex-1 flex flex-col min-w-0 min-h-0 border-x border-primary/20 bg-surface-base">
-      {/* Tab toggle */}
-      <div className="flex items-center justify-center border-b py-2 bg-surface-panel relative" style={{ borderColor: hexToRgba(accent, 0.2) }}>
-        <div className="flex rounded-sm overflow-hidden border" style={{ borderColor: hexToRgba(accent, 0.25) }}>
-          {([
-            { key: 'recap' as const, label: 'Recap' },
-            { key: 'terminal' as const, label: port ? 'Terminal' : 'Logs' },
-          ]).map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              aria-selected={activeTab === key}
-              className="px-5 py-1 text-2xs font-bold font-display tracking-[0.15em] uppercase transition-all"
-              style={activeTab === key
-                ? { background: accent, color: 'var(--surface-base)' }
-                : { color: hexToRgba(accent, 0.5) }
-              }
-            >
-              {label}
-            </button>
-          ))}
+      {/* Tab toggle — hidden when controlled from header */}
+      {!controlledTab && (
+        <div className="flex items-center justify-center border-b py-2 bg-surface-panel relative" style={{ borderColor: hexToRgba(accent, 0.2) }}>
+          <div className="flex rounded-sm overflow-hidden border" style={{ borderColor: hexToRgba(accent, 0.25) }}>
+            {([
+              { key: 'recap' as const, label: 'Recap' },
+              { key: 'terminal' as const, label: port ? 'Terminal' : 'Logs' },
+            ]).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                aria-selected={activeTab === key}
+                className="px-5 py-1 text-2xs font-bold font-display tracking-[0.15em] uppercase transition-all"
+                style={activeTab === key
+                  ? { background: accent, color: 'var(--surface-base)' }
+                  : { color: hexToRgba(accent, 0.5) }
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Content */}
       {isTerminated && sessionId ? (
