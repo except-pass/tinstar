@@ -21,6 +21,11 @@ export interface SessionWorkspace {
   basePath: string | null
 }
 
+export interface SessionNats {
+  enabled: boolean
+  subscriptions: string[]
+}
+
 export interface Session {
   name: string
   backend: SessionBackend
@@ -35,6 +40,8 @@ export interface Session {
   cliTemplate: string | null
   /** Transcript adapter type — determines how to find and parse agent logs */
   adapter: string | null
+  /** NATS channel configuration — enables agent-to-agent messaging */
+  nats: SessionNats | null
   port: number | null
   ttydPid: number | null
   created: string
@@ -74,6 +81,7 @@ export interface CreateSessionOpts {
   skipPermissions?: boolean
   cliTemplate?: string | null
   adapter?: string | null
+  nats?: SessionNats | null
 }
 
 export function createSession(sessionsDir: string, opts: CreateSessionOpts): Session {
@@ -99,6 +107,7 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
     skipPermissions: opts.skipPermissions ?? false,
     cliTemplate: opts.cliTemplate ?? null,
     adapter: opts.adapter ?? null,
+    nats: opts.nats ?? null,
     port: null,
     ttydPid: null,
     created: now,
@@ -122,12 +131,15 @@ export function updateSession(sessionsDir: string, name: string, updates: Partia
   if (!session) return null
 
   const updated = { ...session, ...updates }
-  // Deep merge workspace and conversation
+  // Deep merge workspace, conversation, and nats
   if (updates.workspace) {
     updated.workspace = { ...session.workspace, ...updates.workspace }
   }
   if (updates.conversation) {
     updated.conversation = { ...session.conversation, ...updates.conversation }
+  }
+  if (updates.nats && session.nats) {
+    updated.nats = { ...session.nats, ...updates.nats }
   }
 
   writeFileSync(sessionFile(sessionsDir, name), JSON.stringify(updated, null, 2))

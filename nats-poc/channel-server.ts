@@ -158,6 +158,15 @@ async function subscribe(subject: string): Promise<void> {
   })()
 }
 
+function unsubscribe(subject: string): void {
+  const sub = activeSubs.get(subject)
+  if (sub) {
+    sub.unsubscribe()
+    activeSubs.delete(subject)
+    console.error(`[${agentName}] unsubscribed from ${subject}`)
+  }
+}
+
 // ── Connect to Claude Code over stdio (must happen before subscribing) ────────
 
 await mcp.connect(new StdioServerTransport())
@@ -167,10 +176,51 @@ for (const subject of initialSubjects) {
   await subscribe(subject)
 }
 
+// ── Unix socket for hot subscription management ───────────────────────────────
+
+import { createServer as createUnixServer, type Socket } from 'node:net'
+import { unlinkSync } from 'node:fs'
+
+const socketPath = `/tmp/tinstar-nats-${agentName}.sock`
+
+// Clean up stale socket if it exists
+try { unlinkSync(socketPath) } catch { /* doesn't exist */ }
+
+const unixServer = createUnixServer((socket: Socket) => {
+  let buffer = ''
+  socket.on('data', (data) => {
+    buffer += data.toString()
+    // Process newline-delimited JSON commands
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''  // Keep incomplete line in buffer
+    for (const line of lines) {
+      if (!line.trim()) continue
+      try {
+        const cmd = JSON.parse(line)
+        if (cmd.action === 'subscribe' && cmd.subject) {
+          subscribe(cmd.subject)
+        } else if (cmd.action === 'unsubscribe' && cmd.subject) {
+          unsubscribe(cmd.subject)
+        } else {
+          console.error(`[${agentName}] unknown socket command:`, cmd)
+        }
+      } catch (e) {
+        console.error(`[${agentName}] socket parse error:`, e)
+      }
+    }
+  })
+})
+
+unixServer.listen(socketPath, () => {
+  console.error(`[${agentName}] listening on socket ${socketPath}`)
+})
+
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
 async function shutdown() {
   console.error(`[${agentName}] shutting down`)
+  unixServer.close()
+  try { unlinkSync(socketPath) } catch { /* already gone */ }
   for (const sub of activeSubs.values()) sub.unsubscribe()
   await nc.drain()
   process.exit(0)

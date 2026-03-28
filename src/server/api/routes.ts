@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import { request as httpRequest } from 'node:http'
+import { createConnection } from 'node:net'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
 import type { DocumentStore } from '../stores/document-store'
@@ -42,6 +43,35 @@ import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
+
+// ─── NATS socket communication ─────────────────────────────────────────
+
+/**
+ * Send a command to the channel server's Unix socket for hot subscription management.
+ * The socket path is /tmp/tinstar-nats-<sessionName>.sock
+ */
+function sendNatsSocketCommand(sessionName: string, cmd: { action: 'subscribe' | 'unsubscribe'; subject: string }): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socketPath = `/tmp/tinstar-nats-${sessionName}.sock`
+    const socket = createConnection(socketPath)
+    const timeout = setTimeout(() => {
+      socket.destroy()
+      reject(new Error('Socket timeout'))
+    }, 5000)
+
+    socket.on('connect', () => {
+      socket.write(JSON.stringify(cmd) + '\n')
+      clearTimeout(timeout)
+      socket.end()
+      resolve()
+    })
+
+    socket.on('error', (err) => {
+      clearTimeout(timeout)
+      reject(err)
+    })
+  })
+}
 
 // ─── Multiplexed file watcher ──────────────────────────────────────────
 // Tracks fs.watch instances keyed by absolute path. Multiple subscribers
@@ -1275,7 +1305,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam } = JSON.parse(body)
+        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
@@ -1348,6 +1378,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             skipPermissions,
             cliTemplate: cliTemplateName ?? null,
             adapter: resolvedTemplate?.adapter ?? null,
+            nats: nats ?? null,
           })
 
           // Enrich session with state dir for Docker backend
@@ -1699,6 +1730,78 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         } catch (err) {
           json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
         }
+        return true
+      }
+    }
+
+    // GET /api/sessions/:name/subscriptions — list NATS subscriptions for a session
+    if (method === 'GET' && url.endsWith('/subscriptions') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
+        json(res, { ok: true, data: { subscriptions: session.nats?.subscriptions ?? [] } })
+        return true
+      }
+    }
+
+    // POST /api/sessions/:name/subscriptions — add a NATS subscription
+    if (method === 'POST' && url.endsWith('/subscriptions') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        readBody(req).then(async (body) => {
+          const { subject } = JSON.parse(body)
+          if (!subject || typeof subject !== 'string') {
+            return json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject must be a non-empty string' } }, 400)
+          }
+          const session = getSession(sessDir, name)
+          if (!session) { return json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404) }
+          if (!session.nats?.enabled) { return json(res, { ok: false, error: { code: 'NATS_DISABLED', message: 'NATS is not enabled for this session' } }, 400) }
+
+          // Add to subscriptions if not already present
+          const subs = session.nats.subscriptions
+          if (!subs.includes(subject)) {
+            subs.push(subject)
+            updateSession(sessDir, name, { nats: { ...session.nats, subscriptions: subs } })
+
+            // Send to channel server via Unix socket
+            try {
+              await sendNatsSocketCommand(name, { action: 'subscribe', subject })
+            } catch (err) {
+              log.warn('nats', `Failed to send subscribe to socket for ${name}: ${(err as Error).message}`)
+            }
+          }
+          json(res, { ok: true, data: { subscriptions: subs } })
+        }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+        return true
+      }
+    }
+
+    // DELETE /api/sessions/:name/subscriptions — remove a NATS subscription
+    if (method === 'DELETE' && url.endsWith('/subscriptions') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        readBody(req).then(async (body) => {
+          const { subject } = JSON.parse(body)
+          if (!subject || typeof subject !== 'string') {
+            return json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject must be a non-empty string' } }, 400)
+          }
+          const session = getSession(sessDir, name)
+          if (!session) { return json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404) }
+          if (!session.nats?.enabled) { return json(res, { ok: false, error: { code: 'NATS_DISABLED', message: 'NATS is not enabled for this session' } }, 400) }
+
+          // Remove from subscriptions
+          const subs = session.nats.subscriptions.filter(s => s !== subject)
+          updateSession(sessDir, name, { nats: { ...session.nats, subscriptions: subs } })
+
+          // Send to channel server via Unix socket
+          try {
+            await sendNatsSocketCommand(name, { action: 'unsubscribe', subject })
+          } catch (err) {
+            log.warn('nats', `Failed to send unsubscribe to socket for ${name}: ${(err as Error).message}`)
+          }
+          json(res, { ok: true, data: { subscriptions: subs } })
+        }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
         return true
       }
     }

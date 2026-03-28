@@ -1,9 +1,13 @@
 import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
+import { writeFileSync, mkdirSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
-import type { Session } from '../session'
+import type { Session, SessionNats } from '../session'
 import type { TinstarConfig, CliTemplate } from '../config'
 import { log } from '../../logger'
+
+// Path to the channel-server.ts binary
+const CHANNEL_SERVER_PATH = '/home/ubuntu/repo/tinstar/nats-poc/channel-server.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -79,6 +83,38 @@ function interpolateTemplate(
   return cmd.replace(/\s{2,}/g, ' ').trim()
 }
 
+/**
+ * Generate and write a per-session MCP config file for NATS channels.
+ * Returns the path to the generated config file.
+ */
+export function generateNatsMcpConfig(opts: {
+  sessionsDir: string
+  sessionName: string
+  nats: SessionNats
+}): string {
+  const sessionDir = join(opts.sessionsDir, opts.sessionName)
+  mkdirSync(sessionDir, { recursive: true })
+  const mcpConfigPath = join(sessionDir, 'nats-mcp.json')
+
+  // Build args for channel-server.ts
+  const args: string[] = [CHANNEL_SERVER_PATH, '--name', opts.sessionName]
+  for (const subject of opts.nats.subscriptions) {
+    args.push('--subscribe', subject)
+  }
+
+  const mcpConfig = {
+    mcpServers: {
+      nats: {
+        command: 'bun',
+        args,
+      },
+    },
+  }
+
+  writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2))
+  return mcpConfigPath
+}
+
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
 export function buildAgentCommand(opts: {
   template?: CliTemplate | null
@@ -86,6 +122,7 @@ export function buildAgentCommand(opts: {
   sessionId?: string | null
   resume?: boolean
   initialPrompt?: string | null
+  nats?: { enabled: boolean; mcpConfigPath?: string } | null
 }): string {
   if (opts.template) {
     const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
@@ -99,6 +136,11 @@ export function buildAgentCommand(opts: {
   if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
   if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
   else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
+  // Add NATS channel support
+  if (opts.nats?.enabled && opts.nats.mcpConfigPath) {
+    cmd += ` --mcp-config ${opts.nats.mcpConfigPath}`
+    cmd += ' --dangerously-load-development-channels server:nats'
+  }
   if (opts.initialPrompt) cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
   return cmd
 }
@@ -139,12 +181,25 @@ export async function createTmuxSession(
 
   // Build and send agent command
   const parts = ['eval "$(tmux show-environment -s)"']
+
+  // Generate NATS MCP config if enabled
+  let natsOpts: { enabled: boolean; mcpConfigPath?: string } | null = null
+  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
+    const mcpConfigPath = generateNatsMcpConfig({
+      sessionsDir: config.dirs.sessions,
+      sessionName: opts.session.name,
+      nats: opts.session.nats,
+    })
+    natsOpts = { enabled: true, mcpConfigPath }
+  }
+
   const agentCmd = buildAgentCommand({
     template: opts.template,
     skipPermissions: opts.session.skipPermissions,
     sessionId: opts.session.conversation?.id,
     resume: opts.resume,
     initialPrompt: opts.resume ? undefined : opts.session.initialPrompt,
+    nats: natsOpts,
   })
   parts.push(agentCmd)
 
@@ -174,11 +229,24 @@ export async function startTmuxSession(
 
   // Tmux session exists but agent may have exited — re-send the command
   const parts = ['eval "$(tmux show-environment -s)"']
+
+  // Generate NATS MCP config if enabled
+  let natsOpts: { enabled: boolean; mcpConfigPath?: string } | null = null
+  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
+    const mcpConfigPath = generateNatsMcpConfig({
+      sessionsDir: config.dirs.sessions,
+      sessionName: opts.session.name,
+      nats: opts.session.nats,
+    })
+    natsOpts = { enabled: true, mcpConfigPath }
+  }
+
   const agentCmd = buildAgentCommand({
     template: opts.template,
     skipPermissions: opts.session.skipPermissions,
     sessionId: opts.session.conversation?.id,
     resume: true,
+    nats: natsOpts,
   })
   parts.push(agentCmd)
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])

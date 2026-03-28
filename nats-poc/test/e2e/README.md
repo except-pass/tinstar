@@ -43,6 +43,42 @@ trigger → A1 (Montgomery Wafflesworth-Pudding) → A2 (Countess Beets McGillic
 - Times out with a clear error if any step hangs
 - Tears down cleanly on pass or fail
 
+### `hot-subscribe.sh`
+
+Tests hot subscription management via Unix socket:
+
+```
+agent starts → socket command adds subscription → message received on new subject
+```
+
+**Asserts:**
+- Unix socket is created at `/tmp/tinstar-nats-<name>.sock`
+- Subscribe command via socket succeeds
+- Agent receives messages on dynamically added subscription
+- Unsubscribe command via socket succeeds
+
+**Prerequisites:**
+- NATS server running
+- `nc` (netcat) available for socket communication
+
+### `entity-move.sh`
+
+Tests subscription updates when a task is moved between epics:
+
+```
+create task under epic1 → create session with NATS → move task to epic2 → verify subscriptions updated
+```
+
+**Asserts:**
+- Initial subscriptions include epic1 paths
+- After task move, epic1 paths are removed
+- After task move, epic2 paths are added
+
+**Prerequisites:**
+- NATS server running
+- Tinstar server running at `TINSTAR_URL` (default: `http://localhost:3000`)
+- jq for JSON parsing
+
 ## Notes
 
 - Tests use `--dangerously-skip-permissions` to suppress tool approval prompts.
