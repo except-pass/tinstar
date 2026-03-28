@@ -10,7 +10,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import { connect, StringCodec } from 'nats'
+import { connect, StringCodec, headers } from 'nats'
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
@@ -127,7 +127,12 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
 mcp.setRequestHandler(CallToolRequestSchema, async req => {
   if (req.params.name !== 'reply') throw new Error(`unknown tool: ${req.params.name}`)
   const { to, text } = req.params.arguments as { to: string; text: string }
-  nc.publish(to, sc.encode(text))
+
+  // Include x-from header so recipients know who sent the message
+  const hdrs = headers()
+  hdrs.set('x-from', agentName)
+
+  nc.publish(to, sc.encode(text), { headers: hdrs })
   console.error(`[${agentName}] published to ${to}: ${text.slice(0, 80)}`)
   return { content: [{ type: 'text' as const, text: `published to ${to}` }] }
 })
@@ -142,15 +147,29 @@ async function subscribe(subject: string): Promise<void> {
 
   ;(async () => {
     for await (const msg of sub) {
-      const content = sc.decode(msg.data)
-      console.error(`[${agentName}] received on ${msg.subject}: ${content.slice(0, 80)}`)
+      const rawContent = sc.decode(msg.data)
+
+      // Extract metadata for envelope
+      const fromHeader = msg.headers?.get('x-from') ?? 'unknown'
+      const replyTo = msg.reply ?? 'none'
+      const subject = msg.subject
+
+      // Wrap message in metadata envelope
+      const content = `--- incoming message ---
+from:     ${fromHeader}
+replyTo:  ${replyTo}
+subject:  ${subject}
+---
+${rawContent}`
+
+      console.error(`[${agentName}] received on ${msg.subject} from ${fromHeader}: ${rawContent.slice(0, 80)}`)
       await mcp.notification({
         method: 'notifications/claude/channel',
         params: {
           content,
           meta: {
             subject:  msg.subject,
-            from:     msg.reply ?? '',
+            from:     fromHeader,
           },
         },
       })
