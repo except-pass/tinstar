@@ -6,7 +6,7 @@ Claude Code sessions, runs the full chain, and asserts on the output.
 ## Prerequisites
 
 All of the main prerequisites apply (NATS server, Bun, Claude Code ≥ v2.1.80,
-nats CLI). Tests handle NATS startup automatically if it's not already running.
+nats CLI). **NATS server must be running before you start the tests** — the test will fail with a clear message if it's not. Start it with `nats-server`.
 
 ## Running
 
@@ -35,7 +35,7 @@ trigger → A1 (Montgomery Wafflesworth-Pudding) → A2 (Countess Beets McGillic
 - A1's terminal output contains "Montgomery Wafflesworth-Pudding"
 
 **What it does automatically:**
-- Starts NATS if not running
+- Checks NATS is running (fails clearly if not)
 - Generates `.mcp.json` files with correct absolute paths
 - Launches both Claude sessions in tmux
 - Auto-confirms the dev channels prompt

@@ -33,16 +33,11 @@ info() { echo -e "${YELLOW}→${NC} $1"; }
 
 # ── Teardown ───────────────────────────────────────────────────────────────────
 
-NATS_STARTED=0
-
 teardown() {
   info "Tearing down..."
   tmux kill-session -t e2e-a1 2>/dev/null || true
   tmux kill-session -t e2e-a2 2>/dev/null || true
   rm -f "$DONE_OUTPUT"
-  if [ "$NATS_STARTED" = "1" ]; then
-    pkill -f "nats-server -p 4222" 2>/dev/null || true
-  fi
 }
 
 trap teardown EXIT
@@ -55,16 +50,17 @@ echo "  E2E Test: intro-chain"
 echo "══════════════════════════════════════════"
 echo ""
 
-# NATS server
-if pgrep -x nats-server > /dev/null; then
-  info "NATS server already running"
-else
-  info "Starting NATS server..."
-  nats-server -p 4222 2>/dev/null &
-  sleep 1
-  NATS_STARTED=1
-  pass "NATS server started"
+# NATS server — must be running before the test starts
+if ! pgrep -x nats-server > /dev/null; then
+  echo ""
+  echo -e "${RED}✗ FAIL${NC}: NATS server is not running."
+  echo ""
+  echo "  Start it first:  nats-server"
+  echo "  Then retry:      bun test:e2e"
+  echo ""
+  exit 1
 fi
+pass "NATS server is running"
 
 # Generate .mcp.json files with absolute paths
 info "Generating .mcp.json files..."
