@@ -1729,6 +1729,35 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
+    // PUT /api/cli-templates/:name — update a CLI template (supports renaming)
+    if (method === 'PUT' && url.startsWith('/api/cli-templates/')) {
+      const oldName = decodeURIComponent(url.slice('/api/cli-templates/'.length))
+      readBody(req).then((body) => {
+        const { name, icon, adapter, startCmd, resumeCmd } = JSON.parse(body)
+        if (!name || !startCmd || !resumeCmd) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name, startCmd, and resumeCmd are required' } }, 400)
+
+        // Check if template exists in merged config (includes defaults)
+        const existsInMerged = cfg.cliTemplates.some(t => t.name === oldName)
+        if (!existsInMerged) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Template "${oldName}" not found` } }, 404)
+
+        let data: Record<string, unknown> = {}
+        try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
+        const templates: Array<{ name: string; icon?: string; adapter?: string; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+        const entry = { name, startCmd, resumeCmd, ...(icon ? { icon } : {}), ...(adapter ? { adapter } : {}) }
+        const idx = templates.findIndex(t => t.name === oldName)
+        if (idx >= 0) {
+          templates[idx] = entry
+        } else {
+          // Template exists as a default — add override to user config
+          templates.push(entry)
+        }
+        data.cliTemplates = templates
+        writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+        json(res, { ok: true, data: entry })
+      }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+      return true
+    }
+
     // DELETE /api/cli-templates/:name — remove a CLI template
     if (method === 'DELETE' && url.startsWith('/api/cli-templates/')) {
       const name = decodeURIComponent(url.slice('/api/cli-templates/'.length))

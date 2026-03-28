@@ -197,6 +197,10 @@ export class StatusWatcher {
       if (err) {
         log.debug('status-watcher', `${session.name}: tmux pane lookup failed: ${err.message}`)
         this.idleStreak.delete(session.name)
+        // Tmux session is gone — mark as stopped
+        if (session.state === 'running' || session.state === 'idle') {
+          this.transitionState(session, 'stopped')
+        }
         return
       }
 

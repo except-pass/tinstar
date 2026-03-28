@@ -86,6 +86,13 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     startCmd: 'codex --full-auto -- {prompt}',
     resumeCmd: 'codex resume --last --full-auto',
   },
+  {
+    name: 'Cursor Agent',
+    icon: '◆',
+    adapter: 'generic',
+    startCmd: 'agent --yolo -- {prompt}',
+    resumeCmd: 'agent resume',
+  },
 ]
 
 // --- Base config (hardcoded defaults) ---

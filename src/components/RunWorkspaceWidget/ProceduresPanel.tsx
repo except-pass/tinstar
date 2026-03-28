@@ -1,5 +1,5 @@
 import { useTaxonomy } from '../TaxonomyContext'
-import { useSkillsContext } from '../SkillsProvider'
+import { useSkillsContext } from '../SkillsContext'
 import { resolveEntityProcedures } from '../../domain/procedures'
 import type { SessionStatus, StoredProcedure } from '../../types'
 
