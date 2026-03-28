@@ -1,10 +1,10 @@
 {
-  "name": "claude-nats-channel",
+  "name": "nats-channel-mcp",
   "version": "0.1.0",
   "description": "MCP channel server that bridges NATS pub/sub into Claude Code sessions as <channel> tags",
   "type": "module",
   "bin": {
-    "claude-nats-channel": "./channel-server.ts"
+    "nats-channel-mcp": "./channel-server.ts"
   },
   "scripts": {
     "start": "bun channel-server.ts",

@@ -1,4 +1,4 @@
-# claude-nats-channel
+# nats-channel-mcp
 
 An MCP channel server that bridges [NATS](https://nats.io) pub/sub into [Claude Code](https://claude.ai/code) sessions.
 
@@ -33,7 +33,7 @@ Claude Code must be authenticated with a claude.ai account (`claude auth login`)
 
 ```bash
 git clone <this-repo>
-cd claude-nats-channel
+cd nats-channel-mcp
 bun install
 ```
 
@@ -277,15 +277,34 @@ See [`examples/intro-chain/`](./examples/intro-chain/) for a working end-to-end 
 
 ---
 
-## Known Limitations
+## Known Limitations & Gotchas
 
 | Issue | Details |
 |---|---|
 | **Tool approval prompts** | Claude asks permission before calling `reply`. Choose "don't ask again" to suppress. In sandboxed environments use `--dangerously-skip-permissions`. |
 | **Fire-and-forget delivery** | No subscriber = lost message. Start subscribers before dispatching, or use [NATS JetStream](https://docs.nats.io/nats-concepts/jetstream) for durable delivery. |
-| **One-time startup confirmation** | `--dangerously-load-development-channels` prompts once per session. Automate: `echo 1 | claude ...` |
+| **One-time startup confirmation** | `--dangerously-load-development-channels` prompts once per session. Automate: `echo 1 \| claude ...` |
 | **Research preview** | Requires Claude Code ≥ v2.1.80. The `--dangerously-load-development-channels` flag is for local development. Approved channels use `--channels plugin:name@marketplace`. |
 | **Absolute path in `.mcp.json`** | The path to `channel-server.ts` must be absolute — relative paths don't resolve correctly when Claude Code spawns the subprocess. |
+| **NATS auth not implemented** | `--nats` only accepts a URL. For authenticated NATS servers, credentials file support (`--nats-creds`) is on the roadmap. For now: local NATS only. |
+
+### The Key Name Coupling (important)
+
+The MCP server key in `.mcp.json` and the `--dangerously-load-development-channels server:<key>` flag **must match exactly**. If they don't, Claude starts silently — no channel listener, no error.
+
+```json
+{ "mcpServers": { "nats": { ... } } }
+//                  ^^^^
+//              This must match ──────────────────────────────────────┐
+```
+```bash
+claude --dangerously-load-development-channels server:nats
+#                                                      ^^^^
+```
+
+**Convention:** always use `nats` as the key name. The examples follow this convention.
+
+**If you need a different key name** (e.g. running multiple channel servers per session), use a `CHANNEL_KEY` variable in your launch script so both places stay in sync automatically — see `examples/intro-chain/run.sh` for the pattern.
 
 ---
 

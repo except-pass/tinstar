@@ -12,6 +12,12 @@ set -e
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+# ── Configuration ──────────────────────────────────────────────────────────────
+# CHANNEL_KEY is the MCP server key name in .mcp.json.
+# It MUST match the value passed to --dangerously-load-development-channels server:<key>.
+# Change it here — it flows into both places automatically.
+CHANNEL_KEY="nats"
+
 echo "=== Intro Chain Example ==="
 echo ""
 
@@ -37,7 +43,7 @@ for agent in a1 a2; do
   cat > "$AGENT_DIR/.mcp.json" <<EOF
 {
   "mcpServers": {
-    "nats": {
+    "$CHANNEL_KEY": {
       "command": "bun",
       "args": [
         "$ROOT/channel-server.ts",
@@ -60,11 +66,11 @@ tmux kill-session -t chain-a2 2>/dev/null || true
 
 echo "→ Launching A1 (Montgomery Wafflesworth-Pudding)..."
 tmux new-session -d -s chain-a1 -x 200 -y 50 \
-  "cd $ROOT/examples/intro-chain/agents/a1 && claude --mcp-config .mcp.json --dangerously-load-development-channels server:nats"
+  "cd $ROOT/examples/intro-chain/agents/a1 && claude --mcp-config .mcp.json --dangerously-load-development-channels server:${CHANNEL_KEY}"
 
 echo "→ Launching A2 (Countess Beets McGillicuddy)..."
 tmux new-session -d -s chain-a2 -x 200 -y 50 \
-  "cd $ROOT/examples/intro-chain/agents/a2 && claude --mcp-config .mcp.json --dangerously-load-development-channels server:nats"
+  "cd $ROOT/examples/intro-chain/agents/a2 && claude --mcp-config .mcp.json --dangerously-load-development-channels server:${CHANNEL_KEY}"
 
 echo ""
 echo "⚠  Both agents will prompt for dev channel confirmation."
