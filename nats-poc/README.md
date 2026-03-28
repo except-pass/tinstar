@@ -210,16 +210,16 @@ Create `topics.txt` alongside `AGENT.md`:
 agents.my-agent
 
 # Team channel (shared with other agents on the same task)
-tinstar.init-001.epic-xyz.task-abc.*
+myapp.project-01.epic-xyz.task-abc.*
 
 # Epic-level broadcast
-tinstar.init-001.epic-xyz.>
+myapp.project-01.epic-xyz.>
 
 # Workspace-wide announcements
-tinstar.>
+myapp.>
 
 # Breakout rooms (add/remove as needed)
-# tinstar.breakout.sprint-planning
+# myapp.breakout.sprint-planning
 ```
 
 Pass it with `--topics-file`:

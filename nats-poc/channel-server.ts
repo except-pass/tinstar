@@ -4,7 +4,7 @@
  * delivers messages into a Claude Code session as <channel> tags.
  *
  * Usage:
- *   bun channel-server.ts --name a1 --subscribe tinstar.agent.a1 [--nats nats://localhost:4222]
+ *   bun channel-server.ts --name a1 --subscribe agents.a1 [--nats nats://localhost:4222]
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'

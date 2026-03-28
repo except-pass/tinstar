@@ -5,7 +5,7 @@
 #   - A1 introduces itself as Montgomery Wafflesworth-Pudding
 #   - A1 forwards to A2
 #   - A2 introduces itself as Countess Beets McGillicuddy
-#   - A2 publishes to tinstar.done.chain-001
+#   - A2 publishes to done.chain-001
 #   - The done message is received and verified
 #
 # Usage: ./test/e2e/intro-chain.sh
@@ -16,7 +16,7 @@ set -e
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 EXAMPLES="$ROOT/examples/intro-chain"
 CHANNEL_KEY="nats"
-DONE_SUBJECT="tinstar.done.chain-001"
+DONE_SUBJECT="done.chain-001"
 DONE_OUTPUT="/tmp/nats-e2e-done-$$"
 TIMEOUT_SECONDS=60
 
@@ -150,7 +150,7 @@ LISTENER_PID=$!
 sleep 1  # give listener time to subscribe
 
 info "Dispatching trigger to A1..."
-nats pub tinstar.agent.a1 "Please introduce yourself."
+nats pub agents.a1 "Please introduce yourself."
 
 # Wait for the done message
 info "Waiting for chain completion (timeout: ${TIMEOUT_SECONDS}s)..."

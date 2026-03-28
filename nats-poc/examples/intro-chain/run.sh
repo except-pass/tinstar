@@ -4,7 +4,7 @@
 # Agent A1: Montgomery Wafflesworth-Pudding
 # Agent A2: Countess Beets McGillicuddy
 #
-# Chain: you → A1 → A2 → tinstar.done.chain-001
+# Chain: you → A1 → A2 → done.chain-001
 #
 # Usage: ./run.sh
 
@@ -79,8 +79,8 @@ echo "     tmux attach -t chain-a1   (press 1 + Enter to confirm)"
 echo "     tmux attach -t chain-a2   (press 1 + Enter to confirm)"
 echo ""
 echo "   Once both show 'Listening for channel messages', run:"
-echo "     nats sub tinstar.done.chain-001 &"
-echo "     nats pub tinstar.agent.a1 'Please introduce yourself.'"
+echo "     nats sub done.chain-001 &"
+echo "     nats pub agents.a1 'Please introduce yourself.'"
 echo ""
-echo "   Expected completion message on tinstar.done.chain-001:"
+echo "   Expected completion message on done.chain-001:"
 echo "     Greetings! I am Countess Beets McGillicuddy, at your service."
