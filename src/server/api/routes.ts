@@ -890,6 +890,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           sessionId: sessionId ?? '',
         }
         ctx.docStore.upsertNatsTrafficWidget(widget.id, widget)
+        ctx.sse.broadcastSnapshot()
         json(res, { ok: true, data: widget })
       } catch {
         json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)

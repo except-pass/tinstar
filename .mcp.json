@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "nats": {
+      "command": "/home/ubuntu/.bun/bin/bun",
+      "args": [
+        "run",
+        "/home/ubuntu/repo/tinstar/nats-channel-mcp/channel-server.ts",
+        "--name",
+        "orchestrator",
+        "--subscribe",
+        "tinstar.nats-monitor.orchestrator"
+      ]
+    }
+  }
+}
