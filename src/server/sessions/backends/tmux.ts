@@ -7,7 +7,8 @@ import type { TinstarConfig, CliTemplate } from '../config'
 import { log } from '../../logger'
 
 // Path to the channel-server.ts binary
-const CHANNEL_SERVER_PATH = '/home/ubuntu/repo/tinstar/nats-poc/channel-server.ts'
+const CHANNEL_SERVER_PATH = '/home/ubuntu/repo/tinstar/nats-channel-mcp/channel-server.ts'
+const BUN_PATH = '/home/ubuntu/.bun/bin/bun'
 
 const execFileAsync = promisify(execFile)
 
@@ -84,20 +85,21 @@ function interpolateTemplate(
 }
 
 /**
- * Generate and write a per-session MCP config file for NATS channels.
- * Returns the path to the generated config file.
+ * Write .mcp.json to the workspace CWD so Claude picks it up automatically.
+ * Must use CWD placement — --mcp-config flag does NOT wire the channel server correctly.
+ * Returns the path written.
  */
 export function generateNatsMcpConfig(opts: {
   sessionsDir: string
   sessionName: string
+  workspacePath: string
   nats: SessionNats
 }): string {
-  const sessionDir = join(opts.sessionsDir, opts.sessionName)
-  mkdirSync(sessionDir, { recursive: true })
-  const mcpConfigPath = join(sessionDir, 'nats-mcp.json')
+  // Write to workspace CWD — Claude looks for .mcp.json in the working directory
+  const mcpConfigPath = join(opts.workspacePath, '.mcp.json')
 
   // Build args for channel-server.ts
-  const args: string[] = [CHANNEL_SERVER_PATH, '--name', opts.sessionName]
+  const args: string[] = ['run', CHANNEL_SERVER_PATH, '--name', opts.sessionName]
   for (const subject of opts.nats.subscriptions) {
     args.push('--subscribe', subject)
   }
@@ -105,7 +107,7 @@ export function generateNatsMcpConfig(opts: {
   const mcpConfig = {
     mcpServers: {
       nats: {
-        command: 'bun',
+        command: BUN_PATH,
         args,
       },
     },
@@ -122,7 +124,7 @@ export function buildAgentCommand(opts: {
   sessionId?: string | null
   resume?: boolean
   initialPrompt?: string | null
-  nats?: { enabled: boolean; mcpConfigPath?: string } | null
+  nats?: { enabled: boolean } | null
 }): string {
   if (opts.template) {
     const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
@@ -136,9 +138,8 @@ export function buildAgentCommand(opts: {
   if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
   if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
   else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
-  // Add NATS channel support
-  if (opts.nats?.enabled && opts.nats.mcpConfigPath) {
-    cmd += ` --mcp-config ${opts.nats.mcpConfigPath}`
+  // Add NATS channel support — .mcp.json is in CWD, no --mcp-config needed
+  if (opts.nats?.enabled) {
     cmd += ' --dangerously-load-development-channels server:nats'
   }
   if (opts.initialPrompt) cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
@@ -182,15 +183,16 @@ export async function createTmuxSession(
   // Build and send agent command
   const parts = ['eval "$(tmux show-environment -s)"']
 
-  // Generate NATS MCP config if enabled
-  let natsOpts: { enabled: boolean; mcpConfigPath?: string } | null = null
-  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
-    const mcpConfigPath = generateNatsMcpConfig({
+  // Generate NATS MCP config if enabled — writes .mcp.json to workspace CWD
+  let natsOpts: { enabled: boolean } | null = null
+  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0 && opts.session.workspace?.path) {
+    generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
       sessionName: opts.session.name,
+      workspacePath: opts.session.workspace.path,
       nats: opts.session.nats,
     })
-    natsOpts = { enabled: true, mcpConfigPath }
+    natsOpts = { enabled: true }
   }
 
   const agentCmd = buildAgentCommand({
@@ -230,15 +232,16 @@ export async function startTmuxSession(
   // Tmux session exists but agent may have exited — re-send the command
   const parts = ['eval "$(tmux show-environment -s)"']
 
-  // Generate NATS MCP config if enabled
-  let natsOpts: { enabled: boolean; mcpConfigPath?: string } | null = null
-  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
-    const mcpConfigPath = generateNatsMcpConfig({
+  // Generate NATS MCP config if enabled — writes .mcp.json to workspace CWD
+  let natsOpts: { enabled: boolean } | null = null
+  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0 && opts.session.workspace?.path) {
+    generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
       sessionName: opts.session.name,
+      workspacePath: opts.session.workspace.path,
       nats: opts.session.nats,
     })
-    natsOpts = { enabled: true, mcpConfigPath }
+    natsOpts = { enabled: true }
   }
 
   const agentCmd = buildAgentCommand({
