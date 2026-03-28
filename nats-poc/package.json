@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "bun channel-server.ts",
-    "example": "cd examples/intro-chain && ./run.sh"
+    "example": "cd examples/intro-chain && ./run.sh",
+    "test:e2e": "bash test/e2e/intro-chain.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",
