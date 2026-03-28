@@ -95,6 +95,31 @@ const sc = StringCodec()
 // Track active subscriptions so we can hot-manage them later
 const activeSubs = new Map<string, ReturnType<typeof nc.subscribe>>()
 
+// ── Traffic event publishing ──────────────────────────────────────────────────
+
+interface TrafficEvent {
+  direction: 'inbound' | 'outbound'
+  subject: string
+  from: string
+  replyTo: string | null
+  body: string
+}
+
+function publishTrafficEvent(event: TrafficEvent): void {
+  nc.publish(
+    `_tinstar.traffic.${agentName}`,
+    sc.encode(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      sessionName: agentName,
+      direction: event.direction,
+      subject: event.subject,
+      from: event.from,
+      replyTo: event.replyTo,
+      body: event.body,
+    }))
+  )
+}
+
 // ── MCP server ────────────────────────────────────────────────────────────────
 
 const mcp = new Server(
@@ -134,6 +159,16 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 
   nc.publish(to, sc.encode(text), { headers: hdrs })
   console.error(`[${agentName}] published to ${to}: ${text.slice(0, 80)}`)
+
+  // Publish traffic event for monitoring
+  publishTrafficEvent({
+    direction: 'outbound',
+    subject: to,
+    from: agentName,
+    replyTo: null,
+    body: text,
+  })
+
   return { content: [{ type: 'text' as const, text: `published to ${to}` }] }
 })
 
@@ -163,6 +198,16 @@ subject:  ${subject}
 ${rawContent}`
 
       console.error(`[${agentName}] received on ${msg.subject} from ${fromHeader}: ${rawContent.slice(0, 80)}`)
+
+      // Publish traffic event for monitoring
+      publishTrafficEvent({
+        direction: 'inbound',
+        subject: msg.subject,
+        from: fromHeader,
+        replyTo: msg.reply ?? null,
+        body: rawContent,
+      })
+
       await mcp.notification({
         method: 'notifications/claude/channel',
         params: {
