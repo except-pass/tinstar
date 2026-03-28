@@ -878,6 +878,39 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST /api/nats-traffic-widgets — create a NATS traffic monitor widget
+  if (method === 'POST' && url === '/api/nats-traffic-widgets') {
+    readBody(req).then(body => {
+      try {
+        const { sessionId } = JSON.parse(body) as { sessionId?: string }
+        // sessionId is optional — empty means show all sessions
+        const widget = {
+          id: shortId('nats'),
+          spaceId: ctx.docStore.activeSpaceId || undefined,
+          sessionId: sessionId ?? '',
+        }
+        ctx.docStore.upsertNatsTrafficWidget(widget.id, widget)
+        json(res, { ok: true, data: widget })
+      } catch {
+        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+      }
+    })
+    return true
+  }
+
+  // DELETE /api/nats-traffic-widgets/:id
+  if (method === 'DELETE' && url.startsWith('/api/nats-traffic-widgets/')) {
+    const id = url.slice('/api/nats-traffic-widgets/'.length)
+    const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
+    if (!existing) {
+      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `NatsTrafficWidget ${id} not found` } }, 404)
+      return true
+    }
+    ctx.docStore.deleteNatsTrafficWidget(id)
+    json(res, { ok: true })
+    return true
+  }
+
   // POST /api/file-watch/subscribe — subscribe to file changes via the main SSE
   if (method === 'POST' && url === '/api/file-watch/subscribe') {
     readBody(req).then(body => {

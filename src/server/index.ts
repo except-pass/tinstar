@@ -29,6 +29,7 @@ import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
 import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
+import { NatsTrafficBridge } from './nats-traffic'
 
 export function initBackend(): RouteContext {
   // Instantiate core components
@@ -49,6 +50,11 @@ export function initBackend(): RouteContext {
   // Start draft watcher — emits skill.drafted SSE events when new drafts appear
   ensureDraftsDir()
   watchDrafts(sse)
+
+  // Start NATS traffic bridge — subscribes to _tinstar.traffic.> and broadcasts via SSE
+  const natsUrl = process.env.NATS_URL ?? 'nats://localhost:4222'
+  const natsTraffic = new NatsTrafficBridge(sse, natsUrl)
+  natsTraffic.start()
 
   const fastSim = process.env.TINSTAR_FAST_SIM === '1'
   const speedMultiplier = fastSim ? 0 : 1

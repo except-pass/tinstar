@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { findNodeLabel } from '../domain/view-models'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
@@ -17,6 +17,7 @@ interface Props {
   editorWidgetMap?: Map<string, EditorWidget>
   browserWidgetMap?: Map<string, BrowserWidget>
   imageWidgetMap?: Map<string, ImageWidget>
+  natsTrafficWidgetMap?: Map<string, NatsTrafficWidget>
   onImageWidgetCreated?: (widget: ImageWidget) => void
   focusRunId: string | null
   activeSpaceId?: string
@@ -138,7 +139,7 @@ interface MarqueeRect {
 
 const MARQUEE_THRESHOLD = 5
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -638,8 +639,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const selType = first.startsWith('run-') ? 'run'
         : first.startsWith('editor-') ? 'file-editor'
         : first.startsWith('image-') ? 'image-viewer'
+        : first.startsWith('nats-') ? 'nats-traffic'
         : 'browser-widget'
-      selectMany(slotNodeIds, selType as import('../domain/types').GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer')
+      selectMany(slotNodeIds, selType as import('../domain/types').GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic')
       // Expand all ancestors in sidebar so the nodes become visible
       const ancestorIds: string[] = []
       for (const nodeId of slotNodeIds) {
@@ -658,14 +660,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     },
     onHotgroupAssign: (slot) => {
       const { selectedType, selectedIds } = selectionState
-      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer')) return
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
       for (const nodeId of selectedIds) {
         hotgroups.assign(slot, nodeId)
       }
     },
     onHotgroupRemove: (slot) => {
       const { selectedType, selectedIds } = selectionState
-      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer')) return
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
       for (const nodeId of selectedIds) {
         hotgroups.remove(slot, nodeId)
       }
@@ -698,6 +700,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       additive ? toggleSelect(nodeId, 'browser-widget') : select(nodeId, 'browser-widget')
     } else if (nodeId.startsWith('image-')) {
       additive ? toggleSelect(nodeId, 'image-viewer') : select(nodeId, 'image-viewer')
+    } else if (nodeId.startsWith('nats-')) {
+      additive ? toggleSelect(nodeId, 'nats-traffic') : select(nodeId, 'nats-traffic')
     } else {
       // Group container click — select it in the shared selection state so hierarchy highlights too
       const parsed = parseNodeId(nodeId)
@@ -804,7 +808,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             ? browserWidgetMap.get(node.entityId)
             : node.type === 'image-viewer'
               ? imageWidgetMap.get(node.entityId)
-              : ({
+              : node.type === 'nats-traffic'
+                ? natsTrafficWidgetMap.get(node.entityId)
+                : ({
               node,
               depth: depthMapRef.current.get(node.id) ?? 0,
               onShrinkToFit: shrinkNode,
@@ -830,7 +836,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}
-        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' ? handleDoubleClickZoom : undefined)}
+        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' || node.type === 'nats-traffic' ? handleDoubleClickZoom : undefined)}
         onMove={moveHandler}
         onResize={resizeHandler}
         onDragStart={node.type === 'run' ? handleWidgetDragStart : undefined}

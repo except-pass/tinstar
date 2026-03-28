@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView, findNodeLabel } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
@@ -42,7 +42,7 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
 
 
 function WorkspaceShellInner() {
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, connected } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, connected } = useBackendState()
 
   const levelMeta = useDimensionMeta()
   const dimensions = useMemo(
@@ -86,7 +86,7 @@ function WorkspaceShellInner() {
   // Filter out empty entity containers when showEmptyEntities is false
   const filterEmptyNodes = useCallback((nodes: TreeNode[]): TreeNode[] => {
     return nodes.reduce<TreeNode[]>((acc, node) => {
-      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer') {
+      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' || node.type === 'nats-traffic') {
         acc.push(node)
         return acc
       }
@@ -176,8 +176,29 @@ function WorkspaceShellInner() {
     return map
   }, [imageWidgets])
 
+  const syntheticNatsTrafficNodes: TreeNode[] = useMemo(
+    () =>
+      natsTrafficWidgets.map(w => ({
+        id: w.id,
+        label: w.sessionId ? `NATS (${w.sessionId})` : 'NATS Traffic',
+        type: 'nats-traffic' as const,
+        entityId: w.id,
+        children: [],
+        runCount: 0,
+        activeCount: 0,
+        color: w.color,
+      })),
+    [natsTrafficWidgets],
+  )
+
+  const natsTrafficWidgetMap = useMemo(() => {
+    const map = new Map<string, NatsTrafficWidget>()
+    for (const w of natsTrafficWidgets) map.set(w.id, w)
+    return map
+  }, [natsTrafficWidgets])
+
   const canvasTree = useMemo(() => {
-    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes]
+    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticNatsTrafficNodes]
     if (allSynthetic.length === 0) return sidebarTree
 
     // Map taskNodeId → synthetic nodes to nest inside it
@@ -233,16 +254,22 @@ function WorkspaceShellInner() {
       })
     }
 
+    // Add NATS traffic widgets as orphans (top-level, not associated with tasks)
+    for (const node of syntheticNatsTrafficNodes) {
+      orphans.push(node)
+    }
+
     return [...inject(sidebarTree), ...orphans]
-  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
+  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticNatsTrafficNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
 
   const allNodeIds = useMemo(() => {
     const ids: string[] = Array.from(runMap.keys()).map(id => `run-${id}`)
     for (const w of editorWidgets) ids.push(w.id)
     for (const w of browserWidgets) ids.push(w.id)
     for (const w of imageWidgets) ids.push(w.id)
+    for (const w of natsTrafficWidgets) ids.push(w.id)
     return ids
-  }, [runMap, editorWidgets, browserWidgets, imageWidgets])
+  }, [runMap, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
@@ -775,6 +802,8 @@ function WorkspaceShellInner() {
                     tree={canvasTree}
                     editorWidgetMap={editorWidgetMap}
                     browserWidgetMap={browserWidgetMap}
+                    imageWidgetMap={imageWidgetMap}
+                    natsTrafficWidgetMap={natsTrafficWidgetMap}
                     runMap={runMap}
                     focusRunId={focusRunId}
                     activeSpaceId={activeSpaceId}
@@ -784,7 +813,6 @@ function WorkspaceShellInner() {
                     onDeleteEntity={handleDelete}
                     onMenuOpen={handleMenuOpen}
                     onTaskUpdate={handleTaskUpdate}
-                    imageWidgetMap={imageWidgetMap}
                     onImageWidgetCreated={(widget) => addOptimistic('imageWidget', widget)}
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
                     onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}

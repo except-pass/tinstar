@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 
@@ -16,6 +16,7 @@ export class DocumentStore {
   private editorWidgets = new Map<string, EditorWidget>()
   private browserWidgets = new Map<string, BrowserWidget>()
   private imageWidgets = new Map<string, ImageWidget>()
+  private natsTrafficWidgets = new Map<string, NatsTrafficWidget>()
 
   activeSpaceId: string = ''
 
@@ -44,6 +45,7 @@ export class DocumentStore {
       if (data.editorWidgets) for (const w of data.editorWidgets) this.editorWidgets.set(w.id, w)
       if (data.browserWidgets) for (const w of data.browserWidgets) this.browserWidgets.set(w.id, w)
       if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
+      if (data.natsTrafficWidgets) for (const w of data.natsTrafficWidgets) this.natsTrafficWidgets.set(w.id, w)
     } catch {
       // No file or corrupt — start fresh
     }
@@ -335,6 +337,22 @@ export class DocumentStore {
     return [...this.imageWidgets.values()]
   }
 
+  // --- NatsTrafficWidgets ---
+
+  upsertNatsTrafficWidget(id: string, data: NatsTrafficWidget): void {
+    this.natsTrafficWidgets.set(id, data)
+    this.changes.emit('change', { entity: 'natsTrafficWidget', id, data })
+  }
+
+  deleteNatsTrafficWidget(id: string): void {
+    this.natsTrafficWidgets.delete(id)
+    this.changes.emit('change', { entity: 'natsTrafficWidget', id, data: null })
+  }
+
+  getAllNatsTrafficWidgets(): NatsTrafficWidget[] {
+    return [...this.natsTrafficWidgets.values()]
+  }
+
   // --- Snapshot (filtered by active space) ---
   // Include entities that match the active space OR have no spaceId (homeless).
   // This ensures nothing silently vanishes from the UI.
@@ -353,6 +371,7 @@ export class DocumentStore {
       editorWidgets: this.getAllEditorWidgets().filter(inSpace),
       browserWidgets: this.getAllBrowserWidgets().filter(inSpace),
       imageWidgets: this.getAllImageWidgets().filter(inSpace),
+      natsTrafficWidgets: this.getAllNatsTrafficWidgets().filter(inSpace),
     }
   }
 
@@ -370,6 +389,7 @@ export class DocumentStore {
       editorWidgets: this.getAllEditorWidgets(),
       browserWidgets: this.getAllBrowserWidgets(),
       imageWidgets: this.getAllImageWidgets(),
+      natsTrafficWidgets: this.getAllNatsTrafficWidgets(),
     }
   }
 
@@ -385,6 +405,7 @@ export class DocumentStore {
     for (const [id, e] of this.editorWidgets) if (e.spaceId === spaceId) this.editorWidgets.delete(id)
     for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) this.browserWidgets.delete(id)
     for (const [id, e] of this.imageWidgets) if (e.spaceId === spaceId) this.imageWidgets.delete(id)
+    for (const [id, e] of this.natsTrafficWidgets) if (e.spaceId === spaceId) this.natsTrafficWidgets.delete(id)
     this.changes.emit('change', { entity: 'all', id: '*', data: null })
   }
 
@@ -403,6 +424,7 @@ export class DocumentStore {
       this.editorWidgets.clear()
       this.browserWidgets.clear()
       this.imageWidgets.clear()
+      this.natsTrafficWidgets.clear()
       // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
     }

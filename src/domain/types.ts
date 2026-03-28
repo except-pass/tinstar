@@ -147,6 +147,13 @@ export interface ImageWidget {
   naturalHeight: number
 }
 
+export interface NatsTrafficWidget {
+  id: string
+  spaceId?: string
+  sessionId: string  // Filter to show traffic for a specific session, or empty for all
+  color?: string
+}
+
 // --- Grouping ---
 
 export type GroupingDimension = 'initiative' | 'epic' | 'task' | 'worktree'
@@ -197,7 +204,7 @@ export interface Rect {
 
 export interface SelectionState {
   selectedIds: Set<string>
-  selectedType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | null
+  selectedType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic' | null
   expandedIds: Set<string>
   hoveredId: string | null
 }

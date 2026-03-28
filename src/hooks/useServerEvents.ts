@@ -2,7 +2,7 @@
 declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
 import { useSyncExternalStore, useCallback } from 'react'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget } from '../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget } from '../domain/types'
 
 interface ServerState {
   activeSpaceId: string
@@ -15,6 +15,7 @@ interface ServerState {
   editorWidgets: EditorWidget[]
   browserWidgets: BrowserWidget[]
   imageWidgets: ImageWidget[]
+  natsTrafficWidgets: NatsTrafficWidget[]
   readyQueue: string[]
 }
 
@@ -29,6 +30,7 @@ const EMPTY_STATE: ServerState = {
   editorWidgets: [],
   browserWidgets: [],
   imageWidgets: [],
+  natsTrafficWidgets: [],
   readyQueue: [],
 }
 
@@ -111,6 +113,10 @@ function startSSE() {
 
   es.addEventListener('file_watch', (e: MessageEvent) => {
     window.dispatchEvent(new CustomEvent('tinstar:file_watch', { detail: JSON.parse(e.data) }))
+  })
+
+  es.addEventListener('nats_traffic', (e: MessageEvent) => {
+    window.dispatchEvent(new CustomEvent('tinstar:nats_traffic', { detail: JSON.parse(e.data) }))
   })
 
   es.addEventListener('heartbeat', () => {
@@ -208,6 +214,14 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
     return { ...prev, imageWidgets: idx >= 0 ? iws.map((x, i) => (i === idx ? w : x)) : [...iws, w] }
   }
 
+  if (delta.entity === 'natsTrafficWidget') {
+    const nws = prev.natsTrafficWidgets
+    if (delta.data === null) return { ...prev, natsTrafficWidgets: nws.filter(w => w.id !== delta.id) }
+    const w = delta.data as NatsTrafficWidget
+    const idx = nws.findIndex(x => x.id === w.id)
+    return { ...prev, natsTrafficWidgets: idx >= 0 ? nws.map((x, i) => (i === idx ? w : x)) : [...nws, w] }
+  }
+
   if (delta.entity === 'commit') {
     window.dispatchEvent(new Event('tinstar:commit-delta'))
     return prev
@@ -243,6 +257,10 @@ export function applyOptimistic(entity: string, data: unknown): void {
     const w = data as ImageWidget
     const exists = prev.imageWidgets.some(x => x.id === w.id)
     currentState = { ...prev, imageWidgets: exists ? prev.imageWidgets.map(x => x.id === w.id ? w : x) : [...prev.imageWidgets, w] }
+  } else if (entity === 'natsTrafficWidget') {
+    const w = data as NatsTrafficWidget
+    const exists = prev.natsTrafficWidgets.some(x => x.id === w.id)
+    currentState = { ...prev, natsTrafficWidgets: exists ? prev.natsTrafficWidgets.map(x => x.id === w.id ? w : x) : [...prev.natsTrafficWidgets, w] }
   } else {
     return
   }
