@@ -14,6 +14,8 @@ import { connect, StringCodec } from 'nats'
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
+import { readFileSync } from 'node:fs'
+
 const args = process.argv.slice(2)
 
 function arg(flag: string, fallback?: string): string {
@@ -24,19 +26,38 @@ function arg(flag: string, fallback?: string): string {
   process.exit(1)
 }
 
+function argOptional(flag: string): string | undefined {
+  const i = args.indexOf(flag)
+  if (i !== -1 && args[i + 1]) return args[i + 1]!
+  return undefined
+}
+
 const agentName      = arg('--name')
 const initialSubject = arg('--subscribe')
 const natsUrl        = arg('--nats', 'nats://localhost:4222')
 
+// Instructions: --instructions-file takes precedence over --instructions.
+// If neither is given, a minimal default is used (customize this).
+const instructionsFile = argOptional('--instructions-file')
 const defaultInstructions =
   `You are agent ${agentName}. ` +
-  `Messages from other agents or orchestrators arrive as <channel source="nats" subject="..."> tags. ` +
+  `Messages arrive as <channel source="nats" subject="..."> tags. ` +
   `Read each message and act on it. ` +
-  `When you want to send a message to another agent or signal completion, ` +
-  `use the "reply" tool with a "to" field (the NATS subject) and a "text" field. ` +
-  `Be concise in your replies.`
+  `To send a message to another agent or signal completion, ` +
+  `use the "reply" tool: reply(to="<nats-subject>", text="<message>").`
 
-const instructions = arg('--instructions', defaultInstructions)
+let instructions: string
+if (instructionsFile) {
+  try {
+    instructions = readFileSync(instructionsFile, 'utf-8').trim()
+    console.error(`[${agentName}] loaded instructions from ${instructionsFile}`)
+  } catch (e) {
+    console.error(`[${agentName}] error reading --instructions-file: ${e}`)
+    process.exit(1)
+  }
+} else {
+  instructions = arg('--instructions', defaultInstructions)
+}
 
 // ── NATS connection ───────────────────────────────────────────────────────────
 

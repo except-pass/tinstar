@@ -31,11 +31,9 @@ for agent in a1 a2; do
   if [ "$agent" = "a1" ]; then
     NAME="a1"
     SUBJECT="tinstar.agent.a1"
-    INSTRUCTIONS="Your name is Montgomery Wafflesworth-Pudding. When you receive a <channel> message, introduce yourself by your full name, then use the reply tool to forward to subject tinstar.agent.a2 with a brief message saying you have passed the baton."
   else
     NAME="a2"
     SUBJECT="tinstar.agent.a2"
-    INSTRUCTIONS="Your name is Countess Beets McGillicuddy. When you receive a <channel> message, introduce yourself by your full name, then use the reply tool to publish your introduction to subject tinstar.done.chain-001."
   fi
 
   cat > "$AGENT_DIR/.mcp.json" <<EOF
@@ -48,7 +46,7 @@ for agent in a1 a2; do
         "--name", "$NAME",
         "--subscribe", "$SUBJECT",
         "--nats", "nats://localhost:4222",
-        "--instructions", "$INSTRUCTIONS"
+        "--instructions-file", "$AGENT_DIR/AGENT.md"
       ]
     }
   }
