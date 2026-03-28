@@ -150,12 +150,14 @@ bun channel-server.ts [options]
 | Flag | Required | Description |
 |---|---|---|
 | `--name <name>` | ✅ | Agent name. Used in channel source attribute and default instructions. |
-| `--subscribe <subject>` | ✅ | Initial NATS subject to subscribe to. |
-| `--instructions-file <path>` | ★ | Path to a file whose contents become the MCP instructions (system prompt). **Use this.** |
-| `--instructions <string>` | ★ | Inline instructions string. Falls back to a minimal default if neither is given. |
+| `--subscribe <subject>` | ★ | NATS subject to subscribe to. Repeatable: `--subscribe a --subscribe b`. |
+| `--topics-file <path>` | ★ | Path to a topics file (one subject per line, `#` = comment). **Use this for anything beyond one subject.** |
+| `--instructions-file <path>` | ☆ | Path to a markdown file whose contents become the MCP instructions (system prompt). Recommended. |
+| `--instructions <string>` | ☆ | Inline instructions string. Falls back to a minimal default if neither is given. |
 | `--nats <url>` | — | NATS server URL. Default: `nats://localhost:4222` |
 
-★ At least one of `--instructions-file` or `--instructions` is strongly recommended.
+★ At least one of `--subscribe` or `--topics-file` is required.  
+☆ At least one of `--instructions-file` or `--instructions` is strongly recommended.
 
 ---
 
@@ -184,6 +186,70 @@ On first use, Claude will ask for permission. Choose "Yes, and don't ask again" 
 ```
 
 The `subject` attribute shows which subscription delivered the message — useful when an agent subscribes to multiple subjects.
+
+---
+
+## Topics / Subscriptions
+
+The second thing worth getting right (after instructions) is which subjects your agent subscribes to.
+
+### Option A: Single subject (simple)
+
+```json
+"args": ["--subscribe", "agents.my-agent", ...]
+```
+
+### Option B: Topics file (recommended for multi-level setups)
+
+Create `topics.txt` alongside `AGENT.md`:
+
+```
+# topics.txt — one subject per line, # = comment, blank lines ignored
+
+# Direct (messages specifically for this agent)
+agents.my-agent
+
+# Team channel (shared with other agents on the same task)
+tinstar.init-001.epic-xyz.task-abc.*
+
+# Epic-level broadcast
+tinstar.init-001.epic-xyz.>
+
+# Workspace-wide announcements
+tinstar.>
+
+# Breakout rooms (add/remove as needed)
+# tinstar.breakout.sprint-planning
+```
+
+Pass it with `--topics-file`:
+```json
+"args": ["--topics-file", "./topics.txt", ...]
+```
+
+### Wildcard subjects
+
+NATS wildcards work as you'd expect:
+
+| Pattern | Matches |
+|---|---|
+| `agents.my-agent` | Exactly that subject |
+| `agents.*` | Any single token after `agents.` |
+| `agents.>` | Any subject starting with `agents.` (including nested) |
+
+A message published to `agents.team` is received by any agent subscribed to `agents.team`, `agents.*`, or `agents.>`.
+
+### The channel source attribute
+
+When a message arrives via a wildcard subscription, the `<channel>` tag shows the **actual subject** it was published to:
+
+```xml
+<channel source="nats" subject="agents.team">
+  broadcast to the whole team
+</channel>
+```
+
+Your instructions can tell Claude to behave differently based on which subject a message came from.
 
 ---
 

@@ -30,10 +30,8 @@ for agent in a1 a2; do
   AGENT_DIR="$ROOT/examples/intro-chain/agents/$agent"
   if [ "$agent" = "a1" ]; then
     NAME="a1"
-    SUBJECT="tinstar.agent.a1"
   else
     NAME="a2"
-    SUBJECT="tinstar.agent.a2"
   fi
 
   cat > "$AGENT_DIR/.mcp.json" <<EOF
@@ -44,7 +42,7 @@ for agent in a1 a2; do
       "args": [
         "$ROOT/channel-server.ts",
         "--name", "$NAME",
-        "--subscribe", "$SUBJECT",
+        "--topics-file", "$AGENT_DIR/topics.txt",
         "--nats", "nats://localhost:4222",
         "--instructions-file", "$AGENT_DIR/AGENT.md"
       ]

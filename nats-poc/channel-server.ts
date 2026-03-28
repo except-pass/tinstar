@@ -32,9 +32,37 @@ function argOptional(flag: string): string | undefined {
   return undefined
 }
 
-const agentName      = arg('--name')
-const initialSubject = arg('--subscribe')
-const natsUrl        = arg('--nats', 'nats://localhost:4222')
+const agentName = arg('--name')
+const natsUrl   = arg('--nats', 'nats://localhost:4222')
+
+// Collect all --subscribe values (repeatable)
+const initialSubjects: string[] = []
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--subscribe' && args[i + 1]) {
+    initialSubjects.push(args[i + 1]!)
+  }
+}
+
+// --topics-file: one subject per line, # = comment, blank lines ignored
+const topicsFile = argOptional('--topics-file')
+if (topicsFile) {
+  try {
+    const lines = readFileSync(topicsFile, 'utf-8').split('\n')
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (trimmed && !trimmed.startsWith('#')) initialSubjects.push(trimmed)
+    }
+    console.error(`[${agentName}] loaded topics from ${topicsFile}: ${initialSubjects.join(', ')}`)
+  } catch (e) {
+    console.error(`[${agentName}] error reading --topics-file: ${e}`)
+    process.exit(1)
+  }
+}
+
+if (initialSubjects.length === 0) {
+  console.error(`[${agentName}] error: at least one --subscribe subject or --topics-file is required`)
+  process.exit(1)
+}
 
 // Instructions: --instructions-file takes precedence over --instructions.
 // If neither is given, a minimal default is used (customize this).
@@ -134,8 +162,10 @@ async function subscribe(subject: string): Promise<void> {
 
 await mcp.connect(new StdioServerTransport())
 
-// Start with the initial subscription
-await subscribe(initialSubject)
+// Start with all initial subscriptions
+for (const subject of initialSubjects) {
+  await subscribe(subject)
+}
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
