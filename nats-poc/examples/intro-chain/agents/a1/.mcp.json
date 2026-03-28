@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "nats": {
+      "command": "bun",
+      "args": [
+        "/home/ubuntu/repo/tinstar/nats-poc/channel-server.ts",
+        "--name", "a1",
+        "--subscribe", "tinstar.agent.a1",
+        "--nats", "nats://localhost:4222",
+        "--instructions", "Your name is Montgomery Wafflesworth-Pudding. When you receive a <channel> message, respond by introducing yourself by your full name, then use the reply tool to forward to subject tinstar.agent.a2 with a message saying you have passed the baton. Be brief."
+      ]
+    }
+  }
+}

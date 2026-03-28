@@ -1,0 +1,129 @@
+#!/usr/bin/env bun
+/**
+ * NATS Channel Server — MCP bridge that subscribes to NATS subjects and
+ * delivers messages into a Claude Code session as <channel> tags.
+ *
+ * Usage:
+ *   bun channel-server.ts --name a1 --subscribe tinstar.agent.a1 [--nats nats://localhost:4222]
+ */
+
+import { Server } from '@modelcontextprotocol/sdk/server/index.js'
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { connect, StringCodec } from 'nats'
+
+// ── CLI args ──────────────────────────────────────────────────────────────────
+
+const args = process.argv.slice(2)
+
+function arg(flag: string, fallback?: string): string {
+  const i = args.indexOf(flag)
+  if (i !== -1 && args[i + 1]) return args[i + 1]!
+  if (fallback !== undefined) return fallback
+  console.error(`Missing required argument: ${flag}`)
+  process.exit(1)
+}
+
+const agentName      = arg('--name')
+const initialSubject = arg('--subscribe')
+const natsUrl        = arg('--nats', 'nats://localhost:4222')
+
+const defaultInstructions =
+  `You are agent ${agentName}. ` +
+  `Messages from other agents or orchestrators arrive as <channel source="nats" subject="..."> tags. ` +
+  `Read each message and act on it. ` +
+  `When you want to send a message to another agent or signal completion, ` +
+  `use the "reply" tool with a "to" field (the NATS subject) and a "text" field. ` +
+  `Be concise in your replies.`
+
+const instructions = arg('--instructions', defaultInstructions)
+
+// ── NATS connection ───────────────────────────────────────────────────────────
+
+const nc = await connect({ servers: natsUrl })
+const sc = StringCodec()
+
+// Track active subscriptions so we can hot-manage them later
+const activeSubs = new Map<string, ReturnType<typeof nc.subscribe>>()
+
+// ── MCP server ────────────────────────────────────────────────────────────────
+
+const mcp = new Server(
+  { name: `nats-channel-${agentName}`, version: '0.1.0' },
+  {
+    capabilities: {
+      experimental: { 'claude/channel': {} },
+      tools: {},
+    },
+    instructions,
+  }
+)
+
+// Reply tool — Claude calls this to publish back to NATS
+mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [{
+    name: 'reply',
+    description: 'Publish a message to a NATS subject',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        to:   { type: 'string', description: 'NATS subject to publish to' },
+        text: { type: 'string', description: 'Message content' },
+      },
+      required: ['to', 'text'],
+    },
+  }],
+}))
+
+mcp.setRequestHandler(CallToolRequestSchema, async req => {
+  if (req.params.name !== 'reply') throw new Error(`unknown tool: ${req.params.name}`)
+  const { to, text } = req.params.arguments as { to: string; text: string }
+  nc.publish(to, sc.encode(text))
+  console.error(`[${agentName}] published to ${to}: ${text.slice(0, 80)}`)
+  return { content: [{ type: 'text' as const, text: `published to ${to}` }] }
+})
+
+// ── Subscribe to a NATS subject and bridge to Claude ─────────────────────────
+
+async function subscribe(subject: string): Promise<void> {
+  if (activeSubs.has(subject)) return  // already subscribed
+  const sub = nc.subscribe(subject)
+  activeSubs.set(subject, sub)
+  console.error(`[${agentName}] subscribed to ${subject}`)
+
+  ;(async () => {
+    for await (const msg of sub) {
+      const content = sc.decode(msg.data)
+      console.error(`[${agentName}] received on ${msg.subject}: ${content.slice(0, 80)}`)
+      await mcp.notification({
+        method: 'notifications/claude/channel',
+        params: {
+          content,
+          meta: {
+            subject:  msg.subject,
+            from:     msg.reply ?? '',
+          },
+        },
+      })
+    }
+  })()
+}
+
+// ── Connect to Claude Code over stdio (must happen before subscribing) ────────
+
+await mcp.connect(new StdioServerTransport())
+
+// Start with the initial subscription
+await subscribe(initialSubject)
+
+// ── Graceful shutdown ─────────────────────────────────────────────────────────
+
+async function shutdown() {
+  console.error(`[${agentName}] shutting down`)
+  for (const sub of activeSubs.values()) sub.unsubscribe()
+  await nc.drain()
+  process.exit(0)
+}
+
+process.on('SIGTERM', shutdown)
+process.on('SIGINT',  shutdown)
