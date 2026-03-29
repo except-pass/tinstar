@@ -19,9 +19,12 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
   const [events, setEvents] = useState<TrafficEvent[]>([])
   const [filter, setFilter] = useState('')
   const [paused, setPaused] = useState(false)
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
   const pausedRef = useRef(paused)
   pausedRef.current = paused
+
+  const isAllSessions = !widget.sessionId
 
   // Listen to nats_traffic events
   useEffect(() => {
@@ -73,6 +76,18 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
   }
 
   const truncate = (s: string, len: number) => s.length > len ? s.slice(0, len) + '...' : s
+
+  const toggleRowExpand = useCallback((index: number) => {
+    setExpandedRows(prev => {
+      const next = new Set(prev)
+      if (next.has(index)) {
+        next.delete(index)
+      } else {
+        next.add(index)
+      }
+      return next
+    })
+  }, [])
 
   return (
     <div className="flex flex-col h-full bg-surface-base text-slate-300 overflow-hidden">
@@ -133,32 +148,50 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
               <tr>
                 <th className="px-2 py-1 text-left w-16">Time</th>
                 <th className="px-2 py-1 text-left w-12">Dir</th>
+                <th className="px-2 py-1 text-left w-24">ReplyTo</th>
+                {isAllSessions && <th className="px-2 py-1 text-left w-20">Session</th>}
                 <th className="px-2 py-1 text-left">Subject</th>
                 <th className="px-2 py-1 text-left w-20">From</th>
                 <th className="px-2 py-1 text-left">Body</th>
               </tr>
             </thead>
             <tbody>
-              {filteredEvents.map((e, i) => (
-                <tr
-                  key={i}
-                  className={`border-b border-white/5 hover:bg-white/5 ${e.direction === 'inbound' ? 'text-cyan-400/80' : 'text-amber-400/80'}`}
-                >
-                  <td className="px-2 py-1 whitespace-nowrap text-slate-500">{formatTime(e.timestamp)}</td>
-                  <td className="px-2 py-1 whitespace-nowrap">
-                    {e.direction === 'inbound' ? '<-' : '->'}
-                  </td>
-                  <td className="px-2 py-1 whitespace-nowrap truncate max-w-[200px]" title={e.subject}>
-                    {e.subject}
-                  </td>
-                  <td className="px-2 py-1 whitespace-nowrap truncate max-w-[80px]" title={e.from}>
-                    {e.from}
-                  </td>
-                  <td className="px-2 py-1 truncate max-w-[300px] text-slate-400" title={e.body}>
-                    {truncate(e.body, 100)}
-                  </td>
-                </tr>
-              ))}
+              {filteredEvents.map((e, i) => {
+                const isExpanded = expandedRows.has(i)
+                return (
+                  <tr
+                    key={i}
+                    onClick={() => toggleRowExpand(i)}
+                    className={`border-b border-white/5 cursor-pointer ${isExpanded ? 'bg-white/5' : 'hover:bg-white/5'} ${e.direction === 'inbound' ? 'text-cyan-400/80' : 'text-amber-400/80'}`}
+                  >
+                    <td className="px-2 py-1 whitespace-nowrap text-slate-500">{formatTime(e.timestamp)}</td>
+                    <td className="px-2 py-1 whitespace-nowrap">
+                      {e.direction === 'inbound' ? '<-' : '->'}
+                    </td>
+                    <td className="px-2 py-1 whitespace-nowrap truncate max-w-[96px] text-slate-500" title={e.replyTo ?? ''}>
+                      {e.replyTo ?? '-'}
+                    </td>
+                    {isAllSessions && (
+                      <td className="px-2 py-1 whitespace-nowrap truncate max-w-[80px] text-slate-500" title={e.sessionName}>
+                        {e.sessionName}
+                      </td>
+                    )}
+                    <td className="px-2 py-1 whitespace-nowrap truncate max-w-[200px]" title={e.subject}>
+                      {e.subject}
+                    </td>
+                    <td className="px-2 py-1 whitespace-nowrap truncate max-w-[80px]" title={e.from}>
+                      {e.from}
+                    </td>
+                    <td className={`px-2 py-1 text-slate-400 ${isExpanded ? '' : 'truncate max-w-[300px]'}`} title={isExpanded ? undefined : e.body}>
+                      {isExpanded ? (
+                        <div className="whitespace-pre-wrap break-all py-1">{e.body}</div>
+                      ) : (
+                        truncate(e.body, 100)
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}
