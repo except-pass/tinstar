@@ -14,6 +14,18 @@ interface TrafficEvent {
 
 const MAX_EVENTS = 200
 
+function parseSenderRecipient(event: TrafficEvent): { sender: string; recipient: string } {
+  // Subject format: tinstar.<init>.<epic>.<task>.<session-name>
+  // or: agents.<session-name>
+  const parts = event.subject.split('.')
+  const recipient = parts[parts.length - 1] || event.subject
+
+  // 'from' field contains the sender name
+  const sender = event.from || 'unknown'
+
+  return { sender, recipient }
+}
+
 export function NatsTrafficWidget({ data }: WidgetProps) {
   const widget = data as NatsTrafficWidget
   const [events, setEvents] = useState<TrafficEvent[]>([])
@@ -147,7 +159,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
             <thead className="sticky top-0 bg-surface-panel text-slate-400">
               <tr>
                 <th className="px-2 py-1 text-left w-16">Time</th>
-                <th className="px-2 py-1 text-left w-12">Dir</th>
+                <th className="px-2 py-1 text-left w-32">Flow</th>
                 <th className="px-2 py-1 text-left w-24">ReplyTo</th>
                 {isAllSessions && <th className="px-2 py-1 text-left w-20">Session</th>}
                 <th className="px-2 py-1 text-left">Subject</th>
@@ -162,11 +174,20 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
                   <tr
                     key={i}
                     onClick={() => toggleRowExpand(i)}
-                    className={`border-b border-white/5 cursor-pointer ${isExpanded ? 'bg-white/5' : 'hover:bg-white/5'} ${e.direction === 'inbound' ? 'text-cyan-400/80' : 'text-amber-400/80'}`}
+                    className={`border-b border-white/5 cursor-pointer ${isExpanded ? 'bg-white/5' : 'hover:bg-white/5'}`}
                   >
                     <td className="px-2 py-1 whitespace-nowrap text-slate-500">{formatTime(e.timestamp)}</td>
-                    <td className="px-2 py-1 whitespace-nowrap">
-                      {e.direction === 'inbound' ? '<-' : '->'}
+                    <td className="px-2 py-1 whitespace-nowrap text-slate-300">
+                      {(() => {
+                        const { sender, recipient } = parseSenderRecipient(e)
+                        return (
+                          <span>
+                            <span className="text-cyan-400">{sender}</span>
+                            <span className="text-slate-500"> → </span>
+                            <span className="text-amber-400">{recipient}</span>
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td className="px-2 py-1 whitespace-nowrap truncate max-w-[96px] text-slate-500" title={e.replyTo ?? ''}>
                       {e.replyTo ?? '-'}
