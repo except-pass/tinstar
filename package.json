@@ -25,7 +25,7 @@
     "dev:frontend": "vite",
     "dev": "concurrently --kill-others -n be,fe -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
     "build": "tsc -b && vite build",
-    "build:server": "npx esbuild src/server/standalone.ts --bundle --platform=node --format=esm --outdir=dist/server --external:http-proxy",
+    "build:server": "npx esbuild src/server/standalone.ts --bundle --platform=node --format=esm --outdir=dist/server --external:http-proxy --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "build:all": "vite build --outDir dist/client && npm run build:server",
     "preview": "vite preview",
     "stable": "npm run build:all && node bin/tinstar.js --no-open",

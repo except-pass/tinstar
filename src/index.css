@@ -67,6 +67,30 @@
   animation: ripple-ring 250ms cubic-bezier(0.2, 0, 0.6, 1) forwards;
 }
 
+/* ── Send button animations ──────────────────────────────────────────── */
+
+@keyframes send-fly {
+  0%, 100% { transform: translateX(0) translateY(0) rotate(0deg); }
+  25%      { transform: translateX(2px) translateY(-1px) rotate(8deg); }
+  50%      { transform: translateX(0) translateY(-2px) rotate(-4deg); }
+  75%      { transform: translateX(-1px) translateY(-1px) rotate(4deg); }
+}
+
+@keyframes send-pop {
+  0%   { transform: scale(1) translateX(0); }
+  30%  { transform: scale(1.3) translateX(4px); }
+  60%  { transform: scale(0.9) translateX(0); }
+  100% { transform: scale(1) translateX(0); }
+}
+
+@keyframes send-success {
+  0%   { transform: scale(1); }
+  20%  { transform: scale(1.08); }
+  40%  { transform: scale(0.96); }
+  60%  { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+
 /* ── Widget spawn animation ──────────────────────────────────────────── */
 
 @keyframes widget-spawn {

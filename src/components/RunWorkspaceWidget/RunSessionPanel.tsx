@@ -167,8 +167,10 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   const toggleExpanded = onToggle ?? (() => setInternalExpanded(e => !e))
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
+  const [justSent, setJustSent] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
 
   // Focus when trigger changes (from parent selecting widget)
   useEffect(() => {
@@ -190,6 +192,9 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
       const data = await res.json()
       if (data.ok) {
         setText('')
+        // Trigger success flash
+        setJustSent(true)
+        setTimeout(() => setJustSent(false), 400)
       } else {
         setError(data.error?.message ?? data.error ?? 'Failed to send')
       }
@@ -253,17 +258,61 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
               {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
             </span>
             <button
+              ref={buttonRef}
               onClick={handleSend}
               disabled={!canSend || sending}
-              className="flex items-center gap-1.5 px-3 py-1 text-2xs font-mono uppercase tracking-wider rounded transition-colors disabled:opacity-40"
+              className={`
+                group relative flex items-center gap-1.5 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider rounded
+                transition-all duration-150 ease-out
+                disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100
+                enabled:hover:scale-105 enabled:active:scale-95
+                ${justSent ? 'animate-[send-success_0.4s_ease-out]' : ''}
+              `}
               style={{
-                background: hexToRgba(accent, 0.15),
+                background: justSent
+                  ? hexToRgba(accent, 0.4)
+                  : sending
+                    ? hexToRgba(accent, 0.25)
+                    : hexToRgba(accent, 0.15),
                 color: accent,
-                border: `1px solid ${hexToRgba(accent, 0.3)}`,
+                border: `1px solid ${hexToRgba(accent, justSent ? 0.7 : 0.3)}`,
+                boxShadow: canSend && !sending
+                  ? `0 0 0 0 ${hexToRgba(accent, 0)}`
+                  : justSent
+                    ? `0 0 20px ${hexToRgba(accent, 0.5)}, 0 0 40px ${hexToRgba(accent, 0.2)}`
+                    : 'none',
+              }}
+              onMouseEnter={(e) => {
+                if (canSend && !sending) {
+                  e.currentTarget.style.boxShadow = `0 0 12px ${hexToRgba(accent, 0.4)}, 0 0 24px ${hexToRgba(accent, 0.15)}`
+                  e.currentTarget.style.background = hexToRgba(accent, 0.25)
+                  e.currentTarget.style.borderColor = hexToRgba(accent, 0.5)
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!justSent) {
+                  e.currentTarget.style.boxShadow = 'none'
+                  e.currentTarget.style.background = hexToRgba(accent, 0.15)
+                  e.currentTarget.style.borderColor = hexToRgba(accent, 0.3)
+                }
               }}
             >
-              <span className="material-symbols-outlined text-sm">send</span>
+              <span
+                className={`material-symbols-outlined text-sm transition-transform duration-200 ${
+                  sending ? 'animate-[send-fly_0.6s_ease-in-out_infinite]' : ''
+                } ${justSent ? 'animate-[send-pop_0.3s_ease-out]' : ''}`}
+                style={{ fontVariationSettings: "'FILL' 1" }}
+              >
+                {sending ? 'rocket_launch' : 'send'}
+              </span>
               {sending ? 'Sending...' : 'Send'}
+              {/* Glow ring on hover */}
+              <span
+                className="absolute inset-0 rounded opacity-0 group-enabled:group-hover:opacity-100 transition-opacity duration-200 pointer-events-none"
+                style={{
+                  background: `radial-gradient(ellipse at center, ${hexToRgba(accent, 0.1)} 0%, transparent 70%)`,
+                }}
+              />
             </button>
           </div>
         </div>
