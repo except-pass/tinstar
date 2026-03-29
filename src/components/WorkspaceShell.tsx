@@ -243,6 +243,11 @@ function WorkspaceShellInner() {
       }
     }
 
+    // Add NATS traffic widgets as orphans (top-level, not associated with tasks)
+    for (const node of syntheticNatsTrafficNodes) {
+      orphans.push(node)
+    }
+
     if (byTaskNode.size === 0) return [...sidebarTree, ...orphans]
 
     function inject(nodes: TreeNode[]): TreeNode[] {
@@ -252,11 +257,6 @@ function WorkspaceShellInner() {
         if (!toInject) return injectedChildren === node.children ? node : { ...node, children: injectedChildren }
         return { ...node, children: [...injectedChildren, ...toInject] }
       })
-    }
-
-    // Add NATS traffic widgets as orphans (top-level, not associated with tasks)
-    for (const node of syntheticNatsTrafficNodes) {
-      orphans.push(node)
     }
 
     return [...inject(sidebarTree), ...orphans]
@@ -400,6 +400,10 @@ function WorkspaceShellInner() {
       fetch(`/api/image-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
+    if (type === 'nats-traffic') {
+      fetch(`/api/nats-traffic-widgets/${entityId}`, { method: 'DELETE' })
+      return
+    }
     const endpointMap: Record<string, string> = {
       initiative: '/api/initiatives',
       epic: '/api/epics',
@@ -533,6 +537,11 @@ function WorkspaceShellInner() {
     if (selectedType === 'file-editor') {
       const label = findNodeLabel(canvasTree, firstNodeId) ?? 'File'
       return { id: firstNodeId, type: 'file-editor', label }
+    }
+
+    if (selectedType === 'nats-traffic') {
+      const label = findNodeLabel(canvasTree, firstNodeId) ?? 'NATS Traffic'
+      return { id: firstNodeId, type: 'nats-traffic' as any, label }
     }
 
     return null
