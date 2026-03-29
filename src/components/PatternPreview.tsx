@@ -21,7 +21,7 @@ export function PatternPreview({ pattern }: Props) {
     <div className="bg-surface-base border border-white/10 rounded p-3 mt-2">
       {/* Mini diagram */}
       <div className="relative h-20 mb-3">
-        {def.layout.positions.map((pos, i) => {
+        {def.layout.positions.map((pos) => {
           const session = def.sessions.find(s => s.nameSuffix === pos.nameSuffix)
           if (!session) return null
           const isCoordinator = pos.nameSuffix === 'coordinator'
@@ -34,8 +34,8 @@ export function PatternPreview({ pattern }: Props) {
                   : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
               }`}
               style={{
-                left: `${pos.x * 100}%`,
-                top: `${pos.y * 100}%`,
+                left: `${10 + pos.x * 80}%`,
+                top: `${10 + pos.y * 80}%`,
               }}
             >
               {pos.nameSuffix}
