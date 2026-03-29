@@ -530,7 +530,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // If pattern specified, spawn multi-agent sessions
       const patternType = (pattern as PatternType) ?? 'single'
       if (isMultiAgentPattern(patternType)) {
+        if (!ctx.sessionConfig) {
+          json(res, entity, 201)
+          return
+        }
+
         const patternDef = getPattern(patternType)
+        const sessDir = ctx.sessionConfig.dirs.sessions
 
         for (const sessionDef of patternDef.sessions) {
           const sessionName = `${entity.id}-${sessionDef.nameSuffix}`
@@ -545,7 +551,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const subscriptions = computeNatsSubscriptions(natsCtx, ctx.docStore)
 
           // Create session with NATS enabled
-          const session = createSession(ctx.sessionsDir, {
+          const session = createSession(sessDir, {
             name: sessionName,
             backend: 'tmux',
             nats: {
@@ -555,7 +561,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           })
 
           // Store session instructions for later injection
-          const instructionsPath = join(ctx.sessionsDir, sessionName, 'pattern-instructions.md')
+          const instructionsPath = join(sessDir, sessionName, 'pattern-instructions.md')
           const resolvedInstructions = sessionDef.instructions
             .replace(/\{task\}/g, entity.id)
           writeFileSync(instructionsPath, resolvedInstructions)
@@ -564,8 +570,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const runId = shortId('run')
           ctx.docStore.upsertRun(runId, {
             id: runId,
-            name: sessionName,
+            color: undefined,
             status: session.state,
+            sessionId: sessionName,
+            initiative: entity.initiativeId ?? '',
+            epic: entity.epicId ?? '',
+            task: entity.id,
+            repo: '',
+            worktree: '',
+            touchedFiles: [],
+            recapEntries: [],
+            rawLogs: '',
+            port: null,
+            backend: 'tmux',
+            backendInfo: `tmux session: ${sessionName}`,
             taskId: entity.id,
             worktreeId: '',
             createdAt: new Date().toISOString(),
