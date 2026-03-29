@@ -163,7 +163,6 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
                 <th className="px-2 py-1 text-left w-24">ReplyTo</th>
                 {isAllSessions && <th className="px-2 py-1 text-left w-20">Session</th>}
                 <th className="px-2 py-1 text-left">Subject</th>
-                <th className="px-2 py-1 text-left w-20">From</th>
                 <th className="px-2 py-1 text-left">Body</th>
               </tr>
             </thead>
@@ -199,9 +198,6 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
                     )}
                     <td className="px-2 py-1 whitespace-nowrap truncate max-w-[200px]" title={e.subject}>
                       {e.subject}
-                    </td>
-                    <td className="px-2 py-1 whitespace-nowrap truncate max-w-[80px]" title={e.from}>
-                      {e.from}
                     </td>
                     <td className={`px-2 py-1 text-slate-400 ${isExpanded ? '' : 'truncate max-w-[300px]'}`} title={isExpanded ? undefined : e.body}>
                       {isExpanded ? (
