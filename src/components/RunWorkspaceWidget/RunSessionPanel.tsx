@@ -172,6 +172,156 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
 
+  // Voice recording state
+  const [voiceStatus, setVoiceStatus] = useState<'idle' | 'loading' | 'ready' | 'recording' | 'transcribing' | 'error'>('idle')
+  const [voiceError, setVoiceError] = useState<string | null>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  const streamRef = useRef<MediaStream | null>(null)
+  const transcriberRef = useRef<any>(null)
+
+  const loadWhisper = useCallback(async () => {
+    if (voiceStatus === 'ready' || voiceStatus === 'loading') return
+    setVoiceStatus('loading')
+    setVoiceError(null)
+    try {
+      console.log('[voice] Loading @xenova/transformers...')
+      const { pipeline, env } = await import('@xenova/transformers')
+      // Force remote-only: no local file paths, fetch from HuggingFace CDN
+      env.allowLocalModels = false
+      env.useBrowserCache = true
+      env.localModelPath = ''
+      console.log('[voice] env config:', { allowLocalModels: env.allowLocalModels, localModelPath: env.localModelPath, remoteHost: env.remoteHost })
+      console.log('[voice] Loading whisper-tiny.en model from HuggingFace...')
+      transcriberRef.current = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en', {
+        quantized: true,
+        revision: 'main',
+      })
+      console.log('[voice] Model ready')
+      setVoiceStatus('ready')
+    } catch (err) {
+      console.error('[voice] Load failed:', err)
+      const msg = err instanceof Error ? err.message : String(err)
+      setVoiceError(msg)
+      setVoiceStatus('error')
+    }
+  }, [voiceStatus])
+
+  const startRecording = useCallback(async () => {
+    if (voiceStatus === 'recording') return
+    if (voiceStatus !== 'ready') {
+      await loadWhisper()
+      // Check if load failed
+      if (!transcriberRef.current) {
+        console.error('[voice] Model failed to load, cannot record')
+        return
+      }
+    }
+
+    try {
+      console.log('[voice] Starting recording...')
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
+      })
+      audioChunksRef.current = []
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+      mediaRecorderRef.current = mediaRecorder
+      mediaRecorder.start(100)
+      setVoiceStatus('recording')
+      setVoiceError(null)
+    } catch (err) {
+      setVoiceError(err instanceof Error ? err.message : 'Failed to access microphone')
+      setVoiceStatus('error')
+    }
+  }, [voiceStatus, loadWhisper])
+
+  const stopRecording = useCallback(async () => {
+    if (!mediaRecorderRef.current || voiceStatus !== 'recording') return
+
+    const mediaRecorder = mediaRecorderRef.current
+    return new Promise<void>((resolve) => {
+      mediaRecorder.onstop = async () => {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop())
+          streamRef.current = null
+        }
+
+        if (audioChunksRef.current.length === 0) {
+          setVoiceStatus('ready')
+          resolve()
+          return
+        }
+
+        setVoiceStatus('transcribing')
+        try {
+          if (!transcriberRef.current) {
+            console.error('[voice] Transcriber not loaded')
+            setVoiceError('Whisper model not loaded')
+            setVoiceStatus('error')
+            resolve()
+            return
+          }
+
+          console.log('[voice] Converting audio...')
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+          const arrayBuffer = await audioBlob.arrayBuffer()
+          const audioContext = new AudioContext({ sampleRate: 16000 })
+          const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+          const audioData = audioBuffer.getChannelData(0)
+
+          console.log('[voice] Transcribing', audioData.length, 'samples...')
+          const result = await transcriberRef.current(audioData, {
+            chunk_length_s: 30,
+            stride_length_s: 5,
+            return_timestamps: false,
+          })
+          console.log('[voice] Result:', result)
+
+          const transcribedText = result.text?.trim()
+          if (transcribedText) {
+            // Insert at cursor position
+            const textarea = textareaRef.current
+            if (textarea) {
+              const start = textarea.selectionStart
+              const end = textarea.selectionEnd
+              const before = text.substring(0, start)
+              const after = text.substring(end)
+              const newText = before + (before && !before.endsWith(' ') ? ' ' : '') + transcribedText + after
+              setText(newText)
+              // Move cursor to end of inserted text
+              setTimeout(() => {
+                const newPos = start + transcribedText.length + (before && !before.endsWith(' ') ? 1 : 0)
+                textarea.setSelectionRange(newPos, newPos)
+                textarea.focus()
+              }, 0)
+            } else {
+              setText(prev => prev + (prev ? ' ' : '') + transcribedText)
+            }
+          }
+          setVoiceStatus('ready')
+        } catch (err) {
+          setVoiceError(err instanceof Error ? err.message : 'Transcription failed')
+          setVoiceStatus('error')
+        }
+        resolve()
+      }
+      mediaRecorder.stop()
+    })
+  }, [voiceStatus, text])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
+      }
+    }
+  }, [])
+
   // Focus when trigger changes (from parent selecting widget)
   useEffect(() => {
     if (focusTrigger && isExpanded) textareaRef.current?.focus({ preventScroll: true })
@@ -210,7 +360,20 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
       e.preventDefault()
       handleSend()
     }
-  }, [handleSend])
+    // Push-to-talk: hold Ctrl+M to record
+    if (e.key === 'm' && e.ctrlKey && !e.metaKey && !e.altKey && voiceStatus !== 'recording' && voiceStatus !== 'transcribing') {
+      e.preventDefault()
+      startRecording()
+    }
+  }, [handleSend, voiceStatus, startRecording])
+
+  const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Release Ctrl or M stops recording
+    if ((e.key === 'm' || e.key === 'Control') && voiceStatus === 'recording') {
+      e.preventDefault()
+      stopRecording()
+    }
+  }, [voiceStatus, stopRecording])
 
   // Focus textarea when expanded
   useEffect(() => {
@@ -246,17 +409,43 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
             value={text}
             onChange={e => setText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Enter prompt text... (Ctrl+Enter to send)"
+            onKeyUp={handleKeyUp}
+            placeholder="Enter prompt text... (Ctrl+Enter to send, Ctrl+M for voice)"
             className="w-full h-24 px-2 py-1.5 bg-surface-base border rounded text-xs font-mono text-slate-200 placeholder:text-slate-600 resize-y outline-none focus:border-primary/50"
             style={{ borderColor: hexToRgba(accent, 0.2) }}
           />
           {error && (
             <p className="text-2xs font-mono text-accent-red">{error}</p>
           )}
+          {voiceError && (
+            <p className="text-2xs font-mono text-accent-red">{voiceError}</p>
+          )}
           <div className="flex items-center justify-between">
             <span className="text-2xs text-slate-600 font-mono">
-              {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
+              {voiceStatus === 'loading' ? 'Loading whisper...' :
+               voiceStatus === 'recording' ? 'Recording... (release M)' :
+               voiceStatus === 'transcribing' ? 'Transcribing...' :
+               status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
             </span>
+            <div className="flex items-center gap-2">
+              {/* Mic button for voice input */}
+              <button
+                onMouseDown={() => startRecording()}
+                onMouseUp={() => stopRecording()}
+                onMouseLeave={() => { if (voiceStatus === 'recording') stopRecording() }}
+                disabled={voiceStatus === 'transcribing'}
+                className={`
+                  flex items-center justify-center w-8 h-8 rounded transition-all duration-150
+                  ${voiceStatus === 'recording' ? 'bg-red-500/30 animate-pulse' : 'hover:bg-white/10'}
+                  disabled:opacity-40 disabled:cursor-not-allowed
+                `}
+                style={{ color: voiceStatus === 'recording' ? '#ef4444' : hexToRgba(accent, 0.7) }}
+                title={voiceStatus === 'loading' ? 'Loading...' : voiceStatus === 'transcribing' ? 'Transcribing...' : 'Hold to record (or Ctrl+M)'}
+              >
+                <span className="material-symbols-outlined text-lg" style={{ fontVariationSettings: voiceStatus === 'recording' ? "'FILL' 1" : "'FILL' 0" }}>
+                  {voiceStatus === 'loading' ? 'hourglass_empty' : voiceStatus === 'transcribing' ? 'pending' : 'mic'}
+                </span>
+              </button>
             <button
               ref={buttonRef}
               onClick={handleSend}
@@ -314,6 +503,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
                 }}
               />
             </button>
+            </div>
           </div>
         </div>
       )}
