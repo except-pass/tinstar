@@ -4,27 +4,11 @@ import type { WidgetProps } from '../widgetComponentRegistry'
 
 interface TrafficEvent {
   timestamp: string
-  sessionName: string
-  direction: 'inbound' | 'outbound'
   subject: string
-  from: string
-  replyTo: string | null
-  body: string
+  data: string
 }
 
 const MAX_EVENTS = 200
-
-function parseSenderRecipient(event: TrafficEvent): { sender: string; recipient: string } {
-  // Subject format: tinstar.<init>.<epic>.<task>.<session-name>
-  // or: agents.<session-name>
-  const parts = event.subject.split('.')
-  const recipient = parts[parts.length - 1] || event.subject
-
-  // 'from' field contains the sender name
-  const sender = event.from || 'unknown'
-
-  return { sender, recipient }
-}
 
 export function NatsTrafficWidget({ data }: WidgetProps) {
   const widget = data as NatsTrafficWidget
@@ -32,11 +16,15 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
   const [filter, setFilter] = useState('')
   const [paused, setPaused] = useState(false)
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
+  const [newSub, setNewSub] = useState('')
+  const [publishSubject, setPublishSubject] = useState('')
+  const [publishMessage, setPublishMessage] = useState('')
+  const [showControls, setShowControls] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const pausedRef = useRef(paused)
   pausedRef.current = paused
 
-  const isAllSessions = !widget.sessionId
+  const subscriptions = widget.subscriptions || []
 
   // Listen to nats_traffic events
   useEffect(() => {
@@ -45,12 +33,8 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
 
       const event = (e as CustomEvent).detail as TrafficEvent
 
-      // Filter by session if widget has a sessionId set
-      if (widget.sessionId && event.sessionName !== widget.sessionId) return
-
       setEvents(prev => {
         const next = [...prev, event]
-        // Keep only the last MAX_EVENTS
         if (next.length > MAX_EVENTS) {
           return next.slice(-MAX_EVENTS)
         }
@@ -60,7 +44,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
 
     window.addEventListener('tinstar:nats_traffic', handler)
     return () => window.removeEventListener('tinstar:nats_traffic', handler)
-  }, [widget.sessionId])
+  }, [])
 
   // Auto-scroll when new events arrive
   useEffect(() => {
@@ -77,9 +61,37 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
     setEvents([])
   }, [])
 
+  const addSubscription = useCallback(() => {
+    if (!newSub.trim()) return
+    fetch(`/api/nats-traffic-widgets/${widget.id}/subscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject: newSub.trim() }),
+    }).then(() => setNewSub(''))
+  }, [widget.id, newSub])
+
+  const removeSubscription = useCallback((subject: string) => {
+    fetch(`/api/nats-traffic-widgets/${widget.id}/subscribe`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject }),
+    })
+  }, [widget.id])
+
+  const publishNats = useCallback(() => {
+    if (!publishSubject.trim() || !publishMessage.trim()) return
+    fetch(`/api/nats-traffic-widgets/${widget.id}/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject: publishSubject.trim(), message: publishMessage.trim() }),
+    }).then(() => {
+      setPublishMessage('')
+    })
+  }, [widget.id, publishSubject, publishMessage])
+
   // Filter events by subject
   const filteredEvents = filter
-    ? events.filter(e => e.subject.toLowerCase().includes(filter.toLowerCase()))
+    ? events.filter(e => e.subject.toLowerCase().includes(filter.toLowerCase()) || e.data.toLowerCase().includes(filter.toLowerCase()))
     : events
 
   const formatTime = (ts: string) => {
@@ -107,8 +119,15 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
       <div className="widget-drag-handle flex items-center gap-2 px-3 py-1.5 bg-surface-panel border-b border-white/10 flex-shrink-0 cursor-grab">
         <span className="text-primary text-xs">NATS</span>
         <span className="text-2xs font-mono text-slate-400 truncate flex-1">
-          Traffic Monitor {widget.sessionId ? `(${widget.sessionId})` : '(all sessions)'}
+          Traffic Monitor
         </span>
+        <button
+          onPointerDown={e => e.stopPropagation()}
+          onClick={() => setShowControls(!showControls)}
+          className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${showControls ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
+        >
+          Config
+        </button>
         <button
           onPointerDown={e => e.stopPropagation()}
           onClick={clearEvents}
@@ -133,11 +152,90 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
         </button>
       </div>
 
+      {/* Controls panel (collapsible) */}
+      {showControls && (
+        <div className="px-3 py-2 bg-surface-panel border-b border-white/10 flex-shrink-0 space-y-2">
+          {/* Subscriptions */}
+          <div>
+            <div className="text-2xs text-slate-500 uppercase tracking-wider mb-1">Subscriptions</div>
+            <div className="flex flex-wrap gap-1 mb-1.5">
+              {subscriptions.length === 0 ? (
+                <span className="text-2xs text-slate-500 italic">none</span>
+              ) : (
+                subscriptions.map(sub => (
+                  <span
+                    key={sub}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-primary/20 text-primary text-2xs font-mono rounded"
+                  >
+                    {sub}
+                    <button
+                      onClick={() => removeSubscription(sub)}
+                      className="text-primary/60 hover:text-primary"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))
+              )}
+            </div>
+            <div className="flex gap-1">
+              <input
+                type="text"
+                placeholder="tinstar.> or specific subject..."
+                value={newSub}
+                onChange={e => setNewSub(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addSubscription()}
+                onPointerDown={e => e.stopPropagation()}
+                className="flex-1 bg-surface-base text-xs font-mono px-2 py-1 rounded border border-white/10 focus:border-primary/50 focus:outline-none"
+              />
+              <button
+                onClick={addSubscription}
+                onPointerDown={e => e.stopPropagation()}
+                className="px-2 py-1 bg-primary/20 text-primary text-xs rounded hover:bg-primary/30"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+
+          {/* Publish */}
+          <div>
+            <div className="text-2xs text-slate-500 uppercase tracking-wider mb-1">Publish</div>
+            <div className="flex gap-1 mb-1">
+              <input
+                type="text"
+                placeholder="Subject"
+                value={publishSubject}
+                onChange={e => setPublishSubject(e.target.value)}
+                onPointerDown={e => e.stopPropagation()}
+                className="w-40 bg-surface-base text-xs font-mono px-2 py-1 rounded border border-white/10 focus:border-primary/50 focus:outline-none"
+              />
+              <input
+                type="text"
+                placeholder="Message"
+                value={publishMessage}
+                onChange={e => setPublishMessage(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && publishNats()}
+                onPointerDown={e => e.stopPropagation()}
+                className="flex-1 bg-surface-base text-xs font-mono px-2 py-1 rounded border border-white/10 focus:border-primary/50 focus:outline-none"
+              />
+              <button
+                onClick={publishNats}
+                onPointerDown={e => e.stopPropagation()}
+                className="px-2 py-1 bg-green-600/20 text-green-400 text-xs rounded hover:bg-green-600/30"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Filter bar */}
       <div className="px-3 py-1.5 bg-surface-panel border-b border-white/10 flex-shrink-0">
         <input
           type="text"
-          placeholder="Filter by subject..."
+          placeholder="Filter by subject or content..."
           value={filter}
           onChange={e => setFilter(e.target.value)}
           onPointerDown={e => e.stopPropagation()}
@@ -151,19 +249,25 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
         className="flex-1 min-h-0 overflow-y-auto font-mono text-2xs"
       >
         {filteredEvents.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-slate-500">
-            {events.length === 0 ? 'Waiting for NATS traffic...' : 'No matching events'}
+          <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-2">
+            {events.length === 0 ? (
+              <>
+                <span>Waiting for NATS traffic...</span>
+                {subscriptions.length === 0 && (
+                  <span className="text-2xs">Click Config to add subscriptions</span>
+                )}
+              </>
+            ) : (
+              'No matching events'
+            )}
           </div>
         ) : (
           <table className="w-full">
             <thead className="sticky top-0 bg-surface-panel text-slate-400">
               <tr>
                 <th className="px-2 py-1 text-left w-16">Time</th>
-                <th className="px-2 py-1 text-left w-32">Flow</th>
-                <th className="px-2 py-1 text-left w-24">ReplyTo</th>
-                {isAllSessions && <th className="px-2 py-1 text-left w-20">Session</th>}
                 <th className="px-2 py-1 text-left">Subject</th>
-                <th className="px-2 py-1 text-left">Body</th>
+                <th className="px-2 py-1 text-left">Data</th>
               </tr>
             </thead>
             <tbody>
@@ -176,34 +280,14 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
                     className={`border-b border-white/5 cursor-pointer ${isExpanded ? 'bg-white/5' : 'hover:bg-white/5'}`}
                   >
                     <td className="px-2 py-1 whitespace-nowrap text-slate-500">{formatTime(e.timestamp)}</td>
-                    <td className="px-2 py-1 whitespace-nowrap text-slate-300">
-                      {(() => {
-                        const { sender, recipient } = parseSenderRecipient(e)
-                        return (
-                          <span>
-                            <span className="text-cyan-400">{sender}</span>
-                            <span className="text-slate-500"> → </span>
-                            <span className="text-amber-400">{recipient}</span>
-                          </span>
-                        )
-                      })()}
-                    </td>
-                    <td className="px-2 py-1 whitespace-nowrap truncate max-w-[96px] text-slate-500" title={e.replyTo ?? ''}>
-                      {e.replyTo ?? '-'}
-                    </td>
-                    {isAllSessions && (
-                      <td className="px-2 py-1 whitespace-nowrap truncate max-w-[80px] text-slate-500" title={e.sessionName}>
-                        {e.sessionName}
-                      </td>
-                    )}
-                    <td className="px-2 py-1 whitespace-nowrap truncate max-w-[200px]" title={e.subject}>
+                    <td className="px-2 py-1 whitespace-nowrap text-cyan-400 truncate max-w-[300px]" title={e.subject}>
                       {e.subject}
                     </td>
-                    <td className={`px-2 py-1 text-slate-400 ${isExpanded ? '' : 'truncate max-w-[300px]'}`} title={isExpanded ? undefined : e.body}>
+                    <td className={`px-2 py-1 text-slate-400 ${isExpanded ? '' : 'truncate max-w-[400px]'}`} title={isExpanded ? undefined : e.data}>
                       {isExpanded ? (
-                        <div className="whitespace-pre-wrap break-all py-1">{e.body}</div>
+                        <div className="whitespace-pre-wrap break-all py-1">{e.data}</div>
                       ) : (
-                        truncate(e.body, 100)
+                        truncate(e.data, 150)
                       )}
                     </td>
                   </tr>
@@ -221,7 +305,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
           style={{ background: paused ? '#f59e0b' : '#22c55e' }}
         />
         <span className="text-2xs font-mono text-slate-500">
-          {paused ? 'paused' : 'live'} | {filteredEvents.length} events {filter && `(${events.length} total)`}
+          {paused ? 'paused' : 'live'} | {filteredEvents.length} events {filter && `(${events.length} total)`} | {subscriptions.length} subs
         </span>
       </div>
     </div>

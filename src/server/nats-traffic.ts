@@ -1,8 +1,8 @@
 /**
  * NATS Traffic Bridge
  *
- * Connects to NATS and subscribes to _tinstar.traffic.> to receive
- * traffic events from channel-servers, then broadcasts them via SSE.
+ * Subscribes to NATS subjects based on widget configurations and broadcasts
+ * traffic events via SSE for display in traffic monitor widgets.
  */
 
 import { connect, StringCodec, type NatsConnection, type Subscription } from 'nats'
@@ -11,19 +11,20 @@ import { log } from './logger'
 
 export interface NatsTrafficEvent {
   timestamp: string
-  sessionName: string
-  direction: 'inbound' | 'outbound'
   subject: string
-  from: string
-  replyTo: string | null
-  body: string  // Full body from channel-server
+  data: string
+  widgetId?: string  // Optional: which widget triggered this (for publish events)
 }
 
 export class NatsTrafficBridge {
   private nc: NatsConnection | null = null
-  private sub: Subscription | null = null
   private sc = StringCodec()
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+  // Per-widget subscriptions
+  private widgetSubscriptions = new Map<string, Set<string>>()
+  // Active NATS subscriptions (subject -> Subscription)
+  private activeSubs = new Map<string, Subscription>()
 
   constructor(
     private sse: SSEBroadcaster,
@@ -35,13 +36,10 @@ export class NatsTrafficBridge {
       this.nc = await connect({ servers: this.natsUrl })
       log.info('nats-traffic', `connected to ${this.natsUrl}`)
 
-      // Subscribe to all traffic events
-      this.sub = this.nc.subscribe('_tinstar.traffic.>')
-      this.processMessages()
-
       // Handle connection close
       this.nc.closed().then(() => {
         log.info('nats-traffic', 'connection closed')
+        this.activeSubs.clear()
         this.scheduleReconnect()
       })
     } catch (err) {
@@ -50,20 +48,104 @@ export class NatsTrafficBridge {
     }
   }
 
-  private async processMessages(): Promise<void> {
-    if (!this.sub) return
+  /**
+   * Update subscriptions for a widget. Computes the diff and adds/removes
+   * NATS subscriptions as needed.
+   */
+  updateWidgetSubscriptions(widgetId: string, subjects: string[]): void {
+    const subjectSet = new Set(subjects)
+    this.widgetSubscriptions.set(widgetId, subjectSet)
+    this.syncSubscriptions()
+  }
 
+  /**
+   * Remove a widget and its subscriptions.
+   */
+  removeWidget(widgetId: string): void {
+    this.widgetSubscriptions.delete(widgetId)
+    this.syncSubscriptions()
+  }
+
+  /**
+   * Publish a message to a NATS subject.
+   */
+  publish(subject: string, message: string): void {
+    if (!this.nc) {
+      log.warn('nats-traffic', 'cannot publish: not connected')
+      return
+    }
     try {
-      for await (const msg of this.sub) {
+      this.nc.publish(subject, this.sc.encode(message))
+      // Broadcast the publish event to UI
+      const event: NatsTrafficEvent = {
+        timestamp: new Date().toISOString(),
+        subject,
+        data: message,
+      }
+      this.sse.broadcastEvent('nats_traffic', event)
+      log.info('nats-traffic', `published to ${subject}`)
+    } catch (err) {
+      log.warn('nats-traffic', `failed to publish: ${(err as Error).message}`)
+    }
+  }
+
+  /**
+   * Sync active NATS subscriptions with the union of all widget subscriptions.
+   */
+  private syncSubscriptions(): void {
+    if (!this.nc) return
+
+    // Compute union of all widget subscriptions
+    const needed = new Set<string>()
+    for (const subs of this.widgetSubscriptions.values()) {
+      for (const s of subs) needed.add(s)
+    }
+
+    // Add new subscriptions
+    for (const subject of needed) {
+      if (!this.activeSubs.has(subject)) {
         try {
-          const event = JSON.parse(this.sc.decode(msg.data)) as NatsTrafficEvent
+          const sub = this.nc.subscribe(subject)
+          this.activeSubs.set(subject, sub)
+          this.processSubscription(subject, sub)
+          log.info('nats-traffic', `subscribed to ${subject}`)
+        } catch (err) {
+          log.warn('nats-traffic', `failed to subscribe to ${subject}: ${(err as Error).message}`)
+        }
+      }
+    }
+
+    // Remove old subscriptions
+    for (const [subject, sub] of this.activeSubs) {
+      if (!needed.has(subject)) {
+        sub.unsubscribe()
+        this.activeSubs.delete(subject)
+        log.info('nats-traffic', `unsubscribed from ${subject}`)
+      }
+    }
+  }
+
+  /**
+   * Process messages from a subscription and broadcast to SSE.
+   */
+  private async processSubscription(subject: string, sub: Subscription): Promise<void> {
+    try {
+      for await (const msg of sub) {
+        try {
+          const data = this.sc.decode(msg.data)
+          const event: NatsTrafficEvent = {
+            timestamp: new Date().toISOString(),
+            subject: msg.subject,
+            data,
+          }
           this.sse.broadcastEvent('nats_traffic', event)
         } catch (err) {
-          log.warn('nats-traffic', `failed to parse message: ${(err as Error).message}`)
+          log.warn('nats-traffic', `failed to decode message on ${subject}: ${(err as Error).message}`)
         }
       }
     } catch (err) {
-      log.warn('nats-traffic', `subscription error: ${(err as Error).message}`)
+      // Subscription ended (possibly due to unsubscribe or disconnect)
+      log.info('nats-traffic', `subscription ${subject} ended`)
     }
   }
 
@@ -71,7 +153,7 @@ export class NatsTrafficBridge {
     if (this.reconnectTimer) return
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      this.start()
+      this.start().then(() => this.syncSubscriptions())
     }, 5000)
   }
 
@@ -80,10 +162,10 @@ export class NatsTrafficBridge {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
-    if (this.sub) {
-      this.sub.unsubscribe()
-      this.sub = null
+    for (const sub of this.activeSubs.values()) {
+      sub.unsubscribe()
     }
+    this.activeSubs.clear()
     if (this.nc) {
       await this.nc.drain()
       this.nc = null

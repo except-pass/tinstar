@@ -44,6 +44,57 @@ import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
 import { computeNatsSubscriptions } from '../sessions/nats-subscriptions'
+
+/** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
+function buildNatsSubject(
+  sessionName: string,
+  docStore: DocumentStore,
+  taskId?: string,
+  epicId?: string,
+  initiativeId?: string,
+): string {
+  const BLANK = '_'
+  const sanitize = (s: string) => s.replace(/\s+/g, '-').replace(/[.>*]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase()
+
+  // Resolve hierarchy
+  let initId = initiativeId
+  let epId = epicId
+  let spaceId: string | undefined
+
+  if (taskId) {
+    const task = docStore.getTask(taskId)
+    if (task) {
+      epId = epId || task.epicId
+      initId = initId || task.initiativeId
+      spaceId = task.spaceId
+    }
+  }
+  if (epId && !initId) {
+    const epic = docStore.getEpic(epId)
+    if (epic) {
+      initId = epic.initiativeId
+      spaceId = spaceId || epic.spaceId
+    }
+  }
+  if (initId && !spaceId) {
+    const init = docStore.getInitiative(initId)
+    if (init) {
+      spaceId = init.spaceId
+    }
+  }
+
+  const space = spaceId ? docStore.getSpace(spaceId) : null
+  const initiative = initId ? docStore.getInitiative(initId) : null
+  const epic = epId ? docStore.getEpic(epId) : null
+  const task = taskId ? docStore.getTask(taskId) : null
+
+  const spaceName = space ? sanitize(space.name) : BLANK
+  const initName = initiative ? sanitize(initiative.name) : BLANK
+  const epicName = epic ? sanitize(epic.name) : BLANK
+  const taskName = task ? sanitize(task.name) : BLANK
+
+  return `tinstar.${spaceName}.${initName}.${epicName}.${taskName}.${sanitize(sessionName)}`
+}
 import { discoverPatterns, getPatternByName, interpolateSessionConfig, type TemplateVars } from '../patterns'
 
 // ─── NATS socket communication ─────────────────────────────────────────
@@ -352,9 +403,14 @@ export interface RouteContext {
   resetSimulator: () => void
   sessionConfig: TinstarConfig | null
   readyQueue: ReadyQueue
+  natsTraffic?: import('../nats-traffic').NatsTrafficBridge
 }
 
 function json(res: ServerResponse, data: unknown, status = 200): void {
+  // Some routes respond asynchronously (e.g. readBody(...).then(...)).
+  // If the client disconnects or another codepath already responded, avoid crashing
+  // with ERR_HTTP_HEADERS_SENT.
+  if (res.headersSent || res.writableEnded) return
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
@@ -1078,14 +1134,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'POST' && url === '/api/nats-traffic-widgets') {
     readBody(req).then(body => {
       try {
-        const { sessionId } = JSON.parse(body) as { sessionId?: string }
-        // sessionId is optional — empty means show all sessions
+        const { sessionId, subscriptions } = JSON.parse(body) as { sessionId?: string; subscriptions?: string[] }
         const widget = {
           id: shortId('nats'),
           spaceId: ctx.docStore.activeSpaceId || undefined,
           sessionId: sessionId ?? '',
+          subscriptions: subscriptions ?? ['tinstar.>'],  // Default to all tinstar traffic
         }
         ctx.docStore.upsertNatsTrafficWidget(widget.id, widget)
+        // Update NATS bridge subscriptions
+        ctx.natsTraffic?.updateWidgetSubscriptions(widget.id, widget.subscriptions)
         ctx.sse.broadcastSnapshot()
         json(res, { ok: true, data: widget })
       } catch {
@@ -1095,14 +1153,96 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST /api/nats-traffic-widgets/:id/subscribe — add subscription
+  if (method === 'POST' && url.match(/^\/api\/nats-traffic-widgets\/[^/]+\/subscribe$/)) {
+    const id = url.split('/')[3]
+    readBody(req).then(body => {
+      try {
+        const { subject } = JSON.parse(body) as { subject: string }
+        if (!subject) {
+          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject required' } }, 400)
+          return
+        }
+        const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
+        if (!existing) {
+          json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Widget ${id} not found` } }, 404)
+          return
+        }
+        const subs = new Set(existing.subscriptions || [])
+        subs.add(subject)
+        const updated = { ...existing, subscriptions: [...subs] }
+        ctx.docStore.upsertNatsTrafficWidget(id, updated)
+        ctx.natsTraffic?.updateWidgetSubscriptions(id, updated.subscriptions)
+        ctx.sse.broadcastSnapshot()
+        json(res, { ok: true, data: updated })
+      } catch {
+        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+      }
+    })
+    return true
+  }
+
+  // DELETE /api/nats-traffic-widgets/:id/subscribe — remove subscription
+  if (method === 'DELETE' && url.match(/^\/api\/nats-traffic-widgets\/[^/]+\/subscribe$/)) {
+    const id = url.split('/')[3]
+    readBody(req).then(body => {
+      try {
+        const { subject } = JSON.parse(body) as { subject: string }
+        if (!subject) {
+          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject required' } }, 400)
+          return
+        }
+        const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
+        if (!existing) {
+          json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Widget ${id} not found` } }, 404)
+          return
+        }
+        const subs = (existing.subscriptions || []).filter(s => s !== subject)
+        const updated = { ...existing, subscriptions: subs }
+        ctx.docStore.upsertNatsTrafficWidget(id, updated)
+        ctx.natsTraffic?.updateWidgetSubscriptions(id, updated.subscriptions)
+        ctx.sse.broadcastSnapshot()
+        json(res, { ok: true, data: updated })
+      } catch {
+        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+      }
+    })
+    return true
+  }
+
+  // POST /api/nats-traffic-widgets/:id/publish — publish a message
+  if (method === 'POST' && url.match(/^\/api\/nats-traffic-widgets\/[^/]+\/publish$/)) {
+    const id = url.split('/')[3]
+    readBody(req).then(body => {
+      try {
+        const { subject, message } = JSON.parse(body) as { subject: string; message: string }
+        if (!subject || !message) {
+          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject and message required' } }, 400)
+          return
+        }
+        const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
+        if (!existing) {
+          json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Widget ${id} not found` } }, 404)
+          return
+        }
+        ctx.natsTraffic?.publish(subject, message)
+        json(res, { ok: true })
+      } catch {
+        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+      }
+    })
+    return true
+  }
+
   // DELETE /api/nats-traffic-widgets/:id
-  if (method === 'DELETE' && url.startsWith('/api/nats-traffic-widgets/')) {
+  if (method === 'DELETE' && url.startsWith('/api/nats-traffic-widgets/') && !url.includes('/subscribe')) {
     const id = url.slice('/api/nats-traffic-widgets/'.length)
     const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
     if (!existing) {
       json(res, { ok: false, error: { code: 'NOT_FOUND', message: `NatsTrafficWidget ${id} not found` } }, 404)
       return true
     }
+    ctx.natsTraffic?.removeWidget(id)
     ctx.docStore.deleteNatsTrafficWidget(id)
     json(res, { ok: true })
     return true
@@ -1569,8 +1709,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const suffix = sessionDef.role === 'orchestrator' ? '' : `-${sessionDef.role}`
             sessionNames[sessionDef.role] = `${name}${suffix}`
           }
-          templateVars.orchestrator = `agents.${sessionNames.orchestrator}`
-          templateVars.worker = sessionNames.worker ? `agents.${sessionNames.worker}` : ''
+          // Use hierarchical tinstar.* subjects (not agents.* which isn't namespaced)
+          templateVars.orchestrator = buildNatsSubject(sessionNames.orchestrator, ctx.docStore, taskId, epicId, initiativeId)
+          templateVars.worker = sessionNames.worker ? buildNatsSubject(sessionNames.worker, ctx.docStore, taskId, epicId, initiativeId) : ''
 
           const createCtx: CreateSessionContext = {
             cfg,

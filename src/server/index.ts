@@ -276,7 +276,14 @@ export function initBackend(): RouteContext {
     startSimulator()
   }
 
-  return { docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue }
+  // Sync existing widget subscriptions with NATS traffic bridge
+  for (const widget of docStore.getAllNatsTrafficWidgets()) {
+    if (widget.subscriptions?.length) {
+      natsTraffic.updateWidgetSubscriptions(widget.id, widget.subscriptions)
+    }
+  }
+
+  return { docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue, natsTraffic }
 }
 
 export function tinstarBackend(): Plugin {

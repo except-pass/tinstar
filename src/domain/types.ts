@@ -151,6 +151,7 @@ export interface NatsTrafficWidget {
   id: string
   spaceId?: string
   sessionId: string  // Filter to show traffic for a specific session, or empty for all
+  subscriptions: string[]  // NATS subjects to subscribe to (e.g., "tinstar.>")
   color?: string
 }
 

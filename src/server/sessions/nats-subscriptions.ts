@@ -10,6 +10,7 @@ import type { DocumentStore } from '../stores/document-store'
 
 export interface NatsSubscriptionContext {
   sessionName: string
+  spaceId?: string | null
   taskId?: string | null
   epicId?: string | null
   initiativeId?: string | null
@@ -23,8 +24,9 @@ export interface NatsSubscriptionContext {
  * - Task-level broadcasts
  * - Epic-level wildcards
  * - Initiative-level wildcards
+ * - Space-level wildcards
  *
- * Subject format: tinstar.<initiative>.<epic>.<task>.<session-name>
+ * Subject format: tinstar.<space>.<initiative>.<epic>.<task>.<session-name>
  *
  * @param ctx - Session context with entity IDs
  * @param docStore - Document store for looking up entity hierarchy
@@ -35,14 +37,13 @@ export function computeNatsSubscriptions(
   docStore: DocumentStore,
 ): string[] {
   const subjects: string[] = []
-
-  // Always subscribe to direct messages for this session
-  subjects.push(`agents.${ctx.sessionName}`)
+  // Note: We use only the hierarchical tinstar.* pattern, not agents.* (avoids namespace collision)
 
   // If we have entity associations, build hierarchy-based subjects
   let initiativeId = ctx.initiativeId
   let epicId = ctx.epicId
   const taskId = ctx.taskId
+  let spaceId = ctx.spaceId
 
   // Resolve hierarchy by walking up from task
   if (taskId) {
@@ -50,6 +51,7 @@ export function computeNatsSubscriptions(
     if (task) {
       epicId = epicId || task.epicId
       initiativeId = initiativeId || task.initiativeId
+      spaceId = spaceId || task.spaceId
     }
   }
 
@@ -57,43 +59,58 @@ export function computeNatsSubscriptions(
     const epic = docStore.getEpic(epicId)
     if (epic) {
       initiativeId = epic.initiativeId
+      spaceId = spaceId || epic.spaceId
     }
   }
 
-  // Build hierarchy path
-  const parts: string[] = ['tinstar']
-
-  if (initiativeId) {
+  if (initiativeId && !spaceId) {
     const initiative = docStore.getInitiative(initiativeId)
     if (initiative) {
-      parts.push(sanitizeSubjectToken(initiative.id))
-
-      // Initiative wildcard: tinstar.<init>.>
-      subjects.push(`${parts.join('.')}.>`)
-
-      if (epicId) {
-        const epic = docStore.getEpic(epicId)
-        if (epic) {
-          parts.push(sanitizeSubjectToken(epic.id))
-
-          // Epic wildcard: tinstar.<init>.<epic>.>
-          subjects.push(`${parts.join('.')}.>`)
-
-          if (taskId) {
-            const task = docStore.getTask(taskId)
-            if (task) {
-              parts.push(sanitizeSubjectToken(task.id))
-
-              // Task broadcast: tinstar.<init>.<epic>.<task>.*
-              subjects.push(`${parts.join('.')}.*`)
-
-              // Direct: tinstar.<init>.<epic>.<task>.<session-name>
-              subjects.push(`${parts.join('.')}.${sanitizeSubjectToken(ctx.sessionName)}`)
-            }
-          }
-        }
-      }
+      spaceId = initiative.spaceId
     }
+  }
+
+  // Build hierarchy path using entity names (not IDs) for human-readable subjects
+  // Use '_' as placeholder for missing levels to keep structure consistent:
+  // tinstar.<space>.<init>.<epic>.<task>.<session>
+  const BLANK = '_'
+
+  const space = spaceId ? docStore.getSpace(spaceId) : null
+  const initiative = initiativeId ? docStore.getInitiative(initiativeId) : null
+  const epic = epicId ? docStore.getEpic(epicId) : null
+  const task = taskId ? docStore.getTask(taskId) : null
+
+  const spaceName = space ? sanitizeSubjectToken(space.name) : BLANK
+  const initName = initiative ? sanitizeSubjectToken(initiative.name) : BLANK
+  const epicName = epic ? sanitizeSubjectToken(epic.name) : BLANK
+  const taskName = task ? sanitizeSubjectToken(task.name) : BLANK
+
+  // Always build the full path with placeholders for missing levels
+  const parts = ['tinstar', spaceName, initName, epicName, taskName]
+
+  // Add wildcard subjects for each level that exists (not blank)
+  // tinstar.<space>.>
+  if (space) {
+    subjects.push(`tinstar.${spaceName}.>`)
+  }
+
+  // tinstar.<space>.<init>.>
+  if (initiative) {
+    subjects.push(`tinstar.${spaceName}.${initName}.>`)
+  }
+
+  // tinstar.<space>.<init>.<epic>.>
+  if (epic) {
+    subjects.push(`tinstar.${spaceName}.${initName}.${epicName}.>`)
+  }
+
+  // Task-level subjects (broadcast and direct)
+  if (task) {
+    // tinstar.<space>.<init>.<epic>.<task>.*
+    subjects.push(`${parts.join('.')}.*`)
+
+    // tinstar.<space>.<init>.<epic>.<task>.<session>
+    subjects.push(`${parts.join('.')}.${sanitizeSubjectToken(ctx.sessionName)}`)
   }
 
   return [...new Set(subjects)] // Deduplicate
