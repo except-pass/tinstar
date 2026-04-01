@@ -74,6 +74,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
   const [projects, setProjects] = useState<{ name: string; path: string }[]>([])
   const [cliTemplateOptions, setCliTemplateOptions] = useState<{ name: string; icon?: string }[]>([])
+  const [profiles, setProfiles] = useState<Array<{ name: string; image: string }>>([])
   const [worktrees, setWorktrees] = useState<{ path: string; branch?: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<EntitySettings>({})
@@ -91,14 +92,18 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       fetch(`/api/${endpoint}/${entityId}/settings`).then(r => r.json()),
       fetch('/api/projects').then(r => r.json()),
       fetch('/api/cli-templates').then(r => r.json()),
+      fetch('/api/docker/profiles').then(r => r.json()),
       fetch(`/api/state`).then(r => r.json()),
-    ]).then(([settingsRes, projectsRes, templatesRes, stateRes]) => {
+    ]).then(([settingsRes, projectsRes, templatesRes, profilesRes, stateRes]) => {
       if (settingsRes.ok) setSettings(settingsRes.data)
       if (projectsRes?.ok && projectsRes.data && typeof projectsRes.data === 'object') {
         setProjects(Object.entries(projectsRes.data).map(([name, path]) => ({ name, path: path as string })))
       }
       if (templatesRes?.ok && Array.isArray(templatesRes.data)) {
         setCliTemplateOptions(templatesRes.data)
+      }
+      if (profilesRes?.ok && Array.isArray(profilesRes.data)) {
+        setProfiles(profilesRes.data)
       }
       // Load externalUrl from the entity
       if (stateRes) {
