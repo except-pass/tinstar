@@ -33,6 +33,10 @@ export interface TinstarConfig {
     reconciliationRepos: string[]
     reconciliationBranchScope: string
   }
+  nats: {
+    channelServerPackage: string  // npm package or github:user/repo
+    bunPath: string
+  }
 }
 
 // --- Helpers ---
@@ -80,6 +84,13 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     resumeCmd: 'claude --resume {sessionId}',
   },
   {
+    name: 'Claude (multi-agent)',
+    icon: '⚡',
+    adapter: 'claude',
+    startCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --session-id {sessionId} -- {prompt}',
+    resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --resume {sessionId}',
+  },
+  {
     name: 'Codex (full auto)',
     icon: '◎',
     adapter: 'codex',
@@ -111,6 +122,12 @@ const BASE_CONFIG = {
     taskMarkerRegex: '#([A-Za-z0-9_-]+)',
     reconciliationRepos: [],
     reconciliationBranchScope: '*',
+  },
+  nats: {
+    // Default: install from GitHub on first use via `bun x`
+    // Override in ~/.config/tinstar/config.json for local dev
+    channelServerPackage: 'github:except-pass/nats-channel-mcp',
+    bunPath: join(homedir(), '.bun/bin/bun'),
   },
 }
 
@@ -173,6 +190,14 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
       reconciliationBranchScope: typeof userConfig.reconciliationBranchScope === 'string'
         ? userConfig.reconciliationBranchScope
         : merged.git.reconciliationBranchScope,
+    },
+    nats: {
+      channelServerPackage: typeof (userConfig.nats as Record<string, unknown>)?.channelServerPackage === 'string'
+        ? (userConfig.nats as Record<string, string>).channelServerPackage
+        : merged.nats.channelServerPackage,
+      bunPath: typeof (userConfig.nats as Record<string, unknown>)?.bunPath === 'string'
+        ? (userConfig.nats as Record<string, string>).bunPath
+        : merged.nats.bunPath,
     },
   }
 

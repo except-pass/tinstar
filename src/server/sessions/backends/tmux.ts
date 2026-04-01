@@ -127,29 +127,23 @@ export function buildAgentCommand(opts: {
   initialPrompt?: string | null
   nats?: { enabled: boolean } | null
 }): string {
-  let cmd: string
-
   if (opts.template) {
     const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
-    cmd = interpolateTemplate(tmpl, {
+    return interpolateTemplate(tmpl, {
       sessionId: opts.sessionId,
       prompt: opts.resume ? null : opts.initialPrompt,
     })
-  } else {
-    // Legacy fallback: build claude command from flags
-    cmd = 'claude'
-    if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
-    if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
-    else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
-    if (opts.initialPrompt) cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
   }
-
-  // Add NATS channel support for both templates and legacy commands
-  // .mcp.json is written to workspace CWD, so no --mcp-config needed
+  // Legacy fallback: build claude command from flags
+  let cmd = 'claude'
+  if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
+  if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
+  else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
+  // Add NATS channel support — .mcp.json is in CWD, no --mcp-config needed
   if (opts.nats?.enabled) {
     cmd += ' --dangerously-load-development-channels server:nats'
   }
-
+  if (opts.initialPrompt) cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
   return cmd
 }
 
