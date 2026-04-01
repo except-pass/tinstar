@@ -19,18 +19,15 @@ export interface NatsSubscriptionContext {
 /**
  * Compute NATS subscriptions for a session based on its entity hierarchy.
  *
- * Returns subjects for:
- * - Direct messages to this session
- * - Task-level broadcasts
- * - Epic-level wildcards
- * - Initiative-level wildcards
- * - Space-level wildcards
+ * Subscribes only to the MOST SPECIFIC level available to avoid duplicate
+ * message delivery. For example, if a task is associated, only subscribes to
+ * the task-level wildcard (which covers direct messages to this session).
  *
  * Subject format: tinstar.<space>.<initiative>.<epic>.<task>.<session-name>
  *
  * @param ctx - Session context with entity IDs
  * @param docStore - Document store for looking up entity hierarchy
- * @returns Array of NATS subjects to subscribe to
+ * @returns Array of NATS subjects to subscribe to (typically just one)
  */
 export function computeNatsSubscriptions(
   ctx: NatsSubscriptionContext,
@@ -88,32 +85,25 @@ export function computeNatsSubscriptions(
   // Always build the full path with placeholders for missing levels
   const parts = ['tinstar', spaceName, initName, epicName, taskName]
 
-  // Add wildcard subjects for each level that exists (not blank)
-  // tinstar.<space>.>
-  if (space) {
+  // Subscribe only to the MOST SPECIFIC level to avoid duplicate deliveries.
+  // Broader wildcards (space.>, init.>) would match everything narrower ones match,
+  // causing the same message to be delivered multiple times.
+  if (task) {
+    // Task-level: broadcast to all sessions + direct to this session
+    // tinstar.<space>.<init>.<epic>.<task>.* covers both
+    subjects.push(`${parts.join('.')}.*`)
+  } else if (epic) {
+    // Epic-level wildcard (no task association)
+    subjects.push(`tinstar.${spaceName}.${initName}.${epicName}.>`)
+  } else if (initiative) {
+    // Initiative-level wildcard (no epic/task association)
+    subjects.push(`tinstar.${spaceName}.${initName}.>`)
+  } else if (space) {
+    // Space-level wildcard (no deeper association)
     subjects.push(`tinstar.${spaceName}.>`)
   }
 
-  // tinstar.<space>.<init>.>
-  if (initiative) {
-    subjects.push(`tinstar.${spaceName}.${initName}.>`)
-  }
-
-  // tinstar.<space>.<init>.<epic>.>
-  if (epic) {
-    subjects.push(`tinstar.${spaceName}.${initName}.${epicName}.>`)
-  }
-
-  // Task-level subjects (broadcast and direct)
-  if (task) {
-    // tinstar.<space>.<init>.<epic>.<task>.*
-    subjects.push(`${parts.join('.')}.*`)
-
-    // tinstar.<space>.<init>.<epic>.<task>.<session>
-    subjects.push(`${parts.join('.')}.${sanitizeSubjectToken(ctx.sessionName)}`)
-  }
-
-  return [...new Set(subjects)] // Deduplicate
+  return subjects
 }
 
 /**

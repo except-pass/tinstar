@@ -6,9 +6,8 @@ import type { Session, SessionNats } from '../session'
 import type { TinstarConfig, CliTemplate } from '../config'
 import { log } from '../../logger'
 
-// Path to the channel-server.ts binary
-const CHANNEL_SERVER_PATH = '/home/ubuntu/repo/tinstar/nats-channel-mcp/channel-server.ts'
-const BUN_PATH = '/home/ubuntu/.bun/bin/bun'
+// NATS channel server paths come from config (see config.ts)
+// Install: git clone https://github.com/except-pass/nats-channel-mcp && cd nats-channel-mcp && bun install
 
 const execFileAsync = promisify(execFile)
 
@@ -94,12 +93,14 @@ export function generateNatsMcpConfig(opts: {
   sessionName: string
   workspacePath: string
   nats: SessionNats
+  channelServerPackage: string  // npm package or github:user/repo
+  bunPath: string
 }): string {
   // Write to workspace CWD — Claude looks for .mcp.json in the working directory
   const mcpConfigPath = join(opts.workspacePath, '.mcp.json')
 
-  // Build args for channel-server.ts
-  const args: string[] = ['run', CHANNEL_SERVER_PATH, '--name', opts.sessionName]
+  // Build args: use `bun x <package>` to run from npm/github without local install
+  const args: string[] = ['x', opts.channelServerPackage, '--name', opts.sessionName]
   for (const subject of opts.nats.subscriptions) {
     args.push('--subscribe', subject)
   }
@@ -107,7 +108,7 @@ export function generateNatsMcpConfig(opts: {
   const mcpConfig = {
     mcpServers: {
       nats: {
-        command: BUN_PATH,
+        command: opts.bunPath,
         args,
       },
     },
@@ -126,23 +127,29 @@ export function buildAgentCommand(opts: {
   initialPrompt?: string | null
   nats?: { enabled: boolean } | null
 }): string {
+  let cmd: string
+
   if (opts.template) {
     const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
-    return interpolateTemplate(tmpl, {
+    cmd = interpolateTemplate(tmpl, {
       sessionId: opts.sessionId,
       prompt: opts.resume ? null : opts.initialPrompt,
     })
+  } else {
+    // Legacy fallback: build claude command from flags
+    cmd = 'claude'
+    if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
+    if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
+    else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
+    if (opts.initialPrompt) cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
   }
-  // Legacy fallback: build claude command from flags
-  let cmd = 'claude'
-  if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
-  if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
-  else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
-  // Add NATS channel support — .mcp.json is in CWD, no --mcp-config needed
+
+  // Add NATS channel support for both templates and legacy commands
+  // .mcp.json is written to workspace CWD, so no --mcp-config needed
   if (opts.nats?.enabled) {
     cmd += ' --dangerously-load-development-channels server:nats'
   }
-  if (opts.initialPrompt) cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
+
   return cmd
 }
 
@@ -191,6 +198,8 @@ export async function createTmuxSession(
       sessionName: opts.session.name,
       workspacePath: opts.session.workspace.path,
       nats: opts.session.nats,
+      channelServerPackage: config.nats.channelServerPackage,
+      bunPath: config.nats.bunPath,
     })
     natsOpts = { enabled: true }
   }
@@ -240,6 +249,8 @@ export async function startTmuxSession(
       sessionName: opts.session.name,
       workspacePath: opts.session.workspace.path,
       nats: opts.session.nats,
+      channelServerPackage: config.nats.channelServerPackage,
+      bunPath: config.nats.bunPath,
     })
     natsOpts = { enabled: true }
   }
