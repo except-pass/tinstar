@@ -3,8 +3,8 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { parsePatternFile, type Pattern } from './parser'
 
-/** Default patterns directory */
-export const DEFAULT_PATTERNS_DIR = join(homedir(), '.claude', 'patterns')
+/** Default patterns directory - lives alongside other Tinstar config */
+export const DEFAULT_PATTERNS_DIR = join(homedir(), '.config', 'tinstar', 'patterns')
 
 /**
  * Discover all pattern files in a directory.

@@ -57,12 +57,12 @@ The orchestrator wears two hats: **coordinator** (spawns, routes) and **reviewer
 
 ## Pattern File Format
 
-Pattern templates live in `~/.claude/patterns/` as markdown files with YAML frontmatter.
+Pattern templates live in `~/.config/tinstar/patterns/` as markdown files with YAML frontmatter.
 
 ### Location
 
 ```
-~/.claude/patterns/
+~/.config/tinstar/patterns/
 ├── bug-review.md
 ├── code-review.md
 └── research.md
