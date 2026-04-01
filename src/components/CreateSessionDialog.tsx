@@ -90,6 +90,8 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [runColor, setRunColor] = useState(prefill?.runColor ?? DEFAULT_RUN_ACCENT)
   const [taskId, setTaskId] = useState(prefill?.taskId ?? '')
   const [entities, setEntities] = useState<{ initiatives: EntityOption[]; epics: EntityOption[]; tasks: EntityOption[] }>({ initiatives: [], epics: [], tasks: [] })
+  const [patterns, setPatterns] = useState<Array<{ name: string; description: string; sessions: string[] }>>([])
+  const [pattern, setPattern] = useState<string>('')
   const [addingProject, setAddingProject] = useState(false)
   const [newProjectPath, setNewProjectPath] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -122,6 +124,13 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
             setCliTemplate(d.data[0].name)
           }
         }
+      })
+      .catch(() => {})
+
+    fetch('/api/patterns')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.ok && Array.isArray(d.data)) setPatterns(d.data)
       })
       .catch(() => {})
 
@@ -190,6 +199,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
     if (runColor) body.color = runColor
     if (prefill?.epicId) body.epicId = prefill.epicId
     if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
+    if (pattern) body.pattern = pattern
 
     try {
       const res = await fetch('/api/sessions', {
@@ -208,7 +218,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       setError((err as Error).message)
       setSubmitting(false)
     }
-  }, [effectiveName, backend, profile, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
+  }, [effectiveName, backend, profile, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, pattern, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -405,6 +415,32 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
           </div>
         )}
 
+        {/* Pattern */}
+        {patterns.length > 0 && (
+          <div className="mb-3">
+            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">
+              Pattern
+              <span className="ml-1 text-slate-600">(optional)</span>
+            </label>
+            <select
+              value={pattern}
+              onChange={e => setPattern(e.target.value)}
+              className="w-full px-3 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
+            >
+              <option value="">Single Agent (default)</option>
+              {patterns.map(p => (
+                <option key={p.name} value={p.name}>
+                  {p.name} — {p.sessions.join(' + ')}
+                </option>
+              ))}
+            </select>
+            {pattern && (
+              <div className="mt-2 text-2xs text-slate-500">
+                {patterns.find(p => p.name === pattern)?.description}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Run color */}
         <div className="mb-3">
