@@ -6,6 +6,8 @@ interface TrafficEvent {
   timestamp: string
   subject: string
   data: string
+  direction: 'inbound' | 'outbound'
+  sender?: string
 }
 
 const MAX_EVENTS = 200
@@ -266,6 +268,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
             <thead className="sticky top-0 bg-surface-panel text-slate-400">
               <tr>
                 <th className="px-2 py-1 text-left w-16">Time</th>
+                <th className="px-2 py-1 text-left w-24">From</th>
                 <th className="px-2 py-1 text-left">Subject</th>
                 <th className="px-2 py-1 text-left">Data</th>
               </tr>
@@ -273,6 +276,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
             <tbody>
               {filteredEvents.map((e, i) => {
                 const isExpanded = expandedRows.has(i)
+                const isOutbound = e.direction === 'outbound'
                 return (
                   <tr
                     key={i}
@@ -280,14 +284,22 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
                     className={`border-b border-white/5 cursor-pointer ${isExpanded ? 'bg-white/5' : 'hover:bg-white/5'}`}
                   >
                     <td className="px-2 py-1 whitespace-nowrap text-slate-500">{formatTime(e.timestamp)}</td>
-                    <td className="px-2 py-1 whitespace-nowrap text-cyan-400 truncate max-w-[300px]" title={e.subject}>
+                    <td className={`px-2 py-1 whitespace-nowrap ${isOutbound ? 'text-green-400' : 'text-amber-400'}`} title={isOutbound ? 'outbound' : 'inbound'}>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="material-symbols-outlined text-xs" style={{ fontSize: '12px' }}>
+                          {isOutbound ? 'arrow_upward' : 'arrow_downward'}
+                        </span>
+                        {e.sender || '?'}
+                      </span>
+                    </td>
+                    <td className="px-2 py-1 whitespace-nowrap text-cyan-400 truncate max-w-[250px]" title={e.subject}>
                       {e.subject}
                     </td>
-                    <td className={`px-2 py-1 text-slate-400 ${isExpanded ? '' : 'truncate max-w-[400px]'}`} title={isExpanded ? undefined : e.data}>
+                    <td className={`px-2 py-1 text-slate-400 ${isExpanded ? '' : 'truncate max-w-[350px]'}`} title={isExpanded ? undefined : e.data}>
                       {isExpanded ? (
                         <div className="whitespace-pre-wrap break-all py-1">{e.data}</div>
                       ) : (
-                        truncate(e.data, 150)
+                        truncate(e.data, 120)
                       )}
                     </td>
                   </tr>

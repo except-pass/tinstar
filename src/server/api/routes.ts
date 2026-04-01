@@ -1225,7 +1225,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Widget ${id} not found` } }, 404)
           return
         }
-        ctx.natsTraffic?.publish(subject, message)
+        ctx.natsTraffic?.publish(subject, message, 'tinstar-ui')
         json(res, { ok: true })
       } catch {
         json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)

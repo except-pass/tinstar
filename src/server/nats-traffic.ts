@@ -13,7 +13,8 @@ export interface NatsTrafficEvent {
   timestamp: string
   subject: string
   data: string
-  widgetId?: string  // Optional: which widget triggered this (for publish events)
+  direction: 'inbound' | 'outbound'
+  sender?: string  // Extracted from subject or known from publish
 }
 
 export class NatsTrafficBridge {
@@ -69,18 +70,20 @@ export class NatsTrafficBridge {
   /**
    * Publish a message to a NATS subject.
    */
-  publish(subject: string, message: string): void {
+  publish(subject: string, message: string, sender?: string): void {
     if (!this.nc) {
       log.warn('nats-traffic', 'cannot publish: not connected')
       return
     }
     try {
       this.nc.publish(subject, this.sc.encode(message))
-      // Broadcast the publish event to UI
+      // Broadcast the publish event to UI (marked as outbound)
       const event: NatsTrafficEvent = {
         timestamp: new Date().toISOString(),
         subject,
         data: message,
+        direction: 'outbound',
+        sender: sender ?? 'tinstar',
       }
       this.sse.broadcastEvent('nats_traffic', event)
       log.info('nats-traffic', `published to ${subject}`)
@@ -126,6 +129,20 @@ export class NatsTrafficBridge {
   }
 
   /**
+   * Extract sender from NATS subject.
+   * Subject format: tinstar.<space>.<init>.<epic>.<task>.<session>
+   * Returns the last segment (session name) as sender.
+   */
+  private extractSender(subject: string): string | undefined {
+    const parts = subject.split('.')
+    // tinstar subjects have the session as the last segment
+    if (parts[0] === 'tinstar' && parts.length >= 2) {
+      return parts[parts.length - 1]
+    }
+    return undefined
+  }
+
+  /**
    * Process messages from a subscription and broadcast to SSE.
    */
   private async processSubscription(subject: string, sub: Subscription): Promise<void> {
@@ -137,6 +154,8 @@ export class NatsTrafficBridge {
             timestamp: new Date().toISOString(),
             subject: msg.subject,
             data,
+            direction: 'inbound',
+            sender: this.extractSender(msg.subject),
           }
           this.sse.broadcastEvent('nats_traffic', event)
         } catch (err) {

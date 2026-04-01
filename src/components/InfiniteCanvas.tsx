@@ -89,11 +89,13 @@ const TREEMAP_PAD = 8        // inner padding around children
  * Compute treemap layouts for a set of nodes within a bounding rect.
  * Places nodes in an aspect-ratio-aware grid, then recurses into containers.
  * Returns a flat Map<nodeId, layout> covering every node in the subtree.
+ * Work widgets (non-containers) preserve their existing size; only position changes.
  */
 function computeTreemapLayouts(
   nodes: TreeNode[],
   x: number, y: number, w: number, h: number,
   gap: number,
+  currentLayouts?: Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>,
 ): Map<string, import('../hooks/useWidgetLayouts').WidgetLayout> {
   const result = new Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>()
   const n = nodes.length
@@ -112,17 +114,26 @@ function computeTreemapLayouts(
     const row = Math.floor(i / cols)
     const nx = Math.round(x + gap + col * (cellW + gap))
     const ny = Math.round(y + gap + row * (cellH + gap))
-    result.set(node.id, { x: nx, y: ny, width: Math.round(cellW), height: Math.round(cellH) })
 
     const isContainer = getWidgetComponent(toWidgetType(node.type))?.isContainer
-    if (isContainer && node.children.length > 0 && cellW > 120 && cellH > 80) {
-      const childGap = Math.max(6, Math.floor(gap * 0.6))
-      const innerX = nx + TREEMAP_PAD
-      const innerY = ny + TREEMAP_HEADER_H
-      const innerW = cellW - TREEMAP_PAD * 2
-      const innerH = cellH - TREEMAP_HEADER_H - TREEMAP_PAD
-      const childLayouts = computeTreemapLayouts(node.children, innerX, innerY, innerW, innerH, childGap)
-      for (const [id, layout] of childLayouts) result.set(id, layout)
+    if (isContainer) {
+      // Containers: resize to fit the grid cell
+      result.set(node.id, { x: nx, y: ny, width: Math.round(cellW), height: Math.round(cellH) })
+      if (node.children.length > 0 && cellW > 120 && cellH > 80) {
+        const childGap = Math.max(6, Math.floor(gap * 0.6))
+        const innerX = nx + TREEMAP_PAD
+        const innerY = ny + TREEMAP_HEADER_H
+        const innerW = cellW - TREEMAP_PAD * 2
+        const innerH = cellH - TREEMAP_HEADER_H - TREEMAP_PAD
+        const childLayouts = computeTreemapLayouts(node.children, innerX, innerY, innerW, innerH, childGap, currentLayouts)
+        for (const [id, layout] of childLayouts) result.set(id, layout)
+      }
+    } else {
+      // Work widgets: preserve existing size, only update position
+      const existing = currentLayouts?.get(node.id)
+      const width = existing?.width ?? 1560
+      const height = existing?.height ?? 1410
+      result.set(node.id, { x: nx, y: ny, width, height })
     }
   }
 
@@ -423,8 +434,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const vw = rect.width / camera.zoom
     const vh = rect.height / camera.zoom
 
-    const layouts = computeTreemapLayouts(rootNodes, vx, vy, vw, vh, 20)
-    batchSetLayouts(layouts)
+    const newLayouts = computeTreemapLayouts(rootNodes, vx, vy, vw, vh, 20, layouts)
+    batchSetLayouts(newLayouts)
   }, [camera, selectionState, tree, batchSetLayouts])
 
   // Swim lanes: rows of runs grouped by task, stacked by epic/initiative
@@ -719,7 +730,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const handleDoubleClickZoom = useCallback((nodeId: string) => {
     if (onFocusRun && nodeId.startsWith('run-')) {
       onFocusRun(nodeId.slice(4))
-    } else if (nodeId.startsWith('editor-') || nodeId.startsWith('browser-') || nodeId.startsWith('image-')) {
+    } else if (nodeId.startsWith('editor-') || nodeId.startsWith('browser-') || nodeId.startsWith('image-') || nodeId.startsWith('nats-')) {
       zoomToFitRuns([nodeId])
     }
   }, [onFocusRun, zoomToFitRuns])
