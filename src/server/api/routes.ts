@@ -151,6 +151,199 @@ function removeFileWatchSubscriber(absolutePath: string, subscriberId: string): 
 }
 
 
+interface CreateSessionParams {
+  name: string
+  backend: 'docker' | 'tmux'
+  project?: string
+  worktree?: boolean
+  worktreePath?: string
+  profile?: string
+  prompt?: string
+  skipPermissions?: boolean
+  cliTemplate?: string
+  taskId?: string
+  epicId?: string
+  initiativeId?: string
+  color?: string
+  nats?: { enabled: boolean; subscriptions?: string[] }
+}
+
+interface CreateSessionContext {
+  cfg: TinstarConfig
+  sessDir: string
+  docStore: DocumentStore
+  readyQueue: ReadyQueue
+  sse: SSEBroadcaster
+  emitSessionEvent: (event: string, payload: Record<string, unknown>) => void
+  secrets: () => Record<string, string>
+  dashboardUrl: string
+}
+
+async function createSessionInternal(
+  params: CreateSessionParams,
+  ctx: CreateSessionContext
+): Promise<{ ok: true; session: Session } | { ok: false; error: { code: string; message: string } }> {
+  const {
+    name, backend, project, worktree = false, worktreePath,
+    profile, prompt, skipPermissions = true, cliTemplate: cliTemplateName,
+    taskId, epicId, initiativeId, color: colorParam, nats
+  } = params
+
+  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl } = ctx
+
+  if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
+  if (!['docker', 'tmux'].includes(backend)) return { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }
+
+  if (getSession(sessDir, name)) {
+    return { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }
+  }
+
+  // Resolve project
+  let projectPath: string | null = null
+  if (project) {
+    projectPath = getProject(cfg.files.projects, project)
+    if (!projectPath) return { ok: false, error: { code: 'PROJECT_NOT_FOUND', message: `Project '${project}' not found` } }
+  }
+
+  // Create worktree or use existing
+  let workspacePath = projectPath
+  let branch: string | null = null
+  if (worktreePath && projectPath) {
+    workspacePath = worktreePath
+    branch = await detectBranch(worktreePath)
+  } else if (worktree && projectPath) {
+    workspacePath = await createWorktree(projectPath, name)
+    branch = name
+  }
+
+  const isWorktree = !!(worktreePath || worktree)
+
+  // Register a Worktree entity so it appears in hierarchy/grouping
+  let worktreeEntityId = ''
+  if (isWorktree && workspacePath) {
+    worktreeEntityId = name
+    docStore.upsertWorktree(worktreeEntityId, {
+      id: worktreeEntityId,
+      name,
+      branch: branch ?? name,
+      repo: project ?? '',
+      worktreePath: workspacePath,
+      spaceId: docStore.activeSpaceId,
+    })
+  }
+
+  // Resolve run color
+  const color = colorParam
+    ?? (taskId ? docStore.getTask(taskId)?.settings?.defaultRunColor : undefined)
+    ?? (epicId ? docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
+    ?? (initiativeId ? docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
+
+  // Resolve CLI template
+  const resolvedTemplate = cliTemplateName
+    ? cfg.cliTemplates.find(t => t.name === cliTemplateName) ?? null
+    : null
+
+  // Compute NATS subscriptions
+  let resolvedNats = nats ?? null
+  const natsCtx = {
+    sessionName: name,
+    spaceId: docStore.activeSpaceId || null,
+    taskId: taskId || null,
+    epicId: epicId || null,
+    initiativeId: initiativeId || null,
+  }
+  if (!nats && (taskId || epicId || initiativeId)) {
+    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
+  } else if (nats?.enabled && !nats.subscriptions) {
+    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
+  }
+
+  const session = createSession(sessDir, {
+    name,
+    backend: resolvedTemplate ? 'tmux' : backend,
+    project,
+    workspace: {
+      path: workspacePath,
+      worktree: isWorktree,
+      branch,
+      basePath: isWorktree ? projectPath : null,
+    },
+    profile,
+    // Note: oneshot intentionally not supported in createSessionInternal - pattern sessions are always persistent
+    oneshot: false,
+    skipPermissions,
+    cliTemplate: cliTemplateName ?? null,
+    adapter: resolvedTemplate?.adapter ?? null,
+    nats: resolvedNats,
+  })
+
+  const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
+  enriched._stateDir = claudeStateDir(sessDir, name)
+
+  const sec = secrets()
+  let sessionPort: number | undefined
+
+  if (backend === 'docker') {
+    sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
+    await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: prompt || undefined })
+    updateSession(sessDir, name, { port: sessionPort, state: 'running' })
+  } else {
+    const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+    if (prompt) enriched.initialPrompt = prompt
+
+    const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate })
+    sessionPort = result.port
+    updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+    tmuxBackend.onTtydRestart(name, (newPid) => {
+      updateSession(sessDir, name, { ttydPid: newPid })
+    })
+  }
+
+  // Create Run entry
+  const runId = name
+  const initialStatus = prompt ? 'running' : 'idle'
+  let backendInfo: string | undefined
+  if (backend === 'docker') {
+    const container = dockerBackend.containerName(cfg, name)
+    const imageProfile = profile ? cfg.profiles.find(p => p.name === profile) : undefined
+    const image = imageProfile?.image ?? cfg.container.defaultImage
+    backendInfo = `container: ${container}\nimage: ${image}`
+  } else {
+    backendInfo = `tmux session: ${name}`
+  }
+
+  docStore.upsertRun(runId, {
+    id: runId,
+    color,
+    status: initialStatus,
+    sessionId: name,
+    initiative: initiativeId ?? '',
+    epic: epicId ?? '',
+    task: taskId ?? '',
+    repo: project ?? '',
+    worktree: isWorktree ? (branch ?? name) : '',
+    touchedFiles: [],
+    recapEntries: [],
+    rawLogs: '',
+    port: sessionPort ?? null,
+    backend,
+    backendInfo,
+    agentIcon: resolvedTemplate?.icon ?? undefined,
+    taskId: taskId ?? '',
+    worktreeId: worktreeEntityId,
+    createdAt: new Date().toISOString(),
+    spaceId: docStore.activeSpaceId,
+  })
+
+  readyQueue.onStatusChange(name, initialStatus)
+  sse.setReadyQueue(readyQueue.getQueue())
+  sse.broadcastReadyQueueUpdate()
+  emitSessionEvent('managed_session.created', { name, state: 'running' })
+
+  const updated = getSession(sessDir, name)!
+  return { ok: true, session: updated }
+}
+
 export interface RouteContext {
   docStore: DocumentStore
   otelStore: OTelStore
@@ -1428,38 +1621,44 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             return json(res, { ok: false, error: { code: 'PATTERN_NOT_FOUND', message: `Pattern '${patternName}' not found` } }, 404)
           }
 
-          // Template variables for interpolation
-          const templateVars: TemplateVars = {
-            task: taskId ?? name,
-            taskId: taskId ?? '',
-            sessionId: name,
-          }
-
-          // Find orchestrator session (gets the user's prompt)
-          const orchestratorDef = pattern.sessions.find(s => s.role === 'orchestrator')
-          if (!orchestratorDef) {
+          if (!pattern.sessions.some(s => s.role === 'orchestrator')) {
             return json(res, { ok: false, error: { code: 'INVALID_PATTERN', message: 'Pattern must have an orchestrator session' } }, 400)
           }
 
-          // Spawn all sessions defined in the pattern
+          const templateVars: TemplateVars = {
+            task: taskId ?? name,
+            taskId: taskId ?? '',
+          }
+
+          // Pre-compute all session names for cross-references
+          const sessionNames: Record<string, string> = {}
+          for (const sessionDef of pattern.sessions) {
+            const suffix = sessionDef.role === 'orchestrator' ? '' : `-${sessionDef.role}`
+            sessionNames[sessionDef.role] = `${name}${suffix}`
+          }
+          templateVars.orchestrator = `agents.${sessionNames.orchestrator}`
+          templateVars.worker = sessionNames.worker ? `agents.${sessionNames.worker}` : ''
+
+          const createCtx: CreateSessionContext = {
+            cfg,
+            sessDir,
+            docStore: ctx.docStore,
+            readyQueue: ctx.readyQueue,
+            sse: ctx.sse,
+            emitSessionEvent,
+            secrets,
+            dashboardUrl,
+          }
+
           const createdSessions: string[] = []
+          const errors: string[] = []
 
           for (const sessionDef of pattern.sessions) {
-            const sessionSuffix = sessionDef.role === 'orchestrator' ? '' : `-${sessionDef.role}`
-            const sessionName = `${name}${sessionSuffix}`
-
-            // Update template vars with session-specific values
+            const sessionName = sessionNames[sessionDef.role]
             templateVars.sessionId = sessionName
-            if (sessionDef.role === 'orchestrator') {
-              templateVars.orchestrator = `agents.${sessionName}`
-            } else if (sessionDef.role === 'worker') {
-              templateVars.worker = `agents.${sessionName}`
-            }
 
-            // Interpolate session config
             const interpolatedConfig = interpolateSessionConfig(sessionDef.config, templateVars)
 
-            // Determine prompt: orchestrator gets user's prompt prepended, others get pattern prompt
             let sessionPrompt: string | undefined
             if (sessionDef.role === 'orchestrator') {
               const patternPrompt = interpolatedConfig.prompt ?? ''
@@ -1468,10 +1667,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               sessionPrompt = interpolatedConfig.prompt
             }
 
-            // Create the session via internal call (reuse existing logic)
-            const sessionBody = {
+            const result = await createSessionInternal({
               name: sessionName,
-              backend: interpolatedConfig.backend ?? backend,
+              backend: (interpolatedConfig.backend ?? backend) as 'docker' | 'tmux',
               project: interpolatedConfig.project ?? project,
               worktree: interpolatedConfig.worktree ?? false,
               worktreePath: interpolatedConfig.worktreePath,
@@ -1483,21 +1681,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               epicId,
               initiativeId,
               color: colorParam,
-              // Enable NATS for all pattern sessions
               nats: { enabled: true },
-            }
+            }, createCtx)
 
-            // Make internal request to create session
-            // We'll create sessions directly here to avoid recursive HTTP calls
-            createdSessions.push(sessionName)
+            if (result.ok) {
+              createdSessions.push(sessionName)
+            } else {
+              errors.push(`${sessionName}: ${result.error.message}`)
+            }
           }
 
-          // For now, create sessions sequentially using the existing helper
-          // This is a placeholder - the actual implementation will call the session creation logic directly
-          log.info('patterns', `creating pattern sessions: ${createdSessions.join(', ')}`)
+          if (createdSessions.length === 0) {
+            return json(res, { ok: false, error: { code: 'PATTERN_SPAWN_FAILED', message: `All pattern sessions failed: ${errors.join(', ')}` } }, 500)
+          }
 
-          // Return success with list of created sessions
-          return json(res, { ok: true, data: { pattern: patternName, sessions: createdSessions } }, 201)
+          if (errors.length > 0) {
+            log.warn('patterns', `some pattern sessions failed: ${errors.join(', ')}`)
+          }
+
+          log.info('patterns', `created pattern sessions: ${createdSessions.join(', ')}`)
+          return json(res, { ok: true, data: { pattern: patternName, sessions: createdSessions, errors: errors.length > 0 ? errors : undefined } }, 201)
         }
 
         try {
