@@ -687,40 +687,48 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
       {/* Hotkeys section — height controlled by dragging the divider above */}
       <HotkeysSection height={hotkeysHeight} />
 
-      {/* Arrange section */}
-      {(onArrangeGrid || onArrangeReset || onArrangeSwimlanes) && (
-        <div className="border-t border-white/10 px-3 py-2 flex items-center gap-2">
-          <span className="text-2xs text-slate-500 uppercase tracking-wider">Arrange</span>
-          {onArrangeGrid && (
-            <button
-              className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-              onClick={onArrangeGrid}
-              title="Tile selected in grid (or all if none selected)"
-            >
-              <span className="material-symbols-outlined text-base">grid_view</span>
-            </button>
-          )}
-          {onArrangeSwimlanes && (
-            <button
-              className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-              onClick={onArrangeSwimlanes}
-              title="Swim lanes — rows by task (Ctrl+L)"
-            >
-              <span className="material-symbols-outlined text-base">view_agenda</span>
-            </button>
-          )}
-          {onArrangeReset && (
-            <button
-              className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-              onClick={onArrangeReset}
-              data-testid="arrange-button"
-              title="Reset layout"
-            >
-              <span className="material-symbols-outlined text-base">auto_fix_high</span>
-            </button>
-          )}
-        </div>
-      )}
+      {/* Tools section */}
+      <div className="border-t border-white/10 px-3 py-2 flex items-center gap-2">
+        <span className="text-2xs text-slate-500 uppercase tracking-wider">Tools</span>
+        <button
+          className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+          onClick={() => fetch('/api/nats-traffic-widgets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })}
+          title="Open NATS Traffic Monitor"
+        >
+          <span className="material-symbols-outlined text-base">cell_tower</span>
+        </button>
+        {(onArrangeGrid || onArrangeSwimlanes || onArrangeReset) && (
+          <div className="w-px h-4 bg-white/10 mx-1" />
+        )}
+        {onArrangeGrid && (
+          <button
+            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+            onClick={onArrangeGrid}
+            title="Tile selected in grid (or all if none selected)"
+          >
+            <span className="material-symbols-outlined text-base">grid_view</span>
+          </button>
+        )}
+        {onArrangeSwimlanes && (
+          <button
+            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+            onClick={onArrangeSwimlanes}
+            title="Swim lanes — rows by task (Ctrl+L)"
+          >
+            <span className="material-symbols-outlined text-base">view_agenda</span>
+          </button>
+        )}
+        {onArrangeReset && (
+          <button
+            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+            onClick={onArrangeReset}
+            data-testid="arrange-button"
+            title="Reset layout"
+          >
+            <span className="material-symbols-outlined text-base">auto_fix_high</span>
+          </button>
+        )}
+      </div>
 
       {/* Floating drag card */}
       {dragState && (
