@@ -45,6 +45,7 @@ import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
 import { computeNatsSubscriptions } from '../sessions/nats-subscriptions'
 import { getPattern, isMultiAgentPattern, type PatternType } from '../../domain/patterns'
+import { discoverPatterns } from '../patterns'
 
 // ─── NATS socket communication ─────────────────────────────────────────
 
@@ -544,6 +545,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // Compute NATS subscriptions for this session
           const natsCtx = {
             sessionName,
+            spaceId: entity.spaceId || null,
             taskId: entity.id,
             epicId: entity.epicId || null,
             initiativeId: entity.initiativeId || null,
@@ -1465,6 +1467,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             ? cfg.cliTemplates.find(t => t.name === cliTemplateName) ?? null
             : null
 
+          // Compute NATS subscriptions from entity hierarchy if not explicitly provided
+          let resolvedNats = nats ?? null
+          if (!nats && (taskId || epicId || initiativeId)) {
+            const natsCtx = {
+              sessionName: name,
+              spaceId: ctx.docStore.activeSpaceId || null,
+              taskId: taskId || null,
+              epicId: epicId || null,
+              initiativeId: initiativeId || null,
+            }
+            const subscriptions = computeNatsSubscriptions(natsCtx, ctx.docStore)
+            resolvedNats = { enabled: true, subscriptions }
+          }
+
           const session = createSession(sessDir, {
             name,
             backend: resolvedTemplate ? 'tmux' : backend,
@@ -1480,7 +1496,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             skipPermissions,
             cliTemplate: cliTemplateName ?? null,
             adapter: resolvedTemplate?.adapter ?? null,
-            nats: nats ?? null,
+            nats: resolvedNats,
           })
 
           // Enrich session with state dir for Docker backend
@@ -1976,6 +1992,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
       json(res, { ok: true })
       return true
+    }
+
+    // GET /api/patterns
+    if (method === 'GET' && url === '/api/patterns') {
+      const patterns = discoverPatterns()
+      // Return simplified pattern info for UI
+      const data = patterns.map(p => ({
+        name: p.name,
+        description: p.description,
+        sessions: p.sessions.map(s => s.role),
+      }))
+      return json(res, { ok: true, data })
     }
 
     // GET /api/docker/profiles — configured image profiles (read from disk for freshness)
