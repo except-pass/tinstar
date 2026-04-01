@@ -44,7 +44,6 @@ import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
 import { computeNatsSubscriptions } from '../sessions/nats-subscriptions'
-import { getPattern, isMultiAgentPattern, type PatternType } from '../../domain/patterns'
 import { discoverPatterns, getPatternByName, interpolateSessionConfig, type TemplateVars } from '../patterns'
 
 // ─── NATS socket communication ─────────────────────────────────────────
@@ -708,7 +707,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/tasks
   if (method === 'POST' && url === '/api/tasks') {
     readBody(req).then(body => {
-      const { name, epicId, initiativeId, status, id: providedId, percentDone, externalUrl, pattern } = JSON.parse(body)
+      const { name, epicId, initiativeId, status, id: providedId, percentDone, externalUrl } = JSON.parse(body)
       const entity = {
         id: providedId ?? shortId('task'),
         name: name ?? 'Untitled Task',
@@ -720,72 +719,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         externalUrl: externalUrl ?? null,
       }
       ctx.docStore.upsertTask(entity.id, entity)
-
-      // If pattern specified, spawn multi-agent sessions
-      const patternType = (pattern as PatternType) ?? 'single'
-      if (isMultiAgentPattern(patternType)) {
-        if (!ctx.sessionConfig) {
-          json(res, entity, 201)
-          return
-        }
-
-        const patternDef = getPattern(patternType)
-        const sessDir = ctx.sessionConfig.dirs.sessions
-
-        for (const sessionDef of patternDef.sessions) {
-          const sessionName = `${entity.id}-${sessionDef.nameSuffix}`
-
-          // Compute NATS subscriptions for this session
-          const natsCtx = {
-            sessionName,
-            spaceId: entity.spaceId || null,
-            taskId: entity.id,
-            epicId: entity.epicId || null,
-            initiativeId: entity.initiativeId || null,
-          }
-          const subscriptions = computeNatsSubscriptions(natsCtx, ctx.docStore)
-
-          // Create session with NATS enabled
-          const session = createSession(sessDir, {
-            name: sessionName,
-            backend: 'tmux',
-            nats: {
-              enabled: true,
-              subscriptions,
-            },
-          })
-
-          // Store session instructions for later injection
-          const instructionsPath = join(sessDir, sessionName, 'pattern-instructions.md')
-          const resolvedInstructions = sessionDef.instructions
-            .replace(/\{task\}/g, entity.id)
-          writeFileSync(instructionsPath, resolvedInstructions)
-
-          // Create run entry so it shows up in the UI
-          const runId = shortId('run')
-          ctx.docStore.upsertRun(runId, {
-            id: runId,
-            color: undefined,
-            status: session.state,
-            sessionId: sessionName,
-            initiative: entity.initiativeId ?? '',
-            epic: entity.epicId ?? '',
-            task: entity.id,
-            repo: '',
-            worktree: '',
-            touchedFiles: [],
-            recapEntries: [],
-            rawLogs: '',
-            port: null,
-            backend: 'tmux',
-            backendInfo: `tmux session: ${sessionName}`,
-            taskId: entity.id,
-            worktreeId: '',
-            createdAt: new Date().toISOString(),
-            spaceId: ctx.docStore.activeSpaceId,
-          })
-        }
-      }
 
       json(res, entity, 201)
     })

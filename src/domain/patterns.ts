@@ -1,5 +1,11 @@
 // src/domain/patterns.ts
 
+/**
+ * @deprecated Use ~/.config/tinstar/patterns/ files instead.
+ * This file is kept for reference during migration.
+ * Remove after migration is complete.
+ */
+
 export type PatternType = 'single' | 'sequential' | 'parallel' | 'coordinator' | 'review-critique'
 
 export interface PatternSession {

@@ -2,8 +2,6 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import type { GroupingDimension } from '../domain/types'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { randomUUID } from '../uuid'
-import { PATTERNS, type PatternType } from '../domain/patterns'
-import { PatternPreview } from './PatternPreview'
 
 export interface CreateDialogState {
   parentId: string | null
@@ -41,9 +39,6 @@ function parentKeyField(parentType: GroupingDimension | null): string | null {
 export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate, onCreated }: Props) {
   const [name, setName] = useState('')
   const [color, setColor] = useState('#00f0ff')
-  const [pattern, setPattern] = useState<PatternType>('single')
-  const [showPreview, setShowPreview] = useState(false)
-  const isTask = dialog.childType === 'task'
   const inputRef = useRef<HTMLInputElement>(null)
   const levelMeta = useDimensionMeta()
 
@@ -74,11 +69,6 @@ export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate, onCrea
       body.color = color
     }
 
-    // For tasks, include pattern if not single
-    if (dialog.childType === 'task' && pattern !== 'single') {
-      body.pattern = pattern
-    }
-
     // Inject optimistic entity immediately
     if (onOptimisticCreate) {
       const optimistic: Record<string, unknown> = {
@@ -104,7 +94,7 @@ export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate, onCrea
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-  }, [name, color, pattern, dialog, onClose, onOptimisticCreate, onCreated])
+  }, [name, color, dialog, onClose, onOptimisticCreate, onCreated])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSubmit()
@@ -138,33 +128,6 @@ export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate, onCrea
           className="w-full px-3 py-2 bg-surface-base border border-white/10 rounded text-sm text-slate-200 placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
           data-testid="create-dialog-name"
         />
-
-        {isTask && (
-          <div className="mt-3">
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-slate-400">Pattern</label>
-              <button
-                type="button"
-                onClick={() => setShowPreview(!showPreview)}
-                className="text-2xs text-slate-500 hover:text-slate-300"
-              >
-                {showPreview ? 'hide' : '? preview'}
-              </button>
-            </div>
-            <select
-              value={pattern}
-              onChange={e => setPattern(e.target.value as PatternType)}
-              className="w-full mt-1 px-3 py-2 bg-surface-base border border-white/10 rounded text-sm text-slate-200 focus:border-primary/50 focus:outline-none"
-            >
-              {Object.values(PATTERNS).map(p => (
-                <option key={p.type} value={p.type}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-            {showPreview && <PatternPreview pattern={pattern} />}
-          </div>
-        )}
 
         {dialog.childType === 'initiative' && (
           <div className="flex items-center gap-2 mt-3">
