@@ -40,3 +40,52 @@ worker:
     expect(result).toBeNull()
   })
 })
+
+describe('parsePatternFile with hands', () => {
+  it('parses pattern with hand references', () => {
+    const content = `---
+name: review-critique
+description: Code review pattern
+orchestrator: reviewer
+---
+
+worker:
+  hand: general-purpose
+  prompt: |
+    You do the implementation work.
+
+reviewer:
+  hand: reviewer
+  dependsOn:
+    worker:
+      condition: ready
+`
+    const pattern = parsePatternFile(content)
+    expect(pattern).not.toBeNull()
+    expect(pattern!.name).toBe('review-critique')
+    expect(pattern!.orchestrator).toBe('reviewer')
+    expect(pattern!.sessions).toHaveLength(2)
+
+    const worker = pattern!.sessions.find(s => s.role === 'worker')
+    expect(worker?.config.hand).toBe('general-purpose')
+
+    const reviewer = pattern!.sessions.find(s => s.role === 'reviewer')
+    expect(reviewer?.config.hand).toBe('reviewer')
+  })
+
+  it('allows inline prompts for backward compatibility', () => {
+    const content = `---
+name: simple
+description: Simple pattern
+---
+
+worker:
+  prompt: |
+    You are a worker. Do the work.
+`
+    const pattern = parsePatternFile(content)
+    expect(pattern).not.toBeNull()
+    expect(pattern!.sessions[0]?.config.prompt).toContain('You are a worker')
+    expect(pattern!.sessions[0]?.config.hand).toBeUndefined()
+  })
+})

@@ -9,6 +9,7 @@ export interface PatternSessionConfig {
   profile?: string
   cliTemplate?: string
   prompt?: string
+  hand?: string
 
   // k8s-style orchestration (patterns-v2)
   dependsOn?: Record<string, { condition: 'ready' | 'started' }>
@@ -24,6 +25,7 @@ export interface PatternSession {
 export interface Pattern {
   name: string
   description: string
+  orchestrator?: string
   sessions: PatternSession[]
 }
 
@@ -42,6 +44,7 @@ export function parsePatternFile(content: string): Pattern | null {
 
     const name = frontmatter.name as string
     const description = (frontmatter.description as string) ?? ''
+    const orchestrator = frontmatter.orchestrator as string | undefined
 
     if (!name) return null
 
@@ -60,7 +63,7 @@ export function parsePatternFile(content: string): Pattern | null {
       }
     }
 
-    return { name, description, sessions }
+    return { name, description, orchestrator, sessions }
   } catch {
     return null
   }
