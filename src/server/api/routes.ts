@@ -2236,6 +2236,165 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
+    // POST /api/sessions/:name/spawn — spawn a companion hand on the same task
+    if (method === 'POST' && url.startsWith('/api/sessions/') && url.endsWith('/spawn')) {
+      const parentName = extractSessionName(url, '/api/sessions/')?.replace('/spawn', '')
+      if (!parentName) return json(res, { ok: false, error: { code: 'INVALID_REQUEST', message: 'Session name required' } }, 400)
+
+      const parentSession = getSession(sessDir, parentName)
+      if (!parentSession) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Session '${parentName}' not found` } }, 404)
+
+      const body = await readBody(req)
+      const { hand: handName, prompt: promptOverride, orchestrator } = JSON.parse(body) as {
+        hand: string
+        prompt?: string
+        orchestrator?: boolean
+      }
+
+      if (!handName) {
+        return json(res, { ok: false, error: { code: 'MISSING_HAND', message: 'hand field is required' } }, 400)
+      }
+
+      const hand = getHandByName(handName)
+      if (!hand) {
+        return json(res, { ok: false, error: { code: 'HAND_NOT_FOUND', message: `Hand '${handName}' not found` } }, 404)
+      }
+
+      // Generate unique session name
+      const spawnedName = `${parentName}-${handName}-${shortId()}`
+
+      // Build the prompt: hand base + optional override
+      let fullPrompt = hand.prompt
+      if (promptOverride) {
+        fullPrompt = `${hand.prompt}\n\n---\n\n${promptOverride}`
+      }
+
+      // Resolve the parent's run to get taskId for NATS subject computation
+      const parentRun = ctx.docStore.getAllRuns().find(r => r.sessionId === parentName)
+      const taskId = parentRun?.taskId
+
+      // Inherit workspace from parent session
+      const workspace = parentSession.workspace
+
+      // Build NATS subscriptions for the spawned session
+      let natsConfig: { enabled: boolean; subscriptions: string[] } | null = null
+      if (parentSession.nats?.enabled && taskId) {
+        const natsCtx = {
+          sessionName: spawnedName,
+          spaceId: ctx.docStore.activeSpaceId || null,
+          taskId: taskId || null,
+          epicId: null,
+          initiativeId: null,
+        }
+        const subscriptions = computeNatsSubscriptions(natsCtx, ctx.docStore)
+        natsConfig = { enabled: true, subscriptions }
+      }
+
+      // Resolve CLI template from hand definition
+      const cliTemplate = hand.cliTemplate
+
+      // Create the spawned session
+      const spawnedSession = createSession(sessDir, {
+        name: spawnedName,
+        backend: parentSession.backend,
+        project: parentSession.project,
+        workspace: {
+          path: workspace?.path ?? null,
+          worktree: workspace?.worktree ?? false,
+          branch: workspace?.branch ?? null,
+          basePath: workspace?.basePath ?? null,
+        },
+        profile: parentSession.profile,
+        skipPermissions: parentSession.skipPermissions,
+        cliTemplate: cliTemplate ?? null,
+        adapter: parentSession.adapter,
+        nats: natsConfig,
+      })
+
+      emitSessionEvent('managed_session.created', { session: spawnedSession })
+
+      // Start the session with the combined prompt
+      const enriched = spawnedSession as Session & { _stateDir?: string; initialPrompt?: string }
+      enriched._stateDir = claudeStateDir(sessDir, spawnedName)
+      const sec = secrets()
+
+      const resolvedTemplate = cliTemplate
+        ? cfg.cliTemplates.find(t => t.name === cliTemplate) ?? null
+        : null
+
+      try {
+        let sessionPort: number | undefined
+
+        if (parentSession.backend === 'docker') {
+          sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
+          await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: fullPrompt || undefined })
+          updateSession(sessDir, spawnedName, { port: sessionPort, state: 'running' })
+        } else {
+          const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+          if (fullPrompt) enriched.initialPrompt = fullPrompt
+          const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate })
+          sessionPort = result.port
+          updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+          tmuxBackend.onTtydRestart(spawnedName, (newPid) => {
+            updateSession(sessDir, spawnedName, { ttydPid: newPid })
+          })
+        }
+
+        emitSessionEvent('managed_session.state_changed', { name: spawnedName, state: 'running' })
+
+        // Build NATS subject for the run
+        const natsSubject = natsConfig?.enabled
+          ? buildNatsSubject(spawnedName, ctx.docStore, taskId)
+          : undefined
+
+        // Create a run entity linked to the same task as the parent
+        const runId = spawnedName
+        ctx.docStore.upsertRun(runId, {
+          id: runId,
+          color: parentRun?.color,
+          status: 'running',
+          sessionId: spawnedName,
+          initiative: '',
+          epic: '',
+          task: taskId ?? '',
+          repo: parentSession.project ?? '',
+          worktree: '',
+          touchedFiles: [],
+          recapEntries: [],
+          rawLogs: '',
+          port: sessionPort ?? null,
+          backend: parentSession.backend,
+          backendInfo: parentSession.backend === 'docker'
+            ? `container: ${dockerBackend.containerName(cfg, spawnedName)}`
+            : `tmux session: ${spawnedName}`,
+          natsEnabled: natsConfig?.enabled ?? false,
+          natsSubject,
+          taskId: taskId ?? '',
+          worktreeId: '',
+          createdAt: new Date().toISOString(),
+          spaceId: ctx.docStore.activeSpaceId,
+        })
+
+        return json(res, {
+          ok: true,
+          data: {
+            session: spawnedName,
+            hand: handName,
+            parentSession: parentName,
+            orchestrator: orchestrator ?? false,
+          },
+        }, 201)
+      } catch (err) {
+        // Clean up on failure
+        deleteSession(sessDir, spawnedName)
+        return json(res, {
+          ok: false,
+          error: { code: 'SPAWN_FAILED', message: (err as Error).message },
+        }, 500)
+      }
+      return true
+    }
+
     // POST /api/sessions/:name/send-keys — send raw tmux keys to a session
     if (method === 'POST' && url.endsWith('/send-keys') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
