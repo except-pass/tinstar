@@ -5,6 +5,7 @@ import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { ProceduresPanel } from './ProceduresPanel'
+import { HandsPanel } from './HandsPanel'
 import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
 import { useFlourish } from '../../hotkeys/useFlourish'
 import { useWidgetFocus, useFocusPath } from '../../hotkeys/FocusPathContext'
@@ -34,6 +35,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
   const [procsCollapsed, setProcsCollapsed] = useState(true)
+  const [handsCollapsed, setHandsCollapsed] = useState(true)
   const [sessionTab, setSessionTab] = useState<'recap' | 'terminal'>(run.port ? 'terminal' : 'recap')
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
@@ -262,6 +264,26 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
                 <FileTreePanel sessionId={run.sessionId} onOpenFile={handleOpenFile} />
               )}
             </div>
+            {/* Hands panel at bottom - only show if NATS enabled */}
+            {run.natsEnabled && !handsCollapsed && (
+              <HandsPanel
+                sessionId={run.sessionId}
+                onCollapse={() => setHandsCollapsed(true)}
+              />
+            )}
+            {/* Collapsed hands indicator */}
+            {run.natsEnabled && handsCollapsed && (
+              <div
+                className="h-6 flex items-center justify-center bg-surface-panel cursor-pointer hover:bg-surface-hover border-t border-primary/10"
+                onClick={() => setHandsCollapsed(false)}
+                title="Show Hands panel"
+              >
+                <span className="text-2xs font-mono text-slate-500 flex items-center gap-1">
+                  <span>🤚</span>
+                  <span>Hands</span>
+                </span>
+              </div>
+            )}
             {/* Resize handle */}
             <div
               className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize transition-colors z-10"
