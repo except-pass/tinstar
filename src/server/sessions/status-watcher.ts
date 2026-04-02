@@ -11,7 +11,7 @@ export interface StatusWatcherOpts {
   onStatusChanged: (name: string, state: SessionState) => void
   /** Called with new recap entries parsed from the transcript */
   onRecapEntries?: (name: string, entries: Array<{ id: string; type: string; content: string; timestamp: string }>) => void
-  /** Poll interval in ms (default 2000) */
+  /** Poll interval in ms (default 3000) */
   intervalMs?: number
 }
 
@@ -36,7 +36,7 @@ export class StatusWatcher {
 
   constructor(opts: StatusWatcherOpts) {
     this.opts = opts
-    this.interval = opts.intervalMs ?? 2000
+    this.interval = opts.intervalMs ?? 3000
   }
 
   start(): void {

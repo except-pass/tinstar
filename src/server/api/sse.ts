@@ -6,6 +6,9 @@ export class SSEBroadcaster {
   private clients = new Set<ServerResponse>()
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null
   private readyQueue: string[] = []
+  /** Coalesce rapid `run` updates (same tick burst) into one SSE message per run id. */
+  private pendingRunDeltas = new Map<string, { entity: string; id: string; data: unknown }>()
+  private flushRunTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private store: DocumentStore) {
     this.store.changes.on('change', (change: { entity: string; id: string; data: unknown }) => {
@@ -16,6 +19,12 @@ export class SSEBroadcaster {
         if (change.data !== null && spaceId && spaceId !== this.store.activeSpaceId) {
           return
         }
+      }
+
+      if (change.entity === 'run') {
+        this.pendingRunDeltas.set(change.id, change)
+        this.scheduleRunFlush()
+        return
       }
 
       this.broadcast({
@@ -32,6 +41,25 @@ export class SSEBroadcaster {
     this.heartbeatInterval = setInterval(() => {
       this.broadcast({ type: 'heartbeat' })
     }, 15_000)
+  }
+
+  private scheduleRunFlush(): void {
+    if (this.flushRunTimer) return
+    this.flushRunTimer = setTimeout(() => {
+      this.flushRunTimer = null
+      for (const change of this.pendingRunDeltas.values()) {
+        this.broadcast({
+          type: 'delta',
+          data: {
+            eventType: `${change.entity}.updated` as BusEventType,
+            entity: change.entity,
+            id: change.id,
+            data: change.data,
+          },
+        })
+      }
+      this.pendingRunDeltas.clear()
+    }, 16)
   }
 
   setReadyQueue(queue: string[]): void {

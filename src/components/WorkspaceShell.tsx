@@ -825,6 +825,7 @@ function WorkspaceShellInner() {
                     onImageWidgetCreated={(widget) => addOptimistic('imageWidget', widget)}
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
                     onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
+                    onNatsWidgetCreated={(widget) => addOptimistic('natsTrafficWidget', widget)}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
                     arrangeSwimlanesRef={arrangeSwimlanesRef}

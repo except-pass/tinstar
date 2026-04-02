@@ -25,27 +25,41 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const pausedRef = useRef(paused)
   pausedRef.current = paused
+  const natsBatchRef = useRef<TrafficEvent[]>([])
+  const natsRafRef = useRef<number | null>(null)
 
   const subscriptions = widget.subscriptions || []
 
-  // Listen to nats_traffic events
+  // Listen to nats_traffic events (batch per animation frame to avoid setState storms)
   useEffect(() => {
-    const handler = (e: Event) => {
-      if (pausedRef.current) return
-
-      const event = (e as CustomEvent).detail as TrafficEvent
-
+    const flushBatch = () => {
+      natsRafRef.current = null
+      const batch = natsBatchRef.current
+      natsBatchRef.current = []
+      if (batch.length === 0) return
       setEvents(prev => {
-        const next = [...prev, event]
-        if (next.length > MAX_EVENTS) {
-          return next.slice(-MAX_EVENTS)
-        }
+        let next = [...prev, ...batch]
+        if (next.length > MAX_EVENTS) next = next.slice(-MAX_EVENTS)
         return next
       })
     }
 
+    const handler = (e: Event) => {
+      if (pausedRef.current) return
+
+      const event = (e as CustomEvent).detail as TrafficEvent
+      natsBatchRef.current.push(event)
+      if (natsRafRef.current === null) {
+        natsRafRef.current = requestAnimationFrame(flushBatch)
+      }
+    }
+
     window.addEventListener('tinstar:nats_traffic', handler)
-    return () => window.removeEventListener('tinstar:nats_traffic', handler)
+    return () => {
+      window.removeEventListener('tinstar:nats_traffic', handler)
+      if (natsRafRef.current !== null) cancelAnimationFrame(natsRafRef.current)
+      natsBatchRef.current = []
+    }
   }, [])
 
   // Auto-scroll when new events arrive

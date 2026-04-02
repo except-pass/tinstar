@@ -41,8 +41,12 @@ const EMPTY_STATE: ServerState = {
 // all fetch() calls, terminal iframes, and other HTTP traffic.
 
 let currentState: ServerState = EMPTY_STATE
-let connected = false
-let loading = true
+/** Single snapshot for state + connection flags — one useSyncExternalStore subscriber per hook (not three). */
+let uiBundle: { state: ServerState; connected: boolean; loading: boolean } = {
+  state: EMPTY_STATE,
+  connected: false,
+  loading: true,
+}
 let listeners = new Set<() => void>()
 let es: EventSource | null = null
 let refCount = 0
@@ -51,16 +55,23 @@ function notify() {
   for (const fn of listeners) fn()
 }
 
-function getSnapshot() {
-  return currentState
+function getUiSnapshot() {
+  return uiBundle
 }
 
-function getConnected() {
-  return connected
+function pushState() {
+  uiBundle = { ...uiBundle, state: currentState }
+  notify()
 }
 
-function getLoading() {
-  return loading
+function setConnected(c: boolean) {
+  uiBundle = { ...uiBundle, connected: c }
+  notify()
+}
+
+function setLoading(l: boolean) {
+  uiBundle = { ...uiBundle, loading: l }
+  notify()
 }
 
 function subscribe(listener: () => void): () => void {
@@ -88,7 +99,7 @@ function startSSE() {
   es.addEventListener('snapshot', (e: MessageEvent) => {
     const snapshot = JSON.parse(e.data) as ServerState & { ready_queue?: string[] }
     currentState = { ...snapshot, readyQueue: snapshot.ready_queue ?? [] }
-    loading = false
+    uiBundle = { ...uiBundle, state: currentState, loading: false }
     notify()
   })
 
@@ -100,7 +111,7 @@ function startSSE() {
       data: unknown
     }
     currentState = applyDelta(currentState, delta)
-    notify()
+    pushState()
   })
 
   es.addEventListener('skill.drafted', (e: MessageEvent) => {
@@ -126,11 +137,11 @@ function startSSE() {
   es.addEventListener('ready_queue_update', (e: MessageEvent) => {
     const { queue } = JSON.parse(e.data) as { queue: string[] }
     currentState = { ...currentState, readyQueue: queue }
-    notify()
+    pushState()
   })
 
-  es.onopen = () => { connected = true; notify() }
-  es.onerror = () => { connected = false; notify() }
+  es.onopen = () => { setConnected(true) }
+  es.onerror = () => { setConnected(false) }
 
   const onBeforeUnload = () => es?.close()
   window.addEventListener('beforeunload', onBeforeUnload)
@@ -264,7 +275,7 @@ export function applyOptimistic(entity: string, data: unknown): void {
   } else {
     return
   }
-  notify()
+  pushState()
 }
 
 // ─── React hook (all consumers share the single SSE connection) ────────
@@ -276,9 +287,10 @@ export function useServerEvents(): {
   addOptimistic: (entity: string, data: unknown) => void
   disconnect: () => void
 } {
-  const state = useSyncExternalStore(subscribe, getSnapshot)
-  const isConnected = useSyncExternalStore(subscribe, getConnected)
-  const isLoading = useSyncExternalStore(subscribe, getLoading)
+  const bundle = useSyncExternalStore(subscribe, getUiSnapshot)
+  const state = bundle.state
+  const isConnected = bundle.connected
+  const isLoading = bundle.loading
 
   const addOptimistic = useCallback((entity: string, data: unknown) => {
     applyOptimistic(entity, data)

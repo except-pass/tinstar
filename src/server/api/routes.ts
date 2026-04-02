@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import { request as httpRequest } from 'node:http'
 import { createConnection } from 'node:net'
+import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
 import type { DocumentStore } from '../stores/document-store'
@@ -2277,7 +2278,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
 
       // Generate unique session name
-      const spawnedName = `${parentName}-${handName}-${shortId()}`
+      const spawnedName = `${parentName}-${handName}-${randomUUID().slice(0, 8)}`
 
       // Build the prompt: hand base + optional override
       let fullPrompt = hand.prompt

@@ -254,7 +254,7 @@ export function initBackend(): RouteContext {
         }).catch(err => console.error('[reconcile] error:', (err as Error).message))
       }, 30_000)
 
-      // Periodic git diff reconciliation (5s)
+      // Periodic git diff reconciliation (10s — balances freshness vs git load when many runs are active)
       setInterval(() => {
         for (const run of docStore.getAllRuns()) {
           if (run.status !== 'running' && run.status !== 'idle') continue
@@ -265,7 +265,7 @@ export function initBackend(): RouteContext {
             docStore.reconcileFiles(run.id, files)
           }).catch(() => {})
         }
-      }, 5_000)
+      }, 10_000)
     } catch (err) {
       log.error('server', 'session initialization failed', { error: (err as Error).message })
       if (fastSim) {
