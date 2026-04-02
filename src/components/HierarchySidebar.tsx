@@ -111,6 +111,7 @@ const WORK_WIDGET_META: Record<string, { icon: string; closeable: boolean }> = {
   'file-editor':    { icon: '📄', closeable: true  },
   'browser-widget': { icon: '🌐', closeable: true  },
   'image-viewer':   { icon: '🖼️', closeable: true  },
+  'nats-traffic':   { icon: '📡', closeable: true  },
 }
 
 /** Return inline style for a colored status dot on run nodes */

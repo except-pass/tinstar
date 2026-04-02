@@ -83,6 +83,8 @@ export interface RunData {
   backend: 'docker' | 'tmux' | null
   backendInfo?: string
   agentIcon?: string
+  natsEnabled?: boolean
+  natsSubject?: string
 }
 
 

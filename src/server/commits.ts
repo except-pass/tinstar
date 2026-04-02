@@ -67,7 +67,12 @@ export function buildCommitRecord(payload: CommitHookPayload, source: 'hook' | '
 
 function getCurrentBranch(repoPath: string): string {
   try {
-    return execFileSync('git', ['-C', repoPath, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).trim()
+    return execFileSync(
+      'git',
+      ['-C', repoPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      // Some configured reconciliation paths might not be git repos; suppress git's noisy stderr.
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim()
   } catch {
     return 'unknown'
   }
@@ -91,7 +96,8 @@ export function reconcileGitHistory(docStore: DocumentStore, config: TinstarConf
       if (config.git.reconciliationBranchScope && config.git.reconciliationBranchScope !== '*') {
         args.push(config.git.reconciliationBranchScope)
       }
-      const output = execFileSync('git', args, { encoding: 'utf8' })
+      // Suppress stderr so non-git directories don't spam "fatal: not a git repository".
+      const output = execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       const entries = output.split('\x1e').map(e => e.trim()).filter(Boolean)
       const branch = getCurrentBranch(repoPath)
       for (const entry of entries) {

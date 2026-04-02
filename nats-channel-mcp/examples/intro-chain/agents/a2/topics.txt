@@ -1,3 +1,0 @@
-# Agent A2 — Countess Beets McGillicuddy
-# Direct subject (messages specifically for this agent)
-agents.a2

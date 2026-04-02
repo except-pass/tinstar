@@ -30,6 +30,7 @@ import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
 import { NatsTrafficBridge } from './nats-traffic'
+import { SessionReadinessTracker } from './sessions/readiness'
 
 export function initBackend(): RouteContext {
   // Instantiate core components
@@ -51,10 +52,14 @@ export function initBackend(): RouteContext {
   ensureDraftsDir()
   watchDrafts(sse)
 
-  // Start NATS traffic bridge — subscribes to _tinstar.traffic.> and broadcasts via SSE
+  // Start NATS traffic bridge — subscribes to widget subjects and broadcasts via SSE
   const natsUrl = process.env.NATS_URL ?? 'nats://localhost:4222'
   const natsTraffic = new NatsTrafficBridge(sse, natsUrl)
   natsTraffic.start()
+
+  // Start session readiness tracker — listens for tinstar.ready.> signals
+  const readinessTracker = new SessionReadinessTracker(natsUrl)
+  readinessTracker.start()
 
   const fastSim = process.env.TINSTAR_FAST_SIM === '1'
   const speedMultiplier = fastSim ? 0 : 1
@@ -142,6 +147,8 @@ export function initBackend(): RouteContext {
             port: sess.port ?? null,
             backend: sess.backend ?? null,
             agentIcon: tpl?.icon,
+            natsEnabled: sess.nats?.enabled ?? false,
+            natsSubject: sess.nats?.subscriptions?.[0],
             taskId: '',
             worktreeId: '',
             createdAt: sess.created ?? new Date().toISOString(),
@@ -283,7 +290,7 @@ export function initBackend(): RouteContext {
     }
   }
 
-  return { docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue, natsTraffic }
+  return { docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue, natsTraffic, readinessTracker }
 }
 
 export function tinstarBackend(): Plugin {

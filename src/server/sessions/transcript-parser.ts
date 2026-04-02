@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { RecapEntry } from '../../types'
@@ -38,7 +38,8 @@ export function getTranscriptPath(workdir: string, conversationId: string, state
 }
 
 // Track last read position per session
-const offsets = new Map<string, number>()
+type OffsetState = { byteOffset: number; carry: string }
+const offsets = new Map<string, OffsetState>()
 
 /**
  * Parse transcript into recap entries: user prompt + last assistant response per turn.
@@ -48,23 +49,47 @@ export function parseNewEntries(sessionName: string, workdir: string, conversati
   const path = getTranscriptPath(workdir, conversationId, stateDir)
   if (!existsSync(path)) return []
 
-  const content = readFileSync(path, 'utf-8')
-  const lines = content.split('\n').filter(l => l.trim())
-  const lastOffset = offsets.get(sessionName) ?? 0
-  const newLines = lines.slice(lastOffset)
-
-  if (newLines.length === 0) return []
+  const size = statSync(path).size
+  const state = offsets.get(sessionName) ?? { byteOffset: 0, carry: '' }
+  // If the file was truncated/rotated, reset.
+  if (size < state.byteOffset) {
+    state.byteOffset = 0
+    state.carry = ''
+  }
+  if (size === state.byteOffset) return []
 
   // Parse all new lines into typed records
   const records: Array<{ type: 'user' | 'agent'; text: string; timestamp: string }> = []
-  for (const line of newLines) {
-    try {
-      const obj = JSON.parse(line)
-      const rec = extractRecord(obj)
-      if (rec) records.push(rec)
-    } catch {
-      // Skip malformed lines
+  const fd = openSync(path, 'r')
+  try {
+    const CHUNK = 256 * 1024 // 256KB
+    const buf = Buffer.alloc(CHUNK)
+    let pos = state.byteOffset
+    let carry = state.carry
+    while (pos < size) {
+      const toRead = Math.min(CHUNK, size - pos)
+      const n = readSync(fd, buf, 0, toRead, pos)
+      if (n <= 0) break
+      pos += n
+      const text = carry + buf.subarray(0, n).toString('utf-8')
+      const parts = text.split('\n')
+      carry = parts.pop() ?? ''
+      for (const line of parts) {
+        if (!line.trim()) continue
+        try {
+          const obj = JSON.parse(line)
+          const rec = extractRecord(obj)
+          if (rec) records.push(rec)
+        } catch {
+          // Skip malformed lines
+        }
+      }
     }
+    state.byteOffset = pos
+    state.carry = carry
+    offsets.set(sessionName, state)
+  } finally {
+    closeSync(fd)
   }
 
   // Group into turns: each user message starts a new turn.
@@ -91,7 +116,6 @@ export function parseNewEntries(sessionName: string, workdir: string, conversati
     entries.push({ id: randomUUID(), type: 'agent', content: lastAgent.text, timestamp: lastAgent.timestamp })
   }
 
-  offsets.set(sessionName, lines.length)
   return entries
 }
 

@@ -9,6 +9,11 @@ export interface PatternSessionConfig {
   profile?: string
   cliTemplate?: string
   prompt?: string
+
+  // k8s-style orchestration (patterns-v2)
+  dependsOn?: Record<string, { condition: 'ready' | 'started' }>
+  replicas?: number
+  readiness?: { nats: 'auto' | 'manual' }
 }
 
 export interface PatternSession {

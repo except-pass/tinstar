@@ -3,12 +3,12 @@
     "nats": {
       "command": "/home/ubuntu/.bun/bin/bun",
       "args": [
-        "run",
-        "/home/ubuntu/repo/tinstar/nats-channel-mcp/channel-server.ts",
+        "x",
+        "github:except-pass/nats-channel-mcp",
         "--name",
-        "orchestrator",
+        "bugfixes",
         "--subscribe",
-        "tinstar.nats-monitor.orchestrator"
+        "tinstar.work-space._._.tinstar-improvement.*"
       ]
     }
   }

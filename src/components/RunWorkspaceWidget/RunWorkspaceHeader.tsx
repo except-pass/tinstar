@@ -143,7 +143,22 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       {/* Right: actions + meta */}
       {!compact && (
         <div className="flex items-stretch shrink-0 ml-2 h-full" onPointerDown={e => e.stopPropagation()}>
-          {/* Hotgroup badge — currently in the right zone in the source file */}
+          {/* NATS indicator — radio tower when connected to NATS */}
+          {run.natsEnabled && (
+            <div
+              className="flex items-center px-2"
+              title={run.natsSubject ? `NATS: ${run.natsSubject}` : 'NATS enabled'}
+            >
+              <span
+                className="material-symbols-outlined text-sm"
+                style={{ color: hexToRgba(runAccent, 0.7), fontVariationSettings: "'FILL' 1" }}
+              >
+                cell_tower
+              </span>
+            </div>
+          )}
+
+          {/* Hotgroup badge */}
           <div className="flex items-center px-2">
             <HotgroupBadge slots={slotsForNode(`run-${run.id}`)} testId={`hotgroup-badge-${run.id}`} />
           </div>

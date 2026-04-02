@@ -25,8 +25,8 @@ import {
   registerProject,
   unregisterProject,
   createWorktree,
-
   listWorktrees,
+  listSessions,
   reconcileSessionStates,
   loadSecrets,
   dockerBackend,
@@ -95,7 +95,7 @@ function buildNatsSubject(
 
   return `tinstar.${spaceName}.${initName}.${epicName}.${taskName}.${sanitize(sessionName)}`
 }
-import { discoverPatterns, getPatternByName, interpolateSessionConfig, type TemplateVars } from '../patterns'
+import { discoverPatterns, getPatternByName, interpolateSessionConfig, buildOrchestrationPlan, type TemplateVars } from '../patterns'
 
 // ─── NATS socket communication ─────────────────────────────────────────
 
@@ -362,6 +362,11 @@ async function createSessionInternal(
     backendInfo = `tmux session: ${name}`
   }
 
+  // Build NATS subject for this session
+  const natsSubject = resolvedNats?.enabled
+    ? buildNatsSubject(name, docStore, taskId, epicId, initiativeId)
+    : undefined
+
   docStore.upsertRun(runId, {
     id: runId,
     color,
@@ -379,6 +384,8 @@ async function createSessionInternal(
     backend,
     backendInfo,
     agentIcon: resolvedTemplate?.icon ?? undefined,
+    natsEnabled: resolvedNats?.enabled ?? false,
+    natsSubject,
     taskId: taskId ?? '',
     worktreeId: worktreeEntityId,
     createdAt: new Date().toISOString(),
@@ -404,6 +411,7 @@ export interface RouteContext {
   sessionConfig: TinstarConfig | null
   readyQueue: ReadyQueue
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
+  readinessTracker?: import('../sessions/readiness').SessionReadinessTracker
 }
 
 function json(res: ServerResponse, data: unknown, status = 200): void {
@@ -477,7 +485,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // GET /api/state
   if (method === 'GET' && url === '/api/state') {
-    json(res, ctx.docStore.snapshot())
+    // Include sessions from disk alongside document store snapshot
+    const sessDir = ctx.sessionConfig?.dirs.sessions
+    const sessions = sessDir ? await listSessions(sessDir) : []
+    json(res, { ...ctx.docStore.snapshot(), sessions })
     return true
   }
 
@@ -1687,7 +1698,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           return json(res, { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }, 409)
         }
 
-        // Handle pattern-based session creation
+        // Handle pattern-based session creation with k8s-style orchestration
         if (patternName) {
           const pattern = getPatternByName(patternName)
           if (!pattern) {
@@ -1698,18 +1709,25 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             return json(res, { ok: false, error: { code: 'INVALID_PATTERN', message: 'Pattern must have an orchestrator session' } }, 400)
           }
 
+          // Build orchestration plan (handles replicas, topological sort)
+          const plan = buildOrchestrationPlan(pattern, name)
+          log.info('patterns', `orchestration plan for ${patternName}:`, {
+            spawnOrder: plan.spawnOrder.map(s => s.sessionName),
+            readinessRequired: [...plan.readinessRequired],
+          })
+
+          // Build NATS subjects for template interpolation
+          const sessionNames: Record<string, string> = {}
+          for (const entry of plan.spawnOrder) {
+            if (!sessionNames[entry.role]) {
+              sessionNames[entry.role] = entry.sessionName
+            }
+          }
+
           const templateVars: TemplateVars = {
             task: taskId ?? name,
             taskId: taskId ?? '',
           }
-
-          // Pre-compute all session names for cross-references
-          const sessionNames: Record<string, string> = {}
-          for (const sessionDef of pattern.sessions) {
-            const suffix = sessionDef.role === 'orchestrator' ? '' : `-${sessionDef.role}`
-            sessionNames[sessionDef.role] = `${name}${suffix}`
-          }
-          // Use hierarchical tinstar.* subjects (not agents.* which isn't namespaced)
           templateVars.orchestrator = buildNatsSubject(sessionNames.orchestrator, ctx.docStore, taskId, epicId, initiativeId)
           templateVars.worker = sessionNames.worker ? buildNatsSubject(sessionNames.worker, ctx.docStore, taskId, epicId, initiativeId) : ''
 
@@ -1724,29 +1742,73 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             dashboardUrl,
           }
 
+          // Check if any session needs a worktree — if so, create ONE shared worktree for all
+          const needsWorktree = pattern.sessions.some(s => s.config.worktree)
+          let sharedWorktreePath: string | null = null
+
+          if (needsWorktree && project) {
+            const projectPath = getProject(cfg.files.projects, project)
+            if (projectPath) {
+              try {
+                sharedWorktreePath = await createWorktree(projectPath, name)
+                log.info('patterns', `created shared worktree for pattern: ${sharedWorktreePath}`)
+              } catch (err) {
+                log.warn('patterns', `failed to create shared worktree: ${(err as Error).message}`)
+              }
+            }
+          }
+
           const createdSessions: string[] = []
           const errors: string[] = []
+          const startedSessions = new Set<string>()
 
-          for (const sessionDef of pattern.sessions) {
-            const sessionName = sessionNames[sessionDef.role]
+          // Spawn sessions in order, waiting for readiness where required
+          for (const entry of plan.spawnOrder) {
+            const { sessionName, role, config } = entry
             templateVars.sessionId = sessionName
 
-            const interpolatedConfig = interpolateSessionConfig(sessionDef.config, templateVars)
+            // Check if we need to wait for any dependencies to be ready
+            const depRoles = plan.dependencies.get(sessionName) ?? []
+            for (const depRole of depRoles) {
+              const depConfig = pattern.sessions.find(s => s.role === depRole)?.config
+              const condition = config.dependsOn?.[depRole]?.condition ?? 'started'
+
+              if (condition === 'ready') {
+                // Wait for all sessions with this role to signal ready
+                const depSessions = plan.spawnOrder.filter(s => s.role === depRole).map(s => s.sessionName)
+                log.info('patterns', `${sessionName} waiting for ${depSessions.join(', ')} to be ready`)
+
+                if (ctx.readinessTracker) {
+                  const ready = await ctx.readinessTracker.waitForAllReady(depSessions, 60000)
+                  if (!ready) {
+                    errors.push(`${sessionName}: timed out waiting for ${depRole} to be ready`)
+                    continue
+                  }
+                  log.info('patterns', `${sessionName} dependencies ready, spawning`)
+                }
+              }
+            }
+
+            const interpolatedConfig = interpolateSessionConfig(config, templateVars)
 
             let sessionPrompt: string | undefined
-            if (sessionDef.role === 'orchestrator') {
+            if (role === 'orchestrator') {
               const patternPrompt = interpolatedConfig.prompt ?? ''
               sessionPrompt = prompt ? `${prompt}\n\n---\n\n${patternPrompt}` : patternPrompt
             } else {
               sessionPrompt = interpolatedConfig.prompt
             }
 
+            // Mark session as started for readiness tracking
+            ctx.readinessTracker?.markStarted(sessionName)
+
+            // Use shared worktree for all pattern sessions (don't create individual worktrees)
             const result = await createSessionInternal({
               name: sessionName,
               backend: (interpolatedConfig.backend ?? backend) as 'docker' | 'tmux',
               project: interpolatedConfig.project ?? project,
-              worktree: interpolatedConfig.worktree ?? false,
-              worktreePath: interpolatedConfig.worktreePath,
+              worktree: false,  // Don't create new worktree — use shared one
+              worktreePath: sharedWorktreePath ?? interpolatedConfig.worktreePath,
               profile: interpolatedConfig.profile ?? profile,
               skipPermissions: interpolatedConfig.skipPermissions ?? skipPermissions,
               cliTemplate: interpolatedConfig.cliTemplate ?? cliTemplateName,
@@ -1760,6 +1822,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
             if (result.ok) {
               createdSessions.push(sessionName)
+              startedSessions.add(sessionName)
+
+              // For sessions with readiness.nats: auto, publish ready signal
+              if (config.readiness?.nats === 'auto' && ctx.readinessTracker) {
+                // Fire and forget — don't block on the delay
+                ctx.readinessTracker.publishReady(sessionName).catch(err => {
+                  log.warn('patterns', `failed to publish ready for ${sessionName}: ${(err as Error).message}`)
+                })
+              }
             } else {
               errors.push(`${sessionName}: ${result.error.message}`)
             }
@@ -1908,6 +1979,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             backendInfo = `tmux session: ${name}`
           }
 
+          // Build NATS subject for this session
+          const natsSubject = resolvedNats?.enabled
+            ? buildNatsSubject(name, ctx.docStore, taskId, epicId, initiativeId)
+            : undefined
+
           ctx.docStore.upsertRun(runId, {
             id: runId,
             color,
@@ -1925,6 +2001,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             backend,
             backendInfo,
             agentIcon: resolvedTemplate?.icon ?? undefined,
+            natsEnabled: resolvedNats?.enabled ?? false,
+            natsSubject,
             taskId: taskId ?? '',
             worktreeId: worktreeEntityId,
             createdAt: new Date().toISOString(),
@@ -2353,11 +2431,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // GET /api/patterns
     if (method === 'GET' && url === '/api/patterns') {
       const patterns = discoverPatterns()
-      // Return simplified pattern info for UI
+      // Return pattern info with session details for UI
       const data = patterns.map(p => ({
         name: p.name,
         description: p.description,
-        sessions: p.sessions.map(s => s.role),
+        sessions: p.sessions.map(s => ({
+          role: s.role,
+          cliTemplate: s.config.cliTemplate,
+          backend: s.config.backend,
+          worktree: s.config.worktree,
+        })),
       }))
       return json(res, { ok: true, data })
     }
@@ -2484,12 +2567,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${sessionId}' not found` } }, 404)
         return true
       }
-      if (session.state !== 'idle') {
-        json(res, { error: 'session-not-ready' }, 400)
-        return true
-      }
       readBody(req).then(async (body) => {
-        const { text } = JSON.parse(body) as { text: string }
+        const { text, force } = JSON.parse(body) as { text: string; force?: boolean }
+        if (!force && session.state !== 'idle') {
+          json(res, { error: 'session-not-ready' }, 400)
+          return
+        }
         if (!text) { json(res, { error: 'missing text' }, 400); return }
         try {
           if (session.backend === 'docker') {

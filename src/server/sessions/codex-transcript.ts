@@ -170,6 +170,7 @@ export function readCodexStatus(transcriptPath: string): 'running' | 'idle' | nu
 
 // --- Recap entries ---
 
+// Track last read byte offset per session.
 const codexOffsets = new Map<string, number>()
 
 export function resetCodexOffset(sessionName: string): void {
@@ -183,29 +184,47 @@ export function resetCodexOffset(sessionName: string): void {
 export function parseCodexRecapEntries(sessionName: string, transcriptPath: string): RecapEntry[] {
   if (!existsSync(transcriptPath)) return []
 
-  const content = readFileSync(transcriptPath, 'utf-8')
-  const lines = content.split('\n').filter(l => l.trim())
-  const lastOffset = codexOffsets.get(sessionName) ?? 0
-  const newLines = lines.slice(lastOffset)
-  if (newLines.length === 0) return []
+  const size = statSync(transcriptPath).size
+  const last = codexOffsets.get(sessionName) ?? 0
+  // If the file was truncated/rotated, reset.
+  const start = size < last ? 0 : last
+  if (size === start) return []
 
   const entries: RecapEntry[] = []
 
-  for (const line of newLines) {
-    try {
-      const obj = JSON.parse(line)
-      if (obj.type !== 'event_msg') continue
-      const p = obj.payload
-      const ts = obj.timestamp ?? new Date().toISOString()
+  const fd = openSync(transcriptPath, 'r')
+  try {
+    const CHUNK = 256 * 1024 // 256KB
+    const buf = Buffer.alloc(CHUNK)
+    let pos = start
+    let carry = ''
+    while (pos < size) {
+      const toRead = Math.min(CHUNK, size - pos)
+      const n = readSync(fd, buf, 0, toRead, pos)
+      if (n <= 0) break
+      pos += n
+      const text = carry + buf.subarray(0, n).toString('utf-8')
+      const parts = text.split('\n')
+      carry = parts.pop() ?? ''
+      for (const line of parts) {
+        if (!line.trim()) continue
+        try {
+          const obj = JSON.parse(line)
+          if (obj.type !== 'event_msg') continue
+          const p = obj.payload
+          const ts = obj.timestamp ?? new Date().toISOString()
 
-      if (p?.type === 'user_message' && p.message) {
-        entries.push({ id: randomUUID(), type: 'user', content: p.message, timestamp: ts })
-      } else if (p?.type === 'task_complete' && p.last_agent_message) {
-        entries.push({ id: randomUUID(), type: 'agent', content: p.last_agent_message, timestamp: ts })
+          if (p?.type === 'user_message' && p.message) {
+            entries.push({ id: randomUUID(), type: 'user', content: p.message, timestamp: ts })
+          } else if (p?.type === 'task_complete' && p.last_agent_message) {
+            entries.push({ id: randomUUID(), type: 'agent', content: p.last_agent_message, timestamp: ts })
+          }
+        } catch { /* skip */ }
       }
-    } catch { /* skip */ }
+    }
+    codexOffsets.set(sessionName, pos)
+  } finally {
+    closeSync(fd)
   }
-
-  codexOffsets.set(sessionName, lines.length)
   return entries
 }

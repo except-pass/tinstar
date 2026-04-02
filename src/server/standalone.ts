@@ -36,14 +36,17 @@ export function startServer(opts: ServerOptions) {
   const ctx = initBackend()
   const proxy = httpProxy.createProxyServer({ ws: true })
 
+  function safeWriteHead(res: import('node:http').ServerResponse, status: number, headers: Record<string, string>) {
+    if (res.headersSent || res.writableEnded) return false
+    res.writeHead(status, headers)
+    return true
+  }
+
   proxy.on('error', (err, _req, res) => {
     log.warn('proxy', `proxy error: ${err.message}`)
     if (res && 'writeHead' in res) {
       const sRes = res as import('node:http').ServerResponse
-      if (!sRes.headersSent) {
-        sRes.writeHead(502, { 'Content-Type': 'text/plain' })
-        sRes.end('Session proxy error')
-      }
+      if (safeWriteHead(sRes, 502, { 'Content-Type': 'text/plain' })) sRes.end('Session proxy error')
     }
   })
 
@@ -56,8 +59,9 @@ export function startServer(opts: ServerOptions) {
       const sessionName = sessionMatch[1]!
       const run = ctx.docStore.getRun(sessionName)
       if (!run?.port) {
-        res.writeHead(404, { 'Content-Type': 'text/plain' })
-        res.end(`Session "${sessionName}" not found or has no port`)
+        if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) {
+          res.end(`Session "${sessionName}" not found or has no port`)
+        }
         return
       }
       // Strip the /s/{name} prefix before proxying
@@ -72,10 +76,7 @@ export function startServer(opts: ServerOptions) {
       if (handled) return
     } catch (err) {
       log.error('api', `request error: ${(err as Error).message}`)
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'text/plain' })
-        res.end('Internal server error')
-      }
+      if (safeWriteHead(res, 500, { 'Content-Type': 'text/plain' })) res.end('Internal server error')
       return
     }
 
@@ -86,8 +87,7 @@ export function startServer(opts: ServerOptions) {
 
     // Prevent path traversal outside clientDir
     if (!filePath.startsWith(opts.clientDir)) {
-      res.writeHead(403, { 'Content-Type': 'text/plain' })
-      res.end('Forbidden')
+      if (safeWriteHead(res, 403, { 'Content-Type': 'text/plain' })) res.end('Forbidden')
       return
     }
 
@@ -97,8 +97,9 @@ export function startServer(opts: ServerOptions) {
         const stat = statSync(filePath)
         if (stat.isFile()) {
           const mime = MIME_TYPES[ext] ?? 'application/octet-stream'
-          res.writeHead(200, { 'Content-Type': mime })
-          createReadStream(filePath).pipe(res)
+          if (safeWriteHead(res, 200, { 'Content-Type': mime })) {
+            createReadStream(filePath).pipe(res)
+          }
           return
         }
       } catch {
@@ -109,11 +110,11 @@ export function startServer(opts: ServerOptions) {
     // SPA fallback — serve index.html for non-file routes
     const indexPath = join(opts.clientDir, 'index.html')
     if (existsSync(indexPath)) {
-      res.writeHead(200, { 'Content-Type': 'text/html' })
-      createReadStream(indexPath).pipe(res)
+      if (safeWriteHead(res, 200, { 'Content-Type': 'text/html' })) {
+        createReadStream(indexPath).pipe(res)
+      }
     } else {
-      res.writeHead(404, { 'Content-Type': 'text/plain' })
-      res.end('Not found')
+      if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) res.end('Not found')
     }
   })
 

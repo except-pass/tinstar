@@ -5,7 +5,7 @@ registerWidgetComponent({
   type: 'nats-traffic',
   component: NatsTrafficWidget,
   isContainer: false,
-  defaultSize: { width: 800, height: 400 },
+  defaultSize: { width: 1200, height: 600 },
   minSize: { width: 400, height: 200 },
   dragHandleSelector: '.widget-drag-handle',
 })
