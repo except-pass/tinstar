@@ -96,6 +96,7 @@ function buildNatsSubject(
   return `tinstar.${spaceName}.${initName}.${epicName}.${taskName}.${sanitize(sessionName)}`
 }
 import { discoverPatterns, getPatternByName, interpolateSessionConfig, buildOrchestrationPlan, type TemplateVars } from '../patterns'
+import { discoverHands, getHandByName } from '../hands'
 
 // ─── NATS socket communication ─────────────────────────────────────────
 
@@ -1145,12 +1146,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'POST' && url === '/api/nats-traffic-widgets') {
     readBody(req).then(body => {
       try {
-        const { sessionId, subscriptions } = JSON.parse(body) as { sessionId?: string; subscriptions?: string[] }
+        const { sessionId, subscriptions, color } = JSON.parse(body) as { sessionId?: string; subscriptions?: string[]; color?: string }
         const widget = {
           id: shortId('nats'),
           spaceId: ctx.docStore.activeSpaceId || undefined,
           sessionId: sessionId ?? '',
           subscriptions: subscriptions ?? ['tinstar.>'],  // Default to all tinstar traffic
+          color,
         }
         ctx.docStore.upsertNatsTrafficWidget(widget.id, widget)
         // Update NATS bridge subscriptions
@@ -2441,6 +2443,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           backend: s.config.backend,
           worktree: s.config.worktree,
         })),
+      }))
+      return json(res, { ok: true, data })
+    }
+
+    // GET /api/hands
+    if (method === 'GET' && url === '/api/hands') {
+      const hands = discoverHands()
+      const data = hands.map(h => ({
+        name: h.name,
+        description: h.description,
+        cliTemplate: h.cliTemplate,
       }))
       return json(res, { ok: true, data })
     }
