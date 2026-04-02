@@ -1793,8 +1793,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
             const interpolatedConfig = interpolateSessionConfig(config, templateVars)
 
+            // Resolve hand reference if present
             let sessionPrompt: string | undefined
-            if (role === 'orchestrator') {
+            if (interpolatedConfig.hand) {
+              const hand = getHandByName(interpolatedConfig.hand)
+              if (!hand) {
+                errors.push(`${sessionName}: hand '${interpolatedConfig.hand}' not found`)
+                continue
+              }
+              // Use hand's prompt and cliTemplate
+              sessionPrompt = hand.prompt
+              if (interpolatedConfig.prompt) {
+                sessionPrompt = `${hand.prompt}\n\n---\n\n${interpolatedConfig.prompt}`
+              }
+              // Override cliTemplate if not explicitly set
+              if (!interpolatedConfig.cliTemplate) {
+                interpolatedConfig.cliTemplate = hand.cliTemplate
+              }
+            } else if (role === 'orchestrator') {
               const patternPrompt = interpolatedConfig.prompt ?? ''
               sessionPrompt = prompt ? `${prompt}\n\n---\n\n${patternPrompt}` : patternPrompt
             } else {
