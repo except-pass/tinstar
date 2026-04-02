@@ -29,6 +29,7 @@ interface Props {
   onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
   onEditorWidgetCreated?: (widget: EditorWidget) => void
   onBrowserWidgetCreated?: (widget: BrowserWidget) => void
+  onNatsWidgetCreated?: (widget: NatsTrafficWidget) => void
   arrangeGridRef?: React.MutableRefObject<(() => void) | null>
   arrangeResetRef?: React.MutableRefObject<(() => void) | null>
   arrangeSwimlanesRef?: React.MutableRefObject<(() => void) | null>
@@ -150,7 +151,7 @@ interface MarqueeRect {
 
 const MARQUEE_THRESHOLD = 5
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -757,7 +758,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           })
           const imageJson = await imageRes.json() as { ok: boolean; data?: ImageWidget }
           if (!imageJson.ok || !imageJson.data) return
-          onImageWidgetCreated?.(imageJson.data)
           const { naturalWidth, naturalHeight } = imageJson.data
           const spawnLayout = {
             x: dropX, y: dropY,
@@ -765,6 +765,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             height: Math.min(naturalHeight, 900),
           }
           insertLayout(imageJson.data.id, spawnLayout)
+          onImageWidgetCreated?.(imageJson.data)
           return
         }
 
@@ -776,8 +777,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         })
         const editorJson = await editorRes.json() as { ok: boolean; data?: EditorWidget }
         if (!editorJson.ok || !editorJson.data) return
-        onEditorWidgetCreated?.(editorJson.data)
         insertLayout(editorJson.data.id, spawnLayout)
+        onEditorWidgetCreated?.(editorJson.data)
         return
       }
 
@@ -792,11 +793,60 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         })
         const resJson = await res.json() as { ok: boolean; data?: BrowserWidget }
         if (!resJson.ok || !resJson.data) return
-        onBrowserWidgetCreated?.(resJson.data)
         insertLayout(resJson.data.id, spawnLayout)
+        onBrowserWidgetCreated?.(resJson.data)
+        return
+      }
+
+      const rawNats = e.dataTransfer.getData('application/tinstar-nats')
+      if (rawNats) {
+        const { sessionId, natsSubject, color } = JSON.parse(rawNats) as { sessionId: string; natsSubject?: string; color?: string }
+        const spawnLayout = { x: dropX, y: dropY, width: 500, height: 400 }
+        // Build subscription filter: if natsSubject is available, subscribe to that + wildcards
+        const subscriptions = natsSubject
+          ? [`${natsSubject}.*`, `${natsSubject}.>`]
+          : [`tinstar.>`]  // fallback to all tinstar traffic
+        const res = await fetch('/api/nats-traffic-widgets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, subscriptions, color }),
+        })
+        const resJson = await res.json() as { ok: boolean; data?: NatsTrafficWidget }
+        if (!resJson.ok || !resJson.data) return
+        insertLayout(resJson.data.id, spawnLayout)
+        onNatsWidgetCreated?.(resJson.data)
+        return
+      }
+
+      // Hand spawn drop
+      const handData = e.dataTransfer.getData('application/tinstar-hand')
+      if (handData) {
+        try {
+          const { handName, sessionId } = JSON.parse(handData) as { handName: string; sessionId: string }
+          // Spawn the hand via API
+          fetch(`/api/sessions/${sessionId}/spawn`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hand: handName }),
+          })
+            .then(res => res.json())
+            .then(data => {
+              if (data.ok) {
+                // The spawned session will create a run, which will trigger SSE update
+                // and the canvas will auto-add the new widget via useRunsForTask
+                console.log('Hand spawned:', data.data.session)
+              } else {
+                console.error('Hand spawn failed:', data.error)
+              }
+            })
+            .catch(err => console.error('Hand spawn error:', err))
+        } catch {
+          // Invalid data
+        }
+        return
       }
     },
-    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated],
+    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated],
   )
 
   // Recursive render: groups render behind their children (natural DOM order)
@@ -930,7 +980,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       onDragOver={(e) => { e.preventDefault() }}
       onDrop={handleDrop}
       onDragEnter={(e) => {
-        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-browser')) {
+        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-browser') || e.dataTransfer.types.includes('application/tinstar-nats') || e.dataTransfer.types.includes('application/tinstar-hand')) {
           dragEnterCountRef.current++
           setEditorDragActive(true)
         }
