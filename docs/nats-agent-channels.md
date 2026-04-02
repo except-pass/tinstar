@@ -1,6 +1,29 @@
-# NATS Agent Channels — Design (Ephemeral)
+# NATS Agent Channels
 
-_Working design doc. Written during architecture session 2026-03-28. Not final._
+Multi-agent communication via NATS pub/sub.
+
+## TL;DR — Subject Scheme
+
+```
+tinstar.<init>.<epic>.<task>.<agent>   ← entity hierarchy
+tinstar.breakout.<room-name>            ← ad-hoc rooms
+```
+
+**Each agent auto-subscribes to:**
+```
+tinstar.init-001.epic-xyz.task-abc.a1   ← direct (only me)
+tinstar.init-001.epic-xyz.task-abc.*    ← task broadcast (all agents on this task)
+tinstar.init-001.epic-xyz.>             ← epic and below
+tinstar.init-001.>                      ← initiative and below
+tinstar.>                               ← workspace-wide
+```
+
+**Publishing:**
+| Target | Publish to |
+|--------|------------|
+| One agent | `tinstar.<init>.<epic>.<task>.<agent>` |
+| All on task | `tinstar.<init>.<epic>.<task>.*` |
+| Everyone | `tinstar.>` |
 
 ---
 

@@ -35,6 +35,14 @@ The `tinstar-commit` skill (`~/.claude/commands/tinstar-commit.md`) handles this
 
 Without step 2, commits from agent sessions will not appear in Task Activity until the next server restart triggers reconciliation.
 
+## Multi-Agent / NATS
+
+Agents communicate via NATS pub/sub. Subject scheme: `tinstar.<init>.<epic>.<task>.<agent>`
+
+- Each agent auto-subscribes to task broadcast (`*`) and ancestor wildcards (`>`)
+- Use `reply` MCP tool to publish messages
+- See **[docs/nats-agent-channels.md](docs/nats-agent-channels.md)** for full details
+
 ## Conventions
 
 - All server-side config lives under `~/.config/tinstar/` — no other locations
