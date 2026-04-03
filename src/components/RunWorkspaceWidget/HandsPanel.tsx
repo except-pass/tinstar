@@ -47,7 +47,7 @@ export function HandsPanel({ sessionId, onCollapse }: Props) {
 
   return (
     <section className="flex flex-col bg-surface-panel border-t border-primary/10">
-      <div className="panel-header">
+      <div className="panel-header" title="Spawn collaborator agents to help with this task. Click a hand to spawn it, or drag onto the canvas.">
         <h3 className="panel-label flex items-center gap-1.5">
           <span>🤚</span>
           <span>Hands</span>
@@ -59,7 +59,7 @@ export function HandsPanel({ sessionId, onCollapse }: Props) {
               onClick={onCollapse}
               className="text-slate-500 hover:text-primary ml-1"
             >
-              <span className="material-symbols-outlined text-sm">chevron_right</span>
+              <span className="material-symbols-outlined text-sm">expand_more</span>
             </button>
           )}
         </div>

@@ -35,7 +35,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
   const [procsCollapsed, setProcsCollapsed] = useState(true)
-  const [handsCollapsed, setHandsCollapsed] = useState(true)
+  const [handsCollapsed, setHandsCollapsed] = useState(false)
   const [sessionTab, setSessionTab] = useState<'recap' | 'terminal'>(run.port ? 'terminal' : 'recap')
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null)

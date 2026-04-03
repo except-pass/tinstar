@@ -59,6 +59,37 @@ export function releasePort(port: number): void {
 // --- Command builders ---
 
 /**
+ * Escape a string for use in bash single quotes.
+ * Single quotes don't expand anything (no $, `, !, etc.) — only ' itself needs escaping.
+ * Pattern: replace ' with '\'' (end quote, escaped literal quote, start new quote)
+ */
+function bashSingleQuote(str: string): string {
+  return "'" + str.replace(/'/g, "'\\''") + "'"
+}
+
+/**
+ * Poll tmux pane for the dev channels warning prompt.
+ * Returns true if prompt detected, false on timeout.
+ */
+async function waitForDevChannelPrompt(tmuxName: string, timeoutMs = 15000): Promise<boolean> {
+  const start = Date.now()
+  const pollInterval = 500
+
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const pane = execSync(`tmux capture-pane -t ${tmuxName} -p`, { encoding: 'utf-8' })
+      if (pane.includes('local development')) {
+        return true
+      }
+    } catch {
+      // tmux pane may not exist yet — keep polling
+    }
+    await new Promise(r => setTimeout(r, pollInterval))
+  }
+  return false
+}
+
+/**
  * Interpolate a CLI template string, replacing {sessionId} and {prompt} placeholders.
  * Unused placeholders are stripped so the command stays clean.
  */
@@ -74,7 +105,8 @@ function interpolateTemplate(
     cmd = cmd.replace(/\s*\S*\s*\{sessionId\}/g, '')
   }
   if (vars.prompt) {
-    cmd = cmd.replace(/\{prompt\}/g, JSON.stringify(vars.prompt))
+    // Use single quotes — they don't expand !, `, $, or anything else
+    cmd = cmd.replace(/\{prompt\}/g, bashSingleQuote(vars.prompt))
   } else {
     // Remove "-- {prompt}" or just "{prompt}"
     cmd = cmd.replace(/\s*--\s*\{prompt\}/g, '')
@@ -143,7 +175,10 @@ export function buildAgentCommand(opts: {
   if (opts.nats?.enabled) {
     cmd += ' --dangerously-load-development-channels server:nats'
   }
-  if (opts.initialPrompt) cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
+  if (opts.initialPrompt) {
+    // Use single quotes — they don't expand !, `, $, or anything else
+    cmd += ` -- ${bashSingleQuote(opts.initialPrompt)}`
+  }
   return cmd
 }
 
@@ -209,6 +244,18 @@ export async function createTmuxSession(
   parts.push(agentCmd)
 
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
+
+  // Auto-accept the development channels warning if NATS is enabled
+  // Poll for the prompt text rather than using a fixed delay — handles variance in startup time
+  if (natsOpts?.enabled) {
+    const found = await waitForDevChannelPrompt(tmuxName, 15000)
+    if (found) {
+      log.info('tmux', `${opts.session.name}: dev channel prompt detected, auto-accepting`)
+      await execFileAsync('tmux', ['send-keys', '-t', tmuxName, 'Enter'])
+    } else {
+      log.warn('tmux', `${opts.session.name}: dev channel prompt not found after 15s — skipping auto-accept`)
+    }
+  }
 
   // Start ttyd
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
