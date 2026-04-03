@@ -2294,14 +2294,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const workspace = parentSession.workspace
 
       // Build NATS subscriptions for the spawned session
+      // Inherit NATS from parent regardless of taskId — use whatever hierarchy is available
       let natsConfig: { enabled: boolean; subscriptions: string[] } | null = null
-      if (parentSession.nats?.enabled && taskId) {
+      if (parentSession.nats?.enabled) {
         const natsCtx = {
           sessionName: spawnedName,
           spaceId: ctx.docStore.activeSpaceId || null,
           taskId: taskId || null,
-          epicId: null,
-          initiativeId: null,
+          epicId: parentRun?.epic || null,
+          initiativeId: parentRun?.initiative || null,
         }
         const subscriptions = computeNatsSubscriptions(natsCtx, ctx.docStore)
         natsConfig = { enabled: true, subscriptions }
@@ -2361,7 +2362,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         // Build NATS subject for the run
         const natsSubject = natsConfig?.enabled
-          ? buildNatsSubject(spawnedName, ctx.docStore, taskId)
+          ? buildNatsSubject(spawnedName, ctx.docStore, taskId, parentRun?.epic || undefined, parentRun?.initiative || undefined)
           : undefined
 
         // Create a run entity linked to the same task as the parent
