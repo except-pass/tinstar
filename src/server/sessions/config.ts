@@ -193,10 +193,10 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
     },
     nats: {
       channelServerPackage: typeof (userConfig.nats as Record<string, unknown>)?.channelServerPackage === 'string'
-        ? (userConfig.nats as Record<string, string>).channelServerPackage
+        ? (userConfig.nats as Record<string, string>).channelServerPackage!
         : merged.nats.channelServerPackage,
       bunPath: typeof (userConfig.nats as Record<string, unknown>)?.bunPath === 'string'
-        ? (userConfig.nats as Record<string, string>).bunPath
+        ? (userConfig.nats as Record<string, string>).bunPath!
         : merged.nats.bunPath,
     },
   }

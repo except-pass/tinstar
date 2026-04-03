@@ -33,8 +33,8 @@ worker:
     const patterns = discoverPatterns(testDir)
 
     expect(patterns).toHaveLength(1)
-    expect(patterns[0].name).toBe('bug-review')
-    expect(patterns[0].sessions).toHaveLength(2)
+    expect(patterns[0]!.name).toBe('bug-review')
+    expect(patterns[0]!.sessions).toHaveLength(2)
   })
 
   it('returns empty array for non-existent directory', () => {
@@ -57,6 +57,6 @@ orchestrator:
     const patterns = discoverPatterns(testDir)
 
     expect(patterns).toHaveLength(1)
-    expect(patterns[0].name).toBe('valid')
+    expect(patterns[0]!.name).toBe('valid')
   })
 })

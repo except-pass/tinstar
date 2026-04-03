@@ -16,8 +16,8 @@ export function parseHandFile(content: string): Hand | null {
     const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/)
     if (!frontmatterMatch) return null
 
-    const frontmatter = parseYaml(frontmatterMatch[1]) as Record<string, unknown>
-    const prompt = frontmatterMatch[2].trim()
+    const frontmatter = parseYaml(frontmatterMatch[1]!) as Record<string, unknown>
+    const prompt = frontmatterMatch[2]!.trim()
 
     const name = frontmatter.name as string
     if (!name) return null

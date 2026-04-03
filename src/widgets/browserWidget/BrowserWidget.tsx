@@ -208,7 +208,7 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
           <iframe
             key={iframeSrc}
             src={iframeSrc}
-            className="w-full h-full border-0"
+            className="w-full h-full border-0 bg-white"
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
             title={widget.title ?? url}
           />

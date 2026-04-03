@@ -9,7 +9,7 @@
  * Modeled after Kubernetes Pod orchestration semantics.
  */
 
-import type { Pattern, PatternSession, PatternSessionConfig } from './parser'
+import type { Pattern, PatternSessionConfig } from './parser'
 
 export interface SessionReadinessState {
   name: string

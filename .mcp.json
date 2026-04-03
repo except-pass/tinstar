@@ -8,7 +8,9 @@
         "--name",
         "bugfixes",
         "--subscribe",
-        "tinstar.work-space._._.tinstar-improvement.*"
+        "tinstar.work-space._._.tinstar-improvement",
+        "--subscribe",
+        "tinstar.work-space._._.tinstar-improvement.bugfixes"
       ]
     }
   }

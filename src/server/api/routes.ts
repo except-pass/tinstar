@@ -296,7 +296,7 @@ async function createSessionInternal(
     : null
 
   // Compute NATS subscriptions
-  let resolvedNats = nats ?? null
+  let resolvedNats: { enabled: boolean; subscriptions: string[] } | null = nats ? { enabled: nats.enabled, subscriptions: nats.subscriptions ?? [] } : null
   const natsCtx = {
     sessionName: name,
     spaceId: docStore.activeSpaceId || null,
@@ -306,7 +306,7 @@ async function createSessionInternal(
   }
   if (!nats && (taskId || epicId || initiativeId)) {
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
-  } else if (nats?.enabled && !nats.subscriptions) {
+  } else if (nats?.enabled && !nats.subscriptions?.length) {
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
   }
 
@@ -416,16 +416,17 @@ export interface RouteContext {
   readinessTracker?: import('../sessions/readiness').SessionReadinessTracker
 }
 
-function json(res: ServerResponse, data: unknown, status = 200): void {
+function json(res: ServerResponse, data: unknown, status = 200): true {
   // Some routes respond asynchronously (e.g. readBody(...).then(...)).
   // If the client disconnects or another codepath already responded, avoid crashing
   // with ERR_HTTP_HEADERS_SENT.
-  if (res.headersSent || res.writableEnded) return
+  if (res.headersSent || res.writableEnded) return true
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
   })
   res.end(JSON.stringify(data))
+  return true
 }
 
 /** Deep-merge entity patch with special handling for settings sub-object.
@@ -1169,7 +1170,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // POST /api/nats-traffic-widgets/:id/subscribe — add subscription
   if (method === 'POST' && url.match(/^\/api\/nats-traffic-widgets\/[^/]+\/subscribe$/)) {
-    const id = url.split('/')[3]
+    const id = url.split('/')[3]!
     readBody(req).then(body => {
       try {
         const { subject } = JSON.parse(body) as { subject: string }
@@ -1182,11 +1183,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Widget ${id} not found` } }, 404)
           return
         }
-        const subs = new Set(existing.subscriptions || [])
-        subs.add(subject)
-        const updated = { ...existing, subscriptions: [...subs] }
+        const existingSubs = existing.subscriptions || []
+        const subs = [...new Set([...existingSubs, subject])]
+        const updated = { ...existing, subscriptions: subs }
         ctx.docStore.upsertNatsTrafficWidget(id, updated)
-        ctx.natsTraffic?.updateWidgetSubscriptions(id, updated.subscriptions)
+        ctx.natsTraffic?.updateWidgetSubscriptions(id, subs)
         ctx.sse.broadcastSnapshot()
         json(res, { ok: true, data: updated })
       } catch {
@@ -1198,7 +1199,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // DELETE /api/nats-traffic-widgets/:id/subscribe — remove subscription
   if (method === 'DELETE' && url.match(/^\/api\/nats-traffic-widgets\/[^/]+\/subscribe$/)) {
-    const id = url.split('/')[3]
+    const id = url.split('/')[3]!
     readBody(req).then(body => {
       try {
         const { subject } = JSON.parse(body) as { subject: string }
@@ -1214,7 +1215,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const subs = (existing.subscriptions || []).filter(s => s !== subject)
         const updated = { ...existing, subscriptions: subs }
         ctx.docStore.upsertNatsTrafficWidget(id, updated)
-        ctx.natsTraffic?.updateWidgetSubscriptions(id, updated.subscriptions)
+        ctx.natsTraffic?.updateWidgetSubscriptions(id, subs)
         ctx.sse.broadcastSnapshot()
         json(res, { ok: true, data: updated })
       } catch {
@@ -1504,7 +1505,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       // Check if taskId changed and NATS is enabled — need to update subscriptions
       const taskIdChanged = patch.taskId !== undefined && patch.taskId !== existing.taskId
-      if (taskIdChanged && existing.natsEnabled && cfg) {
+      const sessDir = ctx.sessionConfig?.dirs.sessions
+      if (taskIdChanged && existing.natsEnabled && sessDir) {
         const session = getSession(sessDir, existing.sessionId)
         if (session?.nats?.enabled) {
           // Compute old and new subscriptions
@@ -1649,7 +1651,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const secrets = () => loadSecrets(cfg.dirs.secrets)
     const dashboardUrl = `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`
 
-    function emitSessionEvent(type: 'managed_session.created' | 'managed_session.state_changed' | 'managed_session.deleted', payload: Record<string, unknown>) {
+    function emitSessionEvent(type: string, payload: Record<string, unknown>) {
       ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as unknown as Parameters<typeof ctx.bus.emit>[0])
     }
 
@@ -1772,7 +1774,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             task: taskId ?? name,
             taskId: taskId ?? '',
           }
-          templateVars.orchestrator = buildNatsSubject(sessionNames.orchestrator, ctx.docStore, taskId, epicId, initiativeId)
+          templateVars.orchestrator = sessionNames.orchestrator ? buildNatsSubject(sessionNames.orchestrator, ctx.docStore, taskId, epicId, initiativeId) : ''
           templateVars.worker = sessionNames.worker ? buildNatsSubject(sessionNames.worker, ctx.docStore, taskId, epicId, initiativeId) : ''
 
           const createCtx: CreateSessionContext = {
@@ -1814,7 +1816,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // Check if we need to wait for any dependencies to be ready
             const depRoles = plan.dependencies.get(sessionName) ?? []
             for (const depRole of depRoles) {
-              const depConfig = pattern.sessions.find(s => s.role === depRole)?.config
               const condition = config.dependsOn?.[depRole]?.condition ?? 'started'
 
               if (condition === 'ready') {
@@ -1833,12 +1834,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               }
             }
 
-            const interpolatedConfig = interpolateSessionConfig(config, templateVars)
+            const interpolatedConfig = interpolateSessionConfig(config as unknown as Record<string, unknown>, templateVars) as typeof config
 
             // Resolve hand reference if present
             let sessionPrompt: string | undefined
             if (interpolatedConfig.hand) {
-              const hand = getHandByName(interpolatedConfig.hand)
+              const hand = getHandByName(interpolatedConfig.hand as string)
               if (!hand) {
                 errors.push(`${sessionName}: hand '${interpolatedConfig.hand}' not found`)
                 continue
@@ -1853,10 +1854,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 interpolatedConfig.cliTemplate = hand.cliTemplate
               }
             } else if (role === 'orchestrator') {
-              const patternPrompt = interpolatedConfig.prompt ?? ''
+              const patternPrompt = (interpolatedConfig.prompt as string | undefined) ?? ''
               sessionPrompt = prompt ? `${prompt}\n\n---\n\n${patternPrompt}` : patternPrompt
             } else {
-              sessionPrompt = interpolatedConfig.prompt
+              sessionPrompt = interpolatedConfig.prompt as string | undefined
             }
 
             // Mark session as started for readiness tracking
@@ -1868,7 +1869,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               backend: (interpolatedConfig.backend ?? backend) as 'docker' | 'tmux',
               project: interpolatedConfig.project ?? project,
               worktree: false,  // Don't create new worktree — use shared one
-              worktreePath: sharedWorktreePath ?? interpolatedConfig.worktreePath,
+              worktreePath: sharedWorktreePath ?? interpolatedConfig.worktreePath as string | undefined,
               profile: interpolatedConfig.profile ?? profile,
               skipPermissions: interpolatedConfig.skipPermissions ?? skipPermissions,
               cliTemplate: interpolatedConfig.cliTemplate ?? cliTemplateName,

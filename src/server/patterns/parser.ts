@@ -39,8 +39,8 @@ export function parsePatternFile(content: string): Pattern | null {
     const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/)
     if (!frontmatterMatch) return null
 
-    const frontmatter = parseYaml(frontmatterMatch[1]) as Record<string, unknown>
-    const body = frontmatterMatch[2].trim()
+    const frontmatter = parseYaml(frontmatterMatch[1]!) as Record<string, unknown>
+    const body = frontmatterMatch[2]!.trim()
 
     const name = frontmatter.name as string
     const description = (frontmatter.description as string) ?? ''

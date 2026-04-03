@@ -69,10 +69,6 @@ function setConnected(c: boolean) {
   notify()
 }
 
-function setLoading(l: boolean) {
-  uiBundle = { ...uiBundle, loading: l }
-  notify()
-}
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)

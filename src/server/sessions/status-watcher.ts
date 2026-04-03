@@ -4,13 +4,14 @@ import { readSessionStatusDetail, parseNewEntries } from './transcript-parser'
 import { discoverTranscript, readCodexStatus, parseCodexRecapEntries } from './codex-transcript'
 import { log } from '../logger'
 import { execFile } from 'node:child_process'
+import type { RecapEntry } from '../../types'
 
 export interface StatusWatcherOpts {
   sessionsDir: string
   /** Called when a session's status changes based on JSONL evidence */
   onStatusChanged: (name: string, state: SessionState) => void
   /** Called with new recap entries parsed from the transcript */
-  onRecapEntries?: (name: string, entries: Array<{ id: string; type: string; content: string; timestamp: string }>) => void
+  onRecapEntries?: (name: string, entries: RecapEntry[]) => void
   /** Poll interval in ms (default 3000) */
   intervalMs?: number
 }

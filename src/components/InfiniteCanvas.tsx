@@ -454,7 +454,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     }
 
     // Viewport origin in canvas coords
-    const rect = el.getBoundingClientRect()
     const startX = -camera.x / camera.zoom
     const startY = -camera.y / camera.zoom
     // Track the widest row so empty containers can match

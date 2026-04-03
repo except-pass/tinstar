@@ -85,7 +85,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>(prefill?.worktreeMode ?? 'none')
   const [worktreePath, setWorktreePath] = useState('')
   const [availableWorktrees, setAvailableWorktrees] = useState<Array<{ path: string; branch?: string }>>([])
-  const [skipPermissions, setSkipPermissions] = useState(prefill?.skipPermissions ?? true)
+  const [skipPermissions, _setSkipPermissions] = useState(prefill?.skipPermissions ?? true)
   const [prompt, setPrompt] = useState('')
   const [runColor, setRunColor] = useState(prefill?.runColor ?? DEFAULT_RUN_ACCENT)
   const [taskId, setTaskId] = useState(prefill?.taskId ?? '')

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { readdirSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
