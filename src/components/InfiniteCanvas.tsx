@@ -802,13 +802,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       if (rawNats) {
         const { sessionId, natsSubject, color } = JSON.parse(rawNats) as { sessionId: string; natsSubject?: string; color?: string }
         const spawnLayout = { x: dropX, y: dropY, width: 500, height: 400 }
-        // Build subscription filter: subscribe to direct subject + task-level broadcast
+        // Build subscription filter: two-tier model (direct DM + task broadcast)
         // natsSubject is the direct address (e.g., tinstar.space.init.epic.task.session)
-        // We want: direct + task.* (strip session name, add *)
+        // Broadcast = strip session name (no wildcard needed)
         const subscriptions = natsSubject
           ? [
-              natsSubject,  // direct messages to this session
-              natsSubject.replace(/\.[^.]+$/, '.*'),  // task-level broadcast (replace last token with *)
+              natsSubject,  // direct DM inbox for this session
+              natsSubject.replace(/\.[^.]+$/, ''),  // task broadcast channel (no wildcard)
             ]
           : [`tinstar.>`]  // fallback to all tinstar traffic
         const res = await fetch('/api/nats-traffic-widgets', {

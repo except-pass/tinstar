@@ -2,8 +2,9 @@
  * NATS Subscription Computation
  *
  * Computes NATS subject patterns based on entity hierarchy.
- * Sessions subscribe to subjects that allow them to receive messages
- * at various levels of the hierarchy (task, epic, initiative).
+ * Sessions subscribe to TWO subjects to enable both broadcast and DM:
+ * 1. Task broadcast channel (exact match) — all agents on task see it
+ * 2. Direct channel (exact match) — only this agent sees it (DM inbox)
  */
 
 import type { DocumentStore } from '../stores/document-store'
@@ -19,30 +20,30 @@ export interface NatsSubscriptionContext {
 /**
  * Compute NATS subscriptions for a session based on its entity hierarchy.
  *
- * Subscribes only to the MOST SPECIFIC level available to avoid duplicate
- * message delivery. For example, if a task is associated, only subscribes to
- * the task-level wildcard (which covers direct messages to this session).
+ * Two-tier subscription model:
+ * 1. Broadcast: tinstar.<space>.<init>.<epic>.<task> — task-level channel
+ * 2. Direct: tinstar.<space>.<init>.<epic>.<task>.<session> — DM inbox
  *
- * Subject format: tinstar.<space>.<initiative>.<epic>.<task>.<session-name>
+ * This enables:
+ * - Publish to broadcast → everyone on task sees it
+ * - Publish to direct → only that agent sees it (private DM)
  *
  * @param ctx - Session context with entity IDs
  * @param docStore - Document store for looking up entity hierarchy
- * @returns Array of NATS subjects to subscribe to (typically just one)
+ * @returns Array of NATS subjects to subscribe to (broadcast + direct)
  */
 export function computeNatsSubscriptions(
   ctx: NatsSubscriptionContext,
   docStore: DocumentStore,
 ): string[] {
   const subjects: string[] = []
-  // Note: We use only the hierarchical tinstar.* pattern, not agents.* (avoids namespace collision)
 
-  // If we have entity associations, build hierarchy-based subjects
+  // Resolve hierarchy by walking up from task
   let initiativeId = ctx.initiativeId
   let epicId = ctx.epicId
   const taskId = ctx.taskId
   let spaceId = ctx.spaceId
 
-  // Resolve hierarchy by walking up from task
   if (taskId) {
     const task = docStore.getTask(taskId)
     if (task) {
@@ -68,8 +69,7 @@ export function computeNatsSubscriptions(
   }
 
   // Build hierarchy path using entity names (not IDs) for human-readable subjects
-  // Use '_' as placeholder for missing levels to keep structure consistent:
-  // tinstar.<space>.<init>.<epic>.<task>.<session>
+  // Use '_' as placeholder for missing levels to keep structure consistent
   const BLANK = '_'
 
   const space = spaceId ? docStore.getSpace(spaceId) : null
@@ -81,25 +81,25 @@ export function computeNatsSubscriptions(
   const initName = initiative ? sanitizeSubjectToken(initiative.name) : BLANK
   const epicName = epic ? sanitizeSubjectToken(epic.name) : BLANK
   const taskName = task ? sanitizeSubjectToken(task.name) : BLANK
+  const sessionToken = sanitizeSubjectToken(ctx.sessionName)
 
-  // Always build the full path with placeholders for missing levels
-  const parts = ['tinstar', spaceName, initName, epicName, taskName]
+  // Build base path (without session name)
+  const basePath = ['tinstar', spaceName, initName, epicName, taskName].join('.')
 
-  // Subscribe only to the MOST SPECIFIC level to avoid duplicate deliveries.
-  // Broader wildcards (space.>, init.>) would match everything narrower ones match,
-  // causing the same message to be delivered multiple times.
   if (task) {
-    // Task-level: broadcast to all sessions + direct to this session
-    // tinstar.<space>.<init>.<epic>.<task>.* covers both
-    subjects.push(`${parts.join('.')}.*`)
+    // Two-tier subscription for task-level agents:
+    // 1. Broadcast channel — all agents on task see messages here
+    subjects.push(basePath)
+    // 2. Direct channel — only this agent sees messages here (DM inbox)
+    subjects.push(`${basePath}.${sessionToken}`)
   } else if (epic) {
-    // Epic-level wildcard (no task association)
+    // Epic-level: use wildcard since no specific task
     subjects.push(`tinstar.${spaceName}.${initName}.${epicName}.>`)
   } else if (initiative) {
-    // Initiative-level wildcard (no epic/task association)
+    // Initiative-level wildcard
     subjects.push(`tinstar.${spaceName}.${initName}.>`)
   } else if (space) {
-    // Space-level wildcard (no deeper association)
+    // Space-level wildcard
     subjects.push(`tinstar.${spaceName}.>`)
   }
 

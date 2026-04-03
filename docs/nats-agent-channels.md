@@ -5,25 +5,23 @@ Multi-agent communication via NATS pub/sub.
 ## TL;DR — Subject Scheme
 
 ```
-tinstar.<init>.<epic>.<task>.<agent>   ← entity hierarchy
-tinstar.breakout.<room-name>            ← ad-hoc rooms
+tinstar.<space>.<init>.<epic>.<task>           ← task broadcast (like a Slack channel)
+tinstar.<space>.<init>.<epic>.<task>.<agent>   ← direct DM to specific agent
+tinstar.breakout.<room-name>                    ← ad-hoc rooms
 ```
 
-**Each agent auto-subscribes to:**
+**Each agent auto-subscribes to (two-tier model):**
 ```
-tinstar.init-001.epic-xyz.task-abc.a1   ← direct (only me)
-tinstar.init-001.epic-xyz.task-abc.*    ← task broadcast (all agents on this task)
-tinstar.init-001.epic-xyz.>             ← epic and below
-tinstar.init-001.>                      ← initiative and below
-tinstar.>                               ← workspace-wide
+tinstar.work-space.init-001.epic-xyz.task-abc       ← task broadcast (all agents see)
+tinstar.work-space.init-001.epic-xyz.task-abc.a1    ← my DM inbox (only I see)
 ```
 
 **Publishing:**
 | Target | Publish to |
 |--------|------------|
-| One agent | `tinstar.<init>.<epic>.<task>.<agent>` |
-| All on task | `tinstar.<init>.<epic>.<task>.*` |
-| Everyone | `tinstar.>` |
+| One agent (DM) | `tinstar.<space>.<init>.<epic>.<task>.<agent>` |
+| All on task (broadcast) | `tinstar.<space>.<init>.<epic>.<task>` |
+| Breakout room | `tinstar.breakout.<room-name>` |
 
 ---
 
@@ -157,28 +155,26 @@ NATS `>` wildcard doesn't care about depth — variable-level hierarchies work f
 
 ### What Each Agent Subscribes To
 
-At creation, the channel server automatically subscribes to the full path plus all ancestor wildcard patterns:
+At creation, the channel server subscribes to **two subjects** (two-tier model):
 
 ```
-tinstar.init-001.epic-xyz.task-abc.a1   ← direct
-tinstar.init-001.epic-xyz.task-abc.*    ← task-level broadcast
-tinstar.init-001.epic-xyz.>            ← epic-level and below
-tinstar.init-001.>                      ← initiative-level and below
-tinstar.>                               ← workspace-wide
+tinstar.space.init-001.epic-xyz.task-abc       ← task broadcast (like Slack #channel)
+tinstar.space.init-001.epic-xyz.task-abc.a1    ← my DM inbox (only I receive)
 ```
 
-All computed from the entity path — no manual subscription management needed for the hierarchy.
+This enables both broadcast and private messaging:
+- Messages to the task channel → everyone on the task sees them
+- Messages to an agent's direct channel → only that agent sees them (DM)
 
 ### Publishing Patterns
 
 | Target | Publish to |
 |---|---|
-| Direct to one agent | `tinstar.init-001.epic-xyz.task-abc.a1` |
-| All agents on a task | `tinstar.init-001.epic-xyz.task-abc.*` |
-| All agents in an epic | `tinstar.init-001.epic-xyz.*.*` or use `>` |
-| All agents in an initiative | `tinstar.init-001.>` |
-| Everyone | `tinstar.>` |
+| DM to one agent | `tinstar.space.init-001.epic-xyz.task-abc.a1` |
+| All agents on a task | `tinstar.space.init-001.epic-xyz.task-abc` |
 | A breakout room | `tinstar.breakout.auth-review` |
+
+**Note:** The task broadcast channel has NO trailing wildcard or agent name — it's an exact subject that all task agents subscribe to. DMs append the agent name as an additional token.
 
 ### Breakout Rooms
 
