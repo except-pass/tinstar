@@ -196,6 +196,29 @@ tinstar.breakout.<room-name>
 
 Breakout rooms are intentionally flat — no hierarchy, just a shared meeting point.
 
+### NATS Wildcard Reference
+
+NATS has two wildcards with **very different behavior**:
+
+| Wildcard | Matches | Example |
+|----------|---------|---------|
+| `*` | Exactly ONE token | `task.*` matches `task.agent1` but NOT `task.agent1.sub` |
+| `>` | One or MORE tokens | `task.>` matches `task.agent1` AND `task.agent1.sub.deep` |
+
+**When to use which:**
+
+- **`*` (single token)** — Use for task-level broadcasts where you want to reach all direct children (sessions) but not their descendants. Session names are single tokens (no dots), so `task.*` safely matches all sessions on a task.
+
+- **`>` (multi-level)** — Use for hierarchical subscriptions where you want to catch EVERYTHING below a certain level. This is the "catch-all" for a subtree.
+
+**Common mistake:** Using `*` when you meant `>`. If you're not receiving messages you expected, check your wildcard.
+
+```bash
+# These are NOT equivalent:
+nats sub "tinstar.init-001.*"      # Only direct children of init-001
+nats sub "tinstar.init-001.>"      # Everything under init-001 (epics, tasks, agents)
+```
+
 ### Wildcard Monitoring
 
 ```bash
