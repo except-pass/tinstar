@@ -148,7 +148,8 @@ export function initBackend(): RouteContext {
             backend: sess.backend ?? null,
             agentIcon: tpl?.icon,
             natsEnabled: sess.nats?.enabled ?? false,
-            natsSubject: sess.nats?.subscriptions?.[0],
+            // Compute direct subject from subscription pattern: replace trailing * with session name
+            natsSubject: sess.nats?.subscriptions?.[0]?.replace(/\*$/, sess.name),
             taskId: '',
             worktreeId: '',
             createdAt: sess.created ?? new Date().toISOString(),
