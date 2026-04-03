@@ -129,14 +129,16 @@ export function generateNatsMcpConfig(opts: {
 }
 
 /**
- * Build inline auto-accept script for dev channels prompt.
- * Runs inside the tmux session (not from server), monitoring for the prompt
- * and sending Enter when detected. Backgrounded so it doesn't block claude startup.
+ * Wrap a command with expect to auto-accept the dev channels warning.
+ * Waits for the "Enter to confirm" prompt and sends Enter, then hands off to interactive.
  */
-function buildDevChannelAutoAccept(): string {
-  // Poll up to 15s (30 iterations * 0.5s) for the prompt, then send Enter
-  // Uses tmux commands but they run INSIDE the session, not from the server
-  return `(for i in {1..30}; do sleep 0.5; tmux capture-pane -p 2>/dev/null | grep -q 'local development' && { sleep 0.2; tmux send-keys Enter; break; }; done) &`
+function wrapWithDevChannelAutoAccept(cmd: string): string {
+  // Escape the command for embedding in expect's spawn sh -c "..."
+  // Double quotes and backslashes need escaping
+  const escaped = cmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  // Expect script: spawn via sh -c to handle complex commands, wait for prompt, send Enter, interact
+  const expectScript = `set timeout 30; spawn -noecho sh -c "${escaped}"; expect { "Enter to confirm" { send "\\r"; interact } timeout { interact } eof { exit } }`
+  return `expect -c '${expectScript}'`
 }
 
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
@@ -147,38 +149,51 @@ export function buildAgentCommand(opts: {
   resume?: boolean
   initialPrompt?: string | null
   nats?: { enabled: boolean } | null
+  appendSystemPrompt?: string | null
 }): string {
-  // Dev channel auto-accept: prepended when NATS enabled (runs inside session)
-  const autoAcceptPrefix = opts.nats?.enabled ? `${buildDevChannelAutoAccept()} ` : ''
+  let cmd: string
 
   if (opts.template) {
     const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
-    const cmd = interpolateTemplate(tmpl, {
+    cmd = interpolateTemplate(tmpl, {
       sessionId: opts.sessionId,
       prompt: opts.resume ? null : opts.initialPrompt,
     })
-    return autoAcceptPrefix + cmd
-  }
-  // Legacy fallback: build claude command from flags
-  const parts: string[] = []
-  if (autoAcceptPrefix) {
-    parts.push(autoAcceptPrefix.trim())
+    // Insert --append-system-prompt before the -- prompt separator if present
+    if (opts.appendSystemPrompt) {
+      const promptFlag = ` --append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`
+      const dashDashIdx = cmd.indexOf(' -- ')
+      if (dashDashIdx !== -1) {
+        cmd = cmd.slice(0, dashDashIdx) + promptFlag + cmd.slice(dashDashIdx)
+      } else {
+        cmd += promptFlag
+      }
+    }
+  } else {
+    // Legacy fallback: build claude command from flags
+    cmd = 'claude'
+    if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
+    if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
+    else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
+    // Add NATS channel support — .mcp.json is in CWD, no --mcp-config needed
+    if (opts.nats?.enabled) {
+      cmd += ' --dangerously-load-development-channels server:nats'
+    }
+    // Add hand system prompt if specified
+    if (opts.appendSystemPrompt) {
+      cmd += ` --append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`
+    }
+    if (opts.initialPrompt) {
+      // Use single quotes — they don't expand !, `, $, or anything else
+      cmd += ` -- ${bashSingleQuote(opts.initialPrompt)}`
+    }
   }
 
-  let cmd = 'claude'
-  if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
-  if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
-  else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
-  // Add NATS channel support — .mcp.json is in CWD, no --mcp-config needed
+  // Wrap with expect to auto-accept dev channels warning when NATS enabled
   if (opts.nats?.enabled) {
-    cmd += ' --dangerously-load-development-channels server:nats'
+    return wrapWithDevChannelAutoAccept(cmd)
   }
-  if (opts.initialPrompt) {
-    // Use single quotes — they don't expand !, `, $, or anything else
-    cmd += ` -- ${bashSingleQuote(opts.initialPrompt)}`
-  }
-  parts.push(cmd)
-  return parts.join(' ')
+  return cmd
 }
 
 // --- Tmux operations ---
@@ -191,6 +206,7 @@ export async function createTmuxSession(
     port: number
     resume?: boolean
     template?: CliTemplate | null
+    appendSystemPrompt?: string | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
@@ -240,6 +256,7 @@ export async function createTmuxSession(
     resume: opts.resume,
     initialPrompt: opts.resume ? undefined : opts.session.initialPrompt,
     nats: natsOpts,
+    appendSystemPrompt: opts.appendSystemPrompt,
   })
   parts.push(agentCmd)
 
@@ -261,6 +278,7 @@ export async function startTmuxSession(
     secrets: Record<string, string>
     port: number
     template?: CliTemplate | null
+    appendSystemPrompt?: string | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)

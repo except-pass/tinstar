@@ -44,7 +44,7 @@ import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
-import { computeNatsSubscriptions } from '../sessions/nats-subscriptions'
+import { computeNatsSubscriptions, diffSubscriptions } from '../sessions/nats-subscriptions'
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
 function buildNatsSubject(
@@ -1497,10 +1497,51 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // PATCH /api/runs/:id
   if (method === 'PATCH' && url.startsWith('/api/runs/')) {
     const id = url.slice('/api/runs/'.length)
-    readBody(req).then(body => {
+    readBody(req).then(async body => {
       const existing = ctx.docStore.getRun(id)
       if (!existing) return json(res, { ok: false, error: 'not found' }, 404)
       const patch = JSON.parse(body)
+
+      // Check if taskId changed and NATS is enabled — need to update subscriptions
+      const taskIdChanged = patch.taskId !== undefined && patch.taskId !== existing.taskId
+      if (taskIdChanged && existing.natsEnabled && cfg) {
+        const session = getSession(sessDir, existing.sessionId)
+        if (session?.nats?.enabled) {
+          // Compute old and new subscriptions
+          const oldSubs = session.nats.subscriptions || []
+          const newSubs = computeNatsSubscriptions({
+            sessionName: existing.sessionId,
+            spaceId: existing.spaceId,
+            taskId: patch.taskId,
+          }, ctx.docStore)
+
+          const { add, remove } = diffSubscriptions(oldSubs, newSubs)
+
+          // Send socket commands to update channel server
+          for (const subject of remove) {
+            try {
+              await sendNatsSocketCommand(existing.sessionId, { action: 'unsubscribe', subject })
+            } catch (err) {
+              log.warn('nats', `Failed to unsubscribe ${existing.sessionId} from ${subject}: ${(err as Error).message}`)
+            }
+          }
+          for (const subject of add) {
+            try {
+              await sendNatsSocketCommand(existing.sessionId, { action: 'subscribe', subject })
+            } catch (err) {
+              log.warn('nats', `Failed to subscribe ${existing.sessionId} to ${subject}: ${(err as Error).message}`)
+            }
+          }
+
+          // Update session file with new subscriptions
+          updateSession(sessDir, existing.sessionId, { nats: { ...session.nats, subscriptions: newSubs } })
+
+          // Update run's natsSubject (second subscription is direct channel)
+          patch.natsSubject = newSubs[1] ?? newSubs[0]
+          log.info('nats', `${existing.sessionId}: subscriptions updated for new task ${patch.taskId}`)
+        }
+      }
+
       ctx.docStore.upsertRun(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getRun(id) })
     })
@@ -1689,7 +1730,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, pattern: patternName } = JSON.parse(body)
+        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, pattern: patternName, hand: handName } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
@@ -1908,9 +1949,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             ?? (epicId ? ctx.docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
             ?? (initiativeId ? ctx.docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
 
-          // Resolve CLI template
-          const resolvedTemplate = cliTemplateName
-            ? cfg.cliTemplates.find(t => t.name === cliTemplateName) ?? null
+          // Resolve hand if specified
+          let resolvedHand: ReturnType<typeof getHandByName> = null
+          if (handName) {
+            resolvedHand = getHandByName(handName)
+            if (!resolvedHand) {
+              return json(res, { ok: false, error: { code: 'HAND_NOT_FOUND', message: `Hand '${handName}' not found` } }, 404)
+            }
+          }
+
+          // Resolve CLI template (hand's template as fallback if no explicit template)
+          const templateName = cliTemplateName ?? resolvedHand?.cliTemplate ?? null
+          const resolvedTemplate = templateName
+            ? cfg.cliTemplates.find(t => t.name === templateName) ?? null
             : null
 
           // Compute NATS subscriptions from entity hierarchy if not explicitly provided
@@ -1972,7 +2023,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const port = await tmuxBackend.findPort(cfg.ports.hostStart)
             if (prompt) enriched.initialPrompt = prompt
 
-            const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate })
+            const result = await tmuxBackend.createTmuxSession(cfg, {
+              session: enriched,
+              secrets: sec,
+              port,
+              template: resolvedTemplate,
+              appendSystemPrompt: resolvedHand?.prompt ?? null,
+            })
             sessionPort = result.port
             updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
             tmuxBackend.onTtydRestart(name, (newPid) => {
@@ -2633,6 +2690,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         cliTemplate: h.cliTemplate,
       }))
       return json(res, { ok: true, data })
+    }
+
+    // GET /api/hands/:name — get full hand definition including prompt
+    const handsMatch = url.match(/^\/api\/hands\/([^/]+)$/)
+    if (method === 'GET' && handsMatch) {
+      const handName = decodeURIComponent(handsMatch[1]!)
+      const hand = getHandByName(handName)
+      if (!hand) {
+        return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Hand '${handName}' not found` } }, 404)
+      }
+      return json(res, { ok: true, data: hand })
     }
 
     // GET /api/docker/profiles — configured image profiles (read from disk for freshness)

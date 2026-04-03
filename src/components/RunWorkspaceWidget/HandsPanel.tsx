@@ -46,7 +46,7 @@ export function HandsPanel({ sessionId, onCollapse }: Props) {
   }
 
   return (
-    <section className="flex flex-col bg-surface-panel border-t border-primary/10">
+    <section className="flex flex-col h-full bg-surface-panel border-t border-primary/10">
       <div className="panel-header" title="Spawn collaborator agents to help with this task. Click a hand to spawn it, or drag onto the canvas.">
         <h3 className="panel-label flex items-center gap-1.5">
           <span>🤚</span>
@@ -65,7 +65,7 @@ export function HandsPanel({ sessionId, onCollapse }: Props) {
         </div>
       </div>
 
-      <div data-scrollable className="flex-1 overflow-y-auto scrollbar-thin max-h-32">
+      <div data-scrollable className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
         {loading ? (
           <div className="px-2 py-3 text-2xs font-mono text-slate-600 text-center animate-pulse">
             Loading...

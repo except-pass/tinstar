@@ -296,15 +296,18 @@ export function initBackend(): RouteContext {
 }
 
 export function tinstarBackend(): Plugin {
+  let ctx: RouteContext | null = null
   return {
     name: 'tinstar-backend',
     configureServer(server) {
-      const ctx = initBackend()
+      ctx = initBackend()
       server.middlewares.use((req, res, next) => {
-        handleRequest(ctx, req, res)
+        handleRequest(ctx!, req, res)
           .then(handled => { if (!handled) next() })
           .catch(next)
       })
+      // Flush docStore on server close to persist any pending writes
+      server.httpServer?.on('close', () => ctx?.docStore.flush())
     },
   }
 }

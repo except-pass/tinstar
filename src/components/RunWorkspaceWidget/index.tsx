@@ -38,7 +38,9 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const [handsCollapsed, setHandsCollapsed] = useState(false)
   const [sessionTab, setSessionTab] = useState<'recap' | 'terminal'>(run.port ? 'terminal' : 'recap')
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
+  const [handsPanelHeight, setHandsPanelHeight] = useState(120)
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
+  const handsResizeDragRef = useRef<{ startY: number; startH: number } | null>(null)
   const [termTick, bumpTerm] = useReducer((n: number) => n + 1, 0)
   const [promptComposerExpanded, setPromptComposerExpanded] = useState(() =>
     localStorage.getItem('tinstar-prompt-composer-default') === 'true'
@@ -164,6 +166,21 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
 
   const onResizePointerUp = useCallback(() => { resizeDragRef.current = null }, [])
 
+  const onHandsResizePointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    handsResizeDragRef.current = { startY: e.clientY, startH: handsPanelHeight }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }, [handsPanelHeight])
+
+  const onHandsResizePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!handsResizeDragRef.current) return
+    // Dragging up increases height (startY - clientY is positive when moving up)
+    setHandsPanelHeight(Math.max(60, Math.min(400, handsResizeDragRef.current.startH + (handsResizeDragRef.current.startY - e.clientY))))
+  }, [])
+
+  const onHandsResizePointerUp = useCallback(() => { handsResizeDragRef.current = null }, [])
+
   const handleOpenFile = useCallback((filePath: string) => {
     fetch('/api/editor/open', {
       method: 'POST',
@@ -266,10 +283,20 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
             </div>
             {/* Hands panel at bottom - only show if NATS enabled */}
             {run.natsEnabled && !handsCollapsed && (
-              <HandsPanel
-                sessionId={run.sessionId}
-                onCollapse={() => setHandsCollapsed(true)}
-              />
+              <div className="relative flex-shrink-0" style={{ height: handsPanelHeight }}>
+                {/* Vertical resize handle */}
+                <div
+                  className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize transition-colors z-10 hover:bg-primary/30"
+                  style={{ backgroundColor: hexToRgba(runAccent, 0.18) }}
+                  onPointerDown={onHandsResizePointerDown}
+                  onPointerMove={onHandsResizePointerMove}
+                  onPointerUp={onHandsResizePointerUp}
+                />
+                <HandsPanel
+                  sessionId={run.sessionId}
+                  onCollapse={() => setHandsCollapsed(true)}
+                />
+              </div>
             )}
             {/* Collapsed hands indicator */}
             {run.natsEnabled && handsCollapsed && (

@@ -88,6 +88,7 @@ The CLI checks for dependencies (Claude Code, tmux, ttyd), offers to register yo
 - **Claude Code** — installed and authenticated (`claude auth login`)
 - **tmux** — session multiplexing (`brew install tmux` / `apt install tmux`)
 - **ttyd** — web terminal (`brew install ttyd` / [download binary](https://github.com/tsl0922/ttyd/releases))
+- **expect** — auto-accept prompts for multi-agent NATS sessions (`brew install expect` / `apt install expect`)
 - **Docker** (optional) — for isolated container sessions
 
 ## Ports

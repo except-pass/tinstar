@@ -169,9 +169,10 @@ export function startServer(opts: ServerOptions) {
     return false
   }
 
-  // Clean up port and pid files on shutdown
+  // Clean up on shutdown — flush docStore to persist any pending writes
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     process.on(sig, () => {
+      ctx.docStore.flush()
       removePortFile()
       removePidFile()
       process.exit(0)
