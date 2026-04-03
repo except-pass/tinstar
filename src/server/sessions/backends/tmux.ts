@@ -68,28 +68,6 @@ function bashSingleQuote(str: string): string {
 }
 
 /**
- * Poll tmux pane for the dev channels warning prompt.
- * Returns true if prompt detected, false on timeout.
- */
-async function waitForDevChannelPrompt(tmuxName: string, timeoutMs = 15000): Promise<boolean> {
-  const start = Date.now()
-  const pollInterval = 500
-
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const pane = execSync(`tmux capture-pane -t ${tmuxName} -p`, { encoding: 'utf-8' })
-      if (pane.includes('local development')) {
-        return true
-      }
-    } catch {
-      // tmux pane may not exist yet — keep polling
-    }
-    await new Promise(r => setTimeout(r, pollInterval))
-  }
-  return false
-}
-
-/**
  * Interpolate a CLI template string, replacing {sessionId} and {prompt} placeholders.
  * Unused placeholders are stripped so the command stays clean.
  */
@@ -150,6 +128,17 @@ export function generateNatsMcpConfig(opts: {
   return mcpConfigPath
 }
 
+/**
+ * Build inline auto-accept script for dev channels prompt.
+ * Runs inside the tmux session (not from server), monitoring for the prompt
+ * and sending Enter when detected. Backgrounded so it doesn't block claude startup.
+ */
+function buildDevChannelAutoAccept(): string {
+  // Poll up to 15s (30 iterations * 0.5s) for the prompt, then send Enter
+  // Uses tmux commands but they run INSIDE the session, not from the server
+  return `(for i in {1..30}; do sleep 0.5; tmux capture-pane -p 2>/dev/null | grep -q 'local development' && { sleep 0.2; tmux send-keys Enter; break; }; done) &`
+}
+
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
 export function buildAgentCommand(opts: {
   template?: CliTemplate | null
@@ -159,14 +148,23 @@ export function buildAgentCommand(opts: {
   initialPrompt?: string | null
   nats?: { enabled: boolean } | null
 }): string {
+  // Dev channel auto-accept: prepended when NATS enabled (runs inside session)
+  const autoAcceptPrefix = opts.nats?.enabled ? `${buildDevChannelAutoAccept()} ` : ''
+
   if (opts.template) {
     const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
-    return interpolateTemplate(tmpl, {
+    const cmd = interpolateTemplate(tmpl, {
       sessionId: opts.sessionId,
       prompt: opts.resume ? null : opts.initialPrompt,
     })
+    return autoAcceptPrefix + cmd
   }
   // Legacy fallback: build claude command from flags
+  const parts: string[] = []
+  if (autoAcceptPrefix) {
+    parts.push(autoAcceptPrefix.trim())
+  }
+
   let cmd = 'claude'
   if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
   if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
@@ -179,7 +177,8 @@ export function buildAgentCommand(opts: {
     // Use single quotes — they don't expand !, `, $, or anything else
     cmd += ` -- ${bashSingleQuote(opts.initialPrompt)}`
   }
-  return cmd
+  parts.push(cmd)
+  return parts.join(' ')
 }
 
 // --- Tmux operations ---
@@ -231,6 +230,7 @@ export async function createTmuxSession(
       bunPath: config.nats.bunPath,
     })
     natsOpts = { enabled: true }
+    log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured`)
   }
 
   const agentCmd = buildAgentCommand({
@@ -245,17 +245,8 @@ export async function createTmuxSession(
 
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
 
-  // Auto-accept the development channels warning if NATS is enabled
-  // Poll for the prompt text rather than using a fixed delay — handles variance in startup time
-  if (natsOpts?.enabled) {
-    const found = await waitForDevChannelPrompt(tmuxName, 15000)
-    if (found) {
-      log.info('tmux', `${opts.session.name}: dev channel prompt detected, auto-accepting`)
-      await execFileAsync('tmux', ['send-keys', '-t', tmuxName, 'Enter'])
-    } else {
-      log.warn('tmux', `${opts.session.name}: dev channel prompt not found after 15s — skipping auto-accept`)
-    }
-  }
+  // Dev channel auto-accept is now handled inline by buildDevChannelAutoAccept()
+  // which runs as a background job inside the session itself, not from the server
 
   // Start ttyd
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
