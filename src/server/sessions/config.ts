@@ -70,6 +70,13 @@ function deepMerge(target: Record<string, unknown>, source: Record<string, unkno
 
 const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
   {
+    name: 'Claude (multi-agent)',
+    icon: '⚡',
+    adapter: 'claude',
+    startCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --session-id {sessionId} -- {prompt}',
+    resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --resume {sessionId}',
+  },
+  {
     name: 'Claude (auto)',
     icon: '✦',
     adapter: 'claude',
@@ -82,13 +89,6 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     adapter: 'claude',
     startCmd: 'claude --session-id {sessionId} -- {prompt}',
     resumeCmd: 'claude --resume {sessionId}',
-  },
-  {
-    name: 'Claude (multi-agent)',
-    icon: '⚡',
-    adapter: 'claude',
-    startCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --session-id {sessionId} -- {prompt}',
-    resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --resume {sessionId}',
   },
   {
     name: 'Codex (full auto)',
