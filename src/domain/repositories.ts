@@ -83,29 +83,40 @@ export class TaxonomyRepository {
     return this.worktrees.find(w => w.id === id)
   }
 
-  /** Get the initiative for a run by traversing task → epic → initiative */
+  /** Get the initiative for a run by traversing task → epic → initiative, or direct lookup */
   getInitiativeForRun(run: Run): Initiative | undefined {
     const task = this.tasks.find(t => t.id === run.taskId)
-    if (!task) return undefined
-    if (task.initiativeId) {
-      const direct = this.initiatives.find(i => i.id === task.initiativeId)
-      if (direct) return direct
-    }
-    // Fall back to initiative via epic chain (task has epicId but no initiativeId)
-    if (task.epicId) {
-      const epic = this.epics.find(e => e.id === task.epicId)
-      if (epic?.initiativeId) {
-        return this.initiatives.find(i => i.id === epic.initiativeId)
+    if (task) {
+      if (task.initiativeId) {
+        const direct = this.initiatives.find(i => i.id === task.initiativeId)
+        if (direct) return direct
       }
+      // Fall back to initiative via epic chain (task has epicId but no initiativeId)
+      if (task.epicId) {
+        const epic = this.epics.find(e => e.id === task.epicId)
+        if (epic?.initiativeId) {
+          return this.initiatives.find(i => i.id === epic.initiativeId)
+        }
+      }
+    }
+    // No task — check run's direct initiative field (for epic-level runs)
+    if (run.initiative) {
+      return this.initiatives.find(i => i.id === run.initiative || i.name === run.initiative)
     }
     return undefined
   }
 
-  /** Get the epic for a run by traversing task → epic */
+  /** Get the epic for a run by traversing task → epic, or direct lookup */
   getEpicForRun(run: Run): Epic | undefined {
     const task = this.tasks.find(t => t.id === run.taskId)
-    if (!task) return undefined
-    return this.epics.find(e => e.id === task.epicId)
+    if (task) {
+      return this.epics.find(e => e.id === task.epicId)
+    }
+    // No task — check run's direct epic field (for epic-level runs)
+    if (run.epic) {
+      return this.epics.find(e => e.id === run.epic || e.name === run.epic)
+    }
+    return undefined
   }
 
   /** Get the task for a run */
