@@ -2320,10 +2320,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!parentSession) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Session '${parentName}' not found` } }, 404)
 
       const body = await readBody(req)
-      const { hand: handName, prompt: promptOverride, orchestrator } = JSON.parse(body) as {
+      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride } = JSON.parse(body) as {
         hand: string
         prompt?: string
         orchestrator?: boolean
+        repo?: string          // Override parent's project/repo
+        worktreePath?: string  // Override parent's worktree path
       }
 
       if (!handName) {
@@ -2348,8 +2350,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const parentRun = ctx.docStore.getAllRuns().find(r => r.sessionId === parentName)
       const taskId = parentRun?.taskId
 
-      // Inherit workspace from parent session
-      const workspace = parentSession.workspace
+      // Inherit workspace from parent session, unless overridden
+      const workspace = worktreePathOverride
+        ? { path: worktreePathOverride, worktree: true, branch: null, basePath: null }
+        : parentSession.workspace
 
       // Build NATS subscriptions for the spawned session
       // Inherit NATS from parent regardless of taskId — use whatever hierarchy is available
@@ -2369,11 +2373,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // Resolve CLI template from hand definition
       const cliTemplate = hand.cliTemplate
 
+      // Resolve effective repo (override or inherit)
+      const effectiveRepo = repoOverride ?? parentSession.project
+
       // Create the spawned session
       const spawnedSession = createSession(sessDir, {
         name: spawnedName,
         backend: parentSession.backend,
-        project: parentSession.project,
+        project: effectiveRepo,
         workspace: {
           path: workspace?.path ?? null,
           worktree: workspace?.worktree ?? false,
@@ -2430,7 +2437,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           ? buildNatsSubject(spawnedName, ctx.docStore, taskId, parentRun?.epic || undefined, parentRun?.initiative || undefined)
           : undefined
 
-        // Create a run entity linked to the same task and worktree as the parent
+        // Create a run entity linked to the same task and worktree as the parent (unless overridden)
         const runId = spawnedName
         ctx.docStore.upsertRun(runId, {
           id: runId,
@@ -2440,8 +2447,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           initiative: parentRun?.initiative ?? '',
           epic: parentRun?.epic ?? '',
           task: taskId ?? '',
-          repo: parentSession.project ?? '',
-          worktree: parentRun?.worktree ?? '',
+          repo: effectiveRepo ?? '',
+          worktree: worktreePathOverride ?? parentRun?.worktree ?? '',
           touchedFiles: [],
           recapEntries: [],
           rawLogs: '',
@@ -2453,7 +2460,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           natsEnabled: natsConfig?.enabled ?? false,
           natsSubject,
           taskId: taskId ?? '',
-          worktreeId: parentRun?.worktreeId ?? '',
+          worktreeId: worktreePathOverride ? '' : (parentRun?.worktreeId ?? ''),  // Clear if using custom worktree
           createdAt: new Date().toISOString(),
           spaceId: ctx.docStore.activeSpaceId,
           parentId: parentRun?.id,  // Track who spawned this hand
