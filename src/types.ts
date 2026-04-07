@@ -85,6 +85,7 @@ export interface RunData {
   agentIcon?: string
   natsEnabled?: boolean
   natsSubject?: string
+  parentId?: string  // ID of the run that spawned this one (for hands)
 }
 
 

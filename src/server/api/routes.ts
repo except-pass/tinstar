@@ -2456,6 +2456,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           worktreeId: parentRun?.worktreeId ?? '',
           createdAt: new Date().toISOString(),
           spaceId: ctx.docStore.activeSpaceId,
+          parentId: parentRun?.id,  // Track who spawned this hand
         })
 
         return json(res, {
