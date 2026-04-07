@@ -2408,7 +2408,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         } else {
           const port = await tmuxBackend.findPort(cfg.ports.hostStart)
           if (fullPrompt) enriched.initialPrompt = fullPrompt
-          const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate })
+
+          // Build hand system prompt with parent's NATS subject for intro
+          const parentNatsSubject = parentRun?.natsSubject || buildNatsSubject(parentName, ctx.docStore, taskId, parentRun?.epic || undefined, parentRun?.initiative || undefined)
+          const handSystemPrompt = hand.prompt
+            ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**. Their NATS subject is: \`${parentNatsSubject}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${parentNatsSubject}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
+            : null
+
+          const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, appendSystemPrompt: handSystemPrompt })
           sessionPort = result.port
           updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
           tmuxBackend.onTtydRestart(spawnedName, (newPid) => {
@@ -2423,18 +2430,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           ? buildNatsSubject(spawnedName, ctx.docStore, taskId, parentRun?.epic || undefined, parentRun?.initiative || undefined)
           : undefined
 
-        // Create a run entity linked to the same task as the parent
+        // Create a run entity linked to the same task and worktree as the parent
         const runId = spawnedName
         ctx.docStore.upsertRun(runId, {
           id: runId,
           color: parentRun?.color,
           status: 'running',
           sessionId: spawnedName,
-          initiative: '',
-          epic: '',
+          initiative: parentRun?.initiative ?? '',
+          epic: parentRun?.epic ?? '',
           task: taskId ?? '',
           repo: parentSession.project ?? '',
-          worktree: '',
+          worktree: parentRun?.worktree ?? '',
           touchedFiles: [],
           recapEntries: [],
           rawLogs: '',
@@ -2446,7 +2453,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           natsEnabled: natsConfig?.enabled ?? false,
           natsSubject,
           taskId: taskId ?? '',
-          worktreeId: '',
+          worktreeId: parentRun?.worktreeId ?? '',
           createdAt: new Date().toISOString(),
           spaceId: ctx.docStore.activeSpaceId,
         })

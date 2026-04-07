@@ -26,6 +26,48 @@ export async function tmuxHasSession(tmuxName: string): Promise<boolean> {
   }
 }
 
+/**
+ * Poll tmux pane for dev channel warning and auto-accept it.
+ * More robust than fixed timeout - waits for the actual prompt to appear.
+ * Polls every 500ms for up to 10 seconds.
+ */
+async function autoAcceptDevChannelWarning(tmuxName: string): Promise<void> {
+  const maxAttempts = 20 // 10 seconds at 500ms intervals
+  const interval = 500
+
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise((resolve) => setTimeout(resolve, interval))
+
+    try {
+      // Check if session still exists
+      await execFileAsync('tmux', ['has-session', '-t', tmuxName])
+
+      // Capture pane content
+      const { stdout } = await execFileAsync('tmux', ['capture-pane', '-t', tmuxName, '-p'])
+
+      // Look for the dev channel warning prompt
+      if (stdout.includes('Enter to confirm')) {
+        // Send Enter to accept
+        await execFileAsync('tmux', ['send-keys', '-t', tmuxName, 'Enter'])
+        log.info('tmux', `${tmuxName}: auto-accepted dev channel warning`)
+        return
+      }
+
+      // Check if Claude has already started (prompt appeared without warning)
+      // The "❯" prompt or "Claude Code" banner indicates we're past the warning
+      if (stdout.includes('Claude Code') && !stdout.includes('WARNING:')) {
+        log.info('tmux', `${tmuxName}: Claude started without dev channel warning`)
+        return
+      }
+    } catch {
+      // Session gone or capture failed, stop polling
+      return
+    }
+  }
+
+  log.info('tmux', `${tmuxName}: dev channel warning not detected within timeout`)
+}
+
 // --- Port management ---
 
 const claimedPorts = new Set<number>()
@@ -128,19 +170,6 @@ export function generateNatsMcpConfig(opts: {
   return mcpConfigPath
 }
 
-/**
- * Wrap a command with expect to auto-accept the dev channels warning.
- * Waits for the "Enter to confirm" prompt and sends Enter, then hands off to interactive.
- */
-function wrapWithDevChannelAutoAccept(cmd: string): string {
-  // Escape the command for embedding in expect's spawn sh -c "..."
-  // Double quotes and backslashes need escaping
-  const escaped = cmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-  // Expect script: spawn via sh -c to handle complex commands, wait for prompt, send Enter, interact
-  const expectScript = `set timeout 30; spawn -noecho sh -c "${escaped}"; expect { "Enter to confirm" { send "\\r"; interact } timeout { interact } eof { exit } }`
-  return `expect -c '${expectScript}'`
-}
-
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
 export function buildAgentCommand(opts: {
   template?: CliTemplate | null
@@ -189,10 +218,6 @@ export function buildAgentCommand(opts: {
     }
   }
 
-  // Wrap with expect to auto-accept dev channels warning when NATS enabled
-  if (opts.nats?.enabled) {
-    return wrapWithDevChannelAutoAccept(cmd)
-  }
   return cmd
 }
 
@@ -262,8 +287,13 @@ export async function createTmuxSession(
 
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
 
-  // Dev channel auto-accept is now handled inline by buildDevChannelAutoAccept()
-  // which runs as a background job inside the session itself, not from the server
+  // Auto-accept dev channel warning by polling for the prompt and sending Enter
+  // More robust than fixed timeout - waits for actual prompt to appear
+  if (natsOpts?.enabled) {
+    autoAcceptDevChannelWarning(tmuxName).catch(() => {
+      // Session may have been killed or prompt not shown, ignore
+    })
+  }
 
   // Start ttyd
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
