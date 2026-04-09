@@ -45,6 +45,7 @@ import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
 import { computeNatsSubscriptions, diffSubscriptions } from '../sessions/nats-subscriptions'
+import { natsControlSocketPath } from '../sessions/backends/tmux'
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
 function buildNatsSubject(
@@ -103,11 +104,12 @@ import { discoverHands, getHandByName } from '../hands'
 
 /**
  * Send a command to the channel server's Unix socket for hot subscription management.
- * The socket path is /tmp/tinstar-nats-<sessionName>.sock
+ * Path is defined by natsControlSocketPath() and wired up on the channel-server side
+ * by the --control-socket arg set in generateNatsMcpConfig (backends/tmux.ts).
  */
 function sendNatsSocketCommand(sessionName: string, cmd: { action: 'subscribe' | 'unsubscribe'; subject: string }): Promise<void> {
   return new Promise((resolve, reject) => {
-    const socketPath = `/tmp/tinstar-nats-${sessionName}.sock`
+    const socketPath = natsControlSocketPath(sessionName)
     const socket = createConnection(socketPath)
     const timeout = setTimeout(() => {
       socket.destroy()

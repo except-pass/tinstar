@@ -11,6 +11,21 @@ import { log } from '../../logger'
 
 const execFileAsync = promisify(execFile)
 
+// --- NATS control socket ---
+
+/**
+ * Path to the channel server's Unix control socket for hot subscription
+ * management. Tinstar's API handlers (see sendNatsSocketCommand in routes.ts)
+ * write newline-delimited JSON commands to this path to add/remove
+ * subscriptions on a live session without restarting it.
+ *
+ * Must match the --control-socket arg passed to nats-channel-mcp in
+ * generateNatsMcpConfig below. Exported so both sides use the same source.
+ */
+export function natsControlSocketPath(sessionName: string): string {
+  return `/tmp/tinstar-nats-${sessionName}.sock`
+}
+
 // --- Naming ---
 
 export function tmuxSessionName(config: TinstarConfig, sessionName: string): string {
@@ -156,6 +171,10 @@ export function generateNatsMcpConfig(opts: {
   for (const subject of opts.nats.subscriptions) {
     args.push('--subscribe', subject)
   }
+  // --control-socket wires up the hot subscription management path used by
+  // POST/DELETE /api/sessions/:name/subscriptions. Requires nats-channel-mcp
+  // >= the commit that introduced the flag (except-pass/nats-channel-mcp#1).
+  args.push('--control-socket', natsControlSocketPath(opts.sessionName))
 
   const mcpConfig = {
     mcpServers: {
