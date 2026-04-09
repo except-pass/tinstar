@@ -130,6 +130,63 @@ function sendNatsSocketCommand(sessionName: string, cmd: { action: 'subscribe' |
   })
 }
 
+/**
+ * A structured description of why a NATS control-socket command failed.
+ * Returned to API callers so they can surface the failure instead of us
+ * silently eating it. Code NATS_SOCKET_MISSING means the channel server
+ * isn't reachable (typically: session stopped) — persisted state is still
+ * valid and will apply on next startup. Code NATS_SOCKET_ERROR means the
+ * socket exists but the command failed — this is unexpected.
+ */
+interface NatsSocketWarning {
+  code: 'NATS_SOCKET_MISSING' | 'NATS_SOCKET_ERROR'
+  message: string
+  action: 'subscribe' | 'unsubscribe'
+  subject: string
+}
+
+function classifyNatsSocketError(
+  err: unknown,
+  action: 'subscribe' | 'unsubscribe',
+  subject: string,
+): NatsSocketWarning {
+  const e = err as NodeJS.ErrnoException
+  const missing = e?.code === 'ENOENT' || e?.code === 'ECONNREFUSED'
+  return {
+    code: missing ? 'NATS_SOCKET_MISSING' : 'NATS_SOCKET_ERROR',
+    message: e?.message ?? String(err),
+    action,
+    subject,
+  }
+}
+
+/**
+ * Attempt a control-socket command and return a structured warning on
+ * failure instead of throwing. ENOENT / ECONNREFUSED are logged at `warn`
+ * (expected when the session isn't running); anything else is logged at
+ * `error` (unexpected — channel server died or went unresponsive with the
+ * socket still on disk).
+ */
+async function trySendNatsSocketCommand(
+  sessionName: string,
+  cmd: { action: 'subscribe' | 'unsubscribe'; subject: string },
+): Promise<NatsSocketWarning | null> {
+  try {
+    await sendNatsSocketCommand(sessionName, cmd)
+    return null
+  } catch (err) {
+    const warning = classifyNatsSocketError(err, cmd.action, cmd.subject)
+    const logFn = warning.code === 'NATS_SOCKET_MISSING' ? log.warn : log.error
+    logFn('nats', `control-socket ${cmd.action} failed for ${sessionName} (${cmd.subject}): ${warning.message}`, {
+      sessionName,
+      action: cmd.action,
+      subject: cmd.subject,
+      code: warning.code,
+    })
+    return warning
+  }
+}
+
 // ─── Multiplexed file watcher ──────────────────────────────────────────
 // Tracks fs.watch instances keyed by absolute path. Multiple subscribers
 // (image widgets, file editors) share a single watcher per file. Updates
@@ -1521,20 +1578,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
           const { add, remove } = diffSubscriptions(oldSubs, newSubs)
 
-          // Send socket commands to update channel server
+          // Send socket commands to update channel server. Persisted state is
+          // the source of truth: we always update the session file below so the
+          // new subscriptions apply on next startup. Any socket failures are
+          // collected into natsWarnings and returned to the caller so the UI
+          // can surface that the hot-apply did not land.
+          const natsWarnings: NatsSocketWarning[] = []
           for (const subject of remove) {
-            try {
-              await sendNatsSocketCommand(existing.sessionId, { action: 'unsubscribe', subject })
-            } catch (err) {
-              log.warn('nats', `Failed to unsubscribe ${existing.sessionId} from ${subject}: ${(err as Error).message}`)
-            }
+            const w = await trySendNatsSocketCommand(existing.sessionId, { action: 'unsubscribe', subject })
+            if (w) natsWarnings.push(w)
           }
           for (const subject of add) {
-            try {
-              await sendNatsSocketCommand(existing.sessionId, { action: 'subscribe', subject })
-            } catch (err) {
-              log.warn('nats', `Failed to subscribe ${existing.sessionId} to ${subject}: ${(err as Error).message}`)
-            }
+            const w = await trySendNatsSocketCommand(existing.sessionId, { action: 'subscribe', subject })
+            if (w) natsWarnings.push(w)
           }
 
           // Update session file with new subscriptions
@@ -1543,6 +1599,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // Update run's natsSubject (second subscription is direct channel)
           patch.natsSubject = newSubs[1] ?? newSubs[0]
           log.info('nats', `${existing.sessionId}: subscriptions updated for new task ${patch.taskId}`)
+
+          if (natsWarnings.length > 0) {
+            ctx.docStore.upsertRun(id, { ...existing, ...patch })
+            return json(res, { ok: true, data: ctx.docStore.getRun(id), warnings: { nats: natsWarnings } })
+          }
         }
       }
 
@@ -2566,18 +2627,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
           // Add to subscriptions if not already present
           const subs = session.nats.subscriptions
+          let natsWarning: NatsSocketWarning | null = null
           if (!subs.includes(subject)) {
             subs.push(subject)
             updateSession(sessDir, name, { nats: { ...session.nats, subscriptions: subs } })
 
-            // Send to channel server via Unix socket
-            try {
-              await sendNatsSocketCommand(name, { action: 'subscribe', subject })
-            } catch (err) {
-              log.warn('nats', `Failed to send subscribe to socket for ${name}: ${(err as Error).message}`)
-            }
+            // Send to channel server via Unix socket. Persisted state is
+            // the source of truth (already written above); if the socket
+            // hot-apply fails we surface it in the response instead of
+            // silently logging so callers can show the error.
+            natsWarning = await trySendNatsSocketCommand(name, { action: 'subscribe', subject })
           }
-          json(res, { ok: true, data: { subscriptions: subs } })
+          json(res, {
+            ok: true,
+            data: { subscriptions: subs },
+            ...(natsWarning ? { warnings: { nats: [natsWarning] } } : {}),
+          })
         }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
         return true
       }
@@ -2600,13 +2665,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const subs = session.nats.subscriptions.filter(s => s !== subject)
           updateSession(sessDir, name, { nats: { ...session.nats, subscriptions: subs } })
 
-          // Send to channel server via Unix socket
-          try {
-            await sendNatsSocketCommand(name, { action: 'unsubscribe', subject })
-          } catch (err) {
-            log.warn('nats', `Failed to send unsubscribe to socket for ${name}: ${(err as Error).message}`)
-          }
-          json(res, { ok: true, data: { subscriptions: subs } })
+          // Send to channel server via Unix socket. See POST sibling for
+          // the rationale on surfacing warnings instead of swallowing them.
+          const natsWarning = await trySendNatsSocketCommand(name, { action: 'unsubscribe', subject })
+          json(res, {
+            ok: true,
+            data: { subscriptions: subs },
+            ...(natsWarning ? { warnings: { nats: [natsWarning] } } : {}),
+          })
         }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
         return true
       }
