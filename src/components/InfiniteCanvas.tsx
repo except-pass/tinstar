@@ -246,12 +246,17 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
 
   // --- Pointer handlers: pan OR marquee ---
+  const panPointerIdRef = useRef<number | null>(null)
+
   const onPointerDown = useCallback(
     (e: ReactPointerEvent) => {
       if (spaceHeld.current || e.button === 1) {
         // Space held or middle-click = pan
         e.preventDefault()
         startPan(e.nativeEvent)
+        // Capture pointer so events aren't swallowed by iframes during pan
+        panPointerIdRef.current = e.pointerId
+        containerRef.current?.setPointerCapture(e.pointerId)
         return
       }
       // Start marquee on left-click on empty canvas
@@ -290,6 +295,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     (_e: ReactPointerEvent) => {
       // Always end pan (handles both space+drag and middle-click pan)
       endPan()
+      // Release pointer capture from pan
+      if (panPointerIdRef.current !== null) {
+        try { containerRef.current?.releasePointerCapture(panPointerIdRef.current) } catch { /* already released */ }
+        panPointerIdRef.current = null
+      }
       const wasCanvasPointerDown = canvasPointerDownRef.current
       canvasPointerDownRef.current = false
       if (spaceHeld.current) {
@@ -342,7 +352,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   )
 
   const onPointerLeave = useCallback(() => {
-    endPan()
+    // Don't kill pan if we hold pointer capture (cursor crossing iframes)
+    if (panPointerIdRef.current === null) {
+      endPan()
+    }
     marqueeRef.current = { startX: 0, startY: 0, active: false }
     setMarquee(null)
   }, [endPan])
@@ -981,6 +994,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerLeave={onPointerLeave}
+      onMouseDown={(e) => { if (e.button === 1) e.preventDefault() }}
       onDragOver={(e) => { e.preventDefault() }}
       onDrop={handleDrop}
       onDragEnter={(e) => {

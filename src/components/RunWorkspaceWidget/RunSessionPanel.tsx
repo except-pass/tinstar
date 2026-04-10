@@ -120,7 +120,7 @@ function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus }:
     <div
       className="flex-1 relative overflow-hidden"
       style={focused ? { outline: `2px solid ${accent}`, outlineOffset: '-2px', boxShadow: `inset 0 0 12px ${hexToRgba(accent, 0.15)}` } : undefined}
-      onPointerDown={e => { e.stopPropagation(); onPointerFocus?.() }}
+      onPointerDown={e => { if (e.button === 0) { e.stopPropagation(); onPointerFocus?.() } }}
     >
       <div
         style={needsScale ? {

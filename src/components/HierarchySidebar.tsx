@@ -11,6 +11,7 @@ import { useHotkeyContext } from '../hotkeys/FocusPathContext'
 import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 import { BindingRow, GLOBAL_KEYS, CANVAS_KEYS, QUICKDRAW_KEYS } from './HotkeyBindingRow'
+import { AgentIcon, isIconUrl } from './agentIcon'
 
 const LS_HOTKEYS_HEIGHT = 'tinstar-sidebar-hotkeys-height'
 const DEFAULT_HOTKEYS_HEIGHT = 200
@@ -260,9 +261,11 @@ function SidebarNode({
         )}
 
         {/* Icon */}
-        <span className="w-4 text-center" aria-hidden="true">
+        <span className="w-4 h-4 flex items-center justify-center flex-shrink-0" aria-hidden="true">
           {node.type === 'run'
-            ? (node.agentIcon ?? (node.backend === 'docker' ? '🐳' : '▶'))
+            ? (isIconUrl(node.agentIcon)
+                ? <AgentIcon icon={node.agentIcon} />
+                : (node.agentIcon ?? (node.backend === 'docker' ? '🐳' : '▶')))
             : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
         </span>
 

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useDimensionMeta, autoPlural } from '../hooks/useDimensionMeta'
 import { useBackendState } from '../hooks/useBackendState'
 import type { LevelLabel } from '../domain/types'
+import { AgentIcon, isIconUrl } from './agentIcon'
 
 interface Project {
   name: string
@@ -18,6 +19,7 @@ interface CliTemplate {
   name: string
   icon?: string
   adapter?: string
+  telemetry?: boolean
   startCmd: string
   resumeCmd: string
 }
@@ -66,6 +68,7 @@ export function SettingsDialog({ onClose }: Props) {
   const [newTplAdapter, setNewTplAdapter] = useState('generic')
   const [newTplStart, setNewTplStart] = useState('')
   const [newTplResume, setNewTplResume] = useState('')
+  const [newTplTelemetry, setNewTplTelemetry] = useState(true)
   const [templateError, setTemplateError] = useState<string | null>(null)
   const [editingTemplate, setEditingTemplate] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<CliTemplate | null>(null)
@@ -169,7 +172,7 @@ export function SettingsDialog({ onClose }: Props) {
     const res = await fetch('/api/cli-templates', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: trimName, icon: newTplIcon.trim() || undefined, adapter: newTplAdapter, startCmd: trimStart, resumeCmd: trimResume }),
+      body: JSON.stringify({ name: trimName, icon: newTplIcon.trim() || undefined, adapter: newTplAdapter, telemetry: newTplTelemetry, startCmd: trimStart, resumeCmd: trimResume }),
     })
     const data = await res.json()
     if (!data.ok) {
@@ -179,6 +182,7 @@ export function SettingsDialog({ onClose }: Props) {
     setNewTplName('')
     setNewTplIcon('')
     setNewTplAdapter('generic')
+    setNewTplTelemetry(true)
     setNewTplStart('')
     setNewTplResume('')
     fetchTemplates()
@@ -434,15 +438,20 @@ export function SettingsDialog({ onClose }: Props) {
                           className="w-full px-2 py-1.5 bg-surface-panel border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
                         />
                       </div>
-                      <div className="w-14">
-                        <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Icon</label>
-                        <input
-                          type="text"
-                          value={editDraft.icon ?? ''}
-                          onChange={e => setEditDraft({ ...editDraft, icon: e.target.value })}
-                          maxLength={2}
-                          className="w-full px-2 py-1.5 bg-surface-panel border border-white/10 rounded text-sm text-center text-slate-200 focus:border-primary/50 focus:outline-none"
-                        />
+                      <div className="flex-1">
+                        <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Icon <span className="text-slate-600 normal-case tracking-normal">(emoji or /path/to.svg)</span></label>
+                        <div className="flex items-center gap-1.5">
+                          <span className="flex items-center justify-center w-7 h-7 bg-surface-panel border border-white/10 rounded flex-shrink-0">
+                            <AgentIcon icon={editDraft.icon} className="w-4 h-4" />
+                          </span>
+                          <input
+                            type="text"
+                            value={editDraft.icon ?? ''}
+                            onChange={e => setEditDraft({ ...editDraft, icon: e.target.value })}
+                            placeholder="▶ or /agent-icons/foo.svg"
+                            className="flex-1 min-w-0 px-2 py-1.5 bg-surface-panel border border-white/10 rounded text-xs text-slate-200 placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
+                          />
+                        </div>
                       </div>
                       <div className="w-24">
                         <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Adapter</label>
@@ -457,6 +466,16 @@ export function SettingsDialog({ onClose }: Props) {
                         </select>
                       </div>
                     </div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editDraft.telemetry !== false}
+                        onChange={e => setEditDraft({ ...editDraft, telemetry: e.target.checked })}
+                        className="accent-primary w-3.5 h-3.5"
+                      />
+                      <span className="text-xs text-slate-300">Enable telemetry</span>
+                      <span className="text-2xs text-slate-600">(OTLP metrics export)</span>
+                    </label>
                     <div>
                       <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Start command</label>
                       <input
@@ -497,12 +516,19 @@ export function SettingsDialog({ onClose }: Props) {
                     onClick={() => handleEditTemplate(t)}
                   >
                     <div className="flex items-center gap-2">
-                      {t.icon && <span className="text-sm flex-shrink-0">{t.icon}</span>}
+                      {t.icon && (
+                        <span className="text-sm flex-shrink-0 inline-flex items-center justify-center w-4 h-4">
+                          <AgentIcon icon={t.icon} />
+                        </span>
+                      )}
                       <span className="text-xs text-primary font-display uppercase tracking-wider flex-shrink-0">
                         {t.name}
                       </span>
                       {t.adapter && (
                         <span className="text-2xs text-slate-600 font-mono">{t.adapter}</span>
+                      )}
+                      {t.telemetry !== false && (
+                        <span className="text-2xs text-emerald-600" title="OTLP telemetry enabled">telem</span>
                       )}
                       <span className="flex-1" />
                       <button
@@ -543,16 +569,20 @@ export function SettingsDialog({ onClose }: Props) {
                     className="w-full px-2 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
                   />
                 </div>
-                <div className="w-14">
-                  <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Icon</label>
-                  <input
-                    type="text"
-                    value={newTplIcon}
-                    onChange={e => setNewTplIcon(e.target.value)}
-                    maxLength={2}
-                    placeholder="▶"
-                    className="w-full px-2 py-1.5 bg-surface-base border border-white/10 rounded text-sm text-center text-slate-200 placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
-                  />
+                <div className="flex-1">
+                  <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Icon <span className="text-slate-600 normal-case tracking-normal">(emoji or /path/to.svg)</span></label>
+                  <div className="flex items-center gap-1.5">
+                    <span className="flex items-center justify-center w-7 h-7 bg-surface-base border border-white/10 rounded flex-shrink-0">
+                      <AgentIcon icon={newTplIcon} className="w-4 h-4" />
+                    </span>
+                    <input
+                      type="text"
+                      value={newTplIcon}
+                      onChange={e => setNewTplIcon(e.target.value)}
+                      placeholder="▶ or /agent-icons/foo.svg"
+                      className="flex-1 min-w-0 px-2 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
+                    />
+                  </div>
                 </div>
                 <div className="w-24">
                   <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Adapter</label>
@@ -567,6 +597,16 @@ export function SettingsDialog({ onClose }: Props) {
                   </select>
                 </div>
               </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newTplTelemetry}
+                  onChange={e => setNewTplTelemetry(e.target.checked)}
+                  className="accent-primary w-3.5 h-3.5"
+                />
+                <span className="text-xs text-slate-300">Enable telemetry</span>
+                <span className="text-2xs text-slate-600">(OTLP metrics export)</span>
+              </label>
               <div>
                 <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Start command</label>
                 <input

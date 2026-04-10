@@ -152,7 +152,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
 
       {/* Right: actions + meta */}
       {!compact && (
-        <div className="flex items-stretch shrink-0 ml-2 h-full" onPointerDown={e => e.stopPropagation()}>
+        <div className="flex items-stretch shrink-0 ml-2 h-full" onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>
 
           {/* Hotgroup badge */}
           <div className="flex items-center px-2">

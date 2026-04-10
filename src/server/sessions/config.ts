@@ -16,6 +16,7 @@ export interface CliTemplate {
   name: string
   icon?: string
   adapter?: AdapterType
+  telemetry?: boolean
   startCmd: string
   resumeCmd: string
 }
@@ -71,35 +72,35 @@ function deepMerge(target: Record<string, unknown>, source: Record<string, unkno
 const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
   {
     name: 'Claude (multi-agent)',
-    icon: '⚡',
+    icon: '/agent-icons/claude.svg',
     adapter: 'claude',
     startCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --session-id {sessionId} -- {prompt}',
     resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --resume {sessionId}',
   },
   {
     name: 'Claude (auto)',
-    icon: '✦',
+    icon: '/agent-icons/claude.svg',
     adapter: 'claude',
     startCmd: 'claude --dangerously-skip-permissions --session-id {sessionId} -- {prompt}',
     resumeCmd: 'claude --dangerously-skip-permissions --resume {sessionId}',
   },
   {
     name: 'Claude (interactive)',
-    icon: '✦',
+    icon: '/agent-icons/claude.svg',
     adapter: 'claude',
     startCmd: 'claude --session-id {sessionId} -- {prompt}',
     resumeCmd: 'claude --resume {sessionId}',
   },
   {
     name: 'Codex (full auto)',
-    icon: '◎',
+    icon: '/agent-icons/openai.svg',
     adapter: 'codex',
     startCmd: 'codex --full-auto -- {prompt}',
     resumeCmd: 'codex resume --last --full-auto',
   },
   {
     name: 'Cursor Agent',
-    icon: '◆',
+    icon: '/agent-icons/cursor.svg',
     adapter: 'generic',
     startCmd: 'agent --yolo -- {prompt}',
     resumeCmd: 'agent resume',

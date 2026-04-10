@@ -275,6 +275,21 @@ export async function createTmuxSession(
     }
   }
 
+  // Inject OTLP telemetry env vars when telemetry is enabled on the CLI template
+  if (opts.template?.telemetry !== false) {
+    const otelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318'
+    const telemetryVars: Record<string, string> = {
+      CLAUDE_CODE_ENABLE_TELEMETRY: '1',
+      OTEL_METRICS_EXPORTER: 'otlp',
+      OTEL_LOGS_EXPORTER: 'otlp',
+      OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
+      OTEL_EXPORTER_OTLP_ENDPOINT: otelEndpoint,
+    }
+    for (const [key, value] of Object.entries(telemetryVars)) {
+      await execFileAsync('tmux', ['set-environment', '-t', tmuxName, key, value])
+    }
+  }
+
   // Build and send agent command
   const parts = ['eval "$(tmux show-environment -s)"']
 

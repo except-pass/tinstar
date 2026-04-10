@@ -2699,19 +2699,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/cli-templates — add or update a CLI template
     if (method === 'POST' && url === '/api/cli-templates') {
       readBody(req).then((body) => {
-        const { name, icon, adapter, startCmd, resumeCmd } = JSON.parse(body)
+        const { name, icon, adapter, telemetry, startCmd, resumeCmd } = JSON.parse(body)
         if (!name || !startCmd || !resumeCmd) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name, startCmd, and resumeCmd are required' } }, 400)
 
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
-        const templates: Array<{ name: string; icon?: string; adapter?: string; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
-        const entry = { name, startCmd, resumeCmd, ...(icon ? { icon } : {}), ...(adapter ? { adapter } : {}) }
+        const templates: Array<{ name: string; icon?: string; adapter?: string; telemetry?: boolean; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+        const entry = { name, startCmd, resumeCmd, ...(icon ? { icon } : {}), ...(adapter ? { adapter } : {}), ...(telemetry === false ? { telemetry: false } : {}) }
         const idx = templates.findIndex(t => t.name === name)
         if (idx >= 0) templates[idx] = entry
         else templates.push(entry)
         data.cliTemplates = templates
         writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
-        json(res, { ok: true, data: { name, startCmd, resumeCmd } })
+        json(res, { ok: true, data: entry })
       }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
       return true
     }
@@ -2720,7 +2720,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'PUT' && url.startsWith('/api/cli-templates/')) {
       const oldName = decodeURIComponent(url.slice('/api/cli-templates/'.length))
       readBody(req).then((body) => {
-        const { name, icon, adapter, startCmd, resumeCmd } = JSON.parse(body)
+        const { name, icon, adapter, telemetry, startCmd, resumeCmd } = JSON.parse(body)
         if (!name || !startCmd || !resumeCmd) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name, startCmd, and resumeCmd are required' } }, 400)
 
         // Check if template exists in merged config (includes defaults)
@@ -2729,8 +2729,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
-        const templates: Array<{ name: string; icon?: string; adapter?: string; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
-        const entry = { name, startCmd, resumeCmd, ...(icon ? { icon } : {}), ...(adapter ? { adapter } : {}) }
+        const templates: Array<{ name: string; icon?: string; adapter?: string; telemetry?: boolean; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+        const entry = { name, startCmd, resumeCmd, ...(icon ? { icon } : {}), ...(adapter ? { adapter } : {}), ...(telemetry === false ? { telemetry: false } : {}) }
         const idx = templates.findIndex(t => t.name === oldName)
         if (idx >= 0) {
           templates[idx] = entry

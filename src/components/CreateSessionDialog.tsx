@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { DEFAULT_RUN_ACCENT } from './runAccent'
 import { ColorPalette } from './ColorPalette'
+import { isIconUrl } from './agentIcon'
 
 export interface SessionPrefill {
   project?: string
@@ -328,7 +329,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
                 <optgroup label="🖥 CLI">
                   {cliTemplates.map(t => (
                     <option key={`tmux:${t.name}`} value={`tmux:${t.name}`}>
-                      {t.icon ? `${t.icon} ` : ''}{t.name}
+                      {t.icon && !isIconUrl(t.icon) ? `${t.icon} ` : ''}{t.name}
                     </option>
                   ))}
                 </optgroup>
