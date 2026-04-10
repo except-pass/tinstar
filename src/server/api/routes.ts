@@ -447,6 +447,7 @@ async function createSessionInternal(
     agentIcon: resolvedTemplate?.icon ?? undefined,
     natsEnabled: resolvedNats?.enabled ?? false,
     natsSubject,
+    natsSubscriptions: resolvedNats?.enabled ? resolvedNats.subscriptions : undefined,
     taskId: taskId ?? '',
     worktreeId: worktreeEntityId,
     createdAt: new Date().toISOString(),
@@ -1596,8 +1597,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // Update session file with new subscriptions
           updateSession(sessDir, existing.sessionId, { nats: { ...session.nats, subscriptions: newSubs } })
 
-          // Update run's natsSubject (second subscription is direct channel)
+          // Update run's natsSubject and full subscription list
           patch.natsSubject = newSubs[1] ?? newSubs[0]
+          patch.natsSubscriptions = newSubs
           log.info('nats', `${existing.sessionId}: subscriptions updated for new task ${patch.taskId}`)
 
           if (natsWarnings.length > 0) {
@@ -2522,6 +2524,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             : `tmux session: ${spawnedName}`,
           natsEnabled: natsConfig?.enabled ?? false,
           natsSubject,
+          natsSubscriptions: natsConfig?.enabled ? natsConfig.subscriptions : undefined,
           taskId: taskId ?? '',
           worktreeId: worktreePathOverride ? '' : (parentRun?.worktreeId ?? ''),  // Clear if using custom worktree
           createdAt: new Date().toISOString(),
@@ -2637,6 +2640,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // hot-apply fails we surface it in the response instead of
             // silently logging so callers can show the error.
             natsWarning = await trySendNatsSocketCommand(name, { action: 'subscribe', subject })
+
+            // Keep the run's natsSubscriptions in sync
+            const run = ctx.docStore.getRun(name)
+            if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
           }
           json(res, {
             ok: true,
@@ -2668,6 +2675,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // Send to channel server via Unix socket. See POST sibling for
           // the rationale on surfacing warnings instead of swallowing them.
           const natsWarning = await trySendNatsSocketCommand(name, { action: 'unsubscribe', subject })
+
+          // Keep the run's natsSubscriptions in sync
+          const run = ctx.docStore.getRun(name)
+          if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
+
           json(res, {
             ok: true,
             data: { subscriptions: subs },

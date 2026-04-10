@@ -1,7 +1,8 @@
-import { useState, useRef, useCallback, useEffect, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { RunData, SessionStatus } from '../../types'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
+import { useBackendState } from '../../hooks/useBackendState'
 import { HotgroupBadge } from '../HotgroupBadge'
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 import { ColorPalette } from '../ColorPalette'
@@ -34,6 +35,15 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   const paletteRef = useRef<HTMLDivElement>(null)
   const paletteButtonRef = useRef<HTMLButtonElement>(null)
   const { slotsForNode } = useHotgroupContext()
+  const { taxRepo } = useBackendState()
+
+  // Resolve entity hierarchy names from IDs for the breadcrumb
+  const breadcrumb = useMemo(() => {
+    const initiative = taxRepo.getInitiativeForRun(run as import('../../domain/types').Run)
+    const epic = taxRepo.getEpicForRun(run as import('../../domain/types').Run)
+    const task = taxRepo.getTaskForRun(run as import('../../domain/types').Run)
+    return [initiative?.name, epic?.name, task?.name].filter((s): s is string => !!s)
+  }, [taxRepo, run])
 
   // Close palette when clicking outside both the dropdown and the toggle button
   useEffect(() => {
@@ -120,9 +130,9 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
               <span className="text-2xs font-bold tracking-[0.1em] font-mono uppercase">{status.label}</span>
             </div>
           </div>
-          {!compact && (
+          {!compact && breadcrumb.length > 0 && (
             <nav className="flex items-center gap-1 mt-0.5">
-              {[run.initiative, run.epic, run.task].map((segment, i, arr) => (
+              {breadcrumb.map((segment, i, arr) => (
                 <span key={i} className="flex items-center gap-1">
                   <span
                     className={`text-2xs font-mono tracking-wide truncate ${i === arr.length - 1 ? '' : 'text-slate-500'}`}
@@ -281,7 +291,9 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
                 : hoveredBtn === 'nats' ? runAccent : hexToRgba(runAccent, 0.55),
               background: run.natsEnabled && hoveredBtn === 'nats' ? hexToRgba(runAccent, 0.06) : undefined,
             }}
-            title={run.natsEnabled ? `Drag to canvas to monitor NATS traffic for ${run.natsSubject ?? run.sessionId}` : 'NATS not enabled for this session'}
+            title={run.natsEnabled
+              ? `NATS subscriptions:\n${(run.natsSubscriptions ?? [run.natsSubject]).filter(Boolean).join('\n')}\n\nDrag to canvas to monitor traffic`
+              : 'NATS not enabled for this session'}
           >
             <span className="material-symbols-outlined" style={{ fontSize: '16px', fontVariationSettings: "'FILL' 1" }}>cell_tower</span>
             <span className="text-[8px] font-bold tracking-wide leading-none">NATS</span>

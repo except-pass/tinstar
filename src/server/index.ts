@@ -130,8 +130,8 @@ export function initBackend(): RouteContext {
         const sess = getSession(sessionConfig.dirs.sessions, entry.name)
         if (!sess) continue
         const existingRun = docStore.getRun(sess.name)
+        const tpl = sess.cliTemplate ? sessionConfig.cliTemplates.find(t => t.name === sess.cliTemplate) : null
         if (!existingRun) {
-          const tpl = sess.cliTemplate ? sessionConfig.cliTemplates.find(t => t.name === sess.cliTemplate) : null
           docStore.upsertRun(sess.name, {
             id: sess.name,
             status: sess.state,
@@ -151,15 +151,23 @@ export function initBackend(): RouteContext {
             // Direct subject is the second subscription (index 1) in two-tier model
             // Format: [broadcast, direct] where direct = broadcast + session name
             natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
+            natsSubscriptions: sess.nats?.subscriptions,
             taskId: '',
             worktreeId: '',
             createdAt: sess.created ?? new Date().toISOString(),
             spaceId: docStore.activeSpaceId,
           })
           log.info('rehydrate', `created run for session ${sess.name} (${sess.state})`)
-        } else if (existingRun.status !== sess.state) {
-          log.info('rehydrate', `${sess.name}: correcting status ${existingRun.status} → ${sess.state}`)
-          docStore.updateRunStatus(sess.name, sess.state)
+        } else {
+          // Refresh agentIcon from the current template — lets template icon changes
+          // (e.g. new default logos) propagate to existing persisted runs across restarts.
+          if (tpl?.icon && existingRun.agentIcon !== tpl.icon) {
+            docStore.upsertRun(sess.name, { ...existingRun, agentIcon: tpl.icon })
+          }
+          if (existingRun.status !== sess.state) {
+            log.info('rehydrate', `${sess.name}: correcting status ${existingRun.status} → ${sess.state}`)
+            docStore.updateRunStatus(sess.name, sess.state)
+          }
         }
       }
 

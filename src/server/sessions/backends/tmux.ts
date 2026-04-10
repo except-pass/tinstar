@@ -515,11 +515,26 @@ export function onTtydRestart(sessionName: string, callback: (pid: number) => vo
 
 export async function sendKeys(config: TinstarConfig, sessionName: string, keys: string[]): Promise<void> {
   const tmuxName = tmuxSessionName(config, sessionName)
+  // Cancel copy-mode if active (see sendPrompt for rationale)
+  try {
+    await execFileAsync('tmux', ['send-keys', '-X', 'cancel', '-t', tmuxName])
+  } catch {
+    // "not in a mode" — expected
+  }
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, ...keys])
 }
 
 export async function sendPrompt(config: TinstarConfig, sessionName: string, prompt: string): Promise<void> {
   const tmuxName = tmuxSessionName(config, sessionName)
+  // Cancel copy-mode if active — the pane enters copy-mode when the user
+  // scrolls in the ttyd terminal, and then send-keys silently goes to the
+  // copy-mode handler instead of the underlying process.  "not in a mode"
+  // error means copy-mode wasn't active, which is fine — ignore it.
+  try {
+    await execFileAsync('tmux', ['send-keys', '-X', 'cancel', '-t', tmuxName])
+  } catch {
+    // "not in a mode" — expected when pane isn't in copy-mode
+  }
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, prompt, ''])
   await new Promise(r => setTimeout(r, 300))
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, '', 'Enter'])
