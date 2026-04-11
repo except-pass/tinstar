@@ -81,7 +81,7 @@ function abbreviate(name: string): string {
 function opacityForCategory(name: string, rank: number): number {
   if (name === 'Free space') return FREE_SPACE_OPACITY
   if (name === 'Autocompact buffer') return AUTOCOMPACT_OPACITY
-  return OPACITY_BY_RANK[Math.min(rank, OPACITY_BY_RANK.length - 1)]
+  return OPACITY_BY_RANK[Math.min(rank, OPACITY_BY_RANK.length - 1)] ?? 0.12
 }
 
 function labelColor(opacity: number): string {
