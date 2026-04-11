@@ -2619,9 +2619,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         })
 
         // Add breakout room to parent's run record
+        // upsertRun is a full replacement, so spread the existing run first
         if (breakoutRoom && parentRun) {
           const parentRooms = parentRun.breakoutRooms ?? []
           ctx.docStore.upsertRun(parentRun.id, {
+            ...parentRun,
             breakoutRooms: [...parentRooms, breakoutRoom],
           })
         }
