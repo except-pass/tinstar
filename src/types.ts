@@ -87,6 +87,7 @@ export interface RunData {
   natsSubject?: string
   natsSubscriptions?: string[]
   parentId?: string  // ID of the run that spawned this one (for hands)
+  breakoutRooms?: string[]  // NATS room subjects for parent-child communication
 }
 
 
