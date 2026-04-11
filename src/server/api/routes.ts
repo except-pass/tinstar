@@ -1,5 +1,6 @@
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import { request as httpRequest } from 'node:http'
@@ -1320,6 +1321,46 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     ctx.natsTraffic?.removeWidget(id)
     ctx.docStore.deleteNatsTrafficWidget(id)
     json(res, { ok: true })
+    return true
+  }
+
+  // POST /api/file-content/git-base — return the HEAD-committed version of a file
+  if (method === 'POST' && url === '/api/file-content/git-base') {
+    const execFileAsync = promisify(execFile)
+    readBody(req).then(async body => {
+      try {
+        const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
+        if (!sessionId || !filePath) { json(res, { error: 'sessionId and filePath required' }, 400); return }
+
+        const sessDir = ctx.sessionConfig?.dirs.sessions
+        if (!sessDir) { json(res, { error: 'session config unavailable' }, 503); return }
+        const session = getSession(sessDir, sessionId)
+        if (!session) { json(res, { error: 'session not found' }, 404); return }
+        const workspacePath = session.workspace?.path ?? null
+        if (!workspacePath) { json(res, { error: 'session workspace unavailable' }, 400); return }
+
+        const absolutePath = filePath.startsWith('/')
+          ? filePath
+          : resolve(workspacePath, filePath)
+        if (!absolutePath.startsWith(workspacePath + '/')) {
+          json(res, { error: 'path outside workspace' }, 403); return
+        }
+        const relPath = relative(workspacePath, absolutePath)
+
+        const { stdout } = await execFileAsync(
+          'git', ['show', `HEAD:${relPath}`],
+          { cwd: workspacePath, encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024, timeout: 5000 },
+        )
+        json(res, { ok: true, content: stdout })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.includes('does not exist') || msg.includes('bad revision')) {
+          json(res, { ok: true, content: null })
+        } else {
+          json(res, { error: 'failed to read git base', detail: msg }, 500)
+        }
+      }
+    })
     return true
   }
 
