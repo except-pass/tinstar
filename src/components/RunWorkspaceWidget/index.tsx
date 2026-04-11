@@ -397,7 +397,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
               <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr]">Procs</span>
             </div>
           ) : (
-            <div className="w-40 flex flex-col bg-surface-panel">
+            <div className="w-40 h-full flex flex-col bg-surface-panel">
               {/* Procedures — top section */}
               <div style={{ height: `${procsPercent}%` }} className="flex flex-col min-h-[60px] overflow-hidden">
                 <ProceduresPanel
