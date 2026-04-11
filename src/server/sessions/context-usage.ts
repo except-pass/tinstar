@@ -120,7 +120,7 @@ function spawnSidecar(conversationId: string): Promise<ContextData> {
         if (settled || !line.trim()) continue
         try {
           const parsed = JSON.parse(line)
-          if (parsed.type === 'control_response' && parsed.request_id === requestId) {
+          if (parsed.type === 'control_response' && parsed.response?.request_id === requestId) {
             settled = true
             clearTimeout(timeout)
             child?.kill('SIGKILL')
