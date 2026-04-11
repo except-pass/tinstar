@@ -172,25 +172,26 @@ This enables both broadcast and private messaging:
 |---|---|
 | DM to one agent | `tinstar.space.init-001.epic-xyz.task-abc.a1` |
 | All agents on a task | `tinstar.space.init-001.epic-xyz.task-abc` |
-| A breakout room | `tinstar.breakout.auth-review` |
+| Parent-child room | `tinstar.room.f7e2a91c` |
 
 **Note:** The task broadcast channel has NO trailing wildcard or agent name — it's an exact subject that all task agents subscribe to. DMs append the agent name as an additional token.
 
 ### Breakout Rooms
 
-Ad hoc cross-entity collaboration channels. Any agent, regardless of entity membership, can join one.
+Private parent-child communication channels, created automatically at spawn time.
 
 ```
-tinstar.breakout.<room-name>
+tinstar.room.<8-char-uuid>
 ```
 
-- Named by slug: `tinstar.breakout.auth-refactor`, `tinstar.breakout.prod-incident-42`
-- No pre-registration — publish to it and it exists
-- Created by Clawson publishing a "join this room" message to each agent's direct subject
-- Agent (or Clawson via subscription API) adds the subject as an extra subscription
-- Dissolves naturally when all agents unsubscribe
+- **Created automatically** when `POST /api/sessions/:id/spawn` is called
+- One room per parent-child pair (flat — grandchildren don't inherit parent rooms)
+- Parent is hot-subscribed via control socket; child gets it in initial subscriptions
+- Room subject is injected into the child's system prompt for immediate use
+- No task hierarchy dependency — works across projects, worktrees, and repos
+- Stored on both Run records in the `breakoutRooms` field
 
-Breakout rooms are intentionally flat — no hierarchy, just a shared meeting point.
+**Ad-hoc breakout rooms** can still be created manually by publishing to any `tinstar.room.*` subject and having agents subscribe via the subscription management API.
 
 ### NATS Wildcard Reference
 
