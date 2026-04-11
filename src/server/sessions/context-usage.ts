@@ -78,25 +78,18 @@ function spawnSidecar(conversationId: string): Promise<ContextData> {
       }
     }, SIDECAR_TIMEOUT_MS)
 
-    try {
-      child = spawn('claude', [
-        '--print',
-        '--resume', conversationId,
-        '--fork-session',
-        '--input-format', 'stream-json',
-        '--output-format', 'stream-json',
-        '--verbose',
-        '--max-turns', '1',
-        '--model', 'claude-haiku-4-5-20251001',
-      ], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
-    } catch (err) {
-      clearTimeout(timeout)
-      settled = true
-      reject(new Error(`Failed to spawn claude sidecar: ${(err as Error).message}`))
-      return
-    }
+    child = spawn('claude', [
+      '--print',
+      '--resume', conversationId,
+      '--fork-session',
+      '--input-format', 'stream-json',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--max-turns', '1',
+      '--model', 'claude-haiku-4-5-20251001',
+    ], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
 
     // Send control request + throwaway user message (needed to flush the control_response)
     const requestId = randomUUID()
@@ -133,7 +126,7 @@ function spawnSidecar(conversationId: string): Promise<ContextData> {
             child?.kill('SIGKILL')
 
             const r = parsed.response?.response
-            if (!r?.categories) {
+            if (!Array.isArray(r?.categories)) {
               reject(new Error('Control response missing categories'))
               return
             }
@@ -155,7 +148,9 @@ function spawnSidecar(conversationId: string): Promise<ContextData> {
     })
 
     let stderr = ''
-    child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+    child.stderr!.on('data', (chunk: Buffer) => {
+      if (stderr.length < 2000) stderr += chunk.toString()
+    })
 
     child.on('error', (err) => {
       if (!settled) {
