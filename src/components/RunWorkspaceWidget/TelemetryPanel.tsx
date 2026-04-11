@@ -122,7 +122,7 @@ function Treemap({ categories, accent, maxTokens }: TreemapProps) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
 
   // Filter out zero-token categories, sort descending
-  const sorted = categories
+  const sorted = (categories ?? [])
     .filter(c => c.tokens > 0)
     .sort((a, b) => b.tokens - a.tokens)
 
@@ -322,9 +322,9 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
       </div>
       <div className="flex-1 min-h-0 flex flex-col px-1 pt-1">
         <Treemap
-          categories={data!.categories}
+          categories={data?.categories ?? []}
           accent={runAccent}
-          maxTokens={data!.maxTokens}
+          maxTokens={data?.maxTokens ?? 200_000}
         />
       </div>
       <div className="flex items-center justify-between px-2 py-1 text-2xs font-mono text-slate-600">
