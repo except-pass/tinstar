@@ -205,7 +205,7 @@ function Treemap({ categories, accent, maxTokens }: TreemapProps) {
         <div
           className="absolute z-50 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 shadow-lg pointer-events-none"
           style={{
-            left: `${Math.min(tooltip.x, dims.w - 130)}px`,
+            left: `${Math.min(tooltip.x, dims.w - 150)}px`,
             top: `${Math.max(0, tooltip.y - 52)}px`,
             maxWidth: '150px',
           }}
@@ -248,6 +248,7 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
     setError(null)
     try {
       const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/context`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
       if (!json.ok) throw new Error(json.error?.message ?? 'Unknown error')
       setData(json.data as ContextData)
