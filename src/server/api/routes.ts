@@ -2500,6 +2500,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         natsConfig = { enabled: true, subscriptions }
       }
 
+      // Generate a breakout room for parent-child communication
+      const breakoutRoom = natsConfig?.enabled
+        ? `tinstar.room.${randomUUID().slice(0, 8)}`
+        : undefined
+
+      // Add breakout room to child's initial subscriptions
+      if (breakoutRoom && natsConfig) {
+        natsConfig.subscriptions.push(breakoutRoom)
+      }
+
       // Resolve CLI template from hand definition
       const cliTemplate = hand.cliTemplate
 
@@ -2546,10 +2556,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const port = await tmuxBackend.findPort(cfg.ports.hostStart)
           if (fullPrompt) enriched.initialPrompt = fullPrompt
 
-          // Build hand system prompt with parent's NATS subject for intro
-          const parentNatsSubject = parentRun?.natsSubject || buildNatsSubject(parentName, ctx.docStore, taskId, parentRun?.epic || undefined, parentRun?.initiative || undefined)
+          // Build hand system prompt with breakout room for parent-child communication
           const handSystemPrompt = hand.prompt
-            ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**. Their NATS subject is: \`${parentNatsSubject}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${parentNatsSubject}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
+            ? breakoutRoom
+              ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${breakoutRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${breakoutRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
+              : `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
             : null
 
           const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, appendSystemPrompt: handSystemPrompt })
@@ -2561,6 +2572,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
 
         emitSessionEvent('managed_session.state_changed', { name: spawnedName, state: 'running' })
+
+        // Hot-subscribe parent to the breakout room
+        let breakoutWarning: NatsSocketWarning | null = null
+        if (breakoutRoom) {
+          breakoutWarning = await trySendNatsSocketCommand(parentName, {
+            action: 'subscribe',
+            subject: breakoutRoom,
+          })
+        }
 
         // Build NATS subject for the run
         const natsSubject = natsConfig?.enabled
@@ -2590,12 +2610,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           natsEnabled: natsConfig?.enabled ?? false,
           natsSubject,
           natsSubscriptions: natsConfig?.enabled ? natsConfig.subscriptions : undefined,
+          breakoutRooms: breakoutRoom ? [breakoutRoom] : undefined,
           taskId: taskId ?? '',
           worktreeId: worktreePathOverride ? '' : (parentRun?.worktreeId ?? ''),  // Clear if using custom worktree
           createdAt: new Date().toISOString(),
           spaceId: ctx.docStore.activeSpaceId,
           parentId: parentRun?.id,  // Track who spawned this hand
         })
+
+        // Add breakout room to parent's run record
+        if (breakoutRoom && parentRun) {
+          const parentRooms = parentRun.breakoutRooms ?? []
+          ctx.docStore.upsertRun(parentRun.id, {
+            breakoutRooms: [...parentRooms, breakoutRoom],
+          })
+        }
 
         return json(res, {
           ok: true,
@@ -2604,6 +2633,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             hand: handName,
             parentSession: parentName,
             orchestrator: orchestrator ?? false,
+            room: breakoutRoom ?? null,
+            natsWarning: breakoutWarning ?? undefined,
           },
         }, 201)
       } catch (err) {
