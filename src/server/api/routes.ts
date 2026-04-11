@@ -1783,7 +1783,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
 
     // GET /api/sessions/:name (exact match, no trailing path)
-    if (method === 'GET' && url.startsWith('/api/sessions/') && !url.includes('/start') && !url.includes('/stop') && !url.includes('/files')) {
+    if (method === 'GET' && url.startsWith('/api/sessions/') && !url.includes('/start') && !url.includes('/stop') && !url.includes('/files') && !url.includes('/context')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)
