@@ -103,7 +103,7 @@ interface TreemapProps {
 interface TooltipState {
   name: string
   tokens: number
-  percentage: number
+  percentage?: number
   description: string
   x: number
   y: number
@@ -113,7 +113,7 @@ interface SquarifyInput {
   value: number
   name: string
   tokens: number
-  percentage: number
+  percentage?: number
   rank: number
 }
 
@@ -193,7 +193,7 @@ function Treemap({ categories, accent, maxTokens }: TreemapProps) {
                 className="text-2xs font-mono leading-none select-none pointer-events-none block truncate"
                 style={{ color: labelColor(opacity), fontSize: '8px' }}
               >
-                {abbreviate(cell.name)} {(cell.percentage ?? 0).toFixed(0)}%
+                {abbreviate(cell.name)} {cell.percentage != null ? `${cell.percentage.toFixed(0)}%` : '--'}
               </span>
             )}
           </div>
@@ -212,7 +212,7 @@ function Treemap({ categories, accent, maxTokens }: TreemapProps) {
         >
           <div className="text-2xs font-bold text-slate-200 truncate">{tooltip.name}</div>
           <div className="text-2xs text-slate-400 font-mono">
-            {tooltip.tokens.toLocaleString()} tokens ({(tooltip.percentage ?? 0).toFixed(1)}%)
+            {tooltip.tokens.toLocaleString()} tokens {tooltip.percentage != null ? `(${tooltip.percentage.toFixed(1)}%)` : ''}
           </div>
           {tooltip.description && (
             <div className="text-2xs text-slate-500 mt-0.5 leading-tight">{tooltip.description}</div>
