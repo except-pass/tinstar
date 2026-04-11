@@ -48,7 +48,15 @@ export const test = base.extend<
 
       await use(url)
 
+      // Graceful shutdown — wait up to 3s, then force-kill
       child.kill('SIGTERM')
+      await new Promise<void>(resolve => {
+        const fallback = setTimeout(() => {
+          child.kill('SIGKILL')
+          resolve()
+        }, 3_000)
+        child.on('exit', () => { clearTimeout(fallback); resolve() })
+      })
       await rm(dataDir, { recursive: true, force: true })
     },
     { scope: 'worker' },
