@@ -77,7 +77,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse, 
   const taskPendingSkills = pendingSkills.filter(ps => ps.entityId === taskId)
 
   return (
-    <section className="w-40 flex flex-col bg-surface-panel">
+    <section className="flex flex-col flex-1 min-h-0 bg-surface-panel">
       <div className="panel-header">
         <h3 className="panel-label">Procedures</h3>
         <div className="flex items-center gap-1.5">
