@@ -9,7 +9,7 @@ import { hexToRgba } from '../runAccent'
 interface ContextCategory {
   name: string
   tokens: number
-  percentage: number
+  percentage?: number
 }
 
 interface ContextData {
@@ -144,7 +144,7 @@ function Treemap({ categories, accent, maxTokens }: TreemapProps) {
     value: c.tokens,
     name: c.name,
     tokens: c.tokens,
-    percentage: c.percentage,
+    percentage: maxTokens > 0 ? (c.tokens / maxTokens) * 100 : 0,
     rank: i,
   }))
 
@@ -193,7 +193,7 @@ function Treemap({ categories, accent, maxTokens }: TreemapProps) {
                 className="text-2xs font-mono leading-none select-none pointer-events-none block truncate"
                 style={{ color: labelColor(opacity), fontSize: '8px' }}
               >
-                {abbreviate(cell.name)} {cell.percentage.toFixed(0)}%
+                {abbreviate(cell.name)} {(cell.percentage ?? 0).toFixed(0)}%
               </span>
             )}
           </div>
@@ -212,7 +212,7 @@ function Treemap({ categories, accent, maxTokens }: TreemapProps) {
         >
           <div className="text-2xs font-bold text-slate-200 truncate">{tooltip.name}</div>
           <div className="text-2xs text-slate-400 font-mono">
-            {tooltip.tokens.toLocaleString()} tokens ({tooltip.percentage.toFixed(1)}%)
+            {tooltip.tokens.toLocaleString()} tokens ({(tooltip.percentage ?? 0).toFixed(1)}%)
           </div>
           {tooltip.description && (
             <div className="text-2xs text-slate-500 mt-0.5 leading-tight">{tooltip.description}</div>
