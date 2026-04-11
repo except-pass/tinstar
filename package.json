@@ -42,7 +42,8 @@
     "nats": "^2.29.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "squarify": "^1.1.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
