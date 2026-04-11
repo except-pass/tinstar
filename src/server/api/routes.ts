@@ -47,6 +47,7 @@ import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
 import { computeNatsSubscriptions, diffSubscriptions } from '../sessions/nats-subscriptions'
 import { natsControlSocketPath } from '../sessions/backends/tmux'
+import { getDetailedUsage } from '../sessions/context-usage'
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
 function buildNatsSubject(
@@ -1831,6 +1832,29 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         } catch (err) {
           json(res, { ok: false, error: { code: 'READ_FAILED', message: (err as Error).message } }, 500)
         }
+        return true
+      }
+    }
+
+    // GET /api/sessions/:name/context
+    if (method === 'GET' && url.startsWith('/api/sessions/') && url.includes('/context')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session) {
+          json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
+          return true
+        }
+        if (!session.conversation?.id) {
+          json(res, { ok: false, error: { code: 'NO_CONVERSATION', message: 'Session has no active conversation' } }, 404)
+          return true
+        }
+        getDetailedUsage(session.conversation.id)
+          .then(data => json(res, { ok: true, data }))
+          .catch(err => {
+            log.error('api', `context fetch failed for ${name}: ${(err as Error).message}`)
+            json(res, { ok: false, error: { code: 'CONTEXT_FETCH_FAILED', message: (err as Error).message } }, 500)
+          })
         return true
       }
     }
