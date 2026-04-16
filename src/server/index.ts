@@ -65,6 +65,7 @@ export function initBackend(): RouteContext {
     get query() { return observability.query },
     getState: () => observability.state,
     getProgress: () => observability.progress,
+    getLastError: () => observability.lastError,
     restart: () => observability.restart(),
     getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
   })
@@ -74,6 +75,7 @@ export function initBackend(): RouteContext {
     const shutdown = async () => {
       try { await observability.stop() } catch { /* ignore */ }
       try { telemetryRoutes.stopPolling() } catch { /* ignore */ }
+      try { docStore.flush() } catch { /* ignore */ }
       process.exit(0)
     }
     process.once('SIGINT', shutdown)

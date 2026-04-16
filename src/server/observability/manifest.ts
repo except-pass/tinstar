@@ -16,30 +16,28 @@ export interface BinaryTarget {
  * tests. Checksums MUST be verified against official releases before merging.
  *
  * Prometheus releases: https://github.com/prometheus/prometheus/releases
+ *   Checksums from: https://github.com/prometheus/prometheus/releases/download/v2.54.1/sha256sums.txt
  * Alloy releases:      https://github.com/grafana/alloy/releases
- *
- * NOTE: sha256 values below are placeholders — the implementer MUST replace
- * them with the real checksums from the release `sha256sums.txt` files before
- * enabling telemetry in production. The binary-manager test asserts format
- * (64 hex chars) but the real download path will fail if these don't match.
+ *   Alloy does not publish a sha256sums file; values below were computed by
+ *   piping each zip through sha256sum (reproducible via `curl -sSL <url> | sha256sum`).
  */
 export const MANIFEST = {
   prometheus: {
     version: '2.54.1',
     variants: {
-      'darwin-arm64': { sha256: '0000000000000000000000000000000000000000000000000000000000000000' },
-      'darwin-x64':   { sha256: '0000000000000000000000000000000000000000000000000000000000000000' },
-      'linux-arm64':  { sha256: '0000000000000000000000000000000000000000000000000000000000000000' },
-      'linux-x64':    { sha256: '0000000000000000000000000000000000000000000000000000000000000000' },
+      'darwin-arm64': { sha256: 'ac80faf6bb4e135f58e7d3f2423f561286d07205a93fef2e4bf2c56ce1484038' },
+      'darwin-x64':   { sha256: '841e823ddee1da5fcbce5266bd448c2511297c570a6310a7bf81b226f0def5ea' },
+      'linux-arm64':  { sha256: '3d9946ca730f2679bbd63e9d40e559a0ba227a638d237e723af1a99bd7098263' },
+      'linux-x64':    { sha256: '31715ef65e8a898d0f97c8c08c03b6b9afe485ac84e1698bcfec90fc6e62924f' },
     },
   },
   alloy: {
     version: '1.5.0',
     variants: {
-      'darwin-arm64': { sha256: '0000000000000000000000000000000000000000000000000000000000000000' },
-      'darwin-x64':   { sha256: '0000000000000000000000000000000000000000000000000000000000000000' },
-      'linux-arm64':  { sha256: '0000000000000000000000000000000000000000000000000000000000000000' },
-      'linux-x64':    { sha256: '0000000000000000000000000000000000000000000000000000000000000000' },
+      'darwin-arm64': { sha256: 'e98e546f549e771f2af4400990862fc19320b1dbc4227a9bb476528933440607' },
+      'darwin-x64':   { sha256: '7102641591a54ae8094ed4ea1903e16cde987be2e80e54e3327dc363e9a18713' },
+      'linux-arm64':  { sha256: 'c22de0b7c1fa0126fa528fb5ad078c743fb31e59f48948c12c5a7780cb465551' },
+      'linux-x64':    { sha256: 'd4d5aab7bbdd16aca8f6be61e096cb8c4539d5230d2e30057e7c7b7afdc3faba' },
     },
   },
 } as const

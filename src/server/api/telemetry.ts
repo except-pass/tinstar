@@ -13,6 +13,8 @@ export interface TelemetryApiDeps {
   query: TelemetryQuery | null     // null when state is 'disabled' or 'downloading'
   getState: () => ObservabilityState
   getProgress: () => HudSnapshot['progress']
+  /** Last captured startup/runtime error from the observability stack. Null when healthy or never attempted. */
+  getLastError: () => string | null
   restart: () => Promise<void>
   getDefaultUserEmail: () => string
 }
@@ -53,6 +55,8 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
       autonomy: { ratio: null, cliSeconds: null, userSeconds: null },
       progress: deps.getProgress(),
     }
+    const lastError = deps.getLastError()
+    if (lastError) base.error = lastError
     if (state !== 'ready' || !deps.query) return base
     const tzOffsetMinutes = new Date().getTimezoneOffset()
     try {

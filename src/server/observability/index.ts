@@ -42,22 +42,37 @@ export class ObservabilityStack {
   }
 
   async start(): Promise<void> {
-    if (process.env.TINSTAR_TELEMETRY === '0') { this.state = 'disabled'; return }
+    if (process.env.TINSTAR_TELEMETRY === '0') {
+      this.state = 'disabled'
+      log.info('observability', 'telemetry disabled via TINSTAR_TELEMETRY=0')
+      return
+    }
     if (process.platform !== 'darwin' && process.platform !== 'linux') {
-      this.state = 'disabled'; return
+      this.state = 'disabled'
+      log.info('observability', `telemetry disabled: unsupported platform ${process.platform}`)
+      return
     }
 
     if (process.env.TINSTAR_FAST_SIM === '1') {
       this.state = 'ready'
       this.query = null // fast-sim uses the fake path in telemetry.ts
+      log.info('observability', 'fast-sim mode: synthesizing HUD snapshots, skipping real stack')
       return
     }
 
     // Clear any previous error before a fresh start attempt
     this.lastError = null
+    log.info('observability', 'starting embedded telemetry stack', { binRoot: this.binRoot, obsRoot: this.obsRoot })
 
     mkdirSync(this.obsRoot, { recursive: true })
-    this.lockRelease = await acquireLock(join(this.obsRoot, 'observability.lock'))
+    try {
+      this.lockRelease = await acquireLock(join(this.obsRoot, 'observability.lock'))
+    } catch (err) {
+      this.state = 'degraded'
+      this.lastError = (err as Error).message
+      log.error('observability', 'failed to acquire observability lock', { error: this.lastError })
+      return
+    }
 
     try {
       this.state = 'downloading'
@@ -68,8 +83,14 @@ export class ObservabilityStack {
       }
       const promTarget = resolveBinaryTarget('prometheus', process.platform, process.arch)
       const alloyTarget = resolveBinaryTarget('alloy', process.platform, process.arch)
+
+      log.info('observability', `installing prometheus@${promTarget.version}`, { url: promTarget.url })
       const promInstall = await installBinary(promTarget, this.binRoot, onProgress)
+      log.info('observability', 'prometheus installed', { binaryPath: promInstall.binaryPath })
+
+      log.info('observability', `installing alloy@${alloyTarget.version}`, { url: alloyTarget.url })
       const alloyInstall = await installBinary(alloyTarget, this.binRoot, onProgress)
+      log.info('observability', 'alloy installed', { binaryPath: alloyInstall.binaryPath })
 
       // Render configs
       const promCfgPath = join(this.obsRoot, 'prometheus.yml')
@@ -81,6 +102,7 @@ export class ObservabilityStack {
       }))
 
       this.state = 'starting'
+      log.info('observability', 'starting supervisors', { promPort: PROM_PORT, alloyOtlpPort: ALLOY_OTLP_PORT, alloyAdminPort: ALLOY_ADMIN_PORT })
 
       this.prom = new Supervisor({
         name: 'prometheus',
@@ -117,17 +139,22 @@ export class ObservabilityStack {
       if (this.prom.state === 'ready' && this.alloy.state === 'ready') {
         this.query = new TelemetryQuery(`http://127.0.0.1:${PROM_PORT}`)
         this.state = 'ready'
+        log.info('observability', 'telemetry stack ready', { promPid: this.prom.pid, alloyPid: this.alloy.pid })
       } else {
         this.state = 'degraded'
+        this.lastError = `supervisor not ready: prom=${this.prom.state} alloy=${this.alloy.state}`
+        log.error('observability', 'telemetry stack degraded after supervisor start', { promState: this.prom.state, alloyState: this.alloy.state })
       }
     } catch (err) {
       // Swallow-and-record: callers check state/lastError, no unhandled rejections
       this.state = 'degraded'
       this.lastError = (err as Error).message
+      log.error('observability', 'telemetry stack failed to start', { error: this.lastError })
     }
   }
 
   async stop(): Promise<void> {
+    log.info('observability', 'stopping telemetry stack')
     try {
       try { await this.alloy?.stop() } catch (err) {
         log.warn('observability', 'alloy stop failed', { error: (err as Error).message })
@@ -141,10 +168,12 @@ export class ObservabilityStack {
         this.lockRelease = null
       }
       this.state = 'idle'
+      log.info('observability', 'telemetry stack stopped')
     }
   }
 
   async restart(): Promise<void> {
+    log.info('observability', 'restarting telemetry stack')
     try { await this.stop() } catch (err) {
       log.warn('observability', 'stop during restart failed', { error: (err as Error).message })
     }

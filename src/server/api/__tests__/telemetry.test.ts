@@ -74,6 +74,7 @@ function makeDeps(
     query,
     getState: () => state,
     getProgress: () => undefined,
+    getLastError: () => null,
     restart: vi.fn(async () => {}),
     getDefaultUserEmail: () => 'test@example.com',
   }
@@ -184,6 +185,7 @@ describe('POST /api/telemetry/restart', () => {
       query: null,
       getState: () => 'idle',
       getProgress: () => undefined,
+      getLastError: () => null,
       restart,
       getDefaultUserEmail: () => 'test@example.com',
     }
