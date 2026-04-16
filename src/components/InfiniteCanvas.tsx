@@ -9,6 +9,7 @@ import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegi
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useHotgroupContext } from '../hotkeys/HotgroupContext'
+import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
 import { CanvasMinimap } from './CanvasMinimap'
 import { CanvasHud } from './CanvasHud'
@@ -707,6 +708,28 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     onToggleMinimap: () => minimapToggleRef.current?.(),
     onToggleHud: () => hudToggleRef.current?.(),
   })
+
+  // Register the canvas-level fit implementation so widget action handlers
+  // can call fitWidgetToViewport(id) in response to the 'fit-viewport'
+  // binding (Z key).
+  useEffect(() => {
+    const FIT_MIN_HEIGHT = 150 // mirrors MIN_HEIGHT in useWidgetLayouts.ts
+    return registerCanvasActions({
+      fit: (nodeId: string) => {
+        const layout = getLayout(nodeId)
+        if (!layout) return
+        const vw = window.innerWidth
+        const vh = window.innerHeight
+        const newHeight = Math.min(vh, Math.max(FIT_MIN_HEIGHT, vh))
+        // Grow/shrink the widget; cascade expansion updates ancestor containers.
+        resizeNode(nodeId, layout.width, newHeight)
+        // Center the (resized) widget in the viewport at zoom 1.
+        const cx = vw / 2 - (layout.x + layout.width / 2)
+        const cy = vh / 2 - (layout.y + newHeight / 2)
+        setCamera({ x: Math.round(cx), y: Math.round(cy), zoom: 1 })
+      },
+    })
+  }, [getLayout, resizeNode, setCamera])
 
   const handleDeleteGroup = useCallback((nodeId: string) => {
     if (!onDeleteEntity) return
