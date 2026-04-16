@@ -17,6 +17,7 @@ export interface SupervisorOpts {
   expectedBinaryName?: string
   restartBackoffMs?: number            // default: 2000
   maxRestartsPerMinute?: number        // default: 5
+  shutdownGraceMs?: number             // default: 5000
 }
 
 export class Supervisor {
@@ -50,23 +51,32 @@ export class Supervisor {
   }
 
   async stop(): Promise<void> {
-    if (!this.child || this.adopted) {
-      // adopted children are not directly killed by this instance
-      if (this.pid) {
-        try { process.kill(this.pid, 'SIGTERM') } catch { /* gone */ }
-      }
-      this.cleanupState()
-      this.state = 'idle'
-      return
+    const grace = this.opts.shutdownGraceMs ?? 5_000
+    this.state = 'idle'
+    // remove crash handler so we don't loop-restart during shutdown
+    if (this.child && this.exitHandler) { this.child.off('exit', this.exitHandler); this.exitHandler = null }
+
+    const pid = this.pid
+    if (!pid) { this.cleanupState(); return }
+
+    try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+
+    // wait up to `grace` ms for the process to exit
+    const deadline = Date.now() + grace
+    while (Date.now() < deadline) {
+      try { process.kill(pid, 0) } catch { this.cleanupState(); return }
+      await new Promise((r) => setTimeout(r, 50))
     }
-    try { this.child.kill('SIGTERM') } catch { /* gone */ }
-    // grace window
-    await new Promise((r) => setTimeout(r, 100))
-    if (this.child.exitCode === null) {
-      try { this.child.kill('SIGKILL') } catch { /* gone */ }
+
+    // escalate
+    try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+    // final drain
+    const drainDeadline = Date.now() + 500
+    while (Date.now() < drainDeadline) {
+      try { process.kill(pid, 0) } catch { this.cleanupState(); return }
+      await new Promise((r) => setTimeout(r, 25))
     }
     this.cleanupState()
-    this.state = 'idle'
   }
 
   private spawnOnce(): void {

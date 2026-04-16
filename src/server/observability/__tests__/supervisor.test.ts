@@ -130,3 +130,26 @@ describe('Supervisor crash restart', () => {
     await sup.stop()
   })
 })
+
+describe('Supervisor graceful shutdown', () => {
+  it('SIGTERMs the child and falls through to SIGKILL after grace', async () => {
+    const bin = join(tmp, 'ignoring-term.sh')
+    writeFileSync(bin, `#!/bin/sh\ntrap '' TERM\nwhile true; do sleep 10; done\n`)
+    chmodSync(bin, 0o755)
+
+    const sup = new Supervisor({
+      name: 'ignoring',
+      binaryPath: bin,
+      args: [],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      shutdownGraceMs: 300,
+    })
+    await sup.start()
+    const pidBefore = sup.pid
+    await sup.stop()
+    // kill(pid, 0) should fail (ESRCH) — the child is gone
+    expect(() => process.kill(pidBefore, 0)).toThrow()
+  })
+})
