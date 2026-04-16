@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
 import { resolveRunAccent, hexToRgba } from '../runAccent'
+import { usePromptHistory } from '../../hooks/usePromptHistory'
+import { PromptHistoryPopover } from './PromptHistoryPopover'
 
 function MarkdownText({ content }: { content: string }) {
   return (
@@ -171,6 +173,8 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   const [error, setError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
+  const { history, push: pushHistory } = usePromptHistory(sessionId)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   // Focus when trigger changes (from parent selecting widget)
   useEffect(() => {
@@ -191,6 +195,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
       })
       const data = await res.json()
       if (data.ok) {
+        pushHistory(text)
         setText('')
         // Trigger success flash
         setJustSent(true)
@@ -203,19 +208,37 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
     } finally {
       setSending(false)
     }
-  }, [sessionId, text, canSend, sending, status])
+  }, [sessionId, text, canSend, sending, status, pushHistory])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
+      if (historyOpen) setHistoryOpen(false)
       handleSend()
+      return
     }
-  }, [handleSend])
+    if (e.key === 'ArrowUp' && text.length === 0 && history.length > 0 && !historyOpen) {
+      e.preventDefault()
+      setHistoryOpen(true)
+    }
+  }, [handleSend, text, history.length, historyOpen])
 
   // Focus textarea when expanded
   useEffect(() => {
     if (isExpanded) textareaRef.current?.focus({ preventScroll: true })
   }, [isExpanded])
+
+  const selectFromHistory = useCallback((item: string) => {
+    setText(item)
+    setHistoryOpen(false)
+    // Focus textarea and place caret at end after the state flush.
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus({ preventScroll: true })
+      ta.setSelectionRange(item.length, item.length)
+    })
+  }, [])
 
   return (
     <div className="border-t" style={{ borderColor: hexToRgba(accent, 0.2) }}>
@@ -241,6 +264,14 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
 
       {isExpanded && (
         <div className="px-3 pb-3 space-y-2">
+          {historyOpen && (
+            <PromptHistoryPopover
+              history={history}
+              accent={accent}
+              onSelect={selectFromHistory}
+              onClose={() => setHistoryOpen(false)}
+            />
+          )}
           <textarea
             ref={textareaRef}
             value={text}
@@ -253,67 +284,84 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
           {error && (
             <p className="text-2xs font-mono text-accent-red">{error}</p>
           )}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-2xs text-slate-600 font-mono">
               {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
             </span>
-            <button
-              ref={buttonRef}
-              onClick={handleSend}
-              disabled={!canSend || sending}
-              className={`
-                group relative flex items-center gap-1.5 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider rounded
-                transition-all duration-150 ease-out
-                disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100
-                enabled:hover:scale-105 enabled:active:scale-95
-                ${justSent ? 'animate-[send-success_0.4s_ease-out]' : ''}
-              `}
-              style={{
-                background: justSent
-                  ? hexToRgba(accent, 0.4)
-                  : sending
-                    ? hexToRgba(accent, 0.25)
-                    : hexToRgba(accent, 0.15),
-                color: accent,
-                border: `1px solid ${hexToRgba(accent, justSent ? 0.7 : 0.3)}`,
-                boxShadow: canSend && !sending
-                  ? `0 0 0 0 ${hexToRgba(accent, 0)}`
-                  : justSent
-                    ? `0 0 20px ${hexToRgba(accent, 0.5)}, 0 0 40px ${hexToRgba(accent, 0.2)}`
-                    : 'none',
-              }}
-              onMouseEnter={(e) => {
-                if (canSend && !sending) {
-                  e.currentTarget.style.boxShadow = `0 0 12px ${hexToRgba(accent, 0.4)}, 0 0 24px ${hexToRgba(accent, 0.15)}`
-                  e.currentTarget.style.background = hexToRgba(accent, 0.25)
-                  e.currentTarget.style.borderColor = hexToRgba(accent, 0.5)
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!justSent) {
-                  e.currentTarget.style.boxShadow = 'none'
-                  e.currentTarget.style.background = hexToRgba(accent, 0.15)
-                  e.currentTarget.style.borderColor = hexToRgba(accent, 0.3)
-                }
-              }}
-            >
-              <span
-                className={`material-symbols-outlined text-sm transition-transform duration-200 ${
-                  sending ? 'animate-[send-fly_0.6s_ease-in-out_infinite]' : ''
-                } ${justSent ? 'animate-[send-pop_0.3s_ease-out]' : ''}`}
-                style={{ fontVariationSettings: "'FILL' 1" }}
-              >
-                {sending ? 'rocket_launch' : 'send'}
-              </span>
-              {sending ? 'Sending...' : 'Send'}
-              {/* Glow ring on hover */}
-              <span
-                className="absolute inset-0 rounded opacity-0 group-enabled:group-hover:opacity-100 transition-opacity duration-200 pointer-events-none"
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                data-testid="prompt-history-button"
+                onClick={() => setHistoryOpen(o => !o)}
+                disabled={history.length === 0}
+                title={history.length === 0 ? 'No history yet' : 'Recent prompts (↑)'}
+                className="flex items-center gap-1 px-2 py-1.5 text-2xs font-mono uppercase tracking-wider rounded transition-all duration-150 ease-out disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:scale-105 enabled:active:scale-95"
                 style={{
-                  background: `radial-gradient(ellipse at center, ${hexToRgba(accent, 0.1)} 0%, transparent 70%)`,
+                  background: hexToRgba(accent, 0.1),
+                  color: hexToRgba(accent, 0.7),
+                  border: `1px solid ${hexToRgba(accent, 0.25)}`,
                 }}
-              />
-            </button>
+              >
+                <span className="material-symbols-outlined text-sm">history</span>
+              </button>
+              <button
+                ref={buttonRef}
+                onClick={handleSend}
+                disabled={!canSend || sending}
+                className={`
+                  group relative flex items-center gap-1.5 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider rounded
+                  transition-all duration-150 ease-out
+                  disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100
+                  enabled:hover:scale-105 enabled:active:scale-95
+                  ${justSent ? 'animate-[send-success_0.4s_ease-out]' : ''}
+                `}
+                style={{
+                  background: justSent
+                    ? hexToRgba(accent, 0.4)
+                    : sending
+                      ? hexToRgba(accent, 0.25)
+                      : hexToRgba(accent, 0.15),
+                  color: accent,
+                  border: `1px solid ${hexToRgba(accent, justSent ? 0.7 : 0.3)}`,
+                  boxShadow: canSend && !sending
+                    ? `0 0 0 0 ${hexToRgba(accent, 0)}`
+                    : justSent
+                      ? `0 0 20px ${hexToRgba(accent, 0.5)}, 0 0 40px ${hexToRgba(accent, 0.2)}`
+                      : 'none',
+                }}
+                onMouseEnter={(e) => {
+                  if (canSend && !sending) {
+                    e.currentTarget.style.boxShadow = `0 0 12px ${hexToRgba(accent, 0.4)}, 0 0 24px ${hexToRgba(accent, 0.15)}`
+                    e.currentTarget.style.background = hexToRgba(accent, 0.25)
+                    e.currentTarget.style.borderColor = hexToRgba(accent, 0.5)
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!justSent) {
+                    e.currentTarget.style.boxShadow = 'none'
+                    e.currentTarget.style.background = hexToRgba(accent, 0.15)
+                    e.currentTarget.style.borderColor = hexToRgba(accent, 0.3)
+                  }
+                }}
+              >
+                <span
+                  className={`material-symbols-outlined text-sm transition-transform duration-200 ${
+                    sending ? 'animate-[send-fly_0.6s_ease-in-out_infinite]' : ''
+                  } ${justSent ? 'animate-[send-pop_0.3s_ease-out]' : ''}`}
+                  style={{ fontVariationSettings: "'FILL' 1" }}
+                >
+                  {sending ? 'rocket_launch' : 'send'}
+                </span>
+                {sending ? 'Sending...' : 'Send'}
+                {/* Glow ring on hover */}
+                <span
+                  className="absolute inset-0 rounded opacity-0 group-enabled:group-hover:opacity-100 transition-opacity duration-200 pointer-events-none"
+                  style={{
+                    background: `radial-gradient(ellipse at center, ${hexToRgba(accent, 0.1)} 0%, transparent 70%)`,
+                  }}
+                />
+              </button>
+            </div>
           </div>
         </div>
       )}
