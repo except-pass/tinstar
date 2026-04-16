@@ -3,8 +3,9 @@ export type ObservabilityState =
   | 'downloading'  // fetching binaries
   | 'starting'     // binaries present, children starting
   | 'ready'        // all healthy
-  | 'degraded'     // repeated crashes, retry blocked
-  | 'disabled'     // TINSTAR_TELEMETRY=0
+  | 'degraded'        // repeated crashes, retry blocked
+  | 'download-failed' // binary download failed after retries
+  | 'disabled'        // TINSTAR_TELEMETRY=0
 
 export interface DownloadProgress {
   component: 'prometheus' | 'alloy'

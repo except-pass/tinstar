@@ -3,8 +3,8 @@ import type { ObservabilityState, HudSnapshot } from '../types'
 
 describe('observability types', () => {
   it('ObservabilityState enumerates expected states', () => {
-    const states: ObservabilityState[] = ['idle', 'downloading', 'starting', 'ready', 'degraded', 'disabled']
-    expect(states).toHaveLength(6)
+    const states: ObservabilityState[] = ['idle', 'downloading', 'starting', 'ready', 'degraded', 'download-failed', 'disabled']
+    expect(states).toHaveLength(7)
   })
 
   it('HudSnapshot includes required fields', () => {
