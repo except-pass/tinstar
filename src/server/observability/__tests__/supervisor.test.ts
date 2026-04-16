@@ -152,4 +152,15 @@ describe('Supervisor graceful shutdown', () => {
     // kill(pid, 0) should fail (ESRCH) — the child is gone
     expect(() => process.kill(pidBefore, 0)).toThrow()
   })
+
+  it('clears pid and child handles after stop so repeat stop is a no-op', async () => {
+    const sup = shSupervisor('sleep 5', tmp)
+    await sup.start()
+    expect(sup.pid).toBeGreaterThan(0)
+    await sup.stop()
+    expect(sup.pid).toBe(0)
+    // repeat stop must not throw or hang
+    await sup.stop()
+    expect(sup.pid).toBe(0)
+  })
 })

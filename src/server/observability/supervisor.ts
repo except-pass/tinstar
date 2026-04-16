@@ -144,6 +144,9 @@ export class Supervisor {
     if (existsSync(f)) {
       try { unlinkSync(f) } catch { /* ignore */ }
     }
+    this.pid = 0
+    this.child = null
+    this.adopted = false
   }
 
   private tryAdopt(): number | null {
