@@ -171,7 +171,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
         case 'tab-prev':        setCenterTabIndex(i => (i - 1 + 2) % 2);        break
         case 'activate':        /* no-op for now */                               break
         case 'toggle-prompt':   setPromptComposerExpanded(e => !e);              break
-        case 'fit-viewport':    fitWidgetToViewport(run.id);                     break
+        case 'fit-viewport':    fitWidgetToViewport(`run-${run.id}`);            break
       }
     })
     return () => deregisterActionHandler(run.id)

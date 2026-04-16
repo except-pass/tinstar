@@ -718,14 +718,21 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       fit: (nodeId: string) => {
         const layout = getLayout(nodeId)
         if (!layout) return
-        const vw = window.innerWidth
-        const vh = window.innerHeight
-        const newHeight = Math.min(vh, Math.max(FIT_MIN_HEIGHT, vh))
+        const el = containerRef.current
+        if (!el) return
+        // Use the canvas element's rect, not the window — sidebars take up window width.
+        const rect = el.getBoundingClientRect()
+        const newHeight = Math.max(FIT_MIN_HEIGHT, rect.height)
         // Grow/shrink the widget; cascade expansion updates ancestor containers.
         resizeNode(nodeId, layout.width, newHeight)
-        // Center the (resized) widget in the viewport at zoom 1.
-        const cx = vw / 2 - (layout.x + layout.width / 2)
-        const cy = vh / 2 - (layout.y + newHeight / 2)
+        // Clear any focus-induced auto-scroll on the canvas container. Browsers will
+        // scroll even overflow-hidden elements to reveal focused descendants, which
+        // invalidates our camera math. See: https://drafts.csswg.org/cssom-view/#element-scrolling-members
+        el.scrollLeft = 0
+        el.scrollTop = 0
+        // Center the (resized) widget in the canvas viewport at zoom 1.
+        const cx = rect.width / 2 - (layout.x + layout.width / 2)
+        const cy = rect.height / 2 - (layout.y + newHeight / 2)
         setCamera({ x: Math.round(cx), y: Math.round(cy), zoom: 1 })
       },
     })
@@ -1013,6 +1020,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     <div
       ref={containerRef}
       tabIndex={-1}
+      data-testid="infinite-canvas"
       className="w-full h-full overflow-hidden relative outline-none"
       style={{
         cursor: cursorStyle,
@@ -1040,7 +1048,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           setEditorDragActive(false)
         }
       }}
-      data-testid="infinite-canvas"
     >
       {/* File-editor drag overlay — covers iframes so the drop always lands on the canvas */}
       {editorDragActive && (
