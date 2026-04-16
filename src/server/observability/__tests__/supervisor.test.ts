@@ -50,3 +50,45 @@ describe('Supervisor spawn + readiness', () => {
     await sup.stop()
   })
 })
+
+import { spawn } from 'node:child_process'
+
+describe('Supervisor adoption', () => {
+  it('adopts a live pid recorded in the state file instead of spawning', async () => {
+    // spawn a long-lived sleep out-of-band
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+
+    // pre-seed state file
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: Date.now(),
+    }))
+
+    const sup = new Supervisor({
+      name: 'fake',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => true,
+      expectedBinaryName: 'sleep',
+    })
+    await sup.start()
+    expect(sup.pid).toBe(pid)
+    expect(sup.state).toBe('ready')
+    // do NOT call stop() — that would kill the out-of-band sleep. Instead, kill directly.
+    try { process.kill(pid, 'SIGTERM') } catch { /* gone */ }
+  })
+
+  it('ignores a stale pidfile with a dead pid and spawns fresh', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: 999999, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: 0,
+    }))
+    const sup = shSupervisor('sleep 5', tmp)
+    await sup.start()
+    expect(sup.pid).not.toBe(999999)
+    expect(sup.state).toBe('ready')
+    await sup.stop()
+  })
+})

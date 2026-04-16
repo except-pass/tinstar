@@ -1,5 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process'
-import { writeFileSync, existsSync, unlinkSync, mkdirSync } from 'node:fs'
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { writeFileSync, existsSync, readFileSync, unlinkSync, mkdirSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ObservabilityState, SupervisorState } from './types.js'
 
@@ -14,6 +14,7 @@ export interface SupervisorOpts {
   probe: () => Promise<boolean>
   probeTimeoutMs?: number
   probeIntervalMs?: number
+  expectedBinaryName?: string
 }
 
 export class Supervisor {
@@ -26,6 +27,16 @@ export class Supervisor {
   async start(): Promise<void> {
     this.state = 'starting'
     mkdirSync(this.opts.stateDir, { recursive: true })
+
+    // Try to adopt an existing process recorded in the state file.
+    const adopted = this.tryAdopt()
+    if (adopted) {
+      this.pid = adopted
+      this.adopted = true
+      const ok = await this.waitForReady()
+      this.state = ok ? 'ready' : 'degraded'
+      return
+    }
 
     this.child = spawn(this.opts.binaryPath, this.opts.args, {
       detached: true,
@@ -91,4 +102,32 @@ export class Supervisor {
       try { unlinkSync(f) } catch { /* ignore */ }
     }
   }
+
+  private tryAdopt(): number | null {
+    if (!existsSync(this.stateFile())) return null
+    try {
+      const s = JSON.parse(readFileSync(this.stateFile(), 'utf-8')) as SupervisorState
+      if (!s.pid) return null
+      // kill(pid, 0) throws if the process doesn't exist
+      try { process.kill(s.pid, 0) } catch { return null }
+      // Validate the binary name if an expected name was provided
+      if (this.opts.expectedBinaryName) {
+        const actual = getProcessName(s.pid)
+        if (actual && !actual.includes(this.opts.expectedBinaryName)) return null
+      }
+      return s.pid
+    } catch {
+      return null
+    }
+  }
+}
+
+function getProcessName(pid: number): string | null {
+  if (process.platform === 'linux') {
+    try { return readlinkSync(`/proc/${pid}/exe`) } catch { return null }
+  }
+  if (process.platform === 'darwin') {
+    try { return execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf-8' }).trim() } catch { return null }
+  }
+  return null
 }
