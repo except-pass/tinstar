@@ -2,18 +2,18 @@ import { useCallback, useMemo, useSyncExternalStore } from 'react'
 
 const MAX_ITEMS = 20
 
-const store = new Map<string, string[]>()
+const store = new Map<string, readonly string[]>()
 const listeners = new Map<string, Set<() => void>>()
+
+const EMPTY: readonly string[] = Object.freeze([])
 
 function notify(sessionId: string) {
   listeners.get(sessionId)?.forEach(fn => fn())
 }
 
-function getSnapshot(sessionId: string): string[] {
+function getSnapshot(sessionId: string): readonly string[] {
   return store.get(sessionId) ?? EMPTY
 }
-
-const EMPTY: readonly string[] = Object.freeze([])
 
 function subscribe(sessionId: string, cb: () => void): () => void {
   let set = listeners.get(sessionId)
@@ -34,14 +34,12 @@ export interface PromptHistory {
 }
 
 export function usePromptHistory(sessionId: string | undefined): PromptHistory {
-  const key = sessionId ?? ''
-
   const subscribeStable = useCallback(
     (cb: () => void) => (sessionId ? subscribe(sessionId, cb) : () => {}),
     [sessionId],
   )
   const getSnapshotStable = useCallback(
-    () => (sessionId ? getSnapshot(sessionId) : (EMPTY as string[])),
+    () => (sessionId ? getSnapshot(sessionId) : EMPTY),
     [sessionId],
   )
 
