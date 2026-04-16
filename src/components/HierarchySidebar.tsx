@@ -104,6 +104,8 @@ interface HierarchySidebarProps {
   onCollapse?: () => void
   renamingNodeId?: string | null
   onRenameComplete?: () => void
+  hiddenRunIds?: Set<string>
+  onToggleRunHidden?: (runId: string) => void
 }
 
 /** Metadata for all Work Widget types — drives sidebar icons, badge, close button, and focus behavior */
@@ -143,6 +145,8 @@ function SidebarNode({
   onDragStart,
   renamingNodeId,
   onRenameComplete,
+  hiddenRunIds,
+  onToggleRunHidden,
 }: {
   node: TreeNode
   depth: number
@@ -158,6 +162,8 @@ function SidebarNode({
   onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
   renamingNodeId?: string | null
   onRenameComplete?: () => void
+  hiddenRunIds?: Set<string>
+  onToggleRunHidden?: (runId: string) => void
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
   const { slotsForNode } = useHotgroupContext()
@@ -171,6 +177,7 @@ function SidebarNode({
   const hasChildren = node.children.length > 0
   const isRun = node.type === 'run'
   const isWorkWidget = node.type in WORK_WIDGET_META
+  const runHidden = isRun && hiddenRunIds?.has(node.entityId) === true
   const isDragging = dragNodeId === node.id
   const isDropInside = dropTarget?.nodeId === node.id && dropTarget?.position === 'inside'
   const isDropBefore = dropTarget?.nodeId === node.id && dropTarget?.position === 'before'
@@ -222,6 +229,7 @@ function SidebarNode({
           hovered && !isDragging ? 'bg-surface-hover' : '',
           isDragging ? 'opacity-40' : '',
           isDropInside ? 'bg-primary/10 ring-1 ring-primary/40' : '',
+          runHidden ? 'opacity-50' : '',
         ].join(' ')}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         data-testid={`sidebar-node-${node.id}`}
@@ -309,6 +317,30 @@ function SidebarNode({
         {/* Hotgroup badge for all work widgets */}
         {isWorkWidget && !editing && (
           <HotgroupBadge slots={slotsForNode(node.id)} testId={`sidebar-hotgroup-badge-${node.id}`} />
+        )}
+
+        {/* Visibility eyeball — runs only.
+            Hidden runs show the closed eye permanently so they can be restored.
+            Visible runs show the open eye on hover/selected, matching the other row actions. */}
+        {isRun && !editing && onToggleRunHidden && (
+          <button
+            className={[
+              'w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary transition-opacity',
+              runHidden ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+            ].join(' ')}
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleRunHidden(node.entityId)
+            }}
+            data-testid={`run-visibility-${node.id}`}
+            aria-label={runHidden ? `Show ${node.label}` : `Hide ${node.label}`}
+            title={runHidden ? 'Show on canvas' : 'Hide from canvas'}
+            style={{ opacity: runHidden || hovered ? 1 : undefined }}
+          >
+            <span className="material-symbols-outlined text-sm leading-none">
+              {runHidden ? 'visibility_off' : 'visibility'}
+            </span>
+          </button>
         )}
 
         {/* Count badge */}
@@ -424,6 +456,8 @@ function SidebarNode({
               onDragStart={onDragStart}
               renamingNodeId={renamingNodeId}
               onRenameComplete={onRenameComplete}
+              hiddenRunIds={hiddenRunIds}
+              onToggleRunHidden={onToggleRunHidden}
             />
           ))}
         </div>
@@ -466,6 +500,8 @@ function TreeWithOrphanSeparators({
   onDragStart,
   renamingNodeId,
   onRenameComplete,
+  hiddenRunIds,
+  onToggleRunHidden,
 }: {
   nodes: TreeNode[]
   depth: number
@@ -481,6 +517,8 @@ function TreeWithOrphanSeparators({
   onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
   renamingNodeId?: string | null
   onRenameComplete?: () => void
+  hiddenRunIds?: Set<string>
+  onToggleRunHidden?: (runId: string) => void
 }) {
   const normal = nodes.filter(n => !n.orphan)
   const orphans = nodes.filter(n => n.orphan)
@@ -504,6 +542,8 @@ function TreeWithOrphanSeparators({
           onDragStart={onDragStart}
           renamingNodeId={renamingNodeId}
           onRenameComplete={onRenameComplete}
+          hiddenRunIds={hiddenRunIds}
+          onToggleRunHidden={onToggleRunHidden}
         />
       ))}
       {orphans.length > 0 && <OrphanSeparator />}
@@ -524,13 +564,15 @@ function TreeWithOrphanSeparators({
           onDragStart={onDragStart}
           renamingNodeId={renamingNodeId}
           onRenameComplete={onRenameComplete}
+          hiddenRunIds={hiddenRunIds}
+          onToggleRunHidden={onToggleRunHidden}
         />
       ))}
     </>
   )
 }
 
-export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
+export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
   const showEmpty = showEmptyEntities ?? true
@@ -678,6 +720,8 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
             onDragStart={handleDragStart}
             renamingNodeId={renamingNodeId}
             onRenameComplete={onRenameComplete}
+            hiddenRunIds={hiddenRunIds}
+            onToggleRunHidden={onToggleRunHidden}
           />
         )}
       </div>

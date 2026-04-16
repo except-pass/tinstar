@@ -6,6 +6,7 @@ import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { DEFAULT_LEVELS } from '../domain/dimension-meta'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
 import { cycleNext, cyclePrev } from '../hooks/useReadyQueue'
+import { useHiddenRuns } from '../hooks/useHiddenRuns'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
 import { SettingsDialog } from './SettingsDialog'
@@ -99,6 +100,10 @@ function WorkspaceShellInner() {
   }, [])
 
   const [showEmptyEntities, setShowEmptyEntities] = useState(() => localStorage.getItem('tinstar-show-empty-entities') !== 'false')
+
+  // Figma-style per-run visibility — hidden runs stay in the sidebar (dimmed) but
+  // are pruned from the canvas and skipped by Ctrl+[ / Ctrl+] cycling.
+  const { hiddenIds: hiddenRunIds, isHidden: isRunHidden, toggleHidden: toggleRunHidden } = useHiddenRuns()
 
   const sidebarTree = useMemo(
     () => showEmptyEntities ? rawSidebarTree : filterEmptyNodes(rawSidebarTree),
@@ -261,6 +266,27 @@ function WorkspaceShellInner() {
 
     return [...inject(sidebarTree), ...orphans]
   }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticNatsTrafficNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
+
+  // Canvas view: drop run nodes the user has hidden via the eyeball. The sidebar
+  // still shows them (dimmed) so the user can re-show them.
+  const visibleCanvasTree = useMemo(() => {
+    if (hiddenRunIds.size === 0) return canvasTree
+    const prune = (nodes: TreeNode[]): TreeNode[] => {
+      const out: TreeNode[] = []
+      for (const node of nodes) {
+        if (node.type === 'run' && hiddenRunIds.has(node.entityId)) continue
+        if (node.children.length === 0) {
+          out.push(node)
+          continue
+        }
+        const children = prune(node.children)
+        if (children === node.children) out.push(node)
+        else out.push({ ...node, children })
+      }
+      return out
+    }
+    return prune(canvasTree)
+  }, [canvasTree, hiddenRunIds])
 
   const allNodeIds = useMemo(() => {
     const ids: string[] = Array.from(runMap.keys()).map(id => `run-${id}`)
@@ -594,22 +620,33 @@ function WorkspaceShellInner() {
     onNavigate: (id) => triggerWidgetFlourish(id),
   })
 
+  // sessionIds of runs hidden via the eyeball — used to skip them while cycling.
+  const hiddenSessionIds = useMemo(() => {
+    const out = new Set<string>()
+    for (const run of allRuns) {
+      if (isRunHidden(run.id) && run.sessionId) out.add(run.sessionId)
+    }
+    return out
+  }, [allRuns, isRunHidden])
+
   useGlobalHotkeys({
     onCycleReadyNext: () => {
-      const run = cycleNext(allRuns, readyQueue, selectedRunId)
+      const queue = readyQueue.filter(name => !hiddenSessionIds.has(name))
+      const run = cycleNext(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleReadyPrev: () => {
-      const run = cyclePrev(allRuns, readyQueue, selectedRunId)
+      const queue = readyQueue.filter(name => !hiddenSessionIds.has(name))
+      const run = cyclePrev(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllNext: () => {
-      const activeNames = allRuns.filter(r => r.status !== 'stopped').map(r => r.sessionId).filter(Boolean) as string[]
+      const activeNames = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
       const run = cycleNext(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllPrev: () => {
-      const activeNames = allRuns.filter(r => r.status !== 'stopped').map(r => r.sessionId).filter(Boolean) as string[]
+      const activeNames = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
       const run = cyclePrev(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
@@ -803,6 +840,8 @@ function WorkspaceShellInner() {
                         onCollapse={() => setSidebarCollapsed(true)}
                         renamingNodeId={renamingNodeId}
                         onRenameComplete={() => setRenamingNodeId(null)}
+                        hiddenRunIds={hiddenRunIds}
+                        onToggleRunHidden={toggleRunHidden}
                       />
                     </div>
                     <div
@@ -818,7 +857,7 @@ function WorkspaceShellInner() {
                 {/* Canvas */}
                 <div className="flex-1 relative overflow-hidden" data-testid="canvas-slot">
                   <InfiniteCanvas
-                    tree={canvasTree}
+                    tree={visibleCanvasTree}
                     editorWidgetMap={editorWidgetMap}
                     browserWidgetMap={browserWidgetMap}
                     imageWidgetMap={imageWidgetMap}
