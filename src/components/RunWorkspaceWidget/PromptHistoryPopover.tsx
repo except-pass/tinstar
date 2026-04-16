@@ -1,5 +1,5 @@
 // src/components/RunWorkspaceWidget/PromptHistoryPopover.tsx
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { hexToRgba } from '../runAccent'
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
 }
 
 export function PromptHistoryPopover({ history, accent, onSelect, onClose }: Props) {
+  const labelId = useId()
   const [selected, setSelected] = useState(0)
   const listRef = useRef<HTMLUListElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -75,7 +76,7 @@ export function PromptHistoryPopover({ history, accent, onSelect, onClose }: Pro
       style={{ borderColor: hexToRgba(accent, 0.3) }}
     >
       <div
-        id="prompt-history-label"
+        id={labelId}
         className="px-2 py-1 text-2xs font-mono uppercase tracking-wider border-b"
         style={{
           color: hexToRgba(accent, 0.6),
@@ -88,15 +89,15 @@ export function PromptHistoryPopover({ history, accent, onSelect, onClose }: Pro
         ref={listRef}
         className="max-h-60 overflow-y-auto scrollbar-thin"
         role="listbox"
-        aria-labelledby="prompt-history-label"
-        aria-activedescendant={history.length > 0 ? `prompt-history-item-${selected}` : undefined}
+        aria-labelledby={labelId}
+        aria-activedescendant={history.length > 0 ? `${labelId}-item-${selected}` : undefined}
       >
         {history.map((item, i) => {
           const isSel = i === selected
           return (
             <li
               key={i}
-              id={`prompt-history-item-${i}`}
+              id={`${labelId}-item-${i}`}
               role="option"
               aria-selected={isSel}
               data-testid={`prompt-history-item-${i}`}
