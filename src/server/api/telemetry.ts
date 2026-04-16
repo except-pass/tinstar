@@ -2,6 +2,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { SSEBroadcaster } from './sse.js'
 import type { TelemetryQuery } from '../observability/query.js'
 import type { HudSnapshot, ObservabilityState } from '../observability/types.js'
+import { log } from '../logger.js'
+
+// How often to broadcast a fresh HUD snapshot to connected SSE clients.
+const POLL_INTERVAL_MS = 1_500
 
 export interface TelemetryApiDeps {
   sse: SSEBroadcaster
@@ -44,13 +48,20 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
   function startPolling(): void {
     if (pollTimer) return
     pollTimer = setInterval(async () => {
-      const snap = await buildSnapshot()
-      const serialized = JSON.stringify(snap)
-      if (serialized !== lastSent) {
-        deps.sse.broadcastEvent('telemetry:hud', snap)
-        lastSent = serialized
+      try {
+        const snap = await buildSnapshot()
+        const serialized = JSON.stringify(snap)
+        if (serialized !== lastSent) {
+          deps.sse.broadcastEvent('telemetry:hud', snap)
+          lastSent = serialized
+        }
+      } catch (err) {
+        // Telemetry polling must never crash the server. Silently drop this tick;
+        // the next tick will retry. If the underlying condition persists, callers
+        // still see the last-broadcast snapshot until it heals.
+        log.warn('telemetry', `poll tick error: ${(err as Error).message}`)
       }
-    }, 1_500)
+    }, POLL_INTERVAL_MS)
   }
 
   function stopPolling(): void {
