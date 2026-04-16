@@ -18,6 +18,7 @@ export const GLOBAL_KEYS: Array<{ key: string; label: string }> = [
 export const CANVAS_KEYS: Array<{ key: string; label: string }> = [
   { key: 'Ctrl+G',    label: 'Arrange grid' },
   { key: 'Ctrl+L',    label: 'Swim lanes' },
+  { key: 'Alt+KeyZ',  label: 'Reset zoom' },
 ]
 
 export const QUICKDRAW_KEYS: Array<{ key: string; label: string }> = [
