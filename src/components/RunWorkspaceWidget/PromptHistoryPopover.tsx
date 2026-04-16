@@ -13,6 +13,10 @@ export function PromptHistoryPopover({ history, accent, onSelect, onClose }: Pro
   const [selected, setSelected] = useState(0)
   const listRef = useRef<HTMLUListElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  const onSelectRef = useRef(onSelect)
+  const onCloseRef = useRef(onClose)
+  useEffect(() => { onSelectRef.current = onSelect }, [onSelect])
+  useEffect(() => { onCloseRef.current = onClose }, [onClose])
 
   // Clamp selection when history changes.
   useEffect(() => {
@@ -44,36 +48,34 @@ export function PromptHistoryPopover({ history, accent, onSelect, onClose }: Pro
       } else if (e.key === 'Enter') {
         e.preventDefault()
         const item = history[selected]
-        if (item !== undefined) onSelect(item)
+        if (item !== undefined) onSelectRef.current(item)
       } else if (e.key === 'Escape') {
         e.preventDefault()
-        onClose()
+        onCloseRef.current()
       }
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
-  }, [history, selected, onSelect, onClose])
+  }, [history, selected])
 
   // Outside-click close.
   useEffect(() => {
     function onPointer(e: PointerEvent) {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) onClose()
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) onCloseRef.current()
     }
     document.addEventListener('pointerdown', onPointer, true)
     return () => document.removeEventListener('pointerdown', onPointer, true)
-  }, [onClose])
+  }, [])
 
   return (
     <div
       ref={rootRef}
       data-testid="prompt-history-popover"
-      className="border rounded animate-[history-in_110ms_ease-out]"
-      style={{
-        background: 'var(--surface-panel, #0b0f14)',
-        borderColor: hexToRgba(accent, 0.3),
-      }}
+      className="bg-surface-panel border rounded animate-[history-in_110ms_ease-out]"
+      style={{ borderColor: hexToRgba(accent, 0.3) }}
     >
       <div
+        id="prompt-history-label"
         className="px-2 py-1 text-2xs font-mono uppercase tracking-wider border-b"
         style={{
           color: hexToRgba(accent, 0.6),
@@ -86,12 +88,15 @@ export function PromptHistoryPopover({ history, accent, onSelect, onClose }: Pro
         ref={listRef}
         className="max-h-60 overflow-y-auto scrollbar-thin"
         role="listbox"
+        aria-labelledby="prompt-history-label"
+        aria-activedescendant={history.length > 0 ? `prompt-history-item-${selected}` : undefined}
       >
         {history.map((item, i) => {
           const isSel = i === selected
           return (
             <li
               key={i}
+              id={`prompt-history-item-${i}`}
               role="option"
               aria-selected={isSel}
               data-testid={`prompt-history-item-${i}`}
