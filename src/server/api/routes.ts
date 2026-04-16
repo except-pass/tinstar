@@ -48,6 +48,7 @@ import { imageSize } from 'image-size'
 import { computeNatsSubscriptions, diffSubscriptions } from '../sessions/nats-subscriptions'
 import { natsControlSocketPath } from '../sessions/backends/tmux'
 import { getDetailedUsage } from '../sessions/context-usage'
+import type { TelemetryRoutes } from './telemetry'
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
 function buildNatsSubject(
@@ -476,6 +477,7 @@ export interface RouteContext {
   readyQueue: ReadyQueue
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
   readinessTracker?: import('../sessions/readiness').SessionReadinessTracker
+  telemetryRoutes?: TelemetryRoutes
 }
 
 function json(res: ServerResponse, data: unknown, status = 200): true {
@@ -530,6 +532,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     })
     res.end()
     return true
+  }
+
+  // Telemetry routes — delegated to createTelemetryRoutes
+  if (ctx.telemetryRoutes && url.startsWith('/api/telemetry/')) {
+    // Normalize pathname (strip query string)
+    const pathname = url.split('?')[0]
+    if (await ctx.telemetryRoutes.handle(req, res, pathname)) return true
   }
 
   // GET /api/docs — Scalar API reference UI
