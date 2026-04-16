@@ -9,9 +9,8 @@ function renderTemplate(tmplRelPath: string, vars: Record<string, string | numbe
   return raw.replace(/{{(\w+)}}/g, (_, k) => String(vars[k] ?? ''))
 }
 
-export function renderPrometheusYml(vars: { storagePath: string; port: number }): string {
+export function renderPrometheusYml(vars: { port: number }): string {
   return renderTemplate('templates/prometheus.yml.tmpl', {
-    STORAGE_PATH: vars.storagePath,
     PORT: vars.port,
   })
 }
