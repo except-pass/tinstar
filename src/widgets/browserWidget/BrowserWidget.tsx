@@ -3,6 +3,8 @@ import type { BrowserWidget } from '../../domain/types'
 import type { WidgetProps } from '../widgetComponentRegistry'
 import { hexToRgba, resolveRunAccent } from '../../components/runAccent'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
+import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
+import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { HotgroupBadge } from '../../components/HotgroupBadge'
 
 function proxyUrl(widgetId: string, targetUrl: string): string {
@@ -63,6 +65,14 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
   useEffect(() => {
     if (editing) inputRef.current?.focus()
   }, [editing])
+
+  // Register hotkey action handler for this widget
+  useEffect(() => {
+    registerActionHandler(widget.id, (action) => {
+      if (action === 'fit-viewport') fitWidgetToViewport(widget.id)
+    })
+    return () => deregisterActionHandler(widget.id)
+  }, [widget.id])
 
   const navigate = useCallback((target: string) => {
     const trimmed = target.trim()
