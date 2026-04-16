@@ -103,3 +103,30 @@ describe('Supervisor adoption', () => {
     await sup.stop()
   })
 })
+
+describe('Supervisor crash restart', () => {
+  it('restarts the child on unexpected exit (within the retry budget)', async () => {
+    let spawnCount = 0
+    const bin = join(tmp, 'crashy.sh')
+    writeFileSync(bin, `#!/bin/sh\nexit 1\n`)
+    chmodSync(bin, 0o755)
+
+    const sup = new Supervisor({
+      name: 'crashy',
+      binaryPath: bin,
+      args: [],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => { spawnCount++; return false },
+      probeTimeoutMs: 200,
+      probeIntervalMs: 50,
+      restartBackoffMs: 50,
+      maxRestartsPerMinute: 3,
+    })
+    await sup.start()
+    // probe sees multiple spawn attempts
+    expect(spawnCount).toBeGreaterThan(1)
+    expect(sup.state).toBe('degraded')
+    await sup.stop()
+  })
+})

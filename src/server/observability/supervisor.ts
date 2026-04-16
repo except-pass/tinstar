@@ -15,6 +15,8 @@ export interface SupervisorOpts {
   probeTimeoutMs?: number
   probeIntervalMs?: number
   expectedBinaryName?: string
+  restartBackoffMs?: number            // default: 2000
+  maxRestartsPerMinute?: number        // default: 5
 }
 
 export class Supervisor {
@@ -22,6 +24,9 @@ export class Supervisor {
   pid = 0
   private child: ChildProcess | null = null
   private adopted = false
+  private restartCount = 0
+  private restartWindowStart = 0
+  private exitHandler: ((code: number | null) => void) | null = null
   constructor(private readonly opts: SupervisorOpts) {}
 
   async start(): Promise<void> {
@@ -38,15 +43,7 @@ export class Supervisor {
       return
     }
 
-    this.child = spawn(this.opts.binaryPath, this.opts.args, {
-      detached: true,
-      stdio: 'ignore',
-      env: { ...process.env, ...(this.opts.env ?? {}) },
-    })
-    this.child.unref()
-    this.pid = this.child.pid ?? 0
-    if (!this.pid) throw new Error(`failed to spawn ${this.opts.name}`)
-    this.persist()
+    this.spawnOnce()
 
     const ok = await this.waitForReady()
     this.state = ok ? 'ready' : 'degraded'
@@ -70,6 +67,42 @@ export class Supervisor {
     }
     this.cleanupState()
     this.state = 'idle'
+  }
+
+  private spawnOnce(): void {
+    this.child = spawn(this.opts.binaryPath, this.opts.args, {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, ...(this.opts.env ?? {}) },
+    })
+    this.child.unref()
+    this.pid = this.child.pid ?? 0
+    if (!this.pid) throw new Error(`failed to spawn ${this.opts.name}`)
+    this.persist()
+    this.exitHandler = (_code) => {
+      // ignore if we're stopping
+      if (this.state === 'idle') return
+      this.onChildCrash()
+    }
+    this.child.once('exit', this.exitHandler)
+  }
+
+  private onChildCrash(): void {
+    const now = Date.now()
+    const max = this.opts.maxRestartsPerMinute ?? 5
+    const backoff = this.opts.restartBackoffMs ?? 2_000
+    if (now - this.restartWindowStart > 60_000) {
+      this.restartWindowStart = now
+      this.restartCount = 0
+    }
+    this.restartCount++
+    if (this.restartCount > max) {
+      this.state = 'degraded'
+      return
+    }
+    setTimeout(() => {
+      try { this.spawnOnce() } catch { this.state = 'degraded' }
+    }, backoff)
   }
 
   private async waitForReady(): Promise<boolean> {
