@@ -23,6 +23,11 @@ export function CanvasHud({ toggleRef }: Props) {
 
   const toggle = useCallback(() => setVisible(v => !v), [])
 
+  const handleRetry = useCallback(() => {
+    fetch('/api/telemetry/restart', { method: 'POST' })
+      .catch(err => console.error('telemetry restart failed', err))
+  }, [])
+
   useEffect(() => {
     if (toggleRef) toggleRef.current = toggle
     return () => { if (toggleRef) toggleRef.current = null }
@@ -45,7 +50,7 @@ export function CanvasHud({ toggleRef }: Props) {
   if (snapshot.state !== 'ready') {
     return (
       <div style={wrapStyle} data-testid="canvas-hud">
-        <TelemetryBootstrap snap={snapshot} onRetry={() => fetch('/api/telemetry/restart', { method: 'POST' })} />
+        <TelemetryBootstrap snap={snapshot} onRetry={handleRetry} />
       </div>
     )
   }

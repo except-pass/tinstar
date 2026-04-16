@@ -23,6 +23,7 @@ export interface HudSnapshot {
   cost: { total: number | null; byModel: ModelBreakdown }
   tokens: { total: number | null }
   rate: { perMin: number | null; perHour: number | null }
+  /** Cache-hit fraction in range 0..1 (not 0..100 — the `Pct` suffix is historical). */
   cacheHitPct: number | null
   autonomy: { ratio: number | null; cliSeconds: number | null; userSeconds: number | null }
   staleSeconds?: number
