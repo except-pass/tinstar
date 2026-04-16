@@ -31,6 +31,8 @@ import { log } from './logger'
 import { reconcileGitHistory } from './commits'
 import { NatsTrafficBridge } from './nats-traffic'
 import { SessionReadinessTracker } from './sessions/readiness'
+import { ObservabilityStack } from './observability/index.js'
+import { createTelemetryRoutes } from './api/telemetry.js'
 
 export function initBackend(): RouteContext {
   // Instantiate core components
@@ -47,6 +49,27 @@ export function initBackend(): RouteContext {
   const readyQueue = new ReadyQueue()
   sse.setReadyQueue(readyQueue.getQueue())
   bus.on('ready_queue.update', (ev) => sse.setReadyQueue(ev.payload.queue))
+
+  // Observability stack — fire-and-forget; state is exposed via telemetry API
+  const observability = new ObservabilityStack()
+  observability.start().catch((err) => log.error('observability', 'start failed', { error: (err as Error).message }))
+
+  const telemetryRoutes = createTelemetryRoutes({
+    sse,
+    get query() { return observability.query },
+    getState: () => observability.state,
+    getProgress: () => observability.progress,
+    restart: () => observability.restart(),
+    getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
+  })
+
+  const shutdown = async () => {
+    try { await observability.stop() } catch { /* ignore */ }
+    try { telemetryRoutes.stopPolling() } catch { /* ignore */ }
+    process.exit(0)
+  }
+  process.once('SIGINT', shutdown)
+  process.once('SIGTERM', shutdown)
 
   // Start draft watcher — emits skill.drafted SSE events when new drafts appear
   ensureDraftsDir()
@@ -300,7 +323,7 @@ export function initBackend(): RouteContext {
     }
   }
 
-  return { docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue, natsTraffic, readinessTracker }
+  return { docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue, natsTraffic, readinessTracker, telemetryRoutes }
 }
 
 export function tinstarBackend(): Plugin {
