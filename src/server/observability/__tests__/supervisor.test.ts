@@ -91,4 +91,15 @@ describe('Supervisor adoption', () => {
     expect(sup.state).toBe('ready')
     await sup.stop()
   })
+
+  it('ignores a malformed pidfile with a non-positive pid', async () => {
+    writeFileSync(join(tmp, 'fake.state.json'), JSON.stringify({
+      pid: -1, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: 0,
+    }))
+    const sup = shSupervisor('sleep 5', tmp)
+    await sup.start()
+    expect(sup.pid).toBeGreaterThan(0)
+    expect(sup.state).toBe('ready')
+    await sup.stop()
+  })
 })

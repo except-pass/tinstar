@@ -107,7 +107,7 @@ export class Supervisor {
     if (!existsSync(this.stateFile())) return null
     try {
       const s = JSON.parse(readFileSync(this.stateFile(), 'utf-8')) as SupervisorState
-      if (!s.pid) return null
+      if (!Number.isInteger(s.pid) || s.pid <= 0) return null
       // kill(pid, 0) throws if the process doesn't exist
       try { process.kill(s.pid, 0) } catch { return null }
       // Validate the binary name if an expected name was provided
