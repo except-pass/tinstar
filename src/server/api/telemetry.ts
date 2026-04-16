@@ -3,6 +3,7 @@ import type { SSEBroadcaster } from './sse.js'
 import type { TelemetryQuery } from '../observability/query.js'
 import type { HudSnapshot, ObservabilityState } from '../observability/types.js'
 import { log } from '../logger.js'
+import { makeFakeHud } from '../observability/fast-sim.js'
 
 // How often to broadcast a fresh HUD snapshot to connected SSE clients.
 const POLL_INTERVAL_MS = 1_500
@@ -22,10 +23,22 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
 
   async function buildSnapshot(sessionName?: string): Promise<HudSnapshot> {
     if (process.env.TINSTAR_FAST_SIM === '1') {
-      const { makeFakeHud } = await import('../observability/fast-sim.js')
       const fake = makeFakeHud()
       if (sessionName) {
-        return { ...fake, cost: { ...fake.cost, total: (fake.cost.total ?? 0) * 0.3 } }
+        const SESSION_SCALE = 0.3
+        const scaledByModel: Record<string, number> = {}
+        for (const [model, cost] of Object.entries(fake.cost.byModel)) {
+          scaledByModel[model] = cost * SESSION_SCALE
+        }
+        return {
+          ...fake,
+          cost: { total: (fake.cost.total ?? 0) * SESSION_SCALE, byModel: scaledByModel },
+          tokens: { total: Math.floor((fake.tokens.total ?? 0) * SESSION_SCALE) },
+          rate: {
+            perMin: (fake.rate.perMin ?? 0) * SESSION_SCALE,
+            perHour: (fake.rate.perHour ?? 0) * SESSION_SCALE,
+          },
+        }
       }
       return fake
     }
