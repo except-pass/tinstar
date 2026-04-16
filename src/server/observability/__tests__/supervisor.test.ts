@@ -106,7 +106,7 @@ describe('Supervisor adoption', () => {
 
 describe('Supervisor crash restart', () => {
   it('restarts the child on unexpected exit (within the retry budget)', async () => {
-    let spawnCount = 0
+    const pids = new Set<number>()
     const bin = join(tmp, 'crashy.sh')
     writeFileSync(bin, `#!/bin/sh\nexit 1\n`)
     chmodSync(bin, 0o755)
@@ -117,15 +117,15 @@ describe('Supervisor crash restart', () => {
       args: [],
       stateDir: tmp,
       port: 9999,
-      probe: async () => { spawnCount++; return false },
-      probeTimeoutMs: 200,
-      probeIntervalMs: 50,
-      restartBackoffMs: 50,
+      probe: async () => { if (sup.pid) pids.add(sup.pid); return false },
+      probeTimeoutMs: 2000,
+      probeIntervalMs: 25,
+      restartBackoffMs: 25,
       maxRestartsPerMinute: 3,
     })
     await sup.start()
-    // probe sees multiple spawn attempts
-    expect(spawnCount).toBeGreaterThan(1)
+    // Each restart uses a fresh OS pid; observing more than one proves the restart loop fired.
+    expect(pids.size).toBeGreaterThan(1)
     expect(sup.state).toBe('degraded')
     await sup.stop()
   })

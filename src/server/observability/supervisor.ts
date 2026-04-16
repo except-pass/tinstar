@@ -79,9 +79,9 @@ export class Supervisor {
     this.pid = this.child.pid ?? 0
     if (!this.pid) throw new Error(`failed to spawn ${this.opts.name}`)
     this.persist()
-    this.exitHandler = (_code) => {
-      // ignore if we're stopping
-      if (this.state === 'idle') return
+    this.exitHandler = () => {
+      // Ignore if we're stopping or have given up.
+      if (this.state === 'idle' || this.state === 'degraded') return
       this.onChildCrash()
     }
     this.child.once('exit', this.exitHandler)
@@ -102,7 +102,7 @@ export class Supervisor {
     }
     setTimeout(() => {
       try { this.spawnOnce() } catch { this.state = 'degraded' }
-    }, backoff)
+    }, backoff).unref()
   }
 
   private async waitForReady(): Promise<boolean> {
