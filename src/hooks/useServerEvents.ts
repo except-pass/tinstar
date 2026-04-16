@@ -194,7 +194,18 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
     if (delta.data === null) return { ...prev, runs: prev.runs.filter(r => r.id !== delta.id) }
     const run = delta.data as Run
     const exists = prev.runs.some(r => r.id === run.id)
-    return { ...prev, runs: exists ? prev.runs.map(r => r.id === run.id ? run : r) : [...prev.runs, run] }
+    const mergeRun = (prevRun: Run | undefined, next: Run): Run => ({
+      ...prevRun,
+      ...next,
+      touchedFiles: next.touchedFiles ?? prevRun?.touchedFiles ?? [],
+      recapEntries: next.recapEntries ?? prevRun?.recapEntries ?? [],
+    })
+    return {
+      ...prev,
+      runs: exists
+        ? prev.runs.map(r => (r.id === run.id ? mergeRun(r, run) : r))
+        : [...prev.runs, mergeRun(undefined, run)],
+    }
   }
 
   if (delta.entity === 'editorWidget') {

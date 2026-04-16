@@ -284,6 +284,9 @@ export async function createTmuxSession(
       OTEL_LOGS_EXPORTER: 'otlp',
       OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
       OTEL_EXPORTER_OTLP_ENDPOINT: otelEndpoint,
+      OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: 'cumulative',
+      OTEL_METRIC_EXPORT_INTERVAL: '10000',
+      OTEL_RESOURCE_ATTRIBUTES: `tinstar.session=${opts.session.name}`,
     }
     for (const [key, value] of Object.entries(telemetryVars)) {
       await execFileAsync('tmux', ['set-environment', '-t', tmuxName, key, value])

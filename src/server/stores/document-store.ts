@@ -40,7 +40,15 @@ export class DocumentStore {
       if (data.epics) for (const e of data.epics) this.epics.set(e.id, e)
       if (data.tasks) for (const t of data.tasks) this.tasks.set(t.id, t)
       if (data.worktrees) for (const w of data.worktrees) this.worktrees.set(w.id, w)
-      if (data.runs) for (const r of data.runs) this.runs.set(r.id, r)
+      if (data.runs) for (const r of data.runs) {
+        // Skip zombie/corrupt entries: a run without id or sessionId can't be
+        // rendered or deleted from the UI and indicates prior data corruption.
+        if (!r || !r.id || !r.sessionId) {
+          console.warn('[docstore] skipping corrupt run entry on load:', r)
+          continue
+        }
+        this.runs.set(r.id, r)
+      }
       if (data.commits) for (const c of data.commits) this.commits.set(c.sha, c)
       if (data.editorWidgets) for (const w of data.editorWidgets) this.editorWidgets.set(w.id, w)
       if (data.browserWidgets) for (const w of data.browserWidgets) this.browserWidgets.set(w.id, w)

@@ -1,0 +1,841 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "claude-code-telemetry",
+    "title": "Claude Code Telemetry",
+    "description": "Real-time observability for Claude Code agent sessions — token usage, cost, cache efficiency, and session activity.",
+    "tags": ["claude-code", "otlp", "tinstar"],
+    "timezone": "browser",
+    "refresh": "10s",
+    "time": { "from": "now-1h", "to": "now" },
+    "fiscalYearStartMonth": 0,
+    "liveNow": true,
+    "style": "dark",
+    "editable": true,
+    "templating": {
+      "list": [
+        {
+          "name": "session_id",
+          "label": "Session ID",
+          "type": "query",
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "query": "label_values(claude_code_cost_usage_USD_total, session_id)",
+          "refresh": 2,
+          "includeAll": true,
+          "multi": true,
+          "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+          "sort": 3
+        }
+      ]
+    },
+    "annotations": { "list": [] },
+    "panels": [
+      {
+        "id": 1,
+        "title": "",
+        "type": "row",
+        "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+        "collapsed": false,
+        "panels": []
+      },
+      {
+        "id": 10,
+        "title": "Spend (window)",
+        "description": "Total USD spent within the dashboard time window. Computed as the sum of per-series increase(), so each session's contribution is counted independently even if it goes stale mid-window. No sparkline because PromQL can't produce a monotonic running total across independent counters — use the Burn Rate sparkline next door for the activity shape.",
+        "type": "stat",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 5 },
+                { "color": "orange", "value": 20 },
+                { "color": "red", "value": 50 }
+              ]
+            },
+            "decimals": 2
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value",
+          "graphMode": "none",
+          "justifyMode": "auto"
+        },
+        "targets": [
+          {
+            "expr": "sum(increase(claude_code_cost_usage_USD_total[$__range]))",
+            "legendFormat": "Total",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Burn Rate",
+        "description": "How fast you're spending money RIGHT NOW. Calculated as the per-minute rate of cost increase over a 5-minute window. Spikes when agents are actively working; drops to zero when idle.",
+        "type": "stat",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 0.5 },
+                { "color": "red", "value": 2 }
+              ]
+            },
+            "decimals": 2
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value",
+          "graphMode": "area",
+          "justifyMode": "auto"
+        },
+        "targets": [
+          {
+            "expr": "sum(rate(claude_code_cost_usage_USD_total[5m])) * 60",
+            "legendFormat": "$/min",
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "calculateField",
+            "options": {
+              "mode": "reduceRow",
+              "reduce": { "reducer": "lastNotNull" }
+            }
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "title": "Active Sessions",
+        "description": "Number of Claude Code sessions currently reporting telemetry. Each session is a separate agent conversation. If this drops unexpectedly, a session may have crashed. The sparkline shows session count over time.",
+        "type": "stat",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 4, "w": 3, "x": 8, "y": 1 },
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "blue", "value": null },
+                { "color": "purple", "value": 5 },
+                { "color": "red", "value": 20 }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value",
+          "graphMode": "area",
+          "justifyMode": "auto"
+        },
+        "targets": [
+          {
+            "expr": "count(claude_code_session_count_total)",
+            "legendFormat": "Sessions",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "title": "Tokens (window)",
+        "description": "Total tokens consumed within the dashboard time window. Uses increase() so it reflects only what happened in the selected range, not the all-time cumulative. Zoom to 15m to see a recent burst; zoom to 24h to see a full day's work.",
+        "type": "stat",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 2, "w": 4, "x": 11, "y": 1 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "super-light-blue", "value": null },
+                { "color": "light-blue", "value": 100000 },
+                { "color": "blue", "value": 1000000 }
+              ]
+            },
+            "decimals": 0
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value",
+          "graphMode": "area",
+          "justifyMode": "auto"
+        },
+        "targets": [
+          {
+            "expr": "sum(increase(claude_code_token_usage_tokens_total[$__range]))",
+            "legendFormat": "Tokens",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 16,
+        "title": "Token Rate",
+        "description": "Average tokens per second over the dashboard time window. This adapts automatically — if you're viewing 15 minutes, it's the 15m average. Viewing 6 hours, it's the 6h average. Useful for comparing productivity across different time windows.",
+        "type": "stat",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 2, "w": 4, "x": 11, "y": 3 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "super-light-green", "value": null },
+                { "color": "light-green", "value": 50 },
+                { "color": "green", "value": 200 }
+              ]
+            },
+            "decimals": 1
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value",
+          "graphMode": "area",
+          "justifyMode": "auto"
+        },
+        "targets": [
+          {
+            "expr": "sum(rate(claude_code_token_usage_tokens_total[$__range]))",
+            "legendFormat": "tok/s",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "title": "Cache Hit Rate",
+        "description": "Percentage of tokens served from prompt cache vs freshly computed. Higher is better and cheaper. Cache reads are ~90% cheaper than cache creation. If this drops below 70%, your prompts may be churning context too often.",
+        "type": "gauge",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 4, "w": 4, "x": 15, "y": 1 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1,
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "red", "value": null },
+                { "color": "orange", "value": 0.5 },
+                { "color": "yellow", "value": 0.7 },
+                { "color": "green", "value": 0.85 }
+              ]
+            },
+            "decimals": 1
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+          "orientation": "auto",
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "targets": [
+          {
+            "expr": "sum(claude_code_token_usage_tokens_total{type=\"cacheRead\"}) / (sum(claude_code_token_usage_tokens_total{type=\"cacheRead\"}) + sum(claude_code_token_usage_tokens_total{type=\"cacheCreation\"}))",
+            "legendFormat": "Cache Hit %",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "title": "Agent Autonomy",
+        "description": "Ratio of agent-working time to human-interacting time. 4.52 means for every second the session waits for input, the agent works 4.52 seconds. High autonomy = agents running independently. Low = lots of back-and-forth. Neither is inherently better — complex tasks need dialogue.",
+        "type": "stat",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "none",
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "light-blue", "value": null },
+                { "color": "blue", "value": 5 },
+                { "color": "purple", "value": 20 }
+              ]
+            },
+            "decimals": 2
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+          "orientation": "auto",
+          "textMode": "value",
+          "colorMode": "value",
+          "graphMode": "area",
+          "justifyMode": "auto"
+        },
+        "targets": [
+          {
+            "expr": "sum(claude_code_active_time_seconds_total{type=\"cli\"}) / sum(claude_code_active_time_seconds_total{type=\"user\"})",
+            "legendFormat": ":1 agent:human",
+            "refId": "A"
+          }
+        ]
+      },
+
+      {
+        "id": 2,
+        "title": "Fleet Overview",
+        "type": "row",
+        "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+        "collapsed": false,
+        "panels": []
+      },
+      {
+        "id": 20,
+        "title": "Cost Over Time by Model",
+        "description": "Real-time cost accumulation split by model. The slope of each line is your burn rate for that model. Opus lines climb faster per-token because it's ~30x more expensive than Haiku. Flat sections = idle time. Steep ramps = active agent work.",
+        "type": "timeseries",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "lineWidth": 2,
+              "fillOpacity": 15,
+              "gradientMode": "scheme",
+              "showPoints": "never",
+              "spanNulls": true,
+              "axisBorderShow": false
+            },
+            "color": { "mode": "palette-classic" },
+            "decimals": 3
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+        },
+        "targets": [
+          {
+            "expr": "sum by (model) (claude_code_cost_usage_USD_total)",
+            "legendFormat": "{{model}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 21,
+        "title": "Token Flow by Type",
+        "description": "Stacked view of token consumption by category. Cache Reads (bottom, large) are the cheapest — they mean the prompt cache is working. Cache Creation is the initial fill. Input and Output are the 'real' work tokens. A healthy session has a massive cache-read base with thin input/output layers on top.",
+        "type": "timeseries",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "lineWidth": 1,
+              "fillOpacity": 30,
+              "gradientMode": "opacity",
+              "stacking": { "mode": "normal", "group": "A" },
+              "showPoints": "never",
+              "spanNulls": true
+            },
+            "color": { "mode": "palette-classic" },
+            "decimals": 0
+          },
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "cacheRead" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-green", "mode": "fixed" } }]
+            },
+            {
+              "matcher": { "id": "byName", "options": "cacheCreation" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-yellow", "mode": "fixed" } }]
+            },
+            {
+              "matcher": { "id": "byName", "options": "input" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-blue", "mode": "fixed" } }]
+            },
+            {
+              "matcher": { "id": "byName", "options": "output" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-purple", "mode": "fixed" } }]
+            }
+          ]
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }
+        },
+        "targets": [
+          {
+            "expr": "sum by (type) (claude_code_token_usage_tokens_total)",
+            "legendFormat": "{{type}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 22,
+        "title": "Model Cost Split",
+        "description": "Pie chart showing cost distribution by model. Even if Haiku processes more tokens, Opus typically dominates cost. Use this to evaluate whether expensive Opus calls are justified, or if more work could be delegated to Haiku subagents.",
+        "type": "piechart",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 8, "w": 6, "x": 0, "y": 14 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "color": { "mode": "palette-classic" },
+            "decimals": 3
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+          "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] },
+          "tooltip": { "mode": "single" },
+          "pieType": "donut"
+        },
+        "targets": [
+          {
+            "expr": "sum by (model) (claude_code_cost_usage_USD_total)",
+            "legendFormat": "{{model}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 23,
+        "title": "Model Token Split",
+        "description": "Pie chart showing token distribution by model. Compare with the cost split — Haiku may handle 60%+ of tokens but only 15% of cost. This asymmetry is the value of the subagent architecture: cheap model for bulk work, expensive model for reasoning.",
+        "type": "piechart",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 8, "w": 6, "x": 6, "y": 14 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "color": { "mode": "palette-classic" },
+            "decimals": 0
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+          "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] },
+          "tooltip": { "mode": "single" },
+          "pieType": "donut"
+        },
+        "targets": [
+          {
+            "expr": "sum by (model) (claude_code_token_usage_tokens_total)",
+            "legendFormat": "{{model}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 24,
+        "title": "Token Throughput (tokens/sec)",
+        "description": "Rate of token consumption per second, split by model. Shows how hard each model is working right now. Spikes correspond to active LLM calls. Zero = idle or waiting for user input. Useful for spotting when sessions are actually burning tokens vs just sitting there.",
+        "type": "timeseries",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "custom": {
+              "drawStyle": "bars",
+              "lineWidth": 0,
+              "fillOpacity": 80,
+              "gradientMode": "scheme",
+              "stacking": { "mode": "normal", "group": "A" },
+              "showPoints": "never",
+              "spanNulls": false,
+              "barAlignment": 0,
+              "barWidthFactor": 0.9
+            },
+            "color": { "mode": "palette-classic" },
+            "decimals": 0
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom" }
+        },
+        "targets": [
+          {
+            "expr": "sum by (model) (rate(claude_code_token_usage_tokens_total[1m]))",
+            "legendFormat": "{{model}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 25,
+        "title": "Active Time: Agent vs Human",
+        "description": "Stacked area showing cumulative time split between agent processing (cli) and human interaction (user). The growing gap between these tells you how much leverage you're getting from your agents. Wide cli band = agents doing heavy autonomous work.",
+        "type": "timeseries",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "lineWidth": 2,
+              "fillOpacity": 25,
+              "gradientMode": "opacity",
+              "stacking": { "mode": "normal", "group": "A" },
+              "showPoints": "never",
+              "spanNulls": true
+            },
+            "color": { "mode": "palette-classic" },
+            "decimals": 0
+          },
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "cli" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-orange", "mode": "fixed" } }]
+            },
+            {
+              "matcher": { "id": "byName", "options": "user" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-blue", "mode": "fixed" } }]
+            }
+          ]
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }
+        },
+        "targets": [
+          {
+            "expr": "sum by (type) (claude_code_active_time_seconds_total)",
+            "legendFormat": "{{type}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 26,
+        "title": "Cache Efficiency Over Time",
+        "description": "Rolling cache hit rate over a 5-minute window. Tracks how effectively prompt caching is working across your fleet. A healthy system stays above 80%. Dips mean new context is being created (session starts, large tool outputs, new file reads). Sustained drops below 70% may indicate context churn — agents repeatedly rebuilding context instead of reusing it.",
+        "type": "timeseries",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1,
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "lineWidth": 2,
+              "fillOpacity": 20,
+              "gradientMode": "scheme",
+              "showPoints": "never",
+              "spanNulls": true,
+              "thresholdsStyle": { "mode": "line+area" }
+            },
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "red", "value": null },
+                { "color": "yellow", "value": 0.7 },
+                { "color": "green", "value": 0.85 }
+              ]
+            },
+            "decimals": 1
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "single" },
+          "legend": { "displayMode": "list", "placement": "bottom" }
+        },
+        "targets": [
+          {
+            "expr": "sum(rate(claude_code_token_usage_tokens_total{type=\"cacheRead\"}[5m])) / (sum(rate(claude_code_token_usage_tokens_total{type=\"cacheRead\"}[5m])) + sum(rate(claude_code_token_usage_tokens_total{type=\"cacheCreation\"}[5m])))",
+            "legendFormat": "Cache Hit Rate",
+            "refId": "A"
+          }
+        ]
+      },
+
+      {
+        "id": 3,
+        "title": "Session: $session_id",
+        "type": "row",
+        "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 },
+        "collapsed": false,
+        "repeat": "session_id",
+        "panels": []
+      },
+      {
+        "id": 33,
+        "title": "",
+        "description": "The Tinstar session name for this Claude Code session. Pulled from the tinstar_session resource attribute injected at launch. Sessions started before the telemetry fix will show the session UUID instead.",
+        "type": "stat",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 2, "w": 24, "x": 0, "y": 31 },
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "fixed", "fixedColor": "text" }
+          },
+          "overrides": []
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+          "orientation": "auto",
+          "textMode": "name",
+          "colorMode": "none",
+          "graphMode": "none",
+          "justifyMode": "center",
+          "text": { "titleSize": 12, "valueSize": 28 }
+        },
+        "targets": [
+          {
+            "expr": "count(claude_code_cost_usage_USD_total{session_id=\"$session_id\", tinstar_session!=\"\"}) by (tinstar_session)",
+            "legendFormat": "{{tinstar_session}}",
+            "refId": "A"
+          },
+          {
+            "expr": "count(claude_code_cost_usage_USD_total{session_id=\"$session_id\"}) unless count(claude_code_cost_usage_USD_total{session_id=\"$session_id\", tinstar_session!=\"\"})",
+            "legendFormat": "$session_id",
+            "refId": "B"
+          }
+        ]
+      },
+      {
+        "id": 30,
+        "title": "Cost",
+        "description": "Cumulative cost for this specific session, split by model. Compare the Opus vs Haiku proportions — if Opus is >90% of cost, consider whether some of that work could be delegated to cheaper subagents.",
+        "type": "timeseries",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 7, "w": 8, "x": 0, "y": 33 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "lineWidth": 2,
+              "fillOpacity": 20,
+              "gradientMode": "scheme",
+              "showPoints": "never",
+              "spanNulls": true,
+              "stacking": { "mode": "normal", "group": "A" }
+            },
+            "color": { "mode": "palette-classic" },
+            "decimals": 4
+          },
+          "overrides": []
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom" }
+        },
+        "targets": [
+          {
+            "expr": "sum by (model) (claude_code_cost_usage_USD_total{session_id=\"$session_id\"})",
+            "legendFormat": "{{model}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 31,
+        "title": "Tokens",
+        "description": "Token consumption for this session, broken down by type. The shape tells a story: a huge cacheRead layer with thin input/output = efficient, long-running session. Growing cacheCreation = session is reading new files or exploring unfamiliar code. Big output spikes = agent writing lots of code or explanations.",
+        "type": "timeseries",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 7, "w": 8, "x": 8, "y": 33 },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "lineWidth": 1,
+              "fillOpacity": 25,
+              "gradientMode": "opacity",
+              "stacking": { "mode": "normal", "group": "A" },
+              "showPoints": "never",
+              "spanNulls": true
+            },
+            "color": { "mode": "palette-classic" },
+            "decimals": 0
+          },
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "cacheRead" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-green", "mode": "fixed" } }]
+            },
+            {
+              "matcher": { "id": "byName", "options": "cacheCreation" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-yellow", "mode": "fixed" } }]
+            },
+            {
+              "matcher": { "id": "byName", "options": "input" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-blue", "mode": "fixed" } }]
+            },
+            {
+              "matcher": { "id": "byName", "options": "output" },
+              "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-purple", "mode": "fixed" } }]
+            }
+          ]
+        },
+        "options": {
+          "tooltip": { "mode": "multi", "sort": "desc" },
+          "legend": { "displayMode": "list", "placement": "bottom" }
+        },
+        "targets": [
+          {
+            "expr": "sum by (type) (claude_code_token_usage_tokens_total{session_id=\"$session_id\"})",
+            "legendFormat": "{{type}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 32,
+        "title": "Stats",
+        "description": "Quick-reference stats for this session: total cost, active agent time, human interaction time, and the autonomy ratio. The autonomy ratio is agent-seconds per human-second — higher means the agent is doing more independent work.",
+        "type": "stat",
+        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+        "gridPos": { "h": 7, "w": 8, "x": 16, "y": 33 },
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "palette-classic" },
+            "decimals": 2
+          },
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "Cost" },
+              "properties": [
+                { "id": "unit", "value": "currencyUSD" },
+                { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "Agent Time" },
+              "properties": [
+                { "id": "unit", "value": "s" },
+                { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "Human Time" },
+              "properties": [
+                { "id": "unit", "value": "s" },
+                { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "Autonomy" },
+              "properties": [
+                { "id": "unit", "value": "string" },
+                { "id": "color", "value": { "fixedColor": "purple", "mode": "fixed" } },
+                { "id": "decimals", "value": 0 }
+              ]
+            },
+            {
+              "matcher": { "id": "byFrameRefID", "options": "E" },
+              "properties": [
+                { "id": "color", "value": { "fixedColor": "text", "mode": "fixed" } },
+                { "id": "unit", "value": "string" },
+                { "id": "custom.displayMode", "value": "color-text" }
+              ]
+            }
+          ]
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+          "orientation": "horizontal",
+          "textMode": "auto",
+          "colorMode": "value",
+          "graphMode": "none",
+          "justifyMode": "auto"
+        },
+        "targets": [
+          {
+            "expr": "max by (tinstar_session) (claude_code_cost_usage_USD_total{session_id=\"$session_id\", tinstar_session!=\"\"})",
+            "legendFormat": "{{tinstar_session}}",
+            "refId": "E",
+            "hide": false
+          },
+          {
+            "expr": "sum(claude_code_cost_usage_USD_total{session_id=\"$session_id\"})",
+            "legendFormat": "Cost",
+            "refId": "A"
+          },
+          {
+            "expr": "sum(claude_code_active_time_seconds_total{session_id=\"$session_id\", type=\"cli\"})",
+            "legendFormat": "Agent Time",
+            "refId": "B"
+          },
+          {
+            "expr": "sum(claude_code_active_time_seconds_total{session_id=\"$session_id\", type=\"user\"})",
+            "legendFormat": "Human Time",
+            "refId": "C"
+          },
+          {
+            "expr": "sum(claude_code_active_time_seconds_total{session_id=\"$session_id\", type=\"cli\"}) / sum(claude_code_active_time_seconds_total{session_id=\"$session_id\", type=\"user\"})",
+            "legendFormat": "Autonomy",
+            "refId": "D"
+          }
+        ]
+      }
+    ],
+    "schemaVersion": 39
+  },
+  "overwrite": true
+}

@@ -7,12 +7,23 @@ import { HotgroupBadge } from '../HotgroupBadge'
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 import { ColorPalette } from '../ColorPalette'
 
-const statusConfig: Record<SessionStatus, { label: string; color: string; dot: string; pulse?: boolean }> = {
+type StatusUi = { label: string; color: string; dot: string; pulse?: boolean }
+
+const statusConfig: Record<SessionStatus, StatusUi> = {
   creating: { label: 'CREATING', color: 'text-blue-400', dot: 'bg-blue-400 shadow-[0_0_6px_#818cf8]', pulse: true },
   running: { label: 'RUNNING', color: 'text-accent-green', dot: 'bg-accent-green shadow-[0_0_6px_#00ff88]', pulse: true },
   idle: { label: 'IDLE', color: 'text-accent-amber', dot: 'bg-accent-amber shadow-[0_0_6px_#ffaa00]' },
   needs_attention: { label: 'ATTENTION', color: 'text-orange-400', dot: 'bg-orange-400 shadow-[0_0_6px_#f97316]', pulse: true },
   stopped: { label: 'STOPPED', color: 'text-slate-400', dot: 'bg-slate-500' },
+}
+
+function statusUi(status: SessionStatus | string | undefined): StatusUi {
+  if (status && status in statusConfig) return statusConfig[status as SessionStatus]
+  return {
+    label: (status && String(status)) || 'UNKNOWN',
+    color: 'text-slate-400',
+    dot: 'bg-slate-500',
+  }
 }
 
 interface Props {
@@ -27,7 +38,7 @@ interface Props {
 }
 
 export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp, onRefreshTerminal, activeTab, onActiveTabChange }: Props) {
-  const status = statusConfig[run.status]
+  const status = statusUi(run.status)
   const runAccent = resolveRunAccent(run.color)
   const [busy, setBusy] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)

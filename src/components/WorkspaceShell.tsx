@@ -594,13 +594,13 @@ function WorkspaceShellInner() {
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllNext: () => {
-      const allNames = allRuns.map(r => r.sessionId).filter(Boolean) as string[]
-      const run = cycleNext(allRuns, allNames, selectedRunId)
+      const activeNames = allRuns.filter(r => r.status !== 'stopped').map(r => r.sessionId).filter(Boolean) as string[]
+      const run = cycleNext(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllPrev: () => {
-      const allNames = allRuns.map(r => r.sessionId).filter(Boolean) as string[]
-      const run = cyclePrev(allRuns, allNames, selectedRunId)
+      const activeNames = allRuns.filter(r => r.status !== 'stopped').map(r => r.sessionId).filter(Boolean) as string[]
+      const run = cyclePrev(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onSessionQuick: useCallback(async () => {

@@ -4,6 +4,23 @@ otelcol.receiver.otlp "default" {
     endpoint = "0.0.0.0:4318"
   }
   output {
+    metrics = [otelcol.processor.transform.default.input]
+  }
+}
+
+// Promote tinstar.session resource attribute to a metric-level attribute
+// so it appears as a label on every Prometheus metric (not just target_info)
+otelcol.processor.transform "default" {
+  error_mode = "ignore"
+
+  metric_statements {
+    context    = "datapoint"
+    statements = [
+      "set(attributes[\"tinstar_session\"], resource.attributes[\"tinstar.session\"]) where resource.attributes[\"tinstar.session\"] != nil",
+    ]
+  }
+
+  output {
     metrics = [otelcol.processor.batch.default.input]
   }
 }

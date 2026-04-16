@@ -322,8 +322,8 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
 }
 
 interface Props {
-  recapEntries: RecapEntry[]
-  rawLogs: string
+  recapEntries?: RecapEntry[]
+  rawLogs?: string
   port?: number | null
   sessionId?: string
   status?: SessionStatus
@@ -346,7 +346,7 @@ interface Props {
   composerFocusTrigger?: number
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, color, termTick = 0, terminalFocused, zoom, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange, controlledTab, onControlledTabChange, promptComposerExpanded, onPromptComposerToggle, composerFocusTrigger }: Props) {
+export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, sessionId, status, color, termTick = 0, terminalFocused, zoom, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange, controlledTab, onControlledTabChange, promptComposerExpanded, onPromptComposerToggle, composerFocusTrigger }: Props) {
   const accent = resolveRunAccent(color)
   const TABS = ['recap', 'terminal'] as const
   const [internalActiveTab, setInternalActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')

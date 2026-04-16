@@ -20,8 +20,11 @@ export function toRunSummary(
   const task = taxonomy.getTaskForRun(run)
   const worktree = taxonomy.getWorktreeForRun(run)
 
+  const recapEntries = run.recapEntries ?? []
+  const touchedFiles = run.touchedFiles ?? []
+
   // Use the most recent recap entry timestamp, or createdAt as fallback
-  const lastEntry = run.recapEntries[run.recapEntries.length - 1]
+  const lastEntry = recapEntries[recapEntries.length - 1]
   const lastActivity = lastEntry?.timestamp ?? run.createdAt
 
   return {
@@ -33,7 +36,7 @@ export function toRunSummary(
     epic: epic?.name ?? 'Unknown',
     task: task?.name ?? 'Unknown',
     worktree: worktree?.name ?? 'Unknown',
-    fileCount: run.touchedFiles.length,
+    fileCount: touchedFiles.length,
     lastActivity,
     lastRecap: lastEntry?.content ?? null,
   }
@@ -63,8 +66,9 @@ export function buildWorkspaceView(
 export function findNodeLabel(nodes: TreeNode[], targetId: string): string | null {
   for (const node of nodes) {
     if (node.id === targetId) return node.label
-    if (node.children.length > 0) {
-      const found = findNodeLabel(node.children, targetId)
+    const children = node.children ?? []
+    if (children.length > 0) {
+      const found = findNodeLabel(children, targetId)
       if (found) return found
     }
   }
