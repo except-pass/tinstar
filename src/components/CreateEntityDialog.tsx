@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import type { GroupingDimension } from '../domain/types'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { randomUUID } from '../uuid'
+import { pickRandomPaletteColor } from './ColorPalette'
 
 export interface CreateDialogState {
   parentId: string | null
@@ -38,7 +39,7 @@ function parentKeyField(parentType: GroupingDimension | null): string | null {
 
 export function CreateEntityDialog({ dialog, onClose, onOptimisticCreate, onCreated }: Props) {
   const [name, setName] = useState('')
-  const [color, setColor] = useState('#00f0ff')
+  const [color, setColor] = useState(pickRandomPaletteColor)
   const inputRef = useRef<HTMLInputElement>(null)
   const levelMeta = useDimensionMeta()
 

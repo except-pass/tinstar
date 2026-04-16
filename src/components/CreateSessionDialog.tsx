@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { DEFAULT_RUN_ACCENT } from './runAccent'
-import { ColorPalette } from './ColorPalette'
+import { ColorPalette, pickRandomPaletteColor } from './ColorPalette'
 import { isIconUrl } from './agentIcon'
 
 export interface SessionPrefill {
@@ -88,7 +87,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [availableWorktrees, setAvailableWorktrees] = useState<Array<{ path: string; branch?: string }>>([])
   const [skipPermissions, _setSkipPermissions] = useState(prefill?.skipPermissions ?? true)
   const [prompt, setPrompt] = useState('')
-  const [runColor, setRunColor] = useState(prefill?.runColor ?? DEFAULT_RUN_ACCENT)
+  const [runColor, setRunColor] = useState(() => prefill?.runColor ?? pickRandomPaletteColor())
   const [taskId, setTaskId] = useState(prefill?.taskId ?? '')
   const [entities, setEntities] = useState<{ initiatives: EntityOption[]; epics: EntityOption[]; tasks: EntityOption[] }>({ initiatives: [], epics: [], tasks: [] })
   const [patterns, setPatterns] = useState<Array<{
