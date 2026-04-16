@@ -5,4 +5,5 @@ import './groupContainerWidget'
 import './runTerminalWidget'
 import './entityWidgets'
 import './browserWidget'
+import './imageViewerWidget'
 // runWorkspaceWidget is imported directly by RunWorkspaceWidget/index.tsx
