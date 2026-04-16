@@ -44,24 +44,24 @@ export const MANIFEST = {
   },
 } as const
 
-const PROM_ARCH_MAP: Record<string, string> = { arm64: 'arm64', x64: 'amd64' }
-const PROM_OS_MAP: Record<string, string> = { darwin: 'darwin', linux: 'linux' }
-const ALLOY_ARCH_MAP = PROM_ARCH_MAP
-const ALLOY_OS_MAP = PROM_OS_MAP
+type PlatformKey = 'darwin-arm64' | 'darwin-x64' | 'linux-arm64' | 'linux-x64'
 
-function variantKey(os: string, arch: string): keyof typeof MANIFEST.prometheus.variants {
+const ARCH_MAP: Record<string, string> = { arm64: 'arm64', x64: 'amd64' }
+const OS_MAP:   Record<string, string> = { darwin: 'darwin', linux: 'linux' }
+
+function variantKey(os: string, arch: string): PlatformKey {
   const mappedArch = arch === 'x64' ? 'x64' : arch === 'arm64' ? 'arm64' : null
   if (!mappedArch) throw new Error(`telemetry not supported on arch=${arch}`)
   if (os !== 'darwin' && os !== 'linux') throw new Error(`telemetry not supported on os=${os}`)
-  return `${os}-${mappedArch}` as keyof typeof MANIFEST.prometheus.variants
+  return `${os}-${mappedArch}` as PlatformKey
 }
 
 export function resolveBinaryTarget(component: Component, os: string, arch: string): BinaryTarget {
   const key = variantKey(os, arch)
   if (component === 'prometheus') {
     const v = MANIFEST.prometheus.version
-    const promOs = PROM_OS_MAP[os]
-    const promArch = PROM_ARCH_MAP[arch]
+    const promOs = OS_MAP[os]
+    const promArch = ARCH_MAP[arch]
     const dirName = `prometheus-${v}.${promOs}-${promArch}`
     return {
       component,
@@ -73,8 +73,8 @@ export function resolveBinaryTarget(component: Component, os: string, arch: stri
     }
   }
   const v = MANIFEST.alloy.version
-  const alloyOs = ALLOY_OS_MAP[os]
-  const alloyArch = ALLOY_ARCH_MAP[arch]
+  const alloyOs = OS_MAP[os]
+  const alloyArch = ARCH_MAP[arch]
   return {
     component,
     version: v,
