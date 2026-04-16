@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import squarify from 'squarify'
 import { hexToRgba } from '../runAccent'
+import { HudBar, AutonomyStat } from '../CanvasHud'
+import { useTelemetrySession } from '../../hooks/useTelemetrySession'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -88,6 +90,45 @@ function labelColor(opacity: number): string {
   return opacity >= 0.30
     ? 'rgba(255,255,255,0.7)'
     : 'rgba(255,255,255,0.4)'
+}
+
+/* ------------------------------------------------------------------ */
+/*  SessionSection                                                     */
+/* ------------------------------------------------------------------ */
+
+function SessionSection({ sessionId }: { sessionId: string }) {
+  const snap = useTelemetrySession(sessionId)
+  if (!snap || snap.state !== 'ready') return null
+
+  const costTotal = snap.cost.total
+  const tokensTotal = snap.tokens.total
+  const rateMin = snap.rate.perMin
+  const cacheHit = snap.cacheHitPct
+
+  const costValue = costTotal == null ? '--' : `$${costTotal.toFixed(2)}`
+  const costFill = costTotal == null ? null : Math.min(1, costTotal / 5)
+
+  const tokensLabel = rateMin == null ? 'TOKENS' : `TOKENS · ${Math.round(rateMin).toLocaleString()}/min`
+  const tokensValue = tokensTotal == null ? '--' : tokensTotal.toLocaleString()
+  const tokensFill = rateMin == null ? null : Math.min(1, rateMin / 5000)
+
+  const cacheValue = cacheHit == null ? '--' : `${Math.round(cacheHit * 100)}%`
+
+  return (
+    <div style={{ padding: '10px 12px', borderBottom: '1px solid rgba(120,140,180,0.15)' }} data-testid="telemetry-session-section">
+      <div style={{ fontSize: 9, letterSpacing: 2, opacity: 0.55,
+          fontFamily: 'JetBrains Mono, monospace', marginBottom: 8,
+          display: 'flex', justifyContent: 'space-between' }}>
+        <span>SESSION</span>
+        <span style={{ background: 'rgba(34,211,238,0.12)', color: '#22d3ee',
+            padding: '1px 6px', borderRadius: 2, letterSpacing: 1, fontSize: 8 }}>THIS RUN</span>
+      </div>
+      <HudBar icon="$" label="COST" value={costValue} fill={costFill} accent="gold" />
+      <HudBar icon="⚡" label={tokensLabel} value={tokensValue} fill={tokensFill} accent="blue" />
+      <HudBar icon="◎" label="CACHE HIT" value={cacheValue} fill={cacheHit} accent="green" />
+      <AutonomyStat ratio={snap.autonomy.ratio} cliSeconds={snap.autonomy.cliSeconds} userSeconds={snap.autonomy.userSeconds} />
+    </div>
+  )
 }
 
 /* ------------------------------------------------------------------ */
@@ -260,83 +301,69 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
     }
   }, [sessionId])
 
-  /* ---- Empty state ---- */
+  /* ---- Body varies by state ---- */
+  let body: React.ReactNode
   if (!data && !loading && !error) {
-    return (
-      <section className="flex flex-col flex-1 min-h-0">
-        <div className="panel-header">
-          <h3 className="panel-label">Telemetry</h3>
+    body = (
+      <div className="flex-1 flex items-center justify-center p-2">
+        <button
+          onClick={fetchContext}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-2xs font-mono text-slate-400 border border-dashed border-slate-600 rounded hover:border-slate-400 hover:text-slate-300 transition-colors"
+        >
+          <span className="material-symbols-outlined text-sm">query_stats</span>
+          Load Context
+        </button>
+      </div>
+    )
+  } else if (loading && !data) {
+    body = (
+      <div className="flex-1 flex items-center justify-center">
+        <span className="text-2xs font-mono text-slate-500 animate-pulse">Loading...</span>
+      </div>
+    )
+  } else if (error && !data) {
+    body = (
+      <div className="flex-1 flex flex-col items-center justify-center gap-2 p-2">
+        <span className="text-2xs text-red-400 text-center">{error}</span>
+        <button
+          onClick={fetchContext}
+          className="text-2xs font-mono text-slate-400 hover:text-slate-300"
+        >
+          Retry
+        </button>
+      </div>
+    )
+  } else {
+    body = (
+      <>
+        <div className="flex-1 min-h-0 flex flex-col px-1 pt-1">
+          <Treemap
+            categories={data?.categories ?? []}
+            accent={runAccent}
+            maxTokens={data?.maxTokens ?? 200_000}
+          />
         </div>
-        <div className="flex-1 flex items-center justify-center p-2">
+        <div className="flex items-center justify-between px-2 py-1 text-2xs font-mono text-slate-600">
+          <span>{loadedAt ? `loaded ${ageLabel}` : ''}</span>
           <button
             onClick={fetchContext}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-2xs font-mono text-slate-400 border border-dashed border-slate-600 rounded hover:border-slate-400 hover:text-slate-300 transition-colors"
+            disabled={loading}
+            className="text-slate-500 hover:text-slate-300 disabled:opacity-30"
           >
-            <span className="material-symbols-outlined text-sm">query_stats</span>
-            Load Context
+            <span className="material-symbols-outlined text-xs">refresh</span>
           </button>
         </div>
-      </section>
+      </>
     )
   }
 
-  /* ---- Loading state ---- */
-  if (loading && !data) {
-    return (
-      <section className="flex flex-col flex-1 min-h-0">
-        <div className="panel-header">
-          <h3 className="panel-label">Telemetry</h3>
-        </div>
-        <div className="flex-1 flex items-center justify-center">
-          <span className="text-2xs font-mono text-slate-500 animate-pulse">Loading...</span>
-        </div>
-      </section>
-    )
-  }
-
-  /* ---- Error state ---- */
-  if (error && !data) {
-    return (
-      <section className="flex flex-col flex-1 min-h-0">
-        <div className="panel-header">
-          <h3 className="panel-label">Telemetry</h3>
-        </div>
-        <div className="flex-1 flex flex-col items-center justify-center gap-2 p-2">
-          <span className="text-2xs text-red-400 text-center">{error}</span>
-          <button
-            onClick={fetchContext}
-            className="text-2xs font-mono text-slate-400 hover:text-slate-300"
-          >
-            Retry
-          </button>
-        </div>
-      </section>
-    )
-  }
-
-  /* ---- Loaded state ---- */
   return (
     <section className="flex flex-col flex-1 min-h-0">
       <div className="panel-header">
         <h3 className="panel-label">Telemetry</h3>
       </div>
-      <div className="flex-1 min-h-0 flex flex-col px-1 pt-1">
-        <Treemap
-          categories={data?.categories ?? []}
-          accent={runAccent}
-          maxTokens={data?.maxTokens ?? 200_000}
-        />
-      </div>
-      <div className="flex items-center justify-between px-2 py-1 text-2xs font-mono text-slate-600">
-        <span>{loadedAt ? `loaded ${ageLabel}` : ''}</span>
-        <button
-          onClick={fetchContext}
-          disabled={loading}
-          className="text-slate-500 hover:text-slate-300 disabled:opacity-30"
-        >
-          <span className="material-symbols-outlined text-xs">refresh</span>
-        </button>
-      </div>
+      <SessionSection sessionId={sessionId} />
+      {body}
     </section>
   )
 }
