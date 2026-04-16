@@ -5,6 +5,7 @@ import type { EditorWidget } from '../../domain/types'
 import type { WidgetProps } from '../widgetComponentRegistry'
 import { useFileWatch } from '../../hooks/useFileWatch'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
+import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
 import { HotgroupBadge } from '../../components/HotgroupBadge'
 
@@ -125,6 +126,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
       if (action === 'open-in-editor') handleOpenInEditor()
       if (action === 'toggle-word-wrap') toggleWordWrap()
       if (action === 'toggle-diff') toggleDiff()
+      if (action === 'fit-viewport') fitWidgetToViewport(widget.id)
     })
     return () => deregisterActionHandler(widget.id)
   }, [widget.id, handleOpenInEditor, toggleWordWrap, toggleDiff])
