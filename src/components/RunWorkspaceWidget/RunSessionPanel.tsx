@@ -208,11 +208,12 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
     } finally {
       setSending(false)
     }
-  }, [sessionId, text, canSend, sending, status])
+  }, [sessionId, text, canSend, sending, status, pushHistory])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
+      if (historyOpen) setHistoryOpen(false)
       handleSend()
       return
     }
