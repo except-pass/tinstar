@@ -21,6 +21,14 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
   let lastSent: string | null = null
 
   async function buildSnapshot(sessionName?: string): Promise<HudSnapshot> {
+    if (process.env.TINSTAR_FAST_SIM === '1') {
+      const { makeFakeHud } = await import('../observability/fast-sim.js')
+      const fake = makeFakeHud()
+      if (sessionName) {
+        return { ...fake, cost: { ...fake.cost, total: (fake.cost.total ?? 0) * 0.3 } }
+      }
+      return fake
+    }
     const state = deps.getState()
     const base: HudSnapshot = {
       window: 'today',

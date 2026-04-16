@@ -47,6 +47,12 @@ export class ObservabilityStack {
       this.state = 'disabled'; return
     }
 
+    if (process.env.TINSTAR_FAST_SIM === '1') {
+      this.state = 'ready'
+      this.query = null // fast-sim uses the fake path in telemetry.ts
+      return
+    }
+
     // Clear any previous error before a fresh start attempt
     this.lastError = null
 
