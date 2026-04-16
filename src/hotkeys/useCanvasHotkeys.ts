@@ -19,6 +19,7 @@ export interface CanvasHotkeyHandlers {
   onArrangeGrid: () => void
   onArrangeReset: () => void
   onArrangeSwimlanes: () => void
+  onToggleMinimap: () => void
 }
 
 export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
@@ -57,6 +58,14 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
         e.preventDefault()
         h.onArrangeSwimlanes()
         emitBindingFired('Ctrl+L')
+        return
+      }
+
+      // M — toggle minimap
+      if (e.code === 'KeyM' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        if (inEditable) return
+        e.preventDefault()
+        h.onToggleMinimap()
         return
       }
 

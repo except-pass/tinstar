@@ -10,6 +10,7 @@ import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useHotgroupContext } from '../hotkeys/HotgroupContext'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
+import { CanvasMinimap } from './CanvasMinimap'
 
 interface Props {
   tree: TreeNode[]
@@ -186,6 +187,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const marqueeRef = useRef<{ startX: number; startY: number; active: boolean }>({ startX: 0, startY: 0, active: false })
   // Tracks whether the current pointer-down actually landed on empty canvas (not a widget)
   const canvasPointerDownRef = useRef(false)
+
+  const minimapToggleRef = useRef<(() => void) | null>(null)
 
   // All run node IDs for marquee intersection
   const runNodeIdsRef = useRef<string[]>([])
@@ -699,6 +702,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     onArrangeGrid: () => arrangeGridRef?.current?.(),
     onArrangeReset: () => arrangeResetRef?.current?.(),
     onArrangeSwimlanes: () => arrangeSwimlanesRef?.current?.(),
+    onToggleMinimap: () => minimapToggleRef.current?.(),
   })
 
   const handleDeleteGroup = useCallback((nodeId: string) => {
@@ -1041,6 +1045,20 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
       {/* Marquee selection box */}
       {marqueeStyle && <div style={marqueeStyle} />}
+
+      {/* Minimap */}
+      <CanvasMinimap
+        camera={camera}
+        setCamera={setCamera}
+        layouts={layouts}
+        tree={tree}
+        runMap={runMap}
+        editorWidgetMap={editorWidgetMap}
+        browserWidgetMap={browserWidgetMap}
+        imageWidgetMap={imageWidgetMap}
+        natsTrafficWidgetMap={natsTrafficWidgetMap}
+        toggleRef={minimapToggleRef}
+      />
 
       {/* Bottom-right zoom indicator */}
       <div className="absolute bottom-3 right-3 flex items-center gap-2">
