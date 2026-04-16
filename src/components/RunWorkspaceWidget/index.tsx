@@ -8,6 +8,7 @@ import { ProceduresPanel } from './ProceduresPanel'
 import { TelemetryPanel } from './TelemetryPanel'
 import { HandsPanel } from './HandsPanel'
 import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
+import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { useFlourish } from '../../hotkeys/useFlourish'
 import { useWidgetFocus, useFocusPath } from '../../hotkeys/FocusPathContext'
 import type { FocusZone } from '../../hotkeys/widgetTypes'
@@ -170,6 +171,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
         case 'tab-prev':        setCenterTabIndex(i => (i - 1 + 2) % 2);        break
         case 'activate':        /* no-op for now */                               break
         case 'toggle-prompt':   setPromptComposerExpanded(e => !e);              break
+        case 'fit-viewport':    fitWidgetToViewport(run.id);                     break
       }
     })
     return () => deregisterActionHandler(run.id)
