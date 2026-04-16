@@ -256,6 +256,7 @@ export function CanvasMinimap({
       {/* Close button — visible on hover */}
       <button
         onClick={toggle}
+        onPointerDown={(e) => e.stopPropagation()}
         className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity text-slate-500 hover:text-slate-300"
         title="Hide minimap (M)"
       >
