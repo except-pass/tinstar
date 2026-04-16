@@ -20,6 +20,7 @@ export interface CanvasHotkeyHandlers {
   onArrangeReset: () => void
   onArrangeSwimlanes: () => void
   onToggleMinimap: () => void
+  onToggleHud: () => void
 }
 
 export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
@@ -66,6 +67,14 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
         if (inEditable) return
         e.preventDefault()
         h.onToggleMinimap()
+        return
+      }
+
+      // T — toggle telemetry HUD
+      if (e.code === 'KeyT' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        if (inEditable) return
+        e.preventDefault()
+        h.onToggleHud()
         return
       }
 

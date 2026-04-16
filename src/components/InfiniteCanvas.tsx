@@ -11,6 +11,7 @@ import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useHotgroupContext } from '../hotkeys/HotgroupContext'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
 import { CanvasMinimap } from './CanvasMinimap'
+import { CanvasHud } from './CanvasHud'
 
 interface Props {
   tree: TreeNode[]
@@ -189,6 +190,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const canvasPointerDownRef = useRef(false)
 
   const minimapToggleRef = useRef<(() => void) | null>(null)
+  const hudToggleRef = useRef<(() => void) | null>(null)
 
   // All run node IDs for marquee intersection
   const runNodeIdsRef = useRef<string[]>([])
@@ -703,6 +705,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     onArrangeReset: () => arrangeResetRef?.current?.(),
     onArrangeSwimlanes: () => arrangeSwimlanesRef?.current?.(),
     onToggleMinimap: () => minimapToggleRef.current?.(),
+    onToggleHud: () => hudToggleRef.current?.(),
   })
 
   const handleDeleteGroup = useCallback((nodeId: string) => {
@@ -1059,6 +1062,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         natsTrafficWidgetMap={natsTrafficWidgetMap}
         toggleRef={minimapToggleRef}
       />
+
+      {/* Telemetry HUD (top-right) */}
+      <CanvasHud toggleRef={hudToggleRef} />
 
       {/* Bottom-right zoom indicator */}
       <div className="absolute bottom-3 right-3 flex items-center gap-2">
