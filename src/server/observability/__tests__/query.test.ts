@@ -47,7 +47,9 @@ beforeEach(async () => {
   })
 })
 
-afterEach(() => server.close())
+afterEach(() => {
+  try { server.close() } catch { /* already closed */ }
+})
 
 describe('TelemetryQuery.todayHud', () => {
   it('aggregates today-scoped metrics into a HudSnapshot', async () => {
@@ -63,9 +65,19 @@ describe('TelemetryQuery.todayHud', () => {
     expect(snap.state).toBe('ready')
   })
 
-  it('returns stale snapshot if Prometheus is unreachable', async () => {
+  it('returns stale snapshot with staleSeconds when Prometheus fails after prior success', async () => {
+    const q = new TelemetryQuery(`http://127.0.0.1:${port}`)
+    const first = await q.todayHud({ userEmail: 'test@example.com', tzOffsetMinutes: 0 })
+    expect(first.staleSeconds).toBeUndefined()
+    // shut down the mock server so subsequent calls fail
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    const stale = await q.todayHud({ userEmail: 'test@example.com', tzOffsetMinutes: 0 })
+    expect(stale.staleSeconds).toBeGreaterThanOrEqual(0)
+    expect(stale.cost.total).toBe(first.cost.total)
+  })
+
+  it('throws if Prometheus fails and no cache is available', async () => {
     const q = new TelemetryQuery(`http://127.0.0.1:1`)
-    // seed cache via a successful call first — can't without Prom. Instead verify it throws-safely.
     await expect(q.todayHud({ userEmail: 'x', tzOffsetMinutes: 0 })).rejects.toThrow()
   })
 })

@@ -20,11 +20,11 @@ export interface ModelBreakdown {
 export interface HudSnapshot {
   window: 'today'
   state: ObservabilityState
-  cost: { total: number; byModel: ModelBreakdown }
-  tokens: { total: number }
-  rate: { perMin: number; perHour: number }
-  cacheHitPct: number
-  autonomy: { ratio: number; cliSeconds: number; userSeconds: number }
+  cost: { total: number | null; byModel: ModelBreakdown }
+  tokens: { total: number | null }
+  rate: { perMin: number | null; perHour: number | null }
+  cacheHitPct: number | null
+  autonomy: { ratio: number | null; cliSeconds: number | null; userSeconds: number | null }
   staleSeconds?: number
   progress?: DownloadProgress[]
   error?: string

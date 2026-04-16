@@ -64,14 +64,15 @@ export class TelemetryQuery {
       byModel[model] = Number(r.value[1])
     }
 
-    const ratio = userSec > 0 ? cliSec / userSec : 0
+    const ratio = (cliSec === null || userSec === null || userSec === 0) ? null : cliSec / userSec
+    const cacheHitPct = (cacheHit !== null && isFinite(cacheHit)) ? cacheHit : null
     return {
       window: 'today',
       state: 'ready',
       cost: { total: costTotal, byModel },
       tokens: { total: tokensTotal },
       rate: { perMin: rateMin, perHour: rateHour },
-      cacheHitPct: isFinite(cacheHit) ? cacheHit : 0,
+      cacheHitPct,
       autonomy: { ratio, cliSeconds: cliSec, userSeconds: userSec },
     }
   }
@@ -88,15 +89,15 @@ export class TelemetryQuery {
     return existing.replace(/}$/, `,${extra}}`)
   }
 
-  private async instant(query: string): Promise<number> {
+  private async instant(query: string): Promise<number | null> {
     const vec = await this.instantVec(query)
-    if (vec.length === 0) return 0
+    if (vec.length === 0) return null
     return Number(vec[0].value[1])
   }
 
   private async instantVec(query: string): Promise<PromResult[]> {
     const url = `${this.baseUrl}/api/v1/query?query=${encodeURIComponent(query)}`
-    const res = await fetch(url)
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
     if (!res.ok) throw new Error(`prom query failed: ${res.status}`)
     const json = (await res.json()) as PromResponse
     if (json.status !== 'success' || !json.data) throw new Error(`prom query error: ${json.error ?? 'unknown'}`)
