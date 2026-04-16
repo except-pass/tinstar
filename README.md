@@ -82,6 +82,12 @@ The CLI checks for dependencies (Claude Code, tmux, ttyd), offers to register yo
 - **`/ship`** — Release workflow command
 - **`/tinstar-conventions`** — Project conventions reference
 
+## Telemetry
+
+Tinstar ships with an embedded Prometheus + Alloy stack that's managed for you. On first launch, the binaries are downloaded to `~/.config/tinstar/bin/` and run as supervised subprocesses. A live HUD appears in the upper-right of the canvas showing today's cost, tokens, cache hit rate, and agent-autonomy ratio. Press `T` to toggle.
+
+Disable with `TINSTAR_TELEMETRY=0`. For the full Grafana power-user experience: `npm run dev:observability`.
+
 ## Prerequisites
 
 - **Node.js 20+** — runtime
@@ -115,6 +121,7 @@ The CLI checks for dependencies (Claude Code, tmux, ttyd), offers to register yo
 |----------|---------|---------|
 | `TINSTAR_FAST_SIM` | unset | Set to `1` to auto-start mock data simulator |
 | `TINSTAR_NO_SESSIONS` | unset | Set to `1` to skip session management (CI) |
+| `TINSTAR_TELEMETRY` | unset | Set to `0` to disable the embedded Prometheus + Alloy stack |
 
 ## Development
 
