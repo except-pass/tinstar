@@ -1,0 +1,29 @@
+otelcol.receiver.otlp "tinstar" {
+  http {
+    endpoint = "127.0.0.1:{{OTLP_PORT}}"
+  }
+  output {
+    metrics = [otelcol.processor.attributes.tinstar_labels.input]
+  }
+}
+
+otelcol.processor.attributes "tinstar_labels" {
+  action {
+    key = "tinstar_session"
+    action = "insert"
+    from_attribute = "tinstar.session"
+  }
+  output {
+    metrics = [otelcol.exporter.prometheus.remote.input]
+  }
+}
+
+otelcol.exporter.prometheus "remote" {
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = "{{PROMETHEUS_URL}}"
+  }
+}
