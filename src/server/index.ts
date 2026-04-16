@@ -34,6 +34,12 @@ import { SessionReadinessTracker } from './sessions/readiness'
 import { ObservabilityStack } from './observability/index.js'
 import { createTelemetryRoutes } from './api/telemetry.js'
 
+// Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
+// If initBackend runs twice (Vite HMR), the second invocation skips registration
+// so we avoid a double-signal race. The first instance's shutdown handler is
+// accepted as-is — prod only calls initBackend once.
+let shutdownRegistered = false
+
 export function initBackend(): RouteContext {
   // Instantiate core components
   const bus = new EventBus()
@@ -50,9 +56,9 @@ export function initBackend(): RouteContext {
   sse.setReadyQueue(readyQueue.getQueue())
   bus.on('ready_queue.update', (ev) => sse.setReadyQueue(ev.payload.queue))
 
-  // Observability stack — fire-and-forget; state is exposed via telemetry API
+  // Observability stack — fire-and-forget; errors surface as state='degraded' + lastError via telemetry API
   const observability = new ObservabilityStack()
-  observability.start().catch((err) => log.error('observability', 'start failed', { error: (err as Error).message }))
+  void observability.start()
 
   const telemetryRoutes = createTelemetryRoutes({
     sse,
@@ -63,13 +69,16 @@ export function initBackend(): RouteContext {
     getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
   })
 
-  const shutdown = async () => {
-    try { await observability.stop() } catch { /* ignore */ }
-    try { telemetryRoutes.stopPolling() } catch { /* ignore */ }
-    process.exit(0)
+  if (!shutdownRegistered) {
+    shutdownRegistered = true
+    const shutdown = async () => {
+      try { await observability.stop() } catch { /* ignore */ }
+      try { telemetryRoutes.stopPolling() } catch { /* ignore */ }
+      process.exit(0)
+    }
+    process.once('SIGINT', shutdown)
+    process.once('SIGTERM', shutdown)
   }
-  process.once('SIGINT', shutdown)
-  process.once('SIGTERM', shutdown)
 
   // Start draft watcher — emits skill.drafted SSE events when new drafts appear
   ensureDraftsDir()

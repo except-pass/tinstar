@@ -8,6 +8,11 @@ import { acquireLock, type ReleaseFn } from './lock.js'
 import { renderAlloyRiver, renderPrometheusYml } from './config-render.js'
 import { TelemetryQuery } from './query.js'
 import type { DownloadProgress, ObservabilityState } from './types.js'
+import { log } from '../logger.js'
+
+const PROM_PORT = 9090
+const ALLOY_OTLP_PORT = 4318
+const ALLOY_ADMIN_PORT = 12345
 
 export * from './types.js'
 export { TelemetryQuery } from './query.js'
@@ -21,6 +26,7 @@ export class ObservabilityStack {
   state: ObservabilityState = 'idle'
   progress: DownloadProgress[] = []
   query: TelemetryQuery | null = null
+  lastError: string | null = null
 
   private prom: Supervisor | null = null
   private alloy: Supervisor | null = null
@@ -41,6 +47,9 @@ export class ObservabilityStack {
       this.state = 'disabled'; return
     }
 
+    // Clear any previous error before a fresh start attempt
+    this.lastError = null
+
     mkdirSync(this.obsRoot, { recursive: true })
     this.lockRelease = await acquireLock(join(this.obsRoot, 'observability.lock'))
 
@@ -59,10 +68,10 @@ export class ObservabilityStack {
       // Render configs
       const promCfgPath = join(this.obsRoot, 'prometheus.yml')
       const alloyCfgPath = join(this.obsRoot, 'alloy-config.alloy')
-      writeFileSync(promCfgPath, renderPrometheusYml({ port: 9090 }))
+      writeFileSync(promCfgPath, renderPrometheusYml({ port: PROM_PORT }))
       writeFileSync(alloyCfgPath, renderAlloyRiver({
-        otlpPort: 4318,
-        prometheusUrl: 'http://127.0.0.1:9090/api/v1/write',
+        otlpPort: ALLOY_OTLP_PORT,
+        prometheusUrl: `http://127.0.0.1:${PROM_PORT}/api/v1/write`,
       }))
 
       this.state = 'starting'
@@ -74,24 +83,24 @@ export class ObservabilityStack {
           `--config.file=${promCfgPath}`,
           `--storage.tsdb.path=${join(this.obsRoot, 'prometheus-data')}`,
           `--storage.tsdb.retention.time=7d`,
-          `--web.listen-address=127.0.0.1:9090`,
+          `--web.listen-address=127.0.0.1:${PROM_PORT}`,
           `--web.enable-remote-write-receiver`,
         ],
         stateDir: this.obsRoot,
-        port: 9090,
+        port: PROM_PORT,
         probe: async () => {
-          try { const r = await fetch('http://127.0.0.1:9090/-/ready'); return r.ok } catch { return false }
+          try { const r = await fetch(`http://127.0.0.1:${PROM_PORT}/-/ready`); return r.ok } catch { return false }
         },
         expectedBinaryName: 'prometheus',
       })
       this.alloy = new Supervisor({
         name: 'alloy',
         binaryPath: alloyInstall.binaryPath,
-        args: ['run', alloyCfgPath, '--server.http.listen-addr=127.0.0.1:12345'],
+        args: ['run', alloyCfgPath, `--server.http.listen-addr=127.0.0.1:${ALLOY_ADMIN_PORT}`],
         stateDir: this.obsRoot,
-        port: 4318,
+        port: ALLOY_OTLP_PORT,
         probe: async () => {
-          try { const r = await fetch('http://127.0.0.1:12345/-/ready'); return r.ok } catch { return false }
+          try { const r = await fetch(`http://127.0.0.1:${ALLOY_ADMIN_PORT}/-/ready`); return r.ok } catch { return false }
         },
         expectedBinaryName: 'alloy',
       })
@@ -100,26 +109,39 @@ export class ObservabilityStack {
       await this.alloy.start()
 
       if (this.prom.state === 'ready' && this.alloy.state === 'ready') {
-        this.query = new TelemetryQuery('http://127.0.0.1:9090')
+        this.query = new TelemetryQuery(`http://127.0.0.1:${PROM_PORT}`)
         this.state = 'ready'
       } else {
         this.state = 'degraded'
       }
     } catch (err) {
+      // Swallow-and-record: callers check state/lastError, no unhandled rejections
       this.state = 'degraded'
-      throw err
+      this.lastError = (err as Error).message
     }
   }
 
   async stop(): Promise<void> {
-    await this.alloy?.stop()
-    await this.prom?.stop()
-    if (this.lockRelease) { await this.lockRelease(); this.lockRelease = null }
-    this.state = 'idle'
+    try {
+      try { await this.alloy?.stop() } catch (err) {
+        log.warn('observability', 'alloy stop failed', { error: (err as Error).message })
+      }
+      try { await this.prom?.stop() } catch (err) {
+        log.warn('observability', 'prometheus stop failed', { error: (err as Error).message })
+      }
+    } finally {
+      if (this.lockRelease) {
+        try { await this.lockRelease() } catch { /* best effort */ }
+        this.lockRelease = null
+      }
+      this.state = 'idle'
+    }
   }
 
   async restart(): Promise<void> {
-    await this.stop()
+    try { await this.stop() } catch (err) {
+      log.warn('observability', 'stop during restart failed', { error: (err as Error).message })
+    }
     this.progress = []
     await this.start()
   }
