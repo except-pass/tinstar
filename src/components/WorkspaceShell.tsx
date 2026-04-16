@@ -544,6 +544,16 @@ function WorkspaceShellInner() {
       return { id: firstNodeId, type: 'nats-traffic' as any, label }
     }
 
+    if (selectedType === 'browser-widget') {
+      const label = findNodeLabel(canvasTree, firstNodeId) ?? 'Browser'
+      return { id: firstNodeId, type: 'browser-widget', label }
+    }
+
+    if (selectedType === 'image-viewer') {
+      const label = findNodeLabel(canvasTree, firstNodeId) ?? 'Image'
+      return { id: firstNodeId, type: 'image-viewer', label }
+    }
+
     return null
   }, [selectionState.selectedIds, selectionState.selectedType, canvasTree])
 
