@@ -1,0 +1,27 @@
+.hud-line { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.hud-ic { width: 22px; height: 22px; display: grid; place-items: center;
+  font-size: 14px; background: rgba(80,100,140,0.25); border-radius: 4px; color: #e2e8f0; }
+.hud-lblrow { flex: 1; font-size: 11px; color: #e2e8f0; }
+.hud-lblrow .hud-t { display: flex; justify-content: space-between;
+  opacity: 0.75; font-size: 10px; letter-spacing: 0.3px; }
+.hud-lblrow .hud-v { font-weight: 700; }
+.hud-trough { height: 5px; background: rgba(0,0,0,0.45); border-radius: 3px;
+  margin-top: 3px; overflow: hidden; }
+.hud-fill { height: 100%; border-radius: 3px; transition: width 400ms ease-out; }
+.hud-fill.gold { background: linear-gradient(90deg, #f59e0b, #ef4444); }
+.hud-fill.blue { background: linear-gradient(90deg, #22d3ee, #6366f1); }
+.hud-fill.green { background: linear-gradient(90deg, #10b981, #06b6d4); }
+.hud-fill.purple { background: linear-gradient(90deg, #a855f7, #ec4899); }
+
+.hud-dial-top { display: flex; justify-content: space-between; font-size: 10px; }
+.hud-dial-top .hud-k { opacity: 0.7; letter-spacing: 0.3px; }
+.hud-dial-top .hud-v { font-weight: 700; font-family: 'JetBrains Mono', monospace; color: #fbbf24; }
+.hud-dial-track { height: 10px; margin-top: 3px; position: relative;
+  background: linear-gradient(90deg, rgba(236,72,153,0.2), rgba(120,140,180,0.25), rgba(34,211,238,0.35));
+  border-radius: 5px; }
+.hud-dial-tick { position: absolute; top: -3px; width: 3px; height: 16px;
+  background: #fff; box-shadow: 0 0 6px rgba(255,255,255,0.7); border-radius: 2px;
+  transition: left 400ms ease-out; }
+.hud-dial-ends { display: flex; justify-content: space-between;
+  font-size: 8px; opacity: 0.5; margin-top: 2px;
+  font-family: 'JetBrains Mono', monospace; letter-spacing: 1px; }
