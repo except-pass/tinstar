@@ -126,6 +126,14 @@ function startSSE() {
     window.dispatchEvent(new CustomEvent('tinstar:nats_traffic', { detail: JSON.parse(e.data) }))
   })
 
+  es.addEventListener('telemetry:hud', (e: MessageEvent) => {
+    try {
+      window.dispatchEvent(new CustomEvent('tinstar:telemetry:hud', { detail: JSON.parse(e.data) }))
+    } catch {
+      // malformed event — drop silently
+    }
+  })
+
   es.addEventListener('heartbeat', () => {
     // Keep-alive, no action needed
   })
