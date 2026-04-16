@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
-import { join, dirname } from 'node:path'
+import { createWriteStream, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdir, readdir } from 'node:fs/promises'
+import { join } from 'node:path'
+import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { createGunzip } from 'node:zlib'
 import { spawn } from 'node:child_process'
 import type { BinaryTarget } from './manifest.js'
 import type { DownloadProgress } from './types.js'
@@ -57,7 +57,7 @@ export async function installBinary(
   rmSync(tmpArchive, { force: true })
 
   // Rename staging into installRoot preserving the archive's top-level directory.
-  const entries = (await (await import('node:fs/promises')).readdir(staging))
+  const entries = await readdir(staging)
   if (entries.length !== 1) {
     throw new Error(`unexpected archive layout for ${target.component}: found ${entries.length} entries at top level`)
   }
@@ -69,11 +69,9 @@ export async function installBinary(
   rmSync(staging, { recursive: true, force: true })
 
   // Ensure binary is executable.
-  const { chmodSync } = await import('node:fs')
   chmodSync(binaryPath, 0o755)
 
   // Write sidecar for cache check.
-  const { writeFileSync } = await import('node:fs')
   writeFileSync(`${finalDir}.sha256`, target.sha256)
 
   return { binaryPath, verifiedHash: target.sha256 }
@@ -88,34 +86,38 @@ function sha256File(path: string): string {
 async function downloadTo(url: string, dest: string, component: string, onProgress?: ProgressFn): Promise<void> {
   const res = await fetch(url)
   if (!res.ok) throw new Error(`download failed: ${url} (${res.status})`)
+  if (!res.body) throw new Error(`download returned no body: ${url}`)
   const total = Number(res.headers.get('content-length') ?? 0)
   let received = 0
-  const out = createWriteStream(dest)
-  const reader = res.body!.getReader()
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    out.write(value)
-    received += value.byteLength
-    if (onProgress) onProgress({ component: component as 'prometheus' | 'alloy', bytesReceived: received, bytesTotal: total })
-  }
-  await new Promise<void>((resolve, reject) => out.end((err: Error | null | undefined) => (err ? reject(err) : resolve())))
+  const nodeStream = Readable.fromWeb(res.body as import('node:stream/web').ReadableStream<Uint8Array>)
+  const meter = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      received += chunk.byteLength
+      if (onProgress) onProgress({ component: component as 'prometheus' | 'alloy', bytesReceived: received, bytesTotal: total })
+      cb(null, chunk)
+    },
+  })
+  await pipeline(nodeStream, meter, createWriteStream(dest))
 }
 
 async function extractTarGz(archive: string, destDir: string): Promise<void> {
-  // Use `tar -xzf` via child_process — tar is standard on macOS+Linux.
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn('tar', ['-xzf', archive, '-C', destDir])
-    child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`tar exited ${code}`))))
-    child.on('error', reject)
-  })
+  await runExtract('tar', ['-xzf', archive, '-C', destDir])
 }
 
 async function extractZip(archive: string, destDir: string): Promise<void> {
-  // Use `unzip` — standard on macOS+Linux.
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn('unzip', ['-q', archive, '-d', destDir])
-    child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`unzip exited ${code}`))))
+  await runExtract('unzip', ['-q', archive, '-d', destDir])
+}
+
+function runExtract(cmd: string, args: string[]): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    const stderrChunks: Buffer[] = []
+    child.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk))
     child.on('error', reject)
+    child.on('exit', (code) => {
+      if (code === 0) { resolve(); return }
+      const detail = Buffer.concat(stderrChunks).toString('utf-8').trim()
+      reject(new Error(`${cmd} exited ${code}${detail ? ': ' + detail : ''}`))
+    })
   })
 }

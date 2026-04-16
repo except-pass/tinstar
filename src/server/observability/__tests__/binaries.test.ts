@@ -40,7 +40,6 @@ afterEach(() => {
 // A tiny valid tar.gz with one file "prometheus-0.0.0/prometheus" containing "#!/bin/sh\necho ok\n"
 // Built once at module load with Node's tar/zlib.
 import { gzipSync } from 'node:zlib'
-import { join as pjoin } from 'node:path'
 
 function makeTarBlock(name: string, content: Buffer): Buffer {
   const header = Buffer.alloc(512)
