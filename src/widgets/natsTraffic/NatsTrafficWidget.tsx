@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { NatsTrafficWidget } from '../../domain/types'
 import type { WidgetProps } from '../widgetComponentRegistry'
+import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
+import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 
 interface TrafficEvent {
   timestamp: string
@@ -68,6 +70,14 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [events, paused])
+
+  // Register hotkey action handler for this widget
+  useEffect(() => {
+    registerActionHandler(widget.id, (action) => {
+      if (action === 'fit-viewport') fitWidgetToViewport(widget.id)
+    })
+    return () => deregisterActionHandler(widget.id)
+  }, [widget.id])
 
   const handleClose = useCallback(() => {
     fetch(`/api/nats-traffic-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
