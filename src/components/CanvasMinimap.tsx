@@ -4,7 +4,7 @@ import type { Camera } from '../hooks/useCanvasCamera'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import type { TreeNode, Run, BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget } from '../domain/types'
 import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
-import { resolveRunAccent } from './runAccent'
+import { resolveRunAccent, hexToRgba } from './runAccent'
 
 const MINIMAP_W = 200
 const MINIMAP_H = 140
@@ -60,15 +60,6 @@ function getNodeColor(
     default:
       return resolveRunAccent()
   }
-}
-
-/** Parse a hex color (#rrggbb) into an rgba() string */
-function hexToCanvasColor(hex: string, alpha: number): string {
-  const n = Number.parseInt(hex.slice(1), 16)
-  const r = (n >> 16) & 255
-  const g = (n >> 8) & 255
-  const b = n & 255
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
 export function CanvasMinimap({
@@ -179,7 +170,7 @@ export function CanvasMinimap({
       const [mx, my] = worldToMinimap(layout.x, layout.y)
       const mw = Math.max(2, layout.width * scale)
       const mh = Math.max(2, layout.height * scale)
-      ctx.fillStyle = hexToCanvasColor(color, 0.6)
+      ctx.fillStyle = hexToRgba(color, 0.6)
       ctx.fillRect(mx, my, mw, mh)
     }
 
@@ -227,6 +218,7 @@ export function CanvasMinimap({
   }, [panToMinimapPoint])
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation()
     isDragging.current = false
     try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* already released */ }
   }, [])
