@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 import Editor, { DiffEditor } from '@monaco-editor/react'
+import { MarkdownRenderer } from './MarkdownRenderer'
 import type { editor as MonacoEditor } from 'monaco-editor'
 import type { EditorWidget } from '../../domain/types'
 import type { WidgetProps } from '../widgetComponentRegistry'
@@ -120,6 +121,11 @@ export function FileEditorWidget({ data }: WidgetProps) {
     })
   }, [])
 
+  const language = getLanguage(widget.filePath)
+  const isMarkdown = language === 'markdown'
+  const [rendered, setRendered] = useState(isMarkdown)
+  const toggleRendered = useCallback(() => setRendered(prev => !prev), [])
+
   // Register hotkey action handlers for when this widget is the focused context
   useEffect(() => {
     registerActionHandler(widget.id, (action) => {
@@ -127,9 +133,10 @@ export function FileEditorWidget({ data }: WidgetProps) {
       if (action === 'toggle-word-wrap') toggleWordWrap()
       if (action === 'toggle-diff') toggleDiff()
       if (action === 'fit-viewport') fitWidgetToViewport(widget.id)
+      if (action === 'toggle-rendered' && isMarkdown) toggleRendered()
     })
     return () => deregisterActionHandler(widget.id)
-  }, [widget.id, handleOpenInEditor, toggleWordWrap, toggleDiff])
+  }, [widget.id, handleOpenInEditor, toggleWordWrap, toggleDiff, toggleRendered, isMarkdown])
 
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -139,7 +146,6 @@ export function FileEditorWidget({ data }: WidgetProps) {
   }, [lastUpdatedAt])
   const secondsAgo = lastUpdatedAt ? Math.max(0, Math.floor((now - lastUpdatedAt.getTime()) / 1000)) : null
 
-  const language = getLanguage(widget.filePath)
   const showBinaryMessage = content !== null && isBinaryOrLarge(content)
 
   return (
@@ -152,22 +158,36 @@ export function FileEditorWidget({ data }: WidgetProps) {
         <span className="text-2xs font-mono text-slate-400 truncate flex-1">
           {[widget.task, widget.worktree, filename].filter(Boolean).join(' · ')}
         </span>
-        <button
-          onPointerDown={e => e.stopPropagation()}
-          onClick={toggleDiff}
-          className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${diffMode ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
-          title="Toggle diff view (vs HEAD)"
-        >
-          diff
-        </button>
-        <button
-          onPointerDown={e => e.stopPropagation()}
-          onClick={toggleWordWrap}
-          className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${wordWrap ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
-          title="Toggle word wrap"
-        >
-          wrap
-        </button>
+        {!rendered && (
+          <button
+            onPointerDown={e => e.stopPropagation()}
+            onClick={toggleDiff}
+            className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${diffMode ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
+            title="Toggle diff view (vs HEAD)"
+          >
+            diff
+          </button>
+        )}
+        {!rendered && (
+          <button
+            onPointerDown={e => e.stopPropagation()}
+            onClick={toggleWordWrap}
+            className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${wordWrap ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
+            title="Toggle word wrap"
+          >
+            wrap
+          </button>
+        )}
+        {isMarkdown && (
+          <button
+            onPointerDown={e => e.stopPropagation()}
+            onClick={toggleRendered}
+            className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${rendered ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
+            title="Toggle rendered markdown view"
+          >
+            rendered
+          </button>
+        )}
         <button
           onPointerDown={e => e.stopPropagation()}
           onClick={handleOpenInEditor}
@@ -188,7 +208,14 @@ export function FileEditorWidget({ data }: WidgetProps) {
 
       {/* Body */}
       <div className="flex-1 min-h-0">
-        {content === null ? (
+        {content !== null && rendered ? (
+          <MarkdownRenderer
+            content={content}
+            filePath={widget.filePath}
+            sessionId={widget.sessionId}
+            widgetId={widget.id}
+          />
+        ) : content === null ? (
           <div className="flex items-center justify-center h-full text-slate-500 text-xs font-mono">
             Loading…
           </div>
