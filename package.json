@@ -40,10 +40,12 @@
     "http-proxy": "^1.18.1",
     "image-size": "^2.0.2",
     "js-yaml": "^4.1.0",
+    "mermaid": "^11.14.0",
     "nats": "^2.29.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "squarify": "^1.1.0"
   },
   "devDependencies": {
