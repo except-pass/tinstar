@@ -1,4 +1,4 @@
-import { useCallback, useId, type ComponentPropsWithoutRef } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type ComponentPropsWithoutRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -21,6 +21,62 @@ function resolveRelativePath(base: string, relative: string): string {
     else if (segment !== '.' && segment !== '') parts.push(segment)
   }
   return parts.join('/')
+}
+
+let mermaidIdCounter = 0
+
+function MermaidBlock({ source }: { source: string }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [state, setState] = useState<'loading' | 'ok' | 'error'>('loading')
+  const [errorMsg, setErrorMsg] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    const id = `mermaid-${++mermaidIdCounter}`
+
+    import('mermaid').then(async (mod) => {
+      if (cancelled) return
+      const mermaid = mod.default
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'dark',
+        themeVariables: {
+          primaryColor: '#0a0e12',
+          primaryTextColor: '#cbd5e1',
+          primaryBorderColor: '#00f0ff',
+          lineColor: '#00a5b0',
+          secondaryColor: '#0f1419',
+          tertiaryColor: '#141c24',
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: '11px',
+        },
+      })
+      try {
+        const { svg } = await mermaid.render(id, source)
+        if (cancelled || !containerRef.current) return
+        containerRef.current.innerHTML = svg
+        setState('ok')
+      } catch (err) {
+        if (cancelled) return
+        setErrorMsg(err instanceof Error ? err.message : 'Invalid mermaid syntax')
+        setState('error')
+      }
+    })
+
+    return () => { cancelled = true }
+  }, [source])
+
+  if (state === 'loading') {
+    return <div className="text-2xs font-mono text-slate-500 py-2">Rendering diagram...</div>
+  }
+  if (state === 'error') {
+    return (
+      <pre className="bg-surface-panel border border-accent-red/30 rounded p-3 mb-3 overflow-x-auto">
+        <code className="text-2xs font-mono text-accent-red">{errorMsg}</code>
+      </pre>
+    )
+  }
+  return <div ref={containerRef} className="my-3 flex justify-center [&_svg]:max-w-full" />
 }
 
 export function MarkdownRenderer({ content, filePath, sessionId, widgetId }: Props) {
@@ -90,6 +146,10 @@ export function MarkdownRenderer({ content, filePath, sessionId, widgetId }: Pro
     ),
     code: ({ className, children }) => {
       const match = className?.match(/language-(\w+)/)
+      const lang = match?.[1]
+      if (lang === 'mermaid') {
+        return <MermaidBlock source={String(children).trim()} />
+      }
       if (!match) {
         return <code className="bg-white/5 px-1 py-0.5 rounded text-2xs font-mono text-primary-dim">{children}</code>
       }
