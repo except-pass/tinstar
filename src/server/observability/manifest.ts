@@ -1,15 +1,6 @@
-export type Component = 'prometheus' | 'alloy'
+import type { BinaryTarget } from '../infra/types.js'
 
-export interface BinaryTarget {
-  component: Component
-  version: string
-  url: string
-  sha256: string
-  /** Relative path inside the extracted archive to the actual binary. */
-  executableRelPath: string
-  /** tar.gz or zip — determines extraction strategy. */
-  archiveKind: 'tar.gz' | 'zip'
-}
+export type Component = 'prometheus' | 'alloy'
 
 /**
  * Pinned versions and checksums. Update in lockstep with the binary-manager

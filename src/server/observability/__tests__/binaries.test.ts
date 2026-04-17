@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer, type Server } from 'node:http'
 import { createHash } from 'node:crypto'
-import { installBinary } from '../binaries'
-import type { BinaryTarget } from '../manifest'
+import { installBinary } from '../../infra/binaries'
+import type { BinaryTarget } from '../../infra/types'
 
 let tmpBase: string
 let httpServer: Server

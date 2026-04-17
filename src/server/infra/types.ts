@@ -20,3 +20,12 @@ export interface SupervisorState {
   port: number
   startedAt: number
 }
+
+export interface BinaryTarget {
+  component: string
+  version: string
+  url: string
+  sha256: string
+  executableRelPath: string
+  archiveKind: 'tar.gz' | 'zip'
+}
