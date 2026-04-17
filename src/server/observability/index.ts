@@ -4,7 +4,7 @@ import { writeFileSync, mkdirSync } from 'node:fs'
 import { Supervisor } from './supervisor.js'
 import { installBinary, type ProgressFn } from './binaries.js'
 import { resolveBinaryTarget } from './manifest.js'
-import { acquireLock, type ReleaseFn } from './lock.js'
+import { acquireLock, type ReleaseFn } from '../infra/lock.js'
 import { renderAlloyRiver, renderPrometheusYml } from './config-render.js'
 import { TelemetryQuery } from './query.js'
 import type { DownloadProgress, ObservabilityState } from './types.js'
@@ -104,6 +104,10 @@ export class ObservabilityStack {
       this.state = 'starting'
       log.info('observability', 'starting supervisors', { promPort: PROM_PORT, alloyOtlpPort: ALLOY_OTLP_PORT, alloyAdminPort: ALLOY_ADMIN_PORT })
 
+      const onSupervisorChange = (name: string, s: import('./types.js').ObservabilityState) => {
+        this.onSupervisorStateChange(name, s)
+      }
+
       this.prom = new Supervisor({
         name: 'prometheus',
         binaryPath: promInstall.binaryPath,
@@ -120,6 +124,7 @@ export class ObservabilityStack {
           try { const r = await fetch(`http://127.0.0.1:${PROM_PORT}/-/ready`); return r.ok } catch { return false }
         },
         expectedBinaryName: 'prometheus',
+        onStateChange: onSupervisorChange,
       })
       this.alloy = new Supervisor({
         name: 'alloy',
@@ -131,6 +136,7 @@ export class ObservabilityStack {
           try { const r = await fetch(`http://127.0.0.1:${ALLOY_ADMIN_PORT}/-/ready`); return r.ok } catch { return false }
         },
         expectedBinaryName: 'alloy',
+        onStateChange: onSupervisorChange,
       })
 
       await this.prom.start()
@@ -150,6 +156,22 @@ export class ObservabilityStack {
       this.state = 'degraded'
       this.lastError = (err as Error).message
       log.error('observability', 'telemetry stack failed to start', { error: this.lastError })
+    }
+  }
+
+  private onSupervisorStateChange(name: string, s: ObservabilityState): void {
+    if (s === 'degraded') {
+      this.state = 'degraded'
+      this.lastError = `${name} supervisor is unhealthy`
+      this.query = null
+      log.warn('observability', `${name} went degraded, stack is now degraded`)
+    } else if (s === 'ready') {
+      if (this.prom?.state === 'ready' && this.alloy?.state === 'ready') {
+        this.state = 'ready'
+        this.lastError = null
+        this.query = new TelemetryQuery(`http://127.0.0.1:${PROM_PORT}`)
+        log.info('observability', 'both supervisors healthy, stack is ready')
+      }
     }
   }
 

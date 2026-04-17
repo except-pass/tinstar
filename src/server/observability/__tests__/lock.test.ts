@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { acquireLock, tryAcquireLock } from '../lock'
+import { acquireLock, tryAcquireLock } from '../../infra/lock'
 
 let tmp: string
 
@@ -29,5 +29,30 @@ describe('observability lock', () => {
     const r2 = await acquireLock(join(tmp, 'o.lock'))
     expect(typeof r2).toBe('function')
     await r2()
+  })
+
+  it('steals a stale lock left by a dead process', async () => {
+    const dir = join(tmp, 'o.lock.mark')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 999999, startedAt: 0 }))
+    const release = await acquireLock(join(tmp, 'o.lock'))
+    expect(typeof release).toBe('function')
+    await release()
+  })
+
+  it('steals a stale lock with no owner file (SIGKILL orphan)', async () => {
+    mkdirSync(join(tmp, 'o.lock.mark'))
+    const release = await acquireLock(join(tmp, 'o.lock'))
+    expect(typeof release).toBe('function')
+    await release()
+  })
+
+  it('tryAcquireLock steals from a dead pid', async () => {
+    const dir = join(tmp, 'o.lock.mark')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'owner.json'), JSON.stringify({ pid: 999999, startedAt: 0 }))
+    const release = await tryAcquireLock(join(tmp, 'o.lock'))
+    expect(release).not.toBeNull()
+    await release!()
   })
 })
