@@ -31,6 +31,7 @@ import { log } from './logger'
 import { reconcileGitHistory } from './commits'
 import { NatsTrafficBridge } from './nats-traffic'
 import { SessionReadinessTracker } from './sessions/readiness'
+import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
 import { createTelemetryRoutes } from './api/telemetry.js'
 
@@ -68,11 +69,23 @@ export function initBackend(): RouteContext {
     getLastError: () => observability.lastError,
     restart: () => observability.restart(),
     getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
+    getSessionConversationId: (name: string) => {
+      if (!sessionConfig) return null
+      const sess = getSession(sessionConfig.dirs.sessions, name)
+      return sess?.conversation?.id ?? null
+    },
   })
+
+  let natsManager: NatsManager | undefined
+  let natsTraffic: NatsTrafficBridge | undefined
+  let readinessTracker: SessionReadinessTracker | undefined
 
   if (!shutdownRegistered) {
     shutdownRegistered = true
     const shutdown = async () => {
+      try { await natsTraffic?.stop() } catch { /* ignore */ }
+      try { await readinessTracker?.stop() } catch { /* ignore */ }
+      try { await natsManager?.stop() } catch { /* ignore */ }
       try { await observability.stop() } catch { /* ignore */ }
       try { telemetryRoutes.stopPolling() } catch { /* ignore */ }
       try { docStore.flush() } catch { /* ignore */ }
@@ -86,14 +99,24 @@ export function initBackend(): RouteContext {
   ensureDraftsDir()
   watchDrafts(sse)
 
-  // Start NATS traffic bridge — subscribes to widget subjects and broadcasts via SSE
-  const natsUrl = process.env.NATS_URL ?? 'nats://localhost:4222'
-  const natsTraffic = new NatsTrafficBridge(sse, natsUrl)
-  natsTraffic.start()
+  // Start managed NATS server (installs binary if needed, spawns, probes)
+  natsManager = new NatsManager()
+  void natsManager.start().then(() => {
+    // Start NATS traffic bridge — subscribes to widget subjects and broadcasts via SSE
+    natsTraffic = new NatsTrafficBridge(sse, natsManager!.url)
+    natsTraffic.start()
 
-  // Start session readiness tracker — listens for tinstar.ready.> signals
-  const readinessTracker = new SessionReadinessTracker(natsUrl)
-  readinessTracker.start()
+    // Sync existing widget subscriptions now that the bridge is live
+    for (const widget of docStore.getAllNatsTrafficWidgets()) {
+      if (widget.subscriptions?.length) {
+        natsTraffic.updateWidgetSubscriptions(widget.id, widget.subscriptions)
+      }
+    }
+
+    // Start session readiness tracker — listens for tinstar.ready.> signals
+    readinessTracker = new SessionReadinessTracker(natsManager!.url)
+    readinessTracker.start()
+  })
 
   const fastSim = process.env.TINSTAR_FAST_SIM === '1'
   const speedMultiplier = fastSim ? 0 : 1
@@ -325,13 +348,6 @@ export function initBackend(): RouteContext {
     docStore.upsertSpace(simSpace.id, simSpace)
     docStore.activeSpaceId = simSpace.id
     startSimulator()
-  }
-
-  // Sync existing widget subscriptions with NATS traffic bridge
-  for (const widget of docStore.getAllNatsTrafficWidgets()) {
-    if (widget.subscriptions?.length) {
-      natsTraffic.updateWidgetSubscriptions(widget.id, widget.subscriptions)
-    }
   }
 
   return { docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue, natsTraffic, readinessTracker, telemetryRoutes }
