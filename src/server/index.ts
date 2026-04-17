@@ -350,7 +350,11 @@ export function initBackend(): RouteContext {
     startSimulator()
   }
 
-  return { docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue, natsTraffic, readinessTracker, telemetryRoutes }
+  return {
+    docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue, telemetryRoutes,
+    get natsTraffic() { return natsTraffic },
+    get readinessTracker() { return readinessTracker },
+  }
 }
 
 export function tinstarBackend(): Plugin {
