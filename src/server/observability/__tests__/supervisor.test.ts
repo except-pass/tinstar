@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Supervisor } from '../supervisor'
+import { Supervisor } from '../../infra/supervisor'
 
 let tmp: string
 
@@ -127,6 +127,75 @@ describe('Supervisor crash restart', () => {
     // Each restart uses a fresh OS pid; observing more than one proves the restart loop fired.
     expect(pids.size).toBeGreaterThan(1)
     expect(sup.state).toBe('degraded')
+    await sup.stop()
+  })
+})
+
+describe('Supervisor health loop', () => {
+  it('detects a dead adopted process and fires onStateChange', async () => {
+    const child = spawn('sleep', ['30'], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+
+    writeFileSync(join(tmp, 'health.state.json'), JSON.stringify({
+      pid, binaryPath: '/bin/sleep', binaryHash: '', port: 9999, startedAt: Date.now(),
+    }))
+
+    const stateChanges: string[] = []
+    const sup = new Supervisor({
+      name: 'health',
+      binaryPath: '/bin/sleep',
+      args: ['30'],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => {
+        try { process.kill(pid, 0); return true } catch { return false }
+      },
+      expectedBinaryName: 'sleep',
+      healthIntervalMs: 100,
+      healthFailureThreshold: 1,
+      maxRestartsPerMinute: 0,
+      onStateChange: (_name, state) => { stateChanges.push(state) },
+    })
+    await sup.start()
+    expect(sup.state).toBe('ready')
+
+    process.kill(pid, 'SIGKILL')
+    await new Promise((r) => setTimeout(r, 350))
+
+    expect(sup.state).toBe('degraded')
+    expect(stateChanges).toContain('degraded')
+    await sup.stop()
+  })
+
+  it('recovers from degraded when probe passes again', async () => {
+    let probeResult = true
+    const stateChanges: string[] = []
+    const sup = new Supervisor({
+      name: 'recover',
+      binaryPath: join(tmp, 'recover.sh'),
+      args: [],
+      stateDir: tmp,
+      port: 9999,
+      probe: async () => probeResult,
+      healthIntervalMs: 50,
+      healthFailureThreshold: 1,
+      onStateChange: (_name, state) => { stateChanges.push(state) },
+    })
+    writeFileSync(join(tmp, 'recover.sh'), '#!/bin/sh\nwhile true; do sleep 10; done\n')
+    chmodSync(join(tmp, 'recover.sh'), 0o755)
+
+    await sup.start()
+    expect(sup.state).toBe('ready')
+
+    probeResult = false
+    await new Promise((r) => setTimeout(r, 150))
+    expect(sup.state).toBe('degraded')
+
+    probeResult = true
+    await new Promise((r) => setTimeout(r, 150))
+    expect(sup.state).toBe('ready')
+    expect(stateChanges).toEqual(expect.arrayContaining(['ready', 'degraded', 'ready']))
     await sup.stop()
   })
 })
