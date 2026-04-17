@@ -252,6 +252,37 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => el.removeEventListener('wheel', handler)
   }, [handleWheel])
 
+  // Handle tinstar:open-linked-file — spawn a new editor widget next to the source widget
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const handleLinkedFile = async (e: Event) => {
+      const { sessionId, filePath, sourceWidgetId } = (e as CustomEvent).detail as {
+        sessionId: string
+        filePath: string
+        sourceWidgetId: string
+      }
+
+      const sourceLayout = getLayout(sourceWidgetId)
+      const spawnX = sourceLayout ? sourceLayout.x + sourceLayout.width + 40 : 0
+      const spawnY = sourceLayout ? sourceLayout.y : 0
+      const spawnLayout = { x: spawnX, y: spawnY, width: 640, height: 480 }
+
+      const res = await fetch('/api/editor-widgets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, filePath }),
+      })
+      const json = await res.json() as { ok: boolean; data?: EditorWidget }
+      if (!json.ok || !json.data) return
+      insertLayout(json.data.id, spawnLayout)
+      onEditorWidgetCreated?.(json.data)
+    }
+
+    container.addEventListener('tinstar:open-linked-file', handleLinkedFile)
+    return () => container.removeEventListener('tinstar:open-linked-file', handleLinkedFile)
+  }, [getLayout, insertLayout, onEditorWidgetCreated])
 
   // --- Pointer handlers: pan OR marquee ---
   const panPointerIdRef = useRef<number | null>(null)
