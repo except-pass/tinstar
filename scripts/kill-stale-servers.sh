@@ -8,7 +8,8 @@
 #   - frontend dev (`vite` in the tinstar repo or worktrees)
 #   - backend dev (`tsx ... standalone.ts`)
 #   - prod/standalone servers (`standalone.js`)
-#   - `npx tinstar` invocations that launched a server
+#   - CLI (`node .../bin/tinstar.js` — what `npx tinstar` actually runs; not matched by standalone.js)
+#   - `npx tinstar` invocations (parent shell only; child is bin/tinstar.js above)
 #
 # Usage: ./scripts/kill-stale-servers.sh [--dry-run]
 
@@ -93,8 +94,13 @@ for pid in $(pgrep -f "node .*standalone.js" 2>/dev/null); do
   maybe_kill_tinstar_pid "$pid"
 done
 
-# npx tinstar
+# npx tinstar (parent; often exits before we scan)
 for pid in $(pgrep -f "npx tinstar" 2>/dev/null); do
+  maybe_kill_tinstar_pid "$pid"
+done
+
+# CLI server: node .../bin/tinstar.js (long-lived process holding the HTTP port)
+for pid in $(pgrep -f "node.*bin/tinstar\\.js" 2>/dev/null); do
   maybe_kill_tinstar_pid "$pid"
 done
 

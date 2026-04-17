@@ -7,11 +7,12 @@ interface Props {
   userSeconds: number | null
 }
 
+const SCALE_MAX = 30
+
 export function AutonomyStat({ ratio, cliSeconds, userSeconds }: Props) {
   const hasData = ratio != null && ratio > 0
-  // Position tick on 1:1..10:1 log scale. When no data, center the tick mid-track.
-  const clamped = hasData ? Math.max(1, Math.min(10, ratio!)) : 1
-  const leftPct = Math.log10(clamped) * 100
+  const clamped = hasData ? Math.max(1, Math.min(SCALE_MAX, ratio!)) : 1
+  const leftPct = (Math.log10(clamped) / Math.log10(SCALE_MAX)) * 100
   const display = hasData ? `${ratio!.toFixed(1)}×` : '--'
   const tooltip = hasData
     ? `${cliSeconds ?? '--'}s agent / ${userSeconds ?? '--'}s human`
@@ -27,7 +28,7 @@ export function AutonomyStat({ ratio, cliSeconds, userSeconds }: Props) {
         <div className="hud-dial-track">
           {hasData && <div className="hud-dial-tick" style={{ left: `${leftPct}%` }} />}
         </div>
-        <div className="hud-dial-ends"><span>1:1</span><span>10:1</span></div>
+        <div className="hud-dial-ends"><span>1:1</span><span>30:1</span></div>
       </div>
     </div>
   )

@@ -3,6 +3,7 @@ import { HudBar } from './HudBar'
 import { AutonomyStat } from './AutonomyStat'
 import { TelemetryBootstrap } from './TelemetryBootstrap'
 import { useTelemetryHud } from '../../hooks/useTelemetryHud'
+import { fmtNum, fmtDollar, fmtRate } from './fmt'
 
 const STORAGE_KEY = 'tinstar-hud-visible'
 
@@ -61,14 +62,14 @@ export function CanvasHud({ toggleRef }: Props) {
   const cacheHit = snapshot.cacheHitPct
   const modelChips = Object.entries(snapshot.cost.byModel).slice(0, 2)
 
-  const costValue = costTotal == null ? '--' : `$${costTotal.toFixed(2)}`
+  const costValue = costTotal == null ? '--' : fmtDollar(costTotal)
   const costFill = costTotal == null ? null : Math.min(1, costTotal / 20)
 
-  const tokensLabel = rateMin == null ? 'TOKENS' : `TOKENS · ${Math.round(rateMin).toLocaleString()}/min`
-  const tokensValue = tokensTotal == null ? '--' : tokensTotal.toLocaleString()
+  const tokensLabel = rateMin == null ? 'TOKENS' : `TOKENS · ${fmtRate(rateMin)}/min`
+  const tokensValue = tokensTotal == null ? '--' : fmtNum(tokensTotal)
   const tokensFill = rateMin == null ? null : Math.min(1, rateMin / 5000)
 
-  const cacheValue = cacheHit == null ? '--' : `${Math.round(cacheHit * 100)}%`
+  const cacheValue = cacheHit == null ? '--' : `${(cacheHit * 100).toFixed(2)}%`
   const cacheFill = cacheHit
 
   return (
@@ -81,7 +82,7 @@ export function CanvasHud({ toggleRef }: Props) {
                 fontFamily: 'JetBrains Mono, monospace', borderRadius: 3,
                 background: 'rgba(168,85,247,0.12)', borderLeft: '2px solid #a855f7' }}>
               <div style={{ fontSize: 8, opacity: 0.7, letterSpacing: 1 }}>{model.toUpperCase().slice(0, 10)}</div>
-              <div style={{ fontWeight: 700, color: '#e2e8f0' }}>${cost.toFixed(2)}</div>
+              <div style={{ fontWeight: 700, color: '#e2e8f0' }}>{fmtDollar(cost)}</div>
             </div>
           ))}
         </div>

@@ -77,6 +77,7 @@ function makeDeps(
     getLastError: () => null,
     restart: vi.fn(async () => {}),
     getDefaultUserEmail: () => 'test@example.com',
+    getSessionConversationId: () => null,
   }
 }
 
@@ -156,11 +157,12 @@ describe('GET /api/telemetry/hud — query throws', () => {
 })
 
 describe('GET /api/telemetry/session/:name', () => {
-  it('passes sessionName through to query', async () => {
+  it('resolves session name to conversation ID and passes to query', async () => {
     const sse = makeFakeSSE()
     const snap = makeReadySnapshot()
     const query = makeFakeQuery(snap)
     const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    deps.getSessionConversationId = () => 'conv-uuid-123'
     const routes = createTelemetryRoutes(deps)
 
     const req = makeReq('GET', '/api/telemetry/session/my-session')
@@ -171,7 +173,7 @@ describe('GET /api/telemetry/session/:name', () => {
     expect(handled).toBe(true)
     expect((res as unknown as FakeRes).statusCode).toBe(200)
     expect(query.todayHud).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionName: 'my-session' })
+      expect.objectContaining({ sessionId: 'conv-uuid-123' })
     )
   })
 })
@@ -188,6 +190,7 @@ describe('POST /api/telemetry/restart', () => {
       getLastError: () => null,
       restart,
       getDefaultUserEmail: () => 'test@example.com',
+      getSessionConversationId: () => null,
     }
     const routes = createTelemetryRoutes(deps)
 

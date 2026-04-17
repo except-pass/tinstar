@@ -17,6 +17,8 @@ export interface TelemetryApiDeps {
   getLastError: () => string | null
   restart: () => Promise<void>
   getDefaultUserEmail: () => string
+  /** Resolve a tinstar session name to its Claude Code conversation UUID. */
+  getSessionConversationId: (sessionName: string) => string | null
 }
 
 export function createTelemetryRoutes(deps: TelemetryApiDeps) {
@@ -60,10 +62,11 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
     if (state !== 'ready' || !deps.query) return base
     const tzOffsetMinutes = new Date().getTimezoneOffset()
     try {
+      const sessionId = sessionName ? deps.getSessionConversationId(sessionName) ?? undefined : undefined
       return await deps.query.todayHud({
         userEmail: deps.getDefaultUserEmail(),
         tzOffsetMinutes,
-        sessionName,
+        sessionId,
       })
     } catch (err) {
       return { ...base, state: 'degraded', error: (err as Error).message }

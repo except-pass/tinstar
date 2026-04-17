@@ -31,8 +31,35 @@ interface ServerOptions {
   open?: boolean
 }
 
+function killStalePidSync(pidFilePath: string): void {
+  try {
+    const raw = readFileSync(pidFilePath, 'utf8').trim()
+    const pid = parseInt(raw, 10)
+    if (isNaN(pid) || pid === process.pid) return
+    try { process.kill(pid, 0) } catch { return }
+    process.kill(pid, 'SIGTERM')
+    log.info('server', `killed stale server process ${pid}`)
+    const deadline = Date.now() + 3_000
+    while (Date.now() < deadline) {
+      try { process.kill(pid, 0) } catch { return }
+      const waitMs = 50
+      const start = Date.now()
+      while (Date.now() - start < waitMs) { /* spin */ }
+    }
+    try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+  } catch { /* no pid file or process already gone */ }
+}
+
 export function startServer(opts: ServerOptions) {
   opts.clientDir = resolve(opts.clientDir)
+
+  // Kill any stale server BEFORE starting the backend — the old server's shutdown
+  // handler will clean up its observability supervisors. If we init first, we risk
+  // adopting pids that are about to die.
+  const configDir = join(homedir(), '.config', 'tinstar')
+  const pidFile = join(configDir, 'server.pid')
+  killStalePidSync(pidFile)
+
   const ctx = initBackend()
   const proxy = httpProxy.createProxyServer({ ws: true })
 
@@ -136,9 +163,7 @@ export function startServer(opts: ServerOptions) {
     proxy.ws(req, socket, head, { target: `http://localhost:${run.port}` })
   })
 
-  const configDir = join(homedir(), '.config', 'tinstar')
   const portFile = join(configDir, 'server.port')
-  const pidFile = join(configDir, 'server.pid')
 
   function writePortFile(port: number) {
     try { writeFileSync(portFile, String(port)) } catch { /* best effort */ }
@@ -156,28 +181,6 @@ export function startServer(opts: ServerOptions) {
     try { unlinkSync(pidFile) } catch { /* already gone */ }
   }
 
-  function killStalePid(): boolean {
-    try {
-      const raw = readFileSync(pidFile, 'utf8').trim()
-      const pid = parseInt(raw, 10)
-      if (!isNaN(pid) && pid !== process.pid) {
-        process.kill(pid, 'SIGTERM')
-        log.info('server', `killed stale server process ${pid}`)
-        return true
-      }
-    } catch { /* no pid file or process already gone */ }
-    return false
-  }
-
-  // Clean up on shutdown — flush docStore to persist any pending writes
-  for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-    process.on(sig, () => {
-      ctx.docStore.flush()
-      removePortFile()
-      removePidFile()
-      process.exit(0)
-    })
-  }
   process.on('exit', () => { removePortFile(); removePidFile() })
 
   function listen(port: number, isRetry = false) {
@@ -201,9 +204,9 @@ export function startServer(opts: ServerOptions) {
           process.stderr.write(`[standalone] Port ${port} in use and TINSTAR_NO_PORT_FALLBACK=1 — exiting\n`)
           process.exit(1)
         }
-        if (!isRetry && killStalePid()) {
-          // Give the stale process time to release the port, then retry same port
-          setTimeout(() => listen(port, true), 800)
+        if (!isRetry) {
+          killStalePidSync(pidFile)
+          setTimeout(() => listen(port, true), 500)
         } else {
           log.warn('server', `port ${port} in use, trying ${port + 1}`)
           console.log(`  Port ${port} in use, trying ${port + 1}...`)

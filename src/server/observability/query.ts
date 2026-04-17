@@ -13,7 +13,7 @@ interface PromResponse {
 export interface HudQueryOpts {
   userEmail: string
   tzOffsetMinutes: number   // minutes west of UTC; matches Date.getTimezoneOffset()
-  sessionName?: string      // present → per-session scope
+  sessionId?: string        // Claude Code session UUID → filters by session_id label
 }
 
 export class TelemetryQuery {
@@ -46,14 +46,32 @@ export class TelemetryQuery {
   private async queryHud(opts: HudQueryOpts): Promise<HudSnapshot> {
     const windowSec = this.secondsSinceLocalMidnight(opts.tzOffsetMinutes)
     const filter = this.buildLabelFilter(opts)
+    const isSession = !!opts.sessionId
+
+    const tokenMetric = 'claude_code_token_usage_tokens_total'
+    const tokenFilter = this.mergeFilter(filter, 'type=~"input|output"')
+    const cacheReadFilter = this.mergeFilter(filter, 'type="cacheRead"')
+    const inputFilter = this.mergeFilter(filter, 'type="input"')
+
+    // Per-session: raw counter (stable cumulative total, no extrapolation jitter).
+    // Global today: increase() over today window (sums deltas across all sessions).
+    const tokensQuery = isSession
+      ? `sum(${tokenMetric}${tokenFilter})`
+      : `sum(increase(${tokenMetric}${tokenFilter}[${windowSec}s]))`
+    const cacheReadQuery = isSession
+      ? `sum(${tokenMetric}${cacheReadFilter})`
+      : `sum(increase(${tokenMetric}${cacheReadFilter}[${windowSec}s]))`
+    const inputQuery = isSession
+      ? `sum(${tokenMetric}${inputFilter})`
+      : `sum(increase(${tokenMetric}${inputFilter}[${windowSec}s]))`
 
     const [costTotal, costByModel, tokensTotal, rateMin, rateHour, cacheHit, cliSec, userSec] = await Promise.all([
       this.instant(`sum(increase(claude_code_cost_usage_USD_total${filter}[${windowSec}s]))`),
       this.instantVec(`sum by (model) (increase(claude_code_cost_usage_USD_total${filter}[${windowSec}s]))`),
-      this.instant(`sum(increase(claude_code_tokens_used_total${filter}[${windowSec}s]))`),
-      this.instant(`sum(rate(claude_code_tokens_used_total${filter}[1m])) * 60`),
-      this.instant(`sum(rate(claude_code_tokens_used_total${filter}[1h])) * 3600`),
-      this.instant(`sum(rate(claude_code_cache_read_input_tokens_total${filter}[${windowSec}s])) / sum(rate(claude_code_tokens_used_total${filter}[${windowSec}s]))`),
+      this.instant(tokensQuery),
+      this.instant(`sum(rate(${tokenMetric}${tokenFilter}[1m])) * 60`),
+      this.instant(`sum(rate(${tokenMetric}${tokenFilter}[1h])) * 3600`),
+      this.instant(`${cacheReadQuery} / (${cacheReadQuery} + ${inputQuery})`),
       this.instant(`sum(claude_code_active_time_seconds_total${this.mergeFilter(filter, 'type="cli"')})`),
       this.instant(`sum(claude_code_active_time_seconds_total${this.mergeFilter(filter, 'type="user"')})`),
     ])
@@ -70,7 +88,7 @@ export class TelemetryQuery {
       window: 'today',
       state: 'ready',
       cost: { total: costTotal, byModel },
-      tokens: { total: tokensTotal },
+      tokens: { total: tokensTotal !== null ? Math.floor(tokensTotal) : null },
       rate: { perMin: rateMin, perHour: rateHour },
       cacheHitPct,
       autonomy: { ratio, cliSeconds: cliSec, userSeconds: userSec },
@@ -80,7 +98,7 @@ export class TelemetryQuery {
   private buildLabelFilter(opts: HudQueryOpts): string {
     const parts: string[] = []
     if (opts.userEmail) parts.push(`user_email="${opts.userEmail}"`)
-    if (opts.sessionName) parts.push(`tinstar_session="${opts.sessionName}"`)
+    if (opts.sessionId) parts.push(`session_id="${opts.sessionId}"`)
     return parts.length ? `{${parts.join(',')}}` : ''
   }
 

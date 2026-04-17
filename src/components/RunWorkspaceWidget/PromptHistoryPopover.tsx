@@ -92,6 +92,11 @@ export function PromptHistoryPopover({ history, accent, onSelect, onClose }: Pro
         aria-labelledby={labelId}
         aria-activedescendant={history.length > 0 ? `${labelId}-item-${selected}` : undefined}
       >
+        {history.length === 0 && (
+          <li className="px-2 py-3 text-xs font-mono text-slate-500 text-center">
+            No history yet — send a prompt first
+          </li>
+        )}
         {history.map((item, i) => {
           const isSel = i === selected
           return (

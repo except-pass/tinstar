@@ -27,11 +27,12 @@ beforeEach(async () => {
         } else {
           respond([makeResult({}, 4.82)])
         }
-      } else if (q.includes('cache_read_input_tokens') || q.includes('cache_hit')) {
+      } else if (q.includes('token_usage_tokens_total') && q.includes('cacheRead') && q.includes('/')) {
+        // cache hit ratio: cacheRead / (cacheRead + input)
         respond([makeResult({}, 0.78)])
-      } else if (q.includes('rate(claude_code_tokens_used_total')) {
+      } else if (q.includes('rate(') && q.includes('token_usage_tokens_total')) {
         respond([makeResult({}, 40.2)])
-      } else if (q.includes('tokens_used_total')) {
+      } else if (q.includes('token_usage_tokens_total')) {
         respond([makeResult({}, 318422)])
       } else if (q.includes('active_time_seconds_total') && q.includes('type="cli"')) {
         respond([makeResult({}, 4313)])

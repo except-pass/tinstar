@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import squarify from 'squarify'
 import { hexToRgba } from '../runAccent'
 import { HudBar, AutonomyStat } from '../CanvasHud'
+import { fmtNum, fmtDollar, fmtRate } from '../CanvasHud/fmt'
 import { useTelemetrySession } from '../../hooks/useTelemetrySession'
 
 /* ------------------------------------------------------------------ */
@@ -105,14 +106,14 @@ function SessionSection({ sessionId }: { sessionId: string }) {
   const rateMin = snap.rate.perMin
   const cacheHit = snap.cacheHitPct
 
-  const costValue = costTotal == null ? '--' : `$${costTotal.toFixed(2)}`
+  const costValue = costTotal == null ? '--' : fmtDollar(costTotal)
   const costFill = costTotal == null ? null : Math.min(1, costTotal / 5)
 
-  const tokensLabel = rateMin == null ? 'TOKENS' : `TOKENS · ${Math.round(rateMin).toLocaleString()}/min`
-  const tokensValue = tokensTotal == null ? '--' : tokensTotal.toLocaleString()
+  const tokensLabel = rateMin == null ? 'TOKENS' : `TOKENS · ${fmtRate(rateMin)}/min`
+  const tokensValue = tokensTotal == null ? '--' : fmtNum(tokensTotal)
   const tokensFill = rateMin == null ? null : Math.min(1, rateMin / 5000)
 
-  const cacheValue = cacheHit == null ? '--' : `${Math.round(cacheHit * 100)}%`
+  const cacheValue = cacheHit == null ? '--' : `${(cacheHit * 100).toFixed(2)}%`
 
   return (
     <div style={{ padding: '10px 12px', borderBottom: '1px solid rgba(120,140,180,0.15)' }} data-testid="telemetry-session-section">

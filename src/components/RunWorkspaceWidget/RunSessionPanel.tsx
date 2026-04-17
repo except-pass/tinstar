@@ -217,11 +217,11 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
       handleSend()
       return
     }
-    if (e.key === 'ArrowUp' && text.length === 0 && history.length > 0 && !historyOpen) {
+    if (e.key === 'ArrowUp' && text.length === 0 && !historyOpen) {
       e.preventDefault()
       setHistoryOpen(true)
     }
-  }, [handleSend, text, history.length, historyOpen])
+  }, [handleSend, text, historyOpen])
 
   // Focus textarea when expanded
   useEffect(() => {
@@ -293,8 +293,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
                 type="button"
                 data-testid="prompt-history-button"
                 onClick={() => setHistoryOpen(o => !o)}
-                disabled={history.length === 0}
-                title={history.length === 0 ? 'No history yet' : 'Recent prompts (↑)'}
+                title="Recent prompts (↑)"
                 className="flex items-center gap-1 px-2 py-1.5 text-2xs font-mono uppercase tracking-wider rounded transition-all duration-150 ease-out disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:scale-105 enabled:active:scale-95"
                 style={{
                   background: hexToRgba(accent, 0.1),

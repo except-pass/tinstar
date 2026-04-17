@@ -36,7 +36,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
 
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
-  const [procsCollapsed, setProcsCollapsed] = useState(true)
+  const [procsCollapsed, setProcsCollapsed] = useState(false)
   const [handsCollapsed, setHandsCollapsed] = useState(false)
   const [sessionTab, setSessionTab] = useState<'recap' | 'terminal'>(run.port ? 'terminal' : 'recap')
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
