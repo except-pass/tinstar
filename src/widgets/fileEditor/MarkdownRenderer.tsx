@@ -181,7 +181,7 @@ export function MarkdownRenderer({ content, filePath, sessionId, widgetId }: Pro
   }
 
   return (
-    <div className="h-full overflow-y-auto px-4 py-3 font-mono">
+    <div data-scrollable className="h-full overflow-y-auto px-4 py-3 font-mono">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content}
       </ReactMarkdown>
