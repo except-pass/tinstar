@@ -3,6 +3,7 @@ import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
 import { resolveRunAccent, hexToRgba } from '../runAccent'
 import { usePromptHistory } from '../../hooks/usePromptHistory'
 import { PromptHistoryPopover } from './PromptHistoryPopover'
+import { useFocusPath } from '../../hotkeys/FocusPathContext'
 
 function MarkdownText({ content }: { content: string }) {
   return (
@@ -173,8 +174,38 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   const [error, setError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
+  const composerRootRef = useRef<HTMLDivElement>(null)
   const { history, push: pushHistory } = usePromptHistory(sessionId)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const { pushFocus, popFocus, path } = useFocusPath()
+  const composerFocusId = sessionId ? `${sessionId}:composer` : null
+  const isOnFocusPath = useRef(false)
+
+  const enterComposerFocus = useCallback(() => {
+    if (!composerFocusId || isOnFocusPath.current) return
+    pushFocus({ id: composerFocusId, type: 'prompt-composer', label: 'Composer' })
+    isOnFocusPath.current = true
+  }, [composerFocusId, pushFocus])
+
+  const leaveComposerFocus = useCallback(() => {
+    if (!isOnFocusPath.current) return
+    // Only pop if we're still the tail — don't yank something that pushed on top of us
+    if (path[path.length - 1]?.id === composerFocusId) popFocus()
+    isOnFocusPath.current = false
+  }, [path, composerFocusId, popFocus])
+
+  // Pop on unmount / when composer collapses (textarea won't fire blur if it unmounts)
+  useEffect(() => {
+    if (!isExpanded) leaveComposerFocus()
+  }, [isExpanded, leaveComposerFocus])
+  useEffect(() => () => leaveComposerFocus(), [leaveComposerFocus])
+
+  const onTextareaFocus = useCallback(() => enterComposerFocus(), [enterComposerFocus])
+  const onTextareaBlur = useCallback((e: React.FocusEvent<HTMLTextAreaElement>) => {
+    const next = e.relatedTarget as Node | null
+    if (next && composerRootRef.current?.contains(next)) return
+    leaveComposerFocus()
+  }, [leaveComposerFocus])
 
   // Focus when trigger changes (from parent selecting widget)
   useEffect(() => {
@@ -217,11 +248,20 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
       handleSend()
       return
     }
+    if ((e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'Escape') && sessionId) {
+      e.preventDefault()
+      fetch(`/api/sessions/${sessionId}/send-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: [e.key] }),
+      }).catch(() => { /* swallow — passthrough keys are fire-and-forget */ })
+      return
+    }
     if (e.key === 'ArrowUp' && text.length === 0 && !historyOpen) {
       e.preventDefault()
       setHistoryOpen(true)
     }
-  }, [handleSend, text, historyOpen])
+  }, [handleSend, text, historyOpen, sessionId])
 
   // Focus textarea when expanded
   useEffect(() => {
@@ -241,7 +281,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   }, [])
 
   return (
-    <div className="border-t" style={{ borderColor: hexToRgba(accent, 0.2) }}>
+    <div ref={composerRootRef} className="border-t" style={{ borderColor: hexToRgba(accent, 0.2) }}>
       <button
         onClick={toggleExpanded}
         className="w-full flex items-center gap-2 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider transition-colors hover:bg-primary/5"
@@ -277,6 +317,8 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
             value={text}
             onChange={e => setText(e.target.value)}
             onKeyDown={handleKeyDown}
+            onFocus={onTextareaFocus}
+            onBlur={onTextareaBlur}
             placeholder="Enter prompt text... (Ctrl+Enter to send)"
             className="w-full h-24 px-2 py-1.5 bg-surface-base border rounded text-xs font-mono text-slate-200 placeholder:text-slate-600 resize-y outline-none focus:border-primary/50"
             style={{ borderColor: hexToRgba(accent, 0.2) }}
