@@ -54,9 +54,9 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun }: Props) {
 
   if (snapshot.state !== 'ready') {
     return (
-      <div style={wrapStyle} data-testid="canvas-hud">
+      <HudShell wrapStyle={wrapStyle} onClose={toggle}>
         <TelemetryBootstrap snap={snapshot} onRetry={handleRetry} />
-      </div>
+      </HudShell>
     )
   }
 
@@ -77,7 +77,7 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun }: Props) {
   const cacheFill = cacheHit
 
   return (
-    <div style={wrapStyle} data-testid="canvas-hud">
+    <HudShell wrapStyle={wrapStyle} onClose={toggle}>
       <HudBar icon="$" label="COST" value={costValue} fill={costFill} accent="gold" />
       {modelChips.length > 0 && (
         <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
@@ -101,6 +101,24 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun }: Props) {
           onFocusRun={onFocusRun}
         />
       )}
+    </HudShell>
+  )
+}
+
+function HudShell({
+  wrapStyle, onClose, children,
+}: { wrapStyle: React.CSSProperties; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div style={wrapStyle} data-testid="canvas-hud" className="group">
+      <button
+        onClick={onClose}
+        className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity text-slate-500 hover:text-slate-300"
+        title="Hide telemetry (T)"
+        data-testid="canvas-hud-close"
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>close</span>
+      </button>
+      {children}
     </div>
   )
 }
