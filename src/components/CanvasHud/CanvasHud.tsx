@@ -38,7 +38,18 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun }: Props) {
     return () => { if (toggleRef) toggleRef.current = null }
   }, [toggleRef, toggle])
 
-  if (!visible) return null
+  if (!visible) {
+    return (
+      <button
+        onClick={toggle}
+        className="absolute top-3 right-3 bg-surface-panel border border-white/10 p-1.5 rounded-sm text-slate-500 hover:text-slate-300 transition-colors select-none z-30"
+        title="Show telemetry (T)"
+        data-testid="canvas-hud-toggle"
+      >
+        <span className="material-symbols-outlined text-base" style={{ fontSize: '16px' }}>insights</span>
+      </button>
+    )
+  }
   if (!snapshot || snapshot.state === 'disabled') return null
 
   const wrapStyle: React.CSSProperties = {
