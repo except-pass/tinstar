@@ -49,7 +49,12 @@ export function AgentQuadrant({ runMap, burningRunIds, onFocusRun }: Props) {
   if (alive.length === 0) return null
 
   return (
-    <div data-testid="agent-quadrant" className="mt-3">
+    <div
+      data-testid="agent-quadrant"
+      className="mt-3"
+      role="region"
+      aria-label="Agent activity quadrant: BUSY vs READY by LLM activity"
+    >
       {/* Header row with axis labels */}
       <div className="grid grid-cols-[1fr_1fr] gap-[2px] text-[9px] font-semibold tracking-widest text-slate-400 mb-[2px]">
         <div className="text-center">BUSY</div>
