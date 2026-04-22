@@ -41,7 +41,8 @@ export class TelemetryQuery {
    * against a local Prometheus with ~60 token-metric series.
    */
   async burningSessions(opts: { userEmail: string }): Promise<string[]> {
-    const filter = opts.userEmail ? `{user_email="${opts.userEmail}",type=~"input|output"}` : `{type=~"input|output"}`
+    const base = opts.userEmail ? `{user_email="${opts.userEmail}"}` : ''
+    const filter = this.mergeFilter(base, 'type=~"input|output"')
     const query = `sum by (session_id) (rate(claude_code_token_usage_tokens_total${filter}[30s])) > 0`
     const vec = await this.instantVec(query)
     const out: string[] = []
