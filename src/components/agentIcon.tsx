@@ -58,7 +58,7 @@ function ProceduralAvatar({ seed, color, className }: { seed: string; color: str
     const hit = getAvatarDataUrl(seed, color)
     if (hit) setDataUrl(hit)
     return unsubscribe
-  }, [seed, color, dataUrl])
+  }, [seed, color])
 
   if (dataUrl) {
     return <img src={dataUrl} alt="" aria-hidden="true" className={`${className} inline-block object-contain`} />
@@ -68,7 +68,7 @@ function ProceduralAvatar({ seed, color, className }: { seed: string; color: str
       data-testid="agent-icon-placeholder"
       aria-hidden="true"
       className={`${className} inline-block rounded-full`}
-      style={{ background: `var(--agent-color, ${color})`, '--agent-color': color, opacity: 0.6 } as React.CSSProperties}
+      style={{ background: color, opacity: 0.6 }}
     />
   )
 }

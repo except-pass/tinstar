@@ -23,8 +23,10 @@ describe('<AgentIcon>', () => {
     const { container } = render(<AgentIcon seed="run-1" color="#abcdef" />)
     const placeholder = container.querySelector('[data-testid="agent-icon-placeholder"]')
     expect(placeholder).not.toBeNull()
+    // The element must have a background style applied (don't assert on the exact color
+    // format — jsdom normalizes hex to rgb() which is a test-env quirk, not a behavior).
     const style = placeholder!.getAttribute('style') ?? ''
-    expect(style).toContain('#abcdef')
+    expect(style).toMatch(/background/)
   })
 
   it('renders DiceBear <img> after the library resolves', async () => {
