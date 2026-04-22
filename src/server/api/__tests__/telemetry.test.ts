@@ -23,6 +23,7 @@ function makeFakeQuery(result: HudSnapshot | (() => HudSnapshot) | Error) {
       if (typeof result === 'function') return result()
       return result
     }),
+    burningSessions: async () => [],
   }
 }
 
@@ -78,6 +79,7 @@ function makeDeps(
     restart: vi.fn(async () => {}),
     getDefaultUserEmail: () => 'test@example.com',
     getSessionConversationId: () => null,
+    getRunIdsForConversationIds: () => [],
   }
 }
 
@@ -191,6 +193,7 @@ describe('POST /api/telemetry/restart', () => {
       restart,
       getDefaultUserEmail: () => 'test@example.com',
       getSessionConversationId: () => null,
+      getRunIdsForConversationIds: () => [],
     }
     const routes = createTelemetryRoutes(deps)
 
@@ -234,6 +237,7 @@ describe('startPolling — change detection', () => {
     ]
     const query = {
       todayHud: vi.fn(async () => snapshots[Math.min(callCount++, snapshots.length - 1)]),
+      burningSessions: async () => [],
     }
     const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
     const routes = createTelemetryRoutes(deps)

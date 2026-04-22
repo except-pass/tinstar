@@ -19,6 +19,8 @@ export interface TelemetryApiDeps {
   getDefaultUserEmail: () => string
   /** Resolve a tinstar session name to its Claude Code conversation UUID. */
   getSessionConversationId: (sessionName: string) => string | null
+  /** Inverse of getSessionConversationId — map conversation UUIDs back to tinstar run IDs. */
+  getRunIdsForConversationIds: (conversationIds: string[]) => string[]
 }
 
 export function createTelemetryRoutes(deps: TelemetryApiDeps) {
@@ -55,6 +57,7 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
       rate: { perMin: null, perHour: null },
       cacheHitPct: null,
       autonomy: { ratio: null, cliSeconds: null, userSeconds: null },
+      burningRunIds: [],
       progress: deps.getProgress(),
     }
     const lastError = deps.getLastError()
@@ -63,11 +66,16 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
     const tzOffsetMinutes = new Date().getTimezoneOffset()
     try {
       const sessionId = sessionName ? deps.getSessionConversationId(sessionName) ?? undefined : undefined
-      return await deps.query.todayHud({
-        userEmail: deps.getDefaultUserEmail(),
-        tzOffsetMinutes,
-        sessionId,
-      })
+      const [hud, burningConvIds] = await Promise.all([
+        deps.query.todayHud({
+          userEmail: deps.getDefaultUserEmail(),
+          tzOffsetMinutes,
+          sessionId,
+        }),
+        deps.query.burningSessions({ userEmail: deps.getDefaultUserEmail() }).catch(() => [] as string[]),
+      ])
+      const burningRunIds = deps.getRunIdsForConversationIds(burningConvIds)
+      return { ...hud, burningRunIds }
     } catch (err) {
       return { ...base, state: 'degraded', error: (err as Error).message }
     }
