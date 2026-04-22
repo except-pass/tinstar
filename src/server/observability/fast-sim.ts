@@ -10,6 +10,13 @@ export function makeFakeHud(t = Date.now()): HudSnapshot {
   const cost = 0.10 + secs * 0.0015
   const tokens = Math.floor(1000 + secs * 85)
   const rate = 1200 + Math.sin(secs / 30) * 400
+  // Rotate which fake run IDs are "burning" so the quadrant visibly animates in FAST_SIM.
+  const phase = Math.floor(t / 4000) % 4
+  const fakeBurning: string[] = []
+  if (phase === 0) fakeBurning.push('fake-run-1', 'fake-run-3')
+  if (phase === 1) fakeBurning.push('fake-run-2')
+  if (phase === 2) fakeBurning.push('fake-run-1', 'fake-run-2', 'fake-run-3')
+  // phase === 3 → empty
   return {
     window: 'today',
     state: 'ready',
@@ -24,5 +31,6 @@ export function makeFakeHud(t = Date.now()): HudSnapshot {
     rate: { perMin: Math.max(0, rate), perHour: Math.max(0, rate * 60) },
     cacheHitPct: 0.65 + Math.sin(secs / 45) * 0.15,
     autonomy: { ratio: 4.5 + Math.sin(secs / 60), cliSeconds: 4500, userSeconds: 1000 },
+    burningRunIds: fakeBurning,
   }
 }
