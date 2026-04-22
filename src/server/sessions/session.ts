@@ -44,6 +44,15 @@ export interface Session {
   nats: SessionNats | null
   port: number | null
   ttydPid: number | null
+  /**
+   * ISO timestamp when the session's NATS control socket was detected as
+   * orphaned (file present on disk but listener gone — typically from an
+   * MCP-server restart collision in except-pass/nats-channel-mcp). Once
+   * orphaned, dynamic subscribes will never take effect until the session
+   * is restarted. `null` means healthy or unverified. Cleared on session
+   * restart by state transitions in routes.ts.
+   */
+  natsControlOrphanedAt: string | null
   created: string
   lastActive: string
 }
@@ -110,6 +119,7 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
     nats: opts.nats ?? null,
     port: null,
     ttydPid: null,
+    natsControlOrphanedAt: null,
     created: now,
     lastActive: now,
   }
@@ -120,7 +130,11 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
 
 export function getSession(sessionsDir: string, name: string): Session | null {
   try {
-    return JSON.parse(readFileSync(sessionFile(sessionsDir, name), 'utf-8'))
+    const raw = JSON.parse(readFileSync(sessionFile(sessionsDir, name), 'utf-8')) as Session
+    // Backfill fields added after sessions were persisted so callers can
+    // assume the type as declared.
+    if (raw.natsControlOrphanedAt === undefined) raw.natsControlOrphanedAt = null
+    return raw
   } catch {
     return null
   }

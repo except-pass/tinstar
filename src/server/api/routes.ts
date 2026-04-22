@@ -136,27 +136,75 @@ function sendNatsSocketCommand(sessionName: string, cmd: { action: 'subscribe' |
 /**
  * A structured description of why a NATS control-socket command failed.
  * Returned to API callers so they can surface the failure instead of us
- * silently eating it. Code NATS_SOCKET_MISSING means the channel server
- * isn't reachable (typically: session stopped) — persisted state is still
- * valid and will apply on next startup. Code NATS_SOCKET_ERROR means the
- * socket exists but the command failed — this is unexpected.
+ * silently eating it.
+ *
+ * - NATS_SOCKET_UNREACHABLE (ENOENT): socket file is gone — session stopped
+ *   or never started. Persisted state will apply on next startup. Safe.
+ * - NATS_SOCKET_ORPHANED (ECONNREFUSED, file present): a second channel-server
+ *   instance unlinked the original listener's socket file (see
+ *   except-pass/nats-channel-mcp channel-server.ts unlinkSync+listen on start).
+ *   The live channel-server's listener is bound to an orphaned inode. Static
+ *   subscriptions from startup still work — dynamic subscribes never will
+ *   until the session is restarted.
+ * - NATS_SOCKET_ERROR: other unexpected failure.
  */
+type NatsSocketWarningCode =
+  | 'NATS_SOCKET_UNREACHABLE'
+  | 'NATS_SOCKET_ORPHANED'
+  | 'NATS_SOCKET_ERROR'
+  // Deprecated, kept for backwards-compat in structured responses: maps to
+  // UNREACHABLE | ORPHANED based on file presence. Callers should key off
+  // the new codes.
+  | 'NATS_SOCKET_MISSING'
+
 interface NatsSocketWarning {
-  code: 'NATS_SOCKET_MISSING' | 'NATS_SOCKET_ERROR'
+  code: NatsSocketWarningCode
   message: string
   action: 'subscribe' | 'unsubscribe'
   subject: string
+  /** Parent session is alive but its dynamic-subscribe path is dead; caller should restart the session to recover. */
+  restartRecommended?: boolean
 }
 
-function classifyNatsSocketError(
+export function classifyNatsSocketError(
   err: unknown,
   action: 'subscribe' | 'unsubscribe',
   subject: string,
+  sessionName: string,
+  fileExists: boolean,
 ): NatsSocketWarning {
   const e = err as NodeJS.ErrnoException
-  const missing = e?.code === 'ENOENT' || e?.code === 'ECONNREFUSED'
+  if (e?.code === 'ENOENT') {
+    return {
+      code: 'NATS_SOCKET_UNREACHABLE',
+      message: `Session '${sessionName}' control socket is not present — session is not running. Registry update persisted; will apply on next start.`,
+      action,
+      subject,
+    }
+  }
+  if (e?.code === 'ECONNREFUSED') {
+    if (fileExists) {
+      // File present but no listener → orphaned by a startup-sequence
+      // collision in the external channel-server package. Session is alive
+      // but dynamic subscribes will never land until restart.
+      return {
+        code: 'NATS_SOCKET_ORPHANED',
+        message: `Session '${sessionName}' is running but its NATS control socket is orphaned — a channel-server restart unlinked the live listener. Dynamic ${action} on '${subject}' will NOT take effect. Static subscriptions from session start still work; restart the session to recover dynamic-subscribe.`,
+        action,
+        subject,
+        restartRecommended: true,
+      }
+    }
+    // ECONNREFUSED without a file is odd (race with unlink) — treat as unreachable
+    return {
+      code: 'NATS_SOCKET_UNREACHABLE',
+      message: `Session '${sessionName}' control socket refused the connection and the file is gone. Registry update persisted; will apply on next start.`,
+      action,
+      subject,
+    }
+  }
   return {
-    code: missing ? 'NATS_SOCKET_MISSING' : 'NATS_SOCKET_ERROR',
+    code: 'NATS_SOCKET_ERROR',
     message: e?.message ?? String(err),
     action,
     subject,
@@ -178,8 +226,11 @@ async function trySendNatsSocketCommand(
     await sendNatsSocketCommand(sessionName, cmd)
     return null
   } catch (err) {
-    const warning = classifyNatsSocketError(err, cmd.action, cmd.subject)
-    const logFn = warning.code === 'NATS_SOCKET_MISSING' ? log.warn : log.error
+    const fileExists = existsSync(natsControlSocketPath(sessionName))
+    const warning = classifyNatsSocketError(err, cmd.action, cmd.subject, sessionName, fileExists)
+    // UNREACHABLE is the expected "session not running" case — warn.
+    // ORPHANED is a real in-flight failure: session is up but subscribe silently drops — error.
+    const logFn = warning.code === 'NATS_SOCKET_UNREACHABLE' ? log.warn : log.error
     logFn('nats', `control-socket ${cmd.action} failed for ${sessionName} (${cmd.subject}): ${warning.message}`, {
       sessionName,
       action: cmd.action,
@@ -2310,6 +2361,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const updated = getSession(sessDir, session.name)
             const resumePort = updated?.port ?? session.port
             setState(sessDir, session.name, 'running')
+            // Fresh channel-server → any prior orphan is stale.
+            updateSession(sessDir, session.name, { natsControlOrphanedAt: null })
             ctx.docStore.updateRunStatus(session.name, 'running')
             // Also update port on the run in case it changed
             if (resumePort) {
@@ -2514,8 +2567,57 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ? `tinstar.room.${randomUUID().slice(0, 8)}`
         : undefined
 
-      // Add breakout room to child's initial subscriptions
-      if (breakoutRoom && natsConfig) {
+      // Pre-flight: subscribe parent to the breakout room BEFORE we start the
+      // child, so the child's system prompt can point at a subject the parent
+      // actually hears. If the parent's control socket is unreachable/orphaned
+      // (common symptom of an upstream MCP-restart collision — see the
+      // NATS_SOCKET_ORPHANED docs on classifyNatsSocketError), fall back to
+      // the parent's persistent direct subject, which was subscribed at the
+      // parent's startup and is still live.
+      const parentDirectSubject = natsConfig?.enabled
+        ? buildNatsSubject(
+            parentName,
+            ctx.docStore,
+            parentRun?.taskId,
+            parentRun?.epic || undefined,
+            parentRun?.initiative || undefined,
+          )
+        : undefined
+
+      let breakoutWarning: NatsSocketWarning | null = null
+      let effectiveRoom = breakoutRoom
+      let breakoutFallback = false
+      if (breakoutRoom) {
+        breakoutWarning = await trySendNatsSocketCommand(parentName, {
+          action: 'subscribe',
+          subject: breakoutRoom,
+        })
+        if (breakoutWarning) {
+          // Parent can't receive on the new subject. Use the parent's
+          // persistent direct subject instead — it's been subscribed since
+          // parent startup and is unaffected by the control-socket orphan.
+          effectiveRoom = parentDirectSubject
+          breakoutFallback = true
+          if (breakoutWarning.code === 'NATS_SOCKET_ORPHANED') {
+            // Record orphan state on the session record so the dashboard can
+            // surface it. Clear it on next successful session restart.
+            const orphanedAt = new Date().toISOString()
+            updateSession(sessDir, parentName, { natsControlOrphanedAt: orphanedAt })
+            emitSessionEvent('managed_session.nats_orphaned', {
+              name: parentName,
+              orphanedAt,
+              reason: breakoutWarning.code,
+              restartRecommended: true,
+            })
+          }
+        }
+      }
+
+      // Add the effective room (breakout or fallback) to child's subscriptions
+      // so it can address the parent. Skip if fallback — the parent's direct
+      // subject is already covered by the child-end NATS hierarchy as an
+      // ancestor wildcard when the child's nats subscriptions are computed.
+      if (breakoutRoom && !breakoutFallback && natsConfig) {
         natsConfig.subscriptions.push(breakoutRoom)
       }
 
@@ -2565,10 +2667,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const port = await tmuxBackend.findPort(cfg.ports.hostStart)
           if (fullPrompt) enriched.initialPrompt = fullPrompt
 
-          // Build hand system prompt with breakout room for parent-child communication
+          // Build hand system prompt pointing at the effective parent-child
+          // room. When fallback kicked in (parent's control socket was orphan/
+          // unreachable), effectiveRoom is the parent's persistent direct
+          // subject rather than the fresh breakout room.
           const handSystemPrompt = hand.prompt
-            ? breakoutRoom
-              ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${breakoutRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${breakoutRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
+            ? effectiveRoom
+              ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${effectiveRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${effectiveRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
               : `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
             : null
 
@@ -2582,14 +2687,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         emitSessionEvent('managed_session.state_changed', { name: spawnedName, state: 'running' })
 
-        // Hot-subscribe parent to the breakout room
-        let breakoutWarning: NatsSocketWarning | null = null
-        if (breakoutRoom) {
-          breakoutWarning = await trySendNatsSocketCommand(parentName, {
-            action: 'subscribe',
-            subject: breakoutRoom,
-          })
-        }
+        // NOTE: the hot-subscribe to the breakout room happens BEFORE child
+        // creation now, so we can fall back to the parent's persistent direct
+        // subject when the parent's control socket is orphaned. See above.
 
         // Build NATS subject for the run
         const natsSubject = natsConfig?.enabled
@@ -2619,7 +2719,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           natsEnabled: natsConfig?.enabled ?? false,
           natsSubject,
           natsSubscriptions: natsConfig?.enabled ? natsConfig.subscriptions : undefined,
-          breakoutRooms: breakoutRoom ? [breakoutRoom] : undefined,
+          // Only record the breakout room if it was actually live (parent is
+          // subscribed to it). On fallback, the child uses the parent's
+          // direct subject so there's no separate room to track.
+          breakoutRooms: breakoutRoom && !breakoutFallback ? [breakoutRoom] : undefined,
           taskId: taskId ?? '',
           worktreeId: worktreePathOverride ? '' : (parentRun?.worktreeId ?? ''),  // Clear if using custom worktree
           createdAt: new Date().toISOString(),
@@ -2627,9 +2730,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           parentId: parentRun?.id,  // Track who spawned this hand
         })
 
-        // Add breakout room to parent's run record
-        // upsertRun is a full replacement, so spread the existing run first
-        if (breakoutRoom && parentRun) {
+        // Add breakout room to parent's run record — but only if the parent
+        // is actually subscribed to it. On fallback, there's no live room.
+        // upsertRun is a full replacement, so spread the existing run first.
+        if (breakoutRoom && !breakoutFallback && parentRun) {
           const parentRooms = parentRun.breakoutRooms ?? []
           ctx.docStore.upsertRun(parentRun.id, {
             ...parentRun,
@@ -2644,7 +2748,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             hand: handName,
             parentSession: parentName,
             orchestrator: orchestrator ?? false,
-            room: breakoutRoom ?? null,
+            // `room` is the subject the child was actually told to use. When
+            // the breakout subscribe failed and we fell back, this is the
+            // parent's persistent direct subject rather than a fresh room.
+            room: effectiveRoom ?? null,
+            // `breakoutRoom` is what we would have used if the parent's
+            // control socket were healthy. Kept for observability.
+            breakoutRoom: breakoutRoom ?? null,
+            breakoutFallback,
+            ...(breakoutFallback
+              ? {
+                  fallbackReason: breakoutWarning?.code ?? 'NATS_SOCKET_ERROR',
+                  restartRecommended: breakoutWarning?.restartRecommended ?? false,
+                }
+              : {}),
             natsWarning: breakoutWarning ?? undefined,
           },
         }, 201)
