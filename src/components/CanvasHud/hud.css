@@ -25,3 +25,20 @@
 .hud-dial-ends { display: flex; justify-content: space-between;
   font-size: 8px; opacity: 0.5; margin-top: 2px;
   font-family: 'JetBrains Mono', monospace; letter-spacing: 1px; }
+
+/* Avatar cell-transition pop. Fires whenever an AgentAvatar mounts into a
+   cell — React remounts when a bot moves quadrant cells, so this triggers
+   fresh on every transition but does NOT re-fire for bots that stay put. */
+@keyframes hudAvatarPop {
+  0%   { transform: scale(0.3) rotate(-18deg); opacity: 0; }
+  45%  { transform: scale(1.25) rotate(8deg);  opacity: 1; }
+  70%  { transform: scale(0.92) rotate(-3deg); opacity: 1; }
+  100% { transform: scale(1)    rotate(0);     opacity: 1; }
+}
+.hud-avatar-pop {
+  animation: hudAvatarPop 420ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  transform-origin: center center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hud-avatar-pop { animation: none; }
+}
