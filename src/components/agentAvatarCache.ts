@@ -45,11 +45,6 @@ function notify(): void {
   for (const fn of listeners) fn()
 }
 
-function normalizeHex(color: string): string {
-  // DiceBear expects color strings without the leading '#'.
-  return color.startsWith('#') ? color.slice(1) : color
-}
-
 /**
  * Get the cached avatar data URL, or null if it's not yet rendered.
  * On null, kicks off async generation that will fill the cache; subscribe
@@ -63,10 +58,14 @@ export function getAvatarDataUrl(seed: string, color: string): string | null {
   pending.add(k)
   ensureLoaded().then(({ createAvatar, botttsNeutral }) => {
     try {
+      // Use DiceBear's default vibrant palette for the bot body. The run's
+      // accent color lives on the ring around the avatar (see AgentAvatar.tsx),
+      // not on the face itself — mixing them made every face render near-black
+      // because bottts-neutral's body uses the primary color for everything.
+      // Keep the background transparent so the bot reads against any HUD cell bg.
       const svg = createAvatar(botttsNeutral, {
         seed,
-        primaryColor: [normalizeHex(color)],
-        backgroundColor: ['0a0f14'],
+        backgroundColor: ['transparent'],
       }).toString()
       const dataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`
       cache.set(k, dataUrl)
