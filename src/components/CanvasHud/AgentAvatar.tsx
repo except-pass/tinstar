@@ -9,7 +9,12 @@ interface Props {
 
 /**
  * A single agent's clickable avatar. Round ring tinted with run.color,
- * containing the AgentIcon (template icon or procedural DiceBear).
+ * containing a procedural DiceBear face seeded by run.id.
+ *
+ * Intentionally bypasses the template icon (run.agentIcon) — in the quadrant
+ * we always want the generated face so every agent has a distinct character.
+ * Template icons still win in other AgentIcon consumers (sidebar, etc.).
+ *
  * Click pans the canvas to this agent via onClick → onFocusRun(run.id).
  */
 export function AgentAvatar({ run, onClick }: Props) {
@@ -33,7 +38,6 @@ export function AgentAvatar({ run, onClick }: Props) {
       }}
     >
       <AgentIcon
-        icon={run.agentIcon}
         seed={run.id}
         color={color}
         className="w-5 h-5"
