@@ -77,19 +77,13 @@ export function initBackend(): RouteContext {
     getRunIdsForConversationIds: (conversationIds) => {
       if (!sessionConfig || conversationIds.length === 0) return []
       const wanted = new Set(conversationIds)
-      // Find session names whose conversation.id matches one of the wanted UUIDs.
-      const matchingSessionNames = new Set<string>()
+      const out: string[] = []
       for (const run of docStore.getAllRuns()) {
         const sess = getSession(sessionConfig.dirs.sessions, run.sessionId)
         const convId = sess?.conversation?.id
         if (convId && wanted.has(convId)) {
-          matchingSessionNames.add(run.sessionId)
+          out.push(run.id)
         }
-      }
-      // Return all run IDs whose sessionId matches.
-      const out: string[] = []
-      for (const run of docStore.getAllRuns()) {
-        if (matchingSessionNames.has(run.sessionId)) out.push(run.id)
       }
       return out
     },
