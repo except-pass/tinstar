@@ -10,29 +10,31 @@ const kindIcon: Record<FileKind, string> = {
 }
 
 interface Props {
-  files: TouchedFile[]
+  /** May be undefined if the run payload omits arrays (e.g. partial SSE merge). */
+  files?: TouchedFile[]
   sessionId: string
   onFileSelect?: (file: TouchedFile) => void
   onOpenFile?: (filePath: string) => void
   onCollapse?: () => void
 }
 
-export function TouchedFilesPanel({ files, sessionId, onFileSelect, onOpenFile, onCollapse: _onCollapse }: Props) {
-  const [selectedId, setSelectedId] = useState<string | null>(files[2]?.id ?? null)
+export function TouchedFilesPanel({ files = [], sessionId, onFileSelect, onOpenFile, onCollapse: _onCollapse }: Props) {
+  const list = files
+  const [selectedId, setSelectedId] = useState<string | null>(list[2]?.id ?? null)
   const [showReadOnly, setShowReadOnly] = useState(true)
 
   // Only count reconciled files in header totals
-  const reconciledFiles = files.filter(f => !f.pending)
+  const reconciledFiles = list.filter(f => !f.pending)
   const totalAdded = reconciledFiles.reduce((s, f) => s + f.additions, 0)
   const totalRemoved = reconciledFiles.reduce((s, f) => s + f.deletions, 0)
 
-  const visibleFiles = showReadOnly ? files : files.filter(f => f.additions > 0 || f.deletions > 0 || f.pending)
+  const visibleFiles = showReadOnly ? list : list.filter(f => f.additions > 0 || f.deletions > 0 || f.pending)
 
   return (
     <div className="flex flex-col h-full">
       {/* Summary bar */}
       <div className="px-3 py-1.5 border-b border-primary/10 bg-surface-base/50 flex items-center justify-between">
-        <span className="text-2xs font-mono text-slate-500">{files.length} files</span>
+        <span className="text-2xs font-mono text-slate-500">{list.length} files</span>
         <div className="flex items-center gap-1.5 text-2xs font-mono">
           <label className="flex items-center gap-1 cursor-pointer" title={showReadOnly ? 'Hide viewed-only files' : 'Show viewed-only files'}>
             <input

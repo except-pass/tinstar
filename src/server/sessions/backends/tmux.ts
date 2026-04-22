@@ -1,11 +1,30 @@
 import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
-import type { Session } from '../session'
+import type { Session, SessionNats } from '../session'
 import type { TinstarConfig, CliTemplate } from '../config'
 import { log } from '../../logger'
 
+// NATS channel server paths come from config (see config.ts)
+// Install: git clone https://github.com/except-pass/nats-channel-mcp && cd nats-channel-mcp && bun install
+
 const execFileAsync = promisify(execFile)
+
+// --- NATS control socket ---
+
+/**
+ * Path to the channel server's Unix control socket for hot subscription
+ * management. Tinstar's API handlers (see sendNatsSocketCommand in routes.ts)
+ * write newline-delimited JSON commands to this path to add/remove
+ * subscriptions on a live session without restarting it.
+ *
+ * Must match the --control-socket arg passed to nats-channel-mcp in
+ * generateNatsMcpConfig below. Exported so both sides use the same source.
+ */
+export function natsControlSocketPath(sessionName: string): string {
+  return `/tmp/tinstar-nats-${sessionName}.sock`
+}
 
 // --- Naming ---
 
@@ -20,6 +39,48 @@ export async function tmuxHasSession(tmuxName: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * Poll tmux pane for dev channel warning and auto-accept it.
+ * More robust than fixed timeout - waits for the actual prompt to appear.
+ * Polls every 500ms for up to 10 seconds.
+ */
+async function autoAcceptDevChannelWarning(tmuxName: string): Promise<void> {
+  const maxAttempts = 20 // 10 seconds at 500ms intervals
+  const interval = 500
+
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise((resolve) => setTimeout(resolve, interval))
+
+    try {
+      // Check if session still exists
+      await execFileAsync('tmux', ['has-session', '-t', tmuxName])
+
+      // Capture pane content
+      const { stdout } = await execFileAsync('tmux', ['capture-pane', '-t', tmuxName, '-p'])
+
+      // Look for the dev channel warning prompt
+      if (stdout.includes('Enter to confirm')) {
+        // Send Enter to accept
+        await execFileAsync('tmux', ['send-keys', '-t', tmuxName, 'Enter'])
+        log.info('tmux', `${tmuxName}: auto-accepted dev channel warning`)
+        return
+      }
+
+      // Check if Claude has already started (prompt appeared without warning)
+      // The "❯" prompt or "Claude Code" banner indicates we're past the warning
+      if (stdout.includes('Claude Code') && !stdout.includes('WARNING:')) {
+        log.info('tmux', `${tmuxName}: Claude started without dev channel warning`)
+        return
+      }
+    } catch {
+      // Session gone or capture failed, stop polling
+      return
+    }
+  }
+
+  log.info('tmux', `${tmuxName}: dev channel warning not detected within timeout`)
 }
 
 // --- Port management ---
@@ -55,6 +116,15 @@ export function releasePort(port: number): void {
 // --- Command builders ---
 
 /**
+ * Escape a string for use in bash single quotes.
+ * Single quotes don't expand anything (no $, `, !, etc.) — only ' itself needs escaping.
+ * Pattern: replace ' with '\'' (end quote, escaped literal quote, start new quote)
+ */
+function bashSingleQuote(str: string): string {
+  return "'" + str.replace(/'/g, "'\\''") + "'"
+}
+
+/**
  * Interpolate a CLI template string, replacing {sessionId} and {prompt} placeholders.
  * Unused placeholders are stripped so the command stays clean.
  */
@@ -70,13 +140,53 @@ function interpolateTemplate(
     cmd = cmd.replace(/\s*\S*\s*\{sessionId\}/g, '')
   }
   if (vars.prompt) {
-    cmd = cmd.replace(/\{prompt\}/g, JSON.stringify(vars.prompt))
+    // Use single quotes — they don't expand !, `, $, or anything else
+    cmd = cmd.replace(/\{prompt\}/g, bashSingleQuote(vars.prompt))
   } else {
     // Remove "-- {prompt}" or just "{prompt}"
     cmd = cmd.replace(/\s*--\s*\{prompt\}/g, '')
     cmd = cmd.replace(/\s*\{prompt\}/g, '')
   }
   return cmd.replace(/\s{2,}/g, ' ').trim()
+}
+
+/**
+ * Write .mcp.json to the workspace CWD so Claude picks it up automatically.
+ * Must use CWD placement — --mcp-config flag does NOT wire the channel server correctly.
+ * Returns the path written.
+ */
+export function generateNatsMcpConfig(opts: {
+  sessionsDir: string
+  sessionName: string
+  workspacePath: string
+  nats: SessionNats
+  channelServerPackage: string  // npm package or github:user/repo
+  bunPath: string
+}): string {
+  // Write to workspace CWD — Claude looks for .mcp.json in the working directory
+  const mcpConfigPath = join(opts.workspacePath, '.mcp.json')
+
+  // Build args: use `bun x <package>` to run from npm/github without local install
+  const args: string[] = ['x', opts.channelServerPackage, '--name', opts.sessionName]
+  for (const subject of opts.nats.subscriptions) {
+    args.push('--subscribe', subject)
+  }
+  // --control-socket wires up the hot subscription management path used by
+  // POST/DELETE /api/sessions/:name/subscriptions. Requires nats-channel-mcp
+  // >= the commit that introduced the flag (except-pass/nats-channel-mcp#1).
+  args.push('--control-socket', natsControlSocketPath(opts.sessionName))
+
+  const mcpConfig = {
+    mcpServers: {
+      nats: {
+        command: opts.bunPath,
+        args,
+      },
+    },
+  }
+
+  writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2))
+  return mcpConfigPath
 }
 
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
@@ -86,20 +196,47 @@ export function buildAgentCommand(opts: {
   sessionId?: string | null
   resume?: boolean
   initialPrompt?: string | null
+  nats?: { enabled: boolean } | null
+  appendSystemPrompt?: string | null
 }): string {
+  let cmd: string
+
   if (opts.template) {
     const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
-    return interpolateTemplate(tmpl, {
+    cmd = interpolateTemplate(tmpl, {
       sessionId: opts.sessionId,
       prompt: opts.resume ? null : opts.initialPrompt,
     })
+    // Insert --append-system-prompt before the -- prompt separator if present
+    if (opts.appendSystemPrompt) {
+      const promptFlag = ` --append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`
+      const dashDashIdx = cmd.indexOf(' -- ')
+      if (dashDashIdx !== -1) {
+        cmd = cmd.slice(0, dashDashIdx) + promptFlag + cmd.slice(dashDashIdx)
+      } else {
+        cmd += promptFlag
+      }
+    }
+  } else {
+    // Legacy fallback: build claude command from flags
+    cmd = 'claude'
+    if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
+    if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
+    else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
+    // Add NATS channel support — .mcp.json is in CWD, no --mcp-config needed
+    if (opts.nats?.enabled) {
+      cmd += ' --dangerously-load-development-channels server:nats'
+    }
+    // Add hand system prompt if specified
+    if (opts.appendSystemPrompt) {
+      cmd += ` --append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`
+    }
+    if (opts.initialPrompt) {
+      // Use single quotes — they don't expand !, `, $, or anything else
+      cmd += ` -- ${bashSingleQuote(opts.initialPrompt)}`
+    }
   }
-  // Legacy fallback: build claude command from flags
-  let cmd = 'claude'
-  if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
-  if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
-  else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
-  if (opts.initialPrompt) cmd += ` -- ${JSON.stringify(opts.initialPrompt)}`
+
   return cmd
 }
 
@@ -113,6 +250,7 @@ export async function createTmuxSession(
     port: number
     resume?: boolean
     template?: CliTemplate | null
+    appendSystemPrompt?: string | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
@@ -137,18 +275,62 @@ export async function createTmuxSession(
     }
   }
 
+  // Inject OTLP telemetry env vars when telemetry is enabled on the CLI template
+  if (opts.template?.telemetry !== false) {
+    const otelEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318'
+    const telemetryVars: Record<string, string> = {
+      CLAUDE_CODE_ENABLE_TELEMETRY: '1',
+      OTEL_METRICS_EXPORTER: 'otlp',
+      OTEL_LOGS_EXPORTER: 'otlp',
+      OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
+      OTEL_EXPORTER_OTLP_ENDPOINT: otelEndpoint,
+      OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: 'cumulative',
+      OTEL_METRIC_EXPORT_INTERVAL: '10000',
+      OTEL_RESOURCE_ATTRIBUTES: `tinstar.session=${opts.session.name}`,
+    }
+    for (const [key, value] of Object.entries(telemetryVars)) {
+      await execFileAsync('tmux', ['set-environment', '-t', tmuxName, key, value])
+    }
+  }
+
   // Build and send agent command
   const parts = ['eval "$(tmux show-environment -s)"']
+
+  // Generate NATS MCP config if enabled — writes .mcp.json to workspace CWD
+  let natsOpts: { enabled: boolean } | null = null
+  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0 && opts.session.workspace?.path) {
+    generateNatsMcpConfig({
+      sessionsDir: config.dirs.sessions,
+      sessionName: opts.session.name,
+      workspacePath: opts.session.workspace.path,
+      nats: opts.session.nats,
+      channelServerPackage: config.nats.channelServerPackage,
+      bunPath: config.nats.bunPath,
+    })
+    natsOpts = { enabled: true }
+    log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured`)
+  }
+
   const agentCmd = buildAgentCommand({
     template: opts.template,
     skipPermissions: opts.session.skipPermissions,
     sessionId: opts.session.conversation?.id,
     resume: opts.resume,
     initialPrompt: opts.resume ? undefined : opts.session.initialPrompt,
+    nats: natsOpts,
+    appendSystemPrompt: opts.appendSystemPrompt,
   })
   parts.push(agentCmd)
 
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
+
+  // Auto-accept dev channel warning by polling for the prompt and sending Enter
+  // More robust than fixed timeout - waits for actual prompt to appear
+  if (natsOpts?.enabled) {
+    autoAcceptDevChannelWarning(tmuxName).catch(() => {
+      // Session may have been killed or prompt not shown, ignore
+    })
+  }
 
   // Start ttyd
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
@@ -163,6 +345,7 @@ export async function startTmuxSession(
     secrets: Record<string, string>
     port: number
     template?: CliTemplate | null
+    appendSystemPrompt?: string | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
@@ -174,11 +357,27 @@ export async function startTmuxSession(
 
   // Tmux session exists but agent may have exited — re-send the command
   const parts = ['eval "$(tmux show-environment -s)"']
+
+  // Generate NATS MCP config if enabled — writes .mcp.json to workspace CWD
+  let natsOpts: { enabled: boolean } | null = null
+  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0 && opts.session.workspace?.path) {
+    generateNatsMcpConfig({
+      sessionsDir: config.dirs.sessions,
+      sessionName: opts.session.name,
+      workspacePath: opts.session.workspace.path,
+      nats: opts.session.nats,
+      channelServerPackage: config.nats.channelServerPackage,
+      bunPath: config.nats.bunPath,
+    })
+    natsOpts = { enabled: true }
+  }
+
   const agentCmd = buildAgentCommand({
     template: opts.template,
     skipPermissions: opts.session.skipPermissions,
     sessionId: opts.session.conversation?.id,
     resume: true,
+    nats: natsOpts,
   })
   parts.push(agentCmd)
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
@@ -334,11 +533,26 @@ export function onTtydRestart(sessionName: string, callback: (pid: number) => vo
 
 export async function sendKeys(config: TinstarConfig, sessionName: string, keys: string[]): Promise<void> {
   const tmuxName = tmuxSessionName(config, sessionName)
+  // Cancel copy-mode if active (see sendPrompt for rationale)
+  try {
+    await execFileAsync('tmux', ['send-keys', '-X', 'cancel', '-t', tmuxName])
+  } catch {
+    // "not in a mode" — expected
+  }
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, ...keys])
 }
 
 export async function sendPrompt(config: TinstarConfig, sessionName: string, prompt: string): Promise<void> {
   const tmuxName = tmuxSessionName(config, sessionName)
+  // Cancel copy-mode if active — the pane enters copy-mode when the user
+  // scrolls in the ttyd terminal, and then send-keys silently goes to the
+  // copy-mode handler instead of the underlying process.  "not in a mode"
+  // error means copy-mode wasn't active, which is fine — ignore it.
+  try {
+    await execFileAsync('tmux', ['send-keys', '-X', 'cancel', '-t', tmuxName])
+  } catch {
+    // "not in a mode" — expected when pane isn't in copy-mode
+  }
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, prompt, ''])
   await new Promise(r => setTimeout(r, 300))
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, '', 'Enter'])

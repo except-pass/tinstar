@@ -1,8 +1,11 @@
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import { request as httpRequest } from 'node:http'
+import { createConnection } from 'node:net'
+import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
 import type { DocumentStore } from '../stores/document-store'
@@ -24,8 +27,8 @@ import {
   registerProject,
   unregisterProject,
   createWorktree,
-
   listWorktrees,
+  listSessions,
   reconcileSessionStates,
   loadSecrets,
   dockerBackend,
@@ -42,6 +45,201 @@ import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
+import { computeNatsSubscriptions, diffSubscriptions } from '../sessions/nats-subscriptions'
+import { natsControlSocketPath } from '../sessions/backends/tmux'
+import { getDetailedUsage } from '../sessions/context-usage'
+import type { TelemetryRoutes } from './telemetry'
+
+/** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
+function buildNatsSubject(
+  sessionName: string,
+  docStore: DocumentStore,
+  taskId?: string,
+  epicId?: string,
+  initiativeId?: string,
+): string {
+  const BLANK = '_'
+  const sanitize = (s: string) => s.replace(/\s+/g, '-').replace(/[.>*]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase()
+
+  // Resolve hierarchy
+  let initId = initiativeId
+  let epId = epicId
+  let spaceId: string | undefined
+
+  if (taskId) {
+    const task = docStore.getTask(taskId)
+    if (task) {
+      epId = epId || task.epicId
+      initId = initId || task.initiativeId
+      spaceId = task.spaceId
+    }
+  }
+  if (epId && !initId) {
+    const epic = docStore.getEpic(epId)
+    if (epic) {
+      initId = epic.initiativeId
+      spaceId = spaceId || epic.spaceId
+    }
+  }
+  if (initId && !spaceId) {
+    const init = docStore.getInitiative(initId)
+    if (init) {
+      spaceId = init.spaceId
+    }
+  }
+
+  const space = spaceId ? docStore.getSpace(spaceId) : null
+  const initiative = initId ? docStore.getInitiative(initId) : null
+  const epic = epId ? docStore.getEpic(epId) : null
+  const task = taskId ? docStore.getTask(taskId) : null
+
+  const spaceName = space ? sanitize(space.name) : BLANK
+  const initName = initiative ? sanitize(initiative.name) : BLANK
+  const epicName = epic ? sanitize(epic.name) : BLANK
+  const taskName = task ? sanitize(task.name) : BLANK
+
+  return `tinstar.${spaceName}.${initName}.${epicName}.${taskName}.${sanitize(sessionName)}`
+}
+import { discoverPatterns, getPatternByName, interpolateSessionConfig, buildOrchestrationPlan, type TemplateVars } from '../patterns'
+import { discoverHands, getHandByName } from '../hands'
+
+// ─── NATS socket communication ─────────────────────────────────────────
+
+/**
+ * Send a command to the channel server's Unix socket for hot subscription management.
+ * Path is defined by natsControlSocketPath() and wired up on the channel-server side
+ * by the --control-socket arg set in generateNatsMcpConfig (backends/tmux.ts).
+ */
+function sendNatsSocketCommand(sessionName: string, cmd: { action: 'subscribe' | 'unsubscribe'; subject: string }): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socketPath = natsControlSocketPath(sessionName)
+    const socket = createConnection(socketPath)
+    const timeout = setTimeout(() => {
+      socket.destroy()
+      reject(new Error('Socket timeout'))
+    }, 5000)
+
+    socket.on('connect', () => {
+      socket.write(JSON.stringify(cmd) + '\n')
+      clearTimeout(timeout)
+      socket.end()
+      resolve()
+    })
+
+    socket.on('error', (err) => {
+      clearTimeout(timeout)
+      reject(err)
+    })
+  })
+}
+
+/**
+ * A structured description of why a NATS control-socket command failed.
+ * Returned to API callers so they can surface the failure instead of us
+ * silently eating it.
+ *
+ * - NATS_SOCKET_UNREACHABLE (ENOENT): socket file is gone — session stopped
+ *   or never started. Persisted state will apply on next startup. Safe.
+ * - NATS_SOCKET_ORPHANED (ECONNREFUSED, file present): a second channel-server
+ *   instance unlinked the original listener's socket file (see
+ *   except-pass/nats-channel-mcp channel-server.ts unlinkSync+listen on start).
+ *   The live channel-server's listener is bound to an orphaned inode. Static
+ *   subscriptions from startup still work — dynamic subscribes never will
+ *   until the session is restarted.
+ * - NATS_SOCKET_ERROR: other unexpected failure.
+ */
+type NatsSocketWarningCode =
+  | 'NATS_SOCKET_UNREACHABLE'
+  | 'NATS_SOCKET_ORPHANED'
+  | 'NATS_SOCKET_ERROR'
+  // Deprecated, kept for backwards-compat in structured responses: maps to
+  // UNREACHABLE | ORPHANED based on file presence. Callers should key off
+  // the new codes.
+  | 'NATS_SOCKET_MISSING'
+
+interface NatsSocketWarning {
+  code: NatsSocketWarningCode
+  message: string
+  action: 'subscribe' | 'unsubscribe'
+  subject: string
+  /** Parent session is alive but its dynamic-subscribe path is dead; caller should restart the session to recover. */
+  restartRecommended?: boolean
+}
+
+export function classifyNatsSocketError(
+  err: unknown,
+  action: 'subscribe' | 'unsubscribe',
+  subject: string,
+  sessionName: string,
+  fileExists: boolean,
+): NatsSocketWarning {
+  const e = err as NodeJS.ErrnoException
+  if (e?.code === 'ENOENT') {
+    return {
+      code: 'NATS_SOCKET_UNREACHABLE',
+      message: `Session '${sessionName}' control socket is not present — session is not running. Registry update persisted; will apply on next start.`,
+      action,
+      subject,
+    }
+  }
+  if (e?.code === 'ECONNREFUSED') {
+    if (fileExists) {
+      // File present but no listener → orphaned by a startup-sequence
+      // collision in the external channel-server package. Session is alive
+      // but dynamic subscribes will never land until restart.
+      return {
+        code: 'NATS_SOCKET_ORPHANED',
+        message: `Session '${sessionName}' is running but its NATS control socket is orphaned — a channel-server restart unlinked the live listener. Dynamic ${action} on '${subject}' will NOT take effect. Static subscriptions from session start still work; restart the session to recover dynamic-subscribe.`,
+        action,
+        subject,
+        restartRecommended: true,
+      }
+    }
+    // ECONNREFUSED without a file is odd (race with unlink) — treat as unreachable
+    return {
+      code: 'NATS_SOCKET_UNREACHABLE',
+      message: `Session '${sessionName}' control socket refused the connection and the file is gone. Registry update persisted; will apply on next start.`,
+      action,
+      subject,
+    }
+  }
+  return {
+    code: 'NATS_SOCKET_ERROR',
+    message: e?.message ?? String(err),
+    action,
+    subject,
+  }
+}
+
+/**
+ * Attempt a control-socket command and return a structured warning on
+ * failure instead of throwing. ENOENT / ECONNREFUSED are logged at `warn`
+ * (expected when the session isn't running); anything else is logged at
+ * `error` (unexpected — channel server died or went unresponsive with the
+ * socket still on disk).
+ */
+async function trySendNatsSocketCommand(
+  sessionName: string,
+  cmd: { action: 'subscribe' | 'unsubscribe'; subject: string },
+): Promise<NatsSocketWarning | null> {
+  try {
+    await sendNatsSocketCommand(sessionName, cmd)
+    return null
+  } catch (err) {
+    const fileExists = existsSync(natsControlSocketPath(sessionName))
+    const warning = classifyNatsSocketError(err, cmd.action, cmd.subject, sessionName, fileExists)
+    // UNREACHABLE is the expected "session not running" case — warn.
+    // ORPHANED is a real in-flight failure: session is up but subscribe silently drops — error.
+    const logFn = warning.code === 'NATS_SOCKET_UNREACHABLE' ? log.warn : log.error
+    logFn('nats', `control-socket ${cmd.action} failed for ${sessionName} (${cmd.subject}): ${warning.message}`, {
+      sessionName,
+      action: cmd.action,
+      subject: cmd.subject,
+      code: warning.code,
+    })
+    return warning
+  }
+}
 
 // ─── Multiplexed file watcher ──────────────────────────────────────────
 // Tracks fs.watch instances keyed by absolute path. Multiple subscribers
@@ -118,6 +316,207 @@ function removeFileWatchSubscriber(absolutePath: string, subscriberId: string): 
 }
 
 
+interface CreateSessionParams {
+  name: string
+  backend: 'docker' | 'tmux'
+  project?: string
+  worktree?: boolean
+  worktreePath?: string
+  profile?: string
+  prompt?: string
+  skipPermissions?: boolean
+  cliTemplate?: string
+  taskId?: string
+  epicId?: string
+  initiativeId?: string
+  color?: string
+  nats?: { enabled: boolean; subscriptions?: string[] }
+}
+
+interface CreateSessionContext {
+  cfg: TinstarConfig
+  sessDir: string
+  docStore: DocumentStore
+  readyQueue: ReadyQueue
+  sse: SSEBroadcaster
+  emitSessionEvent: (event: string, payload: Record<string, unknown>) => void
+  secrets: () => Record<string, string>
+  dashboardUrl: string
+}
+
+async function createSessionInternal(
+  params: CreateSessionParams,
+  ctx: CreateSessionContext
+): Promise<{ ok: true; session: Session } | { ok: false; error: { code: string; message: string } }> {
+  const {
+    name, backend, project, worktree = false, worktreePath,
+    profile, prompt, skipPermissions = true, cliTemplate: cliTemplateName,
+    taskId, epicId, initiativeId, color: colorParam, nats
+  } = params
+
+  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl } = ctx
+
+  if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
+  if (!['docker', 'tmux'].includes(backend)) return { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }
+
+  if (getSession(sessDir, name)) {
+    return { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }
+  }
+
+  // Resolve project
+  let projectPath: string | null = null
+  if (project) {
+    projectPath = getProject(cfg.files.projects, project)
+    if (!projectPath) return { ok: false, error: { code: 'PROJECT_NOT_FOUND', message: `Project '${project}' not found` } }
+  }
+
+  // Create worktree or use existing
+  let workspacePath = projectPath
+  let branch: string | null = null
+  if (worktreePath && projectPath) {
+    workspacePath = worktreePath
+    branch = await detectBranch(worktreePath)
+  } else if (worktree && projectPath) {
+    workspacePath = await createWorktree(projectPath, name)
+    branch = name
+  }
+
+  const isWorktree = !!(worktreePath || worktree)
+
+  // Register a Worktree entity so it appears in hierarchy/grouping
+  let worktreeEntityId = ''
+  if (isWorktree && workspacePath) {
+    worktreeEntityId = name
+    docStore.upsertWorktree(worktreeEntityId, {
+      id: worktreeEntityId,
+      name,
+      branch: branch ?? name,
+      repo: project ?? '',
+      worktreePath: workspacePath,
+      spaceId: docStore.activeSpaceId,
+    })
+  }
+
+  // Resolve run color
+  const color = colorParam
+    ?? (taskId ? docStore.getTask(taskId)?.settings?.defaultRunColor : undefined)
+    ?? (epicId ? docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
+    ?? (initiativeId ? docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
+
+  // Resolve CLI template
+  const resolvedTemplate = cliTemplateName
+    ? cfg.cliTemplates.find(t => t.name === cliTemplateName) ?? null
+    : null
+
+  // Compute NATS subscriptions
+  let resolvedNats: { enabled: boolean; subscriptions: string[] } | null = nats ? { enabled: nats.enabled, subscriptions: nats.subscriptions ?? [] } : null
+  const natsCtx = {
+    sessionName: name,
+    spaceId: docStore.activeSpaceId || null,
+    taskId: taskId || null,
+    epicId: epicId || null,
+    initiativeId: initiativeId || null,
+  }
+  if (!nats && (taskId || epicId || initiativeId)) {
+    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
+  } else if (nats?.enabled && !nats.subscriptions?.length) {
+    resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
+  }
+
+  const session = createSession(sessDir, {
+    name,
+    backend: resolvedTemplate ? 'tmux' : backend,
+    project,
+    workspace: {
+      path: workspacePath,
+      worktree: isWorktree,
+      branch,
+      basePath: isWorktree ? projectPath : null,
+    },
+    profile,
+    // Note: oneshot intentionally not supported in createSessionInternal - pattern sessions are always persistent
+    oneshot: false,
+    skipPermissions,
+    cliTemplate: cliTemplateName ?? null,
+    adapter: resolvedTemplate?.adapter ?? null,
+    nats: resolvedNats,
+  })
+
+  const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
+  enriched._stateDir = claudeStateDir(sessDir, name)
+
+  const sec = secrets()
+  let sessionPort: number | undefined
+
+  if (backend === 'docker') {
+    sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
+    await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: prompt || undefined })
+    updateSession(sessDir, name, { port: sessionPort, state: 'running' })
+  } else {
+    const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+    if (prompt) enriched.initialPrompt = prompt
+
+    const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate })
+    sessionPort = result.port
+    updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+    tmuxBackend.onTtydRestart(name, (newPid) => {
+      updateSession(sessDir, name, { ttydPid: newPid })
+    })
+  }
+
+  // Create Run entry
+  const runId = name
+  const initialStatus = prompt ? 'running' : 'idle'
+  let backendInfo: string | undefined
+  if (backend === 'docker') {
+    const container = dockerBackend.containerName(cfg, name)
+    const imageProfile = profile ? cfg.profiles.find(p => p.name === profile) : undefined
+    const image = imageProfile?.image ?? cfg.container.defaultImage
+    backendInfo = `container: ${container}\nimage: ${image}`
+  } else {
+    backendInfo = `tmux session: ${name}`
+  }
+
+  // Build NATS subject for this session
+  const natsSubject = resolvedNats?.enabled
+    ? buildNatsSubject(name, docStore, taskId, epicId, initiativeId)
+    : undefined
+
+  docStore.upsertRun(runId, {
+    id: runId,
+    color,
+    status: initialStatus,
+    sessionId: name,
+    initiative: initiativeId ?? '',
+    epic: epicId ?? '',
+    task: taskId ?? '',
+    repo: project ?? '',
+    worktree: isWorktree ? (branch ?? name) : '',
+    touchedFiles: [],
+    recapEntries: [],
+    rawLogs: '',
+    port: sessionPort ?? null,
+    backend,
+    backendInfo,
+    agentIcon: resolvedTemplate?.icon ?? undefined,
+    natsEnabled: resolvedNats?.enabled ?? false,
+    natsSubject,
+    natsSubscriptions: resolvedNats?.enabled ? resolvedNats.subscriptions : undefined,
+    taskId: taskId ?? '',
+    worktreeId: worktreeEntityId,
+    createdAt: new Date().toISOString(),
+    spaceId: docStore.activeSpaceId,
+  })
+
+  readyQueue.onStatusChange(name, initialStatus)
+  sse.setReadyQueue(readyQueue.getQueue())
+  sse.broadcastReadyQueueUpdate()
+  emitSessionEvent('managed_session.created', { name, state: 'running' })
+
+  const updated = getSession(sessDir, name)!
+  return { ok: true, session: updated }
+}
+
 export interface RouteContext {
   docStore: DocumentStore
   otelStore: OTelStore
@@ -127,14 +526,22 @@ export interface RouteContext {
   resetSimulator: () => void
   sessionConfig: TinstarConfig | null
   readyQueue: ReadyQueue
+  natsTraffic?: import('../nats-traffic').NatsTrafficBridge
+  readinessTracker?: import('../sessions/readiness').SessionReadinessTracker
+  telemetryRoutes?: TelemetryRoutes
 }
 
-function json(res: ServerResponse, data: unknown, status = 200): void {
+function json(res: ServerResponse, data: unknown, status = 200): true {
+  // Some routes respond asynchronously (e.g. readBody(...).then(...)).
+  // If the client disconnects or another codepath already responded, avoid crashing
+  // with ERR_HTTP_HEADERS_SENT.
+  if (res.headersSent || res.writableEnded) return true
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
   })
   res.end(JSON.stringify(data))
+  return true
 }
 
 /** Deep-merge entity patch with special handling for settings sub-object.
@@ -178,6 +585,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // Telemetry routes — delegated to createTelemetryRoutes
+  if (ctx.telemetryRoutes && url.startsWith('/api/telemetry/')) {
+    // Normalize pathname (strip query string)
+    const pathname = url.split('?')[0]
+    if (await ctx.telemetryRoutes.handle(req, res, pathname)) return true
+  }
+
   // GET /api/docs — Scalar API reference UI
   if (method === 'GET' && (url === '/api/docs' || url === '/api/docs/')) {
     res.writeHead(200, { 'Content-Type': 'text/html' })
@@ -196,7 +610,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // GET /api/state
   if (method === 'GET' && url === '/api/state') {
-    json(res, ctx.docStore.snapshot())
+    // Include sessions from disk alongside document store snapshot
+    const sessDir = ctx.sessionConfig?.dirs.sessions
+    const sessions = sessDir ? await listSessions(sessDir) : []
+    json(res, { ...ctx.docStore.snapshot(), sessions })
     return true
   }
 
@@ -494,6 +911,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         externalUrl: externalUrl ?? null,
       }
       ctx.docStore.upsertTask(entity.id, entity)
+
       json(res, entity, 201)
     })
     return true
@@ -848,6 +1266,165 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST /api/nats-traffic-widgets — create a NATS traffic monitor widget
+  if (method === 'POST' && url === '/api/nats-traffic-widgets') {
+    readBody(req).then(body => {
+      try {
+        const { sessionId, subscriptions, color } = JSON.parse(body) as { sessionId?: string; subscriptions?: string[]; color?: string }
+        const widget = {
+          id: shortId('nats'),
+          spaceId: ctx.docStore.activeSpaceId || undefined,
+          sessionId: sessionId ?? '',
+          subscriptions: subscriptions ?? ['tinstar.>'],  // Default to all tinstar traffic
+          color,
+        }
+        ctx.docStore.upsertNatsTrafficWidget(widget.id, widget)
+        // Update NATS bridge subscriptions
+        ctx.natsTraffic?.updateWidgetSubscriptions(widget.id, widget.subscriptions)
+        ctx.sse.broadcastSnapshot()
+        json(res, { ok: true, data: widget })
+      } catch {
+        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+      }
+    })
+    return true
+  }
+
+  // POST /api/nats-traffic-widgets/:id/subscribe — add subscription
+  if (method === 'POST' && url.match(/^\/api\/nats-traffic-widgets\/[^/]+\/subscribe$/)) {
+    const id = url.split('/')[3]!
+    readBody(req).then(body => {
+      try {
+        const { subject } = JSON.parse(body) as { subject: string }
+        if (!subject) {
+          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject required' } }, 400)
+          return
+        }
+        const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
+        if (!existing) {
+          json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Widget ${id} not found` } }, 404)
+          return
+        }
+        const existingSubs = existing.subscriptions || []
+        const subs = [...new Set([...existingSubs, subject])]
+        const updated = { ...existing, subscriptions: subs }
+        ctx.docStore.upsertNatsTrafficWidget(id, updated)
+        ctx.natsTraffic?.updateWidgetSubscriptions(id, subs)
+        ctx.sse.broadcastSnapshot()
+        json(res, { ok: true, data: updated })
+      } catch {
+        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+      }
+    })
+    return true
+  }
+
+  // DELETE /api/nats-traffic-widgets/:id/subscribe — remove subscription
+  if (method === 'DELETE' && url.match(/^\/api\/nats-traffic-widgets\/[^/]+\/subscribe$/)) {
+    const id = url.split('/')[3]!
+    readBody(req).then(body => {
+      try {
+        const { subject } = JSON.parse(body) as { subject: string }
+        if (!subject) {
+          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject required' } }, 400)
+          return
+        }
+        const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
+        if (!existing) {
+          json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Widget ${id} not found` } }, 404)
+          return
+        }
+        const subs = (existing.subscriptions || []).filter(s => s !== subject)
+        const updated = { ...existing, subscriptions: subs }
+        ctx.docStore.upsertNatsTrafficWidget(id, updated)
+        ctx.natsTraffic?.updateWidgetSubscriptions(id, subs)
+        ctx.sse.broadcastSnapshot()
+        json(res, { ok: true, data: updated })
+      } catch {
+        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+      }
+    })
+    return true
+  }
+
+  // POST /api/nats-traffic-widgets/:id/publish — publish a message
+  if (method === 'POST' && url.match(/^\/api\/nats-traffic-widgets\/[^/]+\/publish$/)) {
+    const id = url.split('/')[3]
+    readBody(req).then(body => {
+      try {
+        const { subject, message } = JSON.parse(body) as { subject: string; message: string }
+        if (!subject || !message) {
+          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject and message required' } }, 400)
+          return
+        }
+        const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
+        if (!existing) {
+          json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Widget ${id} not found` } }, 404)
+          return
+        }
+        ctx.natsTraffic?.publish(subject, message, 'tinstar-ui')
+        json(res, { ok: true })
+      } catch {
+        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+      }
+    })
+    return true
+  }
+
+  // DELETE /api/nats-traffic-widgets/:id
+  if (method === 'DELETE' && url.startsWith('/api/nats-traffic-widgets/') && !url.includes('/subscribe')) {
+    const id = url.slice('/api/nats-traffic-widgets/'.length)
+    const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
+    if (!existing) {
+      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `NatsTrafficWidget ${id} not found` } }, 404)
+      return true
+    }
+    ctx.natsTraffic?.removeWidget(id)
+    ctx.docStore.deleteNatsTrafficWidget(id)
+    json(res, { ok: true })
+    return true
+  }
+
+  // POST /api/file-content/git-base — return the HEAD-committed version of a file
+  if (method === 'POST' && url === '/api/file-content/git-base') {
+    const execFileAsync = promisify(execFile)
+    readBody(req).then(async body => {
+      try {
+        const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
+        if (!sessionId || !filePath) { json(res, { error: 'sessionId and filePath required' }, 400); return }
+
+        const sessDir = ctx.sessionConfig?.dirs.sessions
+        if (!sessDir) { json(res, { error: 'session config unavailable' }, 503); return }
+        const session = getSession(sessDir, sessionId)
+        if (!session) { json(res, { error: 'session not found' }, 404); return }
+        const workspacePath = session.workspace?.path ?? null
+        if (!workspacePath) { json(res, { error: 'session workspace unavailable' }, 400); return }
+
+        const absolutePath = filePath.startsWith('/')
+          ? filePath
+          : resolve(workspacePath, filePath)
+        if (!absolutePath.startsWith(workspacePath + '/')) {
+          json(res, { error: 'path outside workspace' }, 403); return
+        }
+        const relPath = relative(workspacePath, absolutePath)
+
+        const { stdout } = await execFileAsync(
+          'git', ['show', `HEAD:${relPath}`],
+          { cwd: workspacePath, encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024, timeout: 5000 },
+        )
+        json(res, { ok: true, content: stdout })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.includes('does not exist') || msg.includes('bad revision')) {
+          json(res, { ok: true, content: null })
+        } else {
+          json(res, { error: 'failed to read git base', detail: msg }, 500)
+        }
+      }
+    })
+    return true
+  }
+
   // POST /api/file-watch/subscribe — subscribe to file changes via the main SSE
   if (method === 'POST' && url === '/api/file-watch/subscribe') {
     readBody(req).then(body => {
@@ -1083,10 +1660,57 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // PATCH /api/runs/:id
   if (method === 'PATCH' && url.startsWith('/api/runs/')) {
     const id = url.slice('/api/runs/'.length)
-    readBody(req).then(body => {
+    readBody(req).then(async body => {
       const existing = ctx.docStore.getRun(id)
       if (!existing) return json(res, { ok: false, error: 'not found' }, 404)
       const patch = JSON.parse(body)
+
+      // Check if taskId changed and NATS is enabled — need to update subscriptions
+      const taskIdChanged = patch.taskId !== undefined && patch.taskId !== existing.taskId
+      const sessDir = ctx.sessionConfig?.dirs.sessions
+      if (taskIdChanged && existing.natsEnabled && sessDir) {
+        const session = getSession(sessDir, existing.sessionId)
+        if (session?.nats?.enabled) {
+          // Compute old and new subscriptions
+          const oldSubs = session.nats.subscriptions || []
+          const newSubs = computeNatsSubscriptions({
+            sessionName: existing.sessionId,
+            spaceId: existing.spaceId,
+            taskId: patch.taskId,
+          }, ctx.docStore)
+
+          const { add, remove } = diffSubscriptions(oldSubs, newSubs)
+
+          // Send socket commands to update channel server. Persisted state is
+          // the source of truth: we always update the session file below so the
+          // new subscriptions apply on next startup. Any socket failures are
+          // collected into natsWarnings and returned to the caller so the UI
+          // can surface that the hot-apply did not land.
+          const natsWarnings: NatsSocketWarning[] = []
+          for (const subject of remove) {
+            const w = await trySendNatsSocketCommand(existing.sessionId, { action: 'unsubscribe', subject })
+            if (w) natsWarnings.push(w)
+          }
+          for (const subject of add) {
+            const w = await trySendNatsSocketCommand(existing.sessionId, { action: 'subscribe', subject })
+            if (w) natsWarnings.push(w)
+          }
+
+          // Update session file with new subscriptions
+          updateSession(sessDir, existing.sessionId, { nats: { ...session.nats, subscriptions: newSubs } })
+
+          // Update run's natsSubject and full subscription list
+          patch.natsSubject = newSubs[1] ?? newSubs[0]
+          patch.natsSubscriptions = newSubs
+          log.info('nats', `${existing.sessionId}: subscriptions updated for new task ${patch.taskId}`)
+
+          if (natsWarnings.length > 0) {
+            ctx.docStore.upsertRun(id, { ...existing, ...patch })
+            return json(res, { ok: true, data: ctx.docStore.getRun(id), warnings: { nats: natsWarnings } })
+          }
+        }
+      }
+
       ctx.docStore.upsertRun(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getRun(id) })
     })
@@ -1194,7 +1818,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const secrets = () => loadSecrets(cfg.dirs.secrets)
     const dashboardUrl = `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`
 
-    function emitSessionEvent(type: 'managed_session.created' | 'managed_session.state_changed' | 'managed_session.deleted', payload: Record<string, unknown>) {
+    function emitSessionEvent(type: string, payload: Record<string, unknown>) {
       ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as unknown as Parameters<typeof ctx.bus.emit>[0])
     }
 
@@ -1219,7 +1843,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
 
     // GET /api/sessions/:name (exact match, no trailing path)
-    if (method === 'GET' && url.startsWith('/api/sessions/') && !url.includes('/start') && !url.includes('/stop') && !url.includes('/files')) {
+    if (method === 'GET' && url.startsWith('/api/sessions/') && !url.includes('/start') && !url.includes('/stop') && !url.includes('/files') && !url.includes('/context')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)
@@ -1272,10 +1896,33 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
     }
 
+    // GET /api/sessions/:name/context
+    if (method === 'GET' && url.startsWith('/api/sessions/') && url.includes('/context')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session) {
+          json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
+          return true
+        }
+        if (!session.conversation?.id) {
+          json(res, { ok: false, error: { code: 'NO_CONVERSATION', message: 'Session has no active conversation' } }, 404)
+          return true
+        }
+        getDetailedUsage(session.conversation.id)
+          .then(data => json(res, { ok: true, data }))
+          .catch(err => {
+            log.error('api', `context fetch failed for ${name}: ${(err as Error).message}`)
+            json(res, { ok: false, error: { code: 'CONTEXT_FETCH_FAILED', message: (err as Error).message } }, 500)
+          })
+        return true
+      }
+    }
+
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam } = JSON.parse(body)
+        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, pattern: patternName, hand: handName } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
@@ -1285,6 +1932,171 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         if (getSession(sessDir, name)) {
           return json(res, { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }, 409)
+        }
+
+        // Handle pattern-based session creation with k8s-style orchestration
+        if (patternName) {
+          const pattern = getPatternByName(patternName)
+          if (!pattern) {
+            return json(res, { ok: false, error: { code: 'PATTERN_NOT_FOUND', message: `Pattern '${patternName}' not found` } }, 404)
+          }
+
+          if (!pattern.sessions.some(s => s.role === 'orchestrator')) {
+            return json(res, { ok: false, error: { code: 'INVALID_PATTERN', message: 'Pattern must have an orchestrator session' } }, 400)
+          }
+
+          // Build orchestration plan (handles replicas, topological sort)
+          const plan = buildOrchestrationPlan(pattern, name)
+          log.info('patterns', `orchestration plan for ${patternName}:`, {
+            spawnOrder: plan.spawnOrder.map(s => s.sessionName),
+            readinessRequired: [...plan.readinessRequired],
+          })
+
+          // Build NATS subjects for template interpolation
+          const sessionNames: Record<string, string> = {}
+          for (const entry of plan.spawnOrder) {
+            if (!sessionNames[entry.role]) {
+              sessionNames[entry.role] = entry.sessionName
+            }
+          }
+
+          const templateVars: TemplateVars = {
+            task: taskId ?? name,
+            taskId: taskId ?? '',
+          }
+          templateVars.orchestrator = sessionNames.orchestrator ? buildNatsSubject(sessionNames.orchestrator, ctx.docStore, taskId, epicId, initiativeId) : ''
+          templateVars.worker = sessionNames.worker ? buildNatsSubject(sessionNames.worker, ctx.docStore, taskId, epicId, initiativeId) : ''
+
+          const createCtx: CreateSessionContext = {
+            cfg,
+            sessDir,
+            docStore: ctx.docStore,
+            readyQueue: ctx.readyQueue,
+            sse: ctx.sse,
+            emitSessionEvent,
+            secrets,
+            dashboardUrl,
+          }
+
+          // Check if any session needs a worktree — if so, create ONE shared worktree for all
+          const needsWorktree = pattern.sessions.some(s => s.config.worktree)
+          let sharedWorktreePath: string | null = null
+
+          if (needsWorktree && project) {
+            const projectPath = getProject(cfg.files.projects, project)
+            if (projectPath) {
+              try {
+                sharedWorktreePath = await createWorktree(projectPath, name)
+                log.info('patterns', `created shared worktree for pattern: ${sharedWorktreePath}`)
+              } catch (err) {
+                log.warn('patterns', `failed to create shared worktree: ${(err as Error).message}`)
+              }
+            }
+          }
+
+          const createdSessions: string[] = []
+          const errors: string[] = []
+          const startedSessions = new Set<string>()
+
+          // Spawn sessions in order, waiting for readiness where required
+          for (const entry of plan.spawnOrder) {
+            const { sessionName, role, config } = entry
+            templateVars.sessionId = sessionName
+
+            // Check if we need to wait for any dependencies to be ready
+            const depRoles = plan.dependencies.get(sessionName) ?? []
+            for (const depRole of depRoles) {
+              const condition = config.dependsOn?.[depRole]?.condition ?? 'started'
+
+              if (condition === 'ready') {
+                // Wait for all sessions with this role to signal ready
+                const depSessions = plan.spawnOrder.filter(s => s.role === depRole).map(s => s.sessionName)
+                log.info('patterns', `${sessionName} waiting for ${depSessions.join(', ')} to be ready`)
+
+                if (ctx.readinessTracker) {
+                  const ready = await ctx.readinessTracker.waitForAllReady(depSessions, 60000)
+                  if (!ready) {
+                    errors.push(`${sessionName}: timed out waiting for ${depRole} to be ready`)
+                    continue
+                  }
+                  log.info('patterns', `${sessionName} dependencies ready, spawning`)
+                }
+              }
+            }
+
+            const interpolatedConfig = interpolateSessionConfig(config as unknown as Record<string, unknown>, templateVars) as typeof config
+
+            // Resolve hand reference if present
+            let sessionPrompt: string | undefined
+            if (interpolatedConfig.hand) {
+              const hand = getHandByName(interpolatedConfig.hand as string)
+              if (!hand) {
+                errors.push(`${sessionName}: hand '${interpolatedConfig.hand}' not found`)
+                continue
+              }
+              // Use hand's prompt and cliTemplate
+              sessionPrompt = hand.prompt
+              if (interpolatedConfig.prompt) {
+                sessionPrompt = `${hand.prompt}\n\n---\n\n${interpolatedConfig.prompt}`
+              }
+              // Override cliTemplate if not explicitly set
+              if (!interpolatedConfig.cliTemplate) {
+                interpolatedConfig.cliTemplate = hand.cliTemplate
+              }
+            } else if (role === 'orchestrator') {
+              const patternPrompt = (interpolatedConfig.prompt as string | undefined) ?? ''
+              sessionPrompt = prompt ? `${prompt}\n\n---\n\n${patternPrompt}` : patternPrompt
+            } else {
+              sessionPrompt = interpolatedConfig.prompt as string | undefined
+            }
+
+            // Mark session as started for readiness tracking
+            ctx.readinessTracker?.markStarted(sessionName)
+
+            // Use shared worktree for all pattern sessions (don't create individual worktrees)
+            const result = await createSessionInternal({
+              name: sessionName,
+              backend: (interpolatedConfig.backend ?? backend) as 'docker' | 'tmux',
+              project: interpolatedConfig.project ?? project,
+              worktree: false,  // Don't create new worktree — use shared one
+              worktreePath: sharedWorktreePath ?? interpolatedConfig.worktreePath as string | undefined,
+              profile: interpolatedConfig.profile ?? profile,
+              skipPermissions: interpolatedConfig.skipPermissions ?? skipPermissions,
+              cliTemplate: interpolatedConfig.cliTemplate ?? cliTemplateName,
+              prompt: sessionPrompt,
+              taskId,
+              epicId,
+              initiativeId,
+              color: colorParam,
+              nats: { enabled: true },
+            }, createCtx)
+
+            if (result.ok) {
+              createdSessions.push(sessionName)
+              startedSessions.add(sessionName)
+
+              // For sessions with readiness.nats: auto, publish ready signal
+              if (config.readiness?.nats === 'auto' && ctx.readinessTracker) {
+                // Fire and forget — don't block on the delay
+                ctx.readinessTracker.publishReady(sessionName).catch(err => {
+                  log.warn('patterns', `failed to publish ready for ${sessionName}: ${(err as Error).message}`)
+                })
+              }
+            } else {
+              errors.push(`${sessionName}: ${result.error.message}`)
+            }
+          }
+
+          if (createdSessions.length === 0) {
+            return json(res, { ok: false, error: { code: 'PATTERN_SPAWN_FAILED', message: `All pattern sessions failed: ${errors.join(', ')}` } }, 500)
+          }
+
+          if (errors.length > 0) {
+            log.warn('patterns', `some pattern sessions failed: ${errors.join(', ')}`)
+          }
+
+          log.info('patterns', `created pattern sessions: ${createdSessions.join(', ')}`)
+          return json(res, { ok: true, data: { pattern: patternName, sessions: createdSessions, errors: errors.length > 0 ? errors : undefined } }, 201)
         }
 
         try {
@@ -1328,10 +2140,34 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             ?? (epicId ? ctx.docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
             ?? (initiativeId ? ctx.docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
 
-          // Resolve CLI template
-          const resolvedTemplate = cliTemplateName
-            ? cfg.cliTemplates.find(t => t.name === cliTemplateName) ?? null
+          // Resolve hand if specified
+          let resolvedHand: ReturnType<typeof getHandByName> = null
+          if (handName) {
+            resolvedHand = getHandByName(handName)
+            if (!resolvedHand) {
+              return json(res, { ok: false, error: { code: 'HAND_NOT_FOUND', message: `Hand '${handName}' not found` } }, 404)
+            }
+          }
+
+          // Resolve CLI template (hand's template as fallback if no explicit template)
+          const templateName = cliTemplateName ?? resolvedHand?.cliTemplate ?? null
+          const resolvedTemplate = templateName
+            ? cfg.cliTemplates.find(t => t.name === templateName) ?? null
             : null
+
+          // Compute NATS subscriptions from entity hierarchy if not explicitly provided
+          let resolvedNats = nats ?? null
+          if (!nats && (taskId || epicId || initiativeId)) {
+            const natsCtx = {
+              sessionName: name,
+              spaceId: ctx.docStore.activeSpaceId || null,
+              taskId: taskId || null,
+              epicId: epicId || null,
+              initiativeId: initiativeId || null,
+            }
+            const subscriptions = computeNatsSubscriptions(natsCtx, ctx.docStore)
+            resolvedNats = { enabled: true, subscriptions }
+          }
 
           const session = createSession(sessDir, {
             name,
@@ -1348,6 +2184,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             skipPermissions,
             cliTemplate: cliTemplateName ?? null,
             adapter: resolvedTemplate?.adapter ?? null,
+            nats: resolvedNats,
           })
 
           // Enrich session with state dir for Docker backend
@@ -1377,7 +2214,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const port = await tmuxBackend.findPort(cfg.ports.hostStart)
             if (prompt) enriched.initialPrompt = prompt
 
-            const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate })
+            const result = await tmuxBackend.createTmuxSession(cfg, {
+              session: enriched,
+              secrets: sec,
+              port,
+              template: resolvedTemplate,
+              appendSystemPrompt: resolvedHand?.prompt ?? null,
+            })
             sessionPort = result.port
             updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
             tmuxBackend.onTtydRestart(name, (newPid) => {
@@ -1403,6 +2246,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             backendInfo = `tmux session: ${name}`
           }
 
+          // Build NATS subject for this session
+          const natsSubject = resolvedNats?.enabled
+            ? buildNatsSubject(name, ctx.docStore, taskId, epicId, initiativeId)
+            : undefined
+
           ctx.docStore.upsertRun(runId, {
             id: runId,
             color,
@@ -1420,6 +2268,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             backend,
             backendInfo,
             agentIcon: resolvedTemplate?.icon ?? undefined,
+            natsEnabled: resolvedNats?.enabled ?? false,
+            natsSubject,
             taskId: taskId ?? '',
             worktreeId: worktreeEntityId,
             createdAt: new Date().toISOString(),
@@ -1511,6 +2361,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const updated = getSession(sessDir, session.name)
             const resumePort = updated?.port ?? session.port
             setState(sessDir, session.name, 'running')
+            // Fresh channel-server → any prior orphan is stale.
+            updateSession(sessDir, session.name, { natsControlOrphanedAt: null })
             ctx.docStore.updateRunStatus(session.name, 'running')
             // Also update port on the run in case it changed
             if (resumePort) {
@@ -1651,6 +2503,279 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
+    // POST /api/sessions/:name/spawn — spawn a companion hand on the same task
+    if (method === 'POST' && url.startsWith('/api/sessions/') && url.endsWith('/spawn')) {
+      const parentName = extractSessionName(url, '/api/sessions/')?.replace('/spawn', '')
+      if (!parentName) return json(res, { ok: false, error: { code: 'INVALID_REQUEST', message: 'Session name required' } }, 400)
+
+      const parentSession = getSession(sessDir, parentName)
+      if (!parentSession) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Session '${parentName}' not found` } }, 404)
+
+      const body = await readBody(req)
+      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride } = JSON.parse(body) as {
+        hand: string
+        prompt?: string
+        orchestrator?: boolean
+        repo?: string          // Override parent's project/repo
+        worktreePath?: string  // Override parent's worktree path
+      }
+
+      if (!handName) {
+        return json(res, { ok: false, error: { code: 'MISSING_HAND', message: 'hand field is required' } }, 400)
+      }
+
+      const hand = getHandByName(handName)
+      if (!hand) {
+        return json(res, { ok: false, error: { code: 'HAND_NOT_FOUND', message: `Hand '${handName}' not found` } }, 404)
+      }
+
+      // Generate unique session name
+      const spawnedName = `${parentName}-${handName}-${randomUUID().slice(0, 8)}`
+
+      // Build the prompt: hand base + optional override
+      let fullPrompt = hand.prompt
+      if (promptOverride) {
+        fullPrompt = `${hand.prompt}\n\n---\n\n${promptOverride}`
+      }
+
+      // Resolve the parent's run to get taskId for NATS subject computation
+      const parentRun = ctx.docStore.getAllRuns().find(r => r.sessionId === parentName)
+      const taskId = parentRun?.taskId
+
+      // Inherit workspace from parent session, unless overridden
+      const workspace = worktreePathOverride
+        ? { path: worktreePathOverride, worktree: true, branch: null, basePath: null }
+        : parentSession.workspace
+
+      // Build NATS subscriptions for the spawned session
+      // Inherit NATS from parent regardless of taskId — use whatever hierarchy is available
+      let natsConfig: { enabled: boolean; subscriptions: string[] } | null = null
+      if (parentSession.nats?.enabled) {
+        const natsCtx = {
+          sessionName: spawnedName,
+          spaceId: ctx.docStore.activeSpaceId || null,
+          taskId: taskId || null,
+          epicId: parentRun?.epic || null,
+          initiativeId: parentRun?.initiative || null,
+        }
+        const subscriptions = computeNatsSubscriptions(natsCtx, ctx.docStore)
+        natsConfig = { enabled: true, subscriptions }
+      }
+
+      // Generate a breakout room for parent-child communication
+      const breakoutRoom = natsConfig?.enabled
+        ? `tinstar.room.${randomUUID().slice(0, 8)}`
+        : undefined
+
+      // Pre-flight: subscribe parent to the breakout room BEFORE we start the
+      // child, so the child's system prompt can point at a subject the parent
+      // actually hears. If the parent's control socket is unreachable/orphaned
+      // (common symptom of an upstream MCP-restart collision — see the
+      // NATS_SOCKET_ORPHANED docs on classifyNatsSocketError), fall back to
+      // the parent's persistent direct subject, which was subscribed at the
+      // parent's startup and is still live.
+      const parentDirectSubject = natsConfig?.enabled
+        ? buildNatsSubject(
+            parentName,
+            ctx.docStore,
+            parentRun?.taskId,
+            parentRun?.epic || undefined,
+            parentRun?.initiative || undefined,
+          )
+        : undefined
+
+      let breakoutWarning: NatsSocketWarning | null = null
+      let effectiveRoom = breakoutRoom
+      let breakoutFallback = false
+      if (breakoutRoom) {
+        breakoutWarning = await trySendNatsSocketCommand(parentName, {
+          action: 'subscribe',
+          subject: breakoutRoom,
+        })
+        if (breakoutWarning) {
+          // Parent can't receive on the new subject. Use the parent's
+          // persistent direct subject instead — it's been subscribed since
+          // parent startup and is unaffected by the control-socket orphan.
+          effectiveRoom = parentDirectSubject
+          breakoutFallback = true
+          if (breakoutWarning.code === 'NATS_SOCKET_ORPHANED') {
+            // Record orphan state on the session record so the dashboard can
+            // surface it. Clear it on next successful session restart.
+            const orphanedAt = new Date().toISOString()
+            updateSession(sessDir, parentName, { natsControlOrphanedAt: orphanedAt })
+            emitSessionEvent('managed_session.nats_orphaned', {
+              name: parentName,
+              orphanedAt,
+              reason: breakoutWarning.code,
+              restartRecommended: true,
+            })
+          }
+        }
+      }
+
+      // Add the effective room (breakout or fallback) to child's subscriptions
+      // so it can address the parent. Skip if fallback — the parent's direct
+      // subject is already covered by the child-end NATS hierarchy as an
+      // ancestor wildcard when the child's nats subscriptions are computed.
+      if (breakoutRoom && !breakoutFallback && natsConfig) {
+        natsConfig.subscriptions.push(breakoutRoom)
+      }
+
+      // Resolve CLI template from hand definition
+      const cliTemplate = hand.cliTemplate
+
+      // Resolve effective repo (override or inherit)
+      const effectiveRepo = repoOverride ?? parentSession.project
+
+      // Create the spawned session
+      const spawnedSession = createSession(sessDir, {
+        name: spawnedName,
+        backend: parentSession.backend,
+        project: effectiveRepo,
+        workspace: {
+          path: workspace?.path ?? null,
+          worktree: workspace?.worktree ?? false,
+          branch: workspace?.branch ?? null,
+          basePath: workspace?.basePath ?? null,
+        },
+        profile: parentSession.profile,
+        skipPermissions: parentSession.skipPermissions,
+        cliTemplate: cliTemplate ?? null,
+        adapter: parentSession.adapter,
+        nats: natsConfig,
+      })
+
+      emitSessionEvent('managed_session.created', { session: spawnedSession })
+
+      // Start the session with the combined prompt
+      const enriched = spawnedSession as Session & { _stateDir?: string; initialPrompt?: string }
+      enriched._stateDir = claudeStateDir(sessDir, spawnedName)
+      const sec = secrets()
+
+      const resolvedTemplate = cliTemplate
+        ? cfg.cliTemplates.find(t => t.name === cliTemplate) ?? null
+        : null
+
+      try {
+        let sessionPort: number | undefined
+
+        if (parentSession.backend === 'docker') {
+          sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
+          await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: fullPrompt || undefined })
+          updateSession(sessDir, spawnedName, { port: sessionPort, state: 'running' })
+        } else {
+          const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+          if (fullPrompt) enriched.initialPrompt = fullPrompt
+
+          // Build hand system prompt pointing at the effective parent-child
+          // room. When fallback kicked in (parent's control socket was orphan/
+          // unreachable), effectiveRoom is the parent's persistent direct
+          // subject rather than the fresh breakout room.
+          const handSystemPrompt = hand.prompt
+            ? effectiveRoom
+              ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${effectiveRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${effectiveRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
+              : `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
+            : null
+
+          const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, appendSystemPrompt: handSystemPrompt })
+          sessionPort = result.port
+          updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+          tmuxBackend.onTtydRestart(spawnedName, (newPid) => {
+            updateSession(sessDir, spawnedName, { ttydPid: newPid })
+          })
+        }
+
+        emitSessionEvent('managed_session.state_changed', { name: spawnedName, state: 'running' })
+
+        // NOTE: the hot-subscribe to the breakout room happens BEFORE child
+        // creation now, so we can fall back to the parent's persistent direct
+        // subject when the parent's control socket is orphaned. See above.
+
+        // Build NATS subject for the run
+        const natsSubject = natsConfig?.enabled
+          ? buildNatsSubject(spawnedName, ctx.docStore, taskId, parentRun?.epic || undefined, parentRun?.initiative || undefined)
+          : undefined
+
+        // Create a run entity linked to the same task and worktree as the parent (unless overridden)
+        const runId = spawnedName
+        ctx.docStore.upsertRun(runId, {
+          id: runId,
+          color: parentRun?.color,
+          status: 'running',
+          sessionId: spawnedName,
+          initiative: parentRun?.initiative ?? '',
+          epic: parentRun?.epic ?? '',
+          task: taskId ?? '',
+          repo: effectiveRepo ?? '',
+          worktree: worktreePathOverride ?? parentRun?.worktree ?? '',
+          touchedFiles: [],
+          recapEntries: [],
+          rawLogs: '',
+          port: sessionPort ?? null,
+          backend: parentSession.backend,
+          backendInfo: parentSession.backend === 'docker'
+            ? `container: ${dockerBackend.containerName(cfg, spawnedName)}`
+            : `tmux session: ${spawnedName}`,
+          natsEnabled: natsConfig?.enabled ?? false,
+          natsSubject,
+          natsSubscriptions: natsConfig?.enabled ? natsConfig.subscriptions : undefined,
+          // Only record the breakout room if it was actually live (parent is
+          // subscribed to it). On fallback, the child uses the parent's
+          // direct subject so there's no separate room to track.
+          breakoutRooms: breakoutRoom && !breakoutFallback ? [breakoutRoom] : undefined,
+          taskId: taskId ?? '',
+          worktreeId: worktreePathOverride ? '' : (parentRun?.worktreeId ?? ''),  // Clear if using custom worktree
+          createdAt: new Date().toISOString(),
+          spaceId: ctx.docStore.activeSpaceId,
+          parentId: parentRun?.id,  // Track who spawned this hand
+        })
+
+        // Add breakout room to parent's run record — but only if the parent
+        // is actually subscribed to it. On fallback, there's no live room.
+        // upsertRun is a full replacement, so spread the existing run first.
+        if (breakoutRoom && !breakoutFallback && parentRun) {
+          const parentRooms = parentRun.breakoutRooms ?? []
+          ctx.docStore.upsertRun(parentRun.id, {
+            ...parentRun,
+            breakoutRooms: [...parentRooms, breakoutRoom],
+          })
+        }
+
+        return json(res, {
+          ok: true,
+          data: {
+            session: spawnedName,
+            hand: handName,
+            parentSession: parentName,
+            orchestrator: orchestrator ?? false,
+            // `room` is the subject the child was actually told to use. When
+            // the breakout subscribe failed and we fell back, this is the
+            // parent's persistent direct subject rather than a fresh room.
+            room: effectiveRoom ?? null,
+            // `breakoutRoom` is what we would have used if the parent's
+            // control socket were healthy. Kept for observability.
+            breakoutRoom: breakoutRoom ?? null,
+            breakoutFallback,
+            ...(breakoutFallback
+              ? {
+                  fallbackReason: breakoutWarning?.code ?? 'NATS_SOCKET_ERROR',
+                  restartRecommended: breakoutWarning?.restartRecommended ?? false,
+                }
+              : {}),
+            natsWarning: breakoutWarning ?? undefined,
+          },
+        }, 201)
+      } catch (err) {
+        // Clean up on failure
+        deleteSession(sessDir, spawnedName)
+        return json(res, {
+          ok: false,
+          error: { code: 'SPAWN_FAILED', message: (err as Error).message },
+        }, 500)
+      }
+      return true
+    }
+
     // POST /api/sessions/:name/send-keys — send raw tmux keys to a session
     if (method === 'POST' && url.endsWith('/send-keys') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
@@ -1703,6 +2828,92 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
     }
 
+    // GET /api/sessions/:name/subscriptions — list NATS subscriptions for a session
+    if (method === 'GET' && url.endsWith('/subscriptions') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
+        json(res, { ok: true, data: { subscriptions: session.nats?.subscriptions ?? [] } })
+        return true
+      }
+    }
+
+    // POST /api/sessions/:name/subscriptions — add a NATS subscription
+    if (method === 'POST' && url.endsWith('/subscriptions') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        readBody(req).then(async (body) => {
+          const { subject } = JSON.parse(body)
+          if (!subject || typeof subject !== 'string') {
+            return json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject must be a non-empty string' } }, 400)
+          }
+          const session = getSession(sessDir, name)
+          if (!session) { return json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404) }
+          if (!session.nats?.enabled) { return json(res, { ok: false, error: { code: 'NATS_DISABLED', message: 'NATS is not enabled for this session' } }, 400) }
+
+          // Add to subscriptions if not already present
+          const subs = session.nats.subscriptions
+          let natsWarning: NatsSocketWarning | null = null
+          if (!subs.includes(subject)) {
+            subs.push(subject)
+            updateSession(sessDir, name, { nats: { ...session.nats, subscriptions: subs } })
+
+            // Send to channel server via Unix socket. Persisted state is
+            // the source of truth (already written above); if the socket
+            // hot-apply fails we surface it in the response instead of
+            // silently logging so callers can show the error.
+            natsWarning = await trySendNatsSocketCommand(name, { action: 'subscribe', subject })
+
+            // Keep the run's natsSubscriptions in sync
+            const run = ctx.docStore.getRun(name)
+            if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
+          }
+          json(res, {
+            ok: true,
+            data: { subscriptions: subs },
+            ...(natsWarning ? { warnings: { nats: [natsWarning] } } : {}),
+          })
+        }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+        return true
+      }
+    }
+
+    // DELETE /api/sessions/:name/subscriptions — remove a NATS subscription
+    if (method === 'DELETE' && url.endsWith('/subscriptions') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        readBody(req).then(async (body) => {
+          const { subject } = JSON.parse(body)
+          if (!subject || typeof subject !== 'string') {
+            return json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject must be a non-empty string' } }, 400)
+          }
+          const session = getSession(sessDir, name)
+          if (!session) { return json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404) }
+          if (!session.nats?.enabled) { return json(res, { ok: false, error: { code: 'NATS_DISABLED', message: 'NATS is not enabled for this session' } }, 400) }
+
+          // Remove from subscriptions
+          const subs = session.nats.subscriptions.filter(s => s !== subject)
+          updateSession(sessDir, name, { nats: { ...session.nats, subscriptions: subs } })
+
+          // Send to channel server via Unix socket. See POST sibling for
+          // the rationale on surfacing warnings instead of swallowing them.
+          const natsWarning = await trySendNatsSocketCommand(name, { action: 'unsubscribe', subject })
+
+          // Keep the run's natsSubscriptions in sync
+          const run = ctx.docStore.getRun(name)
+          if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
+
+          json(res, {
+            ok: true,
+            data: { subscriptions: subs },
+            ...(natsWarning ? { warnings: { nats: [natsWarning] } } : {}),
+          })
+        }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+        return true
+      }
+    }
+
     // GET /api/cli-templates — configured CLI templates for agent backends
     if (method === 'GET' && url === '/api/cli-templates') {
       json(res, { ok: true, data: cfg.cliTemplates })
@@ -1712,19 +2923,48 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/cli-templates — add or update a CLI template
     if (method === 'POST' && url === '/api/cli-templates') {
       readBody(req).then((body) => {
-        const { name, icon, adapter, startCmd, resumeCmd } = JSON.parse(body)
+        const { name, icon, adapter, telemetry, startCmd, resumeCmd } = JSON.parse(body)
         if (!name || !startCmd || !resumeCmd) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name, startCmd, and resumeCmd are required' } }, 400)
 
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
-        const templates: Array<{ name: string; icon?: string; adapter?: string; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
-        const entry = { name, startCmd, resumeCmd, ...(icon ? { icon } : {}), ...(adapter ? { adapter } : {}) }
+        const templates: Array<{ name: string; icon?: string; adapter?: string; telemetry?: boolean; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+        const entry = { name, startCmd, resumeCmd, ...(icon ? { icon } : {}), ...(adapter ? { adapter } : {}), ...(telemetry === false ? { telemetry: false } : {}) }
         const idx = templates.findIndex(t => t.name === name)
         if (idx >= 0) templates[idx] = entry
         else templates.push(entry)
         data.cliTemplates = templates
         writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
-        json(res, { ok: true, data: { name, startCmd, resumeCmd } })
+        json(res, { ok: true, data: entry })
+      }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+      return true
+    }
+
+    // PUT /api/cli-templates/:name — update a CLI template (supports renaming)
+    if (method === 'PUT' && url.startsWith('/api/cli-templates/')) {
+      const oldName = decodeURIComponent(url.slice('/api/cli-templates/'.length))
+      readBody(req).then((body) => {
+        const { name, icon, adapter, telemetry, startCmd, resumeCmd } = JSON.parse(body)
+        if (!name || !startCmd || !resumeCmd) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name, startCmd, and resumeCmd are required' } }, 400)
+
+        // Check if template exists in merged config (includes defaults)
+        const existsInMerged = cfg.cliTemplates.some(t => t.name === oldName)
+        if (!existsInMerged) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Template "${oldName}" not found` } }, 404)
+
+        let data: Record<string, unknown> = {}
+        try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
+        const templates: Array<{ name: string; icon?: string; adapter?: string; telemetry?: boolean; startCmd: string; resumeCmd: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
+        const entry = { name, startCmd, resumeCmd, ...(icon ? { icon } : {}), ...(adapter ? { adapter } : {}), ...(telemetry === false ? { telemetry: false } : {}) }
+        const idx = templates.findIndex(t => t.name === oldName)
+        if (idx >= 0) {
+          templates[idx] = entry
+        } else {
+          // Template exists as a default — add override to user config
+          templates.push(entry)
+        }
+        data.cliTemplates = templates
+        writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+        json(res, { ok: true, data: entry })
       }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
       return true
     }
@@ -1742,6 +2982,45 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
       json(res, { ok: true })
       return true
+    }
+
+    // GET /api/patterns
+    if (method === 'GET' && url === '/api/patterns') {
+      const patterns = discoverPatterns()
+      // Return pattern info with session details for UI
+      const data = patterns.map(p => ({
+        name: p.name,
+        description: p.description,
+        sessions: p.sessions.map(s => ({
+          role: s.role,
+          cliTemplate: s.config.cliTemplate,
+          backend: s.config.backend,
+          worktree: s.config.worktree,
+        })),
+      }))
+      return json(res, { ok: true, data })
+    }
+
+    // GET /api/hands
+    if (method === 'GET' && url === '/api/hands') {
+      const hands = discoverHands()
+      const data = hands.map(h => ({
+        name: h.name,
+        description: h.description,
+        cliTemplate: h.cliTemplate,
+      }))
+      return json(res, { ok: true, data })
+    }
+
+    // GET /api/hands/:name — get full hand definition including prompt
+    const handsMatch = url.match(/^\/api\/hands\/([^/]+)$/)
+    if (method === 'GET' && handsMatch) {
+      const handName = decodeURIComponent(handsMatch[1]!)
+      const hand = getHandByName(handName)
+      if (!hand) {
+        return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Hand '${handName}' not found` } }, 404)
+      }
+      return json(res, { ok: true, data: hand })
     }
 
     // GET /api/docker/profiles — configured image profiles (read from disk for freshness)
@@ -1866,12 +3145,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${sessionId}' not found` } }, 404)
         return true
       }
-      if (session.state !== 'idle') {
-        json(res, { error: 'session-not-ready' }, 400)
-        return true
-      }
       readBody(req).then(async (body) => {
-        const { text } = JSON.parse(body) as { text: string }
+        const { text, force } = JSON.parse(body) as { text: string; force?: boolean }
+        if (!force && session.state !== 'idle') {
+          json(res, { error: 'session-not-ready' }, 400)
+          return
+        }
         if (!text) { json(res, { error: 'missing text' }, 400); return }
         try {
           if (session.backend === 'docker') {

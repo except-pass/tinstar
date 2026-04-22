@@ -27,7 +27,6 @@ export interface EntitySettings {
   backend?: 'docker' | 'tmux'
   skipPermissions?: boolean
   cliTemplate?: string
-  profile?: string
   defaultRunColor?: string
   procedures?: StoredProcedure[]
 }
@@ -148,6 +147,14 @@ export interface ImageWidget {
   naturalHeight: number
 }
 
+export interface NatsTrafficWidget {
+  id: string
+  spaceId?: string
+  sessionId: string  // Filter to show traffic for a specific session, or empty for all
+  subscriptions: string[]  // NATS subjects to subscribe to (e.g., "tinstar.>")
+  color?: string
+}
+
 // --- Grouping ---
 
 export type GroupingDimension = 'initiative' | 'epic' | 'task' | 'worktree'
@@ -198,7 +205,7 @@ export interface Rect {
 
 export interface SelectionState {
   selectedIds: Set<string>
-  selectedType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | null
+  selectedType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic' | null
   expandedIds: Set<string>
   hoveredId: string | null
 }

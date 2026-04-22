@@ -1,0 +1,5 @@
+global:
+  scrape_interval: 15s
+
+# No scrape targets needed — Alloy pushes via remote write
+scrape_configs: []

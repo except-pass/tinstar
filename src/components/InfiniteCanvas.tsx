@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { findNodeLabel } from '../domain/view-models'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
@@ -9,7 +9,10 @@ import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegi
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useHotgroupContext } from '../hotkeys/HotgroupContext'
+import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
+import { CanvasMinimap } from './CanvasMinimap'
+import { CanvasHud } from './CanvasHud'
 
 interface Props {
   tree: TreeNode[]
@@ -17,6 +20,7 @@ interface Props {
   editorWidgetMap?: Map<string, EditorWidget>
   browserWidgetMap?: Map<string, BrowserWidget>
   imageWidgetMap?: Map<string, ImageWidget>
+  natsTrafficWidgetMap?: Map<string, NatsTrafficWidget>
   onImageWidgetCreated?: (widget: ImageWidget) => void
   focusRunId: string | null
   activeSpaceId?: string
@@ -28,6 +32,7 @@ interface Props {
   onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
   onEditorWidgetCreated?: (widget: EditorWidget) => void
   onBrowserWidgetCreated?: (widget: BrowserWidget) => void
+  onNatsWidgetCreated?: (widget: NatsTrafficWidget) => void
   arrangeGridRef?: React.MutableRefObject<(() => void) | null>
   arrangeResetRef?: React.MutableRefObject<(() => void) | null>
   arrangeSwimlanesRef?: React.MutableRefObject<(() => void) | null>
@@ -88,11 +93,13 @@ const TREEMAP_PAD = 8        // inner padding around children
  * Compute treemap layouts for a set of nodes within a bounding rect.
  * Places nodes in an aspect-ratio-aware grid, then recurses into containers.
  * Returns a flat Map<nodeId, layout> covering every node in the subtree.
+ * Work widgets (non-containers) preserve their existing size; only position changes.
  */
 function computeTreemapLayouts(
   nodes: TreeNode[],
   x: number, y: number, w: number, h: number,
   gap: number,
+  currentLayouts?: Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>,
 ): Map<string, import('../hooks/useWidgetLayouts').WidgetLayout> {
   const result = new Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>()
   const n = nodes.length
@@ -111,17 +118,26 @@ function computeTreemapLayouts(
     const row = Math.floor(i / cols)
     const nx = Math.round(x + gap + col * (cellW + gap))
     const ny = Math.round(y + gap + row * (cellH + gap))
-    result.set(node.id, { x: nx, y: ny, width: Math.round(cellW), height: Math.round(cellH) })
 
     const isContainer = getWidgetComponent(toWidgetType(node.type))?.isContainer
-    if (isContainer && node.children.length > 0 && cellW > 120 && cellH > 80) {
-      const childGap = Math.max(6, Math.floor(gap * 0.6))
-      const innerX = nx + TREEMAP_PAD
-      const innerY = ny + TREEMAP_HEADER_H
-      const innerW = cellW - TREEMAP_PAD * 2
-      const innerH = cellH - TREEMAP_HEADER_H - TREEMAP_PAD
-      const childLayouts = computeTreemapLayouts(node.children, innerX, innerY, innerW, innerH, childGap)
-      for (const [id, layout] of childLayouts) result.set(id, layout)
+    if (isContainer) {
+      // Containers: resize to fit the grid cell
+      result.set(node.id, { x: nx, y: ny, width: Math.round(cellW), height: Math.round(cellH) })
+      if (node.children.length > 0 && cellW > 120 && cellH > 80) {
+        const childGap = Math.max(6, Math.floor(gap * 0.6))
+        const innerX = nx + TREEMAP_PAD
+        const innerY = ny + TREEMAP_HEADER_H
+        const innerW = cellW - TREEMAP_PAD * 2
+        const innerH = cellH - TREEMAP_HEADER_H - TREEMAP_PAD
+        const childLayouts = computeTreemapLayouts(node.children, innerX, innerY, innerW, innerH, childGap, currentLayouts)
+        for (const [id, layout] of childLayouts) result.set(id, layout)
+      }
+    } else {
+      // Work widgets: preserve existing size, only update position
+      const existing = currentLayouts?.get(node.id)
+      const width = existing?.width ?? 1560
+      const height = existing?.height ?? 1410
+      result.set(node.id, { x: nx, y: ny, width, height })
     }
   }
 
@@ -138,7 +154,7 @@ interface MarqueeRect {
 
 const MARQUEE_THRESHOLD = 5
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -173,6 +189,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const marqueeRef = useRef<{ startX: number; startY: number; active: boolean }>({ startX: 0, startY: 0, active: false })
   // Tracks whether the current pointer-down actually landed on empty canvas (not a widget)
   const canvasPointerDownRef = useRef(false)
+
+  const minimapToggleRef = useRef<(() => void) | null>(null)
+  const hudToggleRef = useRef<(() => void) | null>(null)
 
   // All run node IDs for marquee intersection
   const runNodeIdsRef = useRef<string[]>([])
@@ -209,18 +228,20 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => clearTimeout(timer)
   }, [tree, treeMaps])
 
-  // Center on a widget when focusRunId changes
+  // Center on a widget when focusRunId changes — always at zoom=1.0 for crisp text
   useEffect(() => {
     if (!focusRunId) return
-    // Always clear focusRunId so subsequent double-clicks on the same widget
-    // re-trigger this effect (React skips re-render if state value is identical).
     onFocusHandled()
     if (!containerRef.current) return
     const layout = getLayout(focusRunId)
     if (!layout) return
     const rect = containerRef.current.getBoundingClientRect()
-    centerOn(layout.x, layout.y, layout.width, layout.height, rect.width, rect.height)
-  }, [focusRunId, getLayout, centerOn, onFocusHandled])
+    setCamera({
+      x: Math.round(rect.width / 2 - (layout.x + layout.width / 2)),
+      y: Math.round(rect.height / 2 - (layout.y + layout.height / 2)),
+      zoom: 1,
+    })
+  }, [focusRunId, getLayout, setCamera, onFocusHandled])
 
   // Attach wheel listener with { passive: false }
   useEffect(() => {
@@ -231,14 +252,50 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => el.removeEventListener('wheel', handler)
   }, [handleWheel])
 
+  // Handle tinstar:open-linked-file — spawn a new editor widget next to the source widget
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const handleLinkedFile = async (e: Event) => {
+      const { sessionId, filePath, sourceWidgetId } = (e as CustomEvent).detail as {
+        sessionId: string
+        filePath: string
+        sourceWidgetId: string
+      }
+
+      const sourceLayout = getLayout(sourceWidgetId)
+      const spawnX = sourceLayout ? sourceLayout.x + sourceLayout.width + 40 : 0
+      const spawnY = sourceLayout ? sourceLayout.y : 0
+      const spawnLayout = { x: spawnX, y: spawnY, width: 640, height: 480 }
+
+      const res = await fetch('/api/editor-widgets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, filePath }),
+      })
+      const json = await res.json() as { ok: boolean; data?: EditorWidget }
+      if (!json.ok || !json.data) return
+      insertLayout(json.data.id, spawnLayout)
+      onEditorWidgetCreated?.(json.data)
+    }
+
+    container.addEventListener('tinstar:open-linked-file', handleLinkedFile)
+    return () => container.removeEventListener('tinstar:open-linked-file', handleLinkedFile)
+  }, [getLayout, insertLayout, onEditorWidgetCreated])
 
   // --- Pointer handlers: pan OR marquee ---
+  const panPointerIdRef = useRef<number | null>(null)
+
   const onPointerDown = useCallback(
     (e: ReactPointerEvent) => {
       if (spaceHeld.current || e.button === 1) {
         // Space held or middle-click = pan
         e.preventDefault()
         startPan(e.nativeEvent)
+        // Capture pointer so events aren't swallowed by iframes during pan
+        panPointerIdRef.current = e.pointerId
+        containerRef.current?.setPointerCapture(e.pointerId)
         return
       }
       // Start marquee on left-click on empty canvas
@@ -277,6 +334,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     (_e: ReactPointerEvent) => {
       // Always end pan (handles both space+drag and middle-click pan)
       endPan()
+      // Release pointer capture from pan
+      if (panPointerIdRef.current !== null) {
+        try { containerRef.current?.releasePointerCapture(panPointerIdRef.current) } catch { /* already released */ }
+        panPointerIdRef.current = null
+      }
       const wasCanvasPointerDown = canvasPointerDownRef.current
       canvasPointerDownRef.current = false
       if (spaceHeld.current) {
@@ -329,7 +391,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   )
 
   const onPointerLeave = useCallback(() => {
-    endPan()
+    // Don't kill pan if we hold pointer capture (cursor crossing iframes)
+    if (panPointerIdRef.current === null) {
+      endPan()
+    }
     marqueeRef.current = { startX: 0, startY: 0, active: false }
     setMarquee(null)
   }, [endPan])
@@ -422,8 +487,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const vw = rect.width / camera.zoom
     const vh = rect.height / camera.zoom
 
-    const layouts = computeTreemapLayouts(rootNodes, vx, vy, vw, vh, 20)
-    batchSetLayouts(layouts)
+    const newLayouts = computeTreemapLayouts(rootNodes, vx, vy, vw, vh, 20, layouts)
+    batchSetLayouts(newLayouts)
   }, [camera, selectionState, tree, batchSetLayouts])
 
   // Swim lanes: rows of runs grouped by task, stacked by epic/initiative
@@ -441,7 +506,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     }
 
     // Viewport origin in canvas coords
-    const rect = el.getBoundingClientRect()
     const startX = -camera.x / camera.zoom
     const startY = -camera.y / camera.zoom
     // Track the widest row so empty containers can match
@@ -638,8 +702,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const selType = first.startsWith('run-') ? 'run'
         : first.startsWith('editor-') ? 'file-editor'
         : first.startsWith('image-') ? 'image-viewer'
+        : first.startsWith('nats-') ? 'nats-traffic'
         : 'browser-widget'
-      selectMany(slotNodeIds, selType as import('../domain/types').GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer')
+      selectMany(slotNodeIds, selType as import('../domain/types').GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic')
       // Expand all ancestors in sidebar so the nodes become visible
       const ancestorIds: string[] = []
       for (const nodeId of slotNodeIds) {
@@ -658,14 +723,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     },
     onHotgroupAssign: (slot) => {
       const { selectedType, selectedIds } = selectionState
-      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer')) return
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
       for (const nodeId of selectedIds) {
         hotgroups.assign(slot, nodeId)
       }
     },
     onHotgroupRemove: (slot) => {
       const { selectedType, selectedIds } = selectionState
-      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer')) return
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
       for (const nodeId of selectedIds) {
         hotgroups.remove(slot, nodeId)
       }
@@ -673,7 +738,38 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     onArrangeGrid: () => arrangeGridRef?.current?.(),
     onArrangeReset: () => arrangeResetRef?.current?.(),
     onArrangeSwimlanes: () => arrangeSwimlanesRef?.current?.(),
+    onToggleMinimap: () => minimapToggleRef.current?.(),
+    onToggleHud: () => hudToggleRef.current?.(),
   })
+
+  // Register the canvas-level fit implementation so widget action handlers
+  // can call fitWidgetToViewport(id) in response to the 'fit-viewport'
+  // binding (Z key).
+  useEffect(() => {
+    const FIT_MIN_HEIGHT = 150 // mirrors MIN_HEIGHT in useWidgetLayouts.ts
+    return registerCanvasActions({
+      fit: (nodeId: string) => {
+        const layout = getLayout(nodeId)
+        if (!layout) return
+        const el = containerRef.current
+        if (!el) return
+        // Use the canvas element's rect, not the window — sidebars take up window width.
+        const rect = el.getBoundingClientRect()
+        const newHeight = Math.max(FIT_MIN_HEIGHT, rect.height)
+        // Grow/shrink the widget; cascade expansion updates ancestor containers.
+        resizeNode(nodeId, layout.width, newHeight)
+        // Clear any focus-induced auto-scroll on the canvas container. Browsers will
+        // scroll even overflow-hidden elements to reveal focused descendants, which
+        // invalidates our camera math. See: https://drafts.csswg.org/cssom-view/#element-scrolling-members
+        el.scrollLeft = 0
+        el.scrollTop = 0
+        // Center the (resized) widget in the canvas viewport at zoom 1.
+        const cx = rect.width / 2 - (layout.x + layout.width / 2)
+        const cy = rect.height / 2 - (layout.y + newHeight / 2)
+        setCamera({ x: Math.round(cx), y: Math.round(cy), zoom: 1 })
+      },
+    })
+  }, [getLayout, resizeNode, setCamera])
 
   const handleDeleteGroup = useCallback((nodeId: string) => {
     if (!onDeleteEntity) return
@@ -698,6 +794,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       additive ? toggleSelect(nodeId, 'browser-widget') : select(nodeId, 'browser-widget')
     } else if (nodeId.startsWith('image-')) {
       additive ? toggleSelect(nodeId, 'image-viewer') : select(nodeId, 'image-viewer')
+    } else if (nodeId.startsWith('nats-')) {
+      additive ? toggleSelect(nodeId, 'nats-traffic') : select(nodeId, 'nats-traffic')
     } else {
       // Group container click — select it in the shared selection state so hierarchy highlights too
       const parsed = parseNodeId(nodeId)
@@ -715,7 +813,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const handleDoubleClickZoom = useCallback((nodeId: string) => {
     if (onFocusRun && nodeId.startsWith('run-')) {
       onFocusRun(nodeId.slice(4))
-    } else if (nodeId.startsWith('editor-') || nodeId.startsWith('browser-') || nodeId.startsWith('image-')) {
+    } else if (nodeId.startsWith('editor-') || nodeId.startsWith('browser-') || nodeId.startsWith('image-') || nodeId.startsWith('nats-')) {
       zoomToFitRuns([nodeId])
     }
   }, [onFocusRun, zoomToFitRuns])
@@ -742,7 +840,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           })
           const imageJson = await imageRes.json() as { ok: boolean; data?: ImageWidget }
           if (!imageJson.ok || !imageJson.data) return
-          onImageWidgetCreated?.(imageJson.data)
           const { naturalWidth, naturalHeight } = imageJson.data
           const spawnLayout = {
             x: dropX, y: dropY,
@@ -750,6 +847,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             height: Math.min(naturalHeight, 900),
           }
           insertLayout(imageJson.data.id, spawnLayout)
+          onImageWidgetCreated?.(imageJson.data)
           return
         }
 
@@ -761,8 +859,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         })
         const editorJson = await editorRes.json() as { ok: boolean; data?: EditorWidget }
         if (!editorJson.ok || !editorJson.data) return
-        onEditorWidgetCreated?.(editorJson.data)
         insertLayout(editorJson.data.id, spawnLayout)
+        onEditorWidgetCreated?.(editorJson.data)
         return
       }
 
@@ -777,11 +875,65 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         })
         const resJson = await res.json() as { ok: boolean; data?: BrowserWidget }
         if (!resJson.ok || !resJson.data) return
-        onBrowserWidgetCreated?.(resJson.data)
         insertLayout(resJson.data.id, spawnLayout)
+        onBrowserWidgetCreated?.(resJson.data)
+        return
+      }
+
+      const rawNats = e.dataTransfer.getData('application/tinstar-nats')
+      if (rawNats) {
+        const { sessionId, natsSubject, color } = JSON.parse(rawNats) as { sessionId: string; natsSubject?: string; color?: string }
+        const spawnLayout = { x: dropX, y: dropY, width: 500, height: 400 }
+        // Build subscription filter: two-tier model (direct DM + task broadcast)
+        // natsSubject is the direct address (e.g., tinstar.space.init.epic.task.session)
+        // Broadcast = strip session name (no wildcard needed)
+        const subscriptions = natsSubject
+          ? [
+              natsSubject,  // direct DM inbox for this session
+              natsSubject.replace(/\.[^.]+$/, ''),  // task broadcast channel (no wildcard)
+            ]
+          : [`tinstar.>`]  // fallback to all tinstar traffic
+        const res = await fetch('/api/nats-traffic-widgets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, subscriptions, color }),
+        })
+        const resJson = await res.json() as { ok: boolean; data?: NatsTrafficWidget }
+        if (!resJson.ok || !resJson.data) return
+        insertLayout(resJson.data.id, spawnLayout)
+        onNatsWidgetCreated?.(resJson.data)
+        return
+      }
+
+      // Hand spawn drop
+      const handData = e.dataTransfer.getData('application/tinstar-hand')
+      if (handData) {
+        try {
+          const { handName, sessionId } = JSON.parse(handData) as { handName: string; sessionId: string }
+          // Spawn the hand via API
+          fetch(`/api/sessions/${sessionId}/spawn`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hand: handName }),
+          })
+            .then(res => res.json())
+            .then(data => {
+              if (data.ok) {
+                // The spawned session will create a run, which will trigger SSE update
+                // and the canvas will auto-add the new widget via useRunsForTask
+                console.log('Hand spawned:', data.data.session)
+              } else {
+                console.error('Hand spawn failed:', data.error)
+              }
+            })
+            .catch(err => console.error('Hand spawn error:', err))
+        } catch {
+          // Invalid data
+        }
+        return
       }
     },
-    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated],
+    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated],
   )
 
   // Recursive render: groups render behind their children (natural DOM order)
@@ -804,7 +956,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             ? browserWidgetMap.get(node.entityId)
             : node.type === 'image-viewer'
               ? imageWidgetMap.get(node.entityId)
-              : ({
+              : node.type === 'nats-traffic'
+                ? natsTrafficWidgetMap.get(node.entityId)
+                : ({
               node,
               depth: depthMapRef.current.get(node.id) ?? 0,
               onShrinkToFit: shrinkNode,
@@ -830,7 +984,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}
-        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' ? handleDoubleClickZoom : undefined)}
+        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' || node.type === 'nats-traffic' ? handleDoubleClickZoom : undefined)}
         onMove={moveHandler}
         onResize={resizeHandler}
         onDragStart={node.type === 'run' ? handleWidgetDragStart : undefined}
@@ -899,6 +1053,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     <div
       ref={containerRef}
       tabIndex={-1}
+      data-testid="infinite-canvas"
       className="w-full h-full overflow-hidden relative outline-none"
       style={{
         cursor: cursorStyle,
@@ -910,10 +1065,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerLeave={onPointerLeave}
+      onMouseDown={(e) => { if (e.button === 1) e.preventDefault() }}
       onDragOver={(e) => { e.preventDefault() }}
       onDrop={handleDrop}
       onDragEnter={(e) => {
-        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-browser')) {
+        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-browser') || e.dataTransfer.types.includes('application/tinstar-nats') || e.dataTransfer.types.includes('application/tinstar-hand')) {
           dragEnterCountRef.current++
           setEditorDragActive(true)
         }
@@ -925,7 +1081,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           setEditorDragActive(false)
         }
       }}
-      data-testid="infinite-canvas"
     >
       {/* File-editor drag overlay — covers iframes so the drop always lands on the canvas */}
       {editorDragActive && (
@@ -956,6 +1111,23 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
       {/* Marquee selection box */}
       {marqueeStyle && <div style={marqueeStyle} />}
+
+      {/* Minimap */}
+      <CanvasMinimap
+        camera={camera}
+        setCamera={setCamera}
+        layouts={layouts}
+        tree={tree}
+        runMap={runMap}
+        editorWidgetMap={editorWidgetMap}
+        browserWidgetMap={browserWidgetMap}
+        imageWidgetMap={imageWidgetMap}
+        natsTrafficWidgetMap={natsTrafficWidgetMap}
+        toggleRef={minimapToggleRef}
+      />
+
+      {/* Telemetry HUD (top-right) */}
+      <CanvasHud toggleRef={hudToggleRef} />
 
       {/* Bottom-right zoom indicator */}
       <div className="absolute bottom-3 right-3 flex items-center gap-2">

@@ -1,6 +1,6 @@
 // src/components/RunWorkspaceWidget/SkillPickerModal.tsx
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { useSkillsContext } from '../SkillsProvider'
+import { useSkillsContext } from '../SkillsContext'
 import { randomUUID } from '../../uuid'
 import { useTaxonomy } from '../TaxonomyContext'
 import { resolveEntityProcedures } from '../../domain/procedures'

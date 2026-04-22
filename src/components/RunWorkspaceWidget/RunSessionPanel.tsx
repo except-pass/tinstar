@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
 import { resolveRunAccent, hexToRgba } from '../runAccent'
+import { usePromptHistory } from '../../hooks/usePromptHistory'
+import { PromptHistoryPopover } from './PromptHistoryPopover'
+import { useFocusPath } from '../../hotkeys/FocusPathContext'
 
 function MarkdownText({ content }: { content: string }) {
   return (
@@ -120,7 +123,7 @@ function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus }:
     <div
       className="flex-1 relative overflow-hidden"
       style={focused ? { outline: `2px solid ${accent}`, outlineOffset: '-2px', boxShadow: `inset 0 0 12px ${hexToRgba(accent, 0.15)}` } : undefined}
-      onPointerDown={e => { e.stopPropagation(); onPointerFocus?.() }}
+      onPointerDown={e => { if (e.button === 0) { e.stopPropagation(); onPointerFocus?.() } }}
     >
       <div
         style={needsScale ? {
@@ -160,9 +163,256 @@ function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus }:
   )
 }
 
+/** Collapsible prompt composer for sending text to the terminal */
+function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTrigger }: { sessionId?: string; accent: string; status?: SessionStatus; expanded?: boolean; onToggle?: () => void; focusTrigger?: number }) {
+  const [internalExpanded, setInternalExpanded] = useState(false)
+  const isExpanded = expanded ?? internalExpanded
+  const toggleExpanded = onToggle ?? (() => setInternalExpanded(e => !e))
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [justSent, setJustSent] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const composerRootRef = useRef<HTMLDivElement>(null)
+  const { history, push: pushHistory } = usePromptHistory(sessionId)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const { pushFocus, popFocus, path } = useFocusPath()
+  const composerFocusId = sessionId ? `${sessionId}:composer` : null
+  const isOnFocusPath = useRef(false)
+
+  const enterComposerFocus = useCallback(() => {
+    if (!composerFocusId || isOnFocusPath.current) return
+    pushFocus({ id: composerFocusId, type: 'prompt-composer', label: 'Composer' })
+    isOnFocusPath.current = true
+  }, [composerFocusId, pushFocus])
+
+  const leaveComposerFocus = useCallback(() => {
+    if (!isOnFocusPath.current) return
+    // Only pop if we're still the tail — don't yank something that pushed on top of us
+    if (path[path.length - 1]?.id === composerFocusId) popFocus()
+    isOnFocusPath.current = false
+  }, [path, composerFocusId, popFocus])
+
+  // Pop on unmount / when composer collapses (textarea won't fire blur if it unmounts)
+  useEffect(() => {
+    if (!isExpanded) leaveComposerFocus()
+  }, [isExpanded, leaveComposerFocus])
+  useEffect(() => () => leaveComposerFocus(), [leaveComposerFocus])
+
+  const onTextareaFocus = useCallback(() => enterComposerFocus(), [enterComposerFocus])
+  const onTextareaBlur = useCallback((e: React.FocusEvent<HTMLTextAreaElement>) => {
+    const next = e.relatedTarget as Node | null
+    if (next && composerRootRef.current?.contains(next)) return
+    leaveComposerFocus()
+  }, [leaveComposerFocus])
+
+  // Focus when trigger changes (from parent selecting widget)
+  useEffect(() => {
+    if (focusTrigger && isExpanded) textareaRef.current?.focus({ preventScroll: true })
+  }, [focusTrigger, isExpanded])
+
+  const canSend = sessionId && text.trim().length > 0
+
+  const handleSend = useCallback(async () => {
+    if (!canSend || sending) return
+    setError(null)
+    setSending(true)
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text.trim(), force: status !== 'idle' }),
+      })
+      const data = await res.json()
+      if (data.ok) {
+        pushHistory(text)
+        setText('')
+        // Trigger success flash
+        setJustSent(true)
+        setTimeout(() => setJustSent(false), 400)
+      } else {
+        setError(data.error?.message ?? data.error ?? 'Failed to send')
+      }
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSending(false)
+    }
+  }, [sessionId, text, canSend, sending, status, pushHistory])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      if (historyOpen) setHistoryOpen(false)
+      handleSend()
+      return
+    }
+    if ((e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'Escape') && sessionId) {
+      e.preventDefault()
+      fetch(`/api/sessions/${sessionId}/send-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: [e.key] }),
+      }).catch(() => { /* swallow — passthrough keys are fire-and-forget */ })
+      return
+    }
+    if (e.key === 'ArrowUp' && text.length === 0 && !historyOpen) {
+      e.preventDefault()
+      setHistoryOpen(true)
+    }
+  }, [handleSend, text, historyOpen, sessionId])
+
+  // Focus textarea when expanded
+  useEffect(() => {
+    if (isExpanded) textareaRef.current?.focus({ preventScroll: true })
+  }, [isExpanded])
+
+  const selectFromHistory = useCallback((item: string) => {
+    setText(item)
+    setHistoryOpen(false)
+    // Focus textarea and place caret at end after the state flush.
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus({ preventScroll: true })
+      ta.setSelectionRange(item.length, item.length)
+    })
+  }, [])
+
+  return (
+    <div ref={composerRootRef} className="border-t" style={{ borderColor: hexToRgba(accent, 0.2) }}>
+      <button
+        onClick={toggleExpanded}
+        className="w-full flex items-center gap-2 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider transition-colors hover:bg-primary/5"
+        style={{ color: hexToRgba(accent, 0.6) }}
+      >
+        <span
+          className="material-symbols-outlined text-sm transition-transform"
+          style={{ transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+        >
+          expand_less
+        </span>
+        Prompt Composer
+        <span className="text-slate-600 text-2xs normal-case tracking-normal ml-1">(P)</span>
+        {status !== 'idle' && (
+          <span className="ml-auto text-slate-500 normal-case tracking-normal">
+            (session {status === 'running' ? 'busy' : status})
+          </span>
+        )}
+      </button>
+
+      {isExpanded && (
+        <div className="px-3 pb-3 space-y-2">
+          {historyOpen && (
+            <PromptHistoryPopover
+              history={history}
+              accent={accent}
+              onSelect={selectFromHistory}
+              onClose={() => setHistoryOpen(false)}
+            />
+          )}
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onFocus={onTextareaFocus}
+            onBlur={onTextareaBlur}
+            placeholder="Enter prompt text... (Ctrl+Enter to send)"
+            className="w-full h-24 px-2 py-1.5 bg-surface-base border rounded text-xs font-mono text-slate-200 placeholder:text-slate-600 resize-y outline-none focus:border-primary/50"
+            style={{ borderColor: hexToRgba(accent, 0.2) }}
+          />
+          {error && (
+            <p className="text-2xs font-mono text-accent-red">{error}</p>
+          )}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-2xs text-slate-600 font-mono">
+              {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                data-testid="prompt-history-button"
+                onClick={() => setHistoryOpen(o => !o)}
+                title="Recent prompts (↑)"
+                className="flex items-center gap-1 px-2 py-1.5 text-2xs font-mono uppercase tracking-wider rounded transition-all duration-150 ease-out disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:scale-105 enabled:active:scale-95"
+                style={{
+                  background: hexToRgba(accent, 0.1),
+                  color: hexToRgba(accent, 0.7),
+                  border: `1px solid ${hexToRgba(accent, 0.25)}`,
+                }}
+              >
+                <span className="material-symbols-outlined text-sm">history</span>
+              </button>
+              <button
+                ref={buttonRef}
+                onClick={handleSend}
+                disabled={!canSend || sending}
+                className={`
+                  group relative flex items-center gap-1.5 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider rounded
+                  transition-all duration-150 ease-out
+                  disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100
+                  enabled:hover:scale-105 enabled:active:scale-95
+                  ${justSent ? 'animate-[send-success_0.4s_ease-out]' : ''}
+                `}
+                style={{
+                  background: justSent
+                    ? hexToRgba(accent, 0.4)
+                    : sending
+                      ? hexToRgba(accent, 0.25)
+                      : hexToRgba(accent, 0.15),
+                  color: accent,
+                  border: `1px solid ${hexToRgba(accent, justSent ? 0.7 : 0.3)}`,
+                  boxShadow: canSend && !sending
+                    ? `0 0 0 0 ${hexToRgba(accent, 0)}`
+                    : justSent
+                      ? `0 0 20px ${hexToRgba(accent, 0.5)}, 0 0 40px ${hexToRgba(accent, 0.2)}`
+                      : 'none',
+                }}
+                onMouseEnter={(e) => {
+                  if (canSend && !sending) {
+                    e.currentTarget.style.boxShadow = `0 0 12px ${hexToRgba(accent, 0.4)}, 0 0 24px ${hexToRgba(accent, 0.15)}`
+                    e.currentTarget.style.background = hexToRgba(accent, 0.25)
+                    e.currentTarget.style.borderColor = hexToRgba(accent, 0.5)
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!justSent) {
+                    e.currentTarget.style.boxShadow = 'none'
+                    e.currentTarget.style.background = hexToRgba(accent, 0.15)
+                    e.currentTarget.style.borderColor = hexToRgba(accent, 0.3)
+                  }
+                }}
+              >
+                <span
+                  className={`material-symbols-outlined text-sm transition-transform duration-200 ${
+                    sending ? 'animate-[send-fly_0.6s_ease-in-out_infinite]' : ''
+                  } ${justSent ? 'animate-[send-pop_0.3s_ease-out]' : ''}`}
+                  style={{ fontVariationSettings: "'FILL' 1" }}
+                >
+                  {sending ? 'rocket_launch' : 'send'}
+                </span>
+                {sending ? 'Sending...' : 'Send'}
+                {/* Glow ring on hover */}
+                <span
+                  className="absolute inset-0 rounded opacity-0 group-enabled:group-hover:opacity-100 transition-opacity duration-200 pointer-events-none"
+                  style={{
+                    background: `radial-gradient(ellipse at center, ${hexToRgba(accent, 0.1)} 0%, transparent 70%)`,
+                  }}
+                />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface Props {
-  recapEntries: RecapEntry[]
-  rawLogs: string
+  recapEntries?: RecapEntry[]
+  rawLogs?: string
   port?: number | null
   sessionId?: string
   status?: SessionStatus
@@ -178,9 +428,14 @@ interface Props {
   /** When provided, the tab toggle is hidden (rendered in the header instead) */
   controlledTab?: 'recap' | 'terminal'
   onControlledTabChange?: (tab: 'recap' | 'terminal') => void
+  /** Controlled prompt composer state */
+  promptComposerExpanded?: boolean
+  onPromptComposerToggle?: () => void
+  /** Increment to focus the prompt composer textarea */
+  composerFocusTrigger?: number
 }
 
-export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status, color, termTick = 0, terminalFocused, zoom, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange, controlledTab, onControlledTabChange }: Props) {
+export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, sessionId, status, color, termTick = 0, terminalFocused, zoom, onTerminalToggle, onTerminalPointerFocus, activeTabIndex, onActiveTabChange, controlledTab, onControlledTabChange, promptComposerExpanded, onPromptComposerToggle, composerFocusTrigger }: Props) {
   const accent = resolveRunAccent(color)
   const TABS = ['recap', 'terminal'] as const
   const [internalActiveTab, setInternalActiveTab] = useState<'recap' | 'terminal'>(port ? 'terminal' : 'recap')
@@ -349,6 +604,10 @@ export function RunSessionPanel({ recapEntries, rawLogs, port, sessionId, status
         </div>
       )}
 
+      {/* Prompt composer — only show when terminal is available */}
+      {port && activeTab === 'terminal' && !isTerminated && (
+        <PromptComposer sessionId={sessionId} accent={accent} status={status} expanded={promptComposerExpanded} onToggle={onPromptComposerToggle} focusTrigger={composerFocusTrigger} />
+      )}
     </section>
   )
 }

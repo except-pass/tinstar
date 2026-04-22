@@ -19,6 +19,8 @@ export interface CanvasHotkeyHandlers {
   onArrangeGrid: () => void
   onArrangeReset: () => void
   onArrangeSwimlanes: () => void
+  onToggleMinimap: () => void
+  onToggleHud: () => void
 }
 
 export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
@@ -31,11 +33,12 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const active = document.activeElement
-      if (isEditable(active) || active?.tagName === 'IFRAME') return
+      const inEditable = isEditable(active) || active?.tagName === 'IFRAME'
       const h = handlersRef.current
 
       // Ctrl+G — arrange grid (use e.code for layout-independence)
       if (e.code === 'KeyG' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+        if (inEditable) return
         e.preventDefault()
         h.onArrangeGrid()
         emitBindingFired('Ctrl+G')
@@ -44,6 +47,7 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
 
       // Ctrl+Shift+G — reset layout
       if (e.code === 'KeyG' && (e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey) {
+        if (inEditable) return
         e.preventDefault()
         h.onArrangeReset()
         return
@@ -51,13 +55,31 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
 
       // Ctrl+L — swim lanes
       if (e.code === 'KeyL' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+        if (inEditable) return
         e.preventDefault()
         h.onArrangeSwimlanes()
         emitBindingFired('Ctrl+L')
         return
       }
 
+      // M — toggle minimap
+      if (e.code === 'KeyM' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        if (inEditable) return
+        e.preventDefault()
+        h.onToggleMinimap()
+        return
+      }
+
+      // T — toggle telemetry HUD
+      if (e.code === 'KeyT' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        if (inEditable) return
+        e.preventDefault()
+        h.onToggleHud()
+        return
+      }
+
       // Hotgroup keys: 1-9, 0 — use e.code so Ctrl+Shift+1 works regardless of e.key value
+      // Ctrl+digit works even from editable (prompt composer) for quick switching
       const digit = SLOT_CODES[e.code]
       if (!digit || e.altKey) return
 
@@ -74,8 +96,8 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
         return
       }
 
-      // Bare digit: single or double tap
-      if (!e.shiftKey) {
+      // Bare digit: single or double tap (blocked in editable)
+      if (!e.shiftKey && !inEditable) {
         e.preventDefault()
         const now = Date.now()
         const last = lastTapRef.current[digit] ?? 0

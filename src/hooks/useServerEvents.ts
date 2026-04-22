@@ -2,7 +2,7 @@
 declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
 import { useSyncExternalStore, useCallback } from 'react'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget } from '../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget } from '../domain/types'
 
 interface ServerState {
   activeSpaceId: string
@@ -15,6 +15,7 @@ interface ServerState {
   editorWidgets: EditorWidget[]
   browserWidgets: BrowserWidget[]
   imageWidgets: ImageWidget[]
+  natsTrafficWidgets: NatsTrafficWidget[]
   readyQueue: string[]
 }
 
@@ -29,6 +30,7 @@ const EMPTY_STATE: ServerState = {
   editorWidgets: [],
   browserWidgets: [],
   imageWidgets: [],
+  natsTrafficWidgets: [],
   readyQueue: [],
 }
 
@@ -39,8 +41,12 @@ const EMPTY_STATE: ServerState = {
 // all fetch() calls, terminal iframes, and other HTTP traffic.
 
 let currentState: ServerState = EMPTY_STATE
-let connected = false
-let loading = true
+/** Single snapshot for state + connection flags — one useSyncExternalStore subscriber per hook (not three). */
+let uiBundle: { state: ServerState; connected: boolean; loading: boolean } = {
+  state: EMPTY_STATE,
+  connected: false,
+  loading: true,
+}
 let listeners = new Set<() => void>()
 let es: EventSource | null = null
 let refCount = 0
@@ -49,17 +55,20 @@ function notify() {
   for (const fn of listeners) fn()
 }
 
-function getSnapshot() {
-  return currentState
+function getUiSnapshot() {
+  return uiBundle
 }
 
-function getConnected() {
-  return connected
+function pushState() {
+  uiBundle = { ...uiBundle, state: currentState }
+  notify()
 }
 
-function getLoading() {
-  return loading
+function setConnected(c: boolean) {
+  uiBundle = { ...uiBundle, connected: c }
+  notify()
 }
+
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)
@@ -86,7 +95,7 @@ function startSSE() {
   es.addEventListener('snapshot', (e: MessageEvent) => {
     const snapshot = JSON.parse(e.data) as ServerState & { ready_queue?: string[] }
     currentState = { ...snapshot, readyQueue: snapshot.ready_queue ?? [] }
-    loading = false
+    uiBundle = { ...uiBundle, state: currentState, loading: false }
     notify()
   })
 
@@ -98,7 +107,7 @@ function startSSE() {
       data: unknown
     }
     currentState = applyDelta(currentState, delta)
-    notify()
+    pushState()
   })
 
   es.addEventListener('skill.drafted', (e: MessageEvent) => {
@@ -113,6 +122,18 @@ function startSSE() {
     window.dispatchEvent(new CustomEvent('tinstar:file_watch', { detail: JSON.parse(e.data) }))
   })
 
+  es.addEventListener('nats_traffic', (e: MessageEvent) => {
+    window.dispatchEvent(new CustomEvent('tinstar:nats_traffic', { detail: JSON.parse(e.data) }))
+  })
+
+  es.addEventListener('telemetry:hud', (e: MessageEvent) => {
+    try {
+      window.dispatchEvent(new CustomEvent('tinstar:telemetry:hud', { detail: JSON.parse(e.data) }))
+    } catch {
+      // malformed event — drop silently
+    }
+  })
+
   es.addEventListener('heartbeat', () => {
     // Keep-alive, no action needed
   })
@@ -120,11 +141,11 @@ function startSSE() {
   es.addEventListener('ready_queue_update', (e: MessageEvent) => {
     const { queue } = JSON.parse(e.data) as { queue: string[] }
     currentState = { ...currentState, readyQueue: queue }
-    notify()
+    pushState()
   })
 
-  es.onopen = () => { connected = true; notify() }
-  es.onerror = () => { connected = false; notify() }
+  es.onopen = () => { setConnected(true) }
+  es.onerror = () => { setConnected(false) }
 
   const onBeforeUnload = () => es?.close()
   window.addEventListener('beforeunload', onBeforeUnload)
@@ -181,7 +202,18 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
     if (delta.data === null) return { ...prev, runs: prev.runs.filter(r => r.id !== delta.id) }
     const run = delta.data as Run
     const exists = prev.runs.some(r => r.id === run.id)
-    return { ...prev, runs: exists ? prev.runs.map(r => r.id === run.id ? run : r) : [...prev.runs, run] }
+    const mergeRun = (prevRun: Run | undefined, next: Run): Run => ({
+      ...prevRun,
+      ...next,
+      touchedFiles: next.touchedFiles ?? prevRun?.touchedFiles ?? [],
+      recapEntries: next.recapEntries ?? prevRun?.recapEntries ?? [],
+    })
+    return {
+      ...prev,
+      runs: exists
+        ? prev.runs.map(r => (r.id === run.id ? mergeRun(r, run) : r))
+        : [...prev.runs, mergeRun(undefined, run)],
+    }
   }
 
   if (delta.entity === 'editorWidget') {
@@ -206,6 +238,14 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
     const w = delta.data as ImageWidget
     const idx = iws.findIndex(x => x.id === w.id)
     return { ...prev, imageWidgets: idx >= 0 ? iws.map((x, i) => (i === idx ? w : x)) : [...iws, w] }
+  }
+
+  if (delta.entity === 'natsTrafficWidget') {
+    const nws = prev.natsTrafficWidgets
+    if (delta.data === null) return { ...prev, natsTrafficWidgets: nws.filter(w => w.id !== delta.id) }
+    const w = delta.data as NatsTrafficWidget
+    const idx = nws.findIndex(x => x.id === w.id)
+    return { ...prev, natsTrafficWidgets: idx >= 0 ? nws.map((x, i) => (i === idx ? w : x)) : [...nws, w] }
   }
 
   if (delta.entity === 'commit') {
@@ -243,10 +283,14 @@ export function applyOptimistic(entity: string, data: unknown): void {
     const w = data as ImageWidget
     const exists = prev.imageWidgets.some(x => x.id === w.id)
     currentState = { ...prev, imageWidgets: exists ? prev.imageWidgets.map(x => x.id === w.id ? w : x) : [...prev.imageWidgets, w] }
+  } else if (entity === 'natsTrafficWidget') {
+    const w = data as NatsTrafficWidget
+    const exists = prev.natsTrafficWidgets.some(x => x.id === w.id)
+    currentState = { ...prev, natsTrafficWidgets: exists ? prev.natsTrafficWidgets.map(x => x.id === w.id ? w : x) : [...prev.natsTrafficWidgets, w] }
   } else {
     return
   }
-  notify()
+  pushState()
 }
 
 // ─── React hook (all consumers share the single SSE connection) ────────
@@ -258,9 +302,10 @@ export function useServerEvents(): {
   addOptimistic: (entity: string, data: unknown) => void
   disconnect: () => void
 } {
-  const state = useSyncExternalStore(subscribe, getSnapshot)
-  const isConnected = useSyncExternalStore(subscribe, getConnected)
-  const isLoading = useSyncExternalStore(subscribe, getLoading)
+  const bundle = useSyncExternalStore(subscribe, getUiSnapshot)
+  const state = bundle.state
+  const isConnected = bundle.connected
+  const isLoading = bundle.loading
 
   const addOptimistic = useCallback((entity: string, data: unknown) => {
     applyOptimistic(entity, data)

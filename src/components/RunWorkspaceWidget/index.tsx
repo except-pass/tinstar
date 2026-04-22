@@ -5,7 +5,10 @@ import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { ProceduresPanel } from './ProceduresPanel'
+import { TelemetryPanel } from './TelemetryPanel'
+import { HandsPanel } from './HandsPanel'
 import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
+import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { useFlourish } from '../../hotkeys/useFlourish'
 import { useWidgetFocus, useFocusPath } from '../../hotkeys/FocusPathContext'
 import type { FocusZone } from '../../hotkeys/widgetTypes'
@@ -33,11 +36,46 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
 
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
-  const [procsCollapsed, setProcsCollapsed] = useState(true)
+  const [procsCollapsed, setProcsCollapsed] = useState(false)
+  const [handsCollapsed, setHandsCollapsed] = useState(false)
   const [sessionTab, setSessionTab] = useState<'recap' | 'terminal'>(run.port ? 'terminal' : 'recap')
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
+  const [handsPanelHeight, setHandsPanelHeight] = useState(120)
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
+  const handsResizeDragRef = useRef<{ startY: number; startH: number } | null>(null)
+
+  // Telemetry divider — percentage of right panel height allocated to Procedures (top)
+  const [procsPercent, setProcsPercent] = useState(50)
+  const telemetryDragRef = useRef<{ startY: number; startPct: number } | null>(null)
+
+  const onTelemetryDividerPointerDown = useCallback((e: ReactPointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    telemetryDragRef.current = { startY: e.clientY, startPct: procsPercent }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }, [procsPercent])
+
+  const onTelemetryDividerPointerMove = useCallback((e: ReactPointerEvent) => {
+    if (!telemetryDragRef.current) return
+    const parentEl = (e.currentTarget as HTMLElement).parentElement
+    if (!parentEl) return
+    const parentHeight = parentEl.getBoundingClientRect().height
+    if (parentHeight < 1) return
+    const deltaY = e.clientY - telemetryDragRef.current.startY
+    const deltaPct = (deltaY / parentHeight) * 100
+    const newPct = Math.max(15, Math.min(85, telemetryDragRef.current.startPct + deltaPct))
+    setProcsPercent(newPct)
+  }, [])
+
+  const onTelemetryDividerPointerUp = useCallback(() => {
+    telemetryDragRef.current = null
+  }, [])
+
   const [termTick, bumpTerm] = useReducer((n: number) => n + 1, 0)
+  const [promptComposerExpanded, setPromptComposerExpanded] = useState(() =>
+    localStorage.getItem('tinstar-prompt-composer-default') === 'true'
+  )
+  const [composerFocusTrigger, bumpComposerFocus] = useReducer((n: number) => n + 1, 0)
 
   const rootRef = useRef<HTMLDivElement>(null)
   const [focusZone, setFocusZone] = useState<FocusZone | null>(null)
@@ -104,6 +142,13 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
     return () => window.removeEventListener('focus', onWindowFocus)
   }, [popFocus])
 
+  // When widget becomes selected and prompt composer is open, focus the composer
+  useEffect(() => {
+    if (isSelected && promptComposerExpanded) {
+      bumpComposerFocus()
+    }
+  }, [isSelected, promptComposerExpanded])
+
   // Expose action dispatch so context router can trigger widget actions
   const { triggerHollywoodHit, triggerScanLine } = useFlourish(rootRef)
 
@@ -125,6 +170,8 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
         case 'tab-next':        setCenterTabIndex(i => (i + 1) % 2);             break
         case 'tab-prev':        setCenterTabIndex(i => (i - 1 + 2) % 2);        break
         case 'activate':        /* no-op for now */                               break
+        case 'toggle-prompt':   setPromptComposerExpanded(e => !e);              break
+        case 'fit-viewport':    fitWidgetToViewport(`run-${run.id}`);            break
       }
     })
     return () => deregisterActionHandler(run.id)
@@ -149,6 +196,21 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   }, [])
 
   const onResizePointerUp = useCallback(() => { resizeDragRef.current = null }, [])
+
+  const onHandsResizePointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    handsResizeDragRef.current = { startY: e.clientY, startH: handsPanelHeight }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }, [handsPanelHeight])
+
+  const onHandsResizePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!handsResizeDragRef.current) return
+    // Dragging up increases height (startY - clientY is positive when moving up)
+    setHandsPanelHeight(Math.max(60, Math.min(400, handsResizeDragRef.current.startH + (handsResizeDragRef.current.startY - e.clientY))))
+  }, [])
+
+  const onHandsResizePointerUp = useCallback(() => { handsResizeDragRef.current = null }, [])
 
   const handleOpenFile = useCallback((filePath: string) => {
     fetch('/api/editor/open', {
@@ -250,6 +312,36 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
                 <FileTreePanel sessionId={run.sessionId} onOpenFile={handleOpenFile} />
               )}
             </div>
+            {/* Hands panel at bottom - only show if NATS enabled */}
+            {run.natsEnabled && !handsCollapsed && (
+              <div className="relative flex-shrink-0" style={{ height: handsPanelHeight }}>
+                {/* Vertical resize handle */}
+                <div
+                  className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize transition-colors z-10 hover:bg-primary/30"
+                  style={{ backgroundColor: hexToRgba(runAccent, 0.18) }}
+                  onPointerDown={onHandsResizePointerDown}
+                  onPointerMove={onHandsResizePointerMove}
+                  onPointerUp={onHandsResizePointerUp}
+                />
+                <HandsPanel
+                  sessionId={run.sessionId}
+                  onCollapse={() => setHandsCollapsed(true)}
+                />
+              </div>
+            )}
+            {/* Collapsed hands indicator */}
+            {run.natsEnabled && handsCollapsed && (
+              <div
+                className="h-6 flex items-center justify-center bg-surface-panel cursor-pointer hover:bg-surface-hover border-t border-primary/10"
+                onClick={() => setHandsCollapsed(false)}
+                title="Show Hands panel"
+              >
+                <span className="text-2xs font-mono text-slate-500 flex items-center gap-1">
+                  <span>🤚</span>
+                  <span>Hands</span>
+                </span>
+              </div>
+            )}
             {/* Resize handle */}
             <div
               className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize transition-colors z-10"
@@ -289,6 +381,9 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
             activeTabIndex={focusZone === 'center-tabs' ? centerTabIndex : undefined}
             controlledTab={sessionTab}
             onControlledTabChange={setSessionTab}
+            promptComposerExpanded={promptComposerExpanded}
+            onPromptComposerToggle={() => setPromptComposerExpanded(e => !e)}
+            composerFocusTrigger={composerFocusTrigger}
           />
         </div>
         <div
@@ -304,15 +399,38 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
               <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr]">Procs</span>
             </div>
           ) : (
-            <ProceduresPanel
-              taskId={run.taskId}
-              sessionId={run.sessionId}
-              sessionStatus={run.status}
-              onCollapse={() => setProcsCollapsed(true)}
-              onFocusTerminal={() => {
-                pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
-              }}
-            />
+            <div className="w-40 h-full flex flex-col bg-surface-panel">
+              {/* Procedures — top section */}
+              <div style={{ height: `${procsPercent}%` }} className="flex flex-col min-h-[60px] overflow-hidden">
+                <ProceduresPanel
+                  taskId={run.taskId}
+                  sessionId={run.sessionId}
+                  sessionStatus={run.status}
+                  onCollapse={() => setProcsCollapsed(true)}
+                  onFocusTerminal={() => {
+                    pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
+                  }}
+                />
+              </div>
+
+              {/* Draggable divider */}
+              <div
+                className="h-1 flex-shrink-0 bg-slate-800 hover:bg-slate-600 cursor-row-resize flex items-center justify-center transition-colors"
+                onPointerDown={onTelemetryDividerPointerDown}
+                onPointerMove={onTelemetryDividerPointerMove}
+                onPointerUp={onTelemetryDividerPointerUp}
+              >
+                <div className="w-5 h-0.5 bg-slate-600 rounded-full" />
+              </div>
+
+              {/* Telemetry — bottom section */}
+              <div style={{ height: `${100 - procsPercent}%` }} className="flex flex-col min-h-[60px] overflow-hidden">
+                <TelemetryPanel
+                  sessionId={run.sessionId}
+                  runAccent={runAccent}
+                />
+              </div>
+            </div>
           )}
         </div>
       </div>

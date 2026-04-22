@@ -83,6 +83,11 @@ export interface RunData {
   backend: 'docker' | 'tmux' | null
   backendInfo?: string
   agentIcon?: string
+  natsEnabled?: boolean
+  natsSubject?: string
+  natsSubscriptions?: string[]
+  parentId?: string  // ID of the run that spawned this one (for hands)
+  breakoutRooms?: string[]  // NATS room subjects for parent-child communication
 }
 
 

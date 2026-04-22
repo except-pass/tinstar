@@ -4,4 +4,8 @@ import './canvasWidget'
 import './groupContainerWidget'
 import './runTerminalWidget'
 import './entityWidgets'
+import './browserWidget'
+import './imageViewerWidget'
+import './natsTrafficWidget'
+import './promptComposer'
 // runWorkspaceWidget is imported directly by RunWorkspaceWidget/index.tsx

@@ -21,6 +21,11 @@ export interface SessionWorkspace {
   basePath: string | null
 }
 
+export interface SessionNats {
+  enabled: boolean
+  subscriptions: string[]
+}
+
 export interface Session {
   name: string
   backend: SessionBackend
@@ -35,8 +40,19 @@ export interface Session {
   cliTemplate: string | null
   /** Transcript adapter type — determines how to find and parse agent logs */
   adapter: string | null
+  /** NATS channel configuration — enables agent-to-agent messaging */
+  nats: SessionNats | null
   port: number | null
   ttydPid: number | null
+  /**
+   * ISO timestamp when the session's NATS control socket was detected as
+   * orphaned (file present on disk but listener gone — typically from an
+   * MCP-server restart collision in except-pass/nats-channel-mcp). Once
+   * orphaned, dynamic subscribes will never take effect until the session
+   * is restarted. `null` means healthy or unverified. Cleared on session
+   * restart by state transitions in routes.ts.
+   */
+  natsControlOrphanedAt: string | null
   created: string
   lastActive: string
 }
@@ -74,6 +90,7 @@ export interface CreateSessionOpts {
   skipPermissions?: boolean
   cliTemplate?: string | null
   adapter?: string | null
+  nats?: SessionNats | null
 }
 
 export function createSession(sessionsDir: string, opts: CreateSessionOpts): Session {
@@ -99,8 +116,10 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
     skipPermissions: opts.skipPermissions ?? false,
     cliTemplate: opts.cliTemplate ?? null,
     adapter: opts.adapter ?? null,
+    nats: opts.nats ?? null,
     port: null,
     ttydPid: null,
+    natsControlOrphanedAt: null,
     created: now,
     lastActive: now,
   }
@@ -111,7 +130,11 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
 
 export function getSession(sessionsDir: string, name: string): Session | null {
   try {
-    return JSON.parse(readFileSync(sessionFile(sessionsDir, name), 'utf-8'))
+    const raw = JSON.parse(readFileSync(sessionFile(sessionsDir, name), 'utf-8')) as Session
+    // Backfill fields added after sessions were persisted so callers can
+    // assume the type as declared.
+    if (raw.natsControlOrphanedAt === undefined) raw.natsControlOrphanedAt = null
+    return raw
   } catch {
     return null
   }
@@ -122,12 +145,15 @@ export function updateSession(sessionsDir: string, name: string, updates: Partia
   if (!session) return null
 
   const updated = { ...session, ...updates }
-  // Deep merge workspace and conversation
+  // Deep merge workspace, conversation, and nats
   if (updates.workspace) {
     updated.workspace = { ...session.workspace, ...updates.workspace }
   }
   if (updates.conversation) {
     updated.conversation = { ...session.conversation, ...updates.conversation }
+  }
+  if (updates.nats && session.nats) {
+    updated.nats = { ...session.nats, ...updates.nats }
   }
 
   writeFileSync(sessionFile(sessionsDir, name), JSON.stringify(updated, null, 2))

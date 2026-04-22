@@ -1,10 +1,12 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import Editor from '@monaco-editor/react'
+import Editor, { DiffEditor } from '@monaco-editor/react'
+import { MarkdownRenderer } from './MarkdownRenderer'
 import type { editor as MonacoEditor } from 'monaco-editor'
 import type { EditorWidget } from '../../domain/types'
 import type { WidgetProps } from '../widgetComponentRegistry'
 import { useFileWatch } from '../../hooks/useFileWatch'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
+import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
 import { HotgroupBadge } from '../../components/HotgroupBadge'
 
@@ -40,6 +42,41 @@ export function FileEditorWidget({ data }: WidgetProps) {
   contentRef.current = content
 
   const filename = widget.filePath.split('/').pop() ?? widget.filePath
+
+  // Diff mode state
+  const [diffMode, setDiffMode] = useState(false)
+  const [baseContent, setBaseContent] = useState<string | null>(null)
+  const [diffLoading, setDiffLoading] = useState(false)
+  // Track whether we've ever fetched for this widget (to know new-file vs not-fetched)
+  const baseFetchedRef = useRef(false)
+
+  const fetchBaseContent = useCallback(() => {
+    setDiffLoading(true)
+    baseFetchedRef.current = true
+    fetch('/api/file-content/git-base', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: widget.sessionId, filePath: widget.filePath }),
+    })
+      .then(r => r.json())
+      .then((data: { ok?: boolean; content?: string | null }) => {
+        // null content means new file (not in HEAD) — use empty string so diff still works
+        setBaseContent(data.content ?? '')
+        setDiffLoading(false)
+      })
+      .catch(() => {
+        setBaseContent('')
+        setDiffLoading(false)
+      })
+  }, [widget.sessionId, widget.filePath])
+
+  const toggleDiff = useCallback(() => {
+    setDiffMode(prev => {
+      const next = !prev
+      if (next && !baseFetchedRef.current) fetchBaseContent()
+      return next
+    })
+  }, [fetchBaseContent])
 
   // When content updates after Monaco is already mounted, update the editor value
   useEffect(() => {
@@ -84,14 +121,22 @@ export function FileEditorWidget({ data }: WidgetProps) {
     })
   }, [])
 
+  const language = getLanguage(widget.filePath)
+  const isMarkdown = language === 'markdown'
+  const [rendered, setRendered] = useState(isMarkdown)
+  const toggleRendered = useCallback(() => setRendered(prev => !prev), [])
+
   // Register hotkey action handlers for when this widget is the focused context
   useEffect(() => {
     registerActionHandler(widget.id, (action) => {
       if (action === 'open-in-editor') handleOpenInEditor()
       if (action === 'toggle-word-wrap') toggleWordWrap()
+      if (action === 'toggle-diff') toggleDiff()
+      if (action === 'fit-viewport') fitWidgetToViewport(widget.id)
+      if (action === 'toggle-rendered' && isMarkdown) toggleRendered()
     })
     return () => deregisterActionHandler(widget.id)
-  }, [widget.id, handleOpenInEditor, toggleWordWrap])
+  }, [widget.id, handleOpenInEditor, toggleWordWrap, toggleDiff, toggleRendered, isMarkdown])
 
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -100,6 +145,8 @@ export function FileEditorWidget({ data }: WidgetProps) {
     return () => clearInterval(id)
   }, [lastUpdatedAt])
   const secondsAgo = lastUpdatedAt ? Math.max(0, Math.floor((now - lastUpdatedAt.getTime()) / 1000)) : null
+
+  const showBinaryMessage = content !== null && isBinaryOrLarge(content)
 
   return (
     <div className="flex flex-col h-full bg-surface-base text-slate-300 overflow-hidden">
@@ -111,14 +158,36 @@ export function FileEditorWidget({ data }: WidgetProps) {
         <span className="text-2xs font-mono text-slate-400 truncate flex-1">
           {[widget.task, widget.worktree, filename].filter(Boolean).join(' · ')}
         </span>
-        <button
-          onPointerDown={e => e.stopPropagation()}
-          onClick={toggleWordWrap}
-          className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${wordWrap ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
-          title="Toggle word wrap"
-        >
-          wrap
-        </button>
+        {!rendered && (
+          <button
+            onPointerDown={e => e.stopPropagation()}
+            onClick={toggleDiff}
+            className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${diffMode ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
+            title="Toggle diff view (vs HEAD)"
+          >
+            diff
+          </button>
+        )}
+        {!rendered && (
+          <button
+            onPointerDown={e => e.stopPropagation()}
+            onClick={toggleWordWrap}
+            className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${wordWrap ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
+            title="Toggle word wrap"
+          >
+            wrap
+          </button>
+        )}
+        {isMarkdown && (
+          <button
+            onPointerDown={e => e.stopPropagation()}
+            onClick={toggleRendered}
+            className={`text-2xs font-mono px-2 py-0.5 rounded border flex-shrink-0 ${rendered ? 'border-primary/60 text-primary' : 'border-primary/30 text-slate-400 hover:text-slate-200 hover:border-primary/60'}`}
+            title="Toggle rendered markdown view"
+          >
+            rendered
+          </button>
+        )}
         <button
           onPointerDown={e => e.stopPropagation()}
           onClick={handleOpenInEditor}
@@ -139,17 +208,44 @@ export function FileEditorWidget({ data }: WidgetProps) {
 
       {/* Body */}
       <div className="flex-1 min-h-0">
-        {content === null ? (
+        {content !== null && rendered ? (
+          <MarkdownRenderer
+            content={content}
+            filePath={widget.filePath}
+            sessionId={widget.sessionId}
+            widgetId={widget.id}
+          />
+        ) : content === null ? (
           <div className="flex items-center justify-center h-full text-slate-500 text-xs font-mono">
             Loading…
           </div>
-        ) : isBinaryOrLarge(content) ? (
+        ) : showBinaryMessage ? (
           <div className="flex items-center justify-center h-full text-slate-500 text-xs font-mono px-4 text-center">
             Binary or large file — open in external editor
           </div>
+        ) : diffMode && diffLoading ? (
+          <div className="flex items-center justify-center h-full text-slate-500 text-xs font-mono">
+            Loading base…
+          </div>
+        ) : diffMode && baseContent !== null ? (
+          <DiffEditor
+            original={baseContent}
+            modified={content}
+            language={language}
+            theme="vs-dark"
+            options={{
+              readOnly: true,
+              minimap: { enabled: false },
+              scrollBeyondLastLine: false,
+              fontSize: 11,
+              lineNumbers: 'on',
+              renderSideBySide: true,
+              wordWrap: wordWrap ? 'on' : 'off',
+            }}
+          />
         ) : (
           <Editor
-            language={getLanguage(widget.filePath)}
+            language={language}
             theme="vs-dark"
             options={{
               readOnly: true,
@@ -174,6 +270,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
           {connected
             ? `watching · last updated ${secondsAgo === null ? '…' : secondsAgo + 's ago'}`
             : 'disconnected'}
+          {diffMode && ' · diff vs HEAD'}
         </span>
       </div>
     </div>

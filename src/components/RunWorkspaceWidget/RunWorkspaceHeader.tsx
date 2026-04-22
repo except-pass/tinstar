@@ -1,17 +1,29 @@
-import { useState, useRef, useCallback, useEffect, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { RunData, SessionStatus } from '../../types'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
+import { useBackendState } from '../../hooks/useBackendState'
 import { HotgroupBadge } from '../HotgroupBadge'
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 import { ColorPalette } from '../ColorPalette'
 
-const statusConfig: Record<SessionStatus, { label: string; color: string; dot: string; pulse?: boolean }> = {
+type StatusUi = { label: string; color: string; dot: string; pulse?: boolean }
+
+const statusConfig: Record<SessionStatus, StatusUi> = {
   creating: { label: 'CREATING', color: 'text-blue-400', dot: 'bg-blue-400 shadow-[0_0_6px_#818cf8]', pulse: true },
   running: { label: 'RUNNING', color: 'text-accent-green', dot: 'bg-accent-green shadow-[0_0_6px_#00ff88]', pulse: true },
   idle: { label: 'IDLE', color: 'text-accent-amber', dot: 'bg-accent-amber shadow-[0_0_6px_#ffaa00]' },
   needs_attention: { label: 'ATTENTION', color: 'text-orange-400', dot: 'bg-orange-400 shadow-[0_0_6px_#f97316]', pulse: true },
   stopped: { label: 'STOPPED', color: 'text-slate-400', dot: 'bg-slate-500' },
+}
+
+function statusUi(status: SessionStatus | string | undefined): StatusUi {
+  if (status && status in statusConfig) return statusConfig[status as SessionStatus]
+  return {
+    label: (status && String(status)) || 'UNKNOWN',
+    color: 'text-slate-400',
+    dot: 'bg-slate-500',
+  }
 }
 
 interface Props {
@@ -26,7 +38,7 @@ interface Props {
 }
 
 export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPointerMove, onPointerUp, onRefreshTerminal, activeTab, onActiveTabChange }: Props) {
-  const status = statusConfig[run.status]
+  const status = statusUi(run.status)
   const runAccent = resolveRunAccent(run.color)
   const [busy, setBusy] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -34,6 +46,15 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   const paletteRef = useRef<HTMLDivElement>(null)
   const paletteButtonRef = useRef<HTMLButtonElement>(null)
   const { slotsForNode } = useHotgroupContext()
+  const { taxRepo } = useBackendState()
+
+  // Resolve entity hierarchy names from IDs for the breadcrumb
+  const breadcrumb = useMemo(() => {
+    const initiative = taxRepo.getInitiativeForRun(run as import('../../domain/types').Run)
+    const epic = taxRepo.getEpicForRun(run as import('../../domain/types').Run)
+    const task = taxRepo.getTaskForRun(run as import('../../domain/types').Run)
+    return [initiative?.name, epic?.name, task?.name].filter((s): s is string => !!s)
+  }, [taxRepo, run])
 
   // Close palette when clicking outside both the dropdown and the toggle button
   useEffect(() => {
@@ -120,9 +141,9 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
               <span className="text-2xs font-bold tracking-[0.1em] font-mono uppercase">{status.label}</span>
             </div>
           </div>
-          {!compact && (
+          {!compact && breadcrumb.length > 0 && (
             <nav className="flex items-center gap-1 mt-0.5">
-              {[run.initiative, run.epic, run.task].map((segment, i, arr) => (
+              {breadcrumb.map((segment, i, arr) => (
                 <span key={i} className="flex items-center gap-1">
                   <span
                     className={`text-2xs font-mono tracking-wide truncate ${i === arr.length - 1 ? '' : 'text-slate-500'}`}
@@ -142,8 +163,9 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
 
       {/* Right: actions + meta */}
       {!compact && (
-        <div className="flex items-stretch shrink-0 ml-2 h-full" onPointerDown={e => e.stopPropagation()}>
-          {/* Hotgroup badge — currently in the right zone in the source file */}
+        <div className="flex items-stretch shrink-0 ml-2 h-full" onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>
+
+          {/* Hotgroup badge */}
           <div className="flex items-center px-2">
             <HotgroupBadge slots={slotsForNode(`run-${run.id}`)} testId={`hotgroup-badge-${run.id}`} />
           </div>
@@ -253,6 +275,39 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
           >
             <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>language</span>
             <span className="text-[8px] font-bold tracking-wide leading-none">BROWSER</span>
+          </div>
+
+          {/* NATS drag chip — grayed out when not NATS enabled */}
+          <div
+            draggable={!!run.natsEnabled}
+            onMouseEnter={() => setHoveredBtn('nats')}
+            onMouseLeave={() => setHoveredBtn(null)}
+            onDragStart={e => {
+              if (!run.natsEnabled) {
+                e.preventDefault()
+                return
+              }
+              e.stopPropagation()
+              e.dataTransfer.setData('application/tinstar-nats', JSON.stringify({
+                sessionId: run.sessionId,
+                natsSubject: run.natsSubject,
+                color: run.color,
+              }))
+              e.dataTransfer.effectAllowed = 'copy'
+            }}
+            className={`flex flex-col items-center justify-center gap-0.5 h-full px-3 transition-colors ${run.natsEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-not-allowed'}`}
+            style={{
+              color: !run.natsEnabled
+                ? 'rgb(100 116 139 / 0.35)'  // slate-500 at 35% — grayed out
+                : hoveredBtn === 'nats' ? runAccent : hexToRgba(runAccent, 0.55),
+              background: run.natsEnabled && hoveredBtn === 'nats' ? hexToRgba(runAccent, 0.06) : undefined,
+            }}
+            title={run.natsEnabled
+              ? `NATS subscriptions:\n${(run.natsSubscriptions ?? [run.natsSubject]).filter(Boolean).join('\n')}\n\nDrag to canvas to monitor traffic`
+              : 'NATS not enabled for this session'}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '16px', fontVariationSettings: "'FILL' 1" }}>cell_tower</span>
+            <span className="text-[8px] font-bold tracking-wide leading-none">NATS</span>
           </div>
 
           {isLive && run.port && (

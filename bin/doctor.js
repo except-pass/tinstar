@@ -141,6 +141,12 @@ async function doctor() {
       return { status: 'pass', label: `ttyd${v ? ' ' + v : ''}` }
     })(),
     (() => {
+      const out = cmdExists('expect')
+      if (!out) return { status: 'warn', label: 'expect — not installed', detail: 'multi-agent NATS prompts require manual accept' }
+      const v = cmdVersion('expect', ['-v']) || ''
+      return { status: 'pass', label: `expect${v ? ' ' + v.replace('expect version ', '') : ''}` }
+    })(),
+    (() => {
       const v = cmdVersion('docker', ['--version'])
       if (!v) return { status: 'warn', label: 'docker — not installed', detail: 'docker sessions unavailable' }
       return { status: 'pass', label: v.replace('Docker version ', 'docker ').replace(/,.*/, '') }

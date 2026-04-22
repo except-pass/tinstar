@@ -3,6 +3,8 @@ import type { ImageWidget } from '../../domain/types'
 import type { WidgetProps } from '../widgetComponentRegistry'
 import { useImageWatch } from '../../hooks/useImageWatch'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
+import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
+import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { HotgroupBadge } from '../../components/HotgroupBadge'
 
 export function ImageViewerWidget({ data }: WidgetProps) {
@@ -39,6 +41,14 @@ export function ImageViewerWidget({ data }: WidgetProps) {
 
   const [imgError, setImgError] = useState(false)
   useEffect(() => { setImgError(false) }, [imgSrc])
+
+  // Register hotkey action handler for this widget
+  useEffect(() => {
+    registerActionHandler(widget.id, (action) => {
+      if (action === 'fit-viewport') fitWidgetToViewport(widget.id)
+    })
+    return () => deregisterActionHandler(widget.id)
+  }, [widget.id])
 
   return (
     <div className="flex flex-col h-full bg-surface-base text-slate-300 overflow-hidden">

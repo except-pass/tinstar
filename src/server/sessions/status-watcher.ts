@@ -4,14 +4,15 @@ import { readSessionStatusDetail, parseNewEntries } from './transcript-parser'
 import { discoverTranscript, readCodexStatus, parseCodexRecapEntries } from './codex-transcript'
 import { log } from '../logger'
 import { execFile } from 'node:child_process'
+import type { RecapEntry } from '../../types'
 
 export interface StatusWatcherOpts {
   sessionsDir: string
   /** Called when a session's status changes based on JSONL evidence */
   onStatusChanged: (name: string, state: SessionState) => void
   /** Called with new recap entries parsed from the transcript */
-  onRecapEntries?: (name: string, entries: Array<{ id: string; type: string; content: string; timestamp: string }>) => void
-  /** Poll interval in ms (default 2000) */
+  onRecapEntries?: (name: string, entries: RecapEntry[]) => void
+  /** Poll interval in ms (default 3000) */
   intervalMs?: number
 }
 
@@ -36,7 +37,7 @@ export class StatusWatcher {
 
   constructor(opts: StatusWatcherOpts) {
     this.opts = opts
-    this.interval = opts.intervalMs ?? 2000
+    this.interval = opts.intervalMs ?? 3000
   }
 
   start(): void {
@@ -197,6 +198,10 @@ export class StatusWatcher {
       if (err) {
         log.debug('status-watcher', `${session.name}: tmux pane lookup failed: ${err.message}`)
         this.idleStreak.delete(session.name)
+        // Tmux session is gone — mark as stopped
+        if (session.state === 'running' || session.state === 'idle') {
+          this.transitionState(session, 'stopped')
+        }
         return
       }
 

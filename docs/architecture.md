@@ -109,6 +109,7 @@ The backend is a **Vite plugin** (`tinstarBackend()` in `src/server/index.ts`) t
 | API Routes | `src/server/api/routes.ts` | REST endpoints for CRUD, session management, hooks, and simulator control. |
 | Session Manager | `src/server/sessions/` | Docker + tmux backends, Caddy proxy, reconciliation, workspace/worktree management. |
 | Simulator | `src/server/simulator/` | Mock event generator for development and testing. |
+| Observability | `src/server/observability/` | Supervises embedded Prometheus + Alloy subprocesses. Downloads platform-matched binaries to `~/.config/tinstar/bin/` on first launch, enforces a pidfile-based singleton lock, and exposes a typed PromQL query layer. Snapshots are served via `/api/telemetry/hud` and pushed over SSE to the canvas HUD. Disabled with `TINSTAR_TELEMETRY=0`; under `TINSTAR_FAST_SIM=1` the supervisor short-circuits to a synthetic fixture. |
 | Logger | `src/server/logger.ts` | Structured logging to console + `~/.config/tinstar/server.log`. Format: `[ISO] [LEVEL] [TAG] message {json}`. |
 
 ### Startup sequence

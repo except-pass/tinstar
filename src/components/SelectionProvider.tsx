@@ -4,9 +4,9 @@ import type { GroupingDimension, SelectionState } from '../domain/types'
 // --- Actions ---
 
 type SelectionAction =
-  | { type: 'select'; id: string; entityType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' }
-  | { type: 'toggle'; id: string; entityType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' }
-  | { type: 'selectMany'; ids: string[]; entityType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' }
+  | { type: 'select'; id: string; entityType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic' }
+  | { type: 'toggle'; id: string; entityType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic' }
+  | { type: 'selectMany'; ids: string[]; entityType: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic' }
   | { type: 'deselect' }
   | { type: 'hover'; id: string | null }
   | { type: 'toggleExpand'; id: string }
@@ -80,9 +80,9 @@ function selectionReducer(state: SelectionState, action: SelectionAction): Selec
 
 interface SelectionContextValue {
   state: SelectionState
-  select: (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer') => void
-  toggleSelect: (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer') => void
-  selectMany: (ids: string[], type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer') => void
+  select: (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic') => void
+  toggleSelect: (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic') => void
+  selectMany: (ids: string[], type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic') => void
   deselect: () => void
   hover: (id: string | null) => void
   toggleExpand: (id: string) => void
@@ -109,19 +109,19 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(selectionReducer, initialState)
 
   const select = useCallback(
-    (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer') =>
+    (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic') =>
       dispatch({ type: 'select', id, entityType: type }),
     [],
   )
 
   const toggleSelect = useCallback(
-    (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer') =>
+    (id: string, type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic') =>
       dispatch({ type: 'toggle', id, entityType: type }),
     [],
   )
 
   const selectMany = useCallback(
-    (ids: string[], type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer') =>
+    (ids: string[], type: GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic') =>
       dispatch({ type: 'selectMany', ids, entityType: type }),
     [],
   )

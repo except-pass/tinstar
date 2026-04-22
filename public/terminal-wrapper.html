@@ -179,6 +179,10 @@
             notifyEscape()
             return false
           }
+          // Ctrl+V: suppress xterm's \x16 so the browser fires a paste event instead
+          if (e.code === 'KeyV' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+            return false
+          }
           return true
         })
         return true
@@ -193,6 +197,21 @@
             e.preventDefault()
             e.stopPropagation()
             notifyEscape()
+          }
+          // Ctrl+V: read clipboard and paste into terminal
+          if (e.code === 'KeyV' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+            e.preventDefault()
+            e.stopPropagation()
+            navigator.clipboard.readText().then(function(text) {
+              if (!text) return
+              try {
+                var win = termEl.contentWindow
+                if (win && win.term) {
+                  if (typeof win.term.paste === 'function') win.term.paste(text)
+                  else win.term.input(text, true)
+                }
+              } catch(err) {}
+            }).catch(function() {})
           }
         }, true)
         return true

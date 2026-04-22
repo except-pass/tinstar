@@ -29,6 +29,17 @@ import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
 import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
+import { NatsTrafficBridge } from './nats-traffic'
+import { SessionReadinessTracker } from './sessions/readiness'
+import { NatsManager } from './nats/nats-manager.js'
+import { ObservabilityStack } from './observability/index.js'
+import { createTelemetryRoutes } from './api/telemetry.js'
+
+// Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
+// If initBackend runs twice (Vite HMR), the second invocation skips registration
+// so we avoid a double-signal race. The first instance's shutdown handler is
+// accepted as-is — prod only calls initBackend once.
+let shutdownRegistered = false
 
 export function initBackend(): RouteContext {
   // Instantiate core components
@@ -46,9 +57,66 @@ export function initBackend(): RouteContext {
   sse.setReadyQueue(readyQueue.getQueue())
   bus.on('ready_queue.update', (ev) => sse.setReadyQueue(ev.payload.queue))
 
+  // Observability stack — fire-and-forget; errors surface as state='degraded' + lastError via telemetry API
+  const observability = new ObservabilityStack()
+  void observability.start()
+
+  const telemetryRoutes = createTelemetryRoutes({
+    sse,
+    get query() { return observability.query },
+    getState: () => observability.state,
+    getProgress: () => observability.progress,
+    getLastError: () => observability.lastError,
+    restart: () => observability.restart(),
+    getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
+    getSessionConversationId: (name: string) => {
+      if (!sessionConfig) return null
+      const sess = getSession(sessionConfig.dirs.sessions, name)
+      return sess?.conversation?.id ?? null
+    },
+  })
+
+  let natsManager: NatsManager | undefined
+  let natsTraffic: NatsTrafficBridge | undefined
+  let readinessTracker: SessionReadinessTracker | undefined
+
+  if (!shutdownRegistered) {
+    shutdownRegistered = true
+    const shutdown = async () => {
+      try { await natsTraffic?.stop() } catch { /* ignore */ }
+      try { await readinessTracker?.stop() } catch { /* ignore */ }
+      try { await natsManager?.stop() } catch { /* ignore */ }
+      try { await observability.stop() } catch { /* ignore */ }
+      try { telemetryRoutes.stopPolling() } catch { /* ignore */ }
+      try { docStore.flush() } catch { /* ignore */ }
+      process.exit(0)
+    }
+    process.once('SIGINT', shutdown)
+    process.once('SIGTERM', shutdown)
+  }
+
   // Start draft watcher — emits skill.drafted SSE events when new drafts appear
   ensureDraftsDir()
   watchDrafts(sse)
+
+  // Start managed NATS server (installs binary if needed, spawns, probes)
+  natsManager = new NatsManager()
+  void natsManager.start().then(() => {
+    // Start NATS traffic bridge — subscribes to widget subjects and broadcasts via SSE
+    natsTraffic = new NatsTrafficBridge(sse, natsManager!.url)
+    natsTraffic.start()
+
+    // Sync existing widget subscriptions now that the bridge is live
+    for (const widget of docStore.getAllNatsTrafficWidgets()) {
+      if (widget.subscriptions?.length) {
+        natsTraffic.updateWidgetSubscriptions(widget.id, widget.subscriptions)
+      }
+    }
+
+    // Start session readiness tracker — listens for tinstar.ready.> signals
+    readinessTracker = new SessionReadinessTracker(natsManager!.url)
+    readinessTracker.start()
+  })
 
   const fastSim = process.env.TINSTAR_FAST_SIM === '1'
   const speedMultiplier = fastSim ? 0 : 1
@@ -119,8 +187,8 @@ export function initBackend(): RouteContext {
         const sess = getSession(sessionConfig.dirs.sessions, entry.name)
         if (!sess) continue
         const existingRun = docStore.getRun(sess.name)
+        const tpl = sess.cliTemplate ? sessionConfig.cliTemplates.find(t => t.name === sess.cliTemplate) : null
         if (!existingRun) {
-          const tpl = sess.cliTemplate ? sessionConfig.cliTemplates.find(t => t.name === sess.cliTemplate) : null
           docStore.upsertRun(sess.name, {
             id: sess.name,
             status: sess.state,
@@ -136,15 +204,27 @@ export function initBackend(): RouteContext {
             port: sess.port ?? null,
             backend: sess.backend ?? null,
             agentIcon: tpl?.icon,
+            natsEnabled: sess.nats?.enabled ?? false,
+            // Direct subject is the second subscription (index 1) in two-tier model
+            // Format: [broadcast, direct] where direct = broadcast + session name
+            natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
+            natsSubscriptions: sess.nats?.subscriptions,
             taskId: '',
             worktreeId: '',
             createdAt: sess.created ?? new Date().toISOString(),
             spaceId: docStore.activeSpaceId,
           })
           log.info('rehydrate', `created run for session ${sess.name} (${sess.state})`)
-        } else if (existingRun.status !== sess.state) {
-          log.info('rehydrate', `${sess.name}: correcting status ${existingRun.status} → ${sess.state}`)
-          docStore.updateRunStatus(sess.name, sess.state)
+        } else {
+          // Refresh agentIcon from the current template — lets template icon changes
+          // (e.g. new default logos) propagate to existing persisted runs across restarts.
+          if (tpl?.icon && existingRun.agentIcon !== tpl.icon) {
+            docStore.upsertRun(sess.name, { ...existingRun, agentIcon: tpl.icon })
+          }
+          if (existingRun.status !== sess.state) {
+            log.info('rehydrate', `${sess.name}: correcting status ${existingRun.status} → ${sess.state}`)
+            docStore.updateRunStatus(sess.name, sess.state)
+          }
         }
       }
 
@@ -241,7 +321,7 @@ export function initBackend(): RouteContext {
         }).catch(err => console.error('[reconcile] error:', (err as Error).message))
       }, 30_000)
 
-      // Periodic git diff reconciliation (5s)
+      // Periodic git diff reconciliation (10s — balances freshness vs git load when many runs are active)
       setInterval(() => {
         for (const run of docStore.getAllRuns()) {
           if (run.status !== 'running' && run.status !== 'idle') continue
@@ -252,7 +332,7 @@ export function initBackend(): RouteContext {
             docStore.reconcileFiles(run.id, files)
           }).catch(() => {})
         }
-      }, 5_000)
+      }, 10_000)
     } catch (err) {
       log.error('server', 'session initialization failed', { error: (err as Error).message })
       if (fastSim) {
@@ -270,19 +350,26 @@ export function initBackend(): RouteContext {
     startSimulator()
   }
 
-  return { docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue }
+  return {
+    docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue, telemetryRoutes,
+    get natsTraffic() { return natsTraffic },
+    get readinessTracker() { return readinessTracker },
+  }
 }
 
 export function tinstarBackend(): Plugin {
+  let ctx: RouteContext | null = null
   return {
     name: 'tinstar-backend',
     configureServer(server) {
-      const ctx = initBackend()
+      ctx = initBackend()
       server.middlewares.use((req, res, next) => {
-        handleRequest(ctx, req, res)
+        handleRequest(ctx!, req, res)
           .then(handled => { if (!handled) next() })
           .catch(next)
       })
+      // Flush docStore on server close to persist any pending writes
+      server.httpServer?.on('close', () => ctx?.docStore.flush())
     },
   }
 }

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView, findNodeLabel } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { DEFAULT_LEVELS } from '../domain/dimension-meta'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
 import { cycleNext, cyclePrev } from '../hooks/useReadyQueue'
+import { useHiddenRuns } from '../hooks/useHiddenRuns'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
 import { SettingsDialog } from './SettingsDialog'
@@ -42,7 +43,7 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
 
 
 function WorkspaceShellInner() {
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, connected } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, connected } = useBackendState()
 
   const levelMeta = useDimensionMeta()
   const dimensions = useMemo(
@@ -86,7 +87,7 @@ function WorkspaceShellInner() {
   // Filter out empty entity containers when showEmptyEntities is false
   const filterEmptyNodes = useCallback((nodes: TreeNode[]): TreeNode[] => {
     return nodes.reduce<TreeNode[]>((acc, node) => {
-      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer') {
+      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' || node.type === 'nats-traffic') {
         acc.push(node)
         return acc
       }
@@ -99,6 +100,10 @@ function WorkspaceShellInner() {
   }, [])
 
   const [showEmptyEntities, setShowEmptyEntities] = useState(() => localStorage.getItem('tinstar-show-empty-entities') !== 'false')
+
+  // Figma-style per-run visibility — hidden runs stay in the sidebar (dimmed) but
+  // are pruned from the canvas and skipped by Ctrl+[ / Ctrl+] cycling.
+  const { hiddenIds: hiddenRunIds, isHidden: isRunHidden, toggleHidden: toggleRunHidden } = useHiddenRuns()
 
   const sidebarTree = useMemo(
     () => showEmptyEntities ? rawSidebarTree : filterEmptyNodes(rawSidebarTree),
@@ -176,8 +181,29 @@ function WorkspaceShellInner() {
     return map
   }, [imageWidgets])
 
+  const syntheticNatsTrafficNodes: TreeNode[] = useMemo(
+    () =>
+      natsTrafficWidgets.map(w => ({
+        id: w.id,
+        label: w.sessionId ? `NATS (${w.sessionId})` : 'NATS Traffic',
+        type: 'nats-traffic' as const,
+        entityId: w.id,
+        children: [],
+        runCount: 0,
+        activeCount: 0,
+        color: w.color,
+      })),
+    [natsTrafficWidgets],
+  )
+
+  const natsTrafficWidgetMap = useMemo(() => {
+    const map = new Map<string, NatsTrafficWidget>()
+    for (const w of natsTrafficWidgets) map.set(w.id, w)
+    return map
+  }, [natsTrafficWidgets])
+
   const canvasTree = useMemo(() => {
-    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes]
+    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticNatsTrafficNodes]
     if (allSynthetic.length === 0) return sidebarTree
 
     // Map taskNodeId → synthetic nodes to nest inside it
@@ -222,6 +248,11 @@ function WorkspaceShellInner() {
       }
     }
 
+    // Add NATS traffic widgets as orphans (top-level, not associated with tasks)
+    for (const node of syntheticNatsTrafficNodes) {
+      orphans.push(node)
+    }
+
     if (byTaskNode.size === 0) return [...sidebarTree, ...orphans]
 
     function inject(nodes: TreeNode[]): TreeNode[] {
@@ -234,15 +265,37 @@ function WorkspaceShellInner() {
     }
 
     return [...inject(sidebarTree), ...orphans]
-  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
+  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticNatsTrafficNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
+
+  // Canvas view: drop run nodes the user has hidden via the eyeball. The sidebar
+  // still shows them (dimmed) so the user can re-show them.
+  const visibleCanvasTree = useMemo(() => {
+    if (hiddenRunIds.size === 0) return canvasTree
+    const prune = (nodes: TreeNode[]): TreeNode[] => {
+      const out: TreeNode[] = []
+      for (const node of nodes) {
+        if (node.type === 'run' && hiddenRunIds.has(node.entityId)) continue
+        if (node.children.length === 0) {
+          out.push(node)
+          continue
+        }
+        const children = prune(node.children)
+        if (children === node.children) out.push(node)
+        else out.push({ ...node, children })
+      }
+      return out
+    }
+    return prune(canvasTree)
+  }, [canvasTree, hiddenRunIds])
 
   const allNodeIds = useMemo(() => {
     const ids: string[] = Array.from(runMap.keys()).map(id => `run-${id}`)
     for (const w of editorWidgets) ids.push(w.id)
     for (const w of browserWidgets) ids.push(w.id)
     for (const w of imageWidgets) ids.push(w.id)
+    for (const w of natsTrafficWidgets) ids.push(w.id)
     return ids
-  }, [runMap, editorWidgets, browserWidgets, imageWidgets])
+  }, [runMap, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
@@ -371,6 +424,10 @@ function WorkspaceShellInner() {
     }
     if (type === 'image-viewer') {
       fetch(`/api/image-widgets/${entityId}`, { method: 'DELETE' })
+      return
+    }
+    if (type === 'nats-traffic') {
+      fetch(`/api/nats-traffic-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
     const endpointMap: Record<string, string> = {
@@ -508,6 +565,21 @@ function WorkspaceShellInner() {
       return { id: firstNodeId, type: 'file-editor', label }
     }
 
+    if (selectedType === 'nats-traffic') {
+      const label = findNodeLabel(canvasTree, firstNodeId) ?? 'NATS Traffic'
+      return { id: firstNodeId, type: 'nats-traffic' as any, label }
+    }
+
+    if (selectedType === 'browser-widget') {
+      const label = findNodeLabel(canvasTree, firstNodeId) ?? 'Browser'
+      return { id: firstNodeId, type: 'browser-widget', label }
+    }
+
+    if (selectedType === 'image-viewer') {
+      const label = findNodeLabel(canvasTree, firstNodeId) ?? 'Image'
+      return { id: firstNodeId, type: 'image-viewer', label }
+    }
+
     return null
   }, [selectionState.selectedIds, selectionState.selectedType, canvasTree])
 
@@ -548,23 +620,34 @@ function WorkspaceShellInner() {
     onNavigate: (id) => triggerWidgetFlourish(id),
   })
 
+  // sessionIds of runs hidden via the eyeball — used to skip them while cycling.
+  const hiddenSessionIds = useMemo(() => {
+    const out = new Set<string>()
+    for (const run of allRuns) {
+      if (isRunHidden(run.id) && run.sessionId) out.add(run.sessionId)
+    }
+    return out
+  }, [allRuns, isRunHidden])
+
   useGlobalHotkeys({
     onCycleReadyNext: () => {
-      const run = cycleNext(allRuns, readyQueue, selectedRunId)
+      const queue = readyQueue.filter(name => !hiddenSessionIds.has(name))
+      const run = cycleNext(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleReadyPrev: () => {
-      const run = cyclePrev(allRuns, readyQueue, selectedRunId)
+      const queue = readyQueue.filter(name => !hiddenSessionIds.has(name))
+      const run = cyclePrev(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllNext: () => {
-      const allNames = allRuns.map(r => r.sessionId).filter(Boolean) as string[]
-      const run = cycleNext(allRuns, allNames, selectedRunId)
+      const activeNames = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const run = cycleNext(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllPrev: () => {
-      const allNames = allRuns.map(r => r.sessionId).filter(Boolean) as string[]
-      const run = cyclePrev(allRuns, allNames, selectedRunId)
+      const activeNames = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const run = cyclePrev(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onSessionQuick: useCallback(async () => {
@@ -757,6 +840,8 @@ function WorkspaceShellInner() {
                         onCollapse={() => setSidebarCollapsed(true)}
                         renamingNodeId={renamingNodeId}
                         onRenameComplete={() => setRenamingNodeId(null)}
+                        hiddenRunIds={hiddenRunIds}
+                        onToggleRunHidden={toggleRunHidden}
                       />
                     </div>
                     <div
@@ -772,9 +857,11 @@ function WorkspaceShellInner() {
                 {/* Canvas */}
                 <div className="flex-1 relative overflow-hidden" data-testid="canvas-slot">
                   <InfiniteCanvas
-                    tree={canvasTree}
+                    tree={visibleCanvasTree}
                     editorWidgetMap={editorWidgetMap}
                     browserWidgetMap={browserWidgetMap}
+                    imageWidgetMap={imageWidgetMap}
+                    natsTrafficWidgetMap={natsTrafficWidgetMap}
                     runMap={runMap}
                     focusRunId={focusRunId}
                     activeSpaceId={activeSpaceId}
@@ -784,10 +871,10 @@ function WorkspaceShellInner() {
                     onDeleteEntity={handleDelete}
                     onMenuOpen={handleMenuOpen}
                     onTaskUpdate={handleTaskUpdate}
-                    imageWidgetMap={imageWidgetMap}
                     onImageWidgetCreated={(widget) => addOptimistic('imageWidget', widget)}
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
                     onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
+                    onNatsWidgetCreated={(widget) => addOptimistic('natsTrafficWidget', widget)}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
                     arrangeSwimlanesRef={arrangeSwimlanesRef}

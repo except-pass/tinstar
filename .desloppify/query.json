@@ -1,0 +1,391 @@
+{
+  "command": "fix",
+  "fixer": "debug-logs",
+  "dry_run": true,
+  "files_would_fix": 3,
+  "items_would_fix": 3,
+  "narrative": {
+    "phase": "first_scan",
+    "headline": "\u26a0 8 security findings \u2014 review before other cleanup. First scan complete. 265 open findings across 3 dimensions.",
+    "dimensions": {
+      "lowest_dimensions": [
+        {
+          "name": "Test health",
+          "strict": 33.5,
+          "issues": 141,
+          "impact": 0.0
+        },
+        {
+          "name": "Duplication",
+          "strict": 88.9,
+          "issues": 48,
+          "impact": 0.0
+        },
+        {
+          "name": "File health",
+          "strict": 89.5,
+          "issues": 16,
+          "impact": 0.0
+        }
+      ],
+      "biggest_gap_dimensions": [],
+      "stagnant_dimensions": []
+    },
+    "actions": [
+      {
+        "type": "auto_fix",
+        "detector": "logs",
+        "count": 3,
+        "description": "3 logs findings \u2014 run `desloppify fix debug-logs --dry-run` to preview, then apply",
+        "command": "desloppify fix debug-logs --dry-run",
+        "impact": 0.0,
+        "dimension": "Code quality",
+        "priority": 1,
+        "lane": "cleanup"
+      },
+      {
+        "type": "reorganize",
+        "detector": "orphaned",
+        "count": 6,
+        "description": "6 orphaned findings \u2014 delete dead files or relocate with `desloppify move`",
+        "command": "desloppify show orphaned --status open",
+        "impact": 0.0,
+        "dimension": "Code quality",
+        "priority": 2,
+        "lane": "restructure"
+      },
+      {
+        "type": "reorganize",
+        "detector": "flat_dirs",
+        "count": 1,
+        "description": "1 flat_dirs findings \u2014 create subdirectories and use `desloppify move`",
+        "command": "desloppify show flat_dirs --status open",
+        "impact": 0.0,
+        "dimension": "Code quality",
+        "priority": 3,
+        "lane": "restructure"
+      },
+      {
+        "type": "reorganize",
+        "detector": "naming",
+        "count": 1,
+        "description": "1 naming findings \u2014 rename files with `desloppify move` to fix conventions",
+        "command": "desloppify show naming --status open",
+        "impact": 0.0,
+        "dimension": "Code quality",
+        "priority": 4,
+        "lane": "restructure"
+      },
+      {
+        "type": "reorganize",
+        "detector": "single_use",
+        "count": 3,
+        "description": "3 single_use findings \u2014 inline or relocate with `desloppify move`",
+        "command": "desloppify show single_use --status open",
+        "impact": 0.0,
+        "dimension": "Code quality",
+        "priority": 5,
+        "lane": "restructure"
+      },
+      {
+        "type": "reorganize",
+        "detector": "cycles",
+        "count": 2,
+        "description": "2 cycles findings \u2014 break cycles by extracting shared code or using `desloppify move`",
+        "command": "desloppify show cycles --status open",
+        "impact": 0.0,
+        "dimension": "Security",
+        "priority": 6,
+        "lane": "restructure"
+      },
+      {
+        "type": "refactor",
+        "detector": "structural",
+        "count": 16,
+        "description": "16 structural findings \u2014 decompose large files \u2014 extract logic into focused modules",
+        "command": "desloppify show structural --status open",
+        "impact": 0.0,
+        "dimension": "File health",
+        "priority": 7,
+        "lane": "refactor"
+      },
+      {
+        "type": "refactor",
+        "detector": "props",
+        "count": 2,
+        "description": "2 props findings \u2014 split bloated components, extract sub-components",
+        "command": "desloppify show props --status open",
+        "impact": 0.0,
+        "dimension": "Code quality",
+        "priority": 8,
+        "lane": "refactor"
+      },
+      {
+        "type": "refactor",
+        "detector": "react",
+        "count": 3,
+        "description": "3 react findings \u2014 refactor React antipatterns (state sync, provider nesting, hook bloat)",
+        "command": "desloppify show react --status open",
+        "impact": 0.0,
+        "dimension": "Code quality",
+        "priority": 9,
+        "lane": "refactor"
+      },
+      {
+        "type": "refactor",
+        "detector": "dupes",
+        "count": 4,
+        "description": "4 dupes findings \u2014 extract shared utility or consolidate duplicates",
+        "command": "desloppify show dupes --status open",
+        "impact": 0.0,
+        "dimension": "Duplication",
+        "priority": 10,
+        "lane": "refactor"
+      },
+      {
+        "type": "refactor",
+        "detector": "test_coverage",
+        "count": 50,
+        "description": "50 test_coverage findings \u2014 add tests for untested production modules \u2014 prioritize by import count",
+        "command": "desloppify show test_coverage --status open",
+        "impact": 0.0,
+        "dimension": "Test health",
+        "priority": 11,
+        "lane": "test_coverage"
+      },
+      {
+        "type": "refactor",
+        "detector": "boilerplate_duplication",
+        "count": 44,
+        "description": "44 boilerplate_duplication findings \u2014 extract shared boilerplate into reusable helpers or base classes",
+        "command": "desloppify show boilerplate_duplication --status open",
+        "impact": 0.0,
+        "dimension": "Duplication",
+        "priority": 12,
+        "lane": "refactor"
+      },
+      {
+        "type": "manual_fix",
+        "detector": "smells",
+        "count": 29,
+        "description": "29 smells findings \u2014 inspect with `desloppify next` and fix manually",
+        "command": "desloppify show smells --status open",
+        "impact": 0.0,
+        "dimension": "Code quality",
+        "priority": 13,
+        "lane": "refactor"
+      },
+      {
+        "type": "manual_fix",
+        "detector": "deprecated",
+        "count": 2,
+        "description": "2 deprecated findings \u2014 remove deprecated symbols or migrate callers",
+        "command": "desloppify show deprecated --status open",
+        "impact": 0.0,
+        "dimension": "Code quality",
+        "priority": 14,
+        "lane": "refactor"
+      },
+      {
+        "type": "manual_fix",
+        "detector": "security",
+        "count": 8,
+        "description": "8 security findings \u2014 review and fix security findings \u2014 prioritize by severity",
+        "command": "desloppify show security --status open",
+        "impact": 0.0,
+        "dimension": "Security",
+        "priority": 15,
+        "lane": "refactor"
+      },
+      {
+        "type": "manual_fix",
+        "detector": "subjective_review",
+        "count": 91,
+        "description": "91 files need design review \u2014 run design review with dimension templates",
+        "command": "desloppify fix review",
+        "impact": 0.0,
+        "dimension": "Test health",
+        "priority": 16,
+        "lane": "refactor"
+      }
+    ],
+    "strategy": {
+      "fixer_leverage": {
+        "auto_fixable_count": 3,
+        "total_count": 265,
+        "coverage": 0.011,
+        "impact_ratio": 0.0,
+        "recommendation": "none"
+      },
+      "lanes": {
+        "cleanup": {
+          "actions": [
+            1
+          ],
+          "file_count": 3,
+          "total_impact": 0.0,
+          "automation": "full",
+          "run_first": true
+        },
+        "restructure": {
+          "actions": [
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "file_count": 13,
+          "total_impact": 0.0,
+          "automation": "manual",
+          "run_first": false
+        },
+        "refactor": {
+          "actions": [
+            7,
+            8,
+            9,
+            10,
+            12,
+            13,
+            14,
+            15,
+            16
+          ],
+          "file_count": 95,
+          "total_impact": 0.0,
+          "automation": "manual",
+          "run_first": false
+        },
+        "test_coverage": {
+          "actions": [
+            11
+          ],
+          "file_count": 50,
+          "total_impact": 0.0,
+          "automation": "manual",
+          "run_first": false
+        }
+      },
+      "can_parallelize": true,
+      "hint": "3 independent workstreams, safe to parallelize. Rescan after each phase to verify."
+    },
+    "tools": {
+      "fixers": [
+        {
+          "name": "debug-logs",
+          "detector": "logs",
+          "open_count": 3,
+          "command": "desloppify fix debug-logs --dry-run"
+        },
+        {
+          "name": "dead-useeffect",
+          "detector": "smells",
+          "open_count": 29,
+          "command": "desloppify fix dead-useeffect --dry-run"
+        },
+        {
+          "name": "empty-if-chain",
+          "detector": "smells",
+          "open_count": 29,
+          "command": "desloppify fix empty-if-chain --dry-run"
+        }
+      ],
+      "move": {
+        "available": true,
+        "relevant": true,
+        "reason": "6 orphaned files + 3 single-use files + 1 flat directories + 1 naming issues",
+        "usage": "desloppify move <source> <dest> [--dry-run]"
+      },
+      "plan": {
+        "command": "desloppify plan",
+        "description": "Generate prioritized markdown cleanup plan"
+      },
+      "badge": {
+        "generated": false,
+        "in_readme": false,
+        "path": "scorecard.png",
+        "recommendation": null
+      }
+    },
+    "debt": {
+      "overall_gap": 0.0,
+      "wontfix_count": 0,
+      "worst_dimension": null,
+      "worst_gap": 0.0,
+      "trend": "stable"
+    },
+    "milestone": null,
+    "primary_action": {
+      "command": "desloppify fix debug-logs --dry-run",
+      "description": "3 logs findings \u2014 run `desloppify fix debug-logs --dry-run` to preview, then apply"
+    },
+    "why_now": "3 independent workstreams, safe to parallelize. Rescan after each phase to verify.",
+    "verification_step": {
+      "command": "desloppify scan",
+      "reason": "revalidate after changes"
+    },
+    "risk_flags": [],
+    "strict_target": {
+      "target": 95.0,
+      "current": 92.6,
+      "gap": 2.4,
+      "state": "below",
+      "warning": null
+    },
+    "reminders": [
+      {
+        "type": "rescan_needed",
+        "message": "Rescan to verify \u2014 cascading effects may create new findings.",
+        "command": "desloppify scan",
+        "priority": 1,
+        "severity": "high"
+      },
+      {
+        "type": "auto_fixers_available",
+        "message": "3 findings are auto-fixable. Run `desloppify fix debug-logs --dry-run`.",
+        "command": "desloppify fix debug-logs --dry-run",
+        "priority": 2,
+        "severity": "medium"
+      },
+      {
+        "type": "dry_run_first",
+        "message": "Always --dry-run first, review changes, then apply.",
+        "command": null,
+        "priority": 3,
+        "severity": "low"
+      },
+      {
+        "type": "review_not_run",
+        "message": "Mechanical checks look good! Run a subjective design review to catch issues linters miss: desloppify review --prepare",
+        "command": "desloppify review --prepare",
+        "priority": 3,
+        "severity": "low"
+      }
+    ],
+    "reminder_history": {
+      "auto_fixers_available": 2,
+      "dry_run_first": 2,
+      "report_scores": 1,
+      "review_not_run": 2,
+      "rescan_needed": 1
+    }
+  },
+  "config": {
+    "target_strict_score": 95,
+    "review_max_age_days": 30,
+    "holistic_max_age_days": 30,
+    "generate_scorecard": true,
+    "badge_path": "scorecard.png",
+    "exclude": [],
+    "ignore": [],
+    "ignore_metadata": {},
+    "zone_overrides": {},
+    "review_dimensions": [],
+    "large_files_threshold": 0,
+    "props_threshold": 0,
+    "finding_noise_budget": 10,
+    "finding_noise_global_budget": 0,
+    "languages": {}
+  }
+}

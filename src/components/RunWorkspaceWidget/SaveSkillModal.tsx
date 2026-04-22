@@ -1,7 +1,7 @@
 // src/components/RunWorkspaceWidget/SaveSkillModal.tsx
 import { useState } from 'react'
 import type { StoredProcedure } from '../../types'
-import { useSkillsContext } from '../SkillsProvider'
+import { useSkillsContext } from '../SkillsContext'
 import { randomUUID } from '../../uuid'
 
 interface Props {

@@ -31,19 +31,49 @@ interface ServerOptions {
   open?: boolean
 }
 
+function killStalePidSync(pidFilePath: string): void {
+  try {
+    const raw = readFileSync(pidFilePath, 'utf8').trim()
+    const pid = parseInt(raw, 10)
+    if (isNaN(pid) || pid === process.pid) return
+    try { process.kill(pid, 0) } catch { return }
+    process.kill(pid, 'SIGTERM')
+    log.info('server', `killed stale server process ${pid}`)
+    const deadline = Date.now() + 3_000
+    while (Date.now() < deadline) {
+      try { process.kill(pid, 0) } catch { return }
+      const waitMs = 50
+      const start = Date.now()
+      while (Date.now() - start < waitMs) { /* spin */ }
+    }
+    try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+  } catch { /* no pid file or process already gone */ }
+}
+
 export function startServer(opts: ServerOptions) {
   opts.clientDir = resolve(opts.clientDir)
+
+  // Kill any stale server BEFORE starting the backend — the old server's shutdown
+  // handler will clean up its observability supervisors. If we init first, we risk
+  // adopting pids that are about to die.
+  const configDir = join(homedir(), '.config', 'tinstar')
+  const pidFile = join(configDir, 'server.pid')
+  killStalePidSync(pidFile)
+
   const ctx = initBackend()
   const proxy = httpProxy.createProxyServer({ ws: true })
+
+  function safeWriteHead(res: import('node:http').ServerResponse, status: number, headers: Record<string, string>) {
+    if (res.headersSent || res.writableEnded) return false
+    res.writeHead(status, headers)
+    return true
+  }
 
   proxy.on('error', (err, _req, res) => {
     log.warn('proxy', `proxy error: ${err.message}`)
     if (res && 'writeHead' in res) {
       const sRes = res as import('node:http').ServerResponse
-      if (!sRes.headersSent) {
-        sRes.writeHead(502, { 'Content-Type': 'text/plain' })
-        sRes.end('Session proxy error')
-      }
+      if (safeWriteHead(sRes, 502, { 'Content-Type': 'text/plain' })) sRes.end('Session proxy error')
     }
   })
 
@@ -56,8 +86,9 @@ export function startServer(opts: ServerOptions) {
       const sessionName = sessionMatch[1]!
       const run = ctx.docStore.getRun(sessionName)
       if (!run?.port) {
-        res.writeHead(404, { 'Content-Type': 'text/plain' })
-        res.end(`Session "${sessionName}" not found or has no port`)
+        if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) {
+          res.end(`Session "${sessionName}" not found or has no port`)
+        }
         return
       }
       // Strip the /s/{name} prefix before proxying
@@ -72,10 +103,7 @@ export function startServer(opts: ServerOptions) {
       if (handled) return
     } catch (err) {
       log.error('api', `request error: ${(err as Error).message}`)
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'text/plain' })
-        res.end('Internal server error')
-      }
+      if (safeWriteHead(res, 500, { 'Content-Type': 'text/plain' })) res.end('Internal server error')
       return
     }
 
@@ -86,8 +114,7 @@ export function startServer(opts: ServerOptions) {
 
     // Prevent path traversal outside clientDir
     if (!filePath.startsWith(opts.clientDir)) {
-      res.writeHead(403, { 'Content-Type': 'text/plain' })
-      res.end('Forbidden')
+      if (safeWriteHead(res, 403, { 'Content-Type': 'text/plain' })) res.end('Forbidden')
       return
     }
 
@@ -97,8 +124,9 @@ export function startServer(opts: ServerOptions) {
         const stat = statSync(filePath)
         if (stat.isFile()) {
           const mime = MIME_TYPES[ext] ?? 'application/octet-stream'
-          res.writeHead(200, { 'Content-Type': mime })
-          createReadStream(filePath).pipe(res)
+          if (safeWriteHead(res, 200, { 'Content-Type': mime })) {
+            createReadStream(filePath).pipe(res)
+          }
           return
         }
       } catch {
@@ -109,11 +137,11 @@ export function startServer(opts: ServerOptions) {
     // SPA fallback — serve index.html for non-file routes
     const indexPath = join(opts.clientDir, 'index.html')
     if (existsSync(indexPath)) {
-      res.writeHead(200, { 'Content-Type': 'text/html' })
-      createReadStream(indexPath).pipe(res)
+      if (safeWriteHead(res, 200, { 'Content-Type': 'text/html' })) {
+        createReadStream(indexPath).pipe(res)
+      }
     } else {
-      res.writeHead(404, { 'Content-Type': 'text/plain' })
-      res.end('Not found')
+      if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) res.end('Not found')
     }
   })
 
@@ -135,9 +163,7 @@ export function startServer(opts: ServerOptions) {
     proxy.ws(req, socket, head, { target: `http://localhost:${run.port}` })
   })
 
-  const configDir = join(homedir(), '.config', 'tinstar')
   const portFile = join(configDir, 'server.port')
-  const pidFile = join(configDir, 'server.pid')
 
   function writePortFile(port: number) {
     try { writeFileSync(portFile, String(port)) } catch { /* best effort */ }
@@ -155,27 +181,6 @@ export function startServer(opts: ServerOptions) {
     try { unlinkSync(pidFile) } catch { /* already gone */ }
   }
 
-  function killStalePid(): boolean {
-    try {
-      const raw = readFileSync(pidFile, 'utf8').trim()
-      const pid = parseInt(raw, 10)
-      if (!isNaN(pid) && pid !== process.pid) {
-        process.kill(pid, 'SIGTERM')
-        log.info('server', `killed stale server process ${pid}`)
-        return true
-      }
-    } catch { /* no pid file or process already gone */ }
-    return false
-  }
-
-  // Clean up port and pid files on shutdown
-  for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-    process.on(sig, () => {
-      removePortFile()
-      removePidFile()
-      process.exit(0)
-    })
-  }
   process.on('exit', () => { removePortFile(); removePidFile() })
 
   function listen(port: number, isRetry = false) {
@@ -199,9 +204,9 @@ export function startServer(opts: ServerOptions) {
           process.stderr.write(`[standalone] Port ${port} in use and TINSTAR_NO_PORT_FALLBACK=1 — exiting\n`)
           process.exit(1)
         }
-        if (!isRetry && killStalePid()) {
-          // Give the stale process time to release the port, then retry same port
-          setTimeout(() => listen(port, true), 800)
+        if (!isRetry) {
+          killStalePidSync(pidFile)
+          setTimeout(() => listen(port, true), 500)
         } else {
           log.warn('server', `port ${port} in use, trying ${port + 1}`)
           console.log(`  Port ${port} in use, trying ${port + 1}...`)

@@ -11,6 +11,7 @@ import { useHotkeyContext } from '../hotkeys/FocusPathContext'
 import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 import { BindingRow, GLOBAL_KEYS, CANVAS_KEYS, QUICKDRAW_KEYS } from './HotkeyBindingRow'
+import { AgentIcon, isIconUrl } from './agentIcon'
 
 const LS_HOTKEYS_HEIGHT = 'tinstar-sidebar-hotkeys-height'
 const DEFAULT_HOTKEYS_HEIGHT = 200
@@ -103,6 +104,8 @@ interface HierarchySidebarProps {
   onCollapse?: () => void
   renamingNodeId?: string | null
   onRenameComplete?: () => void
+  hiddenRunIds?: Set<string>
+  onToggleRunHidden?: (runId: string) => void
 }
 
 /** Metadata for all Work Widget types — drives sidebar icons, badge, close button, and focus behavior */
@@ -111,6 +114,7 @@ const WORK_WIDGET_META: Record<string, { icon: string; closeable: boolean }> = {
   'file-editor':    { icon: '📄', closeable: true  },
   'browser-widget': { icon: '🌐', closeable: true  },
   'image-viewer':   { icon: '🖼️', closeable: true  },
+  'nats-traffic':   { icon: '📡', closeable: true  },
 }
 
 /** Return inline style for a colored status dot on run nodes */
@@ -141,6 +145,8 @@ function SidebarNode({
   onDragStart,
   renamingNodeId,
   onRenameComplete,
+  hiddenRunIds,
+  onToggleRunHidden,
 }: {
   node: TreeNode
   depth: number
@@ -156,6 +162,8 @@ function SidebarNode({
   onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
   renamingNodeId?: string | null
   onRenameComplete?: () => void
+  hiddenRunIds?: Set<string>
+  onToggleRunHidden?: (runId: string) => void
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
   const { slotsForNode } = useHotgroupContext()
@@ -169,6 +177,7 @@ function SidebarNode({
   const hasChildren = node.children.length > 0
   const isRun = node.type === 'run'
   const isWorkWidget = node.type in WORK_WIDGET_META
+  const runHidden = isRun && hiddenRunIds?.has(node.entityId) === true
   const isDragging = dragNodeId === node.id
   const isDropInside = dropTarget?.nodeId === node.id && dropTarget?.position === 'inside'
   const isDropBefore = dropTarget?.nodeId === node.id && dropTarget?.position === 'before'
@@ -220,6 +229,7 @@ function SidebarNode({
           hovered && !isDragging ? 'bg-surface-hover' : '',
           isDragging ? 'opacity-40' : '',
           isDropInside ? 'bg-primary/10 ring-1 ring-primary/40' : '',
+          runHidden ? 'opacity-50' : '',
         ].join(' ')}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         data-testid={`sidebar-node-${node.id}`}
@@ -259,9 +269,11 @@ function SidebarNode({
         )}
 
         {/* Icon */}
-        <span className="w-4 text-center" aria-hidden="true">
+        <span className="w-4 h-4 flex items-center justify-center flex-shrink-0" aria-hidden="true">
           {node.type === 'run'
-            ? (node.agentIcon ?? (node.backend === 'docker' ? '🐳' : '▶'))
+            ? (isIconUrl(node.agentIcon)
+                ? <AgentIcon icon={node.agentIcon} />
+                : (node.agentIcon ?? (node.backend === 'docker' ? '🐳' : '▶')))
             : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
         </span>
 
@@ -305,6 +317,30 @@ function SidebarNode({
         {/* Hotgroup badge for all work widgets */}
         {isWorkWidget && !editing && (
           <HotgroupBadge slots={slotsForNode(node.id)} testId={`sidebar-hotgroup-badge-${node.id}`} />
+        )}
+
+        {/* Visibility eyeball — runs only.
+            Hidden runs show the closed eye permanently so they can be restored.
+            Visible runs show the open eye on hover/selected, matching the other row actions. */}
+        {isRun && !editing && onToggleRunHidden && (
+          <button
+            className={[
+              'w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary transition-opacity',
+              runHidden ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+            ].join(' ')}
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleRunHidden(node.entityId)
+            }}
+            data-testid={`run-visibility-${node.id}`}
+            aria-label={runHidden ? `Show ${node.label}` : `Hide ${node.label}`}
+            title={runHidden ? 'Show on canvas' : 'Hide from canvas'}
+            style={{ opacity: runHidden || hovered ? 1 : undefined }}
+          >
+            <span className="material-symbols-outlined text-sm leading-none">
+              {runHidden ? 'visibility_off' : 'visibility'}
+            </span>
+          </button>
         )}
 
         {/* Count badge */}
@@ -420,6 +456,8 @@ function SidebarNode({
               onDragStart={onDragStart}
               renamingNodeId={renamingNodeId}
               onRenameComplete={onRenameComplete}
+              hiddenRunIds={hiddenRunIds}
+              onToggleRunHidden={onToggleRunHidden}
             />
           ))}
         </div>
@@ -462,6 +500,8 @@ function TreeWithOrphanSeparators({
   onDragStart,
   renamingNodeId,
   onRenameComplete,
+  hiddenRunIds,
+  onToggleRunHidden,
 }: {
   nodes: TreeNode[]
   depth: number
@@ -477,6 +517,8 @@ function TreeWithOrphanSeparators({
   onDragStart?: (nodeId: string, nodeType: string, label: string, clientY: number, clientX: number) => void
   renamingNodeId?: string | null
   onRenameComplete?: () => void
+  hiddenRunIds?: Set<string>
+  onToggleRunHidden?: (runId: string) => void
 }) {
   const normal = nodes.filter(n => !n.orphan)
   const orphans = nodes.filter(n => n.orphan)
@@ -500,6 +542,8 @@ function TreeWithOrphanSeparators({
           onDragStart={onDragStart}
           renamingNodeId={renamingNodeId}
           onRenameComplete={onRenameComplete}
+          hiddenRunIds={hiddenRunIds}
+          onToggleRunHidden={onToggleRunHidden}
         />
       ))}
       {orphans.length > 0 && <OrphanSeparator />}
@@ -520,13 +564,15 @@ function TreeWithOrphanSeparators({
           onDragStart={onDragStart}
           renamingNodeId={renamingNodeId}
           onRenameComplete={onRenameComplete}
+          hiddenRunIds={hiddenRunIds}
+          onToggleRunHidden={onToggleRunHidden}
         />
       ))}
     </>
   )
 }
 
-export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
+export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
   const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
   const showEmpty = showEmptyEntities ?? true
@@ -674,6 +720,8 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
             onDragStart={handleDragStart}
             renamingNodeId={renamingNodeId}
             onRenameComplete={onRenameComplete}
+            hiddenRunIds={hiddenRunIds}
+            onToggleRunHidden={onToggleRunHidden}
           />
         )}
       </div>
@@ -687,40 +735,48 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
       {/* Hotkeys section — height controlled by dragging the divider above */}
       <HotkeysSection height={hotkeysHeight} />
 
-      {/* Arrange section */}
-      {(onArrangeGrid || onArrangeReset || onArrangeSwimlanes) && (
-        <div className="border-t border-white/10 px-3 py-2 flex items-center gap-2">
-          <span className="text-2xs text-slate-500 uppercase tracking-wider">Arrange</span>
-          {onArrangeGrid && (
-            <button
-              className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-              onClick={onArrangeGrid}
-              title="Tile selected in grid (or all if none selected)"
-            >
-              <span className="material-symbols-outlined text-base">grid_view</span>
-            </button>
-          )}
-          {onArrangeSwimlanes && (
-            <button
-              className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-              onClick={onArrangeSwimlanes}
-              title="Swim lanes — rows by task (Ctrl+L)"
-            >
-              <span className="material-symbols-outlined text-base">view_agenda</span>
-            </button>
-          )}
-          {onArrangeReset && (
-            <button
-              className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-              onClick={onArrangeReset}
-              data-testid="arrange-button"
-              title="Reset layout"
-            >
-              <span className="material-symbols-outlined text-base">auto_fix_high</span>
-            </button>
-          )}
-        </div>
-      )}
+      {/* Tools section */}
+      <div className="border-t border-white/10 px-3 py-2 flex items-center gap-2">
+        <span className="text-2xs text-slate-500 uppercase tracking-wider">Tools</span>
+        <button
+          className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+          onClick={() => fetch('/api/nats-traffic-widgets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })}
+          title="Open NATS Traffic Monitor"
+        >
+          <span className="material-symbols-outlined text-base">cell_tower</span>
+        </button>
+        {(onArrangeGrid || onArrangeSwimlanes || onArrangeReset) && (
+          <div className="w-px h-4 bg-white/10 mx-1" />
+        )}
+        {onArrangeGrid && (
+          <button
+            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+            onClick={onArrangeGrid}
+            title="Tile selected in grid (or all if none selected)"
+          >
+            <span className="material-symbols-outlined text-base">grid_view</span>
+          </button>
+        )}
+        {onArrangeSwimlanes && (
+          <button
+            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+            onClick={onArrangeSwimlanes}
+            title="Swim lanes — rows by task (Ctrl+L)"
+          >
+            <span className="material-symbols-outlined text-base">view_agenda</span>
+          </button>
+        )}
+        {onArrangeReset && (
+          <button
+            className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
+            onClick={onArrangeReset}
+            data-testid="arrange-button"
+            title="Reset layout"
+          >
+            <span className="material-symbols-outlined text-base">auto_fix_high</span>
+          </button>
+        )}
+      </div>
 
       {/* Floating drag card */}
       {dragState && (

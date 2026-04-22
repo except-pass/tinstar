@@ -252,10 +252,6 @@ function loadLayouts(tree: TreeNode[], storageKey: string): Map<string, WidgetLa
     if (!raw) return generateDefaultLayouts(tree)
     const parsed = JSON.parse(raw) as Record<string, WidgetLayout>
     const map = new Map<string, WidgetLayout>()
-    const snapLayout = (l: WidgetLayout): WidgetLayout => ({
-      x: Math.round(l.x), y: Math.round(l.y),
-      width: Math.round(l.width), height: Math.round(l.height),
-    })
     for (const id of allIds) {
       const saved = parsed[id]
       if (saved && typeof saved.x === 'number') map.set(id, snap(saved))
