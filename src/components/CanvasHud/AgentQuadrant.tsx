@@ -53,22 +53,22 @@ export function AgentQuadrant({ runMap, burningRunIds, onFocusRun }: Props) {
       data-testid="agent-quadrant"
       className="mt-3"
       role="region"
-      aria-label="Agent activity quadrant: BUSY vs READY by LLM activity"
+      aria-label="Agent activity quadrant: READY vs BUSY by LLM activity (up and right = more active)"
     >
-      {/* Header row with axis labels */}
+      {/* Header row with axis labels — up and right = more active */}
       <div className="grid grid-cols-[1fr_1fr] gap-[2px] text-[9px] font-semibold tracking-widest text-slate-400 mb-[2px]">
-        <div className="text-center">BUSY</div>
         <div className="text-center">READY</div>
+        <div className="text-center">BUSY</div>
       </div>
-      {/* Top row: LLM */}
+      {/* Top row: LLM (both cells are "talking to Claude") */}
       <div className="grid grid-cols-[1fr_1fr] gap-[2px]">
-        <Cell label="WORKING" dataKey="working" runs={cells.working} onFocusRun={onFocusRun} axisLabel="LLM" />
-        <Cell label="SUBAGENT" dataKey="subagent" runs={cells.subagent} onFocusRun={onFocusRun} />
+        <Cell label="SUBAGENT" dataKey="subagent" runs={cells.subagent} onFocusRun={onFocusRun} axisLabel="LLM" />
+        <Cell label="WORKING" dataKey="working" runs={cells.working} onFocusRun={onFocusRun} />
       </div>
-      {/* Bottom row: quiet */}
+      {/* Bottom row: quiet (no LLM activity) */}
       <div className="grid grid-cols-[1fr_1fr] gap-[2px] mt-[2px]">
-        <Cell label="TOOL" dataKey="tool" runs={cells.tool} onFocusRun={onFocusRun} axisLabel="quiet" />
-        <Cell label="IDLE" dataKey="idle" runs={cells.idle} onFocusRun={onFocusRun} />
+        <Cell label="IDLE" dataKey="idle" runs={cells.idle} onFocusRun={onFocusRun} axisLabel="quiet" />
+        <Cell label="TOOL" dataKey="tool" runs={cells.tool} onFocusRun={onFocusRun} />
       </div>
     </div>
   )
