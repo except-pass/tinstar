@@ -1127,7 +1127,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       />
 
       {/* Telemetry HUD (top-right) */}
-      <CanvasHud toggleRef={hudToggleRef} />
+      <CanvasHud toggleRef={hudToggleRef} runMap={runMap} onFocusRun={onFocusRun} />
 
       {/* Bottom-right zoom indicator */}
       <div className="absolute bottom-3 right-3 flex items-center gap-2">

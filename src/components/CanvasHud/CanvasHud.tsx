@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useState } from 'react'
 import { HudBar } from './HudBar'
 import { AutonomyStat } from './AutonomyStat'
+import { AgentQuadrant } from './AgentQuadrant'
 import { TelemetryBootstrap } from './TelemetryBootstrap'
 import { useTelemetryHud } from '../../hooks/useTelemetryHud'
 import { fmtNum, fmtDollar, fmtRate } from './fmt'
+import type { Run } from '../../domain/types'
 
 const STORAGE_KEY = 'tinstar-hud-visible'
 
 interface Props {
   toggleRef?: React.MutableRefObject<(() => void) | null>
+  runMap: Map<string, Run>
+  onFocusRun?: (runId: string) => void
 }
 
-export function CanvasHud({ toggleRef }: Props) {
+export function CanvasHud({ toggleRef, runMap, onFocusRun }: Props) {
   const { snapshot } = useTelemetryHud()
   const [visible, setVisible] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
@@ -90,6 +94,13 @@ export function CanvasHud({ toggleRef }: Props) {
       <HudBar icon="⚡" label={tokensLabel} value={tokensValue} fill={tokensFill} accent="blue" />
       <HudBar icon="◎" label="CACHE HIT" value={cacheValue} fill={cacheFill} accent="green" />
       <AutonomyStat ratio={snapshot.autonomy.ratio} cliSeconds={snapshot.autonomy.cliSeconds} userSeconds={snapshot.autonomy.userSeconds} />
+      {onFocusRun && (
+        <AgentQuadrant
+          runMap={runMap}
+          burningRunIds={new Set(snapshot.burningRunIds ?? [])}
+          onFocusRun={onFocusRun}
+        />
+      )}
     </div>
   )
 }
