@@ -6,6 +6,7 @@ import { useBackendState } from '../../hooks/useBackendState'
 import { HotgroupBadge } from '../HotgroupBadge'
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 import { ColorPalette } from '../ColorPalette'
+import { AgentIcon } from '../agentIcon'
 
 type StatusUi = { label: string; color: string; dot: string; pulse?: boolean }
 
@@ -120,13 +121,11 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       {/* Left: identity */}
       <div className="flex items-center gap-2 min-w-0 pl-3">
         <div
-          className="flex items-center justify-center w-6 h-6 border shrink-0"
+          className="flex items-center justify-center w-6 h-6 border shrink-0 overflow-hidden"
           style={{ borderColor: hexToRgba(runAccent, 0.6), backgroundColor: hexToRgba(runAccent, 0.1) }}
           title={run.backendInfo ?? (run.backend ?? 'unknown')}
         >
-          <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1", color: runAccent }}>
-            {run.backend === 'docker' ? 'deployed_code' : 'terminal'}
-          </span>
+          <AgentIcon seed={run.id} color={runAccent} className="w-5 h-5" />
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">

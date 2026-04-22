@@ -14,7 +14,7 @@
 
 type Loaded = {
   createAvatar: typeof import('@dicebear/core').createAvatar
-  botttsNeutral: typeof import('@dicebear/collection').botttsNeutral
+  bottts: typeof import('@dicebear/collection').bottts
 }
 
 let loadedPromise: Promise<Loaded> | null = null
@@ -34,7 +34,7 @@ function ensureLoaded(): Promise<Loaded> {
       import('@dicebear/core'),
       import('@dicebear/collection'),
     ]).then(([core, col]) => {
-      loaded = { createAvatar: core.createAvatar, botttsNeutral: col.botttsNeutral }
+      loaded = { createAvatar: core.createAvatar, bottts: col.bottts }
       return loaded
     })
   }
@@ -56,14 +56,16 @@ export function getAvatarDataUrl(seed: string, color: string): string | null {
   if (hit) return hit
   if (pending.has(k)) return null
   pending.add(k)
-  ensureLoaded().then(({ createAvatar, botttsNeutral }) => {
+  ensureLoaded().then(({ createAvatar, bottts }) => {
     try {
-      // Use DiceBear's default vibrant palette for the bot body. The run's
-      // accent color lives on the ring around the avatar (see AgentAvatar.tsx),
-      // not on the face itself — mixing them made every face render near-black
-      // because bottts-neutral's body uses the primary color for everything.
-      // Keep the background transparent so the bot reads against any HUD cell bg.
-      const svg = createAvatar(botttsNeutral, {
+      // Use DiceBear's "bottts" (colorful) rather than "bottts-neutral".
+      // Neutral is grayscale by design and rendered as near-black blobs with
+      // only the eyes visible on a dark HUD. The colorful variant picks body
+      // colors from its default palette seeded by `seed`, so we get vibrant,
+      // distinguishable bots. Run accent color stays on the ring around the
+      // avatar (AgentAvatar.tsx). Transparent background so the bot reads
+      // against whatever HUD cell or container it sits inside.
+      const svg = createAvatar(bottts, {
         seed,
         backgroundColor: ['transparent'],
       }).toString()
