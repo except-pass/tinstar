@@ -193,6 +193,34 @@ tinstar.room.<8-char-uuid>
 
 **Ad-hoc breakout rooms** can still be created manually by publishing to any `tinstar.room.*` subject and having agents subscribe via the subscription management API.
 
+### Control Socket Orphan Recovery
+
+The parent's control socket (`/tmp/tinstar-nats-<name>.sock`) is how Tinstar hot-subscribes the parent to a new breakout room. The external `nats-channel-mcp` package binds that socket with `unlinkSync(path); listen(path)` — so if the MCP server restarts (or a duplicate instance starts with the same name), the original listener ends up bound to an inode that's no longer on disk. The kernel still reports LISTEN, but `connect()` hits `ECONNREFUSED`. Static subscriptions from startup keep working; dynamic subscribe is silently dead.
+
+Spawn pre-flights the parent subscribe and classifies failures:
+
+| Code | Meaning | What happens |
+|---|---|---|
+| `NATS_SOCKET_UNREACHABLE` (ENOENT) | Parent session isn't running | Registry update persists, will apply on next start |
+| `NATS_SOCKET_ORPHANED` (ECONNREFUSED + file present) | Parent is alive but control socket is orphaned | **Fallback:** child's effective "room" becomes the parent's persistent direct subject (already subscribed at startup). Parent hears the child there. Session record persists `natsControlOrphanedAt`; SSE event `managed_session.nats_orphaned` fires; session restart recommended to recover dynamic subscribe. |
+| `NATS_SOCKET_ERROR` | Unexpected | Logged at error, spawn still proceeds with fallback |
+
+Spawn response reports the fallback explicitly:
+
+```json
+{
+  "session": "my-child",
+  "room": "tinstar.work-space.foo.bar.my-parent",   // effective room
+  "breakoutRoom": "tinstar.room.abc12345",          // what we would have used
+  "breakoutFallback": true,
+  "fallbackReason": "NATS_SOCKET_ORPHANED",
+  "restartRecommended": true,
+  "natsWarning": { "code": "...", "message": "..." }
+}
+```
+
+The `natsControlOrphanedAt` timestamp is cleared when the session restarts — the new channel-server gets a fresh control socket.
+
 ### NATS Wildcard Reference
 
 NATS has two wildcards with **very different behavior**:
