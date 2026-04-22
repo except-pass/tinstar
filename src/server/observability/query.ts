@@ -35,6 +35,23 @@ export class TelemetryQuery {
     }
   }
 
+  /**
+   * Returns Claude Code conversation session_ids that have emitted tokens in
+   * the last 30 seconds. Cheap: single PromQL aggregation, measured ~0.7ms
+   * against a local Prometheus with ~60 token-metric series.
+   */
+  async burningSessions(opts: { userEmail: string }): Promise<string[]> {
+    const filter = opts.userEmail ? `{user_email="${opts.userEmail}",type=~"input|output"}` : `{type=~"input|output"}`
+    const query = `sum by (session_id) (rate(claude_code_token_usage_tokens_total${filter}[30s])) > 0`
+    const vec = await this.instantVec(query)
+    const out: string[] = []
+    for (const r of vec) {
+      const sid = r.metric.session_id
+      if (sid) out.push(sid)
+    }
+    return out
+  }
+
   private secondsSinceLocalMidnight(tzOffsetMinutes: number): number {
     const now = new Date()
     const local = new Date(now.getTime() - tzOffsetMinutes * 60_000)
