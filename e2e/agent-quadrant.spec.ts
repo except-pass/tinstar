@@ -44,7 +44,7 @@ test.describe('Agent Quadrant and HUD Toggle', () => {
 
     // Quadrant should show the four cell grid
     await expect(page.getByTestId('quadrant-cell-working')).toBeVisible()
-    await expect(page.getByTestId('quadrant-cell-subagent')).toBeVisible()
+    await expect(page.getByTestId('quadrant-cell-cooling')).toBeVisible()
     await expect(page.getByTestId('quadrant-cell-tool')).toBeVisible()
     await expect(page.getByTestId('quadrant-cell-idle')).toBeVisible()
   })

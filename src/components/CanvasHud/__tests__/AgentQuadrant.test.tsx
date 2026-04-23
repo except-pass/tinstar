@@ -60,12 +60,12 @@ describe('<AgentQuadrant>', () => {
     expect(container.querySelector('[data-testid="quadrant-cell-tool"] [data-run-id="r1"]')).not.toBeNull()
   })
 
-  it('places a READY + LLM run in the SUBAGENT cell', () => {
+  it('places a READY + LLM run in the COOLING cell', () => {
     const runMap = new Map([['r1', fakeRun({ id: 'r1', status: 'idle' })]])
     const { container } = render(
       <AgentQuadrant runMap={runMap} burningRunIds={new Set(['r1'])} onFocusRun={() => {}} />
     )
-    expect(container.querySelector('[data-testid="quadrant-cell-subagent"] [data-run-id="r1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="quadrant-cell-cooling"] [data-run-id="r1"]')).not.toBeNull()
   })
 
   it('places a READY + quiet run in the IDLE cell (including needs_attention and creating)', () => {

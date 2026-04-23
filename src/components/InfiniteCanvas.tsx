@@ -498,11 +498,18 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
     const GAP = 24
     const EMPTY_H = 60  // thin placeholder bar for empty containers
+    const MIN_LEAF_H = 150  // mirrors FIT_MIN_HEIGHT / useWidgetLayouts MIN_HEIGHT
     const updates = new Map<string, { x: number; y: number; width: number; height: number }>()
+
+    // Leaf height = viewport height (in canvas coords at current zoom) — same
+    // behavior as hotkey Z. Width keeps the widget's current value.
+    const rect = el.getBoundingClientRect()
+    const leafHeight = Math.max(MIN_LEAF_H, rect.height / camera.zoom)
 
     const getLeafSize = (id: string) => {
       const l = layouts.get(id)
-      return l ? { w: l.width, h: l.height } : { w: 1560, h: 1410 }
+      const w = l ? l.width : 1560
+      return { w, h: leafHeight }
     }
 
     // Viewport origin in canvas coords
@@ -1127,7 +1134,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       />
 
       {/* Telemetry HUD (top-right) */}
-      <CanvasHud toggleRef={hudToggleRef} runMap={runMap} onFocusRun={onFocusRun} />
+      <CanvasHud
+        toggleRef={hudToggleRef}
+        runMap={runMap}
+        onFocusRun={onFocusRun}
+        selectedRunIds={selectionState.selectedType === 'run' ? selectionState.selectedIds : undefined}
+      />
 
       {/* Bottom-right zoom indicator */}
       <div className="absolute bottom-3 right-3 flex items-center gap-2">

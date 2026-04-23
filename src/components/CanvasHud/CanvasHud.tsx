@@ -13,9 +13,10 @@ interface Props {
   toggleRef?: React.MutableRefObject<(() => void) | null>
   runMap: Map<string, Run>
   onFocusRun?: (runId: string) => void
+  selectedRunIds?: Set<string>
 }
 
-export function CanvasHud({ toggleRef, runMap, onFocusRun }: Props) {
+export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds }: Props) {
   const { snapshot } = useTelemetryHud()
   const [visible, setVisible] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
@@ -110,6 +111,7 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun }: Props) {
           runMap={runMap}
           burningRunIds={new Set(snapshot.burningRunIds ?? [])}
           onFocusRun={onFocusRun}
+          selectedRunIds={selectedRunIds}
         />
       )}
     </HudShell>
