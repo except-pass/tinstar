@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react'
+import { useSyncExternalStore } from 'react'
 
 // -------- types mirrored from the server (keep in sync with src/server/cc-quota/types.ts) --------
 export interface UsageBucket { utilization: number; resets_at: string }
@@ -92,7 +92,6 @@ const getServerSnapshot = () => ({ snapshot: null, refreshing: false }) as Singl
 
 export function useCcQuota(): UseCcQuota {
   const s = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
-  useEffect(() => { /* no-op: subscription handles lifecycle */ }, [])
   return {
     snapshot: s.snapshot,
     lastRefreshedAt: s.snapshot?.fetchedAt ?? null,
