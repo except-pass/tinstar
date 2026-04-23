@@ -18,7 +18,12 @@ Non-goals: UI for flipping extra-usage on/off, any action beyond read-only displ
 
 ## 3 · Data source
 
-`GET https://api.anthropic.com/api/oauth/usage` — undocumented endpoint used by community statusline tools. Auth: `Authorization: Bearer <accessToken>` where the token is read from `~/.claude/.credentials.json` → `claudeAiOauth.accessToken`.
+`GET https://api.anthropic.com/api/oauth/usage` — undocumented endpoint used by community statusline tools.
+
+Headers (both required):
+
+- `Authorization: Bearer <accessToken>` — token read from `~/.claude/.credentials.json` → `claudeAiOauth.accessToken`.
+- `anthropic-beta: oauth-2025-04-20` — without this, the endpoint returns 401 with `"OAuth authentication is currently not supported"`. Discovered empirically; see commit `8c981a8`.
 
 Observed response shape (confirmed live):
 
