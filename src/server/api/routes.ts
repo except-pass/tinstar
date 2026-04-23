@@ -642,11 +642,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // GET /api/cc-quota[?force=1]
-  if (method === 'GET' && ctx.ccQuotaService && url.startsWith('/api/cc-quota')) {
-    const parsed = new URL(url, 'http://localhost')
-    const force = parsed.searchParams.get('force') === '1'
-    const snap = await ctx.ccQuotaService.getSnapshot({ force })
+  // GET /api/cc-quota — returns the last pushed snapshot
+  if (method === 'GET' && ctx.ccQuotaService && url === '/api/cc-quota') {
+    json(res, ctx.ccQuotaService.getSnapshot())
+    return true
+  }
+
+  // POST /api/cc-quota/ingest — Claude Code statusline hook pushes its full
+  // session-state JSON here; we extract rate_limits and update the snapshot.
+  if (method === 'POST' && ctx.ccQuotaService && url === '/api/cc-quota/ingest') {
+    const body = await readBody(req)
+    let payload: unknown
+    try {
+      payload = JSON.parse(body)
+    } catch {
+      json(res, { error: 'malformed_json' }, 400)
+      return true
+    }
+    const snap = ctx.ccQuotaService.ingest(payload)
     json(res, snap)
     return true
   }
@@ -2749,6 +2762,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             ...parentRun,
             breakoutRooms: [...parentRooms, breakoutRoom],
           })
+        }
+
+        // Persist the breakout subscription on the parent's session record so
+        // it survives stop/resume. The hot socket-subscribe above only lives
+        // in the running channel-server's memory; on resume we regenerate
+        // .mcp.json from session.nats.subscriptions, so without this the
+        // resumed parent goes deaf on every breakout room it was in.
+        if (breakoutRoom && !breakoutFallback) {
+          const latest = getSession(sessDir, parentName)
+          if (latest?.nats?.enabled) {
+            const existing = latest.nats.subscriptions ?? []
+            if (!existing.includes(breakoutRoom)) {
+              updateSession(sessDir, parentName, {
+                nats: {
+                  ...latest.nats,
+                  subscriptions: [...existing, breakoutRoom],
+                },
+              })
+            }
+          }
         }
 
         return json(res, {
