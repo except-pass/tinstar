@@ -229,17 +229,17 @@ Only the remaining-quota percentage is shown as a number (e.g. `33% left`). Do N
 
 ### 8.8 · Placement in the HUD
 
-Insert between `<AutonomyStat … />` and `<AgentQuadrant … />` in `src/components/CanvasHud/CanvasHud.tsx`. The card renders only when `snapshot.data` is available OR when `snapshot.error` is non-null (so errors are visible). When both are null (no data ever loaded), render nothing.
+Insert between `<AutonomyStat … />` and `<AgentQuadrant … />` in `src/components/CanvasHud/CanvasHud.tsx`. The card always renders the skeleton (clock outline, bar trough, labels); numeric values are `--` when the corresponding bucket is unavailable — whether that's because the token is bad, the endpoint errored, or the bucket is null. The card never hides.
 
 ## 9 · Error handling — single table
 
 | Situation | UI behavior | Metric behavior |
 |---|---|---|
-| `~/.claude/.credentials.json` missing / no OAuth section | Card hidden until first success; a single unobtrusive line `Claude Code · sign in to show quota` in its place. | No metrics emitted. Error counter + 1. |
+| `~/.claude/.credentials.json` missing / no OAuth section | Card renders in full with `--` for every `% left` value; tooltip and refresh icon explain "sign in to Claude Code". Gas-pump chip omitted. | No metrics emitted. Error counter + 1. |
 | 401 expired token | Card stays visible with last-good snapshot; refresh icon red; tooltip explains "start Claude Code to refresh". | Last-good gauges remain stale in Prometheus; error counter + 1. |
 | Null bucket in response | That row renders `--` for `% left`, tooltip says "not reported". | That label set not emitted. |
 | 5xx / network / timeout | Same as 401 — stale card + red refresh icon. | Error counter + 1. |
-| Token valid, all buckets null | Card hides. | Only `cc_quota_fetch_total{result=ok}` emitted. |
+| Token valid, all buckets null | Card renders skeleton with `--` in every row. | Only `cc_quota_fetch_total{result=ok}` emitted. |
 
 **Stale-token tradeoff (accepted):** the local credentials file is refreshed only when Claude Code runs. If Claude Code hasn't been running, the token goes stale and our fetch 401s. We accept this — if the operator isn't running Claude Code, they have no active agents to worry about quota for. Refresh-via-OAuth-refresh-token is explicitly out of scope.
 
