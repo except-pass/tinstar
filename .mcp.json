@@ -6,13 +6,13 @@
         "x",
         "github:except-pass/nats-channel-mcp",
         "--name",
-        "tinstarTelem",
+        "quickfeatures",
         "--subscribe",
         "tinstar.work-space._._.tinstar-improvement",
         "--subscribe",
-        "tinstar.work-space._._.tinstar-improvement.tinstartelem",
+        "tinstar.work-space._._.tinstar-improvement.quickfeatures",
         "--control-socket",
-        "/tmp/tinstar-nats-tinstarTelem.sock"
+        "/tmp/tinstar-nats-quickfeatures.sock"
       ]
     }
   }
