@@ -6,13 +6,12 @@ import type { Span } from '../types'
 
 export class OTelProcessor {
   private runSpanMap = new Map<string, { spanId: string; traceId: string }>()
-  private exporter = new OtlpExporter()
 
   constructor(
     private bus: EventBus,
     private store: OTelStore,
+    private exporter: OtlpExporter,   // ← injected; not instantiated here
   ) {
-    this.exporter.start()
     this.bind()
   }
 

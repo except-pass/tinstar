@@ -35,6 +35,8 @@ import { SessionReadinessTracker } from './sessions/readiness'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
 import { createTelemetryRoutes } from './api/telemetry.js'
+import { OtlpExporter } from './stores/otlp-exporter'
+import { CcQuotaService } from './cc-quota/service'
 
 // Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
 // If initBackend runs twice (Vite HMR), the second invocation skips registration
@@ -50,7 +52,10 @@ export function initBackend(): RouteContext {
 
   // Wire processors
   new DocumentProcessor(bus, docStore)
-  new OTelProcessor(bus, otelStore)
+  const otlpExporter = new OtlpExporter()
+  otlpExporter.start()
+  const ccQuotaService = new CcQuotaService({ sink: otlpExporter })
+  new OTelProcessor(bus, otelStore, otlpExporter)
 
   // Wire SSE
   const sse = new SSEBroadcaster(docStore)
@@ -378,7 +383,8 @@ export function initBackend(): RouteContext {
   }
 
   return {
-    docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue, telemetryRoutes,
+    docStore, otelStore, sse, bus, startSimulator, resetSimulator,
+    sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
     get natsTraffic() { return natsTraffic },
     get readinessTracker() { return readinessTracker },
   }

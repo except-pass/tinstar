@@ -21,7 +21,7 @@ export class CcQuotaService {
   private readonly sink: MetricSink
   private readonly now: () => number
 
-  private lastAttemptMs = 0
+  private lastAttemptMs = -Infinity
   private cached: CcQuotaSnapshot = { fetchedAt: new Date(0).toISOString(), data: null, error: null }
 
   constructor(opts: CcQuotaServiceOptions = {}) {

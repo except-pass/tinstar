@@ -529,6 +529,7 @@ export interface RouteContext {
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
   readinessTracker?: import('../sessions/readiness').SessionReadinessTracker
   telemetryRoutes?: TelemetryRoutes
+  ccQuotaService?: import('../cc-quota/service').CcQuotaService
 }
 
 function json(res: ServerResponse, data: unknown, status = 200): true {
@@ -638,6 +639,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const name = parsed.searchParams.get('name')
     const metrics = name ? ctx.otelStore.getMetricsByName(name) : ctx.otelStore.getAllMetrics()
     json(res, metrics)
+    return true
+  }
+
+  // GET /api/cc-quota[?force=1]
+  if (method === 'GET' && ctx.ccQuotaService && url.startsWith('/api/cc-quota')) {
+    const parsed = new URL(url, 'http://localhost')
+    const force = parsed.searchParams.get('force') === '1'
+    const snap = await ctx.ccQuotaService.getSnapshot({ force })
+    json(res, snap)
     return true
   }
 
