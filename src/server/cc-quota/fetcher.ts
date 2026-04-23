@@ -30,7 +30,10 @@ export async function fetchCcQuota(): Promise<RawUsage> {
 
   let res: Response
   try {
-    res = await fetch(USAGE_URL, { headers: { Authorization: `Bearer ${token}` } })
+    res = await fetch(USAGE_URL, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10_000),
+    })
   } catch (err) {
     throwAs('network', (err as Error).message)
   }

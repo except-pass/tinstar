@@ -26,11 +26,11 @@ describe('fetchCcQuota', () => {
     home = makeFakeHome()
     origHome = process.env.HOME
     process.env.HOME = home
-    vi.restoreAllMocks()
   })
 
   afterEach(() => {
     process.env.HOME = origHome
+    vi.unstubAllGlobals()
     rmSync(home, { recursive: true, force: true })
   })
 
