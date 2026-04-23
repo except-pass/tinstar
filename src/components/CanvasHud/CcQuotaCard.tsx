@@ -1,7 +1,7 @@
 import './hud.css'
 import { CcQuotaClock } from './CcQuotaClock'
 import { Cc7dBar } from './Cc7dBar'
-import type { CcQuotaSnapshot, ExtraUsage, UsageBucket } from '../../hooks/useCcQuota'
+import type { CcQuotaSnapshot, UsageBucket } from '../../hooks/useCcQuota'
 
 interface Props {
   snapshot: CcQuotaSnapshot | null
@@ -40,32 +40,21 @@ function ageLabel(lastMs: number | null, nowMs: number): string {
   return `${h}h ago`
 }
 
-function formatExtraUsage(extra: ExtraUsage | null): { text: string; on: boolean } | null {
-  if (!extra) return null
-  if (!extra.is_enabled) return { text: 'OFF', on: false }
-  if (extra.used_credits == null) return { text: 'ON', on: true }
-  // Empirical: `used_credits` is denominated in USD cents.
-  return { text: `$${(extra.used_credits / 100).toFixed(2)}`, on: true }
-}
-
 function buildTooltip(s: CcQuotaSnapshot | null, nowMs: number): string {
   if (!s) return 'no data'
   const lines: string[] = []
   const d = s.data
-  if (d?.five_hour)        lines.push(`5H resets ${new Date(d.five_hour.resets_at).toLocaleTimeString()}`)
-  if (d?.seven_day)        lines.push(`7D resets ${new Date(d.seven_day.resets_at).toLocaleString()}`)
-  if (d?.seven_day_sonnet) lines.push(`7D Sonnet ${Math.round(100 - d.seven_day_sonnet.utilization)}% left`)
-  if (d?.seven_day_opus)   lines.push(`7D Opus ${Math.round(100 - d.seven_day_opus.utilization)}% left`)
-  if (d?.extra_usage)      lines.push(`Extra usage ${d.extra_usage.is_enabled ? 'ON' : 'OFF'} · used_credits=${d.extra_usage.used_credits ?? 'null'}`)
-  lines.push(`Fetched ${ageLabel(Date.parse(s.fetchedAt), nowMs)}`)
+  if (d?.five_hour) lines.push(`5H resets ${new Date(d.five_hour.resets_at).toLocaleTimeString()}`)
+  if (d?.seven_day) lines.push(`7D resets ${new Date(d.seven_day.resets_at).toLocaleString()}`)
+  lines.push(`Updated ${ageLabel(Date.parse(s.fetchedAt), nowMs)}`)
   if (s.error) lines.push(`⚠ ${s.error.code}: ${s.error.message}`)
+  if (!d) lines.push('Waiting for Claude Code statusline push')
   return lines.join('\n')
 }
 
 export function CcQuotaCard({ snapshot, lastRefreshedAt, refreshing, refresh, nowMs }: Props) {
   const now = nowMs ?? Date.now()
   const data = snapshot?.data ?? null
-  const extra = formatExtraUsage(data?.extra_usage ?? null)
   const tooltip = buildTooltip(snapshot, now)
   const lastMs = lastRefreshedAt ? Date.parse(lastRefreshedAt) : null
   const isError = !!snapshot?.error
@@ -74,23 +63,15 @@ export function CcQuotaCard({ snapshot, lastRefreshedAt, refreshing, refresh, no
     <div data-testid="cc-quota-card" className="cc-quota-card" title={tooltip}>
       <div className="cc-quota-header">
         <span className="cc-quota-title">Claude Code</span>
-        <div className="cc-quota-header-right">
-          <button
-            type="button"
-            className={`cc-quota-refresh${isError ? ' err' : ''}${refreshing ? ' spin' : ''}`}
-            onClick={refresh}
-            aria-label="refresh quota"
-          >
-            <span className="material-symbols-outlined">refresh</span>
-            <span>{ageLabel(lastMs, now)}</span>
-          </button>
-          {extra && (
-            <span className={`cc-gas ${extra.on ? 'on' : 'off'}`}>
-              <span className="material-symbols-outlined">local_gas_station</span>
-              {extra.text}
-            </span>
-          )}
-        </div>
+        <button
+          type="button"
+          className={`cc-quota-refresh${isError ? ' err' : ''}${refreshing ? ' spin' : ''}`}
+          onClick={refresh}
+          aria-label="refresh quota"
+        >
+          <span className="material-symbols-outlined">refresh</span>
+          <span>{ageLabel(lastMs, now)}</span>
+        </button>
       </div>
 
       <div className="cc-quota-row">

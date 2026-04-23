@@ -1,43 +1,33 @@
 export interface UsageBucket {
-  utilization: number
-  resets_at: string
+  utilization: number       // 0..100
+  resets_at: string         // ISO timestamp
 }
 
-export interface ExtraUsage {
-  is_enabled: boolean
-  used_credits: number | null
-  currency: string
-}
-
+/**
+ * Normalized quota snapshot derived from Claude Code's statusline push.
+ *
+ * Only five_hour and seven_day are available via the statusline; per-model
+ * weekly buckets and extra-usage state are not exposed through that channel.
+ */
 export interface RawUsage {
   five_hour: UsageBucket | null
   seven_day: UsageBucket | null
-  seven_day_opus: UsageBucket | null
-  seven_day_sonnet: UsageBucket | null
-  extra_usage: ExtraUsage | null
 }
 
-export type FetchErrorCode =
-  | 'no_creds'
-  | 'expired_token'
-  | 'http_4xx'
-  | 'http_5xx'
-  | 'network'
+export type IngestErrorCode =
+  | 'malformed_json'
+  | 'missing_rate_limits'
 
-export interface FetchError {
-  code: FetchErrorCode
+export interface IngestError {
+  code: IngestErrorCode
   message: string
 }
 
-export class CcQuotaFetchError extends Error {
-  constructor(public readonly info: FetchError) {
-    super(info.message)
-    this.name = 'CcQuotaFetchError'
-  }
-}
-
 export interface CcQuotaSnapshot {
-  fetchedAt: string          // ISO timestamp of the last completed attempt (success or failure)
-  data: RawUsage | null      // last good data; null only if no fetch has ever succeeded
-  error: FetchError | null   // set when the most recent fetch failed
+  /** ISO timestamp of the last ingested payload. Zero-epoch when none. */
+  fetchedAt: string
+  /** Last good data; null only if no ingest has arrived yet. */
+  data: RawUsage | null
+  /** Set when the most recent ingest failed to parse. */
+  error: IngestError | null
 }

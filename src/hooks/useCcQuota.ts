@@ -2,13 +2,9 @@ import { useSyncExternalStore } from 'react'
 
 // -------- types mirrored from the server (keep in sync with src/server/cc-quota/types.ts) --------
 export interface UsageBucket { utilization: number; resets_at: string }
-export interface ExtraUsage   { is_enabled: boolean; used_credits: number | null; currency: string }
 export interface RawUsage {
   five_hour: UsageBucket | null
   seven_day: UsageBucket | null
-  seven_day_opus: UsageBucket | null
-  seven_day_sonnet: UsageBucket | null
-  extra_usage: ExtraUsage | null
 }
 export interface CcQuotaSnapshot {
   fetchedAt: string
@@ -39,12 +35,12 @@ let mountCount = 0
 function emit() { for (const l of listeners) l() }
 function setState(patch: Partial<SingletonState>) { state = { ...state, ...patch }; emit() }
 
-async function doFetch(force: boolean) {
+async function doFetch() {
   if (inflight) return
   inflight = true
   setState({ refreshing: true })
   try {
-    const res = await fetch(force ? '/api/cc-quota?force=1' : '/api/cc-quota')
+    const res = await fetch('/api/cc-quota')
     if (res.ok) {
       const body = (await res.json()) as CcQuotaSnapshot
       setState({ snapshot: body })
@@ -59,9 +55,9 @@ async function doFetch(force: boolean) {
 
 function ensurePolling() {
   if (timer) return
-  void doFetch(false)
+  void doFetch()
   timer = setInterval(() => {
-    if (document.visibilityState !== 'hidden') void doFetch(false)
+    if (document.visibilityState !== 'hidden') void doFetch()
   }, POLL_MS)
   document.addEventListener('visibilitychange', onVisibility)
 }
@@ -73,7 +69,7 @@ function stopPolling() {
 }
 
 function onVisibility() {
-  if (document.visibilityState === 'visible') void doFetch(false)
+  if (document.visibilityState === 'visible') void doFetch()
 }
 
 function subscribe(l: () => void): () => void {
@@ -96,7 +92,7 @@ export function useCcQuota(): UseCcQuota {
     snapshot: s.snapshot,
     lastRefreshedAt: s.snapshot?.fetchedAt ?? null,
     refreshing: s.refreshing,
-    refresh: () => void doFetch(true),
+    refresh: () => void doFetch(),
   }
 }
 

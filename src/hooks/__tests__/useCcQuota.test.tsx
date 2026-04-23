@@ -20,7 +20,7 @@ describe('useCcQuota', () => {
   })
 
   it('fetches once on mount and exposes snapshot', async () => {
-    const body = { fetchedAt: '2026-04-23T10:00:00Z', data: { five_hour: null, seven_day: null, seven_day_opus: null, seven_day_sonnet: null, extra_usage: null }, error: null }
+    const body = { fetchedAt: '2026-04-23T10:00:00Z', data: { five_hour: null, seven_day: null }, error: null }
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })))
 
     const states: unknown[] = []
@@ -45,7 +45,7 @@ describe('useCcQuota', () => {
     await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2))
   })
 
-  it('refresh() hits /api/cc-quota?force=1', async () => {
+  it('refresh() triggers an additional GET /api/cc-quota call', async () => {
     const calls: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       calls.push(url)
@@ -55,7 +55,11 @@ describe('useCcQuota', () => {
     let refresh: (() => void) | null = null
     render(<Probe onSnap={(s) => { refresh = (s as { refresh: () => void }).refresh }} />)
     await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(1))
+    const countBefore = calls.length
     act(() => { refresh!() })
-    await waitFor(() => expect(calls.some(u => u.includes('force=1'))).toBe(true))
+    await waitFor(() => expect(calls.length).toBeGreaterThan(countBefore))
+    // Refresh uses the same endpoint as polling; no force param anymore since
+    // the server just serves the cached push state.
+    expect(calls.every(u => u === '/api/cc-quota')).toBe(true)
   })
 })

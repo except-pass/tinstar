@@ -1,8 +1,26 @@
 # Claude Code Quota HUD — Design
 
-**Status:** approved, ready for implementation plan
+**Status:** shipped on V3.8.0 (PR #62). Pivoted post-implementation from API-poll to statusline-push — see §0 Addendum.
 **Date:** 2026-04-23
 **Author:** gathright@gmail.com + Claude
+
+## 0 · Addendum — pivot to statusline push (same day)
+
+After shipping the initial plan (§3-§10 below), the operator observed 429 rate-limiting on `/api/oauth/usage` (observed `Retry-After: 3418s`, ~57 minutes). While investigating the Claude Code 2.1.118 binary, we discovered that the same `rate_limits` data is piggybacked on every inference API response and exposed through CC's **statusline hook**: when configured, CC invokes a shell command on every render and pipes its full session-state JSON on stdin, including fresh `rate_limits`.
+
+The push path is strictly better for the common case (zero rate-limit risk, fresh on every prompt, no OAuth beta headers). The one tradeoff — quiet periods with no CC activity leave the HUD stale — the operator accepted. No pull fallback.
+
+**Shipped architecture**:
+
+- **Push**: `scripts/cc-quota-statusline.sh` (installed per-machine via `~/.claude/settings.json` `statusLine` key) POSTs CC's session-state JSON to `POST /api/cc-quota/ingest`.
+- **Normalize**: server extracts `rate_limits.{five_hour,seven_day}`, maps `used_percentage` → `utilization` and unix-seconds `resets_at` → ISO string, stores in `CcQuotaService` cache, emits OTel gauges.
+- **Read**: UI polls `GET /api/cc-quota` every 5 minutes (just returns the cached push state; no outbound calls).
+- **No gas-pump chip**: extra-usage state isn't in the statusline payload. Chip removed; per-model weekly too.
+- **Deleted**: `src/server/cc-quota/fetcher.ts`, `fast-sim.ts`, the `?force=1` route param, `CcQuotaFetchError`, `no_creds`/`expired_token`/`http_*`/`network` error codes (replaced by `malformed_json` / `missing_rate_limits` from the ingest path).
+
+Sections 3-9 below describe the superseded API-poll design and are kept for historical context.
+
+---
 
 ## 1 · Problem
 

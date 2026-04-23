@@ -1,17 +1,32 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { handleRequest, type RouteContext } from '../../api/routes'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { CcQuotaService } from '../service'
-import type { RawUsage } from '../types'
-
-function makeReq(url: string): IncomingMessage {
-  return { url, method: 'GET', headers: {} } as unknown as IncomingMessage
-}
+import { EventEmitter } from 'node:events'
 
 interface CapturedRes {
   status: number
   body: string
   res: ServerResponse
+}
+
+function makeGetReq(url: string): IncomingMessage {
+  return { url, method: 'GET', headers: {} } as unknown as IncomingMessage
+}
+
+function makePostReq(url: string, body: string): IncomingMessage {
+  // readBody subscribes to 'data' and 'end' events, so we need an EventEmitter
+  // that emits the body as a Buffer and then an 'end'.
+  const ee = new EventEmitter() as EventEmitter & Record<string, unknown>
+  ee.url = url
+  ee.method = 'POST'
+  ee.headers = { 'content-type': 'application/json' }
+  // Defer emission until the next tick so the listener attaches first.
+  setImmediate(() => {
+    ee.emit('data', Buffer.from(body))
+    ee.emit('end')
+  })
+  return ee as unknown as IncomingMessage
 }
 
 function makeRes(): CapturedRes {
@@ -31,31 +46,54 @@ function makeCtx(svc: CcQuotaService): RouteContext {
 }
 
 describe('GET /api/cc-quota', () => {
-  const sample: RawUsage = {
-    five_hour: { utilization: 40, resets_at: '2026-04-23T13:00:00.000Z' },
-    seven_day: null, seven_day_opus: null, seven_day_sonnet: null, extra_usage: null,
-  }
-
-  it('returns 200 with snapshot body', async () => {
-    const svc = new CcQuotaService({ fetcher: async () => sample, now: () => 1000 })
+  it('returns 200 with the current snapshot (null when nothing ingested)', async () => {
+    const svc = new CcQuotaService({ now: () => 1000 })
     const ctx = makeCtx(svc)
     const r = makeRes()
-    const handled = await handleRequest(ctx, makeReq('/api/cc-quota'), r.res)
+    const handled = await handleRequest(ctx, makeGetReq('/api/cc-quota'), r.res)
     expect(handled).toBe(true)
     expect(r.status).toBe(200)
-    expect(JSON.parse(r.body)).toMatchObject({ data: sample, error: null })
+    expect(JSON.parse(r.body)).toMatchObject({ data: null, error: null })
+  })
+})
+
+describe('POST /api/cc-quota/ingest', () => {
+  const validPayload = {
+    session_id: 'abc',
+    rate_limits: {
+      five_hour: { used_percentage: 33, resets_at: 1776981600 },
+      seven_day: { used_percentage: 77, resets_at: 1777168800 },
+    },
+  }
+
+  it('accepts a statusline payload, returns normalized snapshot', async () => {
+    const svc = new CcQuotaService({ now: () => 1000 })
+    const ctx = makeCtx(svc)
+    const r = makeRes()
+    const handled = await handleRequest(ctx, makePostReq('/api/cc-quota/ingest', JSON.stringify(validPayload)), r.res)
+    expect(handled).toBe(true)
+    expect(r.status).toBe(200)
+    const body = JSON.parse(r.body)
+    expect(body.data.five_hour.utilization).toBe(33)
+    expect(body.data.seven_day.utilization).toBe(77)
+    expect(body.error).toBeNull()
   })
 
-  it('honors ?force=1 after cooldown by re-fetching', async () => {
-    let calls = 0
-    const fetcher = vi.fn(async () => { calls++; return sample })
-    let now = 1000
-    const svc = new CcQuotaService({ fetcher, now: () => now })
+  it('returns 400 on malformed JSON', async () => {
+    const svc = new CcQuotaService({ now: () => 1000 })
     const ctx = makeCtx(svc)
+    const r = makeRes()
+    await handleRequest(ctx, makePostReq('/api/cc-quota/ingest', 'not json'), r.res)
+    expect(r.status).toBe(400)
+    expect(JSON.parse(r.body).error).toBe('malformed_json')
+  })
 
-    await handleRequest(ctx, makeReq('/api/cc-quota'), makeRes().res)
-    now += 6_000
-    await handleRequest(ctx, makeReq('/api/cc-quota?force=1'), makeRes().res)
-    expect(calls).toBe(2)
+  it('POST followed by GET returns the ingested data', async () => {
+    const svc = new CcQuotaService({ now: () => 1000 })
+    const ctx = makeCtx(svc)
+    await handleRequest(ctx, makePostReq('/api/cc-quota/ingest', JSON.stringify(validPayload)), makeRes().res)
+    const r = makeRes()
+    await handleRequest(ctx, makeGetReq('/api/cc-quota'), r.res)
+    expect(JSON.parse(r.body).data.five_hour.utilization).toBe(33)
   })
 })
