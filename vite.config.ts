@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+/// <reference types="vitest" />
 
 function devTitle(): import('vite').Plugin {
   return {
@@ -15,6 +16,9 @@ const backendPort = process.env.TINSTAR_BACKEND_PORT ?? '5281'
 const frontendPort = parseInt(process.env.TINSTAR_FRONTEND_PORT ?? '5280')
 
 export default defineConfig({
+  test: {
+    globals: true,
+  },
   plugins: [react(), devTitle()],
   build: {
     outDir: 'dist/client',
