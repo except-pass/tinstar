@@ -7,6 +7,7 @@
     "tinstar": "bin/tinstar.js"
   },
   "files": [
+    "agent-skills/",
     "bin/",
     "dist/client/",
     "dist/server/",

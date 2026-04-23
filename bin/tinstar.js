@@ -42,6 +42,12 @@ async function main() {
     return doctor()
   }
 
+  // Subcommand: install-skills
+  if (process.argv[2] === 'install-skills') {
+    const { installSkills } = await import('./install-skills.js')
+    return installSkills(process.argv.slice(3))
+  }
+
   console.log(`\n${BOLD}Tinstar${RESET} — Agent Orchestrator\n`)
 
   // Pre-flight checks
