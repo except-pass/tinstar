@@ -29,10 +29,10 @@ function arcPath(fromDeg: number, toDeg: number): string {
   return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} A ${R} ${R} 0 ${largeArc} 1 ${b.x.toFixed(2)} ${b.y.toFixed(2)}`
 }
 
-/** Returns fractional 12-hour value using UTC clock (timezone-stable). */
-function hourOfDay12UTC(ms: number): number {
+/** Returns fractional 12-hour value using the local wall clock. */
+function hourOfDay12(ms: number): number {
   const d = new Date(ms)
-  return (d.getUTCHours() % 12) + d.getUTCMinutes() / 60
+  return (d.getHours() % 12) + d.getMinutes() / 60
 }
 
 type State = 'ok' | 'warn' | 'bad'
@@ -69,11 +69,11 @@ export function CcQuotaClock({ bucket, nowMs }: Props) {
   const usedRatio = Math.max(0, Math.min(1, bucket.utilization / 100))
   const state = classify(usedRatio, timeRatio)
 
-  const resetHourAngle = hourOfDay12UTC(resetMs) * 30             // reset position on clock face (deg CW from 12)
+  const resetHourAngle = hourOfDay12(resetMs) * 30             // reset position on clock face (deg CW from 12)
   const cycleStartAngle = (resetHourAngle - 150 + 360) % 360      // 150° before reset
   const remainingRatio = 1 - usedRatio                             // of the 150° window
   const fillStartAngle = (resetHourAngle - 150 * remainingRatio + 360) % 360
-  const hourAngle = hourOfDay12UTC(now) * 30
+  const hourAngle = hourOfDay12(now) * 30
 
   const resetPt       = pointAt(resetHourAngle)
   const trailingEdge  = pointAt(fillStartAngle)
