@@ -9,6 +9,7 @@ import { handleRequest, type RouteContext } from './api/routes'
 import { MockSensorSimulator } from './simulator/mock-sensors'
 import { join } from 'node:path'
 import { readdirSync, existsSync, rmSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { shortId } from './utils/shortId'
 import {
   loadConfig,
@@ -111,6 +112,19 @@ export function initBackend(): RouteContext {
   // Start draft watcher — emits skill.drafted SSE events when new drafts appear
   ensureDraftsDir()
   watchDrafts(sse)
+
+  // Clear bun's cached nats-channel-mcp so freshly spawned hands re-resolve from
+  // GitHub HEAD. bun caches git specs by commit hash and doesn't re-check the
+  // remote on subsequent `bun x` calls — without this, hands can run stale
+  // channel-server code (e.g. missing upstream fixes like self-echo suppression).
+  try {
+    const bunCacheDir = join(homedir(), '.bun/install/cache')
+    for (const entry of readdirSync(bunCacheDir)) {
+      if (entry.includes('nats-channel-mcp')) {
+        rmSync(join(bunCacheDir, entry), { recursive: true, force: true })
+      }
+    }
+  } catch { /* ignore */ }
 
   // Start managed NATS server (installs binary if needed, spawns, probes)
   natsManager = new NatsManager()
