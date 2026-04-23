@@ -36,8 +36,10 @@ export class CcQuotaService {
     const nowMs = this.now()
     const sinceAttempt = nowMs - this.lastAttemptMs
     const mustWait = sinceAttempt < COOLDOWN_MS
-    if (mustWait && !opts.force) return this.cached
-    if (mustWait && opts.force) return this.cached // cooldown overrides force to prevent thrash
+    // Cooldown applies whether or not the caller set `force`. `force` exists to
+    // bypass the client-side 5-minute poll cache; the 5-second server cooldown is
+    // a rate-limit safety net that always wins.
+    if (mustWait) return this.cached
 
     this.lastAttemptMs = nowMs
     try {
