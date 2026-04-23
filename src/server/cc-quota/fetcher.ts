@@ -31,7 +31,10 @@ export async function fetchCcQuota(): Promise<RawUsage> {
   let res: Response
   try {
     res = await fetch(USAGE_URL, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'anthropic-beta': 'oauth-2025-04-20',
+      },
       signal: AbortSignal.timeout(10_000),
     })
   } catch (err) {
