@@ -131,19 +131,32 @@ Subscriptions and Stream.
 - **Filter bar:** single text input. Substring match (case-insensitive,
   no regex) against both subject and message body. Matches highlighted
   inline in yellow.
-- **Direction pills** below the filter: `All · Sent · Recv`, mutually
-  exclusive, default `All`.
 - **`n hidden` pill** appears in the filter bar when any subscriptions
   are muted; click it to clear all mutes.
 - **Message rows:**
-  - Outbound (this agent's `reply()` calls): **green ▲** icon, green
-    left-border, body text tinted light-green. Determined by matching
-    `event.sender` against this session's name.
-  - Inbound: **amber ▼** icon, amber left-border.
-  - Subject color follows its role (cyan / amber / purple), same palette
-    as the Subscriptions list.
+  - No direction icon. See "Outbound attribution" below — v1 cannot
+    reliably tell which messages this agent itself published, so we
+    don't pretend to. Every row renders the same way.
+  - Left-border color matches the subject's role (cyan / amber / purple),
+    same palette as the Subscriptions list.
   - Timestamp (HH:MM:SS), then subject (truncated), then body (truncated,
     single line; no expand-in-place in v1 — keep scope tight).
+
+### Outbound attribution (not in v1)
+
+`NatsTrafficBridge.extractSender` in `src/server/nats-traffic.ts:136`
+returns the last segment of the subject, which is the *task name* for
+broadcasts and the *recipient session* for DMs — never the publisher.
+The nats-channel MCP that backs `reply()` publishes directly to NATS
+without routing through `bridge.publish()`, so no out-of-band tag is
+available either.
+
+The honest semantic for v1 is: **the Saloon shows all chatter on this
+agent's subscriptions, including echoes of the agent's own broadcasts.**
+Adding proper outbound attribution requires message-metadata changes
+in the nats-channel MCP (tag every published message with the sender
+session name in a NATS header or payload field) and is filed as a
+follow-up, not part of this plan.
 - Auto-scroll to bottom when new events arrive unless the user has
   scrolled up (same pattern as NatsTrafficWidget).
 - Event retention: 200 most recent, dropped FIFO.
@@ -222,11 +235,11 @@ interface Props {
 
 - **Unit:** `subjectRole.ts` — broadcast, DM (ending in session name),
   breakout (prefix match), ambiguous cases.
-- **Unit:** `useSaloonStream` — filtering by subscription set, outbound
-  attribution via sender, 200-event cap, rAF batch flush.
+- **Unit:** `useSaloonStream` — filtering by subscription set, 200-event
+  cap, rAF batch flush.
 - **Component:** `SaloonPanel` — renders broker dot states, empty states,
-  mute toggling, filter substring highlighting, direction-pill filtering,
-  `n hidden` pill behavior.
+  mute toggling, filter substring highlighting, `n hidden` pill
+  behavior.
 - **E2E:** one smoke test in `e2e/` — open a run, assert the Saloon
   header renders with expected subscription count, assert a simulated
   inbound event appears in the stream (leverages `TINSTAR_FAST_SIM=1`).
@@ -234,8 +247,29 @@ interface Props {
 ## Out of scope (for a later spec)
 
 - Publish-from-Saloon. Use the global NatsTrafficWidget for now.
+- **Outbound (Sent vs Received) distinction.** Requires adding a sender
+  tag to every published NATS message via the nats-channel MCP. Filed
+  as a follow-up.
 - Persistent mute/filter state across reloads.
 - Expand-in-place for multi-line message payloads. Current cap: single
   line, truncated, tooltip shows full body.
 - Per-topic liveness pulses or traffic counters on the topic rows.
 - Reworking Telemetry or the right-panel split shape.
+
+## Traffic bridge wiring
+
+For the Saloon to observe messages, `NatsTrafficBridge` must be
+subscribed to each of this session's subjects. Today the bridge only
+subscribes when a `NatsTrafficWidget` registers subjects via
+`updateWidgetSubscriptions`. The Saloon has no widget on the canvas, so
+we need a different path.
+
+Approach: whenever a session's `nats.subscriptions` list changes (session
+creation, breakout-room join, session stop), the server registers the
+full list with the bridge under a synthetic key `saloon:<sessionName>`.
+Same `updateWidgetSubscriptions` API the bridge already exposes — no new
+concept, just a new caller. On session stop, `removeWidget` is called
+with the same key to unsubscribe.
+
+This adds no new SSOT: it simply keeps the bridge mirroring what the
+session authoritatively wants to hear.
