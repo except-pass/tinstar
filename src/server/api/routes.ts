@@ -38,6 +38,7 @@ import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import { spec as openapiSpec } from './openapi'
+import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
@@ -339,6 +340,7 @@ interface CreateSessionContext {
   emitSessionEvent: (event: string, payload: Record<string, unknown>) => void
   secrets: () => Record<string, string>
   dashboardUrl: string
+  natsTraffic?: import('../nats-traffic').NatsTrafficBridge
 }
 
 async function createSessionInternal(
@@ -351,7 +353,7 @@ async function createSessionInternal(
     taskId, epicId, initiativeId, color: colorParam, nats
   } = params
 
-  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl } = ctx
+  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl, natsTraffic } = ctx
 
   if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
   if (!['docker', 'tmux'].includes(backend)) return { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }
@@ -505,6 +507,8 @@ async function createSessionInternal(
     createdAt: new Date().toISOString(),
     spaceId: docStore.activeSpaceId,
   })
+
+  registerSaloonSubs(natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
 
   readyQueue.onStatusChange(name, initialStatus)
   sse.setReadyQueue(readyQueue.getQueue())
@@ -1725,6 +1729,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           patch.natsSubscriptions = newSubs
           log.info('nats', `${existing.sessionId}: subscriptions updated for new task ${patch.taskId}`)
 
+          // Mirror the new subscription list into the traffic bridge so the
+          // Saloon window-event stream stays aligned.
+          registerSaloonSubs(ctx.natsTraffic, existing.sessionId, newSubs)
+
           if (natsWarnings.length > 0) {
             ctx.docStore.upsertRun(id, { ...existing, ...patch })
             return json(res, { ok: true, data: ctx.docStore.getRun(id), warnings: { nats: natsWarnings } })
@@ -1920,6 +1928,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             emitSessionEvent,
             secrets,
             dashboardUrl,
+            natsTraffic: ctx.natsTraffic,
           }
 
           // Check if any session needs a worktree — if so, create ONE shared worktree for all
@@ -2221,6 +2230,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             spaceId: ctx.docStore.activeSpaceId,
           })
 
+          registerSaloonSubs(ctx.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+
           ctx.readyQueue.onStatusChange(name, initialStatus)
           ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
           ctx.sse.broadcastReadyQueueUpdate()
@@ -2341,6 +2352,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         // Respond immediately — UI removal is instant
         ctx.docStore.deleteRun(name)
+        unregisterSaloonSubs(ctx.natsTraffic, name)
         emitSessionEvent('managed_session.deleted', { name })
         ctx.readyQueue.onDelete(name)
         ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
@@ -2707,6 +2719,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           parentId: parentRun?.id,  // Track who spawned this hand
         })
 
+        // Mirror the child's subscription list into the traffic bridge so the
+        // Saloon window-event stream sees messages on its breakout room.
+        registerSaloonSubs(ctx.natsTraffic, spawnedName, natsConfig?.enabled ? natsConfig.subscriptions : [])
+
         // Add breakout room to parent's run record — but only if the parent
         // is actually subscribed to it. On fallback, there's no live room.
         // upsertRun is a full replacement, so spread the existing run first.
@@ -2728,12 +2744,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (latest?.nats?.enabled) {
             const existing = latest.nats.subscriptions ?? []
             if (!existing.includes(breakoutRoom)) {
+              const nextSubs = [...existing, breakoutRoom]
               updateSession(sessDir, parentName, {
                 nats: {
                   ...latest.nats,
-                  subscriptions: [...existing, breakoutRoom],
+                  subscriptions: nextSubs,
                 },
               })
+              // Mirror the parent's expanded subscription list into the traffic bridge.
+              registerSaloonSubs(ctx.natsTraffic, parentName, nextSubs)
             }
           }
         }
@@ -2865,6 +2884,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // Keep the run's natsSubscriptions in sync
             const run = ctx.docStore.getRun(name)
             if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
+
+            // Mirror the updated subscription list into the traffic bridge.
+            registerSaloonSubs(ctx.natsTraffic, name, subs)
           }
           json(res, {
             ok: true,
@@ -2900,6 +2922,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // Keep the run's natsSubscriptions in sync
           const run = ctx.docStore.getRun(name)
           if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
+
+          // Mirror the updated subscription list into the traffic bridge.
+          registerSaloonSubs(ctx.natsTraffic, name, subs)
 
           json(res, {
             ok: true,
