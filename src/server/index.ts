@@ -26,11 +26,11 @@ import {
 import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
 import { StatusWatcher } from './sessions/status-watcher'
-import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
 import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
 import { NatsTrafficBridge } from './nats-traffic'
+import { registerSaloonSubs } from './api/saloonBridge'
 import { SessionReadinessTracker } from './sessions/readiness'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
@@ -114,10 +114,6 @@ export function initBackend(): RouteContext {
     process.once('SIGTERM', shutdown)
   }
 
-  // Start draft watcher — emits skill.drafted SSE events when new drafts appear
-  ensureDraftsDir()
-  watchDrafts(sse)
-
   // Clear bun's cached nats-channel-mcp so freshly spawned hands re-resolve from
   // GitHub HEAD. bun caches git specs by commit hash and doesn't re-check the
   // remote on subsequent `bun x` calls — without this, hands can run stale
@@ -142,6 +138,19 @@ export function initBackend(): RouteContext {
     for (const widget of docStore.getAllNatsTrafficWidgets()) {
       if (widget.subscriptions?.length) {
         natsTraffic.updateWidgetSubscriptions(widget.id, widget.subscriptions)
+      }
+    }
+
+    // Re-register every persisted session's subs with the bridge. Saloon entries
+    // are synthetic (keyed `saloon:<name>`) and not persisted as widget docs, so
+    // the widget hydration loop above doesn't cover them.
+    if (sessionConfig) {
+      const sessEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
+      for (const entry of sessEntries) {
+        if (!entry.isDirectory()) continue
+        const sess = getSession(sessionConfig.dirs.sessions, entry.name)
+        if (!sess) continue
+        registerSaloonSubs(natsTraffic, sess.name, sess.nats?.subscriptions ?? [])
       }
     }
 
@@ -241,6 +250,7 @@ export function initBackend(): RouteContext {
             // Format: [broadcast, direct] where direct = broadcast + session name
             natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
             natsSubscriptions: sess.nats?.subscriptions,
+            natsControlOrphanedAt: sess.natsControlOrphanedAt ?? null,
             taskId: '',
             worktreeId: '',
             createdAt: sess.created ?? new Date().toISOString(),

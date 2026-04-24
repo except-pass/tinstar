@@ -83,46 +83,5 @@ export class OTelProcessor {
       this.store.recordMetric(fileMetric)
       this.exporter.pushMetric(fileMetric)
     })
-
-    this.bus.on('run.procedure_updated', (e) => {
-      const ref = this.runSpanMap.get(e.payload.runId)
-      if (!ref) return
-
-      const procSpanId = randomUUID().replace(/-/g, '').slice(0, 16)
-      const span: Span = {
-        traceId: ref.traceId,
-        spanId: procSpanId,
-        parentSpanId: ref.spanId,
-        name: `procedure:${e.payload.procedure.name}`,
-        kind: 'internal',
-        startTime: new Date().toISOString(),
-        status: e.payload.procedure.status === 'complete' ? 'ok'
-          : e.payload.procedure.status === 'failed' ? 'error'
-          : 'unset',
-        attributes: {
-          'procedure.id': e.payload.procedure.id,
-          'procedure.command': e.payload.procedure.command,
-          'procedure.status': e.payload.procedure.status,
-        },
-        events: [],
-      }
-
-      if (e.payload.procedure.status === 'complete' || e.payload.procedure.status === 'failed') {
-        span.endTime = new Date().toISOString()
-      }
-
-      this.store.addSpan(span)
-      this.exporter.pushSpan(span)
-
-      const cmdMetric = {
-        name: 'commands_run',
-        type: 'counter' as const,
-        value: 1,
-        labels: { run_id: e.payload.runId, procedure: e.payload.procedure.name },
-        timestamp: new Date().toISOString(),
-      }
-      this.store.recordMetric(cmdMetric)
-      this.exporter.pushMetric(cmdMetric)
-    })
   }
 }

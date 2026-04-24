@@ -37,10 +37,8 @@ import {
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
-import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
-import { saveDraft, discardDraft, DRAFTS_DIR, ensureDraftsDir } from '../sessions/skill-drafts'
-import type { SkillDTO } from '../../types'
 import { spec as openapiSpec } from './openapi'
+import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
@@ -342,6 +340,7 @@ interface CreateSessionContext {
   emitSessionEvent: (event: string, payload: Record<string, unknown>) => void
   secrets: () => Record<string, string>
   dashboardUrl: string
+  natsTraffic?: import('../nats-traffic').NatsTrafficBridge
 }
 
 async function createSessionInternal(
@@ -354,7 +353,7 @@ async function createSessionInternal(
     taskId, epicId, initiativeId, color: colorParam, nats
   } = params
 
-  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl } = ctx
+  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl, natsTraffic } = ctx
 
   if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
   if (!['docker', 'tmux'].includes(backend)) return { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }
@@ -502,11 +501,14 @@ async function createSessionInternal(
     natsEnabled: resolvedNats?.enabled ?? false,
     natsSubject,
     natsSubscriptions: resolvedNats?.enabled ? resolvedNats.subscriptions : undefined,
+    natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
     taskId: taskId ?? '',
     worktreeId: worktreeEntityId,
     createdAt: new Date().toISOString(),
     spaceId: docStore.activeSpaceId,
   })
+
+  registerSaloonSubs(natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
 
   readyQueue.onStatusChange(name, initialStatus)
   sse.setReadyQueue(readyQueue.getQueue())
@@ -1727,6 +1729,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           patch.natsSubscriptions = newSubs
           log.info('nats', `${existing.sessionId}: subscriptions updated for new task ${patch.taskId}`)
 
+          // Mirror the new subscription list into the traffic bridge so the
+          // Saloon window-event stream stays aligned.
+          registerSaloonSubs(ctx.natsTraffic, existing.sessionId, newSubs)
+
           if (natsWarnings.length > 0) {
             ctx.docStore.upsertRun(id, { ...existing, ...patch })
             return json(res, { ok: true, data: ctx.docStore.getRun(id), warnings: { nats: natsWarnings } })
@@ -1736,99 +1742,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       ctx.docStore.upsertRun(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getRun(id) })
-    })
-    return true
-  }
-
-  // --- Skills ---
-
-  // GET /api/skills
-  if (method === 'GET' && url === '/api/skills') {
-    const skills = getSkills()
-    const dtos: SkillDTO[] = skills.map(({ name, description, source }) => ({ name, description, source }))
-    json(res, { skills: dtos })
-    return true
-  }
-
-  // POST /api/skills/save
-  if (method === 'POST' && url === '/api/skills/save') {
-    readBody(req).then(async (body) => {
-      const { draftId, location, sessionId } = JSON.parse(body) as {
-        draftId: string
-        location: 'system' | 'repo'
-        sessionId?: string
-      }
-      if (!draftId || !['system', 'repo'].includes(location)) {
-        json(res, { error: 'invalid-params' }, 400)
-        return
-      }
-
-      // Resolve projectRoot for repo-level saves
-      let projectRoot: string | undefined
-      if (location === 'repo' && sessionId && ctx.sessionConfig) {
-        const sess = getSession(ctx.sessionConfig.dirs.sessions, sessionId)
-        if (sess?.workspace?.path) {
-          projectRoot = sess.workspace.path
-        }
-      }
-
-      try {
-        // Read skillName from draft frontmatter BEFORE moving the file
-        const draftPath = join(DRAFTS_DIR, `${draftId}.md`)
-        let skillName = draftId  // fallback
-        try {
-          const content = readFileSync(draftPath, 'utf-8')
-          const fm = parseFrontmatter(content)
-          if (fm.name) skillName = fm.name
-        } catch { /* use fallback */ }
-
-        saveDraft(draftId, location, projectRoot)
-        bustSkillCache()
-
-        const dto: SkillDTO = {
-          name: skillName,
-          source: location === 'system' ? 'system' : 'repo',
-        }
-        // Try to get description from the refreshed cache
-        const freshSkills = getSkills()
-        const saved = freshSkills.find(s => s.name === skillName)
-        if (saved?.description) dto.description = saved.description
-
-        ctx.sse.broadcastEvent('skill.saved', { skill: dto })
-        json(res, { skill: dto })
-      } catch (err) {
-        const e = err as Error & { existingPath?: string }
-        if (e.message === 'skill-name-conflict') {
-          json(res, { error: 'skill-name-conflict', existingPath: e.existingPath }, 409)
-        } else {
-          json(res, { error: e.message }, 500)
-        }
-      }
-    })
-    return true
-  }
-
-  // POST /api/skills/discard
-  if (method === 'POST' && url === '/api/skills/discard') {
-    readBody(req).then((body) => {
-      const { draftId } = JSON.parse(body) as { draftId: string }
-      if (!draftId) { json(res, { error: 'missing draftId' }, 400); return }
-      discardDraft(draftId)
-      json(res, { ok: true })
-    })
-    return true
-  }
-
-  // POST /api/skills/create-draft — create a skeleton skill draft without agent involvement.
-  // The file watcher in watchDrafts() picks this up and emits skill.drafted to the client.
-  if (method === 'POST' && url === '/api/skills/create-draft') {
-    readBody(req).then((body) => {
-      const { draftId, name } = JSON.parse(body) as { draftId: string; name: string }
-      if (!draftId || !name) { json(res, { error: 'missing draftId or name' }, 400); return }
-      ensureDraftsDir()
-      const filePath = join(DRAFTS_DIR, `${draftId}.md`)
-      writeFileSync(filePath, `---\nname: ${name}\ndescription: ${name}\n---\n\n# ${name}\n`)
-      json(res, { ok: true, draftId })
     })
     return true
   }
@@ -2015,6 +1928,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             emitSessionEvent,
             secrets,
             dashboardUrl,
+            natsTraffic: ctx.natsTraffic,
           }
 
           // Check if any session needs a worktree — if so, create ONE shared worktree for all
@@ -2309,11 +2223,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             agentIcon: resolvedTemplate?.icon ?? undefined,
             natsEnabled: resolvedNats?.enabled ?? false,
             natsSubject,
+            natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
             taskId: taskId ?? '',
             worktreeId: worktreeEntityId,
             createdAt: new Date().toISOString(),
             spaceId: ctx.docStore.activeSpaceId,
           })
+
+          registerSaloonSubs(ctx.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
 
           ctx.readyQueue.onStatusChange(name, initialStatus)
           ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
@@ -2402,6 +2319,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             setState(sessDir, session.name, 'running')
             // Fresh channel-server → any prior orphan is stale.
             updateSession(sessDir, session.name, { natsControlOrphanedAt: null })
+            {
+              const run = ctx.docStore.getRun(session.name)
+              if (run) ctx.docStore.upsertRun(session.name, { ...run, natsControlOrphanedAt: null })
+            }
             ctx.docStore.updateRunStatus(session.name, 'running')
             // Also update port on the run in case it changed
             if (resumePort) {
@@ -2431,6 +2352,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         // Respond immediately — UI removal is instant
         ctx.docStore.deleteRun(name)
+        unregisterSaloonSubs(ctx.natsTraffic, name)
         emitSessionEvent('managed_session.deleted', { name })
         ctx.readyQueue.onDelete(name)
         ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
@@ -2665,6 +2587,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // surface it. Clear it on next successful session restart.
             const orphanedAt = new Date().toISOString()
             updateSession(sessDir, parentName, { natsControlOrphanedAt: orphanedAt })
+            {
+              const run = ctx.docStore.getRun(parentName)
+              if (run) ctx.docStore.upsertRun(parentName, { ...run, natsControlOrphanedAt: orphanedAt })
+            }
             emitSessionEvent('managed_session.nats_orphaned', {
               name: parentName,
               orphanedAt,
@@ -2781,6 +2707,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           natsEnabled: natsConfig?.enabled ?? false,
           natsSubject,
           natsSubscriptions: natsConfig?.enabled ? natsConfig.subscriptions : undefined,
+          natsControlOrphanedAt: spawnedSession.natsControlOrphanedAt ?? null,
           // Only record the breakout room if it was actually live (parent is
           // subscribed to it). On fallback, the child uses the parent's
           // direct subject so there's no separate room to track.
@@ -2791,6 +2718,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           spaceId: ctx.docStore.activeSpaceId,
           parentId: parentRun?.id,  // Track who spawned this hand
         })
+
+        // Mirror the child's subscription list into the traffic bridge so the
+        // Saloon window-event stream sees messages on its breakout room.
+        registerSaloonSubs(ctx.natsTraffic, spawnedName, natsConfig?.enabled ? natsConfig.subscriptions : [])
 
         // Add breakout room to parent's run record — but only if the parent
         // is actually subscribed to it. On fallback, there's no live room.
@@ -2813,12 +2744,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (latest?.nats?.enabled) {
             const existing = latest.nats.subscriptions ?? []
             if (!existing.includes(breakoutRoom)) {
+              const nextSubs = [...existing, breakoutRoom]
               updateSession(sessDir, parentName, {
                 nats: {
                   ...latest.nats,
-                  subscriptions: [...existing, breakoutRoom],
+                  subscriptions: nextSubs,
                 },
               })
+              // Mirror the parent's expanded subscription list into the traffic bridge.
+              registerSaloonSubs(ctx.natsTraffic, parentName, nextSubs)
             }
           }
         }
@@ -2950,6 +2884,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // Keep the run's natsSubscriptions in sync
             const run = ctx.docStore.getRun(name)
             if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
+
+            // Mirror the updated subscription list into the traffic bridge.
+            registerSaloonSubs(ctx.natsTraffic, name, subs)
           }
           json(res, {
             ok: true,
@@ -2985,6 +2922,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // Keep the run's natsSubscriptions in sync
           const run = ctx.docStore.getRun(name)
           if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
+
+          // Mirror the updated subscription list into the traffic bridge.
+          registerSaloonSubs(ctx.natsTraffic, name, subs)
 
           json(res, {
             ok: true,

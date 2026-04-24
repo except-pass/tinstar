@@ -9,14 +9,10 @@ export type {
   DiffBlock,
   RecapEntry,
   TouchedFile,
-  StoredProcedure,
-  ResolvedProcedure,
-  PendingSkill,
-  SkillDTO,
   RunData,
 } from '../types'
 
-import type { RunData, SessionStatus as RunStatus, StoredProcedure } from '../types'
+import type { RunData, SessionStatus as RunStatus } from '../types'
 
 // --- Entity settings (closest-ancestor inheritance) ---
 
@@ -28,7 +24,6 @@ export interface EntitySettings {
   skipPermissions?: boolean
   cliTemplate?: string
   defaultRunColor?: string
-  procedures?: StoredProcedure[]
 }
 
 export interface ResolvedSettings {

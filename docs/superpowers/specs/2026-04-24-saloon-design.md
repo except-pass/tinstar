@@ -110,7 +110,7 @@ A 160px-wide vertical panel, two sections split by a draggable divider
 - Color-coded by role:
   - **cyan** — broadcast (task channel, e.g. `tinstar.<space>.<init>.<epic>.<task>`)
   - **amber** — DM inbox (subject ends with `.<sessionName>`)
-  - **purple** — breakout room (subject starts `tinstar.breakout.` OR
+  - **purple** — breakout room (subject starts `tinstar.room.` OR
     was added via the breakout-room path; classifier lives in
     `subjectRole.ts`)
 - **Click a row to toggle cosmetic mute.** Mute is display-only: messages

@@ -14,7 +14,6 @@ import HierarchySidebar from './HierarchySidebar'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { SelectionProvider, useSelection } from './SelectionProvider'
 import { TaxonomyProvider } from './TaxonomyContext'
-import { SkillsProvider } from './SkillsProvider'
 import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
 import { HotgroupProvider } from '../hotkeys/HotgroupContext'
@@ -760,7 +759,6 @@ function WorkspaceShellInner() {
       {activeSpaceId ? (
         <HotgroupProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
-          <SkillsProvider>
             <div className="flex h-screen w-screen bg-surface-base text-slate-200 font-mono">
               {/* Left column: top bar + sidebar stacked — canvas gets full height */}
               {sidebarCollapsed ? (
@@ -956,7 +954,6 @@ function WorkspaceShellInner() {
                 />
               )}
             </div>
-          </SkillsProvider>
           </TaxonomyProvider>
         </HotgroupProvider>
       ) : (

@@ -38,33 +38,6 @@ export interface TouchedFile {
   readOnly?: boolean
 }
 
-export interface StoredProcedure {
-  id: string
-  skillName: string   // matches SkillDTO.name
-}
-
-export interface ResolvedProcedure extends StoredProcedure {
-  entityId: string
-  entityType: 'task' | 'epic' | 'initiative'
-}
-
-export interface PendingSkill {
-  id: string                // client-generated UUID == draftId
-  placeholderName: string   // typed description shown while agent works
-  status: 'defining' | 'saving' | 'error'
-  entityId: string
-  entityType: 'task' | 'epic' | 'initiative'
-  sessionId: string
-  /** Pre-chosen save location; when set, skill.drafted auto-saves without showing SaveSkillModal */
-  preferredLocation?: 'system' | 'repo'
-}
-
-export interface SkillDTO {
-  name: string
-  description?: string
-  source: 'system' | 'repo' | 'plugin'
-}
-
 export interface RunData {
   id: string
   color?: string
@@ -86,6 +59,12 @@ export interface RunData {
   natsEnabled?: boolean
   natsSubject?: string
   natsSubscriptions?: string[]
+  /**
+   * ISO timestamp when the session's NATS control socket was detected
+   * as orphaned. null means healthy or NATS disabled. Mirrors
+   * Session.natsControlOrphanedAt — drives the Saloon broker-health dot.
+   */
+  natsControlOrphanedAt?: string | null
   parentId?: string  // ID of the run that spawned this one (for hands)
   breakoutRooms?: string[]  // NATS room subjects for parent-child communication
 }

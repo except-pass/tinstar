@@ -76,7 +76,6 @@ The CLI checks for dependencies (Claude Code, tmux, ttyd), offers to register yo
 - **External URL** — Attach a link to any entity (initiative, epic, task); opens in a new tab from the settings dialog
 - **Quick Draw** — Hotgroup badges on all work widgets; assign sessions to groups with Ctrl+1–9, jump with 1–9, remove with Ctrl+Shift+1–9
 - **Keyboard shortcuts** — H: toggle empty containers, E: open entity settings, +: create child entity (settings auto-opens), plus full hotkey reference in the sidebar
-- **Procedures sidebar** — Star skills as procedures for instant access; remove procedures directly from the sidebar; define-skill types prompt into the session terminal
 
 ### Commands
 - **`/ship`** — Release workflow command
