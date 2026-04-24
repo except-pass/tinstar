@@ -162,6 +162,7 @@ export function generateNatsMcpConfig(opts: {
   nats: SessionNats
   channelServerPackage: string  // npm package or github:user/repo
   bunPath: string
+  jetstream?: boolean
 }): string {
   // Write to workspace CWD — Claude looks for .mcp.json in the working directory
   const mcpConfigPath = join(opts.workspacePath, '.mcp.json')
@@ -175,6 +176,8 @@ export function generateNatsMcpConfig(opts: {
   // POST/DELETE /api/sessions/:name/subscriptions. Requires nats-channel-mcp
   // >= the commit that introduced the flag (except-pass/nats-channel-mcp#1).
   args.push('--control-socket', natsControlSocketPath(opts.sessionName))
+
+  if (opts.jetstream) args.push('--jetstream')
 
   const mcpConfig = {
     mcpServers: {
@@ -306,6 +309,7 @@ export async function createTmuxSession(
       nats: opts.session.nats,
       channelServerPackage: config.nats.channelServerPackage,
       bunPath: config.nats.bunPath,
+      jetstream: config.nats.jetstream,
     })
     natsOpts = { enabled: true }
     log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured`)
@@ -368,6 +372,7 @@ export async function startTmuxSession(
       nats: opts.session.nats,
       channelServerPackage: config.nats.channelServerPackage,
       bunPath: config.nats.bunPath,
+      jetstream: config.nats.jetstream,
     })
     natsOpts = { enabled: true }
   }

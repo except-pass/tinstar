@@ -37,6 +37,13 @@ export interface TinstarConfig {
   nats: {
     channelServerPackage: string  // npm package or github:user/repo
     bunPath: string
+    /**
+     * Pass --jetstream to the channel-server. Enables durable consumers
+     * (buffered messages survive short pauses + reconnect) and the
+     * `replay` MCP tool. Requires nats-server to be running with -js.
+     * See nats-channel-mcp's README "JetStream Mode" section.
+     */
+    jetstream: boolean
   }
 }
 
@@ -129,6 +136,8 @@ const BASE_CONFIG = {
     // Override in ~/.config/tinstar/config.json for local dev
     channelServerPackage: 'github:except-pass/nats-channel-mcp',
     bunPath: join(homedir(), '.bun/bin/bun'),
+    // Off by default; requires nats-server -js
+    jetstream: false,
   },
 }
 
@@ -199,6 +208,9 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
       bunPath: typeof (userConfig.nats as Record<string, unknown>)?.bunPath === 'string'
         ? (userConfig.nats as Record<string, string>).bunPath!
         : merged.nats.bunPath,
+      jetstream: typeof (userConfig.nats as Record<string, unknown>)?.jetstream === 'boolean'
+        ? (userConfig.nats as Record<string, boolean>).jetstream!
+        : merged.nats.jetstream,
     },
   }
 

@@ -7,5 +7,6 @@ registerWidget({
   contexts: [],
   bindings: [
     { key: 'KeyZ', label: 'Fit to viewport', action: 'fit-viewport' },
+    { key: 'KeyR', label: 'Reload', action: 'reload' },
   ],
 })
