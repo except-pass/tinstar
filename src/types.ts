@@ -59,6 +59,12 @@ export interface RunData {
   natsEnabled?: boolean
   natsSubject?: string
   natsSubscriptions?: string[]
+  /**
+   * ISO timestamp when the session's NATS control socket was detected
+   * as orphaned. null means healthy or NATS disabled. Mirrors
+   * Session.natsControlOrphanedAt — drives the Saloon broker-health dot.
+   */
+  natsControlOrphanedAt?: string | null
   parentId?: string  // ID of the run that spawned this one (for hands)
   breakoutRooms?: string[]  // NATS room subjects for parent-child communication
 }

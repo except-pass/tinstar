@@ -236,6 +236,7 @@ export function initBackend(): RouteContext {
             // Format: [broadcast, direct] where direct = broadcast + session name
             natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
             natsSubscriptions: sess.nats?.subscriptions,
+            natsControlOrphanedAt: sess.natsControlOrphanedAt ?? null,
             taskId: '',
             worktreeId: '',
             createdAt: sess.created ?? new Date().toISOString(),

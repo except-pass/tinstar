@@ -499,6 +499,7 @@ async function createSessionInternal(
     natsEnabled: resolvedNats?.enabled ?? false,
     natsSubject,
     natsSubscriptions: resolvedNats?.enabled ? resolvedNats.subscriptions : undefined,
+    natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
     taskId: taskId ?? '',
     worktreeId: worktreeEntityId,
     createdAt: new Date().toISOString(),
@@ -2213,6 +2214,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             agentIcon: resolvedTemplate?.icon ?? undefined,
             natsEnabled: resolvedNats?.enabled ?? false,
             natsSubject,
+            natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
             taskId: taskId ?? '',
             worktreeId: worktreeEntityId,
             createdAt: new Date().toISOString(),
@@ -2306,6 +2308,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             setState(sessDir, session.name, 'running')
             // Fresh channel-server → any prior orphan is stale.
             updateSession(sessDir, session.name, { natsControlOrphanedAt: null })
+            {
+              const run = ctx.docStore.getRun(session.name)
+              if (run) ctx.docStore.upsertRun(session.name, { ...run, natsControlOrphanedAt: null })
+            }
             ctx.docStore.updateRunStatus(session.name, 'running')
             // Also update port on the run in case it changed
             if (resumePort) {
@@ -2569,6 +2575,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // surface it. Clear it on next successful session restart.
             const orphanedAt = new Date().toISOString()
             updateSession(sessDir, parentName, { natsControlOrphanedAt: orphanedAt })
+            {
+              const run = ctx.docStore.getRun(parentName)
+              if (run) ctx.docStore.upsertRun(parentName, { ...run, natsControlOrphanedAt: orphanedAt })
+            }
             emitSessionEvent('managed_session.nats_orphaned', {
               name: parentName,
               orphanedAt,
@@ -2685,6 +2695,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           natsEnabled: natsConfig?.enabled ?? false,
           natsSubject,
           natsSubscriptions: natsConfig?.enabled ? natsConfig.subscriptions : undefined,
+          natsControlOrphanedAt: spawnedSession.natsControlOrphanedAt ?? null,
           // Only record the breakout room if it was actually live (parent is
           // subscribed to it). On fallback, the child uses the parent's
           // direct subject so there's no separate room to track.
