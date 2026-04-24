@@ -268,6 +268,24 @@ function SidebarNode({
           <span className="w-4" />
         )}
 
+        {/* Robot face chip (runs only) — procedural face seeded by run id, ring tinted by status color */}
+        {isRun && (
+          <span
+            className="flex items-center justify-center flex-shrink-0"
+            style={{
+              width: 16,
+              height: 16,
+              borderRadius: '50%',
+              border: `1.5px solid ${node.color ?? '#94a3b8'}`,
+              background: 'rgba(15,23,42,0.6)',
+            }}
+            data-testid={`sidebar-agent-chip-${node.id}`}
+            aria-hidden="true"
+          >
+            <AgentIcon seed={node.entityId} color={node.color} className="w-3 h-3" />
+          </span>
+        )}
+
         {/* Icon */}
         <span className="w-4 h-4 flex items-center justify-center flex-shrink-0" aria-hidden="true">
           {node.type === 'run'
