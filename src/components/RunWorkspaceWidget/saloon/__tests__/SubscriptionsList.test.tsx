@@ -13,7 +13,7 @@ describe('<SubscriptionsList>', () => {
         subscriptions={[
           'tinstar.a.b.c',
           'tinstar.a.b.c.natsviz',
-          'tinstar.breakout.room1',
+          'tinstar.room.room1',
         ]}
         mutedSet={new Set()}
         onToggleMute={noop}

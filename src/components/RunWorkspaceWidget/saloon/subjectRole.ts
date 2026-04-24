@@ -1,6 +1,6 @@
 export type SubjectRole = 'broadcast' | 'dm' | 'breakout'
 
-const BREAKOUT_PREFIX = 'tinstar.breakout.'
+const BREAKOUT_PREFIX = 'tinstar.room.'
 
 export function classifySubject(subject: string, sessionName: string): SubjectRole {
   const s = subject.toLowerCase()

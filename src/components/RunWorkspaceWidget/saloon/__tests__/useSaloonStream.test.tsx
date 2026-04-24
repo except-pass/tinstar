@@ -41,6 +41,19 @@ describe('useSaloonStream', () => {
     expect(result.current[199].data).toBe('m249')
   })
 
+  it('captures events whose subject matches a wildcard subscription', async () => {
+    const { result } = renderHook(() =>
+      useSaloonStream({ subscriptions: ['tinstar.myspace.>'] }),
+    )
+    act(() => {
+      fireTraffic({ timestamp: 't', subject: 'tinstar.myspace.init.epic.task.sess', data: 'yes', direction: 'inbound' })
+      fireTraffic({ timestamp: 't2', subject: 'tinstar.elsewhere.foo', data: 'no', direction: 'inbound' })
+    })
+    await act(async () => { vi.runAllTimers() })
+    expect(result.current).toHaveLength(1)
+    expect(result.current[0].data).toBe('yes')
+  })
+
   it('reacts to subscription list changes', async () => {
     const { result, rerender } = renderHook(
       ({ subs }: { subs: string[] }) => useSaloonStream({ subscriptions: subs }),

@@ -5,8 +5,8 @@ describe('classifySubject', () => {
   const sessionName = 'natsViz'
 
   it('classifies breakout subjects by prefix', () => {
-    expect(classifySubject('tinstar.breakout.abc123', sessionName)).toBe('breakout')
-    expect(classifySubject('tinstar.breakout.pair-7af3.design', sessionName)).toBe('breakout')
+    expect(classifySubject('tinstar.room.abc123', sessionName)).toBe('breakout')
+    expect(classifySubject('tinstar.room.pair-7af3.design', sessionName)).toBe('breakout')
   })
 
   it('classifies DM inbox by suffix match against session name', () => {
@@ -25,6 +25,6 @@ describe('classifySubject', () => {
 
   it('prefers breakout over DM when both could match', () => {
     // Hypothetical breakout subject that happens to end with the session name.
-    expect(classifySubject('tinstar.breakout.room.natsviz', sessionName)).toBe('breakout')
+    expect(classifySubject('tinstar.room.room.natsviz', sessionName)).toBe('breakout')
   })
 })

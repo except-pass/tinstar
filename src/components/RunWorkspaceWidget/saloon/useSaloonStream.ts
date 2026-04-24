@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { subjectMatches } from './subjectMatches'
 
 export interface SaloonEvent {
   timestamp: string
@@ -36,7 +37,7 @@ export function useSaloonStream({ subscriptions }: Options): SaloonEvent[] {
 
     const handler = (e: Event) => {
       const event = (e as CustomEvent).detail as SaloonEvent
-      if (!subsRef.current.includes(event.subject)) return
+      if (!subsRef.current.some(pattern => subjectMatches(event.subject, pattern))) return
       batchRef.current.push(event)
       if (rafRef.current === null) {
         // rAF may be unavailable in fake-timer envs — fall back to setTimeout(0)
