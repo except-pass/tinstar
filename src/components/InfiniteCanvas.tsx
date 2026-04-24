@@ -649,14 +649,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
   }, [layouts])
 
-  // zoomToFitRuns: compute bounding box and zoom-to-fit with 40px margin
+  // zoomToFitRuns: compute bounding box and zoom-to-fit flush with the viewport (no margin)
   const zoomToFitRuns = useCallback((runIds: string[]) => {
     const el = containerRef.current
     if (!el) return
     const box = getBoundingBox(runIds)
     if (!box) return
     const rect = el.getBoundingClientRect()
-    centerOn(box.x, box.y, box.w, box.h, rect.width, rect.height)
+    centerOn(box.x, box.y, box.w, box.h, rect.width, rect.height, 0)
   }, [getBoundingBox, centerOn])
 
   // panToRuns: pan to center bounding box at current zoom, 60px margin (no zoom change)
