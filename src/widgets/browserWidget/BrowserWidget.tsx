@@ -70,6 +70,7 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
   useEffect(() => {
     registerActionHandler(widget.id, (action) => {
       if (action === 'fit-viewport') fitWidgetToViewport(widget.id)
+      else if (action === 'reload') reloadRef.current()
     })
     return () => deregisterActionHandler(widget.id)
   }, [widget.id])
@@ -106,6 +107,9 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
     setUrl('')
     requestAnimationFrame(() => setUrl(current))
   }, [url])
+
+  const reloadRef = useRef(reload)
+  reloadRef.current = reload
 
   // Always proxy so the iframe works when Tinstar is accessed via a remote hostname
   // (e.g. Tailscale) — without proxying, localhost URLs would resolve on the user's
