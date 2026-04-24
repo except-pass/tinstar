@@ -110,7 +110,7 @@ import { discoverHands, getHandByName } from '../hands'
  * Path is defined by natsControlSocketPath() and wired up on the channel-server side
  * by the --control-socket arg set in generateNatsMcpConfig (backends/tmux.ts).
  */
-function sendNatsSocketCommand(sessionName: string, cmd: { action: 'subscribe' | 'unsubscribe'; subject: string }): Promise<void> {
+function sendNatsSocketCommand(sessionName: string, cmd: { action: 'subscribe' | 'unsubscribe' | 'delete-durable'; subject: string }): Promise<void> {
   return new Promise((resolve, reject) => {
     const socketPath = natsControlSocketPath(sessionName)
     const socket = createConnection(socketPath)
@@ -160,7 +160,7 @@ type NatsSocketWarningCode =
 interface NatsSocketWarning {
   code: NatsSocketWarningCode
   message: string
-  action: 'subscribe' | 'unsubscribe'
+  action: 'subscribe' | 'unsubscribe' | 'delete-durable'
   subject: string
   /** Parent session is alive but its dynamic-subscribe path is dead; caller should restart the session to recover. */
   restartRecommended?: boolean
@@ -168,7 +168,7 @@ interface NatsSocketWarning {
 
 export function classifyNatsSocketError(
   err: unknown,
-  action: 'subscribe' | 'unsubscribe',
+  action: 'subscribe' | 'unsubscribe' | 'delete-durable',
   subject: string,
   sessionName: string,
   fileExists: boolean,
@@ -220,7 +220,7 @@ export function classifyNatsSocketError(
  */
 async function trySendNatsSocketCommand(
   sessionName: string,
-  cmd: { action: 'subscribe' | 'unsubscribe'; subject: string },
+  cmd: { action: 'subscribe' | 'unsubscribe' | 'delete-durable'; subject: string },
 ): Promise<NatsSocketWarning | null> {
   try {
     await sendNatsSocketCommand(sessionName, cmd)
@@ -2425,6 +2425,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ;(async () => {
           try {
             if (session) {
+              // Best-effort delete-durable for every NATS subject this session
+              // owned. Must run BEFORE backend stop — channel-server's control
+              // socket disappears when the process dies. Failures here are
+              // benign: channel-server's InactiveThreshold reaps any leftover.
+              if (session.nats?.enabled && cfg.nats.jetstream) {
+                const run = ctx.docStore.getRun(name)
+                const subjects = new Set<string>([
+                  ...(session.nats.subscriptions ?? []),
+                  ...(run?.breakoutRooms ?? []),
+                ])
+                for (const subject of subjects) {
+                  await trySendNatsSocketCommand(name, { action: 'delete-durable', subject })
+                }
+              }
+
               if (session.backend === 'docker') {
                 await dockerBackend.deleteContainer(cfg, session)
               } else {
