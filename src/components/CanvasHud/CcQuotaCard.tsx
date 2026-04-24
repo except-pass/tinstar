@@ -1,7 +1,10 @@
+import { useEffect, useState } from 'react'
 import './hud.css'
 import { CcQuotaClock } from './CcQuotaClock'
 import { Cc7dBar } from './Cc7dBar'
 import type { CcQuotaSnapshot, UsageBucket } from '../../hooks/useCcQuota'
+
+const TICK_MS = 60_000
 
 interface Props {
   snapshot: CcQuotaSnapshot | null
@@ -50,6 +53,17 @@ function buildTooltip(s: CcQuotaSnapshot | null, nowMs: number): string {
 }
 
 export function CcQuotaCard({ snapshot, nowMs }: Props) {
+  // Re-render every minute so the "resets in Xh Ym" subtitle and the clock's
+  // hour hand keep ticking even when no new snapshot has arrived. When nowMs
+  // is injected (tests), skip the ticker — tests pin time explicitly.
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    if (nowMs !== undefined) return
+    const h = setInterval(() => setTick(t => t + 1), TICK_MS)
+    return () => clearInterval(h)
+  }, [nowMs])
+  void tick
+
   const now = nowMs ?? Date.now()
   const data = snapshot?.data ?? null
   const tooltip = buildTooltip(snapshot, now)
