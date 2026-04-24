@@ -22,8 +22,8 @@ export const CANVAS_KEYS: Array<{ key: string; label: string }> = [
 ]
 
 export const QUICKDRAW_KEYS: Array<{ key: string; label: string }> = [
-  { key: '1–9',            label: 'Quick Draw' },
-  { key: 'Ctrl+1–9',       label: 'Quick Draw assign' },
+  { key: 'Ctrl+1–9',       label: 'Quick Draw navigate' },
+  { key: 'Ctrl+Alt+1–9',   label: 'Quick Draw assign' },
   { key: 'Ctrl+Shift+1–9', label: 'Quick Draw remove' },
 ]
 

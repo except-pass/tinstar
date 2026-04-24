@@ -700,7 +700,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const hotgroups = useHotgroupContext()
 
   useCanvasHotkeys({
-    onHotgroupSelect: (slot, isDoubleTap) => {
+    onHotgroupNavigate: (slot) => {
       // hotgroups stores full node IDs (e.g. 'run-R-241', 'editor-abc', 'browser-xyz')
       const slotNodeIds = hotgroups.nodesInSlot(slot).filter(id => layouts.has(id))
       if (slotNodeIds.length === 0) return
@@ -722,11 +722,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         }
       }
       if (ancestorIds.length > 0) expandAll(ancestorIds)
-      if (isDoubleTap) {
-        zoomToFitRuns(slotNodeIds)
-      } else {
-        panToRuns(slotNodeIds)
-      }
+      zoomToFitRuns(slotNodeIds)
     },
     onHotgroupAssign: (slot) => {
       const { selectedType, selectedIds } = selectionState
