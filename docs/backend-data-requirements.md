@@ -199,17 +199,6 @@ Files modified during the run.
 | deletions | number | Lines deleted |
 | kind | enum | `'code'`, `'test'`, `'config'`, `'script'`, `'doc'` |
 
-#### Procedures
-
-Commands or operations executed during the run.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| id | string | Unique identifier |
-| name | string | Display name (e.g., "Run_Tests") |
-| command | string | Shell command (e.g., "go test ./...") |
-| status | enum | `'idle'`, `'queued'`, `'running'`, `'complete'`, `'failed'` |
-
 #### Recap Entries
 
 Summarized conversation events — what happened during the run.
@@ -309,7 +298,6 @@ Project (1)
         ├─→ Worktree (0..1)
         └─→ Run (many)
               ├─ TouchedFile[] (embedded)
-              ├─ Procedure[] (embedded)
               └─ RecapEntry[] (embedded)
                     └─ DiffBlock? (optional)
 
@@ -335,7 +323,7 @@ Worktree (1)
 The current prototype frontend (mock data) consumes:
 
 - `Initiative[]`, `Epic[]`, `Task[]`, `Worktree[]` — taxonomy entities
-- `Run[]` — with embedded `touchedFiles`, `recapEntries`, `procedures`
+- `Run[]` — with embedded `touchedFiles`, `recapEntries`
 - `GroupingDimension` — for dynamic hierarchy pivoting
 - `TreeNode` — built client-side from the above via `buildGroupTree()`
 - `RunSummaryViewModel`, `GroupRollupViewModel` — computed client-side

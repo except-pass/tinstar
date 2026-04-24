@@ -245,7 +245,6 @@ WorkspaceShell
 │   └── CanvasWidget
 │       └── RunWorkspaceWidget
 │           ├── RunWorkspaceHeader (status badge, breadcrumb)
-│           ├── ProceduresPanel (running commands)
 │           ├── TouchedFilesPanel (file diffs)
 │           └── RunSessionPanel (recap entries, ttyd iframe)
 ├── CreateEntityDialog
@@ -291,7 +290,7 @@ Supports move, resize, shrink-to-fit, and auto-expansion (parents grow when chil
 | `repositories.ts` | `RunRepository`, `TaxonomyRepository` — read-only in-memory access with query methods. |
 | `view-models.ts` | `buildWorkspaceView()` — builds sidebar tree + run summary view models from repos + dimensions. |
 | `dimension-meta.ts` | Static metadata registry for dimensions (labels, icons). |
-| `status-colors.ts` | Tailwind classes and hex colors for session/procedure status indicators. |
+| `status-colors.ts` | Tailwind classes and hex colors for session status indicators. |
 | `mock-data.ts` | Sample entities and runs for development. |
 
 ---
@@ -315,7 +314,7 @@ Supports move, resize, shrink-to-fit, and auto-expansion (parents grow when chil
         └── claude-state/    # Persisted Claude internal state (mounted into containers)
 ```
 
-**`docstore.json`** contains the full document store snapshot: all initiatives, epics, tasks, worktrees, and runs with their touched files, recap entries, and procedures. Debounce-saved every 500ms on change. Loaded on startup.
+**`docstore.json`** contains the full document store snapshot: all initiatives, epics, tasks, worktrees, and runs with their touched files and recap entries. Debounce-saved every 500ms on change. Loaded on startup.
 
 **`session.json`** per session:
 ```json
