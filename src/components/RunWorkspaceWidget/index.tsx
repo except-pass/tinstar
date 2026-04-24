@@ -4,7 +4,6 @@ import { RunWorkspaceHeader } from './RunWorkspaceHeader'
 import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
-import { ProceduresPanel } from './ProceduresPanel'
 import { TelemetryPanel } from './TelemetryPanel'
 import { HandsPanel } from './HandsPanel'
 import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
@@ -36,40 +35,12 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
 
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
   const [filePanelMode, setFilePanelMode] = useState<FilePanelMode>('touched')
-  const [procsCollapsed, setProcsCollapsed] = useState(false)
   const [handsCollapsed, setHandsCollapsed] = useState(false)
   const [sessionTab, setSessionTab] = useState<'recap' | 'terminal'>(run.port ? 'terminal' : 'recap')
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
   const [handsPanelHeight, setHandsPanelHeight] = useState(120)
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
   const handsResizeDragRef = useRef<{ startY: number; startH: number } | null>(null)
-
-  // Telemetry divider — percentage of right panel height allocated to Procedures (top)
-  const [procsPercent, setProcsPercent] = useState(50)
-  const telemetryDragRef = useRef<{ startY: number; startPct: number } | null>(null)
-
-  const onTelemetryDividerPointerDown = useCallback((e: ReactPointerEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    telemetryDragRef.current = { startY: e.clientY, startPct: procsPercent }
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }, [procsPercent])
-
-  const onTelemetryDividerPointerMove = useCallback((e: ReactPointerEvent) => {
-    if (!telemetryDragRef.current) return
-    const parentEl = (e.currentTarget as HTMLElement).parentElement
-    if (!parentEl) return
-    const parentHeight = parentEl.getBoundingClientRect().height
-    if (parentHeight < 1) return
-    const deltaY = e.clientY - telemetryDragRef.current.startY
-    const deltaPct = (deltaY / parentHeight) * 100
-    const newPct = Math.max(15, Math.min(85, telemetryDragRef.current.startPct + deltaPct))
-    setProcsPercent(newPct)
-  }, [])
-
-  const onTelemetryDividerPointerUp = useCallback(() => {
-    telemetryDragRef.current = null
-  }, [])
 
   const [termTick, bumpTerm] = useReducer((n: number) => n + 1, 0)
   const [promptComposerExpanded, setPromptComposerExpanded] = useState(() =>
@@ -390,48 +361,12 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
           data-testid="focus-zone-right-panel"
           className={`flex ${focusZone === 'right-panel' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
         >
-          {procsCollapsed ? (
-            <div
-              data-testid="collapsed-procedures"
-              className="w-6 flex flex-col items-center justify-center bg-surface-panel cursor-pointer hover:bg-surface-hover"
-              onClick={() => setProcsCollapsed(false)}
-            >
-              <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr]">Procs</span>
-            </div>
-          ) : (
-            <div className="w-40 h-full flex flex-col bg-surface-panel">
-              {/* Procedures — top section */}
-              <div style={{ height: `${procsPercent}%` }} className="flex flex-col min-h-[60px] overflow-hidden">
-                <ProceduresPanel
-                  taskId={run.taskId}
-                  sessionId={run.sessionId}
-                  sessionStatus={run.status}
-                  onCollapse={() => setProcsCollapsed(true)}
-                  onFocusTerminal={() => {
-                    pushFocus({ id: run.id, type: 'run-terminal', label: 'Terminal' })
-                  }}
-                />
-              </div>
-
-              {/* Draggable divider */}
-              <div
-                className="h-1 flex-shrink-0 bg-slate-800 hover:bg-slate-600 cursor-row-resize flex items-center justify-center transition-colors"
-                onPointerDown={onTelemetryDividerPointerDown}
-                onPointerMove={onTelemetryDividerPointerMove}
-                onPointerUp={onTelemetryDividerPointerUp}
-              >
-                <div className="w-5 h-0.5 bg-slate-600 rounded-full" />
-              </div>
-
-              {/* Telemetry — bottom section */}
-              <div style={{ height: `${100 - procsPercent}%` }} className="flex flex-col min-h-[60px] overflow-hidden">
-                <TelemetryPanel
-                  sessionId={run.sessionId}
-                  runAccent={runAccent}
-                />
-              </div>
-            </div>
-          )}
+          <div className="w-40 h-full flex flex-col bg-surface-panel">
+            <TelemetryPanel
+              sessionId={run.sessionId}
+              runAccent={runAccent}
+            />
+          </div>
         </div>
       </div>
 

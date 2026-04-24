@@ -44,20 +44,6 @@ test.describe('Run Widget Panels', () => {
     }
   })
 
-  test('expanding collapsed procedures panel shows procedure list', async ({ page }) => {
-    const widgets = page.locator('[data-testid^="canvas-widget-run-"]')
-    const firstWidget = widgets.first()
-
-    // Find the collapsed procedures panel
-    const collapsedProcs = firstWidget.getByTestId('collapsed-procedures')
-    if (await collapsedProcs.isVisible()) {
-      await collapsedProcs.click()
-
-      // After expanding, should show procedures content
-      await expect(firstWidget.getByText('Procedures', { exact: true })).toBeVisible()
-    }
-  })
-
   test('recap tab shows conversation entries', async ({ page }) => {
     const widgets = page.locator('[data-testid^="canvas-widget-run-"]')
     const firstWidget = widgets.first()

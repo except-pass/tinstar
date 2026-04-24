@@ -37,9 +37,6 @@ import {
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
-import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
-import { saveDraft, discardDraft, DRAFTS_DIR, ensureDraftsDir } from '../sessions/skill-drafts'
-import type { SkillDTO } from '../../types'
 import { spec as openapiSpec } from './openapi'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
@@ -1736,99 +1733,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       ctx.docStore.upsertRun(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getRun(id) })
-    })
-    return true
-  }
-
-  // --- Skills ---
-
-  // GET /api/skills
-  if (method === 'GET' && url === '/api/skills') {
-    const skills = getSkills()
-    const dtos: SkillDTO[] = skills.map(({ name, description, source }) => ({ name, description, source }))
-    json(res, { skills: dtos })
-    return true
-  }
-
-  // POST /api/skills/save
-  if (method === 'POST' && url === '/api/skills/save') {
-    readBody(req).then(async (body) => {
-      const { draftId, location, sessionId } = JSON.parse(body) as {
-        draftId: string
-        location: 'system' | 'repo'
-        sessionId?: string
-      }
-      if (!draftId || !['system', 'repo'].includes(location)) {
-        json(res, { error: 'invalid-params' }, 400)
-        return
-      }
-
-      // Resolve projectRoot for repo-level saves
-      let projectRoot: string | undefined
-      if (location === 'repo' && sessionId && ctx.sessionConfig) {
-        const sess = getSession(ctx.sessionConfig.dirs.sessions, sessionId)
-        if (sess?.workspace?.path) {
-          projectRoot = sess.workspace.path
-        }
-      }
-
-      try {
-        // Read skillName from draft frontmatter BEFORE moving the file
-        const draftPath = join(DRAFTS_DIR, `${draftId}.md`)
-        let skillName = draftId  // fallback
-        try {
-          const content = readFileSync(draftPath, 'utf-8')
-          const fm = parseFrontmatter(content)
-          if (fm.name) skillName = fm.name
-        } catch { /* use fallback */ }
-
-        saveDraft(draftId, location, projectRoot)
-        bustSkillCache()
-
-        const dto: SkillDTO = {
-          name: skillName,
-          source: location === 'system' ? 'system' : 'repo',
-        }
-        // Try to get description from the refreshed cache
-        const freshSkills = getSkills()
-        const saved = freshSkills.find(s => s.name === skillName)
-        if (saved?.description) dto.description = saved.description
-
-        ctx.sse.broadcastEvent('skill.saved', { skill: dto })
-        json(res, { skill: dto })
-      } catch (err) {
-        const e = err as Error & { existingPath?: string }
-        if (e.message === 'skill-name-conflict') {
-          json(res, { error: 'skill-name-conflict', existingPath: e.existingPath }, 409)
-        } else {
-          json(res, { error: e.message }, 500)
-        }
-      }
-    })
-    return true
-  }
-
-  // POST /api/skills/discard
-  if (method === 'POST' && url === '/api/skills/discard') {
-    readBody(req).then((body) => {
-      const { draftId } = JSON.parse(body) as { draftId: string }
-      if (!draftId) { json(res, { error: 'missing draftId' }, 400); return }
-      discardDraft(draftId)
-      json(res, { ok: true })
-    })
-    return true
-  }
-
-  // POST /api/skills/create-draft — create a skeleton skill draft without agent involvement.
-  // The file watcher in watchDrafts() picks this up and emits skill.drafted to the client.
-  if (method === 'POST' && url === '/api/skills/create-draft') {
-    readBody(req).then((body) => {
-      const { draftId, name } = JSON.parse(body) as { draftId: string; name: string }
-      if (!draftId || !name) { json(res, { error: 'missing draftId or name' }, 400); return }
-      ensureDraftsDir()
-      const filePath = join(DRAFTS_DIR, `${draftId}.md`)
-      writeFileSync(filePath, `---\nname: ${name}\ndescription: ${name}\n---\n\n# ${name}\n`)
-      json(res, { ok: true, draftId })
     })
     return true
   }

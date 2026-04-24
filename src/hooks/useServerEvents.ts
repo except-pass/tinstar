@@ -110,14 +110,6 @@ function startSSE() {
     pushState()
   })
 
-  es.addEventListener('skill.drafted', (e: MessageEvent) => {
-    window.dispatchEvent(new CustomEvent('tinstar:skill.drafted', { detail: e.data }))
-  })
-
-  es.addEventListener('skill.saved', (e: MessageEvent) => {
-    window.dispatchEvent(new CustomEvent('tinstar:skill.saved', { detail: e.data }))
-  })
-
   es.addEventListener('file_watch', (e: MessageEvent) => {
     window.dispatchEvent(new CustomEvent('tinstar:file_watch', { detail: JSON.parse(e.data) }))
   })

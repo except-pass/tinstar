@@ -76,24 +76,6 @@ test.describe('Run Widget Panels', () => {
     expect(expandedVisible || labelVisible).toBeTruthy()
   })
 
-  test('run widget has collapsed procedures panel', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-run-R-241')
-    // Procedures panel starts collapsed, showing "Procs" text
-    const collapsedProcs = widget.getByTestId('collapsed-procedures')
-    await expect(collapsedProcs).toBeVisible()
-    await expect(collapsedProcs.getByText('Procs')).toBeVisible()
-  })
-
-  test('clicking collapsed procedures panel expands it', async ({ page }) => {
-    const widget = page.getByTestId('canvas-widget-run-R-241')
-
-    // Click collapsed procedures to expand
-    await widget.getByTestId('collapsed-procedures').click()
-    await page.waitForTimeout(200)
-
-    // Should now show the full panel with "Procedures" heading
-    await expect(widget.getByText('Procedures', { exact: true })).toBeVisible()
-  })
 })
 
 test.describe('File Panel Interactions', () => {

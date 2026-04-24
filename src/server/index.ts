@@ -26,7 +26,6 @@ import {
 import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
 import { StatusWatcher } from './sessions/status-watcher'
-import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
 import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
@@ -113,10 +112,6 @@ export function initBackend(): RouteContext {
     process.once('SIGINT', shutdown)
     process.once('SIGTERM', shutdown)
   }
-
-  // Start draft watcher — emits skill.drafted SSE events when new drafts appear
-  ensureDraftsDir()
-  watchDrafts(sse)
 
   // Clear bun's cached nats-channel-mcp so freshly spawned hands re-resolve from
   // GitHub HEAD. bun caches git specs by commit hash and doesn't re-check the
