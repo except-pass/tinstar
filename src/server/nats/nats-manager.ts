@@ -50,7 +50,13 @@ export class NatsManager {
 
     const binRoot = join(this.configRoot, 'bin')
     const stateDir = join(this.configRoot, 'nats')
+    // JetStream needs its own dir for stream storage; keep it under the
+    // existing nats state dir but separate from the supervisor's state files.
+    // Always-on so channel-servers passing --jetstream just work; clients
+    // that don't pass it use core pub/sub unchanged.
+    const jetstreamDir = join(stateDir, 'jetstream')
     mkdirSync(stateDir, { recursive: true })
+    mkdirSync(jetstreamDir, { recursive: true })
 
     try {
       this.state = 'downloading'
@@ -63,7 +69,7 @@ export class NatsManager {
       this.supervisor = new Supervisor({
         name: 'nats-server',
         binaryPath: install.binaryPath,
-        args: ['-a', '127.0.0.1', '-p', String(this.port)],
+        args: ['-a', '127.0.0.1', '-p', String(this.port), '-js', '-sd', jetstreamDir],
         stateDir,
         port: this.port,
         probe: () => this.probe(),
