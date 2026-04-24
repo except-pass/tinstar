@@ -5,6 +5,7 @@ import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { TelemetryPanel } from './TelemetryPanel'
+import { SaloonPanel } from './SaloonPanel'
 import { HandsPanel } from './HandsPanel'
 import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
@@ -53,6 +54,26 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const [terminalFocused, setTerminalFocused] = useState(false)
   const [_fileSelectionIndex, setFileSelectionIndex] = useState(0)
   const [centerTabIndex, setCenterTabIndex] = useState(0)
+  const [saloonCollapsed, setSaloonCollapsed] = useState(false)
+  const [saloonPercent, setSaloonPercent] = useState(55)
+
+  const onSaloonDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const parent = e.currentTarget.parentElement as HTMLElement
+    const startY = e.clientY
+    const startPct = saloonPercent
+    const rect = parent.getBoundingClientRect()
+    const onMove = (ev: PointerEvent) => {
+      const dy = ev.clientY - startY
+      const pct = Math.min(85, Math.max(15, startPct + (dy / rect.height) * 100))
+      setSaloonPercent(pct)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
 
   const leftExpanded = !filesCollapsed
   const runAccent = resolveRunAccent(run.color)
@@ -361,12 +382,39 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
           data-testid="focus-zone-right-panel"
           className={`flex ${focusZone === 'right-panel' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
         >
-          <div className="w-40 h-full flex flex-col bg-surface-panel">
-            <TelemetryPanel
-              sessionId={run.sessionId}
-              runAccent={runAccent}
-            />
-          </div>
+          {saloonCollapsed ? (
+            <div
+              data-testid="collapsed-saloon"
+              className="w-6 flex flex-col items-center justify-center bg-surface-panel cursor-pointer hover:bg-surface-hover"
+              onClick={() => setSaloonCollapsed(false)}
+            >
+              <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr]">Saloon</span>
+            </div>
+          ) : (
+            <div className="w-40 h-full flex flex-col bg-surface-panel">
+              <div style={{ height: `${saloonPercent}%` }} className="flex flex-col min-h-[60px] overflow-hidden">
+                <SaloonPanel
+                  sessionName={run.sessionId}
+                  subscriptions={run.natsSubscriptions ?? []}
+                  natsEnabled={Boolean(run.natsEnabled)}
+                  natsControlOrphanedAt={run.natsControlOrphanedAt ?? null}
+                  onCollapse={() => setSaloonCollapsed(true)}
+                />
+              </div>
+              <div
+                onPointerDown={onSaloonDividerPointerDown}
+                className="h-1 flex-shrink-0 bg-slate-800 hover:bg-slate-600 cursor-row-resize flex items-center justify-center transition-colors"
+              >
+                <div className="w-5 h-0.5 bg-slate-600 rounded-full" />
+              </div>
+              <div style={{ height: `${100 - saloonPercent}%` }} className="flex flex-col min-h-[60px] overflow-hidden">
+                <TelemetryPanel
+                  sessionId={run.sessionId}
+                  runAccent={runAccent}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
