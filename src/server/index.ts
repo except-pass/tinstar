@@ -30,6 +30,7 @@ import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
 import { NatsTrafficBridge } from './nats-traffic'
+import { registerSaloonSubs } from './api/saloonBridge'
 import { SessionReadinessTracker } from './sessions/readiness'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
@@ -137,6 +138,19 @@ export function initBackend(): RouteContext {
     for (const widget of docStore.getAllNatsTrafficWidgets()) {
       if (widget.subscriptions?.length) {
         natsTraffic.updateWidgetSubscriptions(widget.id, widget.subscriptions)
+      }
+    }
+
+    // Re-register every persisted session's subs with the bridge. Saloon entries
+    // are synthetic (keyed `saloon:<name>`) and not persisted as widget docs, so
+    // the widget hydration loop above doesn't cover them.
+    if (sessionConfig) {
+      const sessEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
+      for (const entry of sessEntries) {
+        if (!entry.isDirectory()) continue
+        const sess = getSession(sessionConfig.dirs.sessions, entry.name)
+        if (!sess) continue
+        registerSaloonSubs(natsTraffic, sess.name, sess.nats?.subscriptions ?? [])
       }
     }
 
