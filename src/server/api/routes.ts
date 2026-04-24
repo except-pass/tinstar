@@ -2428,15 +2428,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               // Best-effort delete-durable for every NATS subject this session
               // owned. Must run BEFORE backend stop — channel-server's control
               // socket disappears when the process dies. Failures here are
-              // benign: channel-server's InactiveThreshold reaps any leftover.
+              // benign: channel-server's InactiveThreshold reaps any leftover,
+              // but we log warnings so visible leaks aren't silent.
               if (session.nats?.enabled && cfg.nats.jetstream) {
                 const run = ctx.docStore.getRun(name)
                 const subjects = new Set<string>([
                   ...(session.nats.subscriptions ?? []),
                   ...(run?.breakoutRooms ?? []),
                 ])
-                for (const subject of subjects) {
-                  await trySendNatsSocketCommand(name, { action: 'delete-durable', subject })
+                const results = await Promise.allSettled(
+                  [...subjects].map(subject =>
+                    trySendNatsSocketCommand(name, { action: 'delete-durable', subject })
+                  ),
+                )
+                for (const r of results) {
+                  if (r.status === 'fulfilled' && r.value) {
+                    log.warn('delete', `nats cleanup left durable orphaned for ${name}: ${r.value.code} ${r.value.subject}`)
+                  }
                 }
               }
 

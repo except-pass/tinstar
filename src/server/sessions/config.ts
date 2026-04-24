@@ -41,7 +41,7 @@ export interface TinstarConfig {
      * Pass --jetstream to the channel-server. Enables durable consumers
      * (buffered messages survive short pauses + reconnect) and the
      * `replay` MCP tool. Requires nats-server to be running with -js.
-     * See nats-channel-mcp/docs/design-jetstream.md.
+     * See nats-channel-mcp's README "JetStream Mode" section.
      */
     jetstream: boolean
   }
@@ -136,8 +136,7 @@ const BASE_CONFIG = {
     // Override in ~/.config/tinstar/config.json for local dev
     channelServerPackage: 'github:except-pass/nats-channel-mcp',
     bunPath: join(homedir(), '.bun/bin/bun'),
-    // Off by default — flip to true once nats-server is running with -js
-    // and the channel-server package supports --jetstream (released in 0.2+).
+    // Off by default; requires nats-server -js
     jetstream: false,
   },
 }

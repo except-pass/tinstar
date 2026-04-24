@@ -409,6 +409,6 @@ Implements:
 ## Open Questions
 
 - Permission relay: should agents be able to approve each other's tool calls?
-- ~~JetStream: do we need durable message delivery for v1?~~ Resolved: opt-in via `config.nats.jetstream` (off by default). Buffered messages survive sub-1h pauses; explicit `replay` MCP tool covers longer lookback. See `nats-channel-mcp/docs/design-jetstream.md`.
+- ~~JetStream: do we need durable message delivery for v1?~~ Resolved: opt-in via `config.nats.jetstream` (off by default). Buffered messages survive sub-1h pauses; explicit `replay` MCP tool covers longer lookback. See `nats-channel-mcp` README "JetStream Mode" section.
 - How does the Tinstar UI represent agent-to-agent message flow?
 - Should Clawson's NATS subscription be persistent (always-on) or on-demand?

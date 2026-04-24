@@ -177,8 +177,6 @@ export function generateNatsMcpConfig(opts: {
   // >= the commit that introduced the flag (except-pass/nats-channel-mcp#1).
   args.push('--control-socket', natsControlSocketPath(opts.sessionName))
 
-  // --jetstream enables durable consumers (buffered messages survive
-  // sub-1h pauses) plus the `replay` MCP tool. Requires nats-server -js.
   if (opts.jetstream) args.push('--jetstream')
 
   const mcpConfig = {
