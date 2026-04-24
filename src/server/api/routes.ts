@@ -1919,8 +1919,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
     }
 
+    // GET /api/sessions/:name/context-window — live % from latest statusline push
+    if (method === 'GET' && url.startsWith('/api/sessions/') && url.endsWith('/context-window')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session) {
+          json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
+          return true
+        }
+        const convId = session.conversation?.id
+        const snap = convId && ctx.ccQuotaService ? ctx.ccQuotaService.getSessionContext(convId) : null
+        json(res, { ok: true, data: snap })
+        return true
+      }
+    }
+
     // GET /api/sessions/:name/context
-    if (method === 'GET' && url.startsWith('/api/sessions/') && url.includes('/context')) {
+    if (method === 'GET' && url.startsWith('/api/sessions/') && url.endsWith('/context')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)

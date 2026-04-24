@@ -31,3 +31,17 @@ export interface CcQuotaSnapshot {
   /** Set when the most recent ingest failed to parse. */
   error: IngestError | null
 }
+
+/**
+ * Per-session context-window snapshot carved out of a statusline payload.
+ * Separate from rate-limit quota because context_window is scoped to one
+ * conversation, while rate_limits are global to the CC user.
+ */
+export interface SessionContextSnapshot {
+  /** 0..100 — how full the context window is right now. */
+  usedPercentage: number
+  /** Token budget for this model/session. */
+  windowSize: number
+  /** ISO timestamp of the statusline push that produced this snapshot. */
+  fetchedAt: string
+}

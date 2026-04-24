@@ -4,6 +4,7 @@ import { hexToRgba } from '../runAccent'
 import { HudBar, AutonomyStat } from '../CanvasHud'
 import { fmtNum, fmtDollar, fmtRate } from '../CanvasHud/fmt'
 import { useTelemetrySession } from '../../hooks/useTelemetrySession'
+import { useSessionContextWindow } from '../../hooks/useSessionContextWindow'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -275,6 +276,7 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [loadedAt, setLoadedAt] = useState<number | null>(null)
   const [ageLabel, setAgeLabel] = useState('')
+  const liveCtx = useSessionContextWindow(sessionId)
 
   // Update humanized age every 30s
   useEffect(() => {
@@ -305,14 +307,28 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
   /* ---- Body varies by state ---- */
   let body: React.ReactNode
   if (!data && !loading && !error) {
+    const pct = liveCtx?.usedPercentage ?? null
+    const pctLabel = pct == null ? '--' : `${pct.toFixed(0)}%`
+    const fillPct = pct == null ? 0 : Math.max(0, Math.min(100, pct))
+    const fillBg = hexToRgba(runAccent, 0.35)
     body = (
       <div className="flex-1 flex items-center justify-center p-2">
         <button
           onClick={fetchContext}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-2xs font-mono text-slate-400 border border-dashed border-slate-600 rounded hover:border-slate-400 hover:text-slate-300 transition-colors"
+          title={liveCtx ? `Context window: ${liveCtx.usedPercentage.toFixed(1)}% of ${liveCtx.windowSize.toLocaleString()} tokens — click for detailed breakdown` : 'Load detailed context breakdown'}
+          className="group relative w-full max-w-[240px] overflow-hidden border border-slate-700 rounded hover:border-slate-500 transition-colors"
         >
-          <span className="material-symbols-outlined text-sm">query_stats</span>
-          Load Context
+          <div
+            className="absolute inset-y-0 left-0 transition-all duration-500"
+            style={{ width: `${fillPct}%`, background: fillBg }}
+          />
+          <div className="relative flex items-center justify-between px-3 py-1.5 text-2xs font-mono">
+            <span className="flex items-center gap-1.5 text-slate-300 group-hover:text-slate-100">
+              <span className="material-symbols-outlined text-sm">query_stats</span>
+              Context
+            </span>
+            <span className="text-slate-200 tabular-nums">{pctLabel}</span>
+          </div>
         </button>
       </div>
     )

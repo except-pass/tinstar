@@ -1,5 +1,5 @@
 import { emitCcQuotaMetrics, emitIngestCounter, type MetricSink } from './metrics'
-import type { CcQuotaSnapshot, IngestError, RawUsage, UsageBucket } from './types'
+import type { CcQuotaSnapshot, IngestError, RawUsage, SessionContextSnapshot, UsageBucket } from './types'
 
 export interface CcQuotaServiceOptions {
   /** OTel sink. Defaults to a no-op so tests don't have to wire it. */
@@ -30,6 +30,7 @@ export class CcQuotaService {
   private readonly now: () => number
 
   private cached: CcQuotaSnapshot = { fetchedAt: new Date(0).toISOString(), data: null, error: null }
+  private sessionContexts = new Map<string, SessionContextSnapshot>()
 
   constructor(opts: CcQuotaServiceOptions = {}) {
     this.sink = opts.sink ?? NOOP_SINK
@@ -40,9 +41,15 @@ export class CcQuotaService {
     return this.cached
   }
 
+  getSessionContext(sessionId: string): SessionContextSnapshot | null {
+    return this.sessionContexts.get(sessionId) ?? null
+  }
+
   /** Accept a statusline payload. Returns the resulting snapshot. */
   ingest(payload: unknown): CcQuotaSnapshot {
     const nowMs = this.now()
+    const ctx = extractSessionContext(payload)
+    if (ctx) this.sessionContexts.set(ctx.sessionId, { ...ctx.snap, fetchedAt: new Date(nowMs).toISOString() })
     const parsed = normalizeStatuslinePayload(payload)
 
     if (parsed.kind === 'error') {
@@ -90,6 +97,19 @@ function normalizeStatuslinePayload(payload: unknown): NormalizeResult {
   }
 
   return { kind: 'ok', data: { five_hour: five, seven_day: seven } }
+}
+
+function extractSessionContext(payload: unknown): { sessionId: string; snap: Omit<SessionContextSnapshot, 'fetchedAt'> } | null {
+  if (!payload || typeof payload !== 'object') return null
+  const p = payload as { session_id?: unknown; context_window?: unknown }
+  if (typeof p.session_id !== 'string' || !p.session_id) return null
+  if (!p.context_window || typeof p.context_window !== 'object') return null
+  const cw = p.context_window as { used_percentage?: unknown; context_window_size?: unknown }
+  if (typeof cw.used_percentage !== 'number' || typeof cw.context_window_size !== 'number') return null
+  return {
+    sessionId: p.session_id,
+    snap: { usedPercentage: cw.used_percentage, windowSize: cw.context_window_size },
+  }
 }
 
 function coerceBucket(raw: unknown): UsageBucket | null {
