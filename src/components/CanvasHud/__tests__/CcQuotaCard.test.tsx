@@ -19,7 +19,7 @@ function snap(partial: Partial<CcQuotaSnapshot['data']> = {}): CcQuotaSnapshot {
 describe('<CcQuotaCard>', () => {
   it('renders % left for each bucket — NOT % used', () => {
     const { getByText, queryByText } = render(
-      <CcQuotaCard snapshot={snap()} lastRefreshedAt={snap().fetchedAt} refreshing={false} refresh={() => {}} nowMs={Date.parse('2026-04-23T08:36:00Z')}/>
+      <CcQuotaCard snapshot={snap()} nowMs={Date.parse('2026-04-23T08:36:00Z')}/>
     )
     expect(getByText('33% left')).toBeTruthy()
     expect(getByText('11% left')).toBeTruthy()
@@ -29,18 +29,16 @@ describe('<CcQuotaCard>', () => {
 
   it('renders full skeleton with -- when snapshot has no data', () => {
     const empty: CcQuotaSnapshot = { fetchedAt: '2026-04-23T08:36:00.000Z', data: null, error: null }
-    const { getAllByText, container } = render(
-      <CcQuotaCard snapshot={empty} lastRefreshedAt={empty.fetchedAt} refreshing={false} refresh={() => {}}/>
-    )
+    const { getAllByText, container } = render(<CcQuotaCard snapshot={empty}/>)
     expect(getAllByText(/--/).length).toBeGreaterThanOrEqual(2)
     expect(container.querySelector('[data-testid="cc-quota-card"]')).toBeTruthy()
   })
 
-  it('has no gas-pump chip (extra_usage not exposed via statusline)', () => {
-    const { container, queryByText } = render(
-      <CcQuotaCard snapshot={snap()} lastRefreshedAt={null} refreshing={false} refresh={() => {}} nowMs={Date.parse('2026-04-23T08:36:00Z')}/>
+  it('has no refresh button (data flows in on every CC prompt)', () => {
+    const { container, queryByLabelText } = render(
+      <CcQuotaCard snapshot={snap()} nowMs={Date.parse('2026-04-23T08:36:00Z')}/>
     )
-    expect(container.querySelector('.cc-gas')).toBeNull()
-    expect(queryByText('local_gas_station')).toBeNull()
+    expect(container.querySelector('.cc-quota-refresh')).toBeNull()
+    expect(queryByLabelText('refresh quota')).toBeNull()
   })
 })

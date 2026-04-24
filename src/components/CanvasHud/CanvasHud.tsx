@@ -20,7 +20,7 @@ interface Props {
 
 export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds }: Props) {
   const { snapshot } = useTelemetryHud()
-  const { snapshot: ccQuota, lastRefreshedAt, refreshing, refresh } = useCcQuota()
+  const { snapshot: ccQuota } = useCcQuota()
   const [visible, setVisible] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
     return stored !== 'false'
@@ -109,7 +109,7 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds }: Pro
       <HudBar icon="⚡" label={tokensLabel} value={tokensValue} fill={tokensFill} accent="blue" />
       <HudBar icon="◎" label="CACHE HIT" value={cacheValue} fill={cacheFill} accent="green" />
       <AutonomyStat ratio={snapshot.autonomy.ratio} cliSeconds={snapshot.autonomy.cliSeconds} userSeconds={snapshot.autonomy.userSeconds} />
-      <CcQuotaCard snapshot={ccQuota} lastRefreshedAt={lastRefreshedAt} refreshing={refreshing} refresh={refresh}/>
+      <CcQuotaCard snapshot={ccQuota}/>
       {onFocusRun && (
         <AgentQuadrant
           runMap={runMap}

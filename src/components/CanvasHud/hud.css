@@ -220,22 +220,6 @@
   margin-bottom: 6px;
 }
 .cc-quota-title { color: rgba(255,255,255,0.55); }
-.cc-quota-refresh {
-  background: transparent;
-  border: 0;
-  color: rgba(255,255,255,0.55);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 0;
-}
-.cc-quota-refresh .material-symbols-outlined { font-size: 12px; }
-.cc-quota-refresh.err { color: #ef4444; }
-.cc-quota-refresh.spin .material-symbols-outlined { animation: cc-spin 1.1s linear infinite; }
-@keyframes cc-spin { to { transform: rotate(360deg); } }
 
 .cc-quota-row { display: flex; align-items: center; gap: 10px; }
 .cc-quota-row + .cc-quota-row { margin-top: 8px; }

@@ -14,9 +14,6 @@ export interface CcQuotaSnapshot {
 
 export interface UseCcQuota {
   snapshot: CcQuotaSnapshot | null
-  lastRefreshedAt: string | null
-  refreshing: boolean
-  refresh: () => void
 }
 
 const POLL_MS = 5 * 60 * 1000
@@ -24,9 +21,8 @@ const POLL_MS = 5 * 60 * 1000
 // -------- module-scoped singleton so the whole app shares one timer/fetch --------
 interface SingletonState {
   snapshot: CcQuotaSnapshot | null
-  refreshing: boolean
 }
-let state: SingletonState = { snapshot: null, refreshing: false }
+let state: SingletonState = { snapshot: null }
 const listeners = new Set<() => void>()
 let timer: ReturnType<typeof setInterval> | null = null
 let inflight = false
@@ -38,7 +34,6 @@ function setState(patch: Partial<SingletonState>) { state = { ...state, ...patch
 async function doFetch() {
   if (inflight) return
   inflight = true
-  setState({ refreshing: true })
   try {
     const res = await fetch('/api/cc-quota')
     if (res.ok) {
@@ -49,7 +44,6 @@ async function doFetch() {
     // network down; keep previous snapshot
   } finally {
     inflight = false
-    setState({ refreshing: false })
   }
 }
 
@@ -84,22 +78,17 @@ function subscribe(l: () => void): () => void {
 }
 
 const getSnapshot = () => state
-const getServerSnapshot = () => ({ snapshot: null, refreshing: false }) as SingletonState
+const getServerSnapshot = () => ({ snapshot: null }) as SingletonState
 
 export function useCcQuota(): UseCcQuota {
   const s = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
-  return {
-    snapshot: s.snapshot,
-    lastRefreshedAt: s.snapshot?.fetchedAt ?? null,
-    refreshing: s.refreshing,
-    refresh: () => void doFetch(),
-  }
+  return { snapshot: s.snapshot }
 }
 
 // Only used by tests. Keeps the module pure.
 export function __resetCcQuotaSingletonForTests(): void {
   stopPolling()
-  state = { snapshot: null, refreshing: false }
+  state = { snapshot: null }
   listeners.clear()
   inflight = false
   mountCount = 0

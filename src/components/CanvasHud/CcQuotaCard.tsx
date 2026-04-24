@@ -5,9 +5,6 @@ import type { CcQuotaSnapshot, UsageBucket } from '../../hooks/useCcQuota'
 
 interface Props {
   snapshot: CcQuotaSnapshot | null
-  lastRefreshedAt: string | null
-  refreshing: boolean
-  refresh: () => void
   /** Injected for tests. */
   nowMs?: number
 }
@@ -52,26 +49,15 @@ function buildTooltip(s: CcQuotaSnapshot | null, nowMs: number): string {
   return lines.join('\n')
 }
 
-export function CcQuotaCard({ snapshot, lastRefreshedAt, refreshing, refresh, nowMs }: Props) {
+export function CcQuotaCard({ snapshot, nowMs }: Props) {
   const now = nowMs ?? Date.now()
   const data = snapshot?.data ?? null
   const tooltip = buildTooltip(snapshot, now)
-  const lastMs = lastRefreshedAt ? Date.parse(lastRefreshedAt) : null
-  const isError = !!snapshot?.error
 
   return (
     <div data-testid="cc-quota-card" className="cc-quota-card" title={tooltip}>
       <div className="cc-quota-header">
         <span className="cc-quota-title">Claude Code</span>
-        <button
-          type="button"
-          className={`cc-quota-refresh${isError ? ' err' : ''}${refreshing ? ' spin' : ''}`}
-          onClick={refresh}
-          aria-label="refresh quota"
-        >
-          <span className="material-symbols-outlined">refresh</span>
-          <span>{ageLabel(lastMs, now)}</span>
-        </button>
       </div>
 
       <div className="cc-quota-row">
