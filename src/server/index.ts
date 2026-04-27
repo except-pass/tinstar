@@ -258,11 +258,19 @@ export function initBackend(): RouteContext {
           })
           log.info('rehydrate', `created run for session ${sess.name} (${sess.state})`)
         } else {
-          // Refresh agentIcon from the current template — lets template icon changes
-          // (e.g. new default logos) propagate to existing persisted runs across restarts.
-          if (tpl?.icon && existingRun.agentIcon !== tpl.icon) {
-            docStore.upsertRun(sess.name, { ...existingRun, agentIcon: tpl.icon })
+          // Refresh fields that mirror live session state. NATS fields are SSOT on
+          // the session (subscriptions mutate on breakout joins, orphan flag flips
+          // on control-socket loss) and the run projection must track them across
+          // restarts. agentIcon picks up template-icon changes too.
+          const refreshed = {
+            ...existingRun,
+            natsEnabled: sess.nats?.enabled ?? false,
+            natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
+            natsSubscriptions: sess.nats?.subscriptions,
+            natsControlOrphanedAt: sess.natsControlOrphanedAt ?? null,
+            agentIcon: tpl?.icon ?? existingRun.agentIcon,
           }
+          docStore.upsertRun(sess.name, refreshed)
           if (existingRun.status !== sess.state) {
             log.info('rehydrate', `${sess.name}: correcting status ${existingRun.status} → ${sess.state}`)
             docStore.updateRunStatus(sess.name, sess.state)
