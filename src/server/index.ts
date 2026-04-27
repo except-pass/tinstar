@@ -122,11 +122,20 @@ export function initBackend(): RouteContext {
   // GitHub HEAD. bun caches git specs by commit hash and doesn't re-check the
   // remote on subsequent `bun x` calls — without this, hands can run stale
   // channel-server code (e.g. missing upstream fixes like self-echo suppression).
+  // We clear BOTH the install cache AND the bunx tmp resolutions — the latter
+  // is what `bun x` actually serves from, and the former alone wasn't enough.
   try {
     const bunCacheDir = join(homedir(), '.bun/install/cache')
     for (const entry of readdirSync(bunCacheDir)) {
       if (entry.includes('nats-channel-mcp')) {
         rmSync(join(bunCacheDir, entry), { recursive: true, force: true })
+      }
+    }
+  } catch { /* ignore */ }
+  try {
+    for (const entry of readdirSync('/tmp')) {
+      if (entry.startsWith('bunx-') && entry.includes('nats-channel-mcp')) {
+        rmSync(join('/tmp', entry), { recursive: true, force: true })
       }
     }
   } catch { /* ignore */ }
