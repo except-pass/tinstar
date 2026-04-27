@@ -60,4 +60,10 @@ describe('deriveHierarchicalName', () => {
     const ds = new DocumentStore()
     expect(deriveHierarchicalName('tinstar.weird', ds, 'broadcast')).toBe(null)
   })
+
+  it('returns null for wildcard subjects', () => {
+    const ds = new DocumentStore()
+    expect(deriveHierarchicalName('tinstar.work-space.init.>', ds, 'broadcast')).toBe(null)
+    expect(deriveHierarchicalName('tinstar.work-space.>', ds, 'broadcast')).toBe(null)
+  })
 })

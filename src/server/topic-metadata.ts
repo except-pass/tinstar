@@ -28,6 +28,8 @@ export function deriveHierarchicalName(
 ): string | null {
   if (!subject.startsWith('tinstar.')) return null
   const parts = subject.split('.')
+  const lastSegment = parts[parts.length - 1]
+  if (lastSegment === '>' || lastSegment === '*') return null
   if (kind === 'dm') {
     // DM: tinstar.<space>.<init>.<epic>.<task>.<session> = 6 parts
     if (parts.length !== 6) return null

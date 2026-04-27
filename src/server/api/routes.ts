@@ -35,7 +35,7 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
+import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import { spec as openapiSpec } from './openapi'
 import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
@@ -1119,8 +1119,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       const existing = ctx.docStore.getTopicMetadata(subject)
       if (!existing) return json(res, { error: 'not found' }, 404)
-      const patch = JSON.parse(body) as { name?: string; description?: string }
-      const merged = { ...existing, ...patch }
+      let parsed: Record<string, unknown>
+      try {
+        parsed = JSON.parse(body)
+      } catch {
+        return json(res, { error: 'invalid json' }, 400)
+      }
+      const merged: TopicMetadata = {
+        ...existing,
+        ...(typeof parsed.name === 'string' ? { name: parsed.name } : {}),
+        ...(typeof parsed.description === 'string' ? { description: parsed.description } : {}),
+      }
       ctx.docStore.upsertTopicMetadata(subject, merged)
       json(res, { ok: true, data: joinParticipants(merged, listAllSessions(ctx)) })
     })
@@ -2838,13 +2847,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               registerSaloonSubs(ctx.natsTraffic, parentName, nextSubs)
             }
           }
-          ctx.docStore.upsertTopicMetadata(breakoutRoom, {
-            subject: breakoutRoom,
-            name: `${handName} with ${parentName}`,
-            kind: 'breakout',
-            createdAt: new Date().toISOString(),
-            createdBy: parentName,
-          })
+          if (!ctx.docStore.getTopicMetadata(breakoutRoom)) {
+            ctx.docStore.upsertTopicMetadata(breakoutRoom, {
+              subject: breakoutRoom,
+              name: `${handName} with ${parentName}`,
+              kind: 'breakout',
+              createdAt: new Date().toISOString(),
+              createdBy: parentName,
+            })
+          }
         }
 
         return json(res, {
