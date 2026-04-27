@@ -54,6 +54,9 @@ export function backoffMs(failures: number): number {
 export class NatsHealthMonitor {
   private timer: ReturnType<typeof setInterval> | null = null
   private states = new Map<string, HealthState>()
+  // Names with a probe currently in flight — prevents same-session concurrency
+  // when a slow probe outlives the tick interval.
+  private inFlight = new Set<string>()
   private readonly sessionsDir: string
   private readonly docStore: DocumentStore
   private readonly getSocketPath: (n: string) => string | null
@@ -79,6 +82,7 @@ export class NatsHealthMonitor {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.states.clear()
+    this.inFlight.clear()
   }
 
   trackSession(name: string): void {
@@ -96,12 +100,28 @@ export class NatsHealthMonitor {
     return this.states.get(name)
   }
 
+  /** Test-only: run one tick now (skips the interval timer). */
+  __tickNow(): Promise<void> {
+    return this.tick()
+  }
+
+  /** Test-only: inspect the in-flight guard set. */
+  __inFlightSize(): number {
+    return this.inFlight.size
+  }
+
   private async tick(): Promise<void> {
     const now = Date.now()
+    // Probes run in parallel across sessions; the inFlight set prevents a
+    // slow same-session probe from being launched twice on overlapping ticks.
     for (const [name, state] of this.states) {
       if (now < state.nextProbeAt) continue
+      if (this.inFlight.has(name)) continue
       const sess = getSession(this.sessionsDir, name)
-      if (!sess || !sess.nats?.enabled) {
+      // Stopped sessions: ENOENT on the control socket is the expected state
+      // (their MCP isn't running), so don't probe and don't touch the flag.
+      // Just defer the next attempt — they'll be re-evaluated next interval.
+      if (!sess || !sess.nats?.enabled || sess.state === 'stopped') {
         state.nextProbeAt = now + BASE_INTERVAL_MS
         continue
       }
@@ -110,28 +130,39 @@ export class NatsHealthMonitor {
         state.nextProbeAt = now + BASE_INTERVAL_MS
         continue
       }
-      let outcome: ProbeOutcome
-      try {
-        outcome = await this.probe(socketPath)
-      } catch (err) {
-        outcome = { kind: 'orphaned', reason: `probe threw: ${(err as Error).message}` }
-      }
-      this.applyOutcome(name, outcome, Date.now())
+      const observedFlagAtStart = sess.natsControlOrphanedAt
+      this.inFlight.add(name)
+      // Fire-and-track: we don't await so other sessions' probes can run
+      // concurrently. Errors are caught and converted to 'orphaned'.
+      void (async () => {
+        let outcome: ProbeOutcome
+        try {
+          outcome = await this.probe(socketPath)
+        } catch (err) {
+          outcome = { kind: 'orphaned', reason: `probe threw: ${(err as Error).message}` }
+        } finally {
+          this.inFlight.delete(name)
+        }
+        this.applyOutcome(name, outcome, Date.now(), observedFlagAtStart)
+      })()
     }
   }
 
   /** State-machine step. Exposed for tests. */
-  applyOutcome(name: string, outcome: ProbeOutcome, now: number): void {
+  applyOutcome(name: string, outcome: ProbeOutcome, now: number, observedFlagAtStart: string | null = null): void {
     const state = this.states.get(name)
+    // Session may have been untracked (or the monitor stopped) while a probe
+    // was in flight — drop the result silently.
     if (!state) return
     if (outcome.kind === 'healthy') {
       state.consecutiveFailures = 0
       state.nextProbeAt = now + BASE_INTERVAL_MS
-      this.maybeUpdateOrphanFlag(name, null)
+      this.maybeUpdateOrphanFlag(name, null, observedFlagAtStart)
     } else if (outcome.kind === 'orphaned') {
       state.consecutiveFailures += 1
       state.nextProbeAt = now + backoffMs(state.consecutiveFailures)
-      this.maybeUpdateOrphanFlag(name, new Date(now).toISOString())
+      // Setting always wins — pass undefined to skip the freshness check.
+      this.maybeUpdateOrphanFlag(name, new Date(now).toISOString(), undefined)
     } else {
       // degraded — MCP is alive and healing; back off but don't toggle flag.
       state.consecutiveFailures += 1
@@ -140,14 +171,39 @@ export class NatsHealthMonitor {
     }
   }
 
-  private maybeUpdateOrphanFlag(name: string, value: string | null): void {
+  /**
+   * Update the orphan flag with race protection.
+   *
+   * `expectedCurrentValue === undefined` → skip freshness check (used when
+   * SETTING the flag; orphan path always wins). Otherwise, when CLEARING,
+   * only proceed if the session's current value still matches what we
+   * observed at probe-start; if someone else (e.g. routes.ts subscribe-
+   * failure path) wrote a fresh ISO string while we were probing, leave
+   * their value alone.
+   */
+  private maybeUpdateOrphanFlag(
+    name: string,
+    intendedValue: string | null,
+    expectedCurrentValue: string | null | undefined,
+  ): void {
     const sess = getSession(this.sessionsDir, name)
     if (!sess) return
-    if (sess.natsControlOrphanedAt === value) return
-    updateSession(this.sessionsDir, name, { natsControlOrphanedAt: value })
+    if (
+      intendedValue === null &&
+      expectedCurrentValue !== undefined &&
+      sess.natsControlOrphanedAt !== expectedCurrentValue
+    ) {
+      log.info(
+        'nats-health',
+        `${name}: skipping stale clear (was ${expectedCurrentValue}, now ${sess.natsControlOrphanedAt})`,
+      )
+      return
+    }
+    if (sess.natsControlOrphanedAt === intendedValue) return
+    updateSession(this.sessionsDir, name, { natsControlOrphanedAt: intendedValue })
     const run = this.docStore.getRun(name)
-    if (run) this.docStore.upsertRun(name, { ...run, natsControlOrphanedAt: value })
-    log.info('nats-health', `${name}: orphan flag ${value ? 'set' : 'cleared'}`)
+    if (run) this.docStore.upsertRun(name, { ...run, natsControlOrphanedAt: intendedValue })
+    log.info('nats-health', `${name}: orphan flag ${intendedValue ? 'set' : 'cleared'}`)
   }
 }
 
