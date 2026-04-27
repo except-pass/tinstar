@@ -47,6 +47,12 @@ import { computeNatsSubscriptions, diffSubscriptions } from '../sessions/nats-su
 import { natsControlSocketPath } from '../sessions/backends/tmux'
 import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
+import { joinParticipants } from '../topic-metadata'
+
+// Stub — Task 3 will replace with `import { deriveHierarchicalName } from '../topic-metadata'`.
+function deriveHierarchicalName(_s: string, _ds: unknown, _k: string): string | null {
+  return null
+}
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
 function buildNatsSubject(
@@ -568,6 +574,28 @@ function deepMergeEntity<T extends Record<string, unknown>>(existing: T, patch: 
   return result
 }
 
+/** Synchronously enumerate every persisted session on disk. Mirrors the
+ * rehydrate loop in index.ts (readdirSync + getSession per entry). Used by
+ * topic-metadata routes to derive participants live from `nats.subscriptions`.
+ */
+function listAllSessions(ctx: RouteContext): Session[] {
+  const sessDir = ctx.sessionConfig?.dirs.sessions
+  if (!sessDir) return []
+  let entries: import('node:fs').Dirent<string>[]
+  try {
+    entries = readdirSync(sessDir, { withFileTypes: true, encoding: 'utf8' as const })
+  } catch {
+    return []
+  }
+  const out: Session[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const sess = getSession(sessDir, entry.name)
+    if (sess) out.push(sess)
+  }
+  return out
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = []
@@ -1069,6 +1097,56 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       ctx.docStore.upsertWorktree(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getWorktree(id) })
     })
+    return true
+  }
+
+  // GET /api/topics — all metadata records, with participants joined in
+  if (method === 'GET' && url === '/api/topics') {
+    const sessions = listAllSessions(ctx)
+    const data = ctx.docStore.getAllTopicMetadata().map(m => joinParticipants(m, sessions))
+    json(res, { ok: true, data })
+    return true
+  }
+
+  // GET /api/topics/:subject — single record
+  if (method === 'GET' && url.startsWith('/api/topics/') && !url.endsWith('/refresh')) {
+    const subject = decodeURIComponent(url.slice('/api/topics/'.length))
+    const md = ctx.docStore.getTopicMetadata(subject)
+    if (!md) return json(res, { error: 'not found' }, 404)
+    json(res, { ok: true, data: joinParticipants(md, listAllSessions(ctx)) })
+    return true
+  }
+
+  // PATCH /api/topics/:subject — rename / re-describe (anyone may write)
+  if (method === 'PATCH' && url.startsWith('/api/topics/') && !url.endsWith('/refresh')) {
+    const subject = decodeURIComponent(url.slice('/api/topics/'.length))
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getTopicMetadata(subject)
+      if (!existing) return json(res, { error: 'not found' }, 404)
+      const patch = JSON.parse(body) as { name?: string; description?: string }
+      const merged = { ...existing, ...patch }
+      ctx.docStore.upsertTopicMetadata(subject, merged)
+      json(res, { ok: true, data: joinParticipants(merged, listAllSessions(ctx)) })
+    })
+    return true
+  }
+
+  // POST /api/topics/:subject/refresh — re-bootstrap a hierarchical name from
+  // the entity tree's CURRENT values. No-op for breakout / custom kinds.
+  if (method === 'POST' && url.startsWith('/api/topics/') && url.endsWith('/refresh')) {
+    const subject = decodeURIComponent(url.slice('/api/topics/'.length, -('/refresh'.length)))
+    const existing = ctx.docStore.getTopicMetadata(subject)
+    if (!existing) return json(res, { error: 'not found' }, 404)
+    if (existing.kind !== 'broadcast' && existing.kind !== 'dm') {
+      return json(res, { ok: true, data: joinParticipants(existing, listAllSessions(ctx)) })
+    }
+    const refreshedName = deriveHierarchicalName(subject, ctx.docStore, existing.kind)
+    if (refreshedName) {
+      const merged = { ...existing, name: refreshedName }
+      ctx.docStore.upsertTopicMetadata(subject, merged)
+      return json(res, { ok: true, data: joinParticipants(merged, listAllSessions(ctx)) })
+    }
+    json(res, { ok: true, data: joinParticipants(existing, listAllSessions(ctx)) })
     return true
   }
 
