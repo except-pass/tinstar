@@ -341,6 +341,7 @@ interface CreateSessionContext {
   secrets: () => Record<string, string>
   dashboardUrl: string
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
+  natsHealth?: import('../nats-health').NatsHealthMonitor
 }
 
 async function createSessionInternal(
@@ -353,7 +354,7 @@ async function createSessionInternal(
     taskId, epicId, initiativeId, color: colorParam, nats
   } = params
 
-  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl, natsTraffic } = ctx
+  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl, natsTraffic, natsHealth } = ctx
 
   if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
   if (!['docker', 'tmux'].includes(backend)) return { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }
@@ -509,6 +510,7 @@ async function createSessionInternal(
   })
 
   registerSaloonSubs(natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+  if (resolvedNats?.enabled) natsHealth?.trackSession(name)
 
   readyQueue.onStatusChange(name, initialStatus)
   sse.setReadyQueue(readyQueue.getQueue())
@@ -529,6 +531,7 @@ export interface RouteContext {
   sessionConfig: TinstarConfig | null
   readyQueue: ReadyQueue
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
+  natsHealth?: import('../nats-health').NatsHealthMonitor
   readinessTracker?: import('../sessions/readiness').SessionReadinessTracker
   telemetryRoutes?: TelemetryRoutes
   ccQuotaService?: import('../cc-quota/service').CcQuotaService
@@ -1929,6 +1932,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             secrets,
             dashboardUrl,
             natsTraffic: ctx.natsTraffic,
+            natsHealth: ctx.natsHealth,
           }
 
           // Check if any session needs a worktree — if so, create ONE shared worktree for all
@@ -2231,6 +2235,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           })
 
           registerSaloonSubs(ctx.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+          if (resolvedNats?.enabled) ctx.natsHealth?.trackSession(name)
 
           ctx.readyQueue.onStatusChange(name, initialStatus)
           ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
@@ -2353,6 +2358,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // Respond immediately — UI removal is instant
         ctx.docStore.deleteRun(name)
         unregisterSaloonSubs(ctx.natsTraffic, name)
+        ctx.natsHealth?.untrackSession(name)
         emitSessionEvent('managed_session.deleted', { name })
         ctx.readyQueue.onDelete(name)
         ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
@@ -2722,6 +2728,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // Mirror the child's subscription list into the traffic bridge so the
         // Saloon window-event stream sees messages on its breakout room.
         registerSaloonSubs(ctx.natsTraffic, spawnedName, natsConfig?.enabled ? natsConfig.subscriptions : [])
+        if (natsConfig?.enabled) ctx.natsHealth?.trackSession(spawnedName)
 
         // Add breakout room to parent's run record — but only if the parent
         // is actually subscribed to it. On fallback, there's no live room.

@@ -31,6 +31,8 @@ import { log } from './logger'
 import { reconcileGitHistory } from './commits'
 import { NatsTrafficBridge } from './nats-traffic'
 import { registerSaloonSubs } from './api/saloonBridge'
+import { NatsHealthMonitor } from './nats-health'
+import { natsControlSocketPath } from './sessions/backends/tmux'
 import { SessionReadinessTracker } from './sessions/readiness'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
@@ -97,11 +99,13 @@ export function initBackend(): RouteContext {
 
   let natsManager: NatsManager | undefined
   let natsTraffic: NatsTrafficBridge | undefined
+  let natsHealth: NatsHealthMonitor | undefined
   let readinessTracker: SessionReadinessTracker | undefined
 
   if (!shutdownRegistered) {
     shutdownRegistered = true
     const shutdown = async () => {
+      try { natsHealth?.stop() } catch { /* ignore */ }
       try { await natsTraffic?.stop() } catch { /* ignore */ }
       try { await readinessTracker?.stop() } catch { /* ignore */ }
       try { await natsManager?.stop() } catch { /* ignore */ }
@@ -152,6 +156,25 @@ export function initBackend(): RouteContext {
         if (!sess) continue
         registerSaloonSubs(natsTraffic, sess.name, sess.nats?.subscriptions ?? [])
       }
+    }
+
+    // Start the periodic NATS-control-socket health probe. Drives
+    // Session.natsControlOrphanedAt for every NATS-enabled session so the
+    // Saloon broker-health dot reflects reality even when nobody's tried
+    // to subscribe/unsubscribe recently.
+    if (sessionConfig) {
+      natsHealth = new NatsHealthMonitor({
+        sessionsDir: sessionConfig.dirs.sessions,
+        docStore,
+        getSocketPath: (name) => natsControlSocketPath(name),
+      })
+      const healthEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
+      for (const entry of healthEntries) {
+        if (!entry.isDirectory()) continue
+        const sess = getSession(sessionConfig.dirs.sessions, entry.name)
+        if (sess?.nats?.enabled) natsHealth.trackSession(sess.name)
+      }
+      natsHealth.start()
     }
 
     // Start session readiness tracker — listens for tinstar.ready.> signals
@@ -404,6 +427,7 @@ export function initBackend(): RouteContext {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
     sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
     get natsTraffic() { return natsTraffic },
+    get natsHealth() { return natsHealth },
     get readinessTracker() { return readinessTracker },
   }
 }
