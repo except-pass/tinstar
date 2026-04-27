@@ -3,6 +3,7 @@ import type { SaloonEvent } from './useSaloonStream'
 import { classifySubject, type SubjectRole } from './subjectRole'
 import { useTopicMetadata } from './useTopicMetadata'
 import { useBackendState } from '../../../hooks/useBackendState'
+import { MessageDetailModal } from './MessageDetailModal'
 
 interface Props {
   sessionName: string
@@ -12,15 +13,21 @@ interface Props {
 }
 
 const ROLE_BORDER: Record<SubjectRole, string> = {
-  broadcast: 'border-l-cyan-400/50',
-  dm: 'border-l-amber-400/50',
-  breakout: 'border-l-violet-400/50',
+  broadcast: 'border-l-cyan-400/70',
+  dm: 'border-l-amber-400/70',
+  breakout: 'border-l-violet-400/70',
+}
+const ROLE_TEXT: Record<SubjectRole, string> = {
+  broadcast: 'text-cyan-400',
+  dm: 'text-amber-400',
+  breakout: 'text-violet-400',
 }
 
 export function StreamView({ sessionName, events, mutedSet, onUnmuteAll }: Props) {
   const [filter, setFilter] = useState('')
   const needle = filter.trim().toLowerCase()
   const { topicMetadata } = useBackendState()
+  const [detailIndex, setDetailIndex] = useState<number | null>(null)
 
   const nameByEvent = useMemo(() => {
     const map = new Map<string, string | undefined>()
@@ -38,6 +45,10 @@ export function StreamView({ sessionName, events, mutedSet, onUnmuteAll }: Props
       return subjectLower.includes(needle) || dataLower.includes(needle) || nameLower.includes(needle)
     })
   }, [events, mutedSet, needle, nameByEvent])
+
+  // If filter changes after a modal was opened, the index may now point past
+  // the end of `visible`. Clamp/close defensively.
+  const clampedDetailIndex = detailIndex !== null && detailIndex < visible.length ? detailIndex : null
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -58,31 +69,48 @@ export function StreamView({ sessionName, events, mutedSet, onUnmuteAll }: Props
           </button>
         )}
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         {visible.map((e, i) => (
-          <StreamRow key={i} event={e} sessionName={sessionName} needle={needle} />
+          <StreamRow
+            key={i}
+            event={e}
+            sessionName={sessionName}
+            needle={needle}
+            onClick={() => setDetailIndex(i)}
+          />
         ))}
       </div>
+      {clampedDetailIndex !== null && (
+        <MessageDetailModal
+          events={visible}
+          index={clampedDetailIndex}
+          sessionName={sessionName}
+          onClose={() => setDetailIndex(null)}
+          onNavigate={setDetailIndex}
+        />
+      )}
     </div>
   )
 }
 
-function StreamRow({ event, sessionName, needle }: { event: SaloonEvent; sessionName: string; needle: string }) {
+function StreamRow({ event, sessionName, needle, onClick }: { event: SaloonEvent; sessionName: string; needle: string; onClick: () => void }) {
   const role = classifySubject(event.subject, sessionName)
   const md = useTopicMetadata(event.subject)
   const display = md?.name ?? shortSubject(event.subject)
   return (
     <div
       data-testid="saloon-msg"
-      className={`px-2 py-1 border-b border-white/5 border-l-2 ${ROLE_BORDER[role]} text-2xs font-mono`}
+      onClick={onClick}
+      className={`px-2 py-1 border-b border-white/5 border-l-2 ${ROLE_BORDER[role]} text-2xs font-mono cursor-pointer hover:bg-white/5`}
+      title="Click to expand"
     >
       <div className="flex gap-1 items-baseline">
         <span className="text-[9px] text-slate-600 shrink-0">{formatTime(event.timestamp)}</span>
-        <span className="flex-1 min-w-0 truncate text-slate-400" title={event.subject}>
+        <span className={`flex-1 min-w-0 truncate ${ROLE_TEXT[role]}`} title={event.subject}>
           {highlight(display, needle)}
         </span>
       </div>
-      <div className="truncate text-slate-500" title={event.data}>
+      <div className="text-slate-300 line-clamp-3 whitespace-pre-wrap break-words" title={event.data}>
         {highlight(event.data, needle)}
       </div>
     </div>
