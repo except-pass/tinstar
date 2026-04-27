@@ -31,6 +31,7 @@ import { log } from './logger'
 import { reconcileGitHistory } from './commits'
 import { NatsTrafficBridge } from './nats-traffic'
 import { registerSaloonSubs } from './api/saloonBridge'
+import { bootstrapHierarchicalTopicMetadata } from './topic-metadata'
 import { NatsHealthMonitor } from './nats-health'
 import { natsControlSocketPath } from './sessions/backends/tmux'
 import { SessionReadinessTracker } from './sessions/readiness'
@@ -307,6 +308,12 @@ export function initBackend(): RouteContext {
             log.info('rehydrate', `${sess.name}: correcting status ${existingRun.status} → ${sess.state}`)
             docStore.updateRunStatus(sess.name, sess.state)
           }
+        }
+        // Backfill TopicMetadata for sessions that pre-existed the topic-metadata
+        // feature. The bootstrap helper is idempotent (skips subjects that already
+        // have records) so this is safe to run on every boot.
+        if (sess.nats?.enabled && sess.nats.subscriptions.length > 0) {
+          bootstrapHierarchicalTopicMetadata(sess.nats.subscriptions, sess.name, docStore)
         }
       }
 

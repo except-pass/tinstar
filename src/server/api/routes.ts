@@ -1113,17 +1113,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // PATCH /api/topics/:subject — rename / re-describe (anyone may write)
+  // PATCH /api/topics/:subject — rename / re-describe (anyone may write).
+  // Upsert semantics: if no record exists yet, create one with kind='custom'.
+  // The bootstrap path normally writes hierarchical records on session-create;
+  // this fallback covers subjects the bootstrap missed (e.g. sessions that
+  // pre-existed the feature, or arbitrary subjects a user wants to annotate).
   if (method === 'PATCH' && url.startsWith('/api/topics/') && !url.endsWith('/refresh')) {
     const subject = decodeURIComponent(url.slice('/api/topics/'.length))
     readBody(req).then(body => {
-      const existing = ctx.docStore.getTopicMetadata(subject)
-      if (!existing) return json(res, { error: 'not found' }, 404)
       let parsed: Record<string, unknown>
       try {
         parsed = JSON.parse(body)
       } catch {
         return json(res, { error: 'invalid json' }, 400)
+      }
+      const existing = ctx.docStore.getTopicMetadata(subject) ?? {
+        subject,
+        kind: 'custom' as const,
+        createdAt: new Date().toISOString(),
       }
       const merged: TopicMetadata = {
         ...existing,
