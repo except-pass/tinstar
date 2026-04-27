@@ -35,7 +35,7 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
+import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import { spec as openapiSpec } from './openapi'
 import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
@@ -47,6 +47,7 @@ import { computeNatsSubscriptions, diffSubscriptions } from '../sessions/nats-su
 import { natsControlSocketPath } from '../sessions/backends/tmux'
 import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
+import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
 function buildNatsSubject(
@@ -510,6 +511,7 @@ async function createSessionInternal(
   })
 
   registerSaloonSubs(natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+  bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, docStore)
   if (resolvedNats?.enabled) natsHealth?.trackSession(name)
 
   readyQueue.onStatusChange(name, initialStatus)
@@ -566,6 +568,28 @@ function deepMergeEntity<T extends Record<string, unknown>>(existing: T, patch: 
     ;(result as Record<string, unknown>).settings = Object.keys(mergedSettings).length > 0 ? mergedSettings : undefined
   }
   return result
+}
+
+/** Synchronously enumerate every persisted session on disk. Mirrors the
+ * rehydrate loop in index.ts (readdirSync + getSession per entry). Used by
+ * topic-metadata routes to derive participants live from `nats.subscriptions`.
+ */
+function listAllSessions(ctx: RouteContext): Session[] {
+  const sessDir = ctx.sessionConfig?.dirs.sessions
+  if (!sessDir) return []
+  let entries: import('node:fs').Dirent<string>[]
+  try {
+    entries = readdirSync(sessDir, { withFileTypes: true, encoding: 'utf8' as const })
+  } catch {
+    return []
+  }
+  const out: Session[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const sess = getSession(sessDir, entry.name)
+    if (sess) out.push(sess)
+  }
+  return out
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -1069,6 +1093,65 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       ctx.docStore.upsertWorktree(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getWorktree(id) })
     })
+    return true
+  }
+
+  // GET /api/topics — all metadata records, with participants joined in
+  if (method === 'GET' && url === '/api/topics') {
+    const sessions = listAllSessions(ctx)
+    const data = ctx.docStore.getAllTopicMetadata().map(m => joinParticipants(m, sessions))
+    json(res, { ok: true, data })
+    return true
+  }
+
+  // GET /api/topics/:subject — single record
+  if (method === 'GET' && url.startsWith('/api/topics/') && !url.endsWith('/refresh')) {
+    const subject = decodeURIComponent(url.slice('/api/topics/'.length))
+    const md = ctx.docStore.getTopicMetadata(subject)
+    if (!md) return json(res, { error: 'not found' }, 404)
+    json(res, { ok: true, data: joinParticipants(md, listAllSessions(ctx)) })
+    return true
+  }
+
+  // PATCH /api/topics/:subject — rename / re-describe (anyone may write)
+  if (method === 'PATCH' && url.startsWith('/api/topics/') && !url.endsWith('/refresh')) {
+    const subject = decodeURIComponent(url.slice('/api/topics/'.length))
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getTopicMetadata(subject)
+      if (!existing) return json(res, { error: 'not found' }, 404)
+      let parsed: Record<string, unknown>
+      try {
+        parsed = JSON.parse(body)
+      } catch {
+        return json(res, { error: 'invalid json' }, 400)
+      }
+      const merged: TopicMetadata = {
+        ...existing,
+        ...(typeof parsed.name === 'string' ? { name: parsed.name } : {}),
+        ...(typeof parsed.description === 'string' ? { description: parsed.description } : {}),
+      }
+      ctx.docStore.upsertTopicMetadata(subject, merged)
+      json(res, { ok: true, data: joinParticipants(merged, listAllSessions(ctx)) })
+    })
+    return true
+  }
+
+  // POST /api/topics/:subject/refresh — re-bootstrap a hierarchical name from
+  // the entity tree's CURRENT values. No-op for breakout / custom kinds.
+  if (method === 'POST' && url.startsWith('/api/topics/') && url.endsWith('/refresh')) {
+    const subject = decodeURIComponent(url.slice('/api/topics/'.length, -('/refresh'.length)))
+    const existing = ctx.docStore.getTopicMetadata(subject)
+    if (!existing) return json(res, { error: 'not found' }, 404)
+    if (existing.kind !== 'broadcast' && existing.kind !== 'dm') {
+      return json(res, { ok: true, data: joinParticipants(existing, listAllSessions(ctx)) })
+    }
+    const refreshedName = deriveHierarchicalName(subject, ctx.docStore, existing.kind)
+    if (refreshedName) {
+      const merged = { ...existing, name: refreshedName }
+      ctx.docStore.upsertTopicMetadata(subject, merged)
+      return json(res, { ok: true, data: joinParticipants(merged, listAllSessions(ctx)) })
+    }
+    json(res, { ok: true, data: joinParticipants(existing, listAllSessions(ctx)) })
     return true
   }
 
@@ -2235,6 +2318,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           })
 
           registerSaloonSubs(ctx.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+          bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, ctx.docStore)
           if (resolvedNats?.enabled) ctx.natsHealth?.trackSession(name)
 
           ctx.readyQueue.onStatusChange(name, initialStatus)
@@ -2728,6 +2812,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // Mirror the child's subscription list into the traffic bridge so the
         // Saloon window-event stream sees messages on its breakout room.
         registerSaloonSubs(ctx.natsTraffic, spawnedName, natsConfig?.enabled ? natsConfig.subscriptions : [])
+        bootstrapHierarchicalTopicMetadata(natsConfig?.subscriptions ?? [], spawnedName, ctx.docStore)
         if (natsConfig?.enabled) ctx.natsHealth?.trackSession(spawnedName)
 
         // Add breakout room to parent's run record — but only if the parent
@@ -2761,6 +2846,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               // Mirror the parent's expanded subscription list into the traffic bridge.
               registerSaloonSubs(ctx.natsTraffic, parentName, nextSubs)
             }
+          }
+          if (!ctx.docStore.getTopicMetadata(breakoutRoom)) {
+            ctx.docStore.upsertTopicMetadata(breakoutRoom, {
+              subject: breakoutRoom,
+              name: `${handName} with ${parentName}`,
+              kind: 'breakout',
+              createdAt: new Date().toISOString(),
+              createdBy: parentName,
+            })
           }
         }
 

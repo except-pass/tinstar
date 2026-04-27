@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import type { SaloonEvent } from './useSaloonStream'
 import { classifySubject, type SubjectRole } from './subjectRole'
+import { useTopicMetadata } from './useTopicMetadata'
+import { useBackendState } from '../../../hooks/useBackendState'
 
 interface Props {
   sessionName: string
@@ -18,14 +20,24 @@ const ROLE_BORDER: Record<SubjectRole, string> = {
 export function StreamView({ sessionName, events, mutedSet, onUnmuteAll }: Props) {
   const [filter, setFilter] = useState('')
   const needle = filter.trim().toLowerCase()
+  const { topicMetadata } = useBackendState()
+
+  const nameByEvent = useMemo(() => {
+    const map = new Map<string, string | undefined>()
+    for (const m of topicMetadata) map.set(m.subject, m.name)
+    return map
+  }, [topicMetadata])
 
   const visible = useMemo(() => {
     return events.filter(e => {
       if (mutedSet.has(e.subject)) return false
       if (!needle) return true
-      return e.subject.toLowerCase().includes(needle) || e.data.toLowerCase().includes(needle)
+      const subjectLower = e.subject.toLowerCase()
+      const dataLower = e.data.toLowerCase()
+      const nameLower = (nameByEvent.get(e.subject) ?? '').toLowerCase()
+      return subjectLower.includes(needle) || dataLower.includes(needle) || nameLower.includes(needle)
     })
-  }, [events, mutedSet, needle])
+  }, [events, mutedSet, needle, nameByEvent])
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -47,26 +59,31 @@ export function StreamView({ sessionName, events, mutedSet, onUnmuteAll }: Props
         )}
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto">
-        {visible.map((e, i) => {
-          const role = classifySubject(e.subject, sessionName)
-          return (
-            <div
-              key={i}
-              data-testid="saloon-msg"
-              className={`px-2 py-1 border-b border-white/5 border-l-2 ${ROLE_BORDER[role]} text-2xs font-mono`}
-            >
-              <div className="flex gap-1 items-baseline">
-                <span className="text-[9px] text-slate-600 shrink-0">{formatTime(e.timestamp)}</span>
-                <span className="flex-1 min-w-0 truncate text-slate-400" title={e.subject}>
-                  {highlight(shortSubject(e.subject), needle)}
-                </span>
-              </div>
-              <div className="truncate text-slate-500" title={e.data}>
-                {highlight(e.data, needle)}
-              </div>
-            </div>
-          )
-        })}
+        {visible.map((e, i) => (
+          <StreamRow key={i} event={e} sessionName={sessionName} needle={needle} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function StreamRow({ event, sessionName, needle }: { event: SaloonEvent; sessionName: string; needle: string }) {
+  const role = classifySubject(event.subject, sessionName)
+  const md = useTopicMetadata(event.subject)
+  const display = md?.name ?? shortSubject(event.subject)
+  return (
+    <div
+      data-testid="saloon-msg"
+      className={`px-2 py-1 border-b border-white/5 border-l-2 ${ROLE_BORDER[role]} text-2xs font-mono`}
+    >
+      <div className="flex gap-1 items-baseline">
+        <span className="text-[9px] text-slate-600 shrink-0">{formatTime(event.timestamp)}</span>
+        <span className="flex-1 min-w-0 truncate text-slate-400" title={event.subject}>
+          {highlight(display, needle)}
+        </span>
+      </div>
+      <div className="truncate text-slate-500" title={event.data}>
+        {highlight(event.data, needle)}
       </div>
     </div>
   )

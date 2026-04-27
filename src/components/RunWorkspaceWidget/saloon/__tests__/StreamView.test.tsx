@@ -1,8 +1,23 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/react'
 import { StreamView } from '../StreamView'
 import type { SaloonEvent } from '../useSaloonStream'
+
+vi.mock('../useTopicMetadata', () => ({
+  useTopicMetadata: (subject: string) =>
+    subject === 'tinstar.a.b.c'
+      ? { subject, name: 'Renamed Broadcast', kind: 'broadcast', createdAt: '' }
+      : undefined,
+}))
+
+vi.mock('../../../../hooks/useBackendState', () => ({
+  useBackendState: () => ({
+    topicMetadata: [
+      { subject: 'tinstar.a.b.c', name: 'Renamed Broadcast', kind: 'broadcast', createdAt: '' },
+    ],
+  }),
+}))
 
 const events: SaloonEvent[] = [
   { timestamp: '2026-04-24T12:00:00Z', subject: 'tinstar.a.b.c',          data: 'hello world', direction: 'inbound' },
@@ -49,5 +64,22 @@ describe('<StreamView>', () => {
     expect(pill.textContent).toMatch(/2 hidden/i)
     fireEvent.click(pill)
     expect(calls).toEqual([1])
+  })
+
+  it('renders metadata.name in the subject column when present', () => {
+    const { container } = render(
+      <StreamView sessionName="natsViz" events={events} mutedSet={new Set()} onUnmuteAll={() => {}} />,
+    )
+    expect(container.textContent).toContain('Renamed Broadcast')
+  })
+
+  it('filter matches against name as well as subject and body', () => {
+    const { container, getByPlaceholderText } = render(
+      <StreamView sessionName="natsViz" events={events} mutedSet={new Set()} onUnmuteAll={() => {}} />,
+    )
+    fireEvent.change(getByPlaceholderText(/filter/i), { target: { value: 'renamed' } })
+    const rows = container.querySelectorAll('[data-testid="saloon-msg"]')
+    // exactly the events whose subject is 'tinstar.a.b.c'
+    expect(rows.length).toBe(events.filter(e => e.subject === 'tinstar.a.b.c').length)
   })
 })

@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/react'
 import { SubscriptionsList } from '../SubscriptionsList'
+
+vi.mock('../useTopicMetadata', () => ({
+  useTopicMetadata: (subject: string) => {
+    if (subject === 'tinstar.a.b.c') return { subject, name: 'Friendly Broadcast', kind: 'broadcast', createdAt: '' }
+    if (subject === 'tinstar.room.r1') return { subject, name: 'Rubberduck Room', kind: 'breakout', createdAt: '' }
+    return undefined
+  },
+}))
 
 describe('<SubscriptionsList>', () => {
   const noop = () => {}
@@ -63,5 +71,37 @@ describe('<SubscriptionsList>', () => {
       />,
     )
     expect(getByText(/no subscriptions/i)).toBeTruthy()
+  })
+
+  it('renders metadata.name when present, raw shortSubject otherwise', () => {
+    const { container } = render(
+      <SubscriptionsList
+        sessionName="natsViz"
+        subscriptions={['tinstar.a.b.c', 'tinstar.room.r1', 'tinstar.no.metadata']}
+        mutedSet={new Set()}
+        onToggleMute={() => {}}
+      />,
+    )
+    expect(container.textContent).toContain('Friendly Broadcast')
+    expect(container.textContent).toContain('Rubberduck Room')
+    // Falls back to short-subject form for the unknown one
+    expect(container.textContent).toMatch(/no\.metadata|…\.metadata/)
+  })
+
+  it('clicking the pencil icon switches to inline rename input', () => {
+    const { container } = render(
+      <SubscriptionsList
+        sessionName="natsViz"
+        subscriptions={['tinstar.a.b.c']}
+        mutedSet={new Set()}
+        onToggleMute={() => {}}
+      />,
+    )
+    const editBtn = container.querySelector('[data-testid="saloon-rename"]')
+    expect(editBtn).toBeTruthy()
+    fireEvent.click(editBtn!)
+    const input = container.querySelector('input[data-testid="saloon-rename-input"]') as HTMLInputElement
+    expect(input).toBeTruthy()
+    expect(input.value).toBe('Friendly Broadcast')
   })
 })
