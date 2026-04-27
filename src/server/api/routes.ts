@@ -47,12 +47,7 @@ import { computeNatsSubscriptions, diffSubscriptions } from '../sessions/nats-su
 import { natsControlSocketPath } from '../sessions/backends/tmux'
 import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
-import { joinParticipants } from '../topic-metadata'
-
-// Stub — Task 3 will replace with `import { deriveHierarchicalName } from '../topic-metadata'`.
-function deriveHierarchicalName(_s: string, _ds: unknown, _k: string): string | null {
-  return null
-}
+import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
 function buildNatsSubject(
@@ -516,6 +511,7 @@ async function createSessionInternal(
   })
 
   registerSaloonSubs(natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+  bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, docStore)
   if (resolvedNats?.enabled) natsHealth?.trackSession(name)
 
   readyQueue.onStatusChange(name, initialStatus)
@@ -2313,6 +2309,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           })
 
           registerSaloonSubs(ctx.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+          bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, ctx.docStore)
           if (resolvedNats?.enabled) ctx.natsHealth?.trackSession(name)
 
           ctx.readyQueue.onStatusChange(name, initialStatus)
@@ -2806,6 +2803,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // Mirror the child's subscription list into the traffic bridge so the
         // Saloon window-event stream sees messages on its breakout room.
         registerSaloonSubs(ctx.natsTraffic, spawnedName, natsConfig?.enabled ? natsConfig.subscriptions : [])
+        bootstrapHierarchicalTopicMetadata(natsConfig?.subscriptions ?? [], spawnedName, ctx.docStore)
         if (natsConfig?.enabled) ctx.natsHealth?.trackSession(spawnedName)
 
         // Add breakout room to parent's run record — but only if the parent

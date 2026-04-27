@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { topicParticipants, joinParticipants } from '../topic-metadata'
+import { topicParticipants, joinParticipants, deriveHierarchicalName } from '../topic-metadata'
 import type { Session } from '../sessions/session'
+import { DocumentStore } from '../stores/document-store'
 
 const sess = (name: string, subs: string[] | null): Session => ({
   name, backend: 'tmux', state: 'running', project: null,
@@ -34,5 +35,29 @@ describe('joinParticipants', () => {
     expect(joinParticipants(md, sessions)).toMatchObject({
       subject: 's', participants: ['a', 'b'],
     })
+  })
+})
+
+describe('deriveHierarchicalName', () => {
+  it('returns "Task: <name>" for a broadcast subject ending in a real task', () => {
+    const ds = new DocumentStore()
+    ds.upsertSpace('s1', { id: 's1', name: 'Work Space', createdAt: '' })
+    ds.activeSpaceId = 's1'
+    ds.upsertInitiative('i1', { id: 'i1', name: 'Init', color: '#000', status: 'active', summary: '', spaceId: 's1' })
+    ds.upsertEpic('e1', { id: 'e1', name: 'Epic', initiativeId: 'i1', status: 'active', summary: '', spaceId: 's1' })
+    ds.upsertTask('t1', { id: 't1', name: 'Tinstar Improvement', epicId: 'e1', initiativeId: 'i1', status: 'active', spaceId: 's1' })
+    expect(deriveHierarchicalName('tinstar.work-space.init.epic.tinstar-improvement', ds, 'broadcast'))
+      .toBe('Task: Tinstar Improvement')
+  })
+
+  it('returns "DM → <session>" for a DM subject', () => {
+    const ds = new DocumentStore()
+    expect(deriveHierarchicalName('tinstar.work-space.init.epic.task.natsviz', ds, 'dm'))
+      .toBe('DM → natsviz')
+  })
+
+  it('returns null for an unrecognized shape', () => {
+    const ds = new DocumentStore()
+    expect(deriveHierarchicalName('tinstar.weird', ds, 'broadcast')).toBe(null)
   })
 })
