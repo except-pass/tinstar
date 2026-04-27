@@ -150,6 +150,15 @@ export interface NatsTrafficWidget {
   color?: string
 }
 
+export interface TopicMetadata {
+  subject: string
+  name?: string
+  description?: string
+  kind: 'broadcast' | 'dm' | 'breakout' | 'custom'
+  createdAt: string
+  createdBy?: string
+}
+
 // --- Grouping ---
 
 export type GroupingDimension = 'initiative' | 'epic' | 'task' | 'worktree'
