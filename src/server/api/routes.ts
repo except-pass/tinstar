@@ -2838,6 +2838,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               registerSaloonSubs(ctx.natsTraffic, parentName, nextSubs)
             }
           }
+          ctx.docStore.upsertTopicMetadata(breakoutRoom, {
+            subject: breakoutRoom,
+            name: `${handName} with ${parentName}`,
+            kind: 'breakout',
+            createdAt: new Date().toISOString(),
+            createdBy: parentName,
+          })
         }
 
         return json(res, {
