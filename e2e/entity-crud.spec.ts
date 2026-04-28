@@ -94,6 +94,7 @@ test.describe('Entity Creation', () => {
 
   test('add root button opens create dialog', async ({ page }) => {
     await page.getByTestId('add-root').click()
+    await page.getByTestId('add-root-initiative').click()
 
     const dialog = page.locator('[role="dialog"], .fixed, [class*="backdrop"]').first()
     await expect(dialog).toBeVisible({ timeout: 3000 })

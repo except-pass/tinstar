@@ -41,6 +41,7 @@ test.describe('Hotkeys', () => {
 
     test('? does not open palette when input is focused', async ({ page }) => {
       await page.getByTestId('add-root').click()
+      await page.getByTestId('add-root-initiative').click()
       await page.getByRole('textbox').first().focus()
       await page.keyboard.press('?')
       await expect(page.getByTestId('hotkey-palette')).not.toBeVisible()
@@ -226,6 +227,7 @@ test.describe('Hotkeys', () => {
 
     test('Ctrl+Enter does not open dialog when input is focused', async ({ page }) => {
       await page.getByTestId('add-root').click()
+      await page.getByTestId('add-root-initiative').click()
       await page.getByRole('textbox').first().focus()
       await page.keyboard.press('Control+Enter')
       const dialogs = await page.getByRole('dialog').all()
@@ -365,6 +367,7 @@ test.describe('Hotkeys', () => {
 
     test('S does not open dialog when input is focused', async ({ page }) => {
       await page.getByTestId('add-root').click()
+      await page.getByTestId('add-root-initiative').click()
       await page.getByRole('textbox').first().focus()
       await page.keyboard.press('s')
       await expect(page.getByTestId('session-name-input')).not.toBeVisible()

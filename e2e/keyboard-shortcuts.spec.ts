@@ -40,6 +40,7 @@ test.describe('Keyboard Shortcuts', () => {
 
   test('Escape closes create entity dialog', async ({ page }) => {
     await page.getByTestId('add-root').click()
+    await page.getByTestId('add-root-initiative').click()
     const dialog = page.locator('.fixed').first()
     await expect(dialog).toBeVisible()
 
