@@ -3,6 +3,7 @@ declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
 import { useSyncExternalStore, useCallback } from 'react'
 import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget } from '../domain/types'
+import { apiUrl } from '../apiClient'
 
 interface ServerState {
   activeSpaceId: string
@@ -86,11 +87,13 @@ function subscribe(listener: () => void): () => void {
 function startSSE() {
   if (es) return
 
-  const sseUrl = import.meta.env.DEV && typeof __TINSTAR_BACKEND_PORT__ !== 'undefined'
-    ? `http://${location.hostname}:${__TINSTAR_BACKEND_PORT__}/api/events`
-    : '/api/events'
+  const devBase =
+    import.meta.env.DEV && typeof __TINSTAR_BACKEND_PORT__ !== 'undefined'
+      ? `http://${location.hostname}:${__TINSTAR_BACKEND_PORT__}`
+      : null
+  const sseUrl = devBase ? `${devBase}/api/events` : apiUrl('/api/events')
 
-  es = new EventSource(sseUrl)
+  es = new EventSource(sseUrl, { withCredentials: true })
 
   es.addEventListener('snapshot', (e: MessageEvent) => {
     const snapshot = JSON.parse(e.data) as ServerState & { ready_queue?: string[] }
