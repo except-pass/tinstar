@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { HudSnapshot } from '../server/observability/types'
+import { apiFetch } from '../apiClient'
 
 export function useTelemetrySession(sessionName: string | null): HudSnapshot | null {
   const [snap, setSnap] = useState<HudSnapshot | null>(null)
@@ -8,7 +9,7 @@ export function useTelemetrySession(sessionName: string | null): HudSnapshot | n
     let aborted = false
     const fetchNow = async () => {
       try {
-        const r = await fetch(`/api/telemetry/session/${encodeURIComponent(sessionName)}`)
+        const r = await apiFetch(`/api/telemetry/session/${encodeURIComponent(sessionName)}`)
         if (!r.ok) return
         const data = (await r.json()) as HudSnapshot
         if (!aborted) setSnap(data)

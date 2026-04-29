@@ -12,6 +12,7 @@ import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 import { BindingRow, GLOBAL_KEYS, CANVAS_KEYS, QUICKDRAW_KEYS } from './HotkeyBindingRow'
 import { AgentIcon, isIconUrl } from './agentIcon'
+import { apiFetch } from '../apiClient'
 
 const LS_HOTKEYS_HEIGHT = 'tinstar-sidebar-hotkeys-height'
 const DEFAULT_HOTKEYS_HEIGHT = 200
@@ -740,7 +741,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
         <span className="text-2xs text-slate-500 uppercase tracking-wider">Tools</span>
         <button
           className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-          onClick={() => fetch('/api/nats-traffic-widgets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })}
+          onClick={() => apiFetch('/api/nats-traffic-widgets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })}
           title="Open NATS Traffic Monitor"
         >
           <span className="material-symbols-outlined text-base">cell_tower</span>

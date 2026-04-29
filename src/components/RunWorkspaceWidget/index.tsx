@@ -14,6 +14,7 @@ import { useWidgetFocus, useFocusPath } from '../../hotkeys/FocusPathContext'
 import type { FocusZone } from '../../hotkeys/widgetTypes'
 import '../../hotkeys/widgets/runWorkspaceWidget'  // side-effect: registers WidgetDefinition
 import { hexToRgba, resolveRunAccent } from '../runAccent'
+import { apiFetch } from '../../apiClient'
 
 interface Props {
   run: RunData
@@ -213,7 +214,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const onHandsResizePointerUp = useCallback(() => { handsResizeDragRef.current = null }, [])
 
   const handleOpenFile = useCallback((filePath: string) => {
-    fetch('/api/editor/open', {
+    apiFetch('/api/editor/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: filePath, sessionId: run.sessionId }),

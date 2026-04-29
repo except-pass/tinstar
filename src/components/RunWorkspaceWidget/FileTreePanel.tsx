@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
+import { apiFetch } from '../../apiClient'
 
 interface FileEntry {
   name: string
@@ -29,7 +30,7 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
       return next
     })
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/files?path=${encodeURIComponent(dirPath)}`)
+      const res = await apiFetch(`/api/sessions/${sessionId}/files?path=${encodeURIComponent(dirPath)}`)
       const data = await res.json()
       if (data.ok) {
         setDirs(prev => {

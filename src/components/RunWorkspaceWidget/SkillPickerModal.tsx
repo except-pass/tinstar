@@ -5,6 +5,7 @@ import { randomUUID } from '../../uuid'
 import { useTaxonomy } from '../TaxonomyContext'
 import { resolveEntityProcedures } from '../../domain/procedures'
 import type { SkillDTO, StoredProcedure } from '../../types'
+import { apiFetch } from '../../apiClient'
 
 interface Props {
   taskId: string
@@ -85,7 +86,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     setOptimisticAdded(prev => new Set([...prev, skillName]))
 
     // Always fetch fresh data before PATCHing — avoids overwriting concurrent stars
-    const res = await fetch(`/api/${entityPath}/${entityId}`)
+    const res = await apiFetch(`/api/${entityPath}/${entityId}`)
     if (!res.ok) return
     const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
     const existing = json.data?.settings?.procedures ?? []
@@ -93,7 +94,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     if (existing.some(p => p.skillName === skillName)) return
 
     const newProcedure: StoredProcedure = { id: newId, skillName }
-    fetch(`/api/${entityPath}/${entityId}`, {
+    apiFetch(`/api/${entityPath}/${entityId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings: { procedures: [...existing, newProcedure] } }),
@@ -109,12 +110,12 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     const entityId = proc?.entityId ?? taskId
     const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
 
-    const res = await fetch(`/api/${entityPath}/${entityId}`)
+    const res = await apiFetch(`/api/${entityPath}/${entityId}`)
     if (!res.ok) return
     const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
     const existing = json.data?.settings?.procedures ?? []
     const updated = existing.filter(p => p.skillName !== skillName)
-    await fetch(`/api/${entityPath}/${entityId}`, {
+    await apiFetch(`/api/${entityPath}/${entityId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings: { procedures: updated } }),
@@ -132,7 +133,7 @@ export function SkillPickerModal({ taskId, sessionId, onClose }: Props) {
     closePicker()
 
     // Type the prompt into the session terminal without submitting — user can revise before Enter
-    fetch(`/api/sessions/${sessionId}/send-keys`, {
+    apiFetch(`/api/sessions/${sessionId}/send-keys`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ keys: [prompt] }),

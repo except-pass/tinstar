@@ -2,6 +2,7 @@ import { useTaxonomy } from '../TaxonomyContext'
 import { useSkillsContext } from '../SkillsContext'
 import { resolveEntityProcedures } from '../../domain/procedures'
 import type { SessionStatus, StoredProcedure } from '../../types'
+import { apiFetch } from '../../apiClient'
 
 interface Props {
   taskId: string
@@ -37,11 +38,11 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse, 
     const entityType = proc?.entityType ?? 'task'
     const entityId = proc?.entityId ?? taskId
     const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
-    const res = await fetch(`/api/${entityPath}/${entityId}`)
+    const res = await apiFetch(`/api/${entityPath}/${entityId}`)
     if (!res.ok) return
     const json = await res.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
     const existing = json.data?.settings?.procedures ?? []
-    await fetch(`/api/${entityPath}/${entityId}`, {
+    await apiFetch(`/api/${entityPath}/${entityId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ settings: { procedures: existing.filter(p => p.skillName !== skillName) } }),
@@ -50,7 +51,7 @@ export function ProceduresPanel({ taskId, sessionId, sessionStatus, onCollapse, 
 
   async function sendToTerminal(skillName: string) {
     if (isBusy) return
-    await fetch(`/api/sessions/${sessionId}/send-keys`, {
+    await apiFetch(`/api/sessions/${sessionId}/send-keys`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ keys: [`/${skillName} `] }),

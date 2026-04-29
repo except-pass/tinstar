@@ -4,6 +4,7 @@ import { AutonomyStat } from './AutonomyStat'
 import { TelemetryBootstrap } from './TelemetryBootstrap'
 import { useTelemetryHud } from '../../hooks/useTelemetryHud'
 import { fmtNum, fmtDollar, fmtRate } from './fmt'
+import { apiFetch } from '../../apiClient'
 
 const STORAGE_KEY = 'tinstar-hud-visible'
 
@@ -25,7 +26,7 @@ export function CanvasHud({ toggleRef }: Props) {
   const toggle = useCallback(() => setVisible(v => !v), [])
 
   const handleRetry = useCallback(() => {
-    fetch('/api/telemetry/restart', { method: 'POST' })
+    apiFetch('/api/telemetry/restart', { method: 'POST' })
       .catch(err => console.error('telemetry restart failed', err))
   }, [])
 

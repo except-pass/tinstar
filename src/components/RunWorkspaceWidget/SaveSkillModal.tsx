@@ -3,6 +3,7 @@ import { useState } from 'react'
 import type { StoredProcedure } from '../../types'
 import { useSkillsContext } from '../SkillsContext'
 import { randomUUID } from '../../uuid'
+import { apiFetch } from '../../apiClient'
 
 interface Props {
   draftId: string
@@ -23,7 +24,7 @@ export function SaveSkillModal({ draftId, skillName, pendingSkillId, sessionId, 
     setSaving(true)
     setConflictError(null)
     try {
-      const res = await fetch('/api/skills/save', {
+      const res = await apiFetch('/api/skills/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ draftId, location, sessionId }),
@@ -40,12 +41,12 @@ export function SaveSkillModal({ draftId, skillName, pendingSkillId, sessionId, 
       if (pendingSkill && pendingSkill.entityId) {
         const entityPath = pendingSkill.entityType === 'task' ? 'tasks'
           : pendingSkill.entityType === 'epic' ? 'epics' : 'initiatives'
-        const entityRes = await fetch(`/api/${entityPath}/${pendingSkill.entityId}`)
+        const entityRes = await apiFetch(`/api/${entityPath}/${pendingSkill.entityId}`)
         if (entityRes.ok) {
           const entity = await entityRes.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
           const existing = entity.data?.settings?.procedures ?? []
           const newProcedure: StoredProcedure = { id: randomUUID(), skillName }
-          await fetch(`/api/${entityPath}/${pendingSkill.entityId}`, {
+          await apiFetch(`/api/${entityPath}/${pendingSkill.entityId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ settings: { procedures: [...existing, newProcedure] } }),
@@ -104,7 +105,7 @@ export function SaveSkillModal({ draftId, skillName, pendingSkillId, sessionId, 
 
         <button
           onClick={async () => {
-            await fetch('/api/skills/discard', {
+            await apiFetch('/api/skills/discard', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ draftId }),

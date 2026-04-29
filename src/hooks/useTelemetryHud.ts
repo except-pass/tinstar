@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { HudSnapshot } from '../server/observability/types'
+import { apiFetch } from '../apiClient'
 
 export interface UseTelemetryHudResult {
   snapshot: HudSnapshot | null
@@ -15,7 +16,7 @@ export function useTelemetryHud(): UseTelemetryHudResult {
     let hasLiveEvent = false
 
     // Initial fetch so we have something before SSE pushes.
-    fetch('/api/telemetry/hud')
+    apiFetch('/api/telemetry/hud')
       .then((r) => (r.ok ? r.json() : null))
       .then((snap: HudSnapshot | null) => {
         if (!aborted && snap && !hasLiveEvent) setSnapshot(snap)

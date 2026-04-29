@@ -4,6 +4,7 @@ declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { SkillDTO, PendingSkill, StoredProcedure } from '../types'
 import { randomUUID } from '../uuid'
+import { apiFetch } from '../apiClient'
 
 export interface OptimisticProcedure {
   id: string
@@ -66,7 +67,7 @@ export function useSkills(): SkillsState & SkillsActions {
           ps.id === draftId ? { ...ps, status: 'saving' as const } : ps
         ))
         try {
-          const res = await fetch('/api/skills/save', {
+          const res = await apiFetch('/api/skills/save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ draftId, location: matchingSkill.preferredLocation, sessionId: matchingSkill.sessionId }),
@@ -75,13 +76,13 @@ export function useSkills(): SkillsState & SkillsActions {
             // Add procedure to entity
             const { entityId, entityType } = matchingSkill
             const entityPath = entityType === 'task' ? 'tasks' : entityType === 'epic' ? 'epics' : 'initiatives'
-            const entityRes = await fetch(`/api/${entityPath}/${entityId}`)
+            const entityRes = await apiFetch(`/api/${entityPath}/${entityId}`)
             if (entityRes.ok) {
               const entity = await entityRes.json() as { ok: boolean; data: { settings?: { procedures?: StoredProcedure[] } } }
               const existing = entity.data?.settings?.procedures ?? []
               if (!existing.some(p => p.skillName === skillName)) {
                 const newProcedure: StoredProcedure = { id: randomUUID(), skillName }
-                await fetch(`/api/${entityPath}/${entityId}`, {
+                await apiFetch(`/api/${entityPath}/${entityId}`, {
                   method: 'PATCH',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ settings: { procedures: [...existing, newProcedure] } }),
@@ -124,7 +125,7 @@ export function useSkills(): SkillsState & SkillsActions {
   const fetchSkills = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/skills')
+      const res = await apiFetch('/api/skills')
       const data = await res.json() as { skills: SkillDTO[] }
       setSkills(data.skills)
     } finally {

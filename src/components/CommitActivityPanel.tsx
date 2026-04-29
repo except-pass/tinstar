@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CommitRecord } from '../types'
+import { apiFetch } from '../apiClient'
 
 interface Props {
   mode: 'task' | 'unassigned' | 'standup'
@@ -11,7 +12,7 @@ export function CommitActivityPanel({ mode, selectedTaskTag, onTaskTagChange }: 
   const [commits, setCommits] = useState<CommitRecord[]>([])
 
   const fetchCommits = useCallback(() => {
-    fetch('/api/commits')
+    apiFetch('/api/commits')
       .then(r => r.ok ? r.json() : [])
       .then(data => setCommits(data as CommitRecord[]))
       .catch(() => {})

@@ -4,6 +4,7 @@ import { hexToRgba } from '../runAccent'
 import { HudBar, AutonomyStat } from '../CanvasHud'
 import { fmtNum, fmtDollar, fmtRate } from '../CanvasHud/fmt'
 import { useTelemetrySession } from '../../hooks/useTelemetrySession'
+import { apiFetch } from '../../apiClient'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -289,7 +290,7 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/context`)
+      const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/context`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
       if (!json.ok) throw new Error(json.error?.message ?? 'Unknown error')
