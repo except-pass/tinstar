@@ -12,6 +12,13 @@
   </head>
   <body class="bg-surface-base text-slate-100 font-display antialiased">
     <div id="root"></div>
+    <!--
+      Runtime API base injection point.
+      Empty in browser mode (frontend uses same-origin /api/*).
+      Tauri shell rewrites this line before loading the document to point at the configured backend.
+      Contract: set window.__TINSTAR_API_BASE__ to a full origin (no trailing slash).
+    -->
+    <script>window.__TINSTAR_API_BASE__ = '';</script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

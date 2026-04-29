@@ -53,4 +53,11 @@ describe('apiClient', () => {
       expect.objectContaining({ credentials: 'omit' }),
     )
   })
+
+  it('reads base from window.__TINSTAR_API_BASE__ too (Tauri injection path)', () => {
+    ;(globalThis as any).window = globalThis
+    ;(globalThis as any).__TINSTAR_API_BASE__ = 'http://tailscale-host:5273'
+    _resetApiBaseForTests()
+    expect(apiUrl('/api/foo')).toBe('http://tailscale-host:5273/api/foo')
+  })
 })
