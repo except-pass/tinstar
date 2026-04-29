@@ -49,6 +49,11 @@ import { computeNatsSubscriptions, diffSubscriptions } from '../sessions/nats-su
 import { natsControlSocketPath } from '../sessions/backends/tmux'
 import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
+import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
+
+function currentCorsAllowlist(): string[] {
+  return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
+}
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
 function buildNatsSubject(
@@ -531,15 +536,16 @@ export interface RouteContext {
   telemetryRoutes?: TelemetryRoutes
 }
 
-function json(res: ServerResponse, data: unknown, status = 200): true {
+function moduleJson(res: ServerResponse, data: unknown, status = 200, corsHeaders?: Record<string, string>): true {
   // Some routes respond asynchronously (e.g. readBody(...).then(...)).
   // If the client disconnects or another codepath already responded, avoid crashing
-  // with ERR_HTTP_HEADERS_SENT.
+   // with ERR_HTTP_HEADERS_SENT.
   if (res.headersSent || res.writableEnded) return true
-  res.writeHead(status, {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-  })
+    ...(corsHeaders ?? { 'Access-Control-Allow-Origin': '*' }),
+  }
+  res.writeHead(status, headers)
   res.end(JSON.stringify(data))
   return true
 }
@@ -574,13 +580,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   const url = req.url ?? ''
   const method = req.method ?? 'GET'
 
+  const corsHeaders = resolveCorsHeaders({
+    origin: req.headers.origin,
+    allowlist: currentCorsAllowlist(),
+  }) as Record<string, string>
+
+  // Per-request shadow that auto-applies the resolved CORS headers.
+  // Shadows the module-scope `json` so existing call sites don't need to be updated.
+  const json = (res: ServerResponse, data: unknown, status = 200): true =>
+    moduleJson(res, data, status, corsHeaders)
+
   // CORS preflight
   if (method === 'OPTIONS' && url.startsWith('/api/')) {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    })
+    res.writeHead(204, corsHeaders)
     res.end()
     return true
   }
@@ -619,7 +631,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // GET /api/events (SSE)
   if (method === 'GET' && url === '/api/events') {
-    ctx.sse.addClient(res)
+    ctx.sse.addClient(res, corsHeaders)
     return true
   }
 

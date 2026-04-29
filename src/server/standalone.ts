@@ -4,6 +4,17 @@ import { fileURLToPath } from 'node:url'
 import { createReadStream, existsSync, statSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
 import { homedir } from 'node:os'
 import httpProxy from 'http-proxy'
+
+// Parse --cors-origins as early as possible so that downstream module imports
+// (which capture process.env.TINSTAR_CORS_ORIGINS at load time) see the value.
+{
+  const args = process.argv.slice(2)
+  const corsIdx = args.indexOf('--cors-origins')
+  if (corsIdx !== -1 && args[corsIdx + 1]) {
+    process.env.TINSTAR_CORS_ORIGINS = args[corsIdx + 1]
+  }
+}
+
 import { initBackend } from './index'
 import { handleRequest } from './api/routes'
 import { log } from './logger'
