@@ -29,12 +29,17 @@ function encodeWorkdir(workdir: string): string {
   return workdir.replace(/\//g, '-')
 }
 
-/** Build the JSONL transcript path for a given conversation */
-export function getTranscriptPath(workdir: string, conversationId: string, stateDir?: string): string {
+/** Directory holding all .jsonl conversation files for a given workdir */
+export function getProjectDir(workdir: string, stateDir?: string): string {
   const encoded = encodeWorkdir(workdir)
   // Docker sessions mount claude-state into a session-specific dir
   const base = stateDir ?? join(homedir(), '.claude', 'projects')
-  return join(base, encoded, `${conversationId}.jsonl`)
+  return join(base, encoded)
+}
+
+/** Build the JSONL transcript path for a given conversation */
+export function getTranscriptPath(workdir: string, conversationId: string, stateDir?: string): string {
+  return join(getProjectDir(workdir, stateDir), `${conversationId}.jsonl`)
 }
 
 // Track last read position per session

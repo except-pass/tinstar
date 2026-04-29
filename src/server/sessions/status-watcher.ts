@@ -1,6 +1,7 @@
-import { existsSync } from 'node:fs'
-import { listSessions, setState, claudeStateDir, type Session, type SessionState } from './session'
-import { readSessionStatusDetail, parseNewEntries } from './transcript-parser'
+import { existsSync, statSync } from 'node:fs'
+import { listSessions, setState, setConversationId, claudeStateDir, type Session, type SessionState } from './session'
+import { readSessionStatusDetail, parseNewEntries, getProjectDir, getTranscriptPath, resetOffset } from './transcript-parser'
+import { findNewestConversationId } from './resume'
 import { discoverTranscript, readCodexStatus, parseCodexRecapEntries } from './codex-transcript'
 import { log } from '../logger'
 import { execFile } from 'node:child_process'
@@ -85,12 +86,18 @@ export class StatusWatcher {
     }
 
     const workdir = session.workspace?.path
-    const convId = session.conversation?.id
+    let convId = session.conversation?.id
     if (!workdir || !convId) return
 
     const stateDir = session.backend === 'docker'
       ? claudeStateDir(this.opts.sessionsDir, session.name)
       : undefined
+
+    // /clear (or --resume to a different conversation) starts a new JSONL
+    // file. If the project dir holds a newer transcript than the one we're
+    // tracking, adopt it — otherwise status reads from a dead file forever.
+    const adopted = this.maybeAdoptNewerConversation(session, workdir, convId, stateDir)
+    if (adopted) convId = adopted
 
     const detail = readSessionStatusDetail(workdir, convId, stateDir)
     if (!detail) return // no transcript yet
@@ -130,6 +137,34 @@ export class StatusWatcher {
       // State unchanged — reset idle streak
       this.idleStreak.delete(session.name)
     }
+  }
+
+  /**
+   * If the project dir contains a .jsonl with a newer mtime than the tracked
+   * conversation, swap to it. Returns the new conversation id when adopted.
+   */
+  private maybeAdoptNewerConversation(
+    session: Session,
+    workdir: string,
+    convId: string,
+    stateDir: string | undefined,
+  ): string | null {
+    const projectDir = getProjectDir(workdir, stateDir)
+    const newest = findNewestConversationId(projectDir)
+    if (!newest || newest === convId) return null
+
+    const newestPath = getTranscriptPath(workdir, newest, stateDir)
+    if (!existsSync(newestPath)) return null
+    const newestMtime = statSync(newestPath).mtimeMs
+
+    const trackedPath = getTranscriptPath(workdir, convId, stateDir)
+    const trackedMtime = existsSync(trackedPath) ? statSync(trackedPath).mtimeMs : 0
+    if (newestMtime <= trackedMtime) return null
+
+    setConversationId(this.opts.sessionsDir, session.name, newest)
+    resetOffset(session.name) // recap parser starts fresh on the new file
+    log.info('status-watcher', `${session.name}: adopted newer conversation ${newest} (was ${convId})`)
+    return newest
   }
 
   private async checkCodexSession(session: Session): Promise<void> {
