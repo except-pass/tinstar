@@ -17,15 +17,23 @@ fn sanitize_api_base(raw: &str) -> String {
     trimmed.to_string()
 }
 
+/// Pure function — builds the JS snippet we hand to `Window::eval()` to set
+/// `window.__TINSTAR_API_BASE__`. Extracted from `on_page_load` for unit
+/// testing: Tauri 2 has no headless webview test harness in OSS, so the best
+/// we can do is verify the string we'd inject is correctly quoted.
+fn build_eval_script(base: &str) -> String {
+    let sanitized = sanitize_api_base(base);
+    format!(
+        "window.__TINSTAR_API_BASE__ = {};",
+        serde_json::to_string(&sanitized).expect("json string is always serializable")
+    )
+}
+
 fn main() {
     tauri::Builder::default()
         .on_page_load(|window, payload| {
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
-                let base = sanitize_api_base(HARDCODED_BASE);
-                let script = format!(
-                    "window.__TINSTAR_API_BASE__ = {};",
-                    serde_json::to_string(&base).expect("json string is always serializable")
-                );
+                let script = build_eval_script(HARDCODED_BASE);
                 let _ = window.eval(&script);
             }
         })
@@ -58,5 +66,21 @@ mod tests {
     #[test]
     fn passes_clean_origin() {
         assert_eq!(sanitize_api_base("http://infrapoc:5273"), "http://infrapoc:5273");
+    }
+
+    #[test]
+    fn eval_script_quotes_string() {
+        assert_eq!(
+            build_eval_script("http://infrapoc:5273"),
+            "window.__TINSTAR_API_BASE__ = \"http://infrapoc:5273\";"
+        );
+    }
+
+    #[test]
+    fn eval_script_blanks_on_unsafe_input() {
+        assert_eq!(
+            build_eval_script("http://x\"; alert(1)//"),
+            "window.__TINSTAR_API_BASE__ = \"\";"
+        );
     }
 }
