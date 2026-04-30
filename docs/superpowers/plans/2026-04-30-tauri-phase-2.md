@@ -18,13 +18,13 @@
 
 ## Phase decomposition
 
-- **Phase 2a — Tauri skeleton (Tasks 1–6)** — `src-tauri/` scaffold, single window, `Window::eval()` injection, hardcoded remote URL pointed at infrapoc:5273. Proves the bundling story end-to-end before any config code exists.
+- **Phase 2a — Tauri skeleton (Tasks 0–6)** — `bin/doctor.js --tauri-dev` for build-deps check, `src-tauri/` scaffold, single window, `Window::eval()` injection, hardcoded remote URL pointed at infrapoc:5273. Proves the bundling story end-to-end before any config code exists.
 - **Phase 2b — Config + first-run setup (Tasks 7–13)** — `get_config` / `save_config` IPC, `desktop.json` in `app_config_dir()`, React `<FirstRunSetup />`, routing on bootstrap.
 - **Phase 2c — Splash screen (Tasks 14–16)** — `splash.html` window, Rust orchestration, dismissal on main webview ready.
 - **Phase 2d — Local-mode backend manager (Tasks 17–22)** — reachability probe, `tinstar` shell-out with `TINSTAR_CONFIG_HOME` isolation, child cleanup on quit, "backend unreachable" UX with copyable command.
 - **Phase 2e — Build pipeline (Tasks 23–26)** — `npm run tauri:dev` / `tauri:build`, GitHub Actions matrix, README install/run docs for unsigned binaries, V4.0 release tag.
 
-**26 tasks total. Each task = one atomic commit.**
+**27 tasks total. Each task = one atomic commit.**
 
 ---
 
@@ -65,6 +65,114 @@ Every smoke test in this plan runs against `:5299` with `TINSTAR_CONFIG_HOME=/tm
 ---
 
 # Phase 2a — Tauri skeleton
+
+## Task 0: Extend `tinstar doctor` with `--tauri-dev` build-deps check
+
+End users (downloading .dmg/.msi/.deb/.AppImage) don't need any Tauri-specific libs — the OS has them, or the package manager pulls runtime deps automatically. Developers building from source DO need the `-dev` packages because cargo links against them at build time. This task extends the existing `bin/doctor.js` to surface this requirement clearly.
+
+**Files:**
+- Modify: `bin/doctor.js`
+
+- [ ] **Step 1: Read the current doctor**
+
+```bash
+cat bin/doctor.js | head -60
+```
+
+Confirm the existing pattern: `check(label, fn)` runs `fn`, prints ✓/✗, returns boolean. The doctor already detects platform and runs platform-specific binary checks (claude, tmux, ttyd). Match this pattern.
+
+- [ ] **Step 2: Add the `--tauri-dev` flag and check function**
+
+In `bin/doctor.js`, after the existing checks, add:
+
+```js
+function checkTauriDev() {
+  const platform = process.platform
+  console.log(`\n${BOLD}Tauri build dependencies${RESET} ${DIM}(developers only)${RESET}\n`)
+
+  if (platform === 'darwin') {
+    return check('Xcode Command Line Tools', () => {
+      const path = execSync('xcode-select -p', { encoding: 'utf-8' }).trim()
+      if (!path) throw new Error('Run: xcode-select --install')
+      return path
+    })
+  }
+
+  if (platform === 'linux') {
+    let allOk = true
+    const debDeps = [
+      ['webkit2gtk-4.1', 'libwebkit2gtk-4.1-dev'],
+      ['gtk+-3.0', 'libgtk-3-dev'],
+      ['ayatana-appindicator3-0.1', 'libayatana-appindicator3-dev'],
+      ['librsvg-2.0', 'librsvg2-dev'],
+    ]
+    for (const [pkg, deb] of debDeps) {
+      allOk &= check(`${pkg} (${deb})`, () => {
+        execSync(`pkg-config --exists ${pkg}`, { stdio: 'pipe' })
+        return null
+      })
+    }
+    if (!allOk) {
+      const missing = debDeps.map(([, d]) => d).join(' ')
+      console.log(`\n${DIM}Install with:${RESET}`)
+      console.log(`  sudo apt install -y ${missing} build-essential curl wget file libssl-dev`)
+      console.log(`${DIM}(or your distro's equivalent for webkit2gtk-4.1, gtk+-3.0, ayatana-appindicator3, librsvg2)${RESET}`)
+    }
+    return !!allOk
+  }
+
+  if (platform === 'win32') {
+    return check('Visual Studio Build Tools', () => {
+      execSync('where cl.exe', { stdio: 'pipe' })
+      return null
+    })
+    // If missing, doctor.js's check() already prints the error message;
+    // we add a hint:
+    // -> Install: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+    // (The user sees the error text from where cl.exe failing.)
+  }
+
+  console.log(`${DIM}Unknown platform ${platform} — no Tauri build-deps check.${RESET}`)
+  return true
+}
+```
+
+In the `main` function, add early-out for the new flag:
+
+```js
+if (process.argv.includes('--tauri-dev')) {
+  const ok = checkTauriDev()
+  process.exit(ok ? 0 : 1)
+}
+```
+
+- [ ] **Step 3: Manual smoke-test on this Linux box**
+
+Run: `node bin/doctor.js --tauri-dev`
+Expected (if libs not yet installed): four ✗ lines, exit 1, install command printed.
+
+After the user installs the libs, re-run: four ✓ lines, exit 0.
+
+(macOS / Windows verification deferred to whoever first builds on those platforms — the logic is straightforward enough that platform-specific bugs are unlikely.)
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add bin/doctor.js
+git commit -m "feat(doctor): --tauri-dev mode checks build-time deps for Tauri"
+```
+
+- [ ] **Step 5: Document the new flag**
+
+Add a one-liner to README's "Common Commands" section if such a section exists; otherwise defer to the docs in Task 25:
+
+```
+tinstar doctor --tauri-dev   # Check Tauri build dependencies (developers building from source)
+```
+
+If README has no obvious place, skip — Task 25 puts the official version in `docs/desktop-app.md`.
+
+---
 
 ## Task 1: Add `@tauri-apps/cli` and scaffold `src-tauri/`
 
