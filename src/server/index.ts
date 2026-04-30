@@ -147,7 +147,9 @@ export function initBackend(): RouteContext {
   // --- Session management ---
   if (process.env.TINSTAR_NO_SESSIONS !== '1') {
     try {
-      sessionConfig = loadConfig(process.env.TINSTAR_DATA_DIR ? { _rootDir: process.env.TINSTAR_DATA_DIR } : undefined)
+      // loadConfig() resolves the config root via getConfigRoot(), which honors
+      // TINSTAR_CONFIG_HOME (preferred) and TINSTAR_DATA_DIR (legacy alias).
+      sessionConfig = loadConfig()
       ensureDirs(sessionConfig)
 
       // Enable file-backed persistence so data survives server restarts

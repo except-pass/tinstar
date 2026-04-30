@@ -1,4 +1,3 @@
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { connect } from 'nats'
@@ -6,6 +5,7 @@ import { Supervisor } from '../infra/supervisor.js'
 import { installBinary } from '../infra/binaries.js'
 import { resolveNatsTarget } from './manifest.js'
 import { log } from '../logger.js'
+import { getConfigRoot } from '../configRoot.js'
 import type { ServiceState } from '../infra/types.js'
 
 const DEFAULT_PORT = 4222
@@ -26,7 +26,7 @@ export class NatsManager {
       ? 0
       : parseInt(process.env.NATS_PORT ?? String(opts?.port ?? DEFAULT_PORT), 10)
     this.url = externalUrl ?? `nats://127.0.0.1:${this.port}`
-    this.configRoot = opts?.configRoot ?? join(homedir(), '.config', 'tinstar')
+    this.configRoot = opts?.configRoot ?? getConfigRoot()
   }
 
   async start(): Promise<void> {

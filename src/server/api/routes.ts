@@ -38,7 +38,7 @@ import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
-import { saveDraft, discardDraft, DRAFTS_DIR, ensureDraftsDir } from '../sessions/skill-drafts'
+import { saveDraft, discardDraft, getDraftsDir, ensureDraftsDir } from '../sessions/skill-drafts'
 import type { SkillDTO } from '../../types'
 import { spec as openapiSpec } from './openapi'
 import { ReadyQueue } from '../sessions/ReadyQueue'
@@ -1763,7 +1763,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       try {
         // Read skillName from draft frontmatter BEFORE moving the file
-        const draftPath = join(DRAFTS_DIR, `${draftId}.md`)
+        const draftPath = join(getDraftsDir(), `${draftId}.md`)
         let skillName = draftId  // fallback
         try {
           const content = readFileSync(draftPath, 'utf-8')
@@ -1815,7 +1815,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const { draftId, name } = JSON.parse(body) as { draftId: string; name: string }
       if (!draftId || !name) { json(res, { error: 'missing draftId or name' }, 400); return }
       ensureDraftsDir()
-      const filePath = join(DRAFTS_DIR, `${draftId}.md`)
+      const filePath = join(getDraftsDir(), `${draftId}.md`)
       writeFileSync(filePath, `---\nname: ${name}\ndescription: ${name}\n---\n\n# ${name}\n`)
       json(res, { ok: true, draftId })
     })

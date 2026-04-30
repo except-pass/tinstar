@@ -1,4 +1,3 @@
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { Supervisor } from './supervisor.js'
@@ -9,6 +8,7 @@ import { renderAlloyRiver, renderPrometheusYml } from './config-render.js'
 import { TelemetryQuery } from './query.js'
 import type { DownloadProgress, ObservabilityState } from './types.js'
 import { log } from '../logger.js'
+import { getConfigRoot } from '../configRoot.js'
 
 const PROM_PORT = 9090
 const ALLOY_OTLP_PORT = 4318
@@ -36,7 +36,7 @@ export class ObservabilityStack {
   private readonly obsRoot: string
 
   constructor(opts: ObservabilityStackOpts = {}) {
-    this.root = opts.configRoot ?? join(homedir(), '.config', 'tinstar')
+    this.root = opts.configRoot ?? getConfigRoot()
     this.binRoot = join(this.root, 'bin')
     this.obsRoot = join(this.root, 'observability')
   }

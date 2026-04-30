@@ -4,8 +4,8 @@
 import { execSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 import { request as httpRequest } from 'node:http'
+import { getConfigRoot } from './configRoot.js'
 
 // ── Formatting ──
 
@@ -113,7 +113,7 @@ function sseCheck(url, timeoutMs = 4000) {
 
 // ── Config paths ──
 
-const ROOT = join(homedir(), '.config', 'tinstar')
+const ROOT = getConfigRoot()
 const DOCSTORE = join(ROOT, 'docstore.json')
 const CONFIG_FILE = join(ROOT, 'config.json')
 const SESSIONS_DIR = join(ROOT, 'sessions')
@@ -186,7 +186,7 @@ async function doctor() {
     const c = { status: 'fail', label: `${ROOT} — missing`, detail: 'run tinstar once to initialize' }
     configChecks.push(c)
   } else {
-    configChecks.push({ status: 'pass', label: `~/.config/tinstar/ exists` })
+    configChecks.push({ status: 'pass', label: `${ROOT} exists` })
   }
 
   // config.json
