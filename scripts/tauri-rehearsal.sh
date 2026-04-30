@@ -15,7 +15,16 @@ BACKEND_PORT=5299
 FRONTEND_PORT=4173
 REHEARSAL_DIR=/tmp/tauri-rehearsal
 REHEARSAL_CONFIG_HOME=/tmp/tauri-rehearsal-config
-ALLOWED_ORIGIN="http://localhost:${FRONTEND_PORT}"
+# Allow localhost, 127.0.0.1, and the machine's hostname by default. If you access
+# the rehearsal via a custom alias (e.g. "infrapoc"), pass it via TAURI_EXTRA_HOSTS:
+#
+#   TAURI_EXTRA_HOSTS='infrapoc,box.lan' scripts/tauri-rehearsal.sh
+#
+# Each host is expanded with the frontend port to form an allowed Origin.
+HOST_NAME=$(hostname 2>/dev/null || echo localhost)
+DEFAULT_HOSTS="localhost,127.0.0.1,${HOST_NAME}"
+ALL_HOSTS="${DEFAULT_HOSTS}${TAURI_EXTRA_HOSTS:+,${TAURI_EXTRA_HOSTS}}"
+ALLOWED_ORIGIN=$(echo "${ALL_HOSTS}" | tr ',' '\n' | sed "s|.*|http://&:${FRONTEND_PORT}|" | paste -sd ',' -)
 BACKEND_PATTERN="bin/tinstar.js --port ${BACKEND_PORT}"
 FRONTEND_PATTERN="serve -l ${FRONTEND_PORT}"
 
@@ -71,12 +80,17 @@ if ! curl -sf "http://localhost:${BACKEND_PORT}/api/state" >/dev/null; then
   exit 1
 fi
 
-echo "==> staging frontend with __TINSTAR_API_BASE__=http://localhost:${BACKEND_PORT}"
+echo "==> staging frontend with __TINSTAR_API_BASE__ derived from window.location.hostname"
 cp -r dist/client "${REHEARSAL_DIR}"
-sed -i "s|window.__TINSTAR_API_BASE__ = ''|window.__TINSTAR_API_BASE__ = 'http://localhost:${BACKEND_PORT}'|" \
+# Use whatever hostname the browser used to load the frontend, with the backend port.
+# This lets the rehearsal work whether accessed via http://localhost:4173,
+# http://infrapoc:4173, or http://192.168.x.x:4173 — backend just needs the matching
+# Origin in TINSTAR_CORS_ORIGINS.
+INJECTED_BASE="window.location.protocol + '//' + window.location.hostname + ':${BACKEND_PORT}'"
+sed -i "s|window.__TINSTAR_API_BASE__ = ''|window.__TINSTAR_API_BASE__ = ${INJECTED_BASE}|" \
   "${REHEARSAL_DIR}/index.html"
 
-if ! grep -q "http://localhost:${BACKEND_PORT}" "${REHEARSAL_DIR}/index.html"; then
+if ! grep -q "window.location.hostname" "${REHEARSAL_DIR}/index.html"; then
   echo "sed did not patch index.html — check the runtime-injection placeholder" >&2
   exit 1
 fi
