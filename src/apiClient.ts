@@ -18,6 +18,19 @@ export function _resetApiBaseForTests(): void {
   apiBase = null
 }
 
+/**
+ * Forces the next apiUrl() / apiFetch() call to re-read window.__TINSTAR_API_BASE__.
+ *
+ * Use case: the Tauri desktop shell injects __TINSTAR_API_BASE__ via Window::eval
+ * inside the PageLoadEvent::Started callback. Module-init time can race that
+ * injection in some webview implementations. Calling this from the bootstrap
+ * (main.tsx) right before mounting React makes the timing question irrelevant —
+ * apiBase is null again, so the very next read picks up whatever the eval set.
+ */
+export function resetApiBaseFromGlobal(): void {
+  apiBase = null
+}
+
 export function apiUrl(path: string): string {
   const base = getBase()
   if (!base) return path.startsWith('/') ? path : `/${path}`

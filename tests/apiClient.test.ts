@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { apiUrl, apiFetch, _resetApiBaseForTests } from '../src/apiClient'
+import { apiUrl, apiFetch, _resetApiBaseForTests, resetApiBaseFromGlobal } from '../src/apiClient'
 
 describe('apiClient', () => {
   beforeEach(() => {
@@ -59,5 +59,15 @@ describe('apiClient', () => {
     ;(globalThis as any).__TINSTAR_API_BASE__ = 'http://tailscale-host:5273'
     _resetApiBaseForTests()
     expect(apiUrl('/api/foo')).toBe('http://tailscale-host:5273/api/foo')
+  })
+
+  it('resetApiBaseFromGlobal re-reads __TINSTAR_API_BASE__ after late injection', () => {
+    // First call: nothing injected, falls back to same-origin.
+    expect(apiUrl('/api/x')).toBe('/api/x')
+    // Tauri's eval lands AFTER module init: simulate by setting the global now.
+    ;(globalThis as any).__TINSTAR_API_BASE__ = 'http://infrapoc:5273'
+    // Without the reset we'd still return same-origin (apiBase cached as '').
+    resetApiBaseFromGlobal()
+    expect(apiUrl('/api/x')).toBe('http://infrapoc:5273/api/x')
   })
 })
