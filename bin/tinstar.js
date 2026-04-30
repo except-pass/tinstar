@@ -76,7 +76,9 @@ async function main() {
 
   console.log()
 
-  // Project detection
+  // Project detection — skip the prompt under --no-setup or when stdin isn't a TTY
+  // (CI, pipes, here-strings). Non-TTY callers get the same effect as answering "n".
+  const skipSetup = process.argv.includes('--no-setup') || !process.stdin.isTTY
   try {
     const gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf-8', cwd: process.cwd() }).trim()
     const projectName = basename(gitRoot)
@@ -85,7 +87,7 @@ async function main() {
     let projects = {}
     try { projects = JSON.parse(readFileSync(projectsFile, 'utf-8')) } catch {}
 
-    if (!Object.values(projects).includes(gitRoot)) {
+    if (!Object.values(projects).includes(gitRoot) && !skipSetup) {
       const answer = await ask(`📁 Detected project: ${BOLD}${projectName}${RESET} (${gitRoot})\n   Add as a Tinstar project? [Y/n] `)
       if (answer !== 'n' && answer !== 'no') {
         mkdirSync(join(homedir(), '.config', 'tinstar'), { recursive: true })
