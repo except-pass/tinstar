@@ -96,24 +96,30 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   }
 
-  async function handle(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<boolean> {
+  async function handle(
+    req: IncomingMessage,
+    res: ServerResponse,
+    pathname: string,
+    corsHeaders: Record<string, string> = {},
+  ): Promise<boolean> {
+    const json = { 'content-type': 'application/json', ...corsHeaders }
     if (pathname === '/api/telemetry/hud' && req.method === 'GET') {
       startPolling()
       const snap = await buildSnapshot()
-      res.writeHead(200, { 'content-type': 'application/json' })
+      res.writeHead(200, json)
       res.end(JSON.stringify(snap))
       return true
     }
     const sessMatch = pathname.match(/^\/api\/telemetry\/session\/([^/]+)$/)
     if (sessMatch && req.method === 'GET') {
       const snap = await buildSnapshot(sessMatch[1])
-      res.writeHead(200, { 'content-type': 'application/json' })
+      res.writeHead(200, json)
       res.end(JSON.stringify(snap))
       return true
     }
     if (pathname === '/api/telemetry/restart' && req.method === 'POST') {
       await deps.restart()
-      res.writeHead(200, { 'content-type': 'application/json' })
+      res.writeHead(200, json)
       res.end(JSON.stringify({ ok: true }))
       return true
     }

@@ -601,7 +601,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (ctx.telemetryRoutes && url.startsWith('/api/telemetry/')) {
     // Normalize pathname (strip query string)
     const pathname = url.split('?')[0]
-    if (await ctx.telemetryRoutes.handle(req, res, pathname)) return true
+    if (await ctx.telemetryRoutes.handle(req, res, pathname, corsHeaders)) return true
   }
 
   // GET /api/docs — Scalar API reference UI
