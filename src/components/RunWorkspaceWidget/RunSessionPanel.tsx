@@ -4,6 +4,9 @@ import { resolveRunAccent, hexToRgba } from '../runAccent'
 import { usePromptHistory } from '../../hooks/usePromptHistory'
 import { PromptHistoryPopover } from './PromptHistoryPopover'
 import { useFocusPath } from '../../hotkeys/FocusPathContext'
+import { findSlashToken, rankCommands, type SlashCommand } from '../../lib/slashMatching'
+import { useSlashCommands } from '../../hooks/useSlashCommands'
+import { SlashChips } from './SlashChips'
 
 function MarkdownText({ content }: { content: string }) {
   return (
@@ -181,6 +184,18 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   const composerFocusId = sessionId ? `${sessionId}:composer` : null
   const isOnFocusPath = useRef(false)
 
+  const { commands, usage, refresh: refreshSlash } = useSlashCommands()
+  const [slashCursor, setSlashCursor] = useState<number>(0)
+  const [cycleState, setCycleState] = useState<{ candidates: SlashCommand[]; index: number } | null>(null)
+
+  const slashToken = findSlashToken(text, slashCursor)
+  const candidates: SlashCommand[] = slashToken
+    ? (cycleState?.candidates ?? rankCommands(commands, slashToken.partial, usage))
+    : []
+  const activeIndex = cycleState?.index ?? 0
+
+  useEffect(() => { if (isExpanded) refreshSlash() }, [isExpanded, refreshSlash])
+
   const enterComposerFocus = useCallback(() => {
     if (!composerFocusId || isOnFocusPath.current) return
     pushFocus({ id: composerFocusId, type: 'prompt-composer', label: 'Composer' })
@@ -242,6 +257,27 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   }, [sessionId, text, canSend, sending, status, pushHistory])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Tab' && cycleState) setCycleState(null)
+    if (e.key === 'Tab' && slashToken && candidates.length > 0) {
+      e.preventDefault()
+      const list = cycleState?.candidates ?? candidates
+      const nextIndex = cycleState ? (cycleState.index + 1) % list.length : 0
+      const chosen = list[nextIndex]!
+      const before = text.slice(0, slashToken.start)
+      const after  = text.slice(slashCursor)
+      const replacement = `/${chosen.name}`
+      const newText = before + replacement + after
+      setText(newText)
+      const newCursor = before.length + replacement.length
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (!ta) return
+        ta.setSelectionRange(newCursor, newCursor)
+        setSlashCursor(newCursor)
+      })
+      setCycleState({ candidates: list, index: nextIndex })
+      return
+    }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
       if (historyOpen) setHistoryOpen(false)
@@ -261,7 +297,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
       e.preventDefault()
       setHistoryOpen(true)
     }
-  }, [handleSend, text, historyOpen, sessionId])
+  }, [handleSend, text, historyOpen, sessionId, slashToken, candidates, cycleState, slashCursor])
 
   // Focus textarea when expanded
   useEffect(() => {
@@ -315,7 +351,12 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
           <textarea
             ref={textareaRef}
             value={text}
-            onChange={e => setText(e.target.value)}
+            onChange={e => {
+              setText(e.target.value)
+              setSlashCursor(e.target.selectionStart ?? e.target.value.length)
+              setCycleState(null)
+            }}
+            onSelect={e => setSlashCursor((e.target as HTMLTextAreaElement).selectionStart)}
             onKeyDown={handleKeyDown}
             onFocus={onTextareaFocus}
             onBlur={onTextareaBlur}
@@ -327,9 +368,34 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
             <p className="text-2xs font-mono text-accent-red">{error}</p>
           )}
           <div className="flex items-center justify-between gap-2">
-            <span className="text-2xs text-slate-600 font-mono">
-              {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
-            </span>
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <span className="text-2xs text-slate-600 font-mono shrink-0">
+                {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
+              </span>
+              {slashToken && (
+                <SlashChips
+                  candidates={candidates}
+                  activeIndex={activeIndex}
+                  accent={accent}
+                  onSelect={(i) => {
+                    const list = cycleState?.candidates ?? candidates
+                    const chosen = list[i]!
+                    const before = text.slice(0, slashToken.start)
+                    const after  = text.slice(slashCursor)
+                    const replacement = `/${chosen.name}`
+                    const newText = before + replacement + after
+                    setText(newText)
+                    const newCursor = before.length + replacement.length
+                    requestAnimationFrame(() => {
+                      textareaRef.current?.focus({ preventScroll: true })
+                      textareaRef.current?.setSelectionRange(newCursor, newCursor)
+                      setSlashCursor(newCursor)
+                    })
+                    setCycleState({ candidates: list, index: i })
+                  }}
+                />
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
