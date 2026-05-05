@@ -50,6 +50,7 @@ import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
 import type { SlashCommandRegistry } from '../sessions/slashCommandRegistry'
 import type { SlashUsage } from '../sessions/slashUsage'
+import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
@@ -3309,6 +3310,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           } else {
             json(res, { error: 'input-unavailable' }, 503)
             return
+          }
+          // Track slash usage (fire-and-forget; never blocks response).
+          const slashName = extractLeadingSlashName(text)
+          if (slashName) {
+            ctx.slashUsage?.increment(slashName)
+            ctx.otlpExporter?.pushMetric({
+              name: 'tinstar_slash_use_total',
+              type: 'counter',
+              value: 1,
+              labels: { name: slashName },
+              timestamp: new Date().toISOString(),
+            })
           }
           json(res, { ok: true })
         } catch (err) {
