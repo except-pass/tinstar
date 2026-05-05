@@ -48,6 +48,9 @@ import { natsControlSocketPath } from '../sessions/backends/tmux'
 import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
+import type { SlashCommandRegistry } from '../sessions/slashCommandRegistry'
+import type { SlashUsage } from '../sessions/slashUsage'
+import type { OtlpExporter } from '../stores/otlp-exporter'
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
 function buildNatsSubject(
@@ -537,6 +540,9 @@ export interface RouteContext {
   readinessTracker?: import('../sessions/readiness').SessionReadinessTracker
   telemetryRoutes?: TelemetryRoutes
   ccQuotaService?: import('../cc-quota/service').CcQuotaService
+  slashRegistry?: SlashCommandRegistry
+  slashUsage?: SlashUsage
+  otlpExporter?: OtlpExporter
 }
 
 function json(res: ServerResponse, data: unknown, status = 200): true {

@@ -40,6 +40,8 @@ import { ObservabilityStack } from './observability/index.js'
 import { createTelemetryRoutes } from './api/telemetry.js'
 import { OtlpExporter } from './stores/otlp-exporter'
 import { CcQuotaService } from './cc-quota/service'
+import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
+import { SlashUsage } from './sessions/slashUsage'
 
 // Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
 // If initBackend runs twice (Vite HMR), the second invocation skips registration
@@ -57,6 +59,10 @@ export function initBackend(): RouteContext {
   new DocumentProcessor(bus, docStore)
   const otlpExporter = new OtlpExporter()
   otlpExporter.start()
+  const slashRegistry = new SlashCommandRegistry()
+  const slashUsage = new SlashUsage(join(homedir(), '.config/tinstar/slash-usage.json'))
+  // Debounced flush every 5s while dirty
+  setInterval(() => { void slashUsage.flush() }, 5_000).unref()
   const ccQuotaService = new CcQuotaService({ sink: otlpExporter })
   new OTelProcessor(bus, otelStore, otlpExporter)
 
@@ -442,6 +448,7 @@ export function initBackend(): RouteContext {
   return {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
     sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
+    slashRegistry, slashUsage, otlpExporter,
     get natsTraffic() { return natsTraffic },
     get natsHealth() { return natsHealth },
     get readinessTracker() { return readinessTracker },
