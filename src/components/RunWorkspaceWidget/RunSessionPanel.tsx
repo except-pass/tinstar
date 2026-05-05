@@ -348,22 +348,33 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
               onClose={() => setHistoryOpen(false)}
             />
           )}
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={e => {
-              setText(e.target.value)
-              setSlashCursor(e.target.selectionStart ?? e.target.value.length)
-              setCycleState(null)
-            }}
-            onSelect={e => setSlashCursor((e.target as HTMLTextAreaElement).selectionStart)}
-            onKeyDown={handleKeyDown}
-            onFocus={onTextareaFocus}
-            onBlur={onTextareaBlur}
-            placeholder="Enter prompt text... (Ctrl+Enter to send)"
-            className="w-full h-24 px-2 py-1.5 bg-surface-base border rounded text-xs font-mono text-slate-200 placeholder:text-slate-600 resize-y outline-none focus:border-primary/50"
-            style={{ borderColor: hexToRgba(accent, 0.2) }}
-          />
+          <div className="relative bg-surface-base rounded">
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={e => {
+                setText(e.target.value)
+                setSlashCursor(e.target.selectionStart ?? e.target.value.length)
+                setCycleState(null)
+              }}
+              onSelect={e => setSlashCursor((e.target as HTMLTextAreaElement).selectionStart)}
+              onKeyDown={handleKeyDown}
+              onFocus={onTextareaFocus}
+              onBlur={onTextareaBlur}
+              placeholder="Enter prompt text... (Ctrl+Enter to send)"
+              className="w-full h-24 px-2 py-1.5 bg-surface-base border rounded text-xs font-mono text-slate-200 placeholder:text-slate-600 resize-y outline-none focus:border-primary/50 relative z-10"
+              style={{ borderColor: hexToRgba(accent, 0.2), background: 'transparent' }}
+            />
+            {slashToken && candidates[0] && !cycleState && candidates[0].name.startsWith(slashToken.partial) && candidates[0].name !== slashToken.partial && (
+              <div
+                aria-hidden
+                className="absolute inset-0 px-2 py-1.5 text-xs font-mono whitespace-pre-wrap break-words text-slate-600 pointer-events-none overflow-hidden"
+              >
+                <span className="invisible">{text.slice(0, slashCursor)}</span>
+                <span>{candidates[0].name.slice(slashToken.partial.length)}</span>
+              </div>
+            )}
+          </div>
           {error && (
             <p className="text-2xs font-mono text-accent-red">{error}</p>
           )}
