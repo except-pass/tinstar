@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync, watch, FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { SlashCommand } from '../../lib/slashMatching'
@@ -101,4 +101,55 @@ export async function discoverSlashCommands(opts: DiscoverOpts = {}): Promise<Sl
     ...loadSkillsDir(join(home, '.claude/skills'), 'user-skill'),
     ...loadPluginCache(join(home, '.claude/plugins/cache')),
   ]
+}
+
+export class SlashCommandRegistry {
+  private cache: SlashCommand[] | null = null
+  private watchers: FSWatcher[] = []
+  private opts: DiscoverOpts
+
+  constructor(opts: DiscoverOpts = {}) {
+    this.opts = opts
+  }
+
+  async list(): Promise<SlashCommand[]> {
+    if (this.cache) return this.cache
+    const cmds = await discoverSlashCommands(this.opts)
+    this.cache = cmds
+    this.installWatchers()
+    return cmds
+  }
+
+  invalidate(): void {
+    this.cache = null
+  }
+
+  dispose(): void {
+    for (const w of this.watchers) {
+      try { w.close() } catch { /* already closed */ }
+    }
+    this.watchers = []
+    this.cache = null
+  }
+
+  private installWatchers(): void {
+    if (this.watchers.length > 0) return
+    const home = this.opts.home ?? homedir()
+    const cwd  = this.opts.cwd  ?? process.cwd()
+    const dirs = [
+      join(cwd,  '.claude/commands'),
+      join(cwd,  '.claude/skills'),
+      join(home, '.claude/commands'),
+      join(home, '.claude/skills'),
+      join(home, '.claude/plugins/cache'),
+    ]
+    for (const d of dirs) {
+      try {
+        const w = watch(d, { recursive: true }, () => this.invalidate())
+        this.watchers.push(w)
+      } catch {
+        // Directory may not exist yet — that's fine, no rescan needed for it.
+      }
+    }
+  }
 }

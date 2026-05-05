@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { discoverSlashCommands } from '../slashCommandRegistry'
+import { discoverSlashCommands, SlashCommandRegistry } from '../slashCommandRegistry'
 
 let home: string
 let cwd: string
@@ -64,5 +64,26 @@ describe('discoverSlashCommands', () => {
     const cmds = await discoverSlashCommands({ home, cwd })
     const cmd = cmds.find(c => c.name === 'noDesc')!
     expect(cmd.description).toBe('')
+  })
+})
+
+describe('SlashCommandRegistry caching', () => {
+  it('caches and invalidates on file change', async () => {
+    write(join(home, '.claude/commands/a.md'), '---\ndescription: A\n---\n')
+    const reg = new SlashCommandRegistry({ home, cwd })
+    const first = await reg.list()
+    expect(first.find(c => c.name === 'a')).toBeTruthy()
+
+    // Same call returns cached (no rescan), still finds 'a'.
+    const second = await reg.list()
+    expect(second).toEqual(first)
+
+    // Add another file, then call invalidate(); next list() rescans.
+    write(join(home, '.claude/commands/b.md'), '---\ndescription: B\n---\n')
+    reg.invalidate()
+    const third = await reg.list()
+    expect(third.find(c => c.name === 'b')).toBeTruthy()
+
+    reg.dispose()
   })
 })
