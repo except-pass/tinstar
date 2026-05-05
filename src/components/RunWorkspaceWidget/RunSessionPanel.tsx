@@ -318,28 +318,25 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
 
   return (
     <div ref={composerRootRef} className="border-t" style={{ borderColor: hexToRgba(accent, 0.2) }}>
-      <button
-        onClick={toggleExpanded}
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider transition-colors hover:bg-primary/5"
-        style={{ color: hexToRgba(accent, 0.6) }}
-      >
-        <span
-          className="material-symbols-outlined text-sm transition-transform"
-          style={{ transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+      {!isExpanded && (
+        <button
+          onClick={toggleExpanded}
+          className="w-full flex items-center gap-2 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider transition-colors hover:bg-primary/5"
+          style={{ color: hexToRgba(accent, 0.6) }}
         >
-          expand_less
-        </span>
-        Prompt Composer
-        <span className="text-slate-600 text-2xs normal-case tracking-normal ml-1">(P)</span>
-        {status !== 'idle' && (
-          <span className="ml-auto text-slate-500 normal-case tracking-normal">
-            (session {status === 'running' ? 'busy' : status})
-          </span>
-        )}
-      </button>
+          <span className="material-symbols-outlined text-sm">expand_less</span>
+          Prompt Composer
+          <span className="text-slate-600 text-2xs normal-case tracking-normal ml-1">(P)</span>
+          {status !== 'idle' && (
+            <span className="ml-auto text-slate-500 normal-case tracking-normal">
+              (session {status === 'running' ? 'busy' : status})
+            </span>
+          )}
+        </button>
+      )}
 
       {isExpanded && (
-        <div className="px-3 pb-3 space-y-2">
+        <div className="px-3 pt-2 pb-3 space-y-2">
           {historyOpen && (
             <PromptHistoryPopover
               history={history}
@@ -380,6 +377,15 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
           )}
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0 flex-1">
+              <button
+                type="button"
+                onClick={toggleExpanded}
+                title="Collapse composer"
+                className="flex items-center shrink-0 p-0.5 rounded transition-colors hover:bg-primary/10"
+                style={{ color: hexToRgba(accent, 0.6) }}
+              >
+                <span className="material-symbols-outlined text-sm rotate-180">expand_less</span>
+              </button>
               <span className="text-2xs text-slate-600 font-mono shrink-0">
                 {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
               </span>
