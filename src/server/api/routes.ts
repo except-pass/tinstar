@@ -683,6 +683,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // GET /api/slash-commands — returns registered slash commands merged with usage stats
+  if (method === 'GET' && url === '/api/slash-commands') {
+    if (!ctx.slashRegistry) return json(res, { commands: [] })
+    const commands = await ctx.slashRegistry.list()
+    const usage = ctx.slashUsage?.snapshot() ?? {}
+    const merged = commands.map(c => ({
+      ...c,
+      useCount: usage[c.name]?.count ?? 0,
+      lastUsedAt: usage[c.name]?.lastUsedAt ?? null,
+    }))
+    return json(res, { commands: merged })
+  }
+
   // POST /api/cc-quota/ingest — Claude Code statusline hook pushes its full
   // session-state JSON here; we extract rate_limits and update the snapshot.
   if (method === 'POST' && ctx.ccQuotaService && url === '/api/cc-quota/ingest') {
