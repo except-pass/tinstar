@@ -252,6 +252,22 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => el.removeEventListener('wheel', handler)
   }, [handleWheel])
 
+  // Defensive: if the container ever scrolls (e.g. browser auto-scrolling to
+  // reveal a focused descendant like a freshly-mounted ttyd iframe), snap it
+  // back to 0. overflow: clip should already prevent this, but on any browser
+  // that still allows it the scroll offset would visually shift the canvas,
+  // minimap, HUD, and break centerOn math. Self-heal instead.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const reset = () => {
+      if (el.scrollLeft !== 0) el.scrollLeft = 0
+      if (el.scrollTop !== 0) el.scrollTop = 0
+    }
+    el.addEventListener('scroll', reset)
+    return () => el.removeEventListener('scroll', reset)
+  }, [])
+
   // Handle tinstar:open-linked-file — spawn a new editor widget next to the source widget
   useEffect(() => {
     const container = containerRef.current
@@ -1057,7 +1073,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       ref={containerRef}
       tabIndex={-1}
       data-testid="infinite-canvas"
-      className="w-full h-full overflow-hidden relative outline-none"
+      className="w-full h-full overflow-clip relative outline-none"
       style={{
         cursor: cursorStyle,
         backgroundImage: 'radial-gradient(circle, rgba(0,240,255,0.04) 1px, transparent 1px)',
