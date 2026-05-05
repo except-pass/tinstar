@@ -46,6 +46,8 @@ function subscribe(l: () => void): () => void {
 
 function getSnapshot(): State { return state }
 
+const refreshStable: () => void = () => void refresh()
+
 export interface UseSlashCommands {
   commands: ServerSlashCommand[]
   usage: Record<string, UsageEntry>
@@ -54,5 +56,5 @@ export interface UseSlashCommands {
 
 export function useSlashCommands(): UseSlashCommands {
   const s = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  return { commands: s.commands, usage: s.usage, refresh: () => void refresh() }
+  return { commands: s.commands, usage: s.usage, refresh: refreshStable }
 }
