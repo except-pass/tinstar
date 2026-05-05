@@ -119,6 +119,7 @@ export function initBackend(): RouteContext {
       try { await observability.stop() } catch { /* ignore */ }
       try { telemetryRoutes.stopPolling() } catch { /* ignore */ }
       try { docStore.flush() } catch { /* ignore */ }
+      try { await slashUsage.flush() } catch { /* ignore */ }
       process.exit(0)
     }
     process.once('SIGINT', shutdown)

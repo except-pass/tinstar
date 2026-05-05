@@ -19,7 +19,7 @@ afterEach(() => {
 describe('extractLeadingSlashName', () => {
   it('extracts `/foo`', () => expect(extractLeadingSlashName('/foo bar')).toBe('foo'))
   it('rejects non-leading slash', () => expect(extractLeadingSlashName('hello /foo')).toBeNull())
-  it('rejects path-style', () => expect(extractLeadingSlashName('/foo/bar/baz')).toBe('foo'))
+  it('stops at first non-name char (path slash)', () => expect(extractLeadingSlashName('/foo/bar/baz')).toBe('foo'))
   it('returns null for plain text', () => expect(extractLeadingSlashName('hello')).toBeNull())
   it('handles namespaced names', () => expect(extractLeadingSlashName('/superpowers:brainstorming')).toBe('superpowers:brainstorming'))
 })
