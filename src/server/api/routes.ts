@@ -35,12 +35,10 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import type { Run, EditorWidget, ImageWidget } from '../../domain/types'
+import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
-import { getSkills, bustSkillCache, parseFrontmatter } from '../sessions/skill-discovery'
-import { saveDraft, discardDraft, DRAFTS_DIR, ensureDraftsDir } from '../sessions/skill-drafts'
-import type { SkillDTO } from '../../types'
 import { spec as openapiSpec } from './openapi'
+import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
@@ -49,6 +47,16 @@ import { computeNatsSubscriptions, diffSubscriptions } from '../sessions/nats-su
 import { natsControlSocketPath } from '../sessions/backends/tmux'
 import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
+import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
+import type { SlashCommandRegistry } from '../sessions/slashCommandRegistry'
+import type { SlashUsage } from '../sessions/slashUsage'
+import { extractLeadingSlashName } from '../sessions/slashUsage'
+import type { OtlpExporter } from '../stores/otlp-exporter'
+import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
+
+function currentCorsAllowlist(): string[] {
+  return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
+}
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
 function buildNatsSubject(
@@ -110,7 +118,7 @@ import { discoverHands, getHandByName } from '../hands'
  * Path is defined by natsControlSocketPath() and wired up on the channel-server side
  * by the --control-socket arg set in generateNatsMcpConfig (backends/tmux.ts).
  */
-function sendNatsSocketCommand(sessionName: string, cmd: { action: 'subscribe' | 'unsubscribe'; subject: string }): Promise<void> {
+function sendNatsSocketCommand(sessionName: string, cmd: { action: 'subscribe' | 'unsubscribe' | 'delete-durable'; subject: string }): Promise<void> {
   return new Promise((resolve, reject) => {
     const socketPath = natsControlSocketPath(sessionName)
     const socket = createConnection(socketPath)
@@ -160,7 +168,7 @@ type NatsSocketWarningCode =
 interface NatsSocketWarning {
   code: NatsSocketWarningCode
   message: string
-  action: 'subscribe' | 'unsubscribe'
+  action: 'subscribe' | 'unsubscribe' | 'delete-durable'
   subject: string
   /** Parent session is alive but its dynamic-subscribe path is dead; caller should restart the session to recover. */
   restartRecommended?: boolean
@@ -168,7 +176,7 @@ interface NatsSocketWarning {
 
 export function classifyNatsSocketError(
   err: unknown,
-  action: 'subscribe' | 'unsubscribe',
+  action: 'subscribe' | 'unsubscribe' | 'delete-durable',
   subject: string,
   sessionName: string,
   fileExists: boolean,
@@ -220,7 +228,7 @@ export function classifyNatsSocketError(
  */
 async function trySendNatsSocketCommand(
   sessionName: string,
-  cmd: { action: 'subscribe' | 'unsubscribe'; subject: string },
+  cmd: { action: 'subscribe' | 'unsubscribe' | 'delete-durable'; subject: string },
 ): Promise<NatsSocketWarning | null> {
   try {
     await sendNatsSocketCommand(sessionName, cmd)
@@ -342,6 +350,8 @@ interface CreateSessionContext {
   emitSessionEvent: (event: string, payload: Record<string, unknown>) => void
   secrets: () => Record<string, string>
   dashboardUrl: string
+  natsTraffic?: import('../nats-traffic').NatsTrafficBridge
+  natsHealth?: import('../nats-health').NatsHealthMonitor
 }
 
 async function createSessionInternal(
@@ -354,7 +364,7 @@ async function createSessionInternal(
     taskId, epicId, initiativeId, color: colorParam, nats
   } = params
 
-  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl } = ctx
+  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl, natsTraffic, natsHealth } = ctx
 
   if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
   if (!['docker', 'tmux'].includes(backend)) return { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }
@@ -502,11 +512,16 @@ async function createSessionInternal(
     natsEnabled: resolvedNats?.enabled ?? false,
     natsSubject,
     natsSubscriptions: resolvedNats?.enabled ? resolvedNats.subscriptions : undefined,
+    natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
     taskId: taskId ?? '',
     worktreeId: worktreeEntityId,
     createdAt: new Date().toISOString(),
     spaceId: docStore.activeSpaceId,
   })
+
+  registerSaloonSubs(natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+  bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, docStore)
+  if (resolvedNats?.enabled) natsHealth?.trackSession(name)
 
   readyQueue.onStatusChange(name, initialStatus)
   sse.setReadyQueue(readyQueue.getQueue())
@@ -527,19 +542,25 @@ export interface RouteContext {
   sessionConfig: TinstarConfig | null
   readyQueue: ReadyQueue
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
+  natsHealth?: import('../nats-health').NatsHealthMonitor
   readinessTracker?: import('../sessions/readiness').SessionReadinessTracker
   telemetryRoutes?: TelemetryRoutes
+  ccQuotaService?: import('../cc-quota/service').CcQuotaService
+  slashRegistry?: SlashCommandRegistry
+  slashUsage?: SlashUsage
+  otlpExporter?: OtlpExporter
 }
 
-function json(res: ServerResponse, data: unknown, status = 200): true {
+function moduleJson(res: ServerResponse, data: unknown, status = 200, corsHeaders?: Record<string, string>): true {
   // Some routes respond asynchronously (e.g. readBody(...).then(...)).
   // If the client disconnects or another codepath already responded, avoid crashing
-  // with ERR_HTTP_HEADERS_SENT.
+   // with ERR_HTTP_HEADERS_SENT.
   if (res.headersSent || res.writableEnded) return true
-  res.writeHead(status, {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-  })
+    ...(corsHeaders ?? { 'Access-Control-Allow-Origin': '*' }),
+  }
+  res.writeHead(status, headers)
   res.end(JSON.stringify(data))
   return true
 }
@@ -562,6 +583,28 @@ function deepMergeEntity<T extends Record<string, unknown>>(existing: T, patch: 
   return result
 }
 
+/** Synchronously enumerate every persisted session on disk. Mirrors the
+ * rehydrate loop in index.ts (readdirSync + getSession per entry). Used by
+ * topic-metadata routes to derive participants live from `nats.subscriptions`.
+ */
+function listAllSessions(ctx: RouteContext): Session[] {
+  const sessDir = ctx.sessionConfig?.dirs.sessions
+  if (!sessDir) return []
+  let entries: import('node:fs').Dirent<string>[]
+  try {
+    entries = readdirSync(sessDir, { withFileTypes: true, encoding: 'utf8' as const })
+  } catch {
+    return []
+  }
+  const out: Session[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const sess = getSession(sessDir, entry.name)
+    if (sess) out.push(sess)
+  }
+  return out
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = []
@@ -574,13 +617,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   const url = req.url ?? ''
   const method = req.method ?? 'GET'
 
+  const corsHeaders = resolveCorsHeaders({
+    origin: req.headers.origin,
+    allowlist: currentCorsAllowlist(),
+  }) as Record<string, string>
+
+  // Per-request shadow that auto-applies the resolved CORS headers.
+  // Shadows the module-scope `json` so existing call sites don't need to be updated.
+  const json = (res: ServerResponse, data: unknown, status = 200): true =>
+    moduleJson(res, data, status, corsHeaders)
+
   // CORS preflight
   if (method === 'OPTIONS' && url.startsWith('/api/')) {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    })
+    res.writeHead(204, corsHeaders)
     res.end()
     return true
   }
@@ -589,7 +638,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (ctx.telemetryRoutes && url.startsWith('/api/telemetry/')) {
     // Normalize pathname (strip query string)
     const pathname = url.split('?')[0]
-    if (await ctx.telemetryRoutes.handle(req, res, pathname)) return true
+    if (await ctx.telemetryRoutes.handle(req, res, pathname, corsHeaders)) return true
   }
 
   // GET /api/docs — Scalar API reference UI
@@ -619,7 +668,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // GET /api/events (SSE)
   if (method === 'GET' && url === '/api/events') {
-    ctx.sse.addClient(res)
+    ctx.sse.addClient(res, corsHeaders)
     return true
   }
 
@@ -638,6 +687,41 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const name = parsed.searchParams.get('name')
     const metrics = name ? ctx.otelStore.getMetricsByName(name) : ctx.otelStore.getAllMetrics()
     json(res, metrics)
+    return true
+  }
+
+  // GET /api/cc-quota — returns the last pushed snapshot
+  if (method === 'GET' && ctx.ccQuotaService && url === '/api/cc-quota') {
+    json(res, ctx.ccQuotaService.getSnapshot())
+    return true
+  }
+
+  // GET /api/slash-commands — returns registered slash commands merged with usage stats
+  if (method === 'GET' && url === '/api/slash-commands') {
+    if (!ctx.slashRegistry) return json(res, { commands: [] })
+    const commands = await ctx.slashRegistry.list()
+    const usage = ctx.slashUsage?.snapshot() ?? {}
+    const merged = commands.map(c => ({
+      ...c,
+      useCount: usage[c.name]?.count ?? 0,
+      lastUsedAt: usage[c.name]?.lastUsedAt ?? null,
+    }))
+    return json(res, { commands: merged })
+  }
+
+  // POST /api/cc-quota/ingest — Claude Code statusline hook pushes its full
+  // session-state JSON here; we extract rate_limits and update the snapshot.
+  if (method === 'POST' && ctx.ccQuotaService && url === '/api/cc-quota/ingest') {
+    const body = await readBody(req)
+    let payload: unknown
+    try {
+      payload = JSON.parse(body)
+    } catch {
+      json(res, { error: 'malformed_json' }, 400)
+      return true
+    }
+    const snap = ctx.ccQuotaService.ingest(payload)
+    json(res, snap)
     return true
   }
 
@@ -1041,6 +1125,72 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       ctx.docStore.upsertWorktree(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getWorktree(id) })
     })
+    return true
+  }
+
+  // GET /api/topics — all metadata records, with participants joined in
+  if (method === 'GET' && url === '/api/topics') {
+    const sessions = listAllSessions(ctx)
+    const data = ctx.docStore.getAllTopicMetadata().map(m => joinParticipants(m, sessions))
+    json(res, { ok: true, data })
+    return true
+  }
+
+  // GET /api/topics/:subject — single record
+  if (method === 'GET' && url.startsWith('/api/topics/') && !url.endsWith('/refresh')) {
+    const subject = decodeURIComponent(url.slice('/api/topics/'.length))
+    const md = ctx.docStore.getTopicMetadata(subject)
+    if (!md) return json(res, { error: 'not found' }, 404)
+    json(res, { ok: true, data: joinParticipants(md, listAllSessions(ctx)) })
+    return true
+  }
+
+  // PATCH /api/topics/:subject — rename / re-describe (anyone may write).
+  // Upsert semantics: if no record exists yet, create one with kind='custom'.
+  // The bootstrap path normally writes hierarchical records on session-create;
+  // this fallback covers subjects the bootstrap missed (e.g. sessions that
+  // pre-existed the feature, or arbitrary subjects a user wants to annotate).
+  if (method === 'PATCH' && url.startsWith('/api/topics/') && !url.endsWith('/refresh')) {
+    const subject = decodeURIComponent(url.slice('/api/topics/'.length))
+    readBody(req).then(body => {
+      let parsed: Record<string, unknown>
+      try {
+        parsed = JSON.parse(body)
+      } catch {
+        return json(res, { error: 'invalid json' }, 400)
+      }
+      const existing = ctx.docStore.getTopicMetadata(subject) ?? {
+        subject,
+        kind: 'custom' as const,
+        createdAt: new Date().toISOString(),
+      }
+      const merged: TopicMetadata = {
+        ...existing,
+        ...(typeof parsed.name === 'string' ? { name: parsed.name } : {}),
+        ...(typeof parsed.description === 'string' ? { description: parsed.description } : {}),
+      }
+      ctx.docStore.upsertTopicMetadata(subject, merged)
+      json(res, { ok: true, data: joinParticipants(merged, listAllSessions(ctx)) })
+    })
+    return true
+  }
+
+  // POST /api/topics/:subject/refresh — re-bootstrap a hierarchical name from
+  // the entity tree's CURRENT values. No-op for breakout / custom kinds.
+  if (method === 'POST' && url.startsWith('/api/topics/') && url.endsWith('/refresh')) {
+    const subject = decodeURIComponent(url.slice('/api/topics/'.length, -('/refresh'.length)))
+    const existing = ctx.docStore.getTopicMetadata(subject)
+    if (!existing) return json(res, { error: 'not found' }, 404)
+    if (existing.kind !== 'broadcast' && existing.kind !== 'dm') {
+      return json(res, { ok: true, data: joinParticipants(existing, listAllSessions(ctx)) })
+    }
+    const refreshedName = deriveHierarchicalName(subject, ctx.docStore, existing.kind)
+    if (refreshedName) {
+      const merged = { ...existing, name: refreshedName }
+      ctx.docStore.upsertTopicMetadata(subject, merged)
+      return json(res, { ok: true, data: joinParticipants(merged, listAllSessions(ctx)) })
+    }
+    json(res, { ok: true, data: joinParticipants(existing, listAllSessions(ctx)) })
     return true
   }
 
@@ -1704,6 +1854,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           patch.natsSubscriptions = newSubs
           log.info('nats', `${existing.sessionId}: subscriptions updated for new task ${patch.taskId}`)
 
+          // Mirror the new subscription list into the traffic bridge so the
+          // Saloon window-event stream stays aligned.
+          registerSaloonSubs(ctx.natsTraffic, existing.sessionId, newSubs)
+
           if (natsWarnings.length > 0) {
             ctx.docStore.upsertRun(id, { ...existing, ...patch })
             return json(res, { ok: true, data: ctx.docStore.getRun(id), warnings: { nats: natsWarnings } })
@@ -1713,99 +1867,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       ctx.docStore.upsertRun(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getRun(id) })
-    })
-    return true
-  }
-
-  // --- Skills ---
-
-  // GET /api/skills
-  if (method === 'GET' && url === '/api/skills') {
-    const skills = getSkills()
-    const dtos: SkillDTO[] = skills.map(({ name, description, source }) => ({ name, description, source }))
-    json(res, { skills: dtos })
-    return true
-  }
-
-  // POST /api/skills/save
-  if (method === 'POST' && url === '/api/skills/save') {
-    readBody(req).then(async (body) => {
-      const { draftId, location, sessionId } = JSON.parse(body) as {
-        draftId: string
-        location: 'system' | 'repo'
-        sessionId?: string
-      }
-      if (!draftId || !['system', 'repo'].includes(location)) {
-        json(res, { error: 'invalid-params' }, 400)
-        return
-      }
-
-      // Resolve projectRoot for repo-level saves
-      let projectRoot: string | undefined
-      if (location === 'repo' && sessionId && ctx.sessionConfig) {
-        const sess = getSession(ctx.sessionConfig.dirs.sessions, sessionId)
-        if (sess?.workspace?.path) {
-          projectRoot = sess.workspace.path
-        }
-      }
-
-      try {
-        // Read skillName from draft frontmatter BEFORE moving the file
-        const draftPath = join(DRAFTS_DIR, `${draftId}.md`)
-        let skillName = draftId  // fallback
-        try {
-          const content = readFileSync(draftPath, 'utf-8')
-          const fm = parseFrontmatter(content)
-          if (fm.name) skillName = fm.name
-        } catch { /* use fallback */ }
-
-        saveDraft(draftId, location, projectRoot)
-        bustSkillCache()
-
-        const dto: SkillDTO = {
-          name: skillName,
-          source: location === 'system' ? 'system' : 'repo',
-        }
-        // Try to get description from the refreshed cache
-        const freshSkills = getSkills()
-        const saved = freshSkills.find(s => s.name === skillName)
-        if (saved?.description) dto.description = saved.description
-
-        ctx.sse.broadcastEvent('skill.saved', { skill: dto })
-        json(res, { skill: dto })
-      } catch (err) {
-        const e = err as Error & { existingPath?: string }
-        if (e.message === 'skill-name-conflict') {
-          json(res, { error: 'skill-name-conflict', existingPath: e.existingPath }, 409)
-        } else {
-          json(res, { error: e.message }, 500)
-        }
-      }
-    })
-    return true
-  }
-
-  // POST /api/skills/discard
-  if (method === 'POST' && url === '/api/skills/discard') {
-    readBody(req).then((body) => {
-      const { draftId } = JSON.parse(body) as { draftId: string }
-      if (!draftId) { json(res, { error: 'missing draftId' }, 400); return }
-      discardDraft(draftId)
-      json(res, { ok: true })
-    })
-    return true
-  }
-
-  // POST /api/skills/create-draft — create a skeleton skill draft without agent involvement.
-  // The file watcher in watchDrafts() picks this up and emits skill.drafted to the client.
-  if (method === 'POST' && url === '/api/skills/create-draft') {
-    readBody(req).then((body) => {
-      const { draftId, name } = JSON.parse(body) as { draftId: string; name: string }
-      if (!draftId || !name) { json(res, { error: 'missing draftId or name' }, 400); return }
-      ensureDraftsDir()
-      const filePath = join(DRAFTS_DIR, `${draftId}.md`)
-      writeFileSync(filePath, `---\nname: ${name}\ndescription: ${name}\n---\n\n# ${name}\n`)
-      json(res, { ok: true, draftId })
     })
     return true
   }
@@ -1896,8 +1957,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
     }
 
+    // GET /api/sessions/:name/context-window — live % from latest statusline push
+    if (method === 'GET' && url.startsWith('/api/sessions/') && url.endsWith('/context-window')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session) {
+          json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
+          return true
+        }
+        const convId = session.conversation?.id
+        const snap = convId && ctx.ccQuotaService ? ctx.ccQuotaService.getSessionContext(convId) : null
+        json(res, { ok: true, data: snap })
+        return true
+      }
+    }
+
     // GET /api/sessions/:name/context
-    if (method === 'GET' && url.startsWith('/api/sessions/') && url.includes('/context')) {
+    if (method === 'GET' && url.startsWith('/api/sessions/') && url.endsWith('/context')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)
@@ -1976,6 +2053,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             emitSessionEvent,
             secrets,
             dashboardUrl,
+            natsTraffic: ctx.natsTraffic,
+            natsHealth: ctx.natsHealth,
           }
 
           // Check if any session needs a worktree — if so, create ONE shared worktree for all
@@ -2270,11 +2349,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             agentIcon: resolvedTemplate?.icon ?? undefined,
             natsEnabled: resolvedNats?.enabled ?? false,
             natsSubject,
+            natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
             taskId: taskId ?? '',
             worktreeId: worktreeEntityId,
             createdAt: new Date().toISOString(),
             spaceId: ctx.docStore.activeSpaceId,
           })
+
+          registerSaloonSubs(ctx.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+          bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, ctx.docStore)
+          if (resolvedNats?.enabled) ctx.natsHealth?.trackSession(name)
 
           ctx.readyQueue.onStatusChange(name, initialStatus)
           ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
@@ -2363,6 +2447,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             setState(sessDir, session.name, 'running')
             // Fresh channel-server → any prior orphan is stale.
             updateSession(sessDir, session.name, { natsControlOrphanedAt: null })
+            {
+              const run = ctx.docStore.getRun(session.name)
+              if (run) ctx.docStore.upsertRun(session.name, { ...run, natsControlOrphanedAt: null })
+            }
             ctx.docStore.updateRunStatus(session.name, 'running')
             // Also update port on the run in case it changed
             if (resumePort) {
@@ -2392,6 +2480,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         // Respond immediately — UI removal is instant
         ctx.docStore.deleteRun(name)
+        unregisterSaloonSubs(ctx.natsTraffic, name)
+        ctx.natsHealth?.untrackSession(name)
         emitSessionEvent('managed_session.deleted', { name })
         ctx.readyQueue.onDelete(name)
         ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
@@ -2402,6 +2492,29 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ;(async () => {
           try {
             if (session) {
+              // Best-effort delete-durable for every NATS subject this session
+              // owned. Must run BEFORE backend stop — channel-server's control
+              // socket disappears when the process dies. Failures here are
+              // benign: channel-server's InactiveThreshold reaps any leftover,
+              // but we log warnings so visible leaks aren't silent.
+              if (session.nats?.enabled && cfg.nats.jetstream) {
+                const run = ctx.docStore.getRun(name)
+                const subjects = new Set<string>([
+                  ...(session.nats.subscriptions ?? []),
+                  ...(run?.breakoutRooms ?? []),
+                ])
+                const results = await Promise.allSettled(
+                  [...subjects].map(subject =>
+                    trySendNatsSocketCommand(name, { action: 'delete-durable', subject })
+                  ),
+                )
+                for (const r of results) {
+                  if (r.status === 'fulfilled' && r.value) {
+                    log.warn('delete', `nats cleanup left durable orphaned for ${name}: ${r.value.code} ${r.value.subject}`)
+                  }
+                }
+              }
+
               if (session.backend === 'docker') {
                 await dockerBackend.deleteContainer(cfg, session)
               } else {
@@ -2603,6 +2716,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // surface it. Clear it on next successful session restart.
             const orphanedAt = new Date().toISOString()
             updateSession(sessDir, parentName, { natsControlOrphanedAt: orphanedAt })
+            {
+              const run = ctx.docStore.getRun(parentName)
+              if (run) ctx.docStore.upsertRun(parentName, { ...run, natsControlOrphanedAt: orphanedAt })
+            }
             emitSessionEvent('managed_session.nats_orphaned', {
               name: parentName,
               orphanedAt,
@@ -2719,6 +2836,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           natsEnabled: natsConfig?.enabled ?? false,
           natsSubject,
           natsSubscriptions: natsConfig?.enabled ? natsConfig.subscriptions : undefined,
+          natsControlOrphanedAt: spawnedSession.natsControlOrphanedAt ?? null,
           // Only record the breakout room if it was actually live (parent is
           // subscribed to it). On fallback, the child uses the parent's
           // direct subject so there's no separate room to track.
@@ -2730,6 +2848,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           parentId: parentRun?.id,  // Track who spawned this hand
         })
 
+        // Mirror the child's subscription list into the traffic bridge so the
+        // Saloon window-event stream sees messages on its breakout room.
+        registerSaloonSubs(ctx.natsTraffic, spawnedName, natsConfig?.enabled ? natsConfig.subscriptions : [])
+        bootstrapHierarchicalTopicMetadata(natsConfig?.subscriptions ?? [], spawnedName, ctx.docStore)
+        if (natsConfig?.enabled) ctx.natsHealth?.trackSession(spawnedName)
+
         // Add breakout room to parent's run record — but only if the parent
         // is actually subscribed to it. On fallback, there's no live room.
         // upsertRun is a full replacement, so spread the existing run first.
@@ -2739,6 +2863,38 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             ...parentRun,
             breakoutRooms: [...parentRooms, breakoutRoom],
           })
+        }
+
+        // Persist the breakout subscription on the parent's session record so
+        // it survives stop/resume. The hot socket-subscribe above only lives
+        // in the running channel-server's memory; on resume we regenerate
+        // .mcp.json from session.nats.subscriptions, so without this the
+        // resumed parent goes deaf on every breakout room it was in.
+        if (breakoutRoom && !breakoutFallback) {
+          const latest = getSession(sessDir, parentName)
+          if (latest?.nats?.enabled) {
+            const existing = latest.nats.subscriptions ?? []
+            if (!existing.includes(breakoutRoom)) {
+              const nextSubs = [...existing, breakoutRoom]
+              updateSession(sessDir, parentName, {
+                nats: {
+                  ...latest.nats,
+                  subscriptions: nextSubs,
+                },
+              })
+              // Mirror the parent's expanded subscription list into the traffic bridge.
+              registerSaloonSubs(ctx.natsTraffic, parentName, nextSubs)
+            }
+          }
+          if (!ctx.docStore.getTopicMetadata(breakoutRoom)) {
+            ctx.docStore.upsertTopicMetadata(breakoutRoom, {
+              subject: breakoutRoom,
+              name: `${handName} with ${parentName}`,
+              kind: 'breakout',
+              createdAt: new Date().toISOString(),
+              createdBy: parentName,
+            })
+          }
         }
 
         return json(res, {
@@ -2868,6 +3024,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // Keep the run's natsSubscriptions in sync
             const run = ctx.docStore.getRun(name)
             if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
+
+            // Mirror the updated subscription list into the traffic bridge.
+            registerSaloonSubs(ctx.natsTraffic, name, subs)
           }
           json(res, {
             ok: true,
@@ -2903,6 +3062,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // Keep the run's natsSubscriptions in sync
           const run = ctx.docStore.getRun(name)
           if (run) ctx.docStore.upsertRun(name, { ...run, natsSubscriptions: subs })
+
+          // Mirror the updated subscription list into the traffic bridge.
+          registerSaloonSubs(ctx.natsTraffic, name, subs)
 
           json(res, {
             ok: true,
@@ -3160,6 +3322,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           } else {
             json(res, { error: 'input-unavailable' }, 503)
             return
+          }
+          // Track slash usage (fire-and-forget; never blocks response).
+          const slashName = extractLeadingSlashName(text)
+          if (slashName) {
+            ctx.slashUsage?.increment(slashName)
+            ctx.otlpExporter?.pushMetric({
+              name: 'tinstar_slash_use_total',
+              type: 'counter',
+              value: 1,
+              labels: { name: slashName },
+              timestamp: new Date().toISOString(),
+            })
           }
           json(res, { ok: true })
         } catch (err) {

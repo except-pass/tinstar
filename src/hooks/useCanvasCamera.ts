@@ -149,11 +149,10 @@ export function useCanvasCamera() {
 
   // Zoom-to-fit a world-space rectangle in the viewport with padding
   const centerOn = useCallback(
-    (wx: number, wy: number, ww: number, wh: number, viewportW: number, viewportH: number) => {
-      const PADDING = 40 // px padding on each side
+    (wx: number, wy: number, ww: number, wh: number, viewportW: number, viewportH: number, padding = 40) => {
       const fitZoom = Math.min(
-        (viewportW - PADDING * 2) / ww,
-        (viewportH - PADDING * 2) / wh,
+        (viewportW - padding * 2) / ww,
+        (viewportH - padding * 2) / wh,
       )
       const zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, fitZoom))
       setCamera({

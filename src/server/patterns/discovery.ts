@@ -1,16 +1,21 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 import { parsePatternFile, type Pattern } from './parser'
+import { getConfigRoot } from '../configRoot'
 
 /** Default patterns directory - lives alongside other Tinstar config */
-export const DEFAULT_PATTERNS_DIR = join(homedir(), '.config', 'tinstar', 'patterns')
+export function getDefaultPatternsDir(): string {
+  return join(getConfigRoot(), 'patterns')
+}
+
+/** @deprecated Prefer getDefaultPatternsDir() — this constant freezes the path at module-load time. */
+export const DEFAULT_PATTERNS_DIR = getDefaultPatternsDir()
 
 /**
  * Discover all pattern files in a directory.
  * Returns array of parsed patterns, skipping invalid files.
  */
-export function discoverPatterns(dir: string = DEFAULT_PATTERNS_DIR): Pattern[] {
+export function discoverPatterns(dir: string = getDefaultPatternsDir()): Pattern[] {
   if (!existsSync(dir)) return []
 
   const patterns: Pattern[] = []
@@ -41,7 +46,7 @@ export function discoverPatterns(dir: string = DEFAULT_PATTERNS_DIR): Pattern[] 
 /**
  * Get a specific pattern by name.
  */
-export function getPatternByName(name: string, dir: string = DEFAULT_PATTERNS_DIR): Pattern | null {
+export function getPatternByName(name: string, dir: string = getDefaultPatternsDir()): Pattern | null {
   const patterns = discoverPatterns(dir)
   return patterns.find(p => p.name === name) ?? null
 }

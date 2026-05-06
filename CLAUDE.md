@@ -43,6 +43,19 @@ Agents communicate via NATS pub/sub. Subject scheme: `tinstar.<init>.<epic>.<tas
 - Use `reply` MCP tool to publish messages
 - See **[docs/nats-agent-channels.md](docs/nats-agent-channels.md)** for full details
 
+## Agent skills (`tinstar`, `tinstar-hand`, `tinstar-tmux`, `tinstar-wrangler`)
+
+The skills that teach agents how to spawn, steer, and coordinate Tinstar hands live under `agent-skills/` in this repo (skills only — no separate slash commands). They're symlinked into any harness dir with `skills/` + `commands/` subdirectories (Claude Code's `~/.claude`, project-local `.claude`, `.agents`, etc.):
+
+```bash
+tinstar install-skills                     # default: ~/.claude
+tinstar install-skills --dest ./.claude    # project-local
+tinstar install-skills --force             # replace existing (moves to .bak)
+tinstar install-skills --copy              # copy instead of symlink
+```
+
+Edits to files under `agent-skills/` go live immediately for any machine that installed via symlink — edit in-repo, commit, done.
+
 ## Conventions
 
 - All server-side config lives under `~/.config/tinstar/` — no other locations

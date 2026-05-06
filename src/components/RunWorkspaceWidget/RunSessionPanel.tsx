@@ -4,6 +4,10 @@ import { resolveRunAccent, hexToRgba } from '../runAccent'
 import { usePromptHistory } from '../../hooks/usePromptHistory'
 import { PromptHistoryPopover } from './PromptHistoryPopover'
 import { useFocusPath } from '../../hotkeys/FocusPathContext'
+import { findSlashToken, rankCommands, type SlashCommand } from '../../lib/slashMatching'
+import { useSlashCommands } from '../../hooks/useSlashCommands'
+import { SlashChips } from './SlashChips'
+import { apiFetch } from '../../apiClient'
 
 function MarkdownText({ content }: { content: string }) {
   return (
@@ -181,6 +185,18 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   const composerFocusId = sessionId ? `${sessionId}:composer` : null
   const isOnFocusPath = useRef(false)
 
+  const { commands, usage, refresh: refreshSlash } = useSlashCommands()
+  const [slashCursor, setSlashCursor] = useState<number>(0)
+  const [cycleState, setCycleState] = useState<{ candidates: SlashCommand[]; index: number } | null>(null)
+
+  const slashToken = findSlashToken(text, slashCursor)
+  const candidates: SlashCommand[] = slashToken
+    ? (cycleState?.candidates ?? rankCommands(commands, slashToken.partial, usage))
+    : []
+  const activeIndex = cycleState?.index ?? 0
+
+  useEffect(() => { if (isExpanded) refreshSlash() }, [isExpanded, refreshSlash])
+
   const enterComposerFocus = useCallback(() => {
     if (!composerFocusId || isOnFocusPath.current) return
     pushFocus({ id: composerFocusId, type: 'prompt-composer', label: 'Composer' })
@@ -219,7 +235,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
     setError(null)
     setSending(true)
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/prompt`, {
+      const res = await apiFetch(`/api/sessions/${sessionId}/prompt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: text.trim(), force: status !== 'idle' }),
@@ -242,6 +258,27 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   }, [sessionId, text, canSend, sending, status, pushHistory])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Tab' && cycleState) setCycleState(null)
+    if (e.key === 'Tab' && slashToken && candidates.length > 0) {
+      e.preventDefault()
+      const list = cycleState?.candidates ?? candidates
+      const nextIndex = cycleState ? (cycleState.index + 1) % list.length : 0
+      const chosen = list[nextIndex]!
+      const before = text.slice(0, slashToken.start)
+      const after  = text.slice(slashCursor)
+      const replacement = `/${chosen.name}`
+      const newText = before + replacement + after
+      setText(newText)
+      const newCursor = before.length + replacement.length
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (!ta) return
+        ta.setSelectionRange(newCursor, newCursor)
+        setSlashCursor(newCursor)
+      })
+      setCycleState({ candidates: list, index: nextIndex })
+      return
+    }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault()
       if (historyOpen) setHistoryOpen(false)
@@ -250,7 +287,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
     }
     if ((e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'Escape') && sessionId) {
       e.preventDefault()
-      fetch(`/api/sessions/${sessionId}/send-keys`, {
+      apiFetch(`/api/sessions/${sessionId}/send-keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ keys: [e.key] }),
@@ -261,7 +298,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
       e.preventDefault()
       setHistoryOpen(true)
     }
-  }, [handleSend, text, historyOpen, sessionId])
+  }, [handleSend, text, historyOpen, sessionId, slashToken, candidates, cycleState, slashCursor])
 
   // Focus textarea when expanded
   useEffect(() => {
@@ -282,28 +319,25 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
 
   return (
     <div ref={composerRootRef} className="border-t" style={{ borderColor: hexToRgba(accent, 0.2) }}>
-      <button
-        onClick={toggleExpanded}
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider transition-colors hover:bg-primary/5"
-        style={{ color: hexToRgba(accent, 0.6) }}
-      >
-        <span
-          className="material-symbols-outlined text-sm transition-transform"
-          style={{ transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+      {!isExpanded && (
+        <button
+          onClick={toggleExpanded}
+          className="w-full flex items-center gap-2 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider transition-colors hover:bg-primary/5"
+          style={{ color: hexToRgba(accent, 0.6) }}
         >
-          expand_less
-        </span>
-        Prompt Composer
-        <span className="text-slate-600 text-2xs normal-case tracking-normal ml-1">(P)</span>
-        {status !== 'idle' && (
-          <span className="ml-auto text-slate-500 normal-case tracking-normal">
-            (session {status === 'running' ? 'busy' : status})
-          </span>
-        )}
-      </button>
+          <span className="material-symbols-outlined text-sm">expand_less</span>
+          Prompt Composer
+          <span className="text-slate-600 text-2xs normal-case tracking-normal ml-1">(P)</span>
+          {status !== 'idle' && (
+            <span className="ml-auto text-slate-500 normal-case tracking-normal">
+              (session {status === 'running' ? 'busy' : status})
+            </span>
+          )}
+        </button>
+      )}
 
       {isExpanded && (
-        <div className="px-3 pb-3 space-y-2">
+        <div className="px-3 pt-2 pb-3 space-y-2">
           {historyOpen && (
             <PromptHistoryPopover
               history={history}
@@ -312,24 +346,74 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
               onClose={() => setHistoryOpen(false)}
             />
           )}
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={e => setText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onFocus={onTextareaFocus}
-            onBlur={onTextareaBlur}
-            placeholder="Enter prompt text... (Ctrl+Enter to send)"
-            className="w-full h-24 px-2 py-1.5 bg-surface-base border rounded text-xs font-mono text-slate-200 placeholder:text-slate-600 resize-y outline-none focus:border-primary/50"
-            style={{ borderColor: hexToRgba(accent, 0.2) }}
-          />
+          <div className="relative bg-surface-base rounded">
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={e => {
+                setText(e.target.value)
+                setSlashCursor(e.target.selectionStart ?? e.target.value.length)
+                setCycleState(null)
+              }}
+              onSelect={e => setSlashCursor((e.target as HTMLTextAreaElement).selectionStart)}
+              onKeyDown={handleKeyDown}
+              onFocus={onTextareaFocus}
+              onBlur={onTextareaBlur}
+              placeholder="Enter prompt text... (Ctrl+Enter to send)"
+              className="w-full h-24 px-2 py-1.5 bg-surface-base border rounded text-xs font-mono text-slate-200 placeholder:text-slate-600 resize-y outline-none focus:border-primary/50 relative z-10"
+              style={{ borderColor: hexToRgba(accent, 0.2), background: 'transparent' }}
+            />
+            {slashToken && candidates[0] && !cycleState && candidates[0].name.startsWith(slashToken.partial) && candidates[0].name !== slashToken.partial && (
+              <div
+                aria-hidden
+                className="absolute inset-0 px-2 py-1.5 text-xs font-mono whitespace-pre-wrap break-words text-slate-600 pointer-events-none overflow-hidden"
+              >
+                <span className="invisible">{text.slice(0, slashCursor)}</span>
+                <span>{candidates[0].name.slice(slashToken.partial.length)}</span>
+              </div>
+            )}
+          </div>
           {error && (
             <p className="text-2xs font-mono text-accent-red">{error}</p>
           )}
           <div className="flex items-center justify-between gap-2">
-            <span className="text-2xs text-slate-600 font-mono">
-              {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
-            </span>
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <button
+                type="button"
+                onClick={toggleExpanded}
+                title="Collapse composer"
+                className="flex items-center shrink-0 p-0.5 rounded transition-colors hover:bg-primary/10"
+                style={{ color: hexToRgba(accent, 0.6) }}
+              >
+                <span className="material-symbols-outlined text-sm rotate-180">expand_less</span>
+              </button>
+              <span className="text-2xs text-slate-600 font-mono shrink-0">
+                {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
+              </span>
+              {slashToken && (
+                <SlashChips
+                  candidates={candidates}
+                  activeIndex={activeIndex}
+                  accent={accent}
+                  onSelect={(i) => {
+                    const list = cycleState?.candidates ?? candidates
+                    const chosen = list[i]!
+                    const before = text.slice(0, slashToken.start)
+                    const after  = text.slice(slashCursor)
+                    const replacement = `/${chosen.name}`
+                    const newText = before + replacement + after
+                    setText(newText)
+                    const newCursor = before.length + replacement.length
+                    requestAnimationFrame(() => {
+                      textareaRef.current?.focus({ preventScroll: true })
+                      textareaRef.current?.setSelectionRange(newCursor, newCursor)
+                      setSlashCursor(newCursor)
+                    })
+                    setCycleState({ candidates: list, index: i })
+                  }}
+                />
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -474,7 +558,7 @@ export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, session
     setActionError(null)
     setActionLoading(true)
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/start`, { method: 'POST' })
+      const res = await apiFetch(`/api/sessions/${sessionId}/start`, { method: 'POST' })
       const data = await res.json()
       if (!data.ok) {
         const msg = data.error?.message ?? data.error?.code ?? 'Resume failed'
@@ -492,7 +576,7 @@ export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, session
     setActionError(null)
     setActionLoading(true)
     try {
-      const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
+      const res = await apiFetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
       const data = await res.json()
       if (!data.ok) {
         const msg = data.error?.message ?? data.error?.code ?? 'Delete failed'

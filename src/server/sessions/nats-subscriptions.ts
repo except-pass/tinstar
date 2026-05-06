@@ -110,7 +110,7 @@ export function computeNatsSubscriptions(
  * Sanitize a string for use as a NATS subject token.
  * NATS subjects use '.' as separator and don't allow spaces or special chars.
  */
-function sanitizeSubjectToken(token: string): string {
+export function sanitizeSubjectToken(token: string): string {
   return token
     .replace(/\s+/g, '-')      // spaces to hyphens
     .replace(/[.>*]/g, '-')    // NATS special chars to hyphens

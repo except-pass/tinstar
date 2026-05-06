@@ -136,7 +136,7 @@ Active zone shows `ring-2 ring-indigo-500`. If left panel is collapsed, `left-ta
 | `Tab` / `Shift+Tab` | Next / previous panel zone | widget |
 | `↑` / `↓` | Move between files | widget |
 | `←` / `→` | Switch center tabs | widget |
-| `Enter` | Open file / activate procedure | widget |
+| `Enter` | Open file | widget |
 | `1`…`0` | Select hotgroup | canvas |
 | `1`…`0` (×2) | Zoom-to-fit hotgroup | canvas |
 | `Ctrl+1`…`0` | Add selection to hotgroup | canvas |

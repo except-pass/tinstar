@@ -1,4 +1,4 @@
-import { existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { existsSync, statSync, openSync, readSync, closeSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { RecapEntry } from '../../types'
@@ -29,12 +29,17 @@ function encodeWorkdir(workdir: string): string {
   return workdir.replace(/\//g, '-')
 }
 
-/** Build the JSONL transcript path for a given conversation */
-export function getTranscriptPath(workdir: string, conversationId: string, stateDir?: string): string {
+/** Directory holding all .jsonl conversation files for a given workdir */
+export function getProjectDir(workdir: string, stateDir?: string): string {
   const encoded = encodeWorkdir(workdir)
   // Docker sessions mount claude-state into a session-specific dir
   const base = stateDir ?? join(homedir(), '.claude', 'projects')
-  return join(base, encoded, `${conversationId}.jsonl`)
+  return join(base, encoded)
+}
+
+/** Build the JSONL transcript path for a given conversation */
+export function getTranscriptPath(workdir: string, conversationId: string, stateDir?: string): string {
+  return join(getProjectDir(workdir, stateDir), `${conversationId}.jsonl`)
 }
 
 // Track last read position per session
@@ -145,17 +150,25 @@ export function readSessionStatus(workdir: string, conversationId: string, state
 }
 
 export function readSessionStatusDetail(workdir: string, conversationId: string, stateDir?: string): SessionStatusDetail | null {
-  const path = getTranscriptPath(workdir, conversationId, stateDir)
-  if (!existsSync(path)) return null
+  return readSessionStatusDetailAt(getTranscriptPath(workdir, conversationId, stateDir))
+}
 
-  // Read only the tail of the file — metadata entries (system, progress, etc.)
-  // after the last conversation turn are typically <10 lines.
-  const lines = readTail(path, 20)
+/**
+ * Read the last meaningful JSONL entry from `transcriptPath` and derive
+ * running/idle. Skips trailing metadata lines (system, attachment, last-prompt,
+ * file-history-snapshot, permission-mode) AND user lines whose content is only
+ * a `<local-command-…>` / `<bash-input>` / `<bash-stdout>` / `<bash-stderr>`
+ * artifact — those come from `! cmd` typed at the bash prompt and don't
+ * represent a turn the agent has to respond to.
+ */
+export function readSessionStatusDetailAt(transcriptPath: string): SessionStatusDetail | null {
+  if (!existsSync(transcriptPath)) return null
+
+  // 50 lines comfortably covers the metadata trail + a flurry of bash-input
+  // user records without forcing a full file read.
+  const lines = readTail(transcriptPath, 50)
   if (lines.length === 0) return null
 
-  // Scan backwards to find the last assistant or user entry.
-  // Skip metadata types (system, progress, file-history-snapshot, last-prompt, etc.)
-  // that Claude Code appends after the conversation turn ends.
   for (let i = lines.length - 1; i >= 0; i--) {
     try {
       const obj = JSON.parse(lines[i]!) as Record<string, unknown>
@@ -170,7 +183,7 @@ export function readSessionStatusDetail(workdir: string, conversationId: string,
         return { state: 'idle', toolPending: false }
       }
       if (obj.type === 'user') {
-        // user entry = prompt submitted or tool results fed back → running
+        if (isLocalCommandArtifact(obj)) continue
         return { state: 'running', toolPending: false }
       }
       // Skip non-conversation entries (system, progress, file-history-snapshot, etc.)
@@ -179,6 +192,47 @@ export function readSessionStatusDetail(workdir: string, conversationId: string,
     }
   }
   return null
+}
+
+/**
+ * Scan `<base>/*\/<conversationId>.jsonl` for an existing transcript. Used by
+ * the status watcher when a session has no recorded `workspace.path` (so we
+ * can't compute the project dir directly). Returns the absolute transcript
+ * path, or null if none exists.
+ */
+export function findTranscriptByConvId(conversationId: string, base?: string): string | null {
+  const projectsDir = base ?? join(homedir(), '.claude', 'projects')
+  let entries: string[]
+  try {
+    entries = readdirSync(projectsDir)
+  } catch {
+    return null
+  }
+  for (const entry of entries) {
+    const candidate = join(projectsDir, entry, `${conversationId}.jsonl`)
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+function isLocalCommandArtifact(obj: Record<string, unknown>): boolean {
+  const message = obj.message as Record<string, unknown> | undefined
+  const content = message?.content
+  const text = typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? (content as Array<Record<string, unknown>>)
+          .filter(b => b.type === 'text' && typeof b.text === 'string')
+          .map(b => b.text as string)
+          .join('')
+      : ''
+  const trimmed = text.trimStart()
+  return (
+    trimmed.startsWith('<local-command-') ||
+    trimmed.startsWith('<bash-input>') ||
+    trimmed.startsWith('<bash-stdout>') ||
+    trimmed.startsWith('<bash-stderr>')
+  )
 }
 
 // --- Record extraction ---

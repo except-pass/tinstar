@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
+import { apiFetch } from '../apiClient'
 
 interface FileWatchState {
   content: string | null
@@ -19,7 +20,7 @@ export function useFileWatch(sessionId: string, filePath: string): FileWatchStat
     const subscriberId = subscriberIdRef.current
     let cancelled = false
 
-    fetch('/api/file-watch/subscribe', {
+    apiFetch('/api/file-watch/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, filePath, subscriberId, mode: 'content' }),
@@ -58,7 +59,7 @@ export function useFileWatch(sessionId: string, filePath: string): FileWatchStat
       window.removeEventListener('tinstar:file_watch', handler)
       const absPath = absolutePathRef.current
       if (absPath) {
-        fetch('/api/file-watch/unsubscribe', {
+        apiFetch('/api/file-watch/unsubscribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ absolutePath: absPath, subscriberId }),

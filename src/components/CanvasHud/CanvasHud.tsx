@@ -1,18 +1,27 @@
 import { useCallback, useEffect, useState } from 'react'
 import { HudBar } from './HudBar'
 import { AutonomyStat } from './AutonomyStat'
+import { AgentQuadrant } from './AgentQuadrant'
+import { CcQuotaCard } from './CcQuotaCard'
 import { TelemetryBootstrap } from './TelemetryBootstrap'
 import { useTelemetryHud } from '../../hooks/useTelemetryHud'
+import { useCcQuota } from '../../hooks/useCcQuota'
 import { fmtNum, fmtDollar, fmtRate } from './fmt'
+import type { Run } from '../../domain/types'
+import { apiFetch } from '../../apiClient'
 
 const STORAGE_KEY = 'tinstar-hud-visible'
 
 interface Props {
   toggleRef?: React.MutableRefObject<(() => void) | null>
+  runMap: Map<string, Run>
+  onFocusRun?: (runId: string) => void
+  selectedRunIds?: Set<string>
 }
 
-export function CanvasHud({ toggleRef }: Props) {
+export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds }: Props) {
   const { snapshot } = useTelemetryHud()
+  const { snapshot: ccQuota } = useCcQuota()
   const [visible, setVisible] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
     return stored !== 'false'
@@ -25,7 +34,7 @@ export function CanvasHud({ toggleRef }: Props) {
   const toggle = useCallback(() => setVisible(v => !v), [])
 
   const handleRetry = useCallback(() => {
-    fetch('/api/telemetry/restart', { method: 'POST' })
+    apiFetch('/api/telemetry/restart', { method: 'POST' })
       .catch(err => console.error('telemetry restart failed', err))
   }, [])
 
@@ -34,7 +43,18 @@ export function CanvasHud({ toggleRef }: Props) {
     return () => { if (toggleRef) toggleRef.current = null }
   }, [toggleRef, toggle])
 
-  if (!visible) return null
+  if (!visible) {
+    return (
+      <button
+        onClick={toggle}
+        className="absolute top-3 right-3 bg-surface-panel border border-white/10 p-1.5 rounded-sm text-slate-500 hover:text-slate-300 transition-colors select-none z-30"
+        title="Show telemetry (T)"
+        data-testid="canvas-hud-toggle"
+      >
+        <span className="material-symbols-outlined text-base" style={{ fontSize: '16px' }}>insights</span>
+      </button>
+    )
+  }
   if (!snapshot || snapshot.state === 'disabled') return null
 
   const wrapStyle: React.CSSProperties = {
@@ -50,9 +70,9 @@ export function CanvasHud({ toggleRef }: Props) {
 
   if (snapshot.state !== 'ready') {
     return (
-      <div style={wrapStyle} data-testid="canvas-hud">
+      <HudShell wrapStyle={wrapStyle} onClose={toggle}>
         <TelemetryBootstrap snap={snapshot} onRetry={handleRetry} />
-      </div>
+      </HudShell>
     )
   }
 
@@ -73,7 +93,7 @@ export function CanvasHud({ toggleRef }: Props) {
   const cacheFill = cacheHit
 
   return (
-    <div style={wrapStyle} data-testid="canvas-hud">
+    <HudShell wrapStyle={wrapStyle} onClose={toggle}>
       <HudBar icon="$" label="COST" value={costValue} fill={costFill} accent="gold" />
       {modelChips.length > 0 && (
         <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
@@ -90,6 +110,33 @@ export function CanvasHud({ toggleRef }: Props) {
       <HudBar icon="⚡" label={tokensLabel} value={tokensValue} fill={tokensFill} accent="blue" />
       <HudBar icon="◎" label="CACHE HIT" value={cacheValue} fill={cacheFill} accent="green" />
       <AutonomyStat ratio={snapshot.autonomy.ratio} cliSeconds={snapshot.autonomy.cliSeconds} userSeconds={snapshot.autonomy.userSeconds} />
+      <CcQuotaCard snapshot={ccQuota}/>
+      {onFocusRun && (
+        <AgentQuadrant
+          runMap={runMap}
+          burningRunIds={new Set(snapshot.burningRunIds ?? [])}
+          onFocusRun={onFocusRun}
+          selectedRunIds={selectedRunIds}
+        />
+      )}
+    </HudShell>
+  )
+}
+
+function HudShell({
+  wrapStyle, onClose, children,
+}: { wrapStyle: React.CSSProperties; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div style={wrapStyle} data-testid="canvas-hud" className="group">
+      <button
+        onClick={onClose}
+        className="absolute top-1 right-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity text-slate-500 hover:text-slate-300"
+        title="Hide telemetry (T)"
+        data-testid="canvas-hud-close"
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>close</span>
+      </button>
+      {children}
     </div>
   )
 }

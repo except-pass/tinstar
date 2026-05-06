@@ -1,16 +1,21 @@
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 import { parseHandFile, type Hand } from './parser'
+import { getConfigRoot } from '../configRoot'
 
 /** Default hands directory - lives alongside other Tinstar config */
-export const DEFAULT_HANDS_DIR = join(homedir(), '.config', 'tinstar', 'hands')
+export function getDefaultHandsDir(): string {
+  return join(getConfigRoot(), 'hands')
+}
+
+/** @deprecated Prefer getDefaultHandsDir() — this constant freezes the path at module-load time. */
+export const DEFAULT_HANDS_DIR = getDefaultHandsDir()
 
 /**
  * Discover all hand definition files in a directory.
  * Returns array of parsed hands, skipping invalid files.
  */
-export function discoverHands(dir: string = DEFAULT_HANDS_DIR): Hand[] {
+export function discoverHands(dir: string = getDefaultHandsDir()): Hand[] {
   if (!existsSync(dir)) return []
 
   const hands: Hand[] = []
@@ -41,7 +46,7 @@ export function discoverHands(dir: string = DEFAULT_HANDS_DIR): Hand[] {
 /**
  * Get a specific hand by name.
  */
-export function getHandByName(name: string, dir: string = DEFAULT_HANDS_DIR): Hand | null {
+export function getHandByName(name: string, dir: string = getDefaultHandsDir()): Hand | null {
   const hands = discoverHands(dir)
   return hands.find(h => h.name === name) ?? null
 }

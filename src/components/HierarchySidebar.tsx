@@ -12,6 +12,7 @@ import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 import { BindingRow, GLOBAL_KEYS, CANVAS_KEYS, QUICKDRAW_KEYS } from './HotkeyBindingRow'
 import { AgentIcon, isIconUrl } from './agentIcon'
+import { apiFetch } from '../apiClient'
 
 const LS_HOTKEYS_HEIGHT = 'tinstar-sidebar-hotkeys-height'
 const DEFAULT_HOTKEYS_HEIGHT = 200
@@ -266,6 +267,24 @@ function SidebarNode({
           </button>
         ) : (
           <span className="w-4" />
+        )}
+
+        {/* Robot face chip (runs only) — procedural face seeded by run id, ring tinted by status color */}
+        {isRun && (
+          <span
+            className="flex items-center justify-center flex-shrink-0"
+            style={{
+              width: 16,
+              height: 16,
+              borderRadius: '50%',
+              border: `1.5px solid ${node.color ?? '#94a3b8'}`,
+              background: 'rgba(15,23,42,0.6)',
+            }}
+            data-testid={`sidebar-agent-chip-${node.id}`}
+            aria-hidden="true"
+          >
+            <AgentIcon seed={node.entityId} color={node.color} className="w-3 h-3" />
+          </span>
         )}
 
         {/* Icon */}
@@ -573,7 +592,6 @@ function TreeWithOrphanSeparators({
 }
 
 export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
-  const rootType = dimensions[0] ?? 'initiative'
   const { isExpanded, expandAll } = useSelection()
   const showEmpty = showEmptyEntities ?? true
 
@@ -586,6 +604,19 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
     () => Object.fromEntries(levelMeta.map(m => [m.internalType, m.label])),
     [levelMeta],
   )
+
+  const [addMenuOpen, setAddMenuOpen] = useState(false)
+  const addMenuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!addMenuOpen) return
+    const handler = (e: MouseEvent) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
+        setAddMenuOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', handler)
+    return () => document.removeEventListener('pointerdown', handler)
+  }, [addMenuOpen])
 
   const handleReparent = useCallback((entityId: string, entityType: string, newParentId: string | null, newParentType: string | null) => {
     if (onReparent) onReparent(entityId, entityType, newParentId, newParentType)
@@ -684,14 +715,41 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
             <span className="material-symbols-outlined text-sm">filter_list</span>
           </button>
         )}
-        <button
-          className="text-xs text-slate-500 hover:text-primary shrink-0"
-          onClick={() => onAdd(null, rootType)}
-          data-testid="add-root"
-          aria-label={`Add ${rootType}`}
-        >
-          +
-        </button>
+        <div className="relative shrink-0" ref={addMenuRef}>
+          <button
+            className="text-xs text-slate-500 hover:text-primary"
+            onClick={() => setAddMenuOpen(o => !o)}
+            data-testid="add-root"
+            aria-label="Add entity"
+            aria-haspopup="menu"
+            aria-expanded={addMenuOpen}
+          >
+            +
+          </button>
+          {addMenuOpen && (
+            <div
+              className="absolute top-full right-0 z-50 mt-0.5 min-w-[10rem] bg-surface-raised border border-primary/25 shadow-neon"
+              role="menu"
+              data-testid="add-root-menu"
+            >
+              {dimensions.map(dim => (
+                <button
+                  key={dim}
+                  role="menuitem"
+                  className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-slate-300 hover:bg-surface-hover hover:text-primary transition-colors"
+                  onClick={() => {
+                    setAddMenuOpen(false)
+                    onAdd(null, dim)
+                  }}
+                  data-testid={`add-root-${dim}`}
+                >
+                  <span aria-hidden>{dimensionIconMap[dim] ?? ''}</span>
+                  <span>{dimensionLabelMap[dim] ?? dim}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Tree */}
@@ -740,7 +798,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
         <span className="text-2xs text-slate-500 uppercase tracking-wider">Tools</span>
         <button
           className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-          onClick={() => fetch('/api/nats-traffic-widgets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })}
+          onClick={() => apiFetch('/api/nats-traffic-widgets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })}
           title="Open NATS Traffic Monitor"
         >
           <span className="material-symbols-outlined text-base">cell_tower</span>

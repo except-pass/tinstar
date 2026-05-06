@@ -9,6 +9,7 @@ import { handleRequest, type RouteContext } from './api/routes'
 import { MockSensorSimulator } from './simulator/mock-sensors'
 import { join } from 'node:path'
 import { readdirSync, existsSync, rmSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { shortId } from './utils/shortId'
 import {
   loadConfig,
@@ -25,15 +26,22 @@ import {
 import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
 import { StatusWatcher } from './sessions/status-watcher'
-import { watchDrafts, ensureDraftsDir } from './sessions/skill-drafts'
 import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
 import { NatsTrafficBridge } from './nats-traffic'
+import { registerSaloonSubs } from './api/saloonBridge'
+import { bootstrapHierarchicalTopicMetadata } from './topic-metadata'
+import { NatsHealthMonitor } from './nats-health'
+import { natsControlSocketPath } from './sessions/backends/tmux'
 import { SessionReadinessTracker } from './sessions/readiness'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
 import { createTelemetryRoutes } from './api/telemetry.js'
+import { OtlpExporter } from './stores/otlp-exporter'
+import { CcQuotaService } from './cc-quota/service'
+import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
+import { SlashUsage } from './sessions/slashUsage'
 
 // Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
 // If initBackend runs twice (Vite HMR), the second invocation skips registration
@@ -49,7 +57,14 @@ export function initBackend(): RouteContext {
 
   // Wire processors
   new DocumentProcessor(bus, docStore)
-  new OTelProcessor(bus, otelStore)
+  const otlpExporter = new OtlpExporter()
+  otlpExporter.start()
+  const slashRegistry = new SlashCommandRegistry()
+  const slashUsage = new SlashUsage(join(homedir(), '.config/tinstar/slash-usage.json'))
+  // Debounced flush every 5s while dirty
+  setInterval(() => { void slashUsage.flush() }, 5_000).unref()
+  const ccQuotaService = new CcQuotaService({ sink: otlpExporter })
+  new OTelProcessor(bus, otelStore, otlpExporter)
 
   // Wire SSE
   const sse = new SSEBroadcaster(docStore)
@@ -74,30 +89,64 @@ export function initBackend(): RouteContext {
       const sess = getSession(sessionConfig.dirs.sessions, name)
       return sess?.conversation?.id ?? null
     },
+    getRunIdsForConversationIds: (conversationIds) => {
+      if (!sessionConfig || conversationIds.length === 0) return []
+      const wanted = new Set(conversationIds)
+      const out: string[] = []
+      for (const run of docStore.getAllRuns()) {
+        const sess = getSession(sessionConfig.dirs.sessions, run.sessionId)
+        const convId = sess?.conversation?.id
+        if (convId && wanted.has(convId)) {
+          out.push(run.id)
+        }
+      }
+      return out
+    },
   })
 
   let natsManager: NatsManager | undefined
   let natsTraffic: NatsTrafficBridge | undefined
+  let natsHealth: NatsHealthMonitor | undefined
   let readinessTracker: SessionReadinessTracker | undefined
 
   if (!shutdownRegistered) {
     shutdownRegistered = true
     const shutdown = async () => {
+      try { natsHealth?.stop() } catch { /* ignore */ }
       try { await natsTraffic?.stop() } catch { /* ignore */ }
       try { await readinessTracker?.stop() } catch { /* ignore */ }
       try { await natsManager?.stop() } catch { /* ignore */ }
       try { await observability.stop() } catch { /* ignore */ }
       try { telemetryRoutes.stopPolling() } catch { /* ignore */ }
       try { docStore.flush() } catch { /* ignore */ }
+      try { await slashUsage.flush() } catch { /* ignore */ }
       process.exit(0)
     }
     process.once('SIGINT', shutdown)
     process.once('SIGTERM', shutdown)
   }
 
-  // Start draft watcher — emits skill.drafted SSE events when new drafts appear
-  ensureDraftsDir()
-  watchDrafts(sse)
+  // Clear bun's cached nats-channel-mcp so freshly spawned hands re-resolve from
+  // GitHub HEAD. bun caches git specs by commit hash and doesn't re-check the
+  // remote on subsequent `bun x` calls — without this, hands can run stale
+  // channel-server code (e.g. missing upstream fixes like self-echo suppression).
+  // We clear BOTH the install cache AND the bunx tmp resolutions — the latter
+  // is what `bun x` actually serves from, and the former alone wasn't enough.
+  try {
+    const bunCacheDir = join(homedir(), '.bun/install/cache')
+    for (const entry of readdirSync(bunCacheDir)) {
+      if (entry.includes('nats-channel-mcp')) {
+        rmSync(join(bunCacheDir, entry), { recursive: true, force: true })
+      }
+    }
+  } catch { /* ignore */ }
+  try {
+    for (const entry of readdirSync('/tmp')) {
+      if (entry.startsWith('bunx-') && entry.includes('nats-channel-mcp')) {
+        rmSync(join('/tmp', entry), { recursive: true, force: true })
+      }
+    }
+  } catch { /* ignore */ }
 
   // Start managed NATS server (installs binary if needed, spawns, probes)
   natsManager = new NatsManager()
@@ -111,6 +160,38 @@ export function initBackend(): RouteContext {
       if (widget.subscriptions?.length) {
         natsTraffic.updateWidgetSubscriptions(widget.id, widget.subscriptions)
       }
+    }
+
+    // Re-register every persisted session's subs with the bridge. Saloon entries
+    // are synthetic (keyed `saloon:<name>`) and not persisted as widget docs, so
+    // the widget hydration loop above doesn't cover them.
+    if (sessionConfig) {
+      const sessEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
+      for (const entry of sessEntries) {
+        if (!entry.isDirectory()) continue
+        const sess = getSession(sessionConfig.dirs.sessions, entry.name)
+        if (!sess) continue
+        registerSaloonSubs(natsTraffic, sess.name, sess.nats?.subscriptions ?? [])
+      }
+    }
+
+    // Start the periodic NATS-control-socket health probe. Drives
+    // Session.natsControlOrphanedAt for every NATS-enabled session so the
+    // Saloon broker-health dot reflects reality even when nobody's tried
+    // to subscribe/unsubscribe recently.
+    if (sessionConfig) {
+      natsHealth = new NatsHealthMonitor({
+        sessionsDir: sessionConfig.dirs.sessions,
+        docStore,
+        getSocketPath: (name) => natsControlSocketPath(name),
+      })
+      const healthEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
+      for (const entry of healthEntries) {
+        if (!entry.isDirectory()) continue
+        const sess = getSession(sessionConfig.dirs.sessions, entry.name)
+        if (sess?.nats?.enabled) natsHealth.trackSession(sess.name)
+      }
+      natsHealth.start()
     }
 
     // Start session readiness tracker — listens for tinstar.ready.> signals
@@ -147,7 +228,9 @@ export function initBackend(): RouteContext {
   // --- Session management ---
   if (process.env.TINSTAR_NO_SESSIONS !== '1') {
     try {
-      sessionConfig = loadConfig(process.env.TINSTAR_DATA_DIR ? { _rootDir: process.env.TINSTAR_DATA_DIR } : undefined)
+      // loadConfig() resolves the config root via getConfigRoot(), which honors
+      // TINSTAR_CONFIG_HOME (preferred) and TINSTAR_DATA_DIR (legacy alias).
+      sessionConfig = loadConfig()
       ensureDirs(sessionConfig)
 
       // Enable file-backed persistence so data survives server restarts
@@ -209,6 +292,7 @@ export function initBackend(): RouteContext {
             // Format: [broadcast, direct] where direct = broadcast + session name
             natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
             natsSubscriptions: sess.nats?.subscriptions,
+            natsControlOrphanedAt: sess.natsControlOrphanedAt ?? null,
             taskId: '',
             worktreeId: '',
             createdAt: sess.created ?? new Date().toISOString(),
@@ -216,15 +300,29 @@ export function initBackend(): RouteContext {
           })
           log.info('rehydrate', `created run for session ${sess.name} (${sess.state})`)
         } else {
-          // Refresh agentIcon from the current template — lets template icon changes
-          // (e.g. new default logos) propagate to existing persisted runs across restarts.
-          if (tpl?.icon && existingRun.agentIcon !== tpl.icon) {
-            docStore.upsertRun(sess.name, { ...existingRun, agentIcon: tpl.icon })
+          // Refresh fields that mirror live session state. NATS fields are SSOT on
+          // the session (subscriptions mutate on breakout joins, orphan flag flips
+          // on control-socket loss) and the run projection must track them across
+          // restarts. agentIcon picks up template-icon changes too.
+          const refreshed = {
+            ...existingRun,
+            natsEnabled: sess.nats?.enabled ?? false,
+            natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
+            natsSubscriptions: sess.nats?.subscriptions,
+            natsControlOrphanedAt: sess.natsControlOrphanedAt ?? null,
+            agentIcon: tpl?.icon ?? existingRun.agentIcon,
           }
+          docStore.upsertRun(sess.name, refreshed)
           if (existingRun.status !== sess.state) {
             log.info('rehydrate', `${sess.name}: correcting status ${existingRun.status} → ${sess.state}`)
             docStore.updateRunStatus(sess.name, sess.state)
           }
+        }
+        // Backfill TopicMetadata for sessions that pre-existed the topic-metadata
+        // feature. The bootstrap helper is idempotent (skips subjects that already
+        // have records) so this is safe to run on every boot.
+        if (sess.nats?.enabled && sess.nats.subscriptions.length > 0) {
+          bootstrapHierarchicalTopicMetadata(sess.nats.subscriptions, sess.name, docStore)
         }
       }
 
@@ -351,8 +449,11 @@ export function initBackend(): RouteContext {
   }
 
   return {
-    docStore, otelStore, sse, bus, startSimulator, resetSimulator, sessionConfig, readyQueue, telemetryRoutes,
+    docStore, otelStore, sse, bus, startSimulator, resetSimulator,
+    sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
+    slashRegistry, slashUsage, otlpExporter,
     get natsTraffic() { return natsTraffic },
+    get natsHealth() { return natsHealth },
     get readinessTracker() { return readinessTracker },
   }
 }

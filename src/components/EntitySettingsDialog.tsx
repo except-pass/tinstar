@@ -1,9 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { DEFAULT_RUN_ACCENT } from './runAccent'
 import type { GroupingDimension, EntitySettings, ResolvedSettings } from '../domain/types'
-import type { StoredProcedure } from '../types'
-import { randomUUID } from '../uuid'
 import { ColorPalette } from './ColorPalette'
+import { apiFetch } from '../apiClient'
 
 interface Props {
   entityId: string
@@ -79,7 +78,6 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<EntitySettings>({})
   const [saving, setSaving] = useState(false)
-  const [newProcName, setNewProcName] = useState('')
   const [externalUrl, setExternalUrl] = useState<string>('')
   const [urlDirty, setUrlDirty] = useState(false)
 
@@ -89,11 +87,11 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
     if (!endpoint) return
 
     Promise.all([
-      fetch(`/api/${endpoint}/${entityId}/settings`).then(r => r.json()),
-      fetch('/api/projects').then(r => r.json()),
-      fetch('/api/cli-templates').then(r => r.json()),
-      fetch('/api/docker/profiles').then(r => r.json()),
-      fetch(`/api/state`).then(r => r.json()),
+      apiFetch(`/api/${endpoint}/${entityId}/settings`).then(r => r.json()),
+      apiFetch('/api/projects').then(r => r.json()),
+      apiFetch('/api/cli-templates').then(r => r.json()),
+      apiFetch('/api/docker/profiles').then(r => r.json()),
+      apiFetch(`/api/state`).then(r => r.json()),
     ]).then(([settingsRes, projectsRes, templatesRes, profilesRes, stateRes]) => {
       if (settingsRes.ok) setSettings(settingsRes.data)
       if (projectsRes?.ok && projectsRes.data && typeof projectsRes.data === 'object') {
@@ -125,7 +123,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       setWorktrees([])
       return
     }
-    fetch(`/api/projects/${encodeURIComponent(effectiveProject)}/worktrees`)
+    apiFetch(`/api/projects/${encodeURIComponent(effectiveProject)}/worktrees`)
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.ok && Array.isArray(d.data)) setWorktrees(d.data) })
       .catch(() => {})
@@ -144,7 +142,6 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
         skipPermissions: inherited ?? false,
         cliTemplate: inherited ?? '',
         defaultRunColor: inherited ?? DEFAULT_RUN_ACCENT,
-        procedures: inherited ?? [],
       }
       setDraft(prev => ({ ...prev, [key]: defaults[key] }))
     } else {
@@ -175,7 +172,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       body.externalUrl = externalUrl.trim() || null
     }
 
-    await fetch(`/api/${endpoint}/${entityId}`, {
+    await apiFetch(`/api/${endpoint}/${entityId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -188,35 +185,6 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
   const handleCancel = useCallback(() => {
     onClose()
   }, [onClose])
-
-  // Procedures helpers — work on draft.procedures (initialised from local on first edit)
-  const localProcs = (
-    draft.procedures !== undefined ? draft.procedures : settings?.local.procedures
-  ) as StoredProcedure[] | undefined ?? []
-
-  const inheritedProcs = (settings?.resolved.procedures ?? []) as StoredProcedure[]
-  const localNames = new Set(localProcs.map(p => p.skillName))
-  const inheritedOnly = inheritedProcs.filter(p => !localNames.has(p.skillName))
-
-  const removeProc = useCallback((id: string) => {
-    setDraft(prev => ({
-      ...prev,
-      procedures: ((prev.procedures !== undefined ? prev.procedures : settings?.local.procedures) as StoredProcedure[] ?? [])
-        .filter(p => p.id !== id),
-    }))
-  }, [settings])
-
-  const addProc = useCallback(() => {
-    const name = newProcName.trim()
-    if (!name) return
-    const base = (draft.procedures !== undefined ? draft.procedures : settings?.local.procedures) as StoredProcedure[] ?? []
-    if (base.some(p => p.skillName === name)) { setNewProcName(''); return }
-    setDraft(prev => ({
-      ...prev,
-      procedures: [...base, { id: randomUUID(), skillName: name }],
-    }))
-    setNewProcName('')
-  }, [newProcName, draft.procedures, settings])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
@@ -410,51 +378,6 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                   )
                 }}
               </SettingRow>
-
-              {/* Procedures — manage skills starred at this entity level */}
-              <div className="pt-3 mt-1 border-t border-white/5">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-mono uppercase tracking-wide text-slate-500">Procedures</span>
-                  {inheritedOnly.length > 0 && (
-                    <span className="text-2xs text-slate-600 font-mono">+{inheritedOnly.length} inherited</span>
-                  )}
-                </div>
-
-                {localProcs.map(proc => (
-                  <div key={proc.id} className="flex items-center gap-1.5 py-0.5">
-                    <span className="material-symbols-outlined text-xs text-slate-600">terminal</span>
-                    <span className="flex-1 text-xs font-mono text-slate-300 truncate">{proc.skillName}</span>
-                    <button
-                      onClick={() => removeProc(proc.id)}
-                      className="text-slate-600 hover:text-slate-400 flex-shrink-0"
-                      title="Remove procedure"
-                    >
-                      <span className="material-symbols-outlined text-sm">close</span>
-                    </button>
-                  </div>
-                ))}
-
-                {localProcs.length === 0 && inheritedOnly.length === 0 && (
-                  <p className="text-2xs text-slate-600 italic mb-2">No procedures set</p>
-                )}
-
-                <div className="flex items-center gap-1 mt-2">
-                  <input
-                    value={newProcName}
-                    onChange={e => setNewProcName(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') addProc() }}
-                    placeholder="skill name…"
-                    className="flex-1 bg-surface-base border border-white/10 rounded px-2 py-1 text-xs text-slate-300 font-mono outline-none focus:border-primary/30 placeholder-slate-700"
-                  />
-                  <button
-                    onClick={addProc}
-                    disabled={!newProcName.trim()}
-                    className="px-2 py-1 text-xs border border-white/10 rounded text-slate-500 hover:text-slate-300 hover:border-white/20 disabled:opacity-30"
-                  >
-                    Add
-                  </button>
-                </div>
-              </div>
             </div>
           )}
         </div>

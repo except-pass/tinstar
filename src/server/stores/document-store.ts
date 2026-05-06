@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 
@@ -17,6 +17,7 @@ export class DocumentStore {
   private browserWidgets = new Map<string, BrowserWidget>()
   private imageWidgets = new Map<string, ImageWidget>()
   private natsTrafficWidgets = new Map<string, NatsTrafficWidget>()
+  private topicMetadata = new Map<string, TopicMetadata>()
 
   activeSpaceId: string = ''
 
@@ -54,6 +55,7 @@ export class DocumentStore {
       if (data.browserWidgets) for (const w of data.browserWidgets) this.browserWidgets.set(w.id, w)
       if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
       if (data.natsTrafficWidgets) for (const w of data.natsTrafficWidgets) this.natsTrafficWidgets.set(w.id, w)
+      if (data.topicMetadata) for (const m of data.topicMetadata) this.topicMetadata.set(m.subject, m)
     } catch {
       // No file or corrupt — start fresh
     }
@@ -361,6 +363,26 @@ export class DocumentStore {
     return [...this.natsTrafficWidgets.values()]
   }
 
+  // --- TopicMetadata ---
+
+  upsertTopicMetadata(subject: string, data: TopicMetadata): void {
+    this.topicMetadata.set(subject, data)
+    this.changes.emit('change', { entity: 'topicMetadata', id: subject, data })
+  }
+
+  deleteTopicMetadata(subject: string): void {
+    this.topicMetadata.delete(subject)
+    this.changes.emit('change', { entity: 'topicMetadata', id: subject, data: null })
+  }
+
+  getTopicMetadata(subject: string): TopicMetadata | undefined {
+    return this.topicMetadata.get(subject)
+  }
+
+  getAllTopicMetadata(): TopicMetadata[] {
+    return [...this.topicMetadata.values()]
+  }
+
   // --- Snapshot (filtered by active space) ---
   // Include entities that match the active space OR have no spaceId (homeless).
   // This ensures nothing silently vanishes from the UI.
@@ -380,6 +402,7 @@ export class DocumentStore {
       browserWidgets: this.getAllBrowserWidgets().filter(inSpace),
       imageWidgets: this.getAllImageWidgets().filter(inSpace),
       natsTrafficWidgets: this.getAllNatsTrafficWidgets().filter(inSpace),
+      topicMetadata: this.getAllTopicMetadata(),
     }
   }
 
@@ -398,6 +421,7 @@ export class DocumentStore {
       browserWidgets: this.getAllBrowserWidgets(),
       imageWidgets: this.getAllImageWidgets(),
       natsTrafficWidgets: this.getAllNatsTrafficWidgets(),
+      topicMetadata: this.getAllTopicMetadata(),
     }
   }
 

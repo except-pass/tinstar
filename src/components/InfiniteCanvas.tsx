@@ -13,6 +13,7 @@ import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
 import { CanvasMinimap } from './CanvasMinimap'
 import { CanvasHud } from './CanvasHud'
+import { apiFetch } from '../apiClient'
 
 interface Props {
   tree: TreeNode[]
@@ -252,6 +253,22 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => el.removeEventListener('wheel', handler)
   }, [handleWheel])
 
+  // Defensive: if the container ever scrolls (e.g. browser auto-scrolling to
+  // reveal a focused descendant like a freshly-mounted ttyd iframe), snap it
+  // back to 0. overflow: clip should already prevent this, but on any browser
+  // that still allows it the scroll offset would visually shift the canvas,
+  // minimap, HUD, and break centerOn math. Self-heal instead.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const reset = () => {
+      if (el.scrollLeft !== 0) el.scrollLeft = 0
+      if (el.scrollTop !== 0) el.scrollTop = 0
+    }
+    el.addEventListener('scroll', reset)
+    return () => el.removeEventListener('scroll', reset)
+  }, [])
+
   // Handle tinstar:open-linked-file — spawn a new editor widget next to the source widget
   useEffect(() => {
     const container = containerRef.current
@@ -269,7 +286,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const spawnY = sourceLayout ? sourceLayout.y : 0
       const spawnLayout = { x: spawnX, y: spawnY, width: 640, height: 480 }
 
-      const res = await fetch('/api/editor-widgets', {
+      const res = await apiFetch('/api/editor-widgets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, filePath }),
@@ -498,11 +515,18 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
     const GAP = 24
     const EMPTY_H = 60  // thin placeholder bar for empty containers
+    const MIN_LEAF_H = 150  // mirrors FIT_MIN_HEIGHT / useWidgetLayouts MIN_HEIGHT
     const updates = new Map<string, { x: number; y: number; width: number; height: number }>()
+
+    // Leaf height = viewport height (in canvas coords at current zoom) — same
+    // behavior as hotkey Z. Width keeps the widget's current value.
+    const rect = el.getBoundingClientRect()
+    const leafHeight = Math.max(MIN_LEAF_H, rect.height / camera.zoom)
 
     const getLeafSize = (id: string) => {
       const l = layouts.get(id)
-      return l ? { w: l.width, h: l.height } : { w: 1560, h: 1410 }
+      const w = l ? l.width : 1560
+      return { w, h: leafHeight }
     }
 
     // Viewport origin in canvas coords
@@ -642,14 +666,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
   }, [layouts])
 
-  // zoomToFitRuns: compute bounding box and zoom-to-fit with 40px margin
+  // zoomToFitRuns: compute bounding box and zoom-to-fit flush with the viewport (no margin)
   const zoomToFitRuns = useCallback((runIds: string[]) => {
     const el = containerRef.current
     if (!el) return
     const box = getBoundingBox(runIds)
     if (!box) return
     const rect = el.getBoundingClientRect()
-    centerOn(box.x, box.y, box.w, box.h, rect.width, rect.height)
+    centerOn(box.x, box.y, box.w, box.h, rect.width, rect.height, 0)
   }, [getBoundingBox, centerOn])
 
   // panToRuns: pan to center bounding box at current zoom, 60px margin (no zoom change)
@@ -693,7 +717,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const hotgroups = useHotgroupContext()
 
   useCanvasHotkeys({
-    onHotgroupSelect: (slot, isDoubleTap) => {
+    onHotgroupNavigate: (slot) => {
       // hotgroups stores full node IDs (e.g. 'run-R-241', 'editor-abc', 'browser-xyz')
       const slotNodeIds = hotgroups.nodesInSlot(slot).filter(id => layouts.has(id))
       if (slotNodeIds.length === 0) return
@@ -715,11 +739,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         }
       }
       if (ancestorIds.length > 0) expandAll(ancestorIds)
-      if (isDoubleTap) {
-        zoomToFitRuns(slotNodeIds)
-      } else {
-        panToRuns(slotNodeIds)
-      }
+      zoomToFitRuns(slotNodeIds)
     },
     onHotgroupAssign: (slot) => {
       const { selectedType, selectedIds } = selectionState
@@ -833,7 +853,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         const isImage = imageExts.some(ext => filePath.toLowerCase().endsWith(ext))
 
         if (isImage) {
-          const imageRes = await fetch('/api/image-widgets', {
+          const imageRes = await apiFetch('/api/image-widgets', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sessionId, filePath }),
@@ -852,7 +872,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         }
 
         const spawnLayout = { x: dropX, y: dropY, width: 640, height: 480 }
-        const editorRes = await fetch('/api/editor-widgets', {
+        const editorRes = await apiFetch('/api/editor-widgets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId, filePath }),
@@ -868,7 +888,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       if (rawBrowser) {
         const { sessionId } = JSON.parse(rawBrowser) as { sessionId: string }
         const spawnLayout = { x: dropX, y: dropY, width: 800, height: 600 }
-        const res = await fetch('/api/browser-widgets', {
+        const res = await apiFetch('/api/browser-widgets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId }),
@@ -893,7 +913,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
               natsSubject.replace(/\.[^.]+$/, ''),  // task broadcast channel (no wildcard)
             ]
           : [`tinstar.>`]  // fallback to all tinstar traffic
-        const res = await fetch('/api/nats-traffic-widgets', {
+        const res = await apiFetch('/api/nats-traffic-widgets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId, subscriptions, color }),
@@ -911,7 +931,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         try {
           const { handName, sessionId } = JSON.parse(handData) as { handName: string; sessionId: string }
           // Spawn the hand via API
-          fetch(`/api/sessions/${sessionId}/spawn`, {
+          apiFetch(`/api/sessions/${sessionId}/spawn`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ hand: handName }),
@@ -1054,7 +1074,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       ref={containerRef}
       tabIndex={-1}
       data-testid="infinite-canvas"
-      className="w-full h-full overflow-hidden relative outline-none"
+      className="w-full h-full overflow-clip relative outline-none"
       style={{
         cursor: cursorStyle,
         backgroundImage: 'radial-gradient(circle, rgba(0,240,255,0.04) 1px, transparent 1px)',
@@ -1127,7 +1147,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       />
 
       {/* Telemetry HUD (top-right) */}
-      <CanvasHud toggleRef={hudToggleRef} />
+      <CanvasHud
+        toggleRef={hudToggleRef}
+        runMap={runMap}
+        onFocusRun={onFocusRun}
+        selectedRunIds={selectionState.selectedType === 'run' ? selectionState.selectedIds : undefined}
+      />
 
       {/* Bottom-right zoom indicator */}
       <div className="absolute bottom-3 right-3 flex items-center gap-2">

@@ -4,6 +4,8 @@ import { hexToRgba } from '../runAccent'
 import { HudBar, AutonomyStat } from '../CanvasHud'
 import { fmtNum, fmtDollar, fmtRate } from '../CanvasHud/fmt'
 import { useTelemetrySession } from '../../hooks/useTelemetrySession'
+import { useSessionContextWindow } from '../../hooks/useSessionContextWindow'
+import { apiFetch } from '../../apiClient'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -275,6 +277,7 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [loadedAt, setLoadedAt] = useState<number | null>(null)
   const [ageLabel, setAgeLabel] = useState('')
+  const liveCtx = useSessionContextWindow(sessionId)
 
   // Update humanized age every 30s
   useEffect(() => {
@@ -289,7 +292,7 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/context`)
+      const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/context`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
       if (!json.ok) throw new Error(json.error?.message ?? 'Unknown error')
@@ -302,59 +305,66 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
     }
   }, [sessionId])
 
-  /* ---- Body varies by state ---- */
-  let body: React.ReactNode
-  if (!data && !loading && !error) {
-    body = (
-      <div className="flex-1 flex items-center justify-center p-2">
-        <button
-          onClick={fetchContext}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-2xs font-mono text-slate-400 border border-dashed border-slate-600 rounded hover:border-slate-400 hover:text-slate-300 transition-colors"
-        >
-          <span className="material-symbols-outlined text-sm">query_stats</span>
-          Load Context
-        </button>
-      </div>
-    )
-  } else if (loading && !data) {
-    body = (
+  const pct = liveCtx?.usedPercentage ?? null
+  const pctLabel = pct == null ? '--' : `${pct.toFixed(0)}%`
+  const fillPct = pct == null ? 0 : Math.max(0, Math.min(100, pct))
+  const fillBg = hexToRgba(runAccent, 0.35)
+
+  const meterTitle = loading
+    ? 'Loading detailed context breakdown…'
+    : data
+      ? `Context window: ${pct != null ? pct.toFixed(1) + '%' : '--'} — click to refresh breakdown${loadedAt ? ` (loaded ${ageLabel})` : ''}`
+      : liveCtx
+        ? `Context window: ${liveCtx.usedPercentage.toFixed(1)}% of ${liveCtx.windowSize.toLocaleString()} tokens — click for detailed breakdown`
+        : 'Load detailed context breakdown'
+
+  const meterButton = (
+    <div className="p-2">
+      <button
+        onClick={fetchContext}
+        disabled={loading}
+        title={meterTitle}
+        className="group relative w-full max-w-[240px] mx-auto block overflow-hidden border border-slate-700 rounded hover:border-slate-500 transition-colors disabled:opacity-70"
+      >
+        <div
+          className="absolute inset-y-0 left-0 transition-all duration-500"
+          style={{ width: `${fillPct}%`, background: fillBg }}
+        />
+        <div className="relative flex items-center justify-between px-3 py-1.5 text-2xs font-mono">
+          <span className="flex items-center gap-1.5 text-slate-300 group-hover:text-slate-100">
+            <span className={`material-symbols-outlined text-sm ${loading ? 'animate-spin' : ''}`}>
+              {loading ? 'progress_activity' : 'query_stats'}
+            </span>
+            Context
+          </span>
+          <span className="text-slate-200 tabular-nums">{pctLabel}</span>
+        </div>
+      </button>
+    </div>
+  )
+
+  let detail: React.ReactNode = null
+  if (loading && !data) {
+    detail = (
       <div className="flex-1 flex items-center justify-center">
         <span className="text-2xs font-mono text-slate-500 animate-pulse">Loading...</span>
       </div>
     )
   } else if (error && !data) {
-    body = (
-      <div className="flex-1 flex flex-col items-center justify-center gap-2 p-2">
+    detail = (
+      <div className="flex-1 flex items-center justify-center p-2">
         <span className="text-2xs text-red-400 text-center">{error}</span>
-        <button
-          onClick={fetchContext}
-          className="text-2xs font-mono text-slate-400 hover:text-slate-300"
-        >
-          Retry
-        </button>
       </div>
     )
-  } else {
-    body = (
-      <>
-        <div className="flex-1 min-h-0 flex flex-col px-1 pt-1">
-          <Treemap
-            categories={data?.categories ?? []}
-            accent={runAccent}
-            maxTokens={data?.maxTokens ?? 200_000}
-          />
-        </div>
-        <div className="flex items-center justify-between px-2 py-1 text-2xs font-mono text-slate-600">
-          <span>{loadedAt ? `loaded ${ageLabel}` : ''}</span>
-          <button
-            onClick={fetchContext}
-            disabled={loading}
-            className="text-slate-500 hover:text-slate-300 disabled:opacity-30"
-          >
-            <span className="material-symbols-outlined text-xs">refresh</span>
-          </button>
-        </div>
-      </>
+  } else if (data) {
+    detail = (
+      <div className="flex-1 min-h-0 flex flex-col px-1 pb-1">
+        <Treemap
+          categories={data.categories}
+          accent={runAccent}
+          maxTokens={data.maxTokens}
+        />
+      </div>
     )
   }
 
@@ -364,7 +374,8 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
         <h3 className="panel-label">Telemetry</h3>
       </div>
       <SessionSection sessionId={sessionId} />
-      {body}
+      {meterButton}
+      {detail}
     </section>
   )
 }

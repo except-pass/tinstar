@@ -2,11 +2,22 @@ import { createServer } from 'node:http'
 import { join, extname, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createReadStream, existsSync, statSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
-import { homedir } from 'node:os'
 import httpProxy from 'http-proxy'
+
+// Parse --cors-origins as early as possible so that downstream module imports
+// (which capture process.env.TINSTAR_CORS_ORIGINS at load time) see the value.
+{
+  const args = process.argv.slice(2)
+  const corsIdx = args.indexOf('--cors-origins')
+  if (corsIdx !== -1 && args[corsIdx + 1]) {
+    process.env.TINSTAR_CORS_ORIGINS = args[corsIdx + 1]
+  }
+}
+
 import { initBackend } from './index'
 import { handleRequest } from './api/routes'
 import { log } from './logger'
+import { getConfigRoot } from './configRoot'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -56,7 +67,7 @@ export function startServer(opts: ServerOptions) {
   // Kill any stale server BEFORE starting the backend — the old server's shutdown
   // handler will clean up its observability supervisors. If we init first, we risk
   // adopting pids that are about to die.
-  const configDir = join(homedir(), '.config', 'tinstar')
+  const configDir = getConfigRoot()
   const pidFile = join(configDir, 'server.pid')
   killStalePidSync(pidFile)
 

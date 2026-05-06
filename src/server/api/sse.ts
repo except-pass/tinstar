@@ -1,6 +1,7 @@
 import type { ServerResponse } from 'node:http'
 import type { DocumentStore } from '../stores/document-store'
 import type { BusEventType } from '../types'
+import type { CorsHeaders } from './cors'
 
 export class SSEBroadcaster {
   private clients = new Set<ServerResponse>()
@@ -70,12 +71,13 @@ export class SSEBroadcaster {
     this.broadcastEvent('ready_queue_update', { queue: this.readyQueue })
   }
 
-  addClient(res: ServerResponse): void {
+  addClient(res: ServerResponse, corsHeaders?: CorsHeaders): void {
+    const cors = corsHeaders ?? { 'Access-Control-Allow-Origin': '*' }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
+      ...(cors as Record<string, string>),
     })
 
     this.clients.add(res)

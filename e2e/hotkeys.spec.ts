@@ -41,6 +41,7 @@ test.describe('Hotkeys', () => {
 
     test('? does not open palette when input is focused', async ({ page }) => {
       await page.getByTestId('add-root').click()
+      await page.getByTestId('add-root-initiative').click()
       await page.getByRole('textbox').first().focus()
       await page.keyboard.press('?')
       await expect(page.getByTestId('hotkey-palette')).not.toBeVisible()
@@ -49,26 +50,26 @@ test.describe('Hotkeys', () => {
   })
 
   test.describe('Hotgroups', () => {
-    test('Ctrl+1 assigns selected run and shows badge', async ({ page }) => {
+    test('Ctrl+Alt+1 assigns selected run and shows badge', async ({ page }) => {
       await page.getByTestId('canvas-widget-R-241').click()
-      await page.keyboard.press('Control+1')
+      await page.keyboard.press('Control+Alt+1')
       await expect(page.getByTestId('hotgroup-badge-R-241')).toContainText('⌨ 1')
       // Also check sidebar
       const sidebarBadge = page.getByTestId('sidebar-hotgroup-badge-R-241')
       await expect(sidebarBadge).toContainText('⌨ 1')
     })
 
-    test('Ctrl+2 adds second slot — badge shows both', async ({ page }) => {
+    test('Ctrl+Alt+2 adds second slot — badge shows both', async ({ page }) => {
       await page.getByTestId('canvas-widget-R-241').click()
-      await page.keyboard.press('Control+1')
-      await page.keyboard.press('Control+2')
+      await page.keyboard.press('Control+Alt+1')
+      await page.keyboard.press('Control+Alt+2')
       await expect(page.getByTestId('hotgroup-badge-R-241')).toContainText('⌨ 1 2')
     })
 
     test('Ctrl+Shift+1 removes slot 1', async ({ page }) => {
       await page.getByTestId('canvas-widget-R-241').click()
-      await page.keyboard.press('Control+1')
-      await page.keyboard.press('Control+2')
+      await page.keyboard.press('Control+Alt+1')
+      await page.keyboard.press('Control+Alt+2')
       await page.keyboard.press('Control+Shift+1')
       await expect(page.getByTestId('hotgroup-badge-R-241')).toContainText('⌨ 2')
     })
@@ -79,24 +80,13 @@ test.describe('Hotkeys', () => {
       await expect(page.getByTestId('hotgroup-badge-R-241')).not.toBeVisible()
     })
 
-    test('pressing 1 selects the hotgroup', async ({ page }) => {
+    test('Ctrl+1 navigates (zoom-to-fit) to group', async ({ page }) => {
       await page.getByTestId('canvas-widget-R-241').click()
-      await page.keyboard.press('Control+1')
-      await page.getByTestId('infinite-canvas').click({ position: { x: 10, y: 10 } })
-      await page.keyboard.press('1')
-      const widget = page.getByTestId('canvas-widget-R-241')
-      await expect(widget).toHaveAttribute('data-selected', 'true')
-    })
-
-    test('pressing 1 twice zooms to fit hotgroup', async ({ page }) => {
-      await page.getByTestId('canvas-widget-R-241').click()
-      await page.keyboard.press('Control+1')
+      await page.keyboard.press('Control+Alt+1')
       await page.getByTestId('infinite-canvas').click({ position: { x: 10, y: 10 } })
 
       const zoomBefore = await page.getByTestId('zoom-indicator').textContent()
-      await page.keyboard.press('1')
-      await page.waitForTimeout(50)
-      await page.keyboard.press('1')
+      await page.keyboard.press('Control+1')
       await page.waitForTimeout(300)
 
       const zoomAfter = await page.getByTestId('zoom-indicator').textContent()
@@ -105,26 +95,10 @@ test.describe('Hotkeys', () => {
 
     test('pressing 0 works as slot 10', async ({ page }) => {
       await page.getByTestId('canvas-widget-R-241').click()
-      await page.keyboard.press('Control+0')
+      await page.keyboard.press('Control+Alt+0')
       await expect(page.getByTestId('hotgroup-badge-R-241')).toContainText('⌨ 0')
     })
 
-    test('pressing unassigned slot is no-op', async ({ page }) => {
-      await page.keyboard.press('5')
-      await expect(page.getByTestId('hotkey-palette')).not.toBeVisible()
-    })
-
-    test('digit keys do not fire during sidebar node rename', async ({ page }) => {
-      const node = page.getByTestId('sidebar-node-initiative-init-1')
-      await node.hover()
-      await page.getByTestId('menu-initiative-init-1').click({ force: true })
-      const renameBtn = page.getByText('Rename')
-      if (await renameBtn.isVisible()) {
-        await renameBtn.click()
-        await page.keyboard.press('1')
-        await expect(page.getByTestId('hotkey-palette')).not.toBeVisible()
-      }
-    })
   })
 
   test.describe('Tab Navigation', () => {
@@ -253,6 +227,7 @@ test.describe('Hotkeys', () => {
 
     test('Ctrl+Enter does not open dialog when input is focused', async ({ page }) => {
       await page.getByTestId('add-root').click()
+      await page.getByTestId('add-root-initiative').click()
       await page.getByRole('textbox').first().focus()
       await page.keyboard.press('Control+Enter')
       const dialogs = await page.getByRole('dialog').all()
@@ -392,6 +367,7 @@ test.describe('Hotkeys', () => {
 
     test('S does not open dialog when input is focused', async ({ page }) => {
       await page.getByTestId('add-root').click()
+      await page.getByTestId('add-root-initiative').click()
       await page.getByRole('textbox').first().focus()
       await page.keyboard.press('s')
       await expect(page.getByTestId('session-name-input')).not.toBeVisible()

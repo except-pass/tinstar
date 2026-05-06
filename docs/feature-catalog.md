@@ -179,17 +179,6 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 - **Diff view**: Inline diffs with +/- coloring, filename header, chunk headers
 - Auto-scrolls to bottom on tab switch
 
-### Right Panel — Procedures (collapsed by default)
-- Procedure cards with status-dependent display:
-  - idle: play button
-  - queued: spinning hourglass, "In Queue..." label
-  - running: stop button, "Running..." label, amber highlight
-  - complete: check button, "Done" label, green highlight
-  - failed: close button, "Failed" label, red highlight
-- Procedure name in uppercase neon text when active
-- "New_Procedure" button (dashed border) at bottom
-- Collapsible — collapses to thin 6px vertical tab with rotated label
-
 ---
 
 ## Hierarchy Sidebar
@@ -380,7 +369,7 @@ POST   /api/spaces/:id/activate # Set as active space
 - **Activation**: `TINSTAR_FAST_SIM=1` env var
 - **Behavior**: Emits all mock events synchronously at startup (speedMultiplier=0)
 - **Mock data**: 3 initiatives, 6 epics, 10 tasks, 4 worktrees, 14 runs with staggered creation times
-- **Content**: Files, procedures, and recap entries trickle in with realistic timing offsets
+- **Content**: Files and recap entries trickle in with realistic timing offsets
 - **API controls**: `POST /api/simulator/start` (manual start), `POST /api/simulator/reset` (clear and reset)
 - **Persistence interaction**: When `TINSTAR_FAST_SIM=1`, clears persisted store before running to ensure clean mock state
 
@@ -414,9 +403,8 @@ POST   /api/spaces/:id/activate # Set as active space
 ## Data Model
 
 - **Hierarchy**: Initiative → Epic → Task → Run
-- Each run has: touched files, recap entries, raw logs, procedures
+- Each run has: touched files, recap entries, raw logs
 - **SessionStatus (SSOT)**: `'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped' | 'terminated'` — single type in `src/types.ts`, aliased as `RunStatus` and `SessionState`
-- Procedure statuses: idle, queued, running, complete, failed
 - **Run ↔ Task resolution**: `run.taskId` → task → `task.epicId` → epic → `task.initiativeId` → initiative (resolved by `TaxonomyRepository.resolveDimension`)
 
 ---

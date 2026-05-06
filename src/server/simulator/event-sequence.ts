@@ -74,10 +74,10 @@ export function buildEventSequence(): TimedEvent[] {
 
     // Recap entries come after files
     const filesDone = baseDelay + 50 + run.touchedFiles.length * 30
-    const procsDone = filesDone + 20
+    const recapStart = filesDone + 20
     for (let r = 0; r < run.recapEntries.length; r++) {
       events.push({
-        delayMs: procsDone + 15 + r * 20,
+        delayMs: recapStart + 15 + r * 20,
         event: {
           type: 'run.recap_added',
           timestamp: now(),

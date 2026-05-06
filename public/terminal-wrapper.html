@@ -75,10 +75,24 @@
       hideError()
       if (loadTimer) { clearTimeout(loadTimer); loadTimer = null }
 
+      // Resolve session/port URLs against the backend, not the wrapper's own origin.
+      // In Tauri the wrapper is served from tauri://localhost, so a relative
+      // '/s/SESSION/' would hit Tauri's protocol handler (returns index.html),
+      // creating an inception of the whole app inside the terminal slot.
+      // Read parent's __TINSTAR_API_BASE__ to find the real backend origin.
+      var apiBase = ''
+      try { apiBase = (window.parent && window.parent.__TINSTAR_API_BASE__) || '' } catch(e) {}
+
       if (session) {
-        termEl.src = '/s/' + session + '/'
+        termEl.src = apiBase + '/s/' + session + '/'
       } else if (port) {
-        termEl.src = 'http://localhost:' + port + '/'
+        // localhost won't work when the desktop app and backend are on different
+        // machines; derive the host from apiBase when present.
+        var host = 'localhost'
+        if (apiBase) {
+          try { host = new URL(apiBase).hostname } catch(e) {}
+        }
+        termEl.src = 'http://' + host + ':' + port + '/'
       } else {
         showError('No session or port specified')
         return

@@ -4,8 +4,8 @@
 import { execSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 import { request as httpRequest } from 'node:http'
+import { getConfigRoot } from './configRoot.js'
 
 // ── Formatting ──
 
@@ -113,7 +113,7 @@ function sseCheck(url, timeoutMs = 4000) {
 
 // ── Config paths ──
 
-const ROOT = join(homedir(), '.config', 'tinstar')
+const ROOT = getConfigRoot()
 const DOCSTORE = join(ROOT, 'docstore.json')
 const CONFIG_FILE = join(ROOT, 'config.json')
 const SESSIONS_DIR = join(ROOT, 'sessions')
@@ -186,7 +186,7 @@ async function doctor() {
     const c = { status: 'fail', label: `${ROOT} — missing`, detail: 'run tinstar once to initialize' }
     configChecks.push(c)
   } else {
-    configChecks.push({ status: 'pass', label: `~/.config/tinstar/ exists` })
+    configChecks.push({ status: 'pass', label: `${ROOT} exists` })
   }
 
   // config.json
@@ -516,11 +516,85 @@ async function doctor() {
   process.exit(issues.some(i => i.status === 'fail') ? 1 : 0)
 }
 
-export { doctor }
+// ── Tauri build-dependency check ──
+//
+// Developers building Tinstar from source need platform-specific `-dev`
+// libraries that cargo links against at build time. End users running a
+// shipped .dmg/.msi/.deb/.AppImage do NOT need these — the OS or the package
+// manager covers their runtime needs. This `--tauri-dev` mode is the gate
+// that tells a developer whether their box can build the Tauri shell.
+
+function checkTauriDev() {
+  const platform = process.platform
+  console.log(`\n${BOLD}Tinstar Doctor — Tauri build dependencies${RESET} ${DIM}(developers only)${RESET}`)
+
+  if (platform === 'darwin') {
+    try {
+      const path = execSync('xcode-select -p', { encoding: 'utf-8', stdio: 'pipe' }).trim()
+      if (!path) throw new Error('empty path')
+      printCheck({ status: 'pass', label: 'Xcode Command Line Tools', detail: path })
+      console.log()
+      return true
+    } catch {
+      printCheck({ status: 'fail', label: 'Xcode Command Line Tools — not found', detail: 'run: xcode-select --install' })
+      console.log()
+      return false
+    }
+  }
+
+  if (platform === 'linux') {
+    const debDeps = [
+      ['webkit2gtk-4.1', 'libwebkit2gtk-4.1-dev'],
+      ['gtk+-3.0', 'libgtk-3-dev'],
+      ['ayatana-appindicator3-0.1', 'libayatana-appindicator3-dev'],
+      ['librsvg-2.0', 'librsvg2-dev'],
+    ]
+    let allOk = true
+    for (const [pkg, deb] of debDeps) {
+      try {
+        execSync(`pkg-config --exists ${pkg}`, { stdio: 'pipe' })
+        printCheck({ status: 'pass', label: `${pkg}`, detail: deb })
+      } catch {
+        printCheck({ status: 'fail', label: `${pkg} — missing`, detail: `apt package: ${deb}` })
+        allOk = false
+      }
+    }
+    if (!allOk) {
+      const missing = debDeps.map(([, d]) => d).join(' ')
+      console.log(`\n${DIM}Install with:${RESET}`)
+      console.log(`  sudo apt install -y ${missing} build-essential curl wget file libssl-dev`)
+      console.log(`${DIM}(or your distro's equivalent for webkit2gtk-4.1, gtk+-3.0, ayatana-appindicator3, librsvg2)${RESET}`)
+    }
+    console.log()
+    return allOk
+  }
+
+  if (platform === 'win32') {
+    try {
+      execSync('where cl.exe', { stdio: 'pipe' })
+      printCheck({ status: 'pass', label: 'Visual Studio Build Tools (cl.exe)' })
+      console.log()
+      return true
+    } catch {
+      printCheck({ status: 'fail', label: 'Visual Studio Build Tools — cl.exe not found', detail: 'install: https://visualstudio.microsoft.com/visual-cpp-build-tools/' })
+      console.log()
+      return false
+    }
+  }
+
+  console.log(`${DIM}Unknown platform ${platform} — no Tauri build-deps check.${RESET}\n`)
+  return true
+}
+
+export { doctor, checkTauriDev }
 
 // Auto-run when invoked directly
 const isDirectRun = process.argv[1]?.endsWith('doctor.js')
 if (isDirectRun) {
+  if (process.argv.includes('--tauri-dev')) {
+    const ok = checkTauriDev()
+    process.exit(ok ? 0 : 1)
+  }
   doctor().catch(err => {
     console.error(err)
     process.exit(1)

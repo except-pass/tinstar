@@ -23,6 +23,7 @@ function makeFakeQuery(result: HudSnapshot | (() => HudSnapshot) | Error) {
       if (typeof result === 'function') return result()
       return result
     }),
+    burningSessions: async () => [],
   }
 }
 
@@ -78,6 +79,7 @@ function makeDeps(
     restart: vi.fn(async () => {}),
     getDefaultUserEmail: () => 'test@example.com',
     getSessionConversationId: () => null,
+    getRunIdsForConversationIds: () => [],
   }
 }
 
@@ -178,6 +180,100 @@ describe('GET /api/telemetry/session/:name', () => {
   })
 })
 
+describe('GET /api/telemetry/sessions (batch)', () => {
+  it('returns 400 when names query param is missing', async () => {
+    const sse = makeFakeSSE()
+    const deps = makeDeps('ready', null, sse)
+    const routes = createTelemetryRoutes(deps)
+
+    const req = makeReq('GET', '/api/telemetry/sessions')
+    const res = makeRes()
+
+    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/sessions')
+
+    expect(handled).toBe(true)
+    expect((res as unknown as FakeRes).statusCode).toBe(400)
+    expect((res as unknown as FakeRes).parsedBody).toMatchObject({ error: expect.any(String) })
+  })
+
+  it('returns empty object for names=""', async () => {
+    const sse = makeFakeSSE()
+    const snap = makeReadySnapshot()
+    const query = makeFakeQuery(snap)
+    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    const routes = createTelemetryRoutes(deps)
+
+    const req = makeReq('GET', '/api/telemetry/sessions?names=')
+    const res = makeRes()
+
+    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/sessions')
+
+    expect(handled).toBe(true)
+    expect((res as unknown as FakeRes).statusCode).toBe(200)
+    expect((res as unknown as FakeRes).parsedBody).toEqual({})
+  })
+
+  it('returns a map keyed by session name for comma-separated list', async () => {
+    const sse = makeFakeSSE()
+    const snap = makeReadySnapshot()
+    const query = makeFakeQuery(snap)
+    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    const routes = createTelemetryRoutes(deps)
+
+    const req = makeReq('GET', '/api/telemetry/sessions?names=foo,bar,baz')
+    const res = makeRes()
+
+    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/sessions')
+
+    expect(handled).toBe(true)
+    expect((res as unknown as FakeRes).statusCode).toBe(200)
+    const body = (res as unknown as FakeRes).parsedBody as Record<string, HudSnapshot | null>
+    expect(Object.keys(body).sort()).toEqual(['bar', 'baz', 'foo'])
+    expect(body.foo?.state).toBe('ready')
+    expect(body.bar?.state).toBe('ready')
+    expect(body.baz?.state).toBe('ready')
+  })
+
+  it('URL-decodes session names', async () => {
+    const sse = makeFakeSSE()
+    const snap = makeReadySnapshot()
+    const query = makeFakeQuery(snap)
+    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    const routes = createTelemetryRoutes(deps)
+
+    const req = makeReq('GET', '/api/telemetry/sessions?names=foo%2Fbar,baz%20qux')
+    const res = makeRes()
+
+    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/sessions')
+
+    expect(handled).toBe(true)
+    const body = (res as unknown as FakeRes).parsedBody as Record<string, HudSnapshot | null>
+    expect(Object.keys(body).sort()).toEqual(['baz qux', 'foo/bar'])
+  })
+
+  it('returns null for the name when buildSnapshot would otherwise fail', async () => {
+    // Force buildSnapshot into the degraded path: state=ready but query throws.
+    // Note buildSnapshot catches and returns a degraded snapshot, so result is non-null
+    // (which is the documented contract). This test pins that behavior so the
+    // batch endpoint never throws on a per-name failure.
+    const sse = makeFakeSSE()
+    const query = makeFakeQuery(new Error('prom down'))
+    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    const routes = createTelemetryRoutes(deps)
+
+    const req = makeReq('GET', '/api/telemetry/sessions?names=alpha,beta')
+    const res = makeRes()
+
+    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/sessions')
+
+    expect(handled).toBe(true)
+    expect((res as unknown as FakeRes).statusCode).toBe(200)
+    const body = (res as unknown as FakeRes).parsedBody as Record<string, HudSnapshot | null>
+    expect(body.alpha?.state).toBe('degraded')
+    expect(body.beta?.state).toBe('degraded')
+  })
+})
+
 describe('POST /api/telemetry/restart', () => {
   it('calls deps.restart() and responds {ok: true}', async () => {
     const sse = makeFakeSSE()
@@ -191,6 +287,7 @@ describe('POST /api/telemetry/restart', () => {
       restart,
       getDefaultUserEmail: () => 'test@example.com',
       getSessionConversationId: () => null,
+      getRunIdsForConversationIds: () => [],
     }
     const routes = createTelemetryRoutes(deps)
 
@@ -234,6 +331,7 @@ describe('startPolling — change detection', () => {
     ]
     const query = {
       todayHud: vi.fn(async () => snapshots[Math.min(callCount++, snapshots.length - 1)]),
+      burningSessions: async () => [],
     }
     const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
     const routes = createTelemetryRoutes(deps)

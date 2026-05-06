@@ -9,14 +9,10 @@ export type {
   DiffBlock,
   RecapEntry,
   TouchedFile,
-  StoredProcedure,
-  ResolvedProcedure,
-  PendingSkill,
-  SkillDTO,
   RunData,
 } from '../types'
 
-import type { RunData, SessionStatus as RunStatus, StoredProcedure } from '../types'
+import type { RunData, SessionStatus as RunStatus } from '../types'
 
 // --- Entity settings (closest-ancestor inheritance) ---
 
@@ -28,7 +24,6 @@ export interface EntitySettings {
   skipPermissions?: boolean
   cliTemplate?: string
   defaultRunColor?: string
-  procedures?: StoredProcedure[]
 }
 
 export interface ResolvedSettings {
@@ -153,6 +148,15 @@ export interface NatsTrafficWidget {
   sessionId: string  // Filter to show traffic for a specific session, or empty for all
   subscriptions: string[]  // NATS subjects to subscribe to (e.g., "tinstar.>")
   color?: string
+}
+
+export interface TopicMetadata {
+  subject: string
+  name?: string
+  description?: string
+  kind: 'broadcast' | 'dm' | 'breakout' | 'custom'
+  createdAt: string
+  createdBy?: string
 }
 
 // --- Grouping ---

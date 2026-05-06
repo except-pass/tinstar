@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { apiFetch } from '../apiClient'
 
 interface SessionInfo {
   name: string
@@ -28,7 +29,7 @@ export function SessionsList({ onOpenSession }: Props) {
   const deletingRef = useRef<Set<string>>(new Set())
 
   const fetchSessions = useCallback(() => {
-    fetch('/api/sessions')
+    apiFetch('/api/sessions')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         let data: SessionInfo[] = []
@@ -55,7 +56,7 @@ export function SessionsList({ onOpenSession }: Props) {
   const handleStop = useCallback(async (name: string) => {
     setActionError(null)
     try {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(name)}/stop`, { method: 'POST' })
+      const res = await apiFetch(`/api/sessions/${encodeURIComponent(name)}/stop`, { method: 'POST' })
       const data = await res.json().catch(() => null)
       if (!res.ok || (data && !data.ok)) {
         setActionError({ name, msg: data?.error?.message ?? `Stop failed (${res.status})` })
@@ -71,7 +72,7 @@ export function SessionsList({ onOpenSession }: Props) {
   const handleStart = useCallback(async (name: string) => {
     setActionError(null)
     try {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(name)}/start`, { method: 'POST' })
+      const res = await apiFetch(`/api/sessions/${encodeURIComponent(name)}/start`, { method: 'POST' })
       const data = await res.json().catch(() => null)
       if (!res.ok || (data && !data.ok)) {
         setActionError({ name, msg: data?.error?.message ?? `Start failed (${res.status})` })
@@ -91,7 +92,7 @@ export function SessionsList({ onOpenSession }: Props) {
     deletingRef.current.add(name)
     setSessions(prev => prev.filter(s => s.name !== name))
     try {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      const res = await apiFetch(`/api/sessions/${encodeURIComponent(name)}`, { method: 'DELETE' })
       const data = await res.json().catch(() => null)
       if (!res.ok || (data && !data.ok)) {
         // Undo optimistic removal

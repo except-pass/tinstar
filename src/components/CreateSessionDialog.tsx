@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { ColorPalette, pickRandomPaletteColor } from './ColorPalette'
 import { isIconUrl } from './agentIcon'
+import { apiFetch } from '../apiClient'
 
 export interface SessionPrefill {
   project?: string
@@ -109,7 +110,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
 
   // Fetch projects list and entities
   useEffect(() => {
-    fetch('/api/projects')
+    apiFetch('/api/projects')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.ok && d.data && typeof d.data === 'object') {
@@ -118,7 +119,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       })
       .catch(() => {})
 
-    fetch('/api/cli-templates')
+    apiFetch('/api/cli-templates')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.ok && Array.isArray(d.data)) {
@@ -131,14 +132,14 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       })
       .catch(() => {})
 
-    fetch('/api/patterns')
+    apiFetch('/api/patterns')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.ok && Array.isArray(d.data)) setPatterns(d.data)
       })
       .catch(() => {})
 
-    fetch('/api/state')
+    apiFetch('/api/state')
       .then(r => r.ok ? r.json() : null)
       .then(state => {
         if (!state) return
@@ -153,7 +154,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
 
   // Fetch docker image profiles (always, so they appear in the unified dropdown)
   useEffect(() => {
-    fetch('/api/docker/profiles')
+    apiFetch('/api/docker/profiles')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.ok && Array.isArray(d.data)) setProfiles(d.data)
@@ -168,7 +169,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       setWorktreePath('')
       return
     }
-    fetch(`/api/projects/${encodeURIComponent(project)}/worktrees`)
+    apiFetch(`/api/projects/${encodeURIComponent(project)}/worktrees`)
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.ok && Array.isArray(d.data)) {
@@ -206,7 +207,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
     if (pattern) body.pattern = pattern
 
     try {
-      const res = await fetch('/api/sessions', {
+      const res = await apiFetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -387,7 +388,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
                   onKeyDown={e => {
                     if (e.key === 'Enter' && newProjectPath.trim()) {
                       const name = newProjectPath.trim().split('/').pop() || 'project'
-                      fetch('/api/projects', {
+                      apiFetch('/api/projects', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ name, path: newProjectPath.trim() }),

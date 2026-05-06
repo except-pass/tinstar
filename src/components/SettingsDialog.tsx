@@ -3,6 +3,7 @@ import { useDimensionMeta, autoPlural } from '../hooks/useDimensionMeta'
 import { useBackendState } from '../hooks/useBackendState'
 import type { LevelLabel } from '../domain/types'
 import { AgentIcon, isIconUrl } from './agentIcon'
+import { apiFetch } from '../apiClient'
 
 interface Project {
   name: string
@@ -86,7 +87,7 @@ export function SettingsDialog({ onClose }: Props) {
   )
 
   const fetchProjects = useCallback(() => {
-    fetch('/api/projects')
+    apiFetch('/api/projects')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.ok && d.data && typeof d.data === 'object') {
@@ -105,21 +106,21 @@ export function SettingsDialog({ onClose }: Props) {
   }, [])
 
   const fetchTemplates = useCallback(() => {
-    fetch('/api/cli-templates')
+    apiFetch('/api/cli-templates')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.ok) setTemplates(d.data ?? []) })
       .catch(() => {})
   }, [])
 
   const fetchProfiles = useCallback(() => {
-    fetch('/api/docker/profiles')
+    apiFetch('/api/docker/profiles')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.ok) setProfiles(d.data ?? []) })
       .catch(() => {})
   }, [])
 
   const fetchDockerImages = useCallback(() => {
-    fetch('/api/docker/images')
+    apiFetch('/api/docker/images')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.ok) setDockerImages(d.data ?? []) })
       .catch(() => {})
@@ -130,7 +131,7 @@ export function SettingsDialog({ onClose }: Props) {
     fetchTemplates()
     fetchProfiles()
     fetchDockerImages()
-    fetch('/api/config')
+    apiFetch('/api/config')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.ok && typeof d.data?.editor === 'string') setEditorCmd(d.data.editor) })
       .catch(() => {})
@@ -142,7 +143,7 @@ export function SettingsDialog({ onClose }: Props) {
     if (!trimName || !trimPath) return
     setError(null)
 
-    const res = await fetch('/api/projects', {
+    const res = await apiFetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: trimName, path: trimPath }),
@@ -158,7 +159,7 @@ export function SettingsDialog({ onClose }: Props) {
   }, [newName, newPath, fetchProjects])
 
   const handleDelete = useCallback(async (name: string) => {
-    await fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    await apiFetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' })
     fetchProjects()
   }, [fetchProjects])
 
@@ -169,7 +170,7 @@ export function SettingsDialog({ onClose }: Props) {
     if (!trimName || !trimStart || !trimResume) return
     setTemplateError(null)
 
-    const res = await fetch('/api/cli-templates', {
+    const res = await apiFetch('/api/cli-templates', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: trimName, icon: newTplIcon.trim() || undefined, adapter: newTplAdapter, telemetry: newTplTelemetry, startCmd: trimStart, resumeCmd: trimResume }),
@@ -189,7 +190,7 @@ export function SettingsDialog({ onClose }: Props) {
   }, [newTplName, newTplStart, newTplResume, fetchTemplates])
 
   const handleDeleteTemplate = useCallback(async (name: string) => {
-    await fetch(`/api/cli-templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    await apiFetch(`/api/cli-templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
     fetchTemplates()
   }, [fetchTemplates])
 
@@ -201,7 +202,7 @@ export function SettingsDialog({ onClose }: Props) {
   const handleSaveTemplate = useCallback(async () => {
     if (!editDraft || !editingTemplate) return
     setTemplateError(null)
-    const res = await fetch(`/api/cli-templates/${encodeURIComponent(editingTemplate)}`, {
+    const res = await apiFetch(`/api/cli-templates/${encodeURIComponent(editingTemplate)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(editDraft),
@@ -231,7 +232,7 @@ export function SettingsDialog({ onClose }: Props) {
     setNewProfileName('')
     setSelectedImage('')
 
-    const res = await fetch('/api/docker/profiles', {
+    const res = await apiFetch('/api/docker/profiles', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: trimName, image: selectedImage }),
@@ -246,7 +247,7 @@ export function SettingsDialog({ onClose }: Props) {
   }, [newProfileName, selectedImage])
 
   const handleDeleteProfile = useCallback(async (name: string) => {
-    await fetch(`/api/docker/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    await apiFetch(`/api/docker/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' })
     fetchProfiles()
   }, [fetchProfiles])
 
@@ -254,7 +255,7 @@ export function SettingsDialog({ onClose }: Props) {
     if (!activeSpaceId) return
     setLabelsSaving(true)
     try {
-      const res = await fetch(`/api/spaces/${activeSpaceId}`, {
+      const res = await apiFetch(`/api/spaces/${activeSpaceId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ labelConfig: { levels: labelLevels } }),
@@ -741,7 +742,7 @@ export function SettingsDialog({ onClose }: Props) {
                 onChange={e => { setEditorCmd(e.target.value); setEditorSaved(false) }}
                 onKeyDown={e => {
                   if (e.key === 'Enter' && editorCmd.trim()) {
-                    fetch('/api/config', {
+                    apiFetch('/api/config', {
                       method: 'PATCH',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ editor: editorCmd }),
@@ -755,7 +756,7 @@ export function SettingsDialog({ onClose }: Props) {
                 className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30 disabled:opacity-50 flex-shrink-0"
                 disabled={!editorCmd.trim()}
                 onClick={() => {
-                  fetch('/api/config', {
+                  apiFetch('/api/config', {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ editor: editorCmd }),

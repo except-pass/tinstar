@@ -14,7 +14,6 @@ import HierarchySidebar from './HierarchySidebar'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { SelectionProvider, useSelection } from './SelectionProvider'
 import { TaxonomyProvider } from './TaxonomyContext'
-import { SkillsProvider } from './SkillsProvider'
 import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
 import { HotgroupProvider } from '../hotkeys/HotgroupContext'
@@ -24,6 +23,7 @@ import { triggerWidgetFlourish, registerActionHandler, deregisterActionHandler }
 import type { FocusNode } from '../hotkeys/FocusPathContext'
 import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
+import { apiFetch } from '../apiClient'
 
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
@@ -67,7 +67,7 @@ function WorkspaceShellInner() {
     // Use bottom-N defaults matching the stored count
     const levels: LevelLabel[] = DEFAULT_LEVELS.slice(DEFAULT_LEVELS.length - count)
 
-    fetch(`/api/spaces/${activeSpaceId}`, {
+    apiFetch(`/api/spaces/${activeSpaceId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ labelConfig: { levels } }),
@@ -345,7 +345,7 @@ function WorkspaceShellInner() {
       deepLinkApplied.current = true
       const urlSpaceId = new URLSearchParams(location.search).get('space')
       if (urlSpaceId && spaces.some(s => s.id === urlSpaceId) && urlSpaceId !== activeSpaceId) {
-        fetch(`/api/spaces/${urlSpaceId}/activate`, { method: 'POST' })
+        apiFetch(`/api/spaces/${urlSpaceId}/activate`, { method: 'POST' })
         return // URL already has the right space param
       }
     }
@@ -361,28 +361,28 @@ function WorkspaceShellInner() {
 
   // Space actions
   const handleActivateSpace = useCallback(async (id: string) => {
-    await fetch(`/api/spaces/${id}/activate`, { method: 'POST' })
+    await apiFetch(`/api/spaces/${id}/activate`, { method: 'POST' })
     const url = new URL(location.href)
     url.searchParams.set('space', id)
     window.location.href = url.toString()
   }, [])
 
   const handleCreateSpace = useCallback(async (name: string) => {
-    const res = await fetch('/api/spaces', {
+    const res = await apiFetch('/api/spaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     })
     if (!res.ok) return
     const space = await res.json() as { id: string }
-    await fetch(`/api/spaces/${space.id}/activate`, { method: 'POST' })
+    await apiFetch(`/api/spaces/${space.id}/activate`, { method: 'POST' })
     const url = new URL(location.href)
     url.searchParams.set('space', space.id)
     window.location.href = url.toString()
   }, [])
 
   const handleRenameSpace = useCallback((id: string, name: string) => {
-    fetch(`/api/spaces/${id}`, {
+    apiFetch(`/api/spaces/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
@@ -390,7 +390,7 @@ function WorkspaceShellInner() {
   }, [])
 
   const handleDeleteSpace = useCallback((id: string) => {
-    fetch(`/api/spaces/${id}`, { method: 'DELETE' })
+    apiFetch(`/api/spaces/${id}`, { method: 'DELETE' })
   }, [])
 
   const handleRename = useCallback((entityId: string, type: GroupingDimension, newName: string) => {
@@ -411,23 +411,23 @@ function WorkspaceShellInner() {
 
   const handleDelete = useCallback((entityId: string, type: GroupingDimension | string) => {
     if (type === 'run') {
-      fetch(`/api/sessions/${entityId}`, { method: 'DELETE' })
+      apiFetch(`/api/sessions/${entityId}`, { method: 'DELETE' })
       return
     }
     if (type === 'file-editor') {
-      fetch(`/api/editor-widgets/${entityId}`, { method: 'DELETE' })
+      apiFetch(`/api/editor-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
     if (type === 'browser-widget') {
-      fetch(`/api/browser-widgets/${entityId}`, { method: 'DELETE' })
+      apiFetch(`/api/browser-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
     if (type === 'image-viewer') {
-      fetch(`/api/image-widgets/${entityId}`, { method: 'DELETE' })
+      apiFetch(`/api/image-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
     if (type === 'nats-traffic') {
-      fetch(`/api/nats-traffic-widgets/${entityId}`, { method: 'DELETE' })
+      apiFetch(`/api/nats-traffic-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
     const endpointMap: Record<string, string> = {
@@ -504,7 +504,7 @@ function WorkspaceShellInner() {
       return
     }
     try {
-      const res = await fetch(`/api/${endpoint}/${entityMenu.entityId}/settings`)
+      const res = await apiFetch(`/api/${endpoint}/${entityMenu.entityId}/settings`)
       const data = await res.json()
       const entityLinks: Record<string, string | undefined> = {}
       if (entityMenu.entityType === 'task') entityLinks.taskId = entityMenu.entityId
@@ -661,7 +661,7 @@ function WorkspaceShellInner() {
       }
       const rawId = firstNodeId.startsWith('task-') ? firstNodeId.slice(5) : firstNodeId
       try {
-        const res = await fetch(`/api/tasks/${rawId}/settings`)
+        const res = await apiFetch(`/api/tasks/${rawId}/settings`)
         const data = await res.json()
         if (data.ok) {
           const resolved = data.data.resolved
@@ -730,7 +730,7 @@ function WorkspaceShellInner() {
   }, [])
 
   const handleTaskUpdate = useCallback((taskId: string, patch: { externalUrl?: string | null }) => {
-    void fetch(`/api/tasks/${taskId}`, {
+    void apiFetch(`/api/tasks/${taskId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -760,7 +760,6 @@ function WorkspaceShellInner() {
       {activeSpaceId ? (
         <HotgroupProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
-          <SkillsProvider>
             <div className="flex h-screen w-screen bg-surface-base text-slate-200 font-mono">
               {/* Left column: top bar + sidebar stacked — canvas gets full height */}
               {sidebarCollapsed ? (
@@ -956,7 +955,6 @@ function WorkspaceShellInner() {
                 />
               )}
             </div>
-          </SkillsProvider>
           </TaxonomyProvider>
         </HotgroupProvider>
       ) : (

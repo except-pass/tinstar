@@ -6,6 +6,7 @@ import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { HotgroupBadge } from '../../components/HotgroupBadge'
+import { apiFetch } from '../../apiClient'
 
 export function ImageViewerWidget({ data }: WidgetProps) {
   const widget = data as ImageWidget
@@ -20,7 +21,7 @@ export function ImageViewerWidget({ data }: WidgetProps) {
     : `/api/image-file?session=${encodeURIComponent(widget.sessionId)}&path=${encodeURIComponent(widget.filePath)}`
 
   const handleOpenInEditor = useCallback(() => {
-    fetch('/api/editor/open', {
+    apiFetch('/api/editor/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: widget.filePath, sessionId: widget.sessionId }),
@@ -28,7 +29,7 @@ export function ImageViewerWidget({ data }: WidgetProps) {
   }, [widget.filePath, widget.sessionId])
 
   const handleClose = useCallback(() => {
-    fetch(`/api/image-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
+    apiFetch(`/api/image-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
   }, [widget.id])
 
   const [now, setNow] = useState(() => Date.now())

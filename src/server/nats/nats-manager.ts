@@ -1,4 +1,3 @@
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { connect } from 'nats'
@@ -6,6 +5,7 @@ import { Supervisor } from '../infra/supervisor.js'
 import { installBinary } from '../infra/binaries.js'
 import { resolveNatsTarget } from './manifest.js'
 import { log } from '../logger.js'
+import { getConfigRoot } from '../configRoot.js'
 import type { ServiceState } from '../infra/types.js'
 
 const DEFAULT_PORT = 4222
@@ -26,7 +26,7 @@ export class NatsManager {
       ? 0
       : parseInt(process.env.NATS_PORT ?? String(opts?.port ?? DEFAULT_PORT), 10)
     this.url = externalUrl ?? `nats://127.0.0.1:${this.port}`
-    this.configRoot = opts?.configRoot ?? join(homedir(), '.config', 'tinstar')
+    this.configRoot = opts?.configRoot ?? getConfigRoot()
   }
 
   async start(): Promise<void> {
@@ -50,7 +50,13 @@ export class NatsManager {
 
     const binRoot = join(this.configRoot, 'bin')
     const stateDir = join(this.configRoot, 'nats')
+    // JetStream needs its own dir for stream storage; keep it under the
+    // existing nats state dir but separate from the supervisor's state files.
+    // Always-on so channel-servers passing --jetstream just work; clients
+    // that don't pass it use core pub/sub unchanged.
+    const jetstreamDir = join(stateDir, 'jetstream')
     mkdirSync(stateDir, { recursive: true })
+    mkdirSync(jetstreamDir, { recursive: true })
 
     try {
       this.state = 'downloading'
@@ -63,7 +69,7 @@ export class NatsManager {
       this.supervisor = new Supervisor({
         name: 'nats-server',
         binaryPath: install.binaryPath,
-        args: ['-a', '127.0.0.1', '-p', String(this.port)],
+        args: ['-a', '127.0.0.1', '-p', String(this.port), '-js', '-sd', jetstreamDir],
         stateDir,
         port: this.port,
         probe: () => this.probe(),

@@ -2,7 +2,8 @@
 declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
 import { useSyncExternalStore, useCallback } from 'react'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget } from '../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata } from '../domain/types'
+import { apiUrl } from '../apiClient'
 
 interface ServerState {
   activeSpaceId: string
@@ -16,6 +17,7 @@ interface ServerState {
   browserWidgets: BrowserWidget[]
   imageWidgets: ImageWidget[]
   natsTrafficWidgets: NatsTrafficWidget[]
+  topicMetadata: TopicMetadata[]
   readyQueue: string[]
 }
 
@@ -31,6 +33,7 @@ const EMPTY_STATE: ServerState = {
   browserWidgets: [],
   imageWidgets: [],
   natsTrafficWidgets: [],
+  topicMetadata: [],
   readyQueue: [],
 }
 
@@ -86,15 +89,17 @@ function subscribe(listener: () => void): () => void {
 function startSSE() {
   if (es) return
 
-  const sseUrl = import.meta.env.DEV && typeof __TINSTAR_BACKEND_PORT__ !== 'undefined'
-    ? `http://${location.hostname}:${__TINSTAR_BACKEND_PORT__}/api/events`
-    : '/api/events'
+  const devBase =
+    import.meta.env.DEV && typeof __TINSTAR_BACKEND_PORT__ !== 'undefined'
+      ? `http://${location.hostname}:${__TINSTAR_BACKEND_PORT__}`
+      : null
+  const sseUrl = devBase ? `${devBase}/api/events` : apiUrl('/api/events')
 
-  es = new EventSource(sseUrl)
+  es = new EventSource(sseUrl, { withCredentials: true })
 
   es.addEventListener('snapshot', (e: MessageEvent) => {
     const snapshot = JSON.parse(e.data) as ServerState & { ready_queue?: string[] }
-    currentState = { ...snapshot, readyQueue: snapshot.ready_queue ?? [] }
+    currentState = { ...snapshot, readyQueue: snapshot.ready_queue ?? [], topicMetadata: snapshot.topicMetadata ?? [] }
     uiBundle = { ...uiBundle, state: currentState, loading: false }
     notify()
   })
@@ -108,14 +113,6 @@ function startSSE() {
     }
     currentState = applyDelta(currentState, delta)
     pushState()
-  })
-
-  es.addEventListener('skill.drafted', (e: MessageEvent) => {
-    window.dispatchEvent(new CustomEvent('tinstar:skill.drafted', { detail: e.data }))
-  })
-
-  es.addEventListener('skill.saved', (e: MessageEvent) => {
-    window.dispatchEvent(new CustomEvent('tinstar:skill.saved', { detail: e.data }))
   })
 
   es.addEventListener('file_watch', (e: MessageEvent) => {
@@ -246,6 +243,14 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
     const w = delta.data as NatsTrafficWidget
     const idx = nws.findIndex(x => x.id === w.id)
     return { ...prev, natsTrafficWidgets: idx >= 0 ? nws.map((x, i) => (i === idx ? w : x)) : [...nws, w] }
+  }
+
+  if (delta.entity === 'topicMetadata') {
+    const tms = prev.topicMetadata
+    if (delta.data === null) return { ...prev, topicMetadata: tms.filter(m => m.subject !== delta.id) }
+    const m = delta.data as TopicMetadata
+    const idx = tms.findIndex(x => x.subject === m.subject)
+    return { ...prev, topicMetadata: idx >= 0 ? tms.map((x, i) => (i === idx ? m : x)) : [...tms, m] }
   }
 
   if (delta.entity === 'commit') {

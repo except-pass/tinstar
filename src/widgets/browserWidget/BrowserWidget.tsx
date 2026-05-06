@@ -6,6 +6,7 @@ import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { HotgroupBadge } from '../../components/HotgroupBadge'
+import { apiFetch } from '../../apiClient'
 
 function proxyUrl(widgetId: string, targetUrl: string): string {
   try {
@@ -70,6 +71,7 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
   useEffect(() => {
     registerActionHandler(widget.id, (action) => {
       if (action === 'fit-viewport') fitWidgetToViewport(widget.id)
+      else if (action === 'reload') reloadRef.current()
     })
     return () => deregisterActionHandler(widget.id)
   }, [widget.id])
@@ -81,7 +83,7 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
     setInputValue(normalized)
     setEditing(false)
     if (normalized) {
-      fetch(`/api/browser-widgets/${widget.id}`, {
+      apiFetch(`/api/browser-widgets/${widget.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: normalized }),
@@ -98,7 +100,7 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
   }, [inputValue, url, navigate])
 
   const handleClose = useCallback(() => {
-    fetch(`/api/browser-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
+    apiFetch(`/api/browser-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
   }, [widget.id])
 
   const reload = useCallback(() => {
@@ -106,6 +108,9 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
     setUrl('')
     requestAnimationFrame(() => setUrl(current))
   }, [url])
+
+  const reloadRef = useRef(reload)
+  reloadRef.current = reload
 
   // Always proxy so the iframe works when Tinstar is accessed via a remote hostname
   // (e.g. Tailscale) — without proxying, localhost URLs would resolve on the user's
@@ -295,7 +300,7 @@ function HeadersEditor({ widgetId, headers, onClose }: { widgetId: string; heade
       const k = key.trim()
       if (k) hdrs[k] = value
     }
-    fetch(`/api/browser-widgets/${widgetId}`, {
+    apiFetch(`/api/browser-widgets/${widgetId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ headers: hdrs }),

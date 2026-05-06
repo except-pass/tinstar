@@ -9,6 +9,7 @@ import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/ac
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
 import { HotgroupBadge } from '../../components/HotgroupBadge'
+import { apiFetch } from '../../apiClient'
 
 function getLanguage(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -53,7 +54,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
   const fetchBaseContent = useCallback(() => {
     setDiffLoading(true)
     baseFetchedRef.current = true
-    fetch('/api/file-content/git-base', {
+    apiFetch('/api/file-content/git-base', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: widget.sessionId, filePath: widget.filePath }),
@@ -100,7 +101,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOpenInEditor = useCallback(() => {
-    fetch('/api/editor/open', {
+    apiFetch('/api/editor/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: widget.filePath, sessionId: widget.sessionId }),
@@ -108,7 +109,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
   }, [widget.filePath, widget.sessionId])
 
   const handleClose = useCallback(() => {
-    fetch(`/api/editor-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
+    apiFetch(`/api/editor-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
   }, [widget.id])
 
   const [wordWrap, setWordWrap] = useState(false)
