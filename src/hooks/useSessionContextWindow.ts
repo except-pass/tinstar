@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { apiFetch } from '../apiClient'
 
 export interface SessionContextWindow {
   usedPercentage: number
@@ -17,7 +18,7 @@ export function useSessionContextWindow(sessionId: string | null): SessionContex
     let aborted = false
     const fetchNow = async () => {
       try {
-        const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/context-window`)
+        const r = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/context-window`)
         if (!r.ok) return
         const json = await r.json() as { ok: boolean; data: SessionContextWindow | null }
         if (!aborted) setSnap(json.ok ? json.data : null)

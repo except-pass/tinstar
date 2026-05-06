@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { apiFetch } from '../apiClient'
 
 // -------- types mirrored from the server (keep in sync with src/server/cc-quota/types.ts) --------
 export interface UsageBucket { utilization: number; resets_at: string }
@@ -35,7 +36,7 @@ async function doFetch() {
   if (inflight) return
   inflight = true
   try {
-    const res = await fetch('/api/cc-quota')
+    const res = await apiFetch('/api/cc-quota')
     if (res.ok) {
       const body = (await res.json()) as CcQuotaSnapshot
       setState({ snapshot: body })

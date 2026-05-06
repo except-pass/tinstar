@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { SlashCommand, UsageEntry } from '../lib/slashMatching'
+import { apiFetch } from '../apiClient'
 
 export interface ServerSlashCommand extends SlashCommand {
   useCount: number
@@ -23,7 +24,7 @@ async function refresh(): Promise<void> {
   if (inflight) return
   inflight = true
   try {
-    const res = await fetch('/api/slash-commands')
+    const res = await apiFetch('/api/slash-commands')
     if (!res.ok) return
     const body = (await res.json()) as { commands: ServerSlashCommand[] }
     const usage: Record<string, UsageEntry> = {}

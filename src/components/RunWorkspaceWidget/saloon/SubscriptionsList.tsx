@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { classifySubject, type SubjectRole } from './subjectRole'
 import { useTopicMetadata } from './useTopicMetadata'
+import { apiFetch } from '../../../apiClient'
 
 interface Props {
   sessionName: string
@@ -62,7 +63,7 @@ function SubscriptionRow({ subject, sessionName, muted, onToggleMute }: RowProps
     const trimmed = draft.trim()
     if (!trimmed || trimmed === md?.name) return
     try {
-      await fetch(`/api/topics/${encodeURIComponent(subject)}`, {
+      await apiFetch(`/api/topics/${encodeURIComponent(subject)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: trimmed }),
