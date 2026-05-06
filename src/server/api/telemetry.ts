@@ -117,6 +117,41 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
       res.end(JSON.stringify(snap))
       return true
     }
+    if (pathname === '/api/telemetry/sessions' && req.method === 'GET') {
+      // Batch endpoint: GET /api/telemetry/sessions?names=foo,bar,baz
+      // Returns { foo: HudSnapshot, bar: HudSnapshot, baz: HudSnapshot }
+      // Per-name failures yield null rather than failing the whole request.
+      const parsed = new URL(req.url ?? pathname, 'http://localhost')
+      const namesParam = parsed.searchParams.get('names')
+      if (namesParam === null) {
+        res.writeHead(400, json)
+        res.end(JSON.stringify({ error: 'missing required query parameter: names' }))
+        return true
+      }
+      // Split, decode, drop empties (trailing commas / "names=" etc.)
+      const names = namesParam
+        .split(',')
+        .map((n) => {
+          try { return decodeURIComponent(n) } catch { return n }
+        })
+        .map((n) => n.trim())
+        .filter((n) => n.length > 0)
+      const result: Record<string, HudSnapshot | null> = {}
+      const settled = await Promise.all(
+        names.map(async (name) => {
+          try {
+            return [name, await buildSnapshot(name)] as const
+          } catch (err) {
+            log.warn('telemetry', `batch buildSnapshot(${name}) failed: ${(err as Error).message}`)
+            return [name, null] as const
+          }
+        }),
+      )
+      for (const [name, snap] of settled) result[name] = snap
+      res.writeHead(200, json)
+      res.end(JSON.stringify(result))
+      return true
+    }
     if (pathname === '/api/telemetry/restart' && req.method === 'POST') {
       await deps.restart()
       res.writeHead(200, json)
