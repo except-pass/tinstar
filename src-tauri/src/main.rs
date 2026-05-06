@@ -1,7 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::Manager;
-
 const HARDCODED_BASE: &str = "http://infrapoc:5273";
 
 /// Strip trailing slashes and reject anything containing characters that would
@@ -31,17 +29,28 @@ fn build_eval_script(base: &str) -> String {
 
 fn main() {
     tauri::Builder::default()
-        .on_page_load(|window, payload| {
-            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
-                let script = build_eval_script(HARDCODED_BASE);
-                let _ = window.eval(&script);
-            }
-        })
         .setup(|app| {
-            let main_window = app
-                .get_webview_window("main")
-                .expect("main window missing");
-            main_window.show().expect("show main window");
+            // Build the main window programmatically so we can attach an
+            // `initialization_script` — that script is documented to run BEFORE
+            // any document parsing or inline scripts, so apiClient.ts always
+            // sees the correct __TINSTAR_API_BASE__.
+            //
+            // `Window::eval()` from on_page_load is unreliable on Windows
+            // WebView2: the inline placeholder `<script>__TINSTAR_API_BASE__ = ''</script>`
+            // executes before our eval lands, leaving the global as empty
+            // string. Using initialization_script eliminates the race.
+            tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::default(),
+            )
+            .title("Tinstar")
+            .inner_size(1400.0, 900.0)
+            .min_inner_size(900.0, 600.0)
+            .decorations(true)
+            .initialization_script(build_eval_script(HARDCODED_BASE))
+            .build()
+            .expect("failed to build main window");
             Ok(())
         })
         .run(tauri::generate_context!())

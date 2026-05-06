@@ -10,18 +10,7 @@
     "frontendDist": "../dist/client"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "Tinstar",
-        "width": 1400,
-        "height": 900,
-        "minWidth": 900,
-        "minHeight": 600,
-        "visible": false,
-        "decorations": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
