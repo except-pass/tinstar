@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { discoverSlashCommands, SlashCommandRegistry } from '../slashCommandRegistry'
+import { discoverSlashCommands, SlashCommandRegistry, BUILTIN_SLASH_COMMANDS } from '../slashCommandRegistry'
 
 let home: string
 let cwd: string
@@ -55,9 +55,27 @@ describe('discoverSlashCommands', () => {
     const cmds = await discoverSlashCommands({ home, cwd })
     expect(cmds.find(c => c.name === 'local')).toMatchObject({ source: 'project' })
   })
-  it('returns empty array when nothing exists', async () => {
+  it('returns only built-ins when no on-disk commands exist', async () => {
     const cmds = await discoverSlashCommands({ home, cwd })
-    expect(cmds).toEqual([])
+    expect(cmds.map(c => c.name).sort()).toEqual(
+      BUILTIN_SLASH_COMMANDS.map(c => c.name).sort(),
+    )
+    expect(cmds.every(c => c.source === 'builtin')).toBe(true)
+  })
+  it('includes Claude Code built-ins like /clear and /remote-control', async () => {
+    const cmds = await discoverSlashCommands({ home, cwd })
+    expect(cmds.find(c => c.name === 'clear')?.source).toBe('builtin')
+    expect(cmds.find(c => c.name === 'remote-control')?.source).toBe('builtin')
+  })
+  it('filesystem entries shadow built-ins of the same name', async () => {
+    write(
+      join(home, '.claude/skills/init/SKILL.md'),
+      '---\nname: init\ndescription: my custom init\n---\n',
+    )
+    const cmds = await discoverSlashCommands({ home, cwd })
+    const inits = cmds.filter(c => c.name === 'init')
+    expect(inits).toHaveLength(1)
+    expect(inits[0]).toMatchObject({ source: 'user-skill', description: 'my custom init' })
   })
   it('falls back to filename when frontmatter has no description', async () => {
     write(join(home, '.claude/commands/noDesc.md'), '# heading\n')

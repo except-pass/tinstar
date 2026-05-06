@@ -21,7 +21,7 @@ export function findSlashToken(text: string, cursor: number): SlashToken | null 
 export interface SlashCommand {
   name: string
   description: string
-  source: 'project' | 'user' | 'plugin' | 'project-skill' | 'user-skill' | 'plugin-skill'
+  source: 'project' | 'user' | 'plugin' | 'project-skill' | 'user-skill' | 'plugin-skill' | 'builtin'
   argumentHint?: string | null
 }
 

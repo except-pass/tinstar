@@ -91,16 +91,66 @@ function loadPluginCache(pluginsCacheDir: string): SlashCommand[] {
   return out
 }
 
+/**
+ * Claude Code built-in slash commands. These are baked into the `claude` binary,
+ * not on disk, so the filesystem scan can't find them. Curated by hand from
+ * literal `"/<name>"` strings present in the binary and re-verified on CC version
+ * bumps via `scripts/audit-cc-builtins.mjs`.
+ *
+ * Last verified against: claude 2.1.129
+ *
+ * Note: this is a conservative subset. Commands that CC constructs as
+ * `"/" + name` (rather than a literal) won't appear in the binary scan and
+ * must be added manually after confirming with the in-app `/help` panel.
+ */
+export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<SlashCommand> = [
+  { name: 'agents',         description: 'Manage background and configured agents',    source: 'builtin' },
+  { name: 'clear',          description: 'Clear the conversation',                     source: 'builtin' },
+  { name: 'compact',        description: 'Compact the conversation',                   source: 'builtin' },
+  { name: 'config',         description: 'Open settings',                              source: 'builtin' },
+  { name: 'exit',           description: 'Exit the session',                           source: 'builtin' },
+  { name: 'fast',           description: 'Toggle Opus fast mode',                      source: 'builtin' },
+  { name: 'feedback',       description: 'Submit feedback to Anthropic',               source: 'builtin' },
+  { name: 'hooks',          description: 'Manage hooks',                               source: 'builtin' },
+  { name: 'init',           description: 'Initialize a CLAUDE.md for the project',     source: 'builtin' },
+  { name: 'login',          description: 'Sign in',                                    source: 'builtin' },
+  { name: 'logout',         description: 'Sign out',                                   source: 'builtin' },
+  { name: 'loop',           description: 'Run a prompt or slash command on a loop',    source: 'builtin' },
+  { name: 'mcp',            description: 'Manage MCP servers',                         source: 'builtin' },
+  { name: 'memory',         description: 'Edit auto-memory',                           source: 'builtin' },
+  { name: 'model',          description: 'Switch model',                               source: 'builtin' },
+  { name: 'permissions',    description: 'Manage permissions',                         source: 'builtin' },
+  { name: 'quit',           description: 'Exit the session',                           source: 'builtin' },
+  { name: 'remote-control', description: 'Open remote control',                        source: 'builtin' },
+  { name: 'resume',         description: 'Resume a previous session',                  source: 'builtin' },
+  { name: 'rewind',         description: 'Rewind to an earlier checkpoint',            source: 'builtin' },
+  { name: 'status',         description: 'Show session status',                        source: 'builtin' },
+  { name: 'teleport',       description: 'Teleport to another session',                source: 'builtin' },
+  { name: 'ultrareview',    description: 'Run a cloud-hosted multi-agent code review', source: 'builtin' },
+]
+
+/**
+ * Merge filesystem-discovered commands with built-ins. If a name collides
+ * (e.g. user has `~/.claude/skills/init/SKILL.md` shadowing the built-in
+ * `/init`), the filesystem entry wins so user customization is preserved.
+ */
+function mergeWithBuiltins(discovered: SlashCommand[]): SlashCommand[] {
+  const seen = new Set(discovered.map(c => c.name))
+  const builtins = BUILTIN_SLASH_COMMANDS.filter(c => !seen.has(c.name))
+  return [...discovered, ...builtins]
+}
+
 export async function discoverSlashCommands(opts: DiscoverOpts = {}): Promise<SlashCommand[]> {
   const home = opts.home ?? homedir()
   const cwd  = opts.cwd  ?? process.cwd()
-  return [
+  const discovered = [
     ...loadCommandsDir(join(cwd, '.claude/commands'), 'project'),
     ...loadSkillsDir(join(cwd, '.claude/skills'), 'project-skill'),
     ...loadCommandsDir(join(home, '.claude/commands'), 'user'),
     ...loadSkillsDir(join(home, '.claude/skills'), 'user-skill'),
     ...loadPluginCache(join(home, '.claude/plugins/cache')),
   ]
+  return mergeWithBuiltins(discovered)
 }
 
 export class SlashCommandRegistry {
