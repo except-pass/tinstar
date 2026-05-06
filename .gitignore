@@ -8,3 +8,6 @@ trivial.txt
 backlog/
 .superpowers/
 .worktrees/
+.claude/worktrees/*
+screenshots/
+docs/superpowers/

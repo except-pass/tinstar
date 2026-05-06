@@ -1,6 +1,6 @@
 ---
 name: tinstar
-description: Tinstar control plane — the broader API beyond spawning hands. Use for multi-agent patterns, editor widgets, breakout rooms, arbitrary session queries, and when the tinstar-hand skill doesn't cover what you need.
+description: Tinstar control plane — the broader API beyond spawning hands. Use for editor widgets, breakout rooms, arbitrary session queries, and when the tinstar-hand skill doesn't cover what you need.
 ---
 
 # Tinstar
@@ -31,7 +31,6 @@ Session names **cannot contain dots** — tmux reads `.` as a pane separator and
 ```bash
 curl -s "$TINSTAR_URL/api/state" | jq .                              # Full state (sessions, runs, tasks, epics)
 curl -s "$TINSTAR_URL/api/hands" | jq .                              # Installed hands
-curl -s "$TINSTAR_URL/api/patterns" | jq .                           # Multi-agent patterns
 curl -s "$TINSTAR_URL/api/cli-templates" | jq .                      # Agent templates
 curl -s -X POST "$TINSTAR_URL/api/sessions/NAME/prompt" -d '{"text":"…"}'   # Non-NATS prompt
 ```
@@ -53,23 +52,6 @@ curl -s -X POST "$TINSTAR_URL/api/sessions" \
 ```
 
 `cliTemplate: "Claude (multi-agent)"` enables NATS. Omit only for plain non-collaborative sessions.
-
-## Multi-agent patterns
-
-Patterns spawn coordinated session sets (orchestrator + workers) from one call.
-
-```bash
-curl -s -X POST "$TINSTAR_URL/api/sessions" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "code-review",
-    "pattern": "review-critique",
-    "project": "myproject",
-    "prompt": "Review the auth module"
-  }'
-```
-
-Creates `code-review-worker` + `code-review` (orchestrator) in a shared worktree. Pattern definitions live in `~/.config/tinstar/patterns/`; syntax follows k8s/Compose conventions (`dependsOn`, `replicas`, `readiness`).
 
 ## Editor widgets (file on canvas)
 

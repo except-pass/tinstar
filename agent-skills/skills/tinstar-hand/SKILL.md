@@ -74,10 +74,17 @@ PROMPT="Review the last 3 commits on this branch. Focus on auth edge cases. Repo
 curl -s -X POST "$TINSTAR_URL/api/sessions/$SESSION/spawn" \
   -H "Content-Type: application/json" \
   -d "$(jq -n --arg hand "$HAND" --arg prompt "$PROMPT" '{hand: $hand, prompt: $prompt}')" \
-  | jq '{name, state}'
+  | jq '.data | {session, hand, room}'
+
+# Verify exactly one new child appeared (catches accidental double-spawns):
+curl -s "$TINSTAR_URL/api/state" \
+  | jq --arg parent "$SESSION" \
+       '[.sessions[] | select(.name | startswith($parent + "-"))] | length'
 ```
 
 Spawned names look like `<parent>-<hand>-<uuid8>` (e.g. `my-task-reviewer-a1b2c3d4`). Remember it — you'll use it for follow-ups and teardown.
+
+The API response is wrapped — the actual session name is at `.data.session`, not `.session`. A `jq` filter at the top level (e.g. `'{name, state}'`) silently produces `{ "name": null, "state": null }` even on a fully successful spawn; that null output is **not** evidence the spawn failed. Trust the HTTP status (`201 Created`) and `GET /api/state` over whatever surface fields you tried to pluck.
 
 ## 3b — Spawn in a *different* worktree
 
