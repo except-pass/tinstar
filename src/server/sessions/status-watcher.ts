@@ -1,7 +1,7 @@
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, statSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { listSessions, setState, setConversationId, claudeStateDir, type Session, type SessionState } from './session'
-import { readSessionStatusDetail, parseNewEntries, getProjectDir, getTranscriptPath, resetOffset } from './transcript-parser'
-import { findNewestConversationId } from './resume'
+import { readSessionStatusDetailAt, parseNewEntries, getProjectDir, getTranscriptPath, resetOffset, findTranscriptByConvId } from './transcript-parser'
 import { discoverTranscript, readCodexStatus, parseCodexRecapEntries } from './codex-transcript'
 import { log } from '../logger'
 import { execFile } from 'node:child_process'
@@ -35,6 +35,10 @@ export class StatusWatcher {
   private readonly processTreeOverride = new Set<string>()
   /** Cached Codex transcript paths per session */
   private readonly codexTranscripts = new Map<string, string>()
+  /** Cached Claude transcript paths for sessions without a workspace.path */
+  private readonly claudeTranscripts = new Map<string, string>()
+  /** Snapshot of live sessions for the current tick — used to detect peer claims on shared project dirs */
+  private peerSessions: readonly Session[] = []
 
   constructor(opts: StatusWatcherOpts) {
     this.opts = opts
@@ -57,6 +61,7 @@ export class StatusWatcher {
   private async tick(): Promise<void> {
     try {
       const sessions = await listSessions(this.opts.sessionsDir)
+      this.peerSessions = sessions
       for (const session of sessions) {
         // Only check sessions that are actually alive (running or idle)
         if (session.state !== 'running' && session.state !== 'idle') continue
@@ -87,7 +92,7 @@ export class StatusWatcher {
 
     const workdir = session.workspace?.path
     let convId = session.conversation?.id
-    if (!workdir || !convId) return
+    if (!convId) return
 
     const stateDir = session.backend === 'docker'
       ? claudeStateDir(this.opts.sessionsDir, session.name)
@@ -96,10 +101,29 @@ export class StatusWatcher {
     // /clear (or --resume to a different conversation) starts a new JSONL
     // file. If the project dir holds a newer transcript than the one we're
     // tracking, adopt it — otherwise status reads from a dead file forever.
-    const adopted = this.maybeAdoptNewerConversation(session, workdir, convId, stateDir)
-    if (adopted) convId = adopted
+    //
+    // Multi-agent caveat: when N tmux sessions share a workdir, they share
+    // `~/.claude/projects/<encoded-workdir>/`. We must NOT adopt a transcript
+    // already claimed by another live session — that would cross-pollinate
+    // (session A picks up B's convId whenever B writes more recently).
+    if (workdir) {
+      const adopted = this.maybeAdoptNewerConversation(session, workdir, convId, stateDir)
+      if (adopted) convId = adopted
+    }
 
-    const detail = readSessionStatusDetail(workdir, convId, stateDir)
+    const transcriptPath = this.resolveClaudeTranscriptPath(session, workdir, convId, stateDir)
+    if (!transcriptPath) {
+      // No transcript discoverable yet (typical for a freshly-spawned session
+      // before its first turn, or a session with no workspace whose JSONL
+      // hasn't appeared anywhere on disk yet). On tmux we still get a usable
+      // running/idle signal from the process tree.
+      if (!workdir && session.backend === 'tmux') {
+        this.checkProcessTree(session)
+      }
+      return
+    }
+
+    const detail = readSessionStatusDetailAt(transcriptPath)
     if (!detail) return // no transcript yet
 
     // When JSONL shows a pending tool_use on a tmux session, use the process
@@ -140,8 +164,69 @@ export class StatusWatcher {
   }
 
   /**
+   * Resolve the on-disk transcript path for a Claude session. Prefers
+   * computing from `workspace.path` + convId. When workspace.path is null
+   * (legacy session, or one spawned without a project), scans
+   * `~/.claude/projects/*\/<convId>.jsonl` and caches the result.
+   */
+  private resolveClaudeTranscriptPath(
+    session: Session,
+    workdir: string | null | undefined,
+    convId: string,
+    stateDir: string | undefined,
+  ): string | null {
+    if (workdir) return getTranscriptPath(workdir, convId, stateDir)
+
+    const cached = this.claudeTranscripts.get(session.name)
+    if (cached && existsSync(cached)) return cached
+    if (cached) this.claudeTranscripts.delete(session.name)
+
+    const found = findTranscriptByConvId(convId)
+    if (found) {
+      this.claudeTranscripts.set(session.name, found)
+      log.info('status-watcher', `${session.name}: discovered transcript ${found} (no workspace.path on session)`)
+    }
+    return found
+  }
+
+  /**
+   * Collect convIds currently claimed by *other* live sessions sharing the
+   * given project dir. Used to keep a session from adopting a peer's
+   * transcript when N agents share a workdir.
+   *
+   * The shared-workdir case: every agent's transcript lives in the same
+   * `~/.claude/projects/<encoded-workdir>/` directory. Without this filter,
+   * `findNewestByMtime` would return whichever peer is most recently active.
+   */
+  private collectClaimedByPeers(self: Session, projectDir: string): Set<string> {
+    const claimed = new Set<string>()
+    const sessions = this.peerSessions ?? []
+    for (const s of sessions) {
+      if (s.name === self.name) continue
+      if (s.state !== 'running' && s.state !== 'idle') continue
+      const otherWorkdir = s.workspace?.path
+      if (!otherWorkdir) continue
+      const otherStateDir = s.backend === 'docker'
+        ? claudeStateDir(this.opts.sessionsDir, s.name)
+        : undefined
+      // Only peers whose project dir resolves to the same path as ours can
+      // collide. This naturally excludes docker peers (their state dir is
+      // separate) and tmux peers in different workdirs.
+      if (getProjectDir(otherWorkdir, otherStateDir) !== projectDir) continue
+      const otherConvId = s.conversation?.id
+      if (otherConvId) claimed.add(otherConvId)
+    }
+    return claimed
+  }
+
+  /**
    * If the project dir contains a .jsonl with a newer mtime than the tracked
-   * conversation, swap to it. Returns the new conversation id when adopted.
+   * conversation AND that .jsonl isn't claimed by another live session,
+   * swap to it. Returns the new conversation id when adopted.
+   *
+   * This is the multi-agent-safe replacement for the old "adopt newest by
+   * mtime" heuristic. The exclusion filter is what prevents session A from
+   * picking up session B's convId when both run in the same workdir.
    */
   private maybeAdoptNewerConversation(
     session: Session,
@@ -150,21 +235,41 @@ export class StatusWatcher {
     stateDir: string | undefined,
   ): string | null {
     const projectDir = getProjectDir(workdir, stateDir)
-    const newest = findNewestConversationId(projectDir)
-    if (!newest || newest === convId) return null
+    const claimedByPeers = this.collectClaimedByPeers(session, projectDir)
 
-    const newestPath = getTranscriptPath(workdir, newest, stateDir)
-    if (!existsSync(newestPath)) return null
-    const newestMtime = statSync(newestPath).mtimeMs
+    // If our tracked convId is also claimed by a peer, we've already
+    // cross-pollinated. Symmetry-break by `session.created`: each session
+    // looks for an unclaimed file born during its own lifetime, which is
+    // the file the agent process has been writing. Different sessions have
+    // different `created` times → different candidate sets → different
+    // adoption decisions. No global coordination needed.
+    if (claimedByPeers.has(convId)) {
+      const sessionStartMs = Date.parse(session.created)
+      if (Number.isNaN(sessionStartMs)) return null
+      const candidate = findNewestUnclaimedJsonl(projectDir, claimedByPeers, sessionStartMs)
+      if (!candidate || candidate.convId === convId) return null
+      setConversationId(this.opts.sessionsDir, session.name, candidate.convId)
+      resetOffset(session.name)
+      log.info(
+        'status-watcher',
+        `${session.name}: repaired contested convId — adopted ${candidate.convId} (was ${convId}, born after session.created)`,
+      )
+      return candidate.convId
+    }
+
+    // Normal /clear (or --resume) path: adopt only if a non-peer transcript
+    // is newer than what we're tracking.
+    const candidate = findNewestUnclaimedJsonl(projectDir, claimedByPeers)
+    if (!candidate || candidate.convId === convId) return null
 
     const trackedPath = getTranscriptPath(workdir, convId, stateDir)
     const trackedMtime = existsSync(trackedPath) ? statSync(trackedPath).mtimeMs : 0
-    if (newestMtime <= trackedMtime) return null
+    if (candidate.mtime <= trackedMtime) return null
 
-    setConversationId(this.opts.sessionsDir, session.name, newest)
+    setConversationId(this.opts.sessionsDir, session.name, candidate.convId)
     resetOffset(session.name) // recap parser starts fresh on the new file
-    log.info('status-watcher', `${session.name}: adopted newer conversation ${newest} (was ${convId})`)
-    return newest
+    log.info('status-watcher', `${session.name}: adopted newer conversation ${candidate.convId} (was ${convId})`)
+    return candidate.convId
   }
 
   private async checkCodexSession(session: Session): Promise<void> {
@@ -311,4 +416,41 @@ export class StatusWatcher {
       }
     }
   }
+}
+
+/**
+ * Pick the newest .jsonl in `projectDir` whose convId (filename stem) is not
+ * in `claimed`. When `minBirthtimeMs` is provided, only files whose
+ * filesystem birthtime is at or after that timestamp are considered — used
+ * to filter to "files born during this session's lifetime" when repairing
+ * a cross-pollinated convId. Returns `{ convId, mtime }` or null.
+ *
+ * Exported for tests.
+ */
+export function findNewestUnclaimedJsonl(
+  projectDir: string,
+  claimed: Set<string>,
+  minBirthtimeMs?: number,
+): { convId: string; mtime: number } | null {
+  let entries: string[]
+  try {
+    entries = readdirSync(projectDir)
+  } catch {
+    return null
+  }
+  let best: { convId: string; mtime: number } | null = null
+  for (const name of entries) {
+    if (!name.endsWith('.jsonl')) continue
+    const convId = name.slice(0, -'.jsonl'.length)
+    if (claimed.has(convId)) continue
+    let stat: ReturnType<typeof statSync>
+    try {
+      stat = statSync(join(projectDir, name))
+    } catch {
+      continue
+    }
+    if (minBirthtimeMs !== undefined && stat.birthtimeMs < minBirthtimeMs) continue
+    if (!best || stat.mtimeMs > best.mtime) best = { convId, mtime: stat.mtimeMs }
+  }
+  return best
 }
