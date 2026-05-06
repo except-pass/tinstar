@@ -7,6 +7,7 @@ import { useFocusPath } from '../../hotkeys/FocusPathContext'
 import { findSlashToken, rankCommands, type SlashCommand } from '../../lib/slashMatching'
 import { useSlashCommands } from '../../hooks/useSlashCommands'
 import { SlashChips } from './SlashChips'
+import { apiFetch } from '../../apiClient'
 
 function MarkdownText({ content }: { content: string }) {
   return (
@@ -234,7 +235,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
     setError(null)
     setSending(true)
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/prompt`, {
+      const res = await apiFetch(`/api/sessions/${sessionId}/prompt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: text.trim(), force: status !== 'idle' }),
@@ -286,7 +287,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
     }
     if ((e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'Escape') && sessionId) {
       e.preventDefault()
-      fetch(`/api/sessions/${sessionId}/send-keys`, {
+      apiFetch(`/api/sessions/${sessionId}/send-keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ keys: [e.key] }),
@@ -557,7 +558,7 @@ export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, session
     setActionError(null)
     setActionLoading(true)
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/start`, { method: 'POST' })
+      const res = await apiFetch(`/api/sessions/${sessionId}/start`, { method: 'POST' })
       const data = await res.json()
       if (!data.ok) {
         const msg = data.error?.message ?? data.error?.code ?? 'Resume failed'
@@ -575,7 +576,7 @@ export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, session
     setActionError(null)
     setActionLoading(true)
     try {
-      const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
+      const res = await apiFetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
       const data = await res.json()
       if (!data.ok) {
         const msg = data.error?.message ?? data.error?.code ?? 'Delete failed'

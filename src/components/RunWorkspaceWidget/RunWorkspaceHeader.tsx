@@ -7,6 +7,7 @@ import { HotgroupBadge } from '../HotgroupBadge'
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 import { ColorPalette } from '../ColorPalette'
 import { AgentIcon } from '../agentIcon'
+import { apiFetch } from '../../apiClient'
 
 type StatusUi = { label: string; color: string; dot: string; pulse?: boolean }
 
@@ -72,7 +73,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
 
   const handleColorChange = useCallback(async (color: string) => {
     setPaletteOpen(false)
-    await fetch(`/api/runs/${run.id}`, {
+    await apiFetch(`/api/runs/${run.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ color }),

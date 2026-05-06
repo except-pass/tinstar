@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
+import { apiFetch } from '../apiClient'
 
 interface ImageWatchState {
   connected: boolean
@@ -17,7 +18,7 @@ export function useImageWatch(sessionId: string, filePath: string): ImageWatchSt
     const subscriberId = subscriberIdRef.current
     let cancelled = false
 
-    fetch('/api/file-watch/subscribe', {
+    apiFetch('/api/file-watch/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, filePath, subscriberId, mode: 'notify' }),
@@ -48,7 +49,7 @@ export function useImageWatch(sessionId: string, filePath: string): ImageWatchSt
       setConnected(false)
       const absPath = absolutePathRef.current
       if (absPath) {
-        fetch('/api/file-watch/unsubscribe', {
+        apiFetch('/api/file-watch/unsubscribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ absolutePath: absPath, subscriberId }),

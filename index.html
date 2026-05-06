@@ -12,6 +12,15 @@
   </head>
   <body class="bg-surface-base text-slate-100 font-display antialiased">
     <div id="root"></div>
+    <!--
+      Runtime API base injection point.
+      Empty in browser mode (frontend uses same-origin /api/*).
+      In Tauri the shell sets window.__TINSTAR_API_BASE__ via initialization_script
+      BEFORE this inline runs, so we must only assign when undefined — otherwise
+      we'd stomp the Tauri value back to empty.
+      Contract: window.__TINSTAR_API_BASE__ is a full origin string (no trailing slash) or ''.
+    -->
+    <script>if(typeof window.__TINSTAR_API_BASE__==='undefined')window.__TINSTAR_API_BASE__='';</script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -52,6 +52,11 @@ import type { SlashCommandRegistry } from '../sessions/slashCommandRegistry'
 import type { SlashUsage } from '../sessions/slashUsage'
 import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
+import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
+
+function currentCorsAllowlist(): string[] {
+  return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
+}
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
 function buildNatsSubject(
@@ -546,15 +551,16 @@ export interface RouteContext {
   otlpExporter?: OtlpExporter
 }
 
-function json(res: ServerResponse, data: unknown, status = 200): true {
+function moduleJson(res: ServerResponse, data: unknown, status = 200, corsHeaders?: Record<string, string>): true {
   // Some routes respond asynchronously (e.g. readBody(...).then(...)).
   // If the client disconnects or another codepath already responded, avoid crashing
-  // with ERR_HTTP_HEADERS_SENT.
+   // with ERR_HTTP_HEADERS_SENT.
   if (res.headersSent || res.writableEnded) return true
-  res.writeHead(status, {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-  })
+    ...(corsHeaders ?? { 'Access-Control-Allow-Origin': '*' }),
+  }
+  res.writeHead(status, headers)
   res.end(JSON.stringify(data))
   return true
 }
@@ -611,13 +617,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   const url = req.url ?? ''
   const method = req.method ?? 'GET'
 
+  const corsHeaders = resolveCorsHeaders({
+    origin: req.headers.origin,
+    allowlist: currentCorsAllowlist(),
+  }) as Record<string, string>
+
+  // Per-request shadow that auto-applies the resolved CORS headers.
+  // Shadows the module-scope `json` so existing call sites don't need to be updated.
+  const json = (res: ServerResponse, data: unknown, status = 200): true =>
+    moduleJson(res, data, status, corsHeaders)
+
   // CORS preflight
   if (method === 'OPTIONS' && url.startsWith('/api/')) {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    })
+    res.writeHead(204, corsHeaders)
     res.end()
     return true
   }
@@ -626,7 +638,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (ctx.telemetryRoutes && url.startsWith('/api/telemetry/')) {
     // Normalize pathname (strip query string)
     const pathname = url.split('?')[0]
-    if (await ctx.telemetryRoutes.handle(req, res, pathname)) return true
+    if (await ctx.telemetryRoutes.handle(req, res, pathname, corsHeaders)) return true
   }
 
   // GET /api/docs — Scalar API reference UI
@@ -656,7 +668,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // GET /api/events (SSE)
   if (method === 'GET' && url === '/api/events') {
-    ctx.sse.addClient(res)
+    ctx.sse.addClient(res, corsHeaders)
     return true
   }
 

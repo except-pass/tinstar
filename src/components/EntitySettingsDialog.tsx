@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { DEFAULT_RUN_ACCENT } from './runAccent'
 import type { GroupingDimension, EntitySettings, ResolvedSettings } from '../domain/types'
 import { ColorPalette } from './ColorPalette'
+import { apiFetch } from '../apiClient'
 
 interface Props {
   entityId: string
@@ -86,11 +87,11 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
     if (!endpoint) return
 
     Promise.all([
-      fetch(`/api/${endpoint}/${entityId}/settings`).then(r => r.json()),
-      fetch('/api/projects').then(r => r.json()),
-      fetch('/api/cli-templates').then(r => r.json()),
-      fetch('/api/docker/profiles').then(r => r.json()),
-      fetch(`/api/state`).then(r => r.json()),
+      apiFetch(`/api/${endpoint}/${entityId}/settings`).then(r => r.json()),
+      apiFetch('/api/projects').then(r => r.json()),
+      apiFetch('/api/cli-templates').then(r => r.json()),
+      apiFetch('/api/docker/profiles').then(r => r.json()),
+      apiFetch(`/api/state`).then(r => r.json()),
     ]).then(([settingsRes, projectsRes, templatesRes, profilesRes, stateRes]) => {
       if (settingsRes.ok) setSettings(settingsRes.data)
       if (projectsRes?.ok && projectsRes.data && typeof projectsRes.data === 'object') {
@@ -122,7 +123,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       setWorktrees([])
       return
     }
-    fetch(`/api/projects/${encodeURIComponent(effectiveProject)}/worktrees`)
+    apiFetch(`/api/projects/${encodeURIComponent(effectiveProject)}/worktrees`)
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.ok && Array.isArray(d.data)) setWorktrees(d.data) })
       .catch(() => {})
@@ -171,7 +172,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       body.externalUrl = externalUrl.trim() || null
     }
 
-    await fetch(`/api/${endpoint}/${entityId}`, {
+    await apiFetch(`/api/${endpoint}/${entityId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

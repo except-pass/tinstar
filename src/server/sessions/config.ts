@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { getConfigRoot } from '../configRoot'
 
 // --- Types ---
 
@@ -144,7 +145,7 @@ const BASE_CONFIG = {
 // --- Public API ---
 
 export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
-  const rootDir = overrides?._rootDir ?? join(homedir(), '.config', 'tinstar')
+  const rootDir = overrides?._rootDir ?? getConfigRoot()
 
   // Read optional user overrides
   const userConfigPath = join(rootDir, 'config.json')

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { apiFetch } from '../../apiClient'
 
 interface Hand {
   name: string
@@ -16,7 +17,7 @@ export function HandsPanel({ sessionId, onCollapse }: Props) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch('/api/hands')
+    apiFetch('/api/hands')
       .then(res => res.json())
       .then(data => {
         if (data.ok) setHands(data.data)
@@ -34,7 +35,7 @@ export function HandsPanel({ sessionId, onCollapse }: Props) {
   }
 
   async function handleSpawn(handName: string, prompt?: string) {
-    const res = await fetch(`/api/sessions/${sessionId}/spawn`, {
+    const res = await apiFetch(`/api/sessions/${sessionId}/spawn`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hand: handName, prompt }),

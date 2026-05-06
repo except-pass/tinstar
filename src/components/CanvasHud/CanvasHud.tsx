@@ -8,6 +8,7 @@ import { useTelemetryHud } from '../../hooks/useTelemetryHud'
 import { useCcQuota } from '../../hooks/useCcQuota'
 import { fmtNum, fmtDollar, fmtRate } from './fmt'
 import type { Run } from '../../domain/types'
+import { apiFetch } from '../../apiClient'
 
 const STORAGE_KEY = 'tinstar-hud-visible'
 
@@ -33,7 +34,7 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds }: Pro
   const toggle = useCallback(() => setVisible(v => !v), [])
 
   const handleRetry = useCallback(() => {
-    fetch('/api/telemetry/restart', { method: 'POST' })
+    apiFetch('/api/telemetry/restart', { method: 'POST' })
       .catch(err => console.error('telemetry restart failed', err))
   }, [])
 

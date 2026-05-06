@@ -1,8 +1,8 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
+import { getConfigRoot } from './configRoot'
 
-const LOG_DIR = process.env.TINSTAR_DATA_DIR ?? join(homedir(), '.config', 'tinstar')
+const LOG_DIR = getConfigRoot()
 const LOG_FILE = join(LOG_DIR, 'server.log')
 
 mkdirSync(LOG_DIR, { recursive: true })

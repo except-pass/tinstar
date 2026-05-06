@@ -13,6 +13,7 @@ import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
 import { CanvasMinimap } from './CanvasMinimap'
 import { CanvasHud } from './CanvasHud'
+import { apiFetch } from '../apiClient'
 
 interface Props {
   tree: TreeNode[]
@@ -285,7 +286,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const spawnY = sourceLayout ? sourceLayout.y : 0
       const spawnLayout = { x: spawnX, y: spawnY, width: 640, height: 480 }
 
-      const res = await fetch('/api/editor-widgets', {
+      const res = await apiFetch('/api/editor-widgets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, filePath }),
@@ -852,7 +853,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         const isImage = imageExts.some(ext => filePath.toLowerCase().endsWith(ext))
 
         if (isImage) {
-          const imageRes = await fetch('/api/image-widgets', {
+          const imageRes = await apiFetch('/api/image-widgets', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sessionId, filePath }),
@@ -871,7 +872,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         }
 
         const spawnLayout = { x: dropX, y: dropY, width: 640, height: 480 }
-        const editorRes = await fetch('/api/editor-widgets', {
+        const editorRes = await apiFetch('/api/editor-widgets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId, filePath }),
@@ -887,7 +888,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       if (rawBrowser) {
         const { sessionId } = JSON.parse(rawBrowser) as { sessionId: string }
         const spawnLayout = { x: dropX, y: dropY, width: 800, height: 600 }
-        const res = await fetch('/api/browser-widgets', {
+        const res = await apiFetch('/api/browser-widgets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId }),
@@ -912,7 +913,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
               natsSubject.replace(/\.[^.]+$/, ''),  // task broadcast channel (no wildcard)
             ]
           : [`tinstar.>`]  // fallback to all tinstar traffic
-        const res = await fetch('/api/nats-traffic-widgets', {
+        const res = await apiFetch('/api/nats-traffic-widgets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId, subscriptions, color }),
@@ -930,7 +931,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         try {
           const { handName, sessionId } = JSON.parse(handData) as { handName: string; sessionId: string }
           // Spawn the hand via API
-          fetch(`/api/sessions/${sessionId}/spawn`, {
+          apiFetch(`/api/sessions/${sessionId}/spawn`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ hand: handName }),

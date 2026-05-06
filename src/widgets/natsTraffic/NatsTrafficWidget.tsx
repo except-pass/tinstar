@@ -3,6 +3,7 @@ import type { NatsTrafficWidget } from '../../domain/types'
 import type { WidgetProps } from '../widgetComponentRegistry'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
+import { apiFetch } from '../../apiClient'
 
 interface TrafficEvent {
   timestamp: string
@@ -80,7 +81,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
   }, [widget.id])
 
   const handleClose = useCallback(() => {
-    fetch(`/api/nats-traffic-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
+    apiFetch(`/api/nats-traffic-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
   }, [widget.id])
 
   const clearEvents = useCallback(() => {
@@ -89,7 +90,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
 
   const addSubscription = useCallback(() => {
     if (!newSub.trim()) return
-    fetch(`/api/nats-traffic-widgets/${widget.id}/subscribe`, {
+    apiFetch(`/api/nats-traffic-widgets/${widget.id}/subscribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject: newSub.trim() }),
@@ -97,7 +98,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
   }, [widget.id, newSub])
 
   const removeSubscription = useCallback((subject: string) => {
-    fetch(`/api/nats-traffic-widgets/${widget.id}/subscribe`, {
+    apiFetch(`/api/nats-traffic-widgets/${widget.id}/subscribe`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject }),
@@ -106,7 +107,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
 
   const publishNats = useCallback(() => {
     if (!publishSubject.trim() || !publishMessage.trim()) return
-    fetch(`/api/nats-traffic-widgets/${widget.id}/publish`, {
+    apiFetch(`/api/nats-traffic-widgets/${widget.id}/publish`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject: publishSubject.trim(), message: publishMessage.trim() }),

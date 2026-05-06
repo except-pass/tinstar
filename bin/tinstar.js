@@ -4,8 +4,8 @@
 import { execSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, basename } from 'node:path'
-import { homedir } from 'node:os'
 import { createInterface } from 'node:readline'
+import { getConfigRoot } from './configRoot.js'
 
 const GREEN = '\x1b[32m'
 const RED = '\x1b[31m'
@@ -82,19 +82,21 @@ async function main() {
 
   console.log()
 
-  // Project detection
+  // Project detection — skip the prompt under --no-setup or when stdin isn't a TTY
+  // (CI, pipes, here-strings). Non-TTY callers get the same effect as answering "n".
+  const skipSetup = process.argv.includes('--no-setup') || !process.stdin.isTTY
   try {
     const gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf-8', cwd: process.cwd() }).trim()
     const projectName = basename(gitRoot)
-    const projectsFile = join(homedir(), '.config', 'tinstar', 'projects.json')
+    const projectsFile = join(getConfigRoot(), 'projects.json')
 
     let projects = {}
     try { projects = JSON.parse(readFileSync(projectsFile, 'utf-8')) } catch {}
 
-    if (!Object.values(projects).includes(gitRoot)) {
+    if (!Object.values(projects).includes(gitRoot) && !skipSetup) {
       const answer = await ask(`📁 Detected project: ${BOLD}${projectName}${RESET} (${gitRoot})\n   Add as a Tinstar project? [Y/n] `)
       if (answer !== 'n' && answer !== 'no') {
-        mkdirSync(join(homedir(), '.config', 'tinstar'), { recursive: true })
+        mkdirSync(getConfigRoot(), { recursive: true })
         projects[projectName] = gitRoot
         writeFileSync(projectsFile, JSON.stringify(projects, null, 2))
         console.log(`${GREEN}✓${RESET} Added ${projectName}\n`)
