@@ -8,21 +8,13 @@ Single-source reference for every feature shipped in v3.7. Organized by subsyste
 
 ## Multi-agent orchestration
 
-### Patterns (`docs/multi-agent-patterns.md`, `docs/patterns-v2.md`)
-
-Task creation accepts a pattern (Single / Sequential / Parallel / Coordinator / Review & Critique). On create, Tinstar spawns all sessions described by the pattern, auto-wires NATS subscriptions from the task's entity hierarchy, and injects pattern-specific prompts.
-
-Pattern files live in `~/.config/tinstar/patterns/*.md` with YAML frontmatter. Template interpolation is Jinja-style (`{{task}}`, `{{orchestrator}}`, `{{worker}}`). Code: `src/server/patterns/`.
-
-**Design note — no layout enforcement.** Pattern-specific canvas layouts arrange widgets on spawn but aren't re-applied after drag. Users own their canvas; the pattern is a seed, not a constraint.
-
-**Design note — 2-agent cap for Review & Critique.** The orchestrator wears two hats (coordinator + reviewer). Single point of contact for the user, while still enabling a real critique loop.
+> **Patterns retired.** v3.7 also shipped a "patterns" feature (`docs/multi-agent-patterns.md`, `docs/patterns-v2.md`, `src/server/patterns/`, `/api/patterns`, the dropdown in CreateSessionDialog) that let task creation spawn a Single/Sequential/Parallel/Coordinator/Review-&-Critique orchestration in one go. It was superseded by Hands (below) as the primary multi-agent primitive and removed in V4.1. Don't add it back without a fresh design.
 
 ### Hands (ad-hoc collaborators)
 
 Hand definitions in `~/.config/tinstar/hands/*.md` describe reusable collaborator roles. `POST /api/sessions/:parent/spawn` creates a child session on the same task/worktree; `HandsPanel` drag-to-canvas does the same from the UI. Code: `src/server/hands/`, `src/components/HandsPanel.tsx`.
 
-**Design note — first agent is the orchestrator by default.** Override via `{"orchestrator": true}` in the spawn body or explicit `orchestrator:` field in a pattern. `parentId` is tracked on the child's run for lineage in the service registry.
+**Design note — first agent is the orchestrator by default.** Override via `{"orchestrator": true}` in the spawn body. `parentId` is tracked on the child's run for lineage in the service registry.
 
 **Design note — discovery happens via NATS, not a registry.** Spawned agents announce themselves on the task broadcast subject; other agents respond. No central bookkeeping; orchestrators track who's online from message flow.
 
@@ -178,7 +170,6 @@ Drop any image file from the Changed Files / Explorer panel onto the canvas. Reu
 - `GroupingControls` chip bar (level reorder/add) — replaced by Settings → Entity Labels.
 - `file-touched` / `file-read` hook endpoints.
 - `installHooks` / `removeHooks` machinery — file tracking is now the git diff poll + process-tree status watcher.
-- Old hardcoded `patterns.ts` — replaced by file-based pattern discovery under `~/.config/tinstar/patterns/`.
 
 ---
 

@@ -34,7 +34,6 @@ import { registerSaloonSubs } from './api/saloonBridge'
 import { bootstrapHierarchicalTopicMetadata } from './topic-metadata'
 import { NatsHealthMonitor } from './nats-health'
 import { natsControlSocketPath } from './sessions/backends/tmux'
-import { SessionReadinessTracker } from './sessions/readiness'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
 import { createTelemetryRoutes } from './api/telemetry.js'
@@ -107,14 +106,12 @@ export function initBackend(): RouteContext {
   let natsManager: NatsManager | undefined
   let natsTraffic: NatsTrafficBridge | undefined
   let natsHealth: NatsHealthMonitor | undefined
-  let readinessTracker: SessionReadinessTracker | undefined
 
   if (!shutdownRegistered) {
     shutdownRegistered = true
     const shutdown = async () => {
       try { natsHealth?.stop() } catch { /* ignore */ }
       try { await natsTraffic?.stop() } catch { /* ignore */ }
-      try { await readinessTracker?.stop() } catch { /* ignore */ }
       try { await natsManager?.stop() } catch { /* ignore */ }
       try { await observability.stop() } catch { /* ignore */ }
       try { telemetryRoutes.stopPolling() } catch { /* ignore */ }
@@ -193,10 +190,6 @@ export function initBackend(): RouteContext {
       }
       natsHealth.start()
     }
-
-    // Start session readiness tracker — listens for tinstar.ready.> signals
-    readinessTracker = new SessionReadinessTracker(natsManager!.url)
-    readinessTracker.start()
   })
 
   const fastSim = process.env.TINSTAR_FAST_SIM === '1'
@@ -459,7 +452,6 @@ export function initBackend(): RouteContext {
     slashRegistry, slashUsage, otlpExporter,
     get natsTraffic() { return natsTraffic },
     get natsHealth() { return natsHealth },
-    get readinessTracker() { return readinessTracker },
   }
 
   // Auto-start the marshal so it's always available without a UI nudge.

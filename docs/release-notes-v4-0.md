@@ -114,6 +114,10 @@ Skill location: `agent-skills/skills/all-hands/SKILL.md` (+ `assets/`, `referenc
 
 ---
 
+## Removed: orchestration patterns
+
+The "patterns" subsystem shipped in v3.7 (`src/server/patterns/`, `/api/patterns`, the dropdown in CreateSessionDialog, pattern files under `~/.config/tinstar/patterns/*.md`, and the supporting `SessionReadinessTracker` that watched for `tinstar.ready.>`) was retired in V4.1. Hands (`docs/release-notes-v3-7.md` § Multi-agent orchestration) and the `/all-hands` skill (above) replaced it as the primary multi-agent primitive. The pattern handler in `POST /api/sessions`, the `pattern:` body field, the Jinja-style template interpolation (`{{task}}`, `{{orchestrator}}`, `{{worker}}`), and the `tinstar.ready.<session>` readiness signaling all went with it. If you need that shape back, design fresh — don't restore the old code.
+
 ## Retired design docs
 
 `docs/superpowers/plans/` and `docs/superpowers/specs/` were retired with the v4.0 merge — same pattern v3.7 used, captured in `release-notes-v3-7.md`. The rationale above covers the load-bearing design decisions; individual specs live on in git history (`git log --all --oneline -- docs/superpowers/specs/<file>`).

@@ -108,7 +108,6 @@ function buildNatsSubject(
 
   return `tinstar.${spaceName}.${initName}.${epicName}.${taskName}.${sanitize(sessionName)}`
 }
-import { discoverPatterns, getPatternByName, interpolateSessionConfig, buildOrchestrationPlan, type TemplateVars } from '../patterns'
 import { discoverHands, getHandByName } from '../hands'
 
 // ─── NATS socket communication ─────────────────────────────────────────
@@ -444,7 +443,6 @@ async function createSessionInternal(
       basePath: isWorktree ? projectPath : null,
     },
     profile,
-    // Note: oneshot intentionally not supported in createSessionInternal - pattern sessions are always persistent
     oneshot: false,
     skipPermissions,
     cliTemplate: cliTemplateName ?? null,
@@ -543,7 +541,6 @@ export interface RouteContext {
   readyQueue: ReadyQueue
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
   natsHealth?: import('../nats-health').NatsHealthMonitor
-  readinessTracker?: import('../sessions/readiness').SessionReadinessTracker
   telemetryRoutes?: TelemetryRoutes
   ccQuotaService?: import('../cc-quota/service').CcQuotaService
   slashRegistry?: SlashCommandRegistry
@@ -2092,7 +2089,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, pattern: patternName, hand: handName } = JSON.parse(body)
+        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
@@ -2102,173 +2099,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         if (getSession(sessDir, name)) {
           return json(res, { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }, 409)
-        }
-
-        // Handle pattern-based session creation with k8s-style orchestration
-        if (patternName) {
-          const pattern = getPatternByName(patternName)
-          if (!pattern) {
-            return json(res, { ok: false, error: { code: 'PATTERN_NOT_FOUND', message: `Pattern '${patternName}' not found` } }, 404)
-          }
-
-          if (!pattern.sessions.some(s => s.role === 'orchestrator')) {
-            return json(res, { ok: false, error: { code: 'INVALID_PATTERN', message: 'Pattern must have an orchestrator session' } }, 400)
-          }
-
-          // Build orchestration plan (handles replicas, topological sort)
-          const plan = buildOrchestrationPlan(pattern, name)
-          log.info('patterns', `orchestration plan for ${patternName}:`, {
-            spawnOrder: plan.spawnOrder.map(s => s.sessionName),
-            readinessRequired: [...plan.readinessRequired],
-          })
-
-          // Build NATS subjects for template interpolation
-          const sessionNames: Record<string, string> = {}
-          for (const entry of plan.spawnOrder) {
-            if (!sessionNames[entry.role]) {
-              sessionNames[entry.role] = entry.sessionName
-            }
-          }
-
-          const templateVars: TemplateVars = {
-            task: taskId ?? name,
-            taskId: taskId ?? '',
-          }
-          templateVars.orchestrator = sessionNames.orchestrator ? buildNatsSubject(sessionNames.orchestrator, ctx.docStore, taskId, epicId, initiativeId) : ''
-          templateVars.worker = sessionNames.worker ? buildNatsSubject(sessionNames.worker, ctx.docStore, taskId, epicId, initiativeId) : ''
-
-          const createCtx: CreateSessionContext = {
-            cfg,
-            sessDir,
-            docStore: ctx.docStore,
-            readyQueue: ctx.readyQueue,
-            sse: ctx.sse,
-            emitSessionEvent,
-            secrets,
-            dashboardUrl,
-            natsTraffic: ctx.natsTraffic,
-            natsHealth: ctx.natsHealth,
-          }
-
-          // Check if any session needs a worktree — if so, create ONE shared worktree for all
-          const needsWorktree = pattern.sessions.some(s => s.config.worktree)
-          let sharedWorktreePath: string | null = null
-
-          if (needsWorktree && project) {
-            const projectPath = getProject(cfg.files.projects, project)
-            if (projectPath) {
-              try {
-                sharedWorktreePath = await createWorktree(projectPath, name)
-                log.info('patterns', `created shared worktree for pattern: ${sharedWorktreePath}`)
-              } catch (err) {
-                log.warn('patterns', `failed to create shared worktree: ${(err as Error).message}`)
-              }
-            }
-          }
-
-          const createdSessions: string[] = []
-          const errors: string[] = []
-          const startedSessions = new Set<string>()
-
-          // Spawn sessions in order, waiting for readiness where required
-          for (const entry of plan.spawnOrder) {
-            const { sessionName, role, config } = entry
-            templateVars.sessionId = sessionName
-
-            // Check if we need to wait for any dependencies to be ready
-            const depRoles = plan.dependencies.get(sessionName) ?? []
-            for (const depRole of depRoles) {
-              const condition = config.dependsOn?.[depRole]?.condition ?? 'started'
-
-              if (condition === 'ready') {
-                // Wait for all sessions with this role to signal ready
-                const depSessions = plan.spawnOrder.filter(s => s.role === depRole).map(s => s.sessionName)
-                log.info('patterns', `${sessionName} waiting for ${depSessions.join(', ')} to be ready`)
-
-                if (ctx.readinessTracker) {
-                  const ready = await ctx.readinessTracker.waitForAllReady(depSessions, 60000)
-                  if (!ready) {
-                    errors.push(`${sessionName}: timed out waiting for ${depRole} to be ready`)
-                    continue
-                  }
-                  log.info('patterns', `${sessionName} dependencies ready, spawning`)
-                }
-              }
-            }
-
-            const interpolatedConfig = interpolateSessionConfig(config as unknown as Record<string, unknown>, templateVars) as typeof config
-
-            // Resolve hand reference if present
-            let sessionPrompt: string | undefined
-            if (interpolatedConfig.hand) {
-              const hand = getHandByName(interpolatedConfig.hand as string)
-              if (!hand) {
-                errors.push(`${sessionName}: hand '${interpolatedConfig.hand}' not found`)
-                continue
-              }
-              // Use hand's prompt and cliTemplate
-              sessionPrompt = hand.prompt
-              if (interpolatedConfig.prompt) {
-                sessionPrompt = `${hand.prompt}\n\n---\n\n${interpolatedConfig.prompt}`
-              }
-              // Override cliTemplate if not explicitly set
-              if (!interpolatedConfig.cliTemplate) {
-                interpolatedConfig.cliTemplate = hand.cliTemplate
-              }
-            } else if (role === 'orchestrator') {
-              const patternPrompt = (interpolatedConfig.prompt as string | undefined) ?? ''
-              sessionPrompt = prompt ? `${prompt}\n\n---\n\n${patternPrompt}` : patternPrompt
-            } else {
-              sessionPrompt = interpolatedConfig.prompt as string | undefined
-            }
-
-            // Mark session as started for readiness tracking
-            ctx.readinessTracker?.markStarted(sessionName)
-
-            // Use shared worktree for all pattern sessions (don't create individual worktrees)
-            const result = await createSessionInternal({
-              name: sessionName,
-              backend: (interpolatedConfig.backend ?? backend) as 'docker' | 'tmux',
-              project: interpolatedConfig.project ?? project,
-              worktree: false,  // Don't create new worktree — use shared one
-              worktreePath: sharedWorktreePath ?? interpolatedConfig.worktreePath as string | undefined,
-              profile: interpolatedConfig.profile ?? profile,
-              skipPermissions: interpolatedConfig.skipPermissions ?? skipPermissions,
-              cliTemplate: interpolatedConfig.cliTemplate ?? cliTemplateName,
-              prompt: sessionPrompt,
-              taskId,
-              epicId,
-              initiativeId,
-              color: colorParam,
-              nats: { enabled: true },
-            }, createCtx)
-
-            if (result.ok) {
-              createdSessions.push(sessionName)
-              startedSessions.add(sessionName)
-
-              // For sessions with readiness.nats: auto, publish ready signal
-              if (config.readiness?.nats === 'auto' && ctx.readinessTracker) {
-                // Fire and forget — don't block on the delay
-                ctx.readinessTracker.publishReady(sessionName).catch(err => {
-                  log.warn('patterns', `failed to publish ready for ${sessionName}: ${(err as Error).message}`)
-                })
-              }
-            } else {
-              errors.push(`${sessionName}: ${result.error.message}`)
-            }
-          }
-
-          if (createdSessions.length === 0) {
-            return json(res, { ok: false, error: { code: 'PATTERN_SPAWN_FAILED', message: `All pattern sessions failed: ${errors.join(', ')}` } }, 500)
-          }
-
-          if (errors.length > 0) {
-            log.warn('patterns', `some pattern sessions failed: ${errors.join(', ')}`)
-          }
-
-          log.info('patterns', `created pattern sessions: ${createdSessions.join(', ')}`)
-          return json(res, { ok: true, data: { pattern: patternName, sessions: createdSessions, errors: errors.length > 0 ? errors : undefined } }, 201)
         }
 
         try {
@@ -3303,23 +3133,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
       json(res, { ok: true })
       return true
-    }
-
-    // GET /api/patterns
-    if (method === 'GET' && url === '/api/patterns') {
-      const patterns = discoverPatterns()
-      // Return pattern info with session details for UI
-      const data = patterns.map(p => ({
-        name: p.name,
-        description: p.description,
-        sessions: p.sessions.map(s => ({
-          role: s.role,
-          cliTemplate: s.config.cliTemplate,
-          backend: s.config.backend,
-          worktree: s.config.worktree,
-        })),
-      }))
-      return json(res, { ok: true, data })
     }
 
     // GET /api/hands
