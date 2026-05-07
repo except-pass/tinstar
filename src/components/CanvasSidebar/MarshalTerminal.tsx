@@ -42,6 +42,26 @@ export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
     else void ensure()
   }, [state.phase, ensure])
 
+  const restart = useCallback(async () => {
+    if (ensuringRef.current) return
+    ensuringRef.current = true
+    setState({ phase: 'creating' })
+    try {
+      const res = await apiFetch('/api/marshal/restart', { method: 'POST' })
+      const body = await res.json() as { ok: boolean; data?: { name: string; port?: number; state?: string }; error?: { message?: string } }
+      if (!body.ok || !body.data?.port) {
+        setState({ phase: 'error', message: body.error?.message ?? 'marshal session has no port yet' })
+      } else {
+        setState({ phase: 'ready', port: body.data.port, sessionName: body.data.name })
+        setTick(t => t + 1)
+      }
+    } catch (err) {
+      setState({ phase: 'error', message: (err as Error).message })
+    } finally {
+      ensuringRef.current = false
+    }
+  }, [])
+
   return (
     <div className="flex-1 min-h-0 flex flex-col" data-testid="marshal-terminal">
       <div
@@ -54,14 +74,24 @@ export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
           {state.phase === 'creating' && <span className="text-slate-500 normal-case tracking-normal">starting…</span>}
           {state.phase === 'error' && <span className="text-accent-red normal-case tracking-normal">error</span>}
         </div>
-        <button
-          onClick={refresh}
-          className="text-slate-500 hover:text-slate-300"
-          title="Refresh marshal terminal"
-          data-testid="marshal-refresh"
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>refresh</span>
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={refresh}
+            className="text-slate-500 hover:text-slate-300"
+            title="Refresh marshal terminal"
+            data-testid="marshal-refresh"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>refresh</span>
+          </button>
+          <button
+            onClick={() => void restart()}
+            className="text-slate-500 hover:text-accent-red"
+            title="Tear down the marshal session and start a fresh one (use when refresh isn't enough — e.g. after a crash)"
+            data-testid="marshal-restart"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>restart_alt</span>
+          </button>
+        </div>
       </div>
       <div className="flex-1 min-h-0 relative bg-black">
         {state.phase === 'ready' ? (

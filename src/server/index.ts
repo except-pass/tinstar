@@ -5,7 +5,7 @@ import { OTelStore } from './stores/otel-store'
 import { DocumentProcessor } from './processors/document-processor'
 import { OTelProcessor } from './processors/otel-processor'
 import { SSEBroadcaster } from './api/sse'
-import { handleRequest, type RouteContext } from './api/routes'
+import { handleRequest, ensureMarshalSession, type RouteContext } from './api/routes'
 import { MockSensorSimulator } from './simulator/mock-sensors'
 import { join } from 'node:path'
 import { readdirSync, existsSync, rmSync } from 'node:fs'
@@ -453,7 +453,7 @@ export function initBackend(): RouteContext {
     startSimulator()
   }
 
-  return {
+  const ctx: RouteContext = {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
     sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
     slashRegistry, slashUsage, otlpExporter,
@@ -461,6 +461,20 @@ export function initBackend(): RouteContext {
     get natsHealth() { return natsHealth },
     get readinessTracker() { return readinessTracker },
   }
+
+  // Auto-start the marshal so it's always available without a UI nudge.
+  // Deferred so it doesn't block server startup or interleave with the
+  // session rehydration that just ran above.
+  setImmediate(() => {
+    ensureMarshalSession(ctx)
+      .then(result => {
+        if (!result.ok) log.warn('marshal-boot', `auto-start failed: ${result.error.code} ${result.error.message}`)
+        else log.info('marshal-boot', `marshal session ready: ${result.data.state}`)
+      })
+      .catch(err => log.warn('marshal-boot', `auto-start threw: ${(err as Error).message}`))
+  })
+
+  return ctx
 }
 
 export function tinstarBackend(): Plugin {

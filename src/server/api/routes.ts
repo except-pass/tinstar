@@ -613,6 +613,99 @@ function readBody(req: IncomingMessage): Promise<string> {
   })
 }
 
+const MARSHAL_NAME = 'marshal'
+
+/** Build a CreateSessionContext from the long-lived RouteContext. The
+ * per-request handler builds this same shape inline; this helper lets the
+ * boot path and the marshal endpoints reuse it without duplicating wiring. */
+function buildCreateSessionContext(ctx: RouteContext): CreateSessionContext | null {
+  if (!ctx.sessionConfig) return null
+  const cfg = ctx.sessionConfig
+  return {
+    cfg,
+    sessDir: cfg.dirs.sessions,
+    docStore: ctx.docStore,
+    readyQueue: ctx.readyQueue,
+    sse: ctx.sse,
+    emitSessionEvent: (type, payload) => ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as unknown as Parameters<typeof ctx.bus.emit>[0]),
+    secrets: () => loadSecrets(cfg.dirs.secrets),
+    dashboardUrl: `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`,
+    natsTraffic: ctx.natsTraffic,
+    natsHealth: ctx.natsHealth,
+  }
+}
+
+type MarshalResult =
+  | { ok: true; data: { name: string; port: number | null; state: string } }
+  | { ok: false; error: { code: string; message: string } }
+
+/** Idempotent — returns the existing marshal session if one is on disk,
+ * otherwise creates a fresh one. Used by /api/marshal/ensure and called
+ * from server boot so the marshal is always available without a UI nudge. */
+export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalResult> {
+  const createCtx = buildCreateSessionContext(ctx)
+  if (!createCtx) return { ok: false, error: { code: 'NO_CONFIG', message: 'sessionConfig unavailable' } }
+
+  const existing = getSession(createCtx.sessDir, MARSHAL_NAME)
+  if (existing) {
+    return { ok: true, data: { name: existing.name, port: existing.port ?? null, state: existing.state } }
+  }
+
+  const hand = getHandByName('marshal')
+  if (!hand) return { ok: false, error: { code: 'HAND_NOT_FOUND', message: 'marshal hand definition is missing' } }
+
+  const result = await createSessionInternal({
+    name: MARSHAL_NAME,
+    backend: 'tmux',
+    skipPermissions: true,
+    cliTemplate: hand.cliTemplate,
+    prompt: hand.prompt,
+  }, createCtx)
+  if (!result.ok) return { ok: false, error: result.error }
+
+  const sess = getSession(createCtx.sessDir, MARSHAL_NAME)
+  return { ok: true, data: { name: MARSHAL_NAME, port: sess?.port ?? null, state: sess?.state ?? 'running' } }
+}
+
+/** Tear down the existing marshal (if any) and create a fresh one. Used
+ * when the session has crashed or wedged — equivalent to the user clicking
+ * "restart marshal" in the sidebar. Synchronously awaits cleanup so the
+ * subsequent create won't race with disk-dir removal. */
+export async function restartMarshalSession(ctx: RouteContext): Promise<MarshalResult> {
+  const createCtx = buildCreateSessionContext(ctx)
+  if (!createCtx) return { ok: false, error: { code: 'NO_CONFIG', message: 'sessionConfig unavailable' } }
+  const { cfg, sessDir } = createCtx
+
+  const existing = getSession(sessDir, MARSHAL_NAME)
+  if (existing) {
+    try { writeFileSync(join(sessDir, MARSHAL_NAME, '.deleting'), '') } catch { /* dir may already be gone */ }
+    ctx.docStore.deleteRun(MARSHAL_NAME)
+    ctx.readyQueue.onDelete(MARSHAL_NAME)
+    ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
+    ctx.sse.broadcastReadyQueueUpdate()
+    createCtx.emitSessionEvent('managed_session.deleted', { name: MARSHAL_NAME })
+
+    try {
+      if (existing.backend === 'docker') {
+        await dockerBackend.deleteContainer(cfg, existing)
+      } else {
+        await tmuxBackend.deleteTmuxSession(cfg, existing)
+        if (existing.port) tmuxBackend.releasePort(existing.port)
+      }
+    } catch (err) {
+      log.warn('marshal-restart', `backend cleanup: ${(err as Error).message}`)
+    }
+    if (!deleteSession(sessDir, MARSHAL_NAME)) {
+      // Disk dir didn't go away — wait briefly then try once more so the
+      // following create doesn't trip the SESSION_EXISTS guard.
+      await new Promise(r => setTimeout(r, 500))
+      deleteSession(sessDir, MARSHAL_NAME)
+    }
+  }
+
+  return ensureMarshalSession(ctx)
+}
+
 export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = req.url ?? ''
   const method = req.method ?? 'GET'
@@ -3354,40 +3447,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/marshal/ensure — return (and create on first call) the global marshal session.
     // The marshal is the user's persistent in-app copilot that lives in the canvas sidebar.
     if (method === 'POST' && url === '/api/marshal/ensure') {
-      const MARSHAL_NAME = 'marshal'
-      const existing = getSession(sessDir, MARSHAL_NAME)
-      if (existing) {
-        return json(res, { ok: true, data: { name: existing.name, port: existing.port, state: existing.state } })
-      }
+      ensureMarshalSession(ctx)
+        .then(result => json(res, result, result.ok ? 200 : 500))
+        .catch(err => json(res, { ok: false, error: { code: 'MARSHAL_CREATE_FAILED', message: (err as Error).message } }, 500))
+      return true
+    }
 
-      const hand = getHandByName('marshal')
-      if (!hand) {
-        return json(res, { ok: false, error: { code: 'HAND_NOT_FOUND', message: "marshal hand definition is missing" } }, 500)
-      }
-
-      const createCtx: CreateSessionContext = {
-        cfg, sessDir,
-        docStore: ctx.docStore,
-        readyQueue: ctx.readyQueue,
-        sse: ctx.sse,
-        emitSessionEvent,
-        secrets,
-        dashboardUrl,
-        natsTraffic: ctx.natsTraffic,
-        natsHealth: ctx.natsHealth,
-      }
-
-      createSessionInternal({
-        name: MARSHAL_NAME,
-        backend: 'tmux',
-        skipPermissions: true,
-        cliTemplate: hand.cliTemplate,
-        prompt: hand.prompt,
-      }, createCtx).then(result => {
-        if (!result.ok) return json(res, { ok: false, error: result.error }, 500)
-        const sess = getSession(sessDir, MARSHAL_NAME)
-        return json(res, { ok: true, data: { name: MARSHAL_NAME, port: sess?.port, state: sess?.state ?? 'running' } })
-      }).catch(err => json(res, { ok: false, error: { code: 'MARSHAL_CREATE_FAILED', message: (err as Error).message } }, 500))
+    // POST /api/marshal/restart — tear down the existing marshal session and
+    // create a fresh one. Used by the sidebar's restart button when the
+    // marshal has crashed or wedged and refresh-iframe alone won't recover.
+    if (method === 'POST' && url === '/api/marshal/restart') {
+      restartMarshalSession(ctx)
+        .then(result => json(res, result, result.ok ? 200 : 500))
+        .catch(err => json(res, { ok: false, error: { code: 'MARSHAL_RESTART_FAILED', message: (err as Error).message } }, 500))
       return true
     }
   }
