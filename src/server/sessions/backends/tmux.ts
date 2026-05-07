@@ -545,29 +545,53 @@ export function onTtydRestart(sessionName: string, callback: (pid: number) => vo
 }
 
 /**
- * Force the target pane out of any active mode (copy-mode and any nested
- * sub-prompts like search-forward / jump-backward). A single -X cancel
- * only pops one level — if the user is in copy-mode AND has a search/jump
- * sub-prompt open (the yellow command bar), one cancel dismisses the
- * sub-prompt but leaves the pane in copy-mode, and the next send-keys
- * text goes to the copy-mode handler instead of the shell. We loop until
- * #{pane_in_mode} reports 0 (capped to avoid spinning on a wedged pane).
+ * Force the target pane fully out of copy-mode and any active command-prompt
+ * overlay (the yellow bar — search-forward, jump-backward, goto-line, etc.).
+ *
+ * Two failure modes that the naive "-X cancel" doesn't handle:
+ *   1. Command-prompt overlays in vi copy-mode (`:` `/` `?` `f` `F` `t` `T`)
+ *      are server-side overlays, not pane modes. -X cancel doesn't dismiss
+ *      them — they need a literal Escape keystroke. While the overlay is
+ *      active, copy-mode itself remains active and any subsequent text goes
+ *      to the mode handler, where the *next* prompt char (e.g. ':') opens
+ *      *another* overlay (e.g. "(goto line)").
+ *   2. Session-level targets (`-t sessionName`) resolve to "active pane in
+ *      active window" each time, which can shift between commands. We
+ *      resolve a stable pane_id once and use it everywhere.
  */
 async function exitAnyMode(tmuxName: string): Promise<void> {
-  for (let i = 0; i < 4; i++) {
+  let paneId: string
+  try {
+    const { stdout } = await execFileAsync('tmux', ['display-message', '-p', '-t', tmuxName, '#{pane_id}'])
+    paneId = stdout.trim()
+    if (!paneId) return
+  } catch {
+    return
+  }
+
+  for (let i = 0; i < 5; i++) {
     let inMode = '0'
     try {
-      const { stdout } = await execFileAsync('tmux', ['display-message', '-p', '-t', tmuxName, '#{pane_in_mode}'])
+      const { stdout } = await execFileAsync('tmux', ['display-message', '-p', '-t', paneId, '#{pane_in_mode}'])
       inMode = stdout.trim()
     } catch {
-      // pane lookup failed — bail; downstream send-keys will surface a real error
       return
     }
     if (inMode !== '1') return
+
+    // Literal Escape: dismisses any active command-prompt overlay. In
+    // copy-mode (which we've confirmed via pane_in_mode) Escape is bound to
+    // cancel/clear-selection — it never reaches the underlying shell.
     try {
-      await execFileAsync('tmux', ['send-keys', '-X', 'cancel', '-t', tmuxName])
+      await execFileAsync('tmux', ['send-keys', '-t', paneId, 'Escape'])
     } catch {
-      // "not currently in a mode" — race with another exit; re-check on next iter
+      // ignore — re-check on next iter
+    }
+    // -X cancel: exits copy-mode itself once any overlay is dismissed.
+    try {
+      await execFileAsync('tmux', ['send-keys', '-X', 'cancel', '-t', paneId])
+    } catch {
+      // "not currently in a mode" — already exited; loop will confirm
     }
   }
 }
