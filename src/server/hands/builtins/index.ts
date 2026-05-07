@@ -91,7 +91,10 @@ const BUILTIN_HANDS: Hand[] = [
   {
     name: 'marshal',
     description: "The Tinstar marshal — your dedicated copilot for the live Tinstar session. Knows the dashboard's APIs, can move your viewport, find sessions/widgets/files, and answer questions about everything happening on your canvas.",
-    cliTemplate: 'Claude (multi-agent)',
+    // Uses the dedicated 'Marshal' CLI template (claude + haiku, NATS-enabled).
+    // Override by adding a 'Marshal' entry to cliTemplates in
+    // ~/.config/tinstar/config.json or define your own in user hands dir.
+    cliTemplate: 'Marshal',
     prompt: MARSHAL_PROMPT,
   },
 ]

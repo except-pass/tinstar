@@ -107,6 +107,17 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     resumeCmd: 'codex resume --last --full-auto',
   },
   {
+    // Dedicated template for the in-app marshal (the canvas-sidebar copilot).
+    // Defaults to Haiku for snappy, low-cost responses; users can override by
+    // dropping a same-named entry into ~/.config/tinstar/config.json's
+    // cliTemplates array.
+    name: 'Marshal',
+    icon: '/agent-icons/claude.svg',
+    adapter: 'claude',
+    startCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --model haiku --session-id {sessionId} -- {prompt}',
+    resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --model haiku --resume {sessionId}',
+  },
+  {
     name: 'Cursor Agent',
     icon: '/agent-icons/cursor.svg',
     adapter: 'generic',
