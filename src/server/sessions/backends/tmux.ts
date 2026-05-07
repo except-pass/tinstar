@@ -544,28 +544,47 @@ export function onTtydRestart(sessionName: string, callback: (pid: number) => vo
   if (entry) entry.onRestart = callback
 }
 
+/**
+ * Force the target pane out of any active mode (copy-mode and any nested
+ * sub-prompts like search-forward / jump-backward). A single -X cancel
+ * only pops one level — if the user is in copy-mode AND has a search/jump
+ * sub-prompt open (the yellow command bar), one cancel dismisses the
+ * sub-prompt but leaves the pane in copy-mode, and the next send-keys
+ * text goes to the copy-mode handler instead of the shell. We loop until
+ * #{pane_in_mode} reports 0 (capped to avoid spinning on a wedged pane).
+ */
+async function exitAnyMode(tmuxName: string): Promise<void> {
+  for (let i = 0; i < 4; i++) {
+    let inMode = '0'
+    try {
+      const { stdout } = await execFileAsync('tmux', ['display-message', '-p', '-t', tmuxName, '#{pane_in_mode}'])
+      inMode = stdout.trim()
+    } catch {
+      // pane lookup failed — bail; downstream send-keys will surface a real error
+      return
+    }
+    if (inMode !== '1') return
+    try {
+      await execFileAsync('tmux', ['send-keys', '-X', 'cancel', '-t', tmuxName])
+    } catch {
+      // "not currently in a mode" — race with another exit; re-check on next iter
+    }
+  }
+}
+
 export async function sendKeys(config: TinstarConfig, sessionName: string, keys: string[]): Promise<void> {
   const tmuxName = tmuxSessionName(config, sessionName)
-  // Cancel copy-mode if active (see sendPrompt for rationale)
-  try {
-    await execFileAsync('tmux', ['send-keys', '-X', 'cancel', '-t', tmuxName])
-  } catch {
-    // "not in a mode" — expected
-  }
+  await exitAnyMode(tmuxName)
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, ...keys])
 }
 
 export async function sendPrompt(config: TinstarConfig, sessionName: string, prompt: string): Promise<void> {
   const tmuxName = tmuxSessionName(config, sessionName)
-  // Cancel copy-mode if active — the pane enters copy-mode when the user
-  // scrolls in the ttyd terminal, and then send-keys silently goes to the
-  // copy-mode handler instead of the underlying process.  "not in a mode"
-  // error means copy-mode wasn't active, which is fine — ignore it.
-  try {
-    await execFileAsync('tmux', ['send-keys', '-X', 'cancel', '-t', tmuxName])
-  } catch {
-    // "not in a mode" — expected when pane isn't in copy-mode
-  }
+  // The pane enters copy-mode when the user scrolls in the ttyd terminal.
+  // While in copy-mode (or a nested sub-prompt like search/jump), send-keys
+  // text goes to the mode handler instead of the underlying process — which
+  // is how a prompt starting with 'F' silently triggers "jump backward".
+  await exitAnyMode(tmuxName)
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, prompt, ''])
   await new Promise(r => setTimeout(r, 300))
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, '', 'Enter'])
