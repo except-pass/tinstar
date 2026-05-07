@@ -2468,6 +2468,64 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
+    // POST /api/tasks/:taskId/sessions — create a session inside a task with
+    // automatic settings inheritance. Resolves the task's project (and any
+    // other inheritable fields) from the entity hierarchy so the caller only
+    // has to supply the session name. Designed for the marshal and other
+    // automation that wants one-call session creation in task context.
+    //
+    // Body: { name, ...overrides } where overrides may include any field
+    // that POST /api/sessions accepts (cliTemplate, backend, prompt, nats,
+    // color, etc). Explicit overrides win over resolved task settings.
+    {
+      const taskSessionsMatch = method === 'POST' && url.match(/^\/api\/tasks\/([^/]+)\/sessions$/)
+      if (taskSessionsMatch) {
+        const taskId = taskSessionsMatch[1]!
+        readBody(req).then(async (body) => {
+          const overrides = body ? JSON.parse(body) : {}
+          if (!overrides.name) {
+            return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
+          }
+
+          const task = ctx.docStore.getTask(taskId)
+          if (!task) return json(res, { ok: false, error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found` } }, 404)
+
+          const settings = resolveEntitySettings(taskId, 'task', ctx.docStore)
+          const resolvedProject = settings?.resolved?.project
+
+          const params: CreateSessionParams = {
+            backend: 'tmux',
+            nats: { enabled: true },
+            ...overrides,
+            project: overrides.project ?? resolvedProject,
+            taskId,
+            epicId: overrides.epicId ?? task.epicId,
+            initiativeId: overrides.initiativeId ?? task.initiativeId,
+          }
+
+          const createCtx: CreateSessionContext = {
+            cfg, sessDir,
+            docStore: ctx.docStore,
+            readyQueue: ctx.readyQueue,
+            sse: ctx.sse,
+            emitSessionEvent,
+            secrets,
+            dashboardUrl,
+            natsTraffic: ctx.natsTraffic,
+            natsHealth: ctx.natsHealth,
+          }
+
+          const result = await createSessionInternal(params, createCtx)
+          if (!result.ok) {
+            const status = result.error.code === 'SESSION_EXISTS' ? 409 : 500
+            return json(res, result, status)
+          }
+          json(res, { ok: true, data: result.session }, 201)
+        }).catch(err => json(res, { ok: false, error: { code: 'INTERNAL', message: (err as Error).message } }, 500))
+        return true
+      }
+    }
+
     // POST /api/sessions/:name/stop
     if (method === 'POST' && url.endsWith('/stop') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')

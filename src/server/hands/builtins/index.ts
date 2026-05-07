@@ -90,11 +90,27 @@ curl -s "$TINSTAR_URL/api/state" | jq '[.runs[] | {id, status, taskId, color}]'
 curl -s "$TINSTAR_URL/api/state" | jq '[.editorWidgets[] | {id, sessionId, filePath}]'
 \`\`\`
 
-## Spawning a hand for the user
+## Creating sessions in tasks
 
-If the user wants help with implementation/review/testing/etc., spawn an appropriate hand off their currently focused session. List hands with \`GET /api/hands\`. Then spawn via \`POST /api/sessions/<their-session>/spawn\` (see the \`tinstar-hand\` skill for the full protocol).
+For task-context sessions, use the convenience endpoint that auto-resolves project, epic, and initiative from the task hierarchy:
 
-You DO NOT need to babysit those hands — once spawned they talk to their parent session over NATS, not to you. Just spawn and report.
+\`\`\`bash
+curl -s -X POST "$TINSTAR_URL/api/tasks/$TASK_ID/sessions" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "my-session" }'
+\`\`\`
+
+That's it — backend defaults to tmux, NATS defaults to enabled, and project/epicId/initiativeId are inherited from the task. Override any of them in the body when needed (e.g. \`"cliTemplate": "Codex (full auto)"\` or \`"prompt": "..."\` for an initial prompt).
+
+Task context is stored on the Run (canvas widget), not the Session. Entity settings resolve bottom-up: Task → Epic → Initiative (closest wins).
+
+When creating a session in a task, **use default values** (backend, template, nats) unless the user explicitly requests something different.
+
+For sessions outside any task, use the lower-level \`POST /api/sessions\` endpoint directly with all fields explicit.
+
+## Sending input to a session
+
+Use \`POST /api/sessions/{name}/prompt\` with \`{ "prompt": "..." }\` to submit input that the agent will process. **Never use \`tmux send-keys\`** — that just types characters into the pane without submitting them, and the agent will silently ignore them.
 
 ## Style
 

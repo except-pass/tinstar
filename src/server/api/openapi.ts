@@ -185,6 +185,31 @@ export const spec = {
         responses: { 200: { description: 'Resolved settings' } },
       },
     },
+    '/api/tasks/{taskId}/sessions': {
+      post: {
+        tags: ['Tasks', 'Sessions'],
+        summary: 'Create a session in a task with auto-resolved settings',
+        description: 'One-call session creation in task context. Auto-resolves project from the task hierarchy (Task → Epic → Initiative, closest wins) and fills in epicId/initiativeId from the task. Defaults: backend=tmux, nats enabled. Any field in the body overrides resolved/default values.',
+        parameters: [{ name: 'taskId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: {
+            type: 'object',
+            required: ['name'],
+            properties: {
+              name: { type: 'string', description: 'Session name (unique identifier)' },
+              backend: { type: 'string', enum: ['docker', 'tmux'], default: 'tmux' },
+              cliTemplate: { type: 'string' },
+              prompt: { type: 'string', description: 'Initial message to send to the agent' },
+              project: { type: 'string', description: 'Override the resolved project' },
+              color: { type: 'string' },
+              nats: { type: 'object', properties: { enabled: { type: 'boolean' }, subscriptions: { type: 'array', items: { type: 'string' } } } },
+            },
+          } } },
+        },
+        responses: { 201: { description: 'Session created and started' }, 400: { description: 'Missing name' }, 404: { description: 'Task not found' }, 409: { description: 'Session name already exists' } },
+      },
+    },
 
     // ── Worktrees ────────────────────────────────────────
     '/api/worktrees': {
