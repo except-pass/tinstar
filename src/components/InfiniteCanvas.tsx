@@ -11,8 +11,7 @@ import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useHotgroupContext } from '../hotkeys/HotgroupContext'
 import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
-import { CanvasMinimap } from './CanvasMinimap'
-import { CanvasHud } from './CanvasHud'
+import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
 
 interface Props {
@@ -243,6 +242,72 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       zoom: 1,
     })
   }, [focusRunId, getLayout, setCamera, onFocusHandled])
+
+  // Listen for marshal-driven viewport directives. The marshal hand POSTs
+  // /api/canvas/viewport which broadcasts a 'canvas:viewport' SSE event,
+  // which useServerEvents re-emits as a window event we pick up here.
+  useEffect(() => {
+    function resolveNodeId(detail: { nodeId?: string; sessionName?: string }): string | null {
+      if (detail.nodeId) return detail.nodeId
+      if (detail.sessionName) {
+        for (const run of runMap.values()) {
+          if (run.sessionId === detail.sessionName) return `run-${run.id}`
+        }
+      }
+      return null
+    }
+    function onViewport(e: Event) {
+      const detail = (e as CustomEvent).detail as {
+        action: 'set' | 'focus' | 'reset' | 'fit'
+        x?: number; y?: number; zoom?: number
+        nodeId?: string; sessionName?: string
+        padding?: number
+      }
+      const container = containerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+
+      if (detail.action === 'set') {
+        if (typeof detail.x !== 'number' || typeof detail.y !== 'number') return
+        setCamera(prev => ({
+          x: Math.round(detail.x!),
+          y: Math.round(detail.y!),
+          zoom: typeof detail.zoom === 'number' ? detail.zoom : prev.zoom,
+        }))
+      } else if (detail.action === 'reset') {
+        setCamera(prev => {
+          if (prev.zoom === 1) return prev
+          const cx = rect.width / 2
+          const cy = rect.height / 2
+          const ratio = 1 / prev.zoom
+          return {
+            x: Math.round(cx - (cx - prev.x) * ratio),
+            y: Math.round(cy - (cy - prev.y) * ratio),
+            zoom: 1,
+          }
+        })
+      } else if (detail.action === 'focus') {
+        const id = resolveNodeId(detail)
+        if (!id) return
+        const layout = getLayout(id)
+        if (!layout) return
+        centerOn(layout.x, layout.y, layout.width, layout.height, rect.width, rect.height, detail.padding ?? 80)
+      } else if (detail.action === 'fit') {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, count = 0
+        for (const layout of layouts.values()) {
+          minX = Math.min(minX, layout.x)
+          minY = Math.min(minY, layout.y)
+          maxX = Math.max(maxX, layout.x + layout.width)
+          maxY = Math.max(maxY, layout.y + layout.height)
+          count++
+        }
+        if (count === 0) return
+        centerOn(minX, minY, maxX - minX, maxY - minY, rect.width, rect.height, detail.padding ?? 80)
+      }
+    }
+    window.addEventListener('tinstar:canvas:viewport', onViewport)
+    return () => window.removeEventListener('tinstar:canvas:viewport', onViewport)
+  }, [setCamera, centerOn, getLayout, layouts, runMap])
 
   // Attach wheel listener with { passive: false }
   useEffect(() => {
@@ -1132,8 +1197,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       {/* Marquee selection box */}
       {marqueeStyle && <div style={marqueeStyle} />}
 
-      {/* Minimap */}
-      <CanvasMinimap
+      {/* Right-side canvas sidebar — telemetry + marshal terminal + minimap */}
+      <CanvasSidebar
         camera={camera}
         setCamera={setCamera}
         layouts={layouts}
@@ -1143,15 +1208,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         browserWidgetMap={browserWidgetMap}
         imageWidgetMap={imageWidgetMap}
         natsTrafficWidgetMap={natsTrafficWidgetMap}
-        toggleRef={minimapToggleRef}
-      />
-
-      {/* Telemetry HUD (top-right) */}
-      <CanvasHud
-        toggleRef={hudToggleRef}
-        runMap={runMap}
         onFocusRun={onFocusRun}
         selectedRunIds={selectionState.selectedType === 'run' ? selectionState.selectedIds : undefined}
+        hudToggleRef={hudToggleRef}
+        minimapToggleRef={minimapToggleRef}
       />
 
       {/* Bottom-right zoom indicator */}

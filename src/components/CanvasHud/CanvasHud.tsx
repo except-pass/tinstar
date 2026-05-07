@@ -17,9 +17,11 @@ interface Props {
   runMap: Map<string, Run>
   onFocusRun?: (runId: string) => void
   selectedRunIds?: Set<string>
+  /** When true, render in normal document flow instead of as a floating top-right overlay. */
+  embedded?: boolean
 }
 
-export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds }: Props) {
+export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embedded = false }: Props) {
   const { snapshot } = useTelemetryHud()
   const { snapshot: ccQuota } = useCcQuota()
   const [visible, setVisible] = useState(() => {
@@ -44,7 +46,17 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds }: Pro
   }, [toggleRef, toggle])
 
   if (!visible) {
-    return (
+    return embedded ? (
+      <button
+        onClick={toggle}
+        className="block w-full px-2 py-1 bg-surface-base/50 border-b border-white/10 text-slate-500 hover:text-slate-300 transition-colors select-none text-2xs font-mono uppercase tracking-wider"
+        title="Show telemetry (T)"
+        data-testid="canvas-hud-toggle"
+      >
+        <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: '14px' }}>insights</span>
+        telemetry
+      </button>
+    ) : (
       <button
         onClick={toggle}
         className="absolute top-3 right-3 bg-surface-panel border border-white/10 p-1.5 rounded-sm text-slate-500 hover:text-slate-300 transition-colors select-none z-30"
@@ -57,16 +69,25 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds }: Pro
   }
   if (!snapshot || snapshot.state === 'disabled') return null
 
-  const wrapStyle: React.CSSProperties = {
-    position: 'absolute', top: 14, right: 14, width: 260,
-    background: 'rgba(15,20,30,0.92)',
-    border: '1px solid rgba(180,200,230,0.15)',
-    borderRadius: 10,
-    padding: '10px 12px',
-    color: '#e2e8f0',
-    fontFamily: "'Chakra Petch', sans-serif",
-    zIndex: 30,
-  }
+  const wrapStyle: React.CSSProperties = embedded
+    ? {
+        width: '100%',
+        background: 'transparent',
+        padding: '8px 10px',
+        color: '#e2e8f0',
+        fontFamily: "'Chakra Petch', sans-serif",
+        position: 'relative',
+      }
+    : {
+        position: 'absolute', top: 14, right: 14, width: 260,
+        background: 'rgba(15,20,30,0.92)',
+        border: '1px solid rgba(180,200,230,0.15)',
+        borderRadius: 10,
+        padding: '10px 12px',
+        color: '#e2e8f0',
+        fontFamily: "'Chakra Petch', sans-serif",
+        zIndex: 30,
+      }
 
   if (snapshot.state !== 'ready') {
     return (
