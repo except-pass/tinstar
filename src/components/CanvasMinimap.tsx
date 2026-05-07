@@ -22,6 +22,8 @@ interface MinimapProps {
   imageWidgetMap: Map<string, ImageWidget>
   natsTrafficWidgetMap: Map<string, NatsTrafficWidget>
   toggleRef?: React.MutableRefObject<(() => void) | null>
+  /** When true, render in normal document flow instead of as a floating bottom-right overlay. */
+  embedded?: boolean
 }
 
 /** Collect all non-container (work) nodes from the tree */
@@ -65,7 +67,7 @@ function getNodeColor(
 export function CanvasMinimap({
   camera, setCamera, layouts, tree,
   runMap, editorWidgetMap, browserWidgetMap, imageWidgetMap, natsTrafficWidgetMap,
-  toggleRef,
+  toggleRef, embedded = false,
 }: MinimapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [visible, setVisible] = useState(() => {
@@ -225,7 +227,17 @@ export function CanvasMinimap({
 
   if (!visible) {
     // Collapsed: show small icon button
-    return (
+    return embedded ? (
+      <button
+        onClick={toggle}
+        className="block w-full px-2 py-1 bg-surface-base/50 border-t border-white/10 text-slate-500 hover:text-slate-300 transition-colors select-none text-2xs font-mono uppercase tracking-wider"
+        title="Show minimap (M)"
+        data-testid="minimap-toggle"
+      >
+        <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: '14px' }}>map</span>
+        minimap
+      </button>
+    ) : (
       <button
         onClick={toggle}
         className="absolute bottom-12 right-3 bg-surface-panel border border-white/10 p-1.5 rounded-sm text-slate-500 hover:text-slate-300 transition-colors select-none"
@@ -237,17 +249,30 @@ export function CanvasMinimap({
     )
   }
 
-  return (
-    <div
-      className="absolute bottom-12 right-3 select-none group"
-      style={{
+  const containerStyle: React.CSSProperties = embedded
+    ? {
+        width: MINIMAP_W,
+        height: MINIMAP_H,
+        margin: '6px auto',
+        background: 'rgba(15, 23, 42, 0.85)',
+        border: '1px solid rgba(255, 255, 255, 0.1)',
+        borderRadius: 2,
+        cursor: 'crosshair',
+        position: 'relative',
+      }
+    : {
         width: MINIMAP_W,
         height: MINIMAP_H,
         background: 'rgba(15, 23, 42, 0.85)',
         border: '1px solid rgba(255, 255, 255, 0.1)',
         borderRadius: 2,
         cursor: 'crosshair',
-      }}
+      }
+
+  return (
+    <div
+      className={embedded ? 'select-none group' : 'absolute bottom-12 right-3 select-none group'}
+      style={containerStyle}
       data-testid="canvas-minimap"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

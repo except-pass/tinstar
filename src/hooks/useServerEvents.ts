@@ -131,6 +131,14 @@ function startSSE() {
     }
   })
 
+  es.addEventListener('canvas:viewport', (e: MessageEvent) => {
+    try {
+      window.dispatchEvent(new CustomEvent('tinstar:canvas:viewport', { detail: JSON.parse(e.data) }))
+    } catch {
+      // malformed event — drop silently
+    }
+  })
+
   es.addEventListener('heartbeat', () => {
     // Keep-alive, no action needed
   })

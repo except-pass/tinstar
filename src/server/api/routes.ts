@@ -3342,6 +3342,65 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       })
       return true
     }
+
+    // POST /api/marshal/ensure — return (and create on first call) the global marshal session.
+    // The marshal is the user's persistent in-app copilot that lives in the canvas sidebar.
+    if (method === 'POST' && url === '/api/marshal/ensure') {
+      const MARSHAL_NAME = 'marshal'
+      const existing = getSession(sessDir, MARSHAL_NAME)
+      if (existing) {
+        return json(res, { ok: true, data: { name: existing.name, port: existing.port, state: existing.state } })
+      }
+
+      const hand = getHandByName('marshal')
+      if (!hand) {
+        return json(res, { ok: false, error: { code: 'HAND_NOT_FOUND', message: "marshal hand definition is missing" } }, 500)
+      }
+
+      const createCtx: CreateSessionContext = {
+        cfg, sessDir,
+        docStore: ctx.docStore,
+        readyQueue: ctx.readyQueue,
+        sse: ctx.sse,
+        emitSessionEvent,
+        secrets,
+        dashboardUrl,
+        natsTraffic: ctx.natsTraffic,
+        natsHealth: ctx.natsHealth,
+      }
+
+      createSessionInternal({
+        name: MARSHAL_NAME,
+        backend: 'tmux',
+        skipPermissions: true,
+        cliTemplate: hand.cliTemplate,
+        prompt: hand.prompt,
+      }, createCtx).then(result => {
+        if (!result.ok) return json(res, { ok: false, error: result.error }, 500)
+        const sess = getSession(sessDir, MARSHAL_NAME)
+        return json(res, { ok: true, data: { name: MARSHAL_NAME, port: sess?.port, state: sess?.state ?? 'running' } })
+      }).catch(err => json(res, { ok: false, error: { code: 'MARSHAL_CREATE_FAILED', message: (err as Error).message } }, 500))
+      return true
+    }
+  }
+
+  // POST /api/canvas/viewport — push a viewport directive to all connected clients.
+  // The frontend listens for the 'canvas:viewport' SSE event and updates the camera.
+  // Used by the marshal to drive the user's view (and potentially other automation).
+  if (method === 'POST' && url === '/api/canvas/viewport') {
+    readBody(req).then(body => {
+      let payload: Record<string, unknown>
+      try { payload = JSON.parse(body) } catch {
+        return json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400)
+      }
+      const action = payload.action
+      if (action !== 'set' && action !== 'focus' && action !== 'reset' && action !== 'fit') {
+        return json(res, { ok: false, error: { code: 'INVALID_ACTION', message: "action must be one of: set, focus, reset, fit" } }, 400)
+      }
+      ctx.sse.broadcastEvent('canvas:viewport', { ...payload, ts: Date.now() })
+      return json(res, { ok: true })
+    }).catch(err => json(res, { ok: false, error: { code: 'INTERNAL', message: (err as Error).message } }, 500))
+    return true
   }
 
   // POST /api/dev/restart — rebuild and restart the server
