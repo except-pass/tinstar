@@ -2391,6 +2391,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               if (session.port) tmuxBackend.releasePort(session.port)
             }
 
+            // Clear port/ttydPid so a later start re-allocates a fresh port via
+            // findPort(). Leaving stale values here causes the proxy /s/{name}
+            // to route to whichever ttyd later wins port 8703, and lets two
+            // managed-ttyd auto-restart handlers war over the same port.
+            updateSession(sessDir, session.name, { port: null, ttydPid: null })
+            const run = ctx.docStore.getRun(session.name)
+            if (run) ctx.docStore.upsertRun(session.name, { ...run, port: null })
+
             setState(sessDir, session.name, 'stopped')
             ctx.docStore.updateRunStatus(session.name, 'stopped')
             emitSessionEvent('managed_session.state_changed', { name: session.name, state: 'stopped' })

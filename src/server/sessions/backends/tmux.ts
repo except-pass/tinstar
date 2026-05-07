@@ -113,6 +113,14 @@ export function releasePort(port: number): void {
   claimedPorts.delete(port)
 }
 
+// Reserve a port at startup so findPort() won't hand it to a different session
+// after the in-memory claimedPorts set was wiped by a server restart. Two
+// sessions colliding on one port causes ttyd auto-restart wars (each session's
+// startTtyd kills the other's ttyd), so the proxy /s/{name} flaps between them.
+export function claimPort(port: number): void {
+  claimedPorts.add(port)
+}
+
 // --- Command builders ---
 
 /**

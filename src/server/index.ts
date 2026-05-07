@@ -269,6 +269,11 @@ export function initBackend(): RouteContext {
         }
         const sess = getSession(sessionConfig.dirs.sessions, entry.name)
         if (!sess) continue
+        // Reclaim any port already bound to this session so a different session's
+        // start path can't grab it via findPort() and trigger a ttyd kill war.
+        if (sess.backend === 'tmux' && sess.port) {
+          tmuxBackend.claimPort(sess.port)
+        }
         const existingRun = docStore.getRun(sess.name)
         const tpl = sess.cliTemplate ? sessionConfig.cliTemplates.find(t => t.name === sess.cliTemplate) : null
         if (!existingRun) {
