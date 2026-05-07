@@ -6,9 +6,9 @@ Pattern orchestration is modeled after **Kubernetes/Docker Compose** syntax and 
 
 See: [Kubernetes Pod Spec](https://kubernetes.io/docs/concepts/workloads/pods/), [Docker Compose](https://docs.docker.com/compose/compose-file/)
 
-## MVP Features (v1)
+## Pattern Syntax
 
-### 1. `dependsOn` with conditions
+### `dependsOn` with conditions
 
 ```yaml
 orchestrator:
@@ -21,7 +21,7 @@ Conditions:
 - `ready` - session has sent NATS ready signal
 - `started` - session process has launched (no health check)
 
-### 2. `replicas` 
+### `replicas`
 
 ```yaml
 worker:
@@ -30,7 +30,7 @@ worker:
 
 Workers are named `<session>-1`, `<session>-2`, etc.
 
-### 3. `readiness.nats`
+### `readiness.nats`
 
 ```yaml
 worker:
@@ -40,20 +40,9 @@ worker:
 
 The nats-channel-mcp automatically publishes to `tinstar.ready.<session>` when the channel connects. Tinstar server listens and tracks session readiness.
 
-## Future Features (borrow as needed)
-
-| k8s/Compose Feature | Tinstar Equivalent | Status |
-|---------------------|-------------------|--------|
-| initContainers | `init:` sessions | Planned |
-| livenessProbe | Heartbeat monitoring | Planned |
-| restartPolicy | `restart:` config | Planned |
-| resources.limits | Model tier, token budget | Idea |
-| volumes | Shared worktrees | Exists |
-| env/secrets | Session environment | Exists |
-
 ## Implementation Notes
 
-- Pattern parser: `src/server/patterns.ts`
+- Pattern parser: `src/server/patterns/parser.ts`
+- Pattern orchestration: `src/server/patterns/orchestrator.ts`
 - Session lifecycle: `src/server/sessions/`
-- NATS readiness: nats-channel-mcp auto-publishes on connect
-- Tinstar server subscribes to `tinstar.ready.>` to track state
+- NATS readiness: nats-channel-mcp auto-publishes on connect; the Tinstar server subscribes to `tinstar.ready.>` to track state

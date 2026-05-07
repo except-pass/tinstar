@@ -122,27 +122,9 @@ Your image must be compatible with running as a non-root user (the host UID). If
 
 ---
 
-## Claude Code Hooks
-
-Tinstar installs Claude Code hooks into `.claude/settings.json` inside the workspace (not inside the image). The hooks call back to Tinstar via `curl`:
-
-```
-POST http://host.docker.internal:5273/api/hooks/idle    — Claude went idle
-POST http://host.docker.internal:5273/api/hooks/active  — Claude is running
-POST http://host.docker.internal:5273/api/hooks/file-touched  — Claude edited a file
-```
-
-**Requirements for hook scripts:**
-- Use synchronous (blocking) `curl`, not backgrounded (`curl ... &`). Backgrounded curl causes Claude Code to report a hook error even if the data arrives.
-- Do not suppress curl's exit code in a way that masks failures.
-
-If your image has its own hook scripts that conflict with these, they will be de-duplicated on session create — Tinstar removes any previous hook entries containing `/api/hooks/` before adding its own.
-
----
-
 ## Networking
 
-The container needs to reach `host.docker.internal` to deliver hook callbacks. This is guaranteed by `--add-host=host.docker.internal:host-gateway` which Tinstar sets automatically.
+The container needs to reach `host.docker.internal` for telemetry (`OTEL_EXPORTER_OTLP_ENDPOINT`) and any agent calls back into the Tinstar API. This is guaranteed by `--add-host=host.docker.internal:host-gateway`, which Tinstar sets automatically.
 
 The image does not need any special network configuration.
 
