@@ -19,7 +19,7 @@ beforeEach(() => {
 
 describe('FirstSessionStep', () => {
   it('lists available projects from /api/projects', async () => {
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ tinstar: '/repo/tinstar' }) })
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true, data: { tinstar: '/repo/tinstar' } }) })
     render(<FirstSessionStep />)
     await waitFor(() => expect(screen.getByTestId('session-project-select')).toBeTruthy())
     expect(screen.getByText('tinstar')).toBeTruthy()
@@ -27,7 +27,7 @@ describe('FirstSessionStep', () => {
 
   it('POSTs to /api/sessions with project + cliTemplate=claude', async () => {
     fetchMock
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ tinstar: '/repo/tinstar' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true, data: { tinstar: '/repo/tinstar' } }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
     render(<FirstSessionStep />)
     await waitFor(() => screen.getByTestId('session-project-select'))

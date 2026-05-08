@@ -15,6 +15,10 @@ vi.mock('../../src/hooks/useOnboardingState', () => ({
   }),
 }))
 
+vi.mock('../../src/hooks/useBackendState', () => ({
+  useBackendState: () => ({ spaces: [] }),
+}))
+
 describe('OnboardingCanvas', () => {
   it('renders the four step cards in order', () => {
     render(<OnboardingCanvas />)
