@@ -133,12 +133,39 @@ function bashSingleQuote(str: string): string {
 }
 
 /**
- * Interpolate a CLI template string, replacing {sessionId} and {prompt} placeholders.
- * Unused placeholders are stripped so the command stays clean.
+ * Persistent agent definition — injected into a CLI template via the
+ * {agentName} / {agentDescription} / {agentPrompt} / {agentJson} placeholders.
+ * Lets a hand carry a persona that lives in the system prompt (and so
+ * survives `/clear`) without baking the prompt body into the user-editable
+ * template string. Different CLIs accept persona text differently, so we
+ * expose multiple shapes (raw text, claude --agents JSON) and let the
+ * template author pick which one to use.
+ */
+export interface AgentDef {
+  name: string
+  description: string
+  prompt: string
+}
+
+/**
+ * Interpolate a CLI template string. Recognized placeholders:
+ *   {sessionId}        — claude session UUID
+ *   {prompt}           — one-shot user message
+ *   {agentName}        — persona name (e.g. "marshal")
+ *   {agentDescription} — short persona description
+ *   {agentPrompt}      — raw persona body (markdown), for --append-system-prompt etc.
+ *   {agentJson}        — claude --agents JSON: {"<name>":{"description":...,"prompt":...}}
+ *
+ * Unused placeholders are stripped along with any preceding flag, so e.g.
+ * `--agents {agentJson}` disappears entirely when no persona is supplied.
  */
 function interpolateTemplate(
   template: string,
-  vars: { sessionId?: string | null; prompt?: string | null },
+  vars: {
+    sessionId?: string | null
+    prompt?: string | null
+    agent?: AgentDef | null
+  },
 ): string {
   let cmd = template
   if (vars.sessionId) {
@@ -146,6 +173,21 @@ function interpolateTemplate(
   } else {
     // Remove the placeholder and any preceding flag (e.g. "--session-id {sessionId}")
     cmd = cmd.replace(/\s*\S*\s*\{sessionId\}/g, '')
+  }
+  if (vars.agent) {
+    const agentJson = JSON.stringify({
+      [vars.agent.name]: { description: vars.agent.description, prompt: vars.agent.prompt },
+    })
+    cmd = cmd.replace(/\{agentName\}/g, vars.agent.name)
+    cmd = cmd.replace(/\{agentDescription\}/g, bashSingleQuote(vars.agent.description))
+    cmd = cmd.replace(/\{agentPrompt\}/g, bashSingleQuote(vars.agent.prompt))
+    cmd = cmd.replace(/\{agentJson\}/g, bashSingleQuote(agentJson))
+  } else {
+    // Strip placeholders + preceding flag (e.g. `--agents {agentJson}`)
+    cmd = cmd.replace(/\s*\S*\s*\{agentName\}/g, '')
+    cmd = cmd.replace(/\s*\S*\s*\{agentDescription\}/g, '')
+    cmd = cmd.replace(/\s*\S*\s*\{agentPrompt\}/g, '')
+    cmd = cmd.replace(/\s*\S*\s*\{agentJson\}/g, '')
   }
   if (vars.prompt) {
     // Use single quotes — they don't expand !, `, $, or anything else
@@ -209,6 +251,7 @@ export function buildAgentCommand(opts: {
   initialPrompt?: string | null
   nats?: { enabled: boolean } | null
   appendSystemPrompt?: string | null
+  agent?: AgentDef | null
 }): string {
   let cmd: string
 
@@ -217,6 +260,7 @@ export function buildAgentCommand(opts: {
     cmd = interpolateTemplate(tmpl, {
       sessionId: opts.sessionId,
       prompt: opts.resume ? null : opts.initialPrompt,
+      agent: opts.agent,
     })
     // Insert --append-system-prompt before the -- prompt separator if present
     if (opts.appendSystemPrompt) {
@@ -262,6 +306,7 @@ export async function createTmuxSession(
     resume?: boolean
     template?: CliTemplate | null
     appendSystemPrompt?: string | null
+    agent?: AgentDef | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
@@ -331,6 +376,7 @@ export async function createTmuxSession(
     initialPrompt: opts.resume ? undefined : opts.session.initialPrompt,
     nats: natsOpts,
     appendSystemPrompt: opts.appendSystemPrompt,
+    agent: opts.agent,
   })
   parts.push(agentCmd)
 
@@ -358,6 +404,7 @@ export async function startTmuxSession(
     port: number
     template?: CliTemplate | null
     appendSystemPrompt?: string | null
+    agent?: AgentDef | null
   },
 ): Promise<{ port: number; ttydPid: number | undefined }> {
   const tmuxName = tmuxSessionName(config, opts.session.name)
@@ -391,6 +438,8 @@ export async function startTmuxSession(
     sessionId: opts.session.conversation?.id,
     resume: true,
     nats: natsOpts,
+    appendSystemPrompt: opts.appendSystemPrompt,
+    agent: opts.agent,
   })
   parts.push(agentCmd)
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])

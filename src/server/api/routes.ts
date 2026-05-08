@@ -109,6 +109,7 @@ function buildNatsSubject(
   return `tinstar.${spaceName}.${initName}.${epicName}.${taskName}.${sanitize(sessionName)}`
 }
 import { discoverHands, getHandByName } from '../hands'
+import { MARSHAL_AGENT_NAME, MARSHAL_AGENT_DESCRIPTION, MARSHAL_AGENT_PROMPT } from '../hands/builtins/index'
 
 // ─── NATS socket communication ─────────────────────────────────────────
 
@@ -338,6 +339,10 @@ interface CreateSessionParams {
   initiativeId?: string
   color?: string
   nats?: { enabled: boolean; subscriptions?: string[] }
+  /** Persistent persona for this session — substituted into the CLI template
+   * via {agentName}/{agentJson}/{agentPrompt}/{agentDescription} placeholders.
+   * Used by the marshal so its persona survives `/clear`. */
+  agent?: { name: string; description: string; prompt: string }
 }
 
 interface CreateSessionContext {
@@ -360,7 +365,7 @@ async function createSessionInternal(
   const {
     name, backend, project, worktree = false, worktreePath,
     profile, prompt, skipPermissions = true, cliTemplate: cliTemplateName,
-    taskId, epicId, initiativeId, color: colorParam, nats
+    taskId, epicId, initiativeId, color: colorParam, nats, agent
   } = params
 
   const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl, natsTraffic, natsHealth } = ctx
@@ -464,7 +469,7 @@ async function createSessionInternal(
     const port = await tmuxBackend.findPort(cfg.ports.hostStart)
     if (prompt) enriched.initialPrompt = prompt
 
-    const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate })
+    const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, agent: agent ?? null })
     sessionPort = result.port
     updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
     tmuxBackend.onTtydRestart(name, (newPid) => {
@@ -657,6 +662,11 @@ export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalRe
     skipPermissions: true,
     cliTemplate: hand.cliTemplate,
     prompt: hand.prompt,
+    agent: {
+      name: MARSHAL_AGENT_NAME,
+      description: MARSHAL_AGENT_DESCRIPTION,
+      prompt: MARSHAL_AGENT_PROMPT,
+    },
   }, createCtx)
   if (!result.ok) return { ok: false, error: result.error }
 

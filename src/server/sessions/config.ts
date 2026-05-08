@@ -114,8 +114,19 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     name: 'Marshal',
     icon: '/agent-icons/claude.svg',
     adapter: 'claude',
-    startCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --model haiku --session-id {sessionId} -- {prompt}',
-    resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --model haiku --resume {sessionId}',
+    // The marshal hand carries a persona (see hands/builtins/index.ts) that
+    // gets injected via `--append-system-prompt {agentPrompt}` — so the persona
+    // is the MAIN conversation's system prompt (it IS the marshal), not a
+    // subagent definition. The flag is process-level, so it survives `/clear`.
+    // The trailing {prompt} is the one-shot intro instruction the marshal
+    // sees as its first user message.
+    //
+    // Available persona placeholders:
+    //   {agentName}, {agentDescription}, {agentPrompt}, {agentJson}
+    // {agentJson}/--agents is for spawning the persona as a Task subagent —
+    // that's NOT what we want for the main marshal conversation.
+    startCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --model haiku --append-system-prompt {agentPrompt} --session-id {sessionId} -- {prompt}',
+    resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --model haiku --append-system-prompt {agentPrompt} --resume {sessionId}',
   },
   {
     name: 'Cursor Agent',
