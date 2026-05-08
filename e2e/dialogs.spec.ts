@@ -14,14 +14,6 @@ test.describe('CreateSessionDialog', () => {
     await expect(page.getByTestId('session-name-input')).toBeVisible()
   })
 
-  test('session dialog has backend toggle', async ({ page }) => {
-    await page.getByTestId('new-session-btn').click()
-
-    // Should show Docker and Tmux backend buttons
-    await expect(page.getByText('Docker').first()).toBeVisible()
-    await expect(page.getByText('Tmux').first()).toBeVisible()
-  })
-
   test('session dialog has skip permissions checkbox', async ({ page }) => {
     await page.getByTestId('new-session-btn').click()
 

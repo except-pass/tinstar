@@ -31,7 +31,6 @@ import {
   listSessions,
   reconcileSessionStates,
   loadSecrets,
-  dockerBackend,
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
@@ -326,11 +325,9 @@ function removeFileWatchSubscriber(absolutePath: string, subscriberId: string): 
 
 interface CreateSessionParams {
   name: string
-  backend: 'docker' | 'tmux'
   project?: string
   worktree?: boolean
   worktreePath?: string
-  profile?: string
   prompt?: string
   skipPermissions?: boolean
   cliTemplate?: string
@@ -363,15 +360,14 @@ async function createSessionInternal(
   ctx: CreateSessionContext
 ): Promise<{ ok: true; session: Session } | { ok: false; error: { code: string; message: string } }> {
   const {
-    name, backend, project, worktree = false, worktreePath,
-    profile, prompt, skipPermissions = true, cliTemplate: cliTemplateName,
+    name, project, worktree = false, worktreePath,
+    prompt, skipPermissions = true, cliTemplate: cliTemplateName,
     taskId, epicId, initiativeId, color: colorParam, nats, agent
   } = params
 
   const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl, natsTraffic, natsHealth } = ctx
 
   if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
-  if (!['docker', 'tmux'].includes(backend)) return { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }
 
   if (getSession(sessDir, name)) {
     return { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }
@@ -439,7 +435,7 @@ async function createSessionInternal(
 
   const session = createSession(sessDir, {
     name,
-    backend: resolvedTemplate ? 'tmux' : backend,
+    backend: 'tmux',
     project,
     workspace: {
       path: workspacePath,
@@ -447,7 +443,7 @@ async function createSessionInternal(
       branch,
       basePath: isWorktree ? projectPath : null,
     },
-    profile,
+    profile: null,
     oneshot: false,
     skipPermissions,
     cliTemplate: cliTemplateName ?? null,
@@ -459,36 +455,20 @@ async function createSessionInternal(
   enriched._stateDir = claudeStateDir(sessDir, name)
 
   const sec = secrets()
-  let sessionPort: number | undefined
+  const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+  if (prompt) enriched.initialPrompt = prompt
 
-  if (backend === 'docker') {
-    sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
-    await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: prompt || undefined })
-    updateSession(sessDir, name, { port: sessionPort, state: 'running' })
-  } else {
-    const port = await tmuxBackend.findPort(cfg.ports.hostStart)
-    if (prompt) enriched.initialPrompt = prompt
-
-    const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, agent: agent ?? null })
-    sessionPort = result.port
-    updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
-    tmuxBackend.onTtydRestart(name, (newPid) => {
-      updateSession(sessDir, name, { ttydPid: newPid })
-    })
-  }
+  const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, agent: agent ?? null })
+  const sessionPort = result.port
+  updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+  tmuxBackend.onTtydRestart(name, (newPid) => {
+    updateSession(sessDir, name, { ttydPid: newPid })
+  })
 
   // Create Run entry
   const runId = name
   const initialStatus = prompt ? 'running' : 'idle'
-  let backendInfo: string | undefined
-  if (backend === 'docker') {
-    const container = dockerBackend.containerName(cfg, name)
-    const imageProfile = profile ? cfg.profiles.find(p => p.name === profile) : undefined
-    const image = imageProfile?.image ?? cfg.container.defaultImage
-    backendInfo = `container: ${container}\nimage: ${image}`
-  } else {
-    backendInfo = `tmux session: ${name}`
-  }
+  const backendInfo = `tmux session: ${name}`
 
   // Build NATS subject for this session
   const natsSubject = resolvedNats?.enabled
@@ -693,12 +673,8 @@ export async function restartMarshalSession(ctx: RouteContext): Promise<MarshalR
     createCtx.emitSessionEvent('managed_session.deleted', { name: MARSHAL_NAME })
 
     try {
-      if (existing.backend === 'docker') {
-        await dockerBackend.deleteContainer(cfg, existing)
-      } else {
-        await tmuxBackend.deleteTmuxSession(cfg, existing)
-        if (existing.port) tmuxBackend.releasePort(existing.port)
-      }
+      await tmuxBackend.deleteTmuxSession(cfg, existing)
+      if (existing.port) tmuxBackend.releasePort(existing.port)
     } catch (err) {
       log.warn('marshal-restart', `backend cleanup: ${(err as Error).message}`)
     }
@@ -1036,7 +1012,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     json(res, {
       ok: true,
       warning: orphanedRuns.length > 0
-        ? `${orphanedRuns.length} session(s) are still running. Use \`tmux ls\` or \`docker ps\` to manage them.`
+        ? `${orphanedRuns.length} session(s) are still running. Use \`tmux ls\` to manage them.`
         : undefined,
     })
     return true
@@ -1993,7 +1969,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // GET /api/sessions
     if (method === 'GET' && url === '/api/sessions') {
       reconcileSessionStates(sessDir, {
-        getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
         getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
         onStateChanged: (name, state) => {
           emitSessionEvent('managed_session.state_changed', { name, state })
@@ -2099,13 +2074,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName } = JSON.parse(body)
-        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
+        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName } = JSON.parse(body)
+        log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
-        if (!['docker', 'tmux'].includes(backend)) return json(res, { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }, 400)
-        if (oneshot && !prompt) return json(res, { ok: false, error: { code: 'MISSING_PROMPT', message: 'oneshot sessions require a prompt' } }, 400)
-        if (oneshot && backend !== 'docker') return json(res, { ok: false, error: { code: 'INVALID_BACKEND', message: 'oneshot is only supported for docker backend' } }, 400)
 
         if (getSession(sessDir, name)) {
           return json(res, { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }, 409)
@@ -2183,7 +2155,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
           const session = createSession(sessDir, {
             name,
-            backend: resolvedTemplate ? 'tmux' : backend,
+            backend: 'tmux',
             project,
             workspace: {
               path: workspacePath,
@@ -2191,54 +2163,33 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               branch,
               basePath: isWorktree ? projectPath : null,
             },
-            profile,
-            oneshot,
+            profile: null,
+            oneshot: false,
             skipPermissions,
             cliTemplate: cliTemplateName ?? null,
             adapter: resolvedTemplate?.adapter ?? null,
             nats: resolvedNats,
           })
 
-          // Enrich session with state dir for Docker backend
           const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
           enriched._stateDir = claudeStateDir(sessDir, name)
 
           const sec = secrets()
-          let sessionPort: number | undefined
+          const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+          if (prompt) enriched.initialPrompt = prompt
 
-          if (backend === 'docker' && oneshot) {
-            await dockerBackend.createOneShotContainer(cfg, {
-              session: enriched,
-              secrets: sec,
-              prompt,
-              onComplete: (exitCode: number) => {
-                setState(sessDir, name, 'idle')
-                emitSessionEvent('managed_session.state_changed', { name, state: 'idle' })
-                log.info('oneshot', `${name} exited`, { exitCode })
-              },
-            })
-            updateSession(sessDir, name, { state: 'running' })
-          } else if (backend === 'docker') {
-            sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
-            await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: prompt || undefined })
-            updateSession(sessDir, name, { port: sessionPort, state: 'running' })
-          } else {
-            const port = await tmuxBackend.findPort(cfg.ports.hostStart)
-            if (prompt) enriched.initialPrompt = prompt
-
-            const result = await tmuxBackend.createTmuxSession(cfg, {
-              session: enriched,
-              secrets: sec,
-              port,
-              template: resolvedTemplate,
-              appendSystemPrompt: resolvedHand?.prompt ?? null,
-            })
-            sessionPort = result.port
-            updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
-            tmuxBackend.onTtydRestart(name, (newPid) => {
-              updateSession(sessDir, name, { ttydPid: newPid })
-            })
-          }
+          const result = await tmuxBackend.createTmuxSession(cfg, {
+            session: enriched,
+            secrets: sec,
+            port,
+            template: resolvedTemplate,
+            appendSystemPrompt: resolvedHand?.prompt ?? null,
+          })
+          const sessionPort = result.port
+          updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+          tmuxBackend.onTtydRestart(name, (newPid) => {
+            updateSession(sessDir, name, { ttydPid: newPid })
+          })
 
           const updated = getSession(sessDir, name)
 
@@ -2247,16 +2198,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // If not, Claude opens at the REPL waiting for input — 'idle'.
           const runId = name
           const initialStatus = prompt ? 'running' : 'idle'
-          // Build backend info for tooltip
-          let backendInfo: string | undefined
-          if (backend === 'docker') {
-            const container = dockerBackend.containerName(cfg, name)
-            const imageProfile = profile ? cfg.profiles.find(p => p.name === profile) : undefined
-            const image = imageProfile?.image ?? cfg.container.defaultImage
-            backendInfo = `container: ${container}\nimage: ${image}`
-          } else {
-            backendInfo = `tmux session: ${name}`
-          }
+          const backendInfo = `tmux session: ${name}`
 
           // Build NATS subject for this session
           const natsSubject = resolvedNats?.enabled
@@ -2277,7 +2219,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             recapEntries: [],
             rawLogs: '',
             port: sessionPort ?? null,
-            backend,
+            backend: 'tmux',
             backendInfo,
             agentIcon: resolvedTemplate?.icon ?? undefined,
             natsEnabled: resolvedNats?.enabled ?? false,
@@ -2297,7 +2239,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
           ctx.sse.broadcastReadyQueueUpdate()
           emitSessionEvent('managed_session.created', { name, state: 'running' })
-          log.info('sessions', `session created: ${name}`, { backend, port: sessionPort, state: 'running' })
+          log.info('sessions', `session created: ${name}`, { port: sessionPort, state: 'running' })
 
           json(res, { ok: true, data: updated }, 201)
         } catch (err) {
@@ -2375,12 +2317,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!session) return json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
 
           try {
-            if (session.backend === 'docker') {
-              await dockerBackend.stopContainer(cfg, session)
-            } else {
-              await tmuxBackend.stopTmuxSession(cfg, session)
-              if (session.port) tmuxBackend.releasePort(session.port)
-            }
+            await tmuxBackend.stopTmuxSession(cfg, session)
+            if (session.port) tmuxBackend.releasePort(session.port)
 
             // Clear port/ttydPid so a later start re-allocates a fresh port via
             // findPort(). Leaving stale values here causes the proxy /s/{name}
@@ -2424,21 +2362,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           try {
             const sec = secrets()
 
-            if (session.backend === 'docker') {
-              const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
-              await dockerBackend.startContainer(cfg, { session: session as Session & { _stateDir?: string }, secrets: sec, port, dashboardUrl })
-              updateSession(sessDir, session.name, { port })
-            } else {
-              const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
-              const resumeTemplate = session.cliTemplate
-                ? cfg.cliTemplates.find(t => t.name === session.cliTemplate) ?? null
-                : null
-              const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port, template: resumeTemplate })
-              updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
-              tmuxBackend.onTtydRestart(session.name, (newPid) => {
-                updateSession(sessDir, session.name, { ttydPid: newPid })
-              })
-            }
+            const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
+            const resumeTemplate = session.cliTemplate
+              ? cfg.cliTemplates.find(t => t.name === session.cliTemplate) ?? null
+              : null
+            const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port, template: resumeTemplate })
+            updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
+            tmuxBackend.onTtydRestart(session.name, (newPid) => {
+              updateSession(sessDir, session.name, { ttydPid: newPid })
+            })
 
             // Re-read session to get updated port
             const updated = getSession(sessDir, session.name)
@@ -2514,12 +2446,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 }
               }
 
-              if (session.backend === 'docker') {
-                await dockerBackend.deleteContainer(cfg, session)
-              } else {
-                await tmuxBackend.deleteTmuxSession(cfg, session)
-                if (session.port) tmuxBackend.releasePort(session.port)
-              }
+              await tmuxBackend.deleteTmuxSession(cfg, session)
+              if (session.port) tmuxBackend.releasePort(session.port)
 
 
             }
@@ -2746,7 +2674,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // Create the spawned session
       const spawnedSession = createSession(sessDir, {
         name: spawnedName,
-        backend: parentSession.backend,
+        backend: 'tmux',
         project: effectiveRepo,
         workspace: {
           path: workspace?.path ?? null,
@@ -2773,33 +2701,25 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         : null
 
       try {
-        let sessionPort: number | undefined
+        const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+        if (fullPrompt) enriched.initialPrompt = fullPrompt
 
-        if (parentSession.backend === 'docker') {
-          sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
-          await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: fullPrompt || undefined })
-          updateSession(sessDir, spawnedName, { port: sessionPort, state: 'running' })
-        } else {
-          const port = await tmuxBackend.findPort(cfg.ports.hostStart)
-          if (fullPrompt) enriched.initialPrompt = fullPrompt
+        // Build hand system prompt pointing at the effective parent-child
+        // room. When fallback kicked in (parent's control socket was orphan/
+        // unreachable), effectiveRoom is the parent's persistent direct
+        // subject rather than the fresh breakout room.
+        const handSystemPrompt = hand.prompt
+          ? effectiveRoom
+            ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${effectiveRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${effectiveRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
+            : `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
+          : null
 
-          // Build hand system prompt pointing at the effective parent-child
-          // room. When fallback kicked in (parent's control socket was orphan/
-          // unreachable), effectiveRoom is the parent's persistent direct
-          // subject rather than the fresh breakout room.
-          const handSystemPrompt = hand.prompt
-            ? effectiveRoom
-              ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${effectiveRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${effectiveRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
-              : `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
-            : null
-
-          const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, appendSystemPrompt: handSystemPrompt })
-          sessionPort = result.port
-          updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
-          tmuxBackend.onTtydRestart(spawnedName, (newPid) => {
-            updateSession(sessDir, spawnedName, { ttydPid: newPid })
-          })
-        }
+        const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, appendSystemPrompt: handSystemPrompt })
+        const sessionPort = result.port
+        updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+        tmuxBackend.onTtydRestart(spawnedName, (newPid) => {
+          updateSession(sessDir, spawnedName, { ttydPid: newPid })
+        })
 
         emitSessionEvent('managed_session.state_changed', { name: spawnedName, state: 'running' })
 
@@ -2828,10 +2748,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           recapEntries: [],
           rawLogs: '',
           port: sessionPort ?? null,
-          backend: parentSession.backend,
-          backendInfo: parentSession.backend === 'docker'
-            ? `container: ${dockerBackend.containerName(cfg, spawnedName)}`
-            : `tmux session: ${spawnedName}`,
+          backend: 'tmux',
+          backendInfo: `tmux session: ${spawnedName}`,
           natsEnabled: natsConfig?.enabled ?? false,
           natsSubject,
           natsSubscriptions: natsConfig?.enabled ? natsConfig.subscriptions : undefined,
@@ -2944,11 +2862,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const session = getSession(sessDir, name)
         if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
         try {
-          if (session.backend === 'docker') {
-            await dockerBackend.sendKeys(cfg, name, keys)
-          } else {
-            await tmuxBackend.sendKeys(cfg, name, keys)
-          }
+          await tmuxBackend.sendKeys(cfg, name, keys)
           json(res, { ok: true })
         } catch (err) {
           json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
@@ -2970,11 +2884,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const session = getSession(sessDir, name)
         if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
         try {
-          if (session.backend === 'docker') {
-            await dockerBackend.sendPrompt(cfg, name, prompt)
-          } else {
-            await tmuxBackend.sendPrompt(cfg, name, prompt)
-          }
+          await tmuxBackend.sendPrompt(cfg, name, prompt)
           json(res, { ok: true })
         } catch (err) {
           json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
@@ -3167,69 +3077,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return json(res, { ok: true, data: hand })
     }
 
-    // GET /api/docker/profiles — configured image profiles (read from disk for freshness)
-    if (method === 'GET' && url === '/api/docker/profiles') {
-      let profiles = cfg.profiles
-      try {
-        const data = JSON.parse(readFileSync(cfg.files.config, 'utf-8'))
-        if (Array.isArray(data.profiles)) profiles = data.profiles
-      } catch { /* use frozen default */ }
-      json(res, { ok: true, data: profiles })
-      return true
-    }
-
-    // GET /api/docker/images — list local Docker images
-    if (method === 'GET' && url === '/api/docker/images') {
-      import('node:child_process').then(({ execFile }) => {
-        execFile('docker', ['images', '--format', '{{.Repository}}:{{.Tag}}'], { encoding: 'utf-8' }, (err, stdout) => {
-          if (err) {
-            json(res, { ok: false, error: { code: 'DOCKER_ERROR', message: err.message } }, 500)
-            return
-          }
-          const images = stdout.trim().split('\n').filter(Boolean).filter(i => i !== '<none>:<none>')
-          json(res, { ok: true, data: images })
-        })
-      })
-      return true
-    }
-
-    // POST /api/docker/profiles — add a new image profile
-    if (method === 'POST' && url === '/api/docker/profiles') {
-      readBody(req).then((body) => {
-        const { name, image, home } = JSON.parse(body)
-        if (!name || !image) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name and image are required' } }, 400)
-
-        // Read current config, update profiles array, persist
-        let data: Record<string, unknown> = {}
-        try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config yet */ }
-        const profiles: Array<{ name: string; image: string; home?: string }> = Array.isArray(data.profiles) ? data.profiles : []
-        if (profiles.some(p => p.name === name)) return json(res, { ok: false, error: { code: 'DUPLICATE', message: `Profile "${name}" already exists` } }, 409)
-
-        const profile: { name: string; image: string; home?: string } = { name, image }
-        if (home) profile.home = home
-        profiles.push(profile)
-        data.profiles = profiles
-        writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
-        json(res, { ok: true, data: profile })
-      }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
-      return true
-    }
-
-    // DELETE /api/docker/profiles/:name — remove an image profile
-    if (method === 'DELETE' && url.startsWith('/api/docker/profiles/')) {
-      const name = decodeURIComponent(url.slice('/api/docker/profiles/'.length))
-      let data: Record<string, unknown> = {}
-      try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
-      const profiles: Array<{ name: string; image: string; home?: string }> = Array.isArray(data.profiles) ? data.profiles : []
-      const idx = profiles.findIndex(p => p.name === name)
-      if (idx === -1) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Profile "${name}" not found` } }, 404), true
-      profiles.splice(idx, 1)
-      data.profiles = profiles
-      writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
-      json(res, { ok: true })
-      return true
-    }
-
     // --- Projects ---
 
     // GET /api/projects
@@ -3298,14 +3145,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         if (!text) { json(res, { error: 'missing text' }, 400); return }
         try {
-          if (session.backend === 'docker') {
-            await dockerBackend.sendPrompt(cfg, sessionId, text)
-          } else if (session.backend === 'tmux') {
-            await tmuxBackend.sendPrompt(cfg, sessionId, text)
-          } else {
-            json(res, { error: 'input-unavailable' }, 503)
-            return
-          }
+          await tmuxBackend.sendPrompt(cfg, sessionId, text)
           // Track slash usage (fire-and-forget; never blocks response).
           const slashName = extractLeadingSlashName(text)
           if (slashName) {

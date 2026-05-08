@@ -5,12 +5,10 @@ import { apiFetch } from '../apiClient'
 
 export interface SessionPrefill {
   project?: string
-  backend?: 'docker' | 'tmux'
   worktreeMode?: 'none' | 'new' | 'existing'
   defaultWorktreePath?: string
   skipPermissions?: boolean
   cliTemplate?: string
-  profile?: string
   runColor?: string
   taskId?: string
   epicId?: string
@@ -23,7 +21,6 @@ interface Props {
   prefill?: SessionPrefill
 }
 
-type Backend = 'docker' | 'tmux'
 type WorktreeMode = 'none' | 'new' | 'existing'
 
 interface EntityOption { id: string; name: string }
@@ -57,31 +54,9 @@ function InheritedFrom({ source }: { source?: { type: string; name: string } }) 
 export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [placeholder] = useState(generateName)
   const [name, setName] = useState('')
-  const [backend, setBackend] = useState<Backend>(prefill?.backend ?? 'tmux')
-  const [profile, setProfile] = useState(prefill?.profile ?? '')
-  const [profiles, setProfiles] = useState<Array<{ name: string; image: string }>>([])
   const [cliTemplate, setCliTemplate] = useState(prefill?.cliTemplate ?? '')
   const [cliTemplates, setCliTemplates] = useState<Array<{ name: string; icon?: string }>>([])
   const [project, setProject] = useState(prefill?.project ?? '')
-
-  // Combined agent key: "tmux:<template>" or "docker:<profile>"
-  const agentKey = backend === 'docker' && profile
-    ? `docker:${profile}`
-    : cliTemplate ? `tmux:${cliTemplate}` : ''
-
-  const handleAgentChange = (key: string) => {
-    if (key.startsWith('docker:')) {
-      const p = key.slice('docker:'.length)
-      setBackend('docker')
-      setProfile(p)
-      setCliTemplate('')
-    } else if (key.startsWith('tmux:')) {
-      const t = key.slice('tmux:'.length)
-      setBackend('tmux')
-      setCliTemplate(t)
-      setProfile('')
-    }
-  }
   const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
   const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>(prefill?.worktreeMode ?? 'none')
   const [worktreePath, setWorktreePath] = useState('')
@@ -139,16 +114,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       .catch(() => {})
   }, [])
 
-  // Fetch docker image profiles (always, so they appear in the unified dropdown)
-  useEffect(() => {
-    apiFetch('/api/docker/profiles')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        if (d?.ok && Array.isArray(d.data)) setProfiles(d.data)
-      })
-      .catch(() => {})
-  }, [])
-
   // Fetch existing worktrees when project is selected and mode is 'existing'
   useEffect(() => {
     if (!project || worktreeMode !== 'existing') {
@@ -178,11 +143,9 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
 
     const body: Record<string, unknown> = {
       name: effectiveName,
-      backend,
       skipPermissions,
     }
     if (cliTemplate) body.cliTemplate = cliTemplate
-    if (profile) body.profile = profile
     if (project) body.project = project
     if (worktreeMode === 'new') body.worktree = true
     if (worktreeMode === 'existing' && worktreePath) body.worktreePath = worktreePath
@@ -209,7 +172,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       setError((err as Error).message)
       setSubmitting(false)
     }
-  }, [effectiveName, backend, profile, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
+  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -248,35 +211,22 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
 
         {/* Agent + Project row */}
         <div className="flex gap-3 mb-3">
-          {/* Agent picker (CLI templates + Docker profiles) */}
+          {/* Agent picker (CLI templates) */}
           <div className="flex-1">
             <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">
               Agent
-              <InheritedFrom source={sources.cliTemplate ?? sources.backend} />
+              <InheritedFrom source={sources.cliTemplate} />
             </label>
             <select
-              value={agentKey}
-              onChange={e => handleAgentChange(e.target.value)}
+              value={cliTemplate}
+              onChange={e => setCliTemplate(e.target.value)}
               className="w-full px-3 py-2 bg-surface-base border border-white/10 rounded text-sm text-slate-200 focus:border-primary/50 focus:outline-none"
             >
-              {cliTemplates.length > 0 && (
-                <optgroup label="🖥 CLI">
-                  {cliTemplates.map(t => (
-                    <option key={`tmux:${t.name}`} value={`tmux:${t.name}`}>
-                      {t.icon && !isIconUrl(t.icon) ? `${t.icon} ` : ''}{t.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {profiles.length > 0 && (
-                <optgroup label="🐳 Docker">
-                  {profiles.map(p => (
-                    <option key={`docker:${p.name}`} value={`docker:${p.name}`}>
-                      {p.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
+              {cliTemplates.map(t => (
+                <option key={t.name} value={t.name}>
+                  {t.icon && !isIconUrl(t.icon) ? `${t.icon} ` : ''}{t.name}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -285,7 +235,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
             <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block group relative cursor-default">
               Project<InheritedFrom source={sources.project} />
               <span className="pointer-events-none absolute left-0 top-full mt-1 z-50 hidden group-hover:block w-56 px-2 py-1.5 rounded bg-slate-800 border border-white/10 text-2xs text-slate-300 leading-relaxed shadow-lg normal-case tracking-normal">
-                Sets the working directory. For tmux: opens at the project path (or a sibling worktree dir). For Docker: bind-mounted the same way. None = no mount.
+                Sets the working directory. Opens tmux at the project path (or a sibling worktree dir). None = no project.
               </span>
             </label>
             <select

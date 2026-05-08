@@ -29,7 +29,7 @@ export function natsControlSocketPath(sessionName: string): string {
 // --- Naming ---
 
 export function tmuxSessionName(config: TinstarConfig, sessionName: string): string {
-  return `${config.container.prefix}${sessionName}`
+  return `${config.sessions.prefix}${sessionName}`
 }
 
 export async function tmuxHasSession(tmuxName: string): Promise<boolean> {

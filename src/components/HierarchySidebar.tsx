@@ -111,7 +111,7 @@ interface HierarchySidebarProps {
 
 /** Metadata for all Work Widget types — drives sidebar icons, badge, close button, and focus behavior */
 const WORK_WIDGET_META: Record<string, { icon: string; closeable: boolean }> = {
-  'run':            { icon: '▶',  closeable: false },  // icon overridden per-node for docker backend
+  'run':            { icon: '▶',  closeable: false },
   'file-editor':    { icon: '📄', closeable: true  },
   'browser-widget': { icon: '🌐', closeable: true  },
   'image-viewer':   { icon: '🖼️', closeable: true  },
@@ -292,7 +292,7 @@ function SidebarNode({
           {node.type === 'run'
             ? (isIconUrl(node.agentIcon)
                 ? <AgentIcon icon={node.agentIcon} />
-                : (node.agentIcon ?? (node.backend === 'docker' ? '🐳' : '▶')))
+                : (node.agentIcon ?? '▶'))
             : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
         </span>
 

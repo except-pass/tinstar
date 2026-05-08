@@ -32,7 +32,6 @@ function encodeWorkdir(workdir: string): string {
 /** Directory holding all .jsonl conversation files for a given workdir */
 export function getProjectDir(workdir: string, stateDir?: string): string {
   const encoded = encodeWorkdir(workdir)
-  // Docker sessions mount claude-state into a session-specific dir
   const base = stateDir ?? join(homedir(), '.claude', 'projects')
   return join(base, encoded)
 }

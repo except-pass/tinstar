@@ -17,7 +17,6 @@ import {
   loadActiveSpaceId,
   saveActiveSpaceId,
   reconcileSessionStates,
-  dockerBackend,
   tmuxBackend,
   getSession,
   updateSession,
@@ -356,7 +355,6 @@ export function initBackend(): RouteContext {
       }
 
       reconcileSessionStates(cfg.dirs.sessions, {
-        getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
         getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
         onStateChanged: (name, state) => {
           onStateChanged(name, state)
@@ -366,7 +364,6 @@ export function initBackend(): RouteContext {
         // Reattach ttyd for tmux sessions that survived a server crash
         for (const session of sessions) {
           if (session.state === 'stopped' || session.state === 'creating') continue
-          if (session.backend !== 'tmux') continue
           const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
           try {
             const result = await tmuxBackend.reattachTmuxSession(cfg, { session, port })
@@ -408,7 +405,6 @@ export function initBackend(): RouteContext {
       // Periodic session state reconciliation (30s)
       setInterval(() => {
         reconcileSessionStates(cfg.dirs.sessions, {
-          getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
           getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
           onStateChanged: (name, state) => {
             onStateChanged(name, state)

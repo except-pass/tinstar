@@ -28,7 +28,6 @@ export {
 export { detectConversationId, ensureResumeReady } from './resume'
 export { reconcileSessionStates, type ReconcileOpts } from './reconcile'
 
-import * as dockerBackend from './backends/docker'
 import * as tmuxBackend from './backends/tmux'
-export { dockerBackend, tmuxBackend }
+export { tmuxBackend }
 

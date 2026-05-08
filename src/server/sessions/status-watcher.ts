@@ -1,6 +1,6 @@
 import { existsSync, statSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { listSessions, setState, setConversationId, claudeStateDir, type Session, type SessionState } from './session'
+import { listSessions, setState, setConversationId, type Session, type SessionState } from './session'
 import { readSessionStatusDetailAt, parseNewEntriesAt, getProjectDir, getTranscriptPath, resetOffset, findTranscriptByConvId } from './transcript-parser'
 import { discoverTranscript, readCodexStatus, parseCodexRecapEntries } from './codex-transcript'
 import { log } from '../logger'
@@ -94,9 +94,7 @@ export class StatusWatcher {
     let convId = session.conversation?.id
     if (!convId) return
 
-    const stateDir = session.backend === 'docker'
-      ? claudeStateDir(this.opts.sessionsDir, session.name)
-      : undefined
+    const stateDir = undefined
 
     // /clear (or --resume to a different conversation) starts a new JSONL
     // file. If the project dir holds a newer transcript than the one we're
@@ -206,13 +204,8 @@ export class StatusWatcher {
       if (s.state !== 'running' && s.state !== 'idle') continue
       const otherWorkdir = s.workspace?.path
       if (!otherWorkdir) continue
-      const otherStateDir = s.backend === 'docker'
-        ? claudeStateDir(this.opts.sessionsDir, s.name)
-        : undefined
-      // Only peers whose project dir resolves to the same path as ours can
-      // collide. This naturally excludes docker peers (their state dir is
-      // separate) and tmux peers in different workdirs.
-      if (getProjectDir(otherWorkdir, otherStateDir) !== projectDir) continue
+      // Only peers whose workdir resolves to the same project dir as ours can collide.
+      if (getProjectDir(otherWorkdir, undefined) !== projectDir) continue
       const otherConvId = s.conversation?.id
       if (otherConvId) claimed.add(otherConvId)
     }
@@ -402,13 +395,10 @@ export class StatusWatcher {
       if (!convId) return
 
       const workdir = session.workspace?.path
-      const stateDir = session.backend === 'docker'
-        ? claudeStateDir(this.opts.sessionsDir, session.name)
-        : undefined
 
       // Resolve the path the same way the main poll loop does — handles
       // the marshal/no-workspace case via findTranscriptByConvId.
-      const transcriptPath = this.resolveClaudeTranscriptPath(session, workdir, convId, stateDir)
+      const transcriptPath = this.resolveClaudeTranscriptPath(session, workdir, convId, undefined)
       if (!transcriptPath) return
 
       try {

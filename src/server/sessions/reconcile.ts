@@ -2,7 +2,6 @@
 import { listSessions, setState, type Session, type SessionState } from './session'
 
 export interface ReconcileOpts {
-  getContainerState: (sessionName: string) => Promise<string>
   getTmuxSessionState: (sessionName: string) => Promise<'exists' | 'missing'>
   onStateChanged?: (name: string, state: SessionState) => void
 }
@@ -30,20 +29,11 @@ export async function reconcileSessionStates(
 
     let newState: SessionState | null = null
     try {
-      if (session.backend === 'docker') {
-        const actual = await opts.getContainerState(session.name)
-        if (actual === 'running') {
-          // Container alive — no change
-        } else {
-          newState = 'stopped'
-        }
-      } else {
-        const tmuxState = await opts.getTmuxSessionState(session.name)
-        if (tmuxState === 'exists') {
-          // Tmux alive
-        } else if (session.state === 'running' || session.state === 'idle' || session.state === 'needs_attention') {
-          newState = 'stopped'
-        }
+      const tmuxState = await opts.getTmuxSessionState(session.name)
+      if (tmuxState === 'exists') {
+        // Tmux alive
+      } else if (session.state === 'running' || session.state === 'idle' || session.state === 'needs_attention') {
+        newState = 'stopped'
       }
     } catch {
       // If we can't check, assume current state is fine

@@ -5,12 +5,6 @@ import { getConfigRoot } from '../configRoot'
 
 // --- Types ---
 
-export interface ImageProfile {
-  name: string
-  image: string
-  home?: string
-}
-
 export type AdapterType = 'claude' | 'codex' | 'generic'
 
 export interface CliTemplate {
@@ -23,8 +17,8 @@ export interface CliTemplate {
 }
 
 export interface TinstarConfig {
-  container: { prefix: string; defaultImage: string; home: string }
-  profiles: ImageProfile[]
+  /** Prefix applied to tmux session names (e.g. `tinstar-mysession`). */
+  sessions: { prefix: string }
   cliTemplates: CliTemplate[]
   editor: string
   ports: { ttyd: number; hostStart: number }
@@ -140,10 +134,8 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
 // --- Base config (hardcoded defaults) ---
 
 const BASE_CONFIG = {
-  container: {
+  sessions: {
     prefix: 'tinstar-',
-    defaultImage: '',
-    home: '/home/tinstar',
   },
   ports: {
     ttyd: 7681,
@@ -180,11 +172,6 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
 
   const merged = deepMerge(BASE_CONFIG as unknown as Record<string, unknown>, userConfig) as unknown as typeof BASE_CONFIG
 
-  // Profiles are replaced wholesale (not deep-merged) — user list wins if present
-  const profiles: ImageProfile[] = Array.isArray(userConfig.profiles)
-    ? userConfig.profiles as ImageProfile[]
-    : []
-
   // CLI templates: user list extends defaults (user can override by name)
   const userTemplates = Array.isArray(userConfig.cliTemplates)
     ? userConfig.cliTemplates as CliTemplate[]
@@ -199,8 +186,7 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
   const editor = typeof userConfig.editor === 'string' ? userConfig.editor : 'cursor {{path}}'
 
   const config: TinstarConfig = {
-    container: merged.container,
-    profiles,
+    sessions: merged.sessions,
     cliTemplates,
     editor,
     ports: merged.ports,
@@ -262,16 +248,6 @@ export function ensureDirs(config: TinstarConfig): void {
   mkdirSync(config.dirs.root, { recursive: true })
   mkdirSync(config.dirs.secrets, { recursive: true })
   mkdirSync(config.dirs.sessions, { recursive: true })
-
-  // Copy start-ttyd.sh to config dir so it can be mounted into any container
-  const scriptDest = join(config.dirs.root, 'start-ttyd.sh')
-  try {
-    const scriptSrc = join(new URL('.', import.meta.url).pathname, 'scripts', 'start-ttyd.sh')
-    const content = readFileSync(scriptSrc, 'utf-8')
-    writeFileSync(scriptDest, content, { mode: 0o755 })
-  } catch {
-    // Script may already exist from a previous run, or source not found in production
-  }
 }
 
 export function loadActiveSpaceId(rootDir: string): string | null {

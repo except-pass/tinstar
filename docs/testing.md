@@ -39,7 +39,7 @@ Three env vars control this:
 | `TINSTAR_FRONTEND_PORT` | `5280` | Vite dev server port |
 | `BASE_URL` | `http://localhost:5280` | URL Playwright uses as the app base |
 
-`playwright.config.ts` generates a fresh `TINSTAR_DATA_DIR` tmp path on every run and passes `TINSTAR_NO_SESSIONS=1` so the backend runs fully in-memory with no Docker/tmux dependencies.
+`playwright.config.ts` generates a fresh `TINSTAR_DATA_DIR` tmp path on every run and passes `TINSTAR_NO_SESSIONS=1` so the backend runs fully in-memory with no tmux dependencies.
 
 ### Running a second isolated server alongside dev
 
@@ -64,7 +64,7 @@ TINSTAR_BACKEND_PORT=5291 TINSTAR_FRONTEND_PORT=5290 npm run dev:frontend
 
 ## Simulator
 
-Tests run against a simulator (`TINSTAR_FAST_SIM=1`) that generates mock sessions, runs, and events without Docker or tmux. The simulator is automatically enabled by `playwright.config.ts`.
+Tests run against a simulator (`TINSTAR_FAST_SIM=1`) that generates mock sessions, runs, and events without tmux. The simulator is automatically enabled by `playwright.config.ts`.
 
 Each test should call `resetAndWaitForData()` from `e2e/helpers.ts` at the start to get a clean, predictable state:
 

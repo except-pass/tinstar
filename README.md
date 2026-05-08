@@ -57,10 +57,10 @@ The CLI checks for dependencies (Claude Code, tmux, ttyd), offers to register yo
 
 ### Sessions & Agents
 - **Live terminals** — Embedded ttyd sessions with real-time status updates and crisp sub-pixel rendering
-- **CLI Templates** — Define reusable launch configs for any agent backend; unified agent dropdown across tmux, Docker, and custom profiles
+- **CLI Templates** — Define reusable launch configs for any agent CLI; unified agent dropdown across Claude, Codex, and custom templates
 - **Multi-agent support** — Run Claude Code and Codex sessions side-by-side; Codex transcript adapter handles discovery, status, and recap parsing
 - **Configurable agent icons** — Set per-agent icons on run nodes in the hierarchy sidebar
-- **Session lifecycle** — Create, stop, resume, delete sessions with tmux or Docker backends
+- **Session lifecycle** — Create, stop, resume, delete tmux-backed sessions
 - **Real-time state** — SSE-powered status updates (running, idle, needs attention)
 - **`tinstar doctor`** — Health check command that validates all dependencies and reports actionable errors
 
@@ -94,7 +94,6 @@ Disable with `TINSTAR_TELEMETRY=0`. For the full Grafana power-user experience: 
 - **tmux** — session multiplexing (`brew install tmux` / `apt install tmux`)
 - **ttyd** — web terminal (`brew install ttyd` / [download binary](https://github.com/tsl0922/ttyd/releases))
 - **expect** — auto-accept prompts for multi-agent NATS sessions (`brew install expect` / `apt install expect`)
-- **Docker** (optional) — for isolated container sessions
 
 ## Ports
 

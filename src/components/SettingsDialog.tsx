@@ -10,12 +10,6 @@ interface Project {
   path: string
 }
 
-interface ImageProfile {
-  name: string
-  image: string
-  home?: string
-}
-
 interface CliTemplate {
   name: string
   icon?: string
@@ -25,7 +19,7 @@ interface CliTemplate {
   resumeCmd: string
 }
 
-type Section = 'projects' | 'agents' | 'docker' | 'editor' | 'labels' | 'widgets'
+type Section = 'projects' | 'agents' | 'editor' | 'labels' | 'widgets'
 
 interface Props {
   onClose: () => void
@@ -35,7 +29,6 @@ export function SettingsDialog({ onClose }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const projectsRef = useRef<HTMLDivElement>(null)
   const agentsRef = useRef<HTMLDivElement>(null)
-  const dockerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<HTMLDivElement>(null)
   const labelsRef = useRef<HTMLDivElement>(null)
   const widgetsRef = useRef<HTMLDivElement>(null)
@@ -74,13 +67,6 @@ export function SettingsDialog({ onClose }: Props) {
   const [editingTemplate, setEditingTemplate] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<CliTemplate | null>(null)
 
-  // Docker image profiles
-  const [profiles, setProfiles] = useState<ImageProfile[]>([])
-  const [dockerImages, setDockerImages] = useState<string[]>([])
-  const [newProfileName, setNewProfileName] = useState('')
-  const [selectedImage, setSelectedImage] = useState('')
-  const [profileError, setProfileError] = useState<string | null>(null)
-
   // Widget settings (localStorage)
   const [promptComposerDefault, setPromptComposerDefault] = useState(() =>
     localStorage.getItem('tinstar-prompt-composer-default') === 'true'
@@ -112,30 +98,14 @@ export function SettingsDialog({ onClose }: Props) {
       .catch(() => {})
   }, [])
 
-  const fetchProfiles = useCallback(() => {
-    apiFetch('/api/docker/profiles')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d?.ok) setProfiles(d.data ?? []) })
-      .catch(() => {})
-  }, [])
-
-  const fetchDockerImages = useCallback(() => {
-    apiFetch('/api/docker/images')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d?.ok) setDockerImages(d.data ?? []) })
-      .catch(() => {})
-  }, [])
-
   useEffect(() => {
     fetchProjects()
     fetchTemplates()
-    fetchProfiles()
-    fetchDockerImages()
     apiFetch('/api/config')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.ok && typeof d.data?.editor === 'string') setEditorCmd(d.data.editor) })
       .catch(() => {})
-  }, [fetchProjects, fetchTemplates, fetchProfiles, fetchDockerImages])
+  }, [fetchProjects, fetchTemplates])
 
   const handleAdd = useCallback(async () => {
     const trimName = newName.trim()
@@ -222,35 +192,6 @@ export function SettingsDialog({ onClose }: Props) {
     setEditDraft(null)
   }, [])
 
-  const handleAddProfile = useCallback(async () => {
-    const trimName = newProfileName.trim()
-    if (!trimName || !selectedImage) return
-    setProfileError(null)
-
-    const optimistic: ImageProfile = { name: trimName, image: selectedImage }
-    setProfiles(prev => [...prev, optimistic])
-    setNewProfileName('')
-    setSelectedImage('')
-
-    const res = await apiFetch('/api/docker/profiles', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: trimName, image: selectedImage }),
-    })
-    const data = await res.json()
-    if (!data.ok) {
-      setProfiles(prev => prev.filter(p => p !== optimistic))
-      setProfileError(data.error?.message ?? 'Failed to add profile')
-      setNewProfileName(trimName)
-      setSelectedImage(selectedImage)
-    }
-  }, [newProfileName, selectedImage])
-
-  const handleDeleteProfile = useCallback(async (name: string) => {
-    await apiFetch(`/api/docker/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' })
-    fetchProfiles()
-  }, [fetchProfiles])
-
   const handleSaveLabels = useCallback(async () => {
     if (!activeSpaceId) return
     setLabelsSaving(true)
@@ -282,7 +223,6 @@ export function SettingsDialog({ onClose }: Props) {
   const sections: { key: Section; label: string; icon: string; ref: React.RefObject<HTMLDivElement | null> }[] = [
     { key: 'projects', label: 'Projects', icon: 'folder', ref: projectsRef },
     { key: 'agents', label: 'Agents', icon: 'terminal', ref: agentsRef },
-    { key: 'docker', label: 'Docker', icon: 'deployed_code', ref: dockerRef },
     { key: 'editor', label: 'Editor', icon: 'edit', ref: editorRef },
     { key: 'labels', label: 'Entity Labels', icon: 'label', ref: labelsRef },
     { key: 'widgets', label: 'Widgets', icon: 'widgets', ref: widgetsRef },
@@ -640,86 +580,6 @@ export function SettingsDialog({ onClose }: Props) {
             {templateError && (
               <div className="mt-2 text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded px-3 py-1.5">
                 {templateError}
-              </div>
-            )}
-          </div>
-
-          {/* ── Separator ── */}
-          <div className="mx-5 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-
-          {/* ── Docker Images ── */}
-          <div ref={dockerRef} className="px-5 pt-5 pb-6">
-            <h4 className="text-xs font-display uppercase tracking-wider text-slate-300 mb-1">
-              Docker Images
-            </h4>
-            <p className="text-2xs text-slate-500 mb-4">
-              Register Docker images as named profiles for new sessions.
-            </p>
-
-            <div className="space-y-1 mb-4">
-              {profiles.length === 0 ? (
-                <div className="text-xs text-slate-500 py-2">No image profiles registered.</div>
-              ) : (
-                profiles.map(p => (
-                  <div
-                    key={p.name}
-                    className="flex items-center gap-2 px-3 py-2 bg-surface-base rounded border border-white/5 group"
-                  >
-                    <span className="text-xs text-primary font-display uppercase tracking-wider flex-shrink-0">
-                      {p.name}
-                    </span>
-                    <span className="text-2xs text-slate-500 truncate flex-1 font-mono" title={p.image}>
-                      {p.image}
-                    </span>
-                    <button
-                      className="text-xs text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
-                      onClick={() => handleDeleteProfile(p.name)}
-                      aria-label={`Remove ${p.name}`}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="flex gap-2 items-end">
-              <div className="flex-shrink-0 w-28">
-                <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Name</label>
-                <input
-                  type="text"
-                  value={newProfileName}
-                  onChange={e => setNewProfileName(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') handleAddProfile() }}
-                  placeholder="my-image"
-                  className="w-full px-2 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">Image</label>
-                <select
-                  value={selectedImage}
-                  onChange={e => setSelectedImage(e.target.value)}
-                  className="w-full px-2 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
-                >
-                  <option value="" className="text-slate-500">Select image...</option>
-                  {dockerImages.map(img => (
-                    <option key={img} value={img}>{img}</option>
-                  ))}
-                </select>
-              </div>
-              <button
-                className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30 disabled:opacity-50 flex-shrink-0"
-                onClick={handleAddProfile}
-                disabled={!newProfileName.trim() || !selectedImage}
-              >
-                Add
-              </button>
-            </div>
-
-            {profileError && (
-              <div className="mt-2 text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded px-3 py-1.5">
-                {profileError}
               </div>
             )}
           </div>
