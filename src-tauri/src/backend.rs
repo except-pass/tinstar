@@ -3,7 +3,24 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tauri::State;
 
-pub struct ManagedBackend(pub Mutex<Option<Child>>);
+pub struct ManagedBackend(Mutex<Option<Child>>);
+
+impl ManagedBackend {
+    pub fn new() -> Self {
+        ManagedBackend(Mutex::new(None))
+    }
+}
+
+impl Drop for ManagedBackend {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.0.lock() {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+}
 
 #[tauri::command]
 pub fn probe_backend(url: String) -> bool {

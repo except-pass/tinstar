@@ -38,7 +38,7 @@ fn build_eval_script(base: &str) -> String {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(backend::ManagedBackend(std::sync::Mutex::new(None)))
+        .manage(backend::ManagedBackend::new())
         .setup(|app| {
             // Build the main window programmatically so we can attach an
             // `initialization_script` — that script is documented to run BEFORE
