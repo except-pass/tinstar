@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod config;
+
 const HARDCODED_BASE: &str = "http://infrapoc:5273";
 
 /// Strip trailing slashes and reject anything containing characters that would
@@ -53,6 +55,10 @@ fn main() {
             .expect("failed to build main window");
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            config::get_config,
+            config::save_config,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
