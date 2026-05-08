@@ -75,6 +75,16 @@ async function main() {
     return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
   }
 
+  if (process.argv[2] === 'help' && process.argv[3] === 'api') {
+    const { run } = await import('./tinstar/commands/help-api.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
+  if (process.argv[2] === 'help' && process.argv[3] !== 'api') {
+    const { run } = await import('./tinstar/help.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
   console.log(`\n${BOLD}Tinstar${RESET} — Agent Orchestrator\n`)
 
   // Pre-flight checks
