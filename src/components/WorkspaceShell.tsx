@@ -25,6 +25,7 @@ import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
 import { OnboardingCanvas } from './OnboardingCanvas'
 import { apiFetch } from '../apiClient'
+import { useOnboardingState } from '../hooks/useOnboardingState'
 
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
@@ -45,6 +46,9 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
 
 function WorkspaceShellInner() {
   const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, connected } = useBackendState()
+
+  const onboarding = useOnboardingState()
+  const forceMarshalOpen = onboarding.active !== null && onboarding.active !== 'connect'
 
   const levelMeta = useDimensionMeta()
   const dimensions = useMemo(
@@ -878,6 +882,7 @@ function WorkspaceShellInner() {
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
                     arrangeSwimlanesRef={arrangeSwimlanesRef}
+                    forceMarshalOpen={forceMarshalOpen}
                   />
                 </div>
 

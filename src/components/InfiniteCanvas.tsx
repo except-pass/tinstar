@@ -38,6 +38,8 @@ interface Props {
   arrangeSwimlanesRef?: React.MutableRefObject<(() => void) | null>
   zoomToFitRunsRef?: React.MutableRefObject<((runIds: string[]) => void) | null>
   panToRunsRef?: React.MutableRefObject<((runIds: string[]) => void) | null>
+  /** When true, force the canvas sidebar open regardless of localStorage preference. */
+  forceMarshalOpen?: boolean
 }
 
 /** Extract entity type and ID from a tree node ID like "initiative-abc123" */
@@ -154,7 +156,7 @@ interface MarqueeRect {
 
 const MARQUEE_THRESHOLD = 5
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -1212,6 +1214,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         selectedRunIds={selectionState.selectedType === 'run' ? selectionState.selectedIds : undefined}
         hudToggleRef={hudToggleRef}
         minimapToggleRef={minimapToggleRef}
+        forceExpanded={forceMarshalOpen}
       />
 
       {/* Bottom-right zoom indicator */}

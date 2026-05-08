@@ -24,18 +24,23 @@ interface Props {
   /** Toggle refs forwarded for keyboard hotkeys (T = telemetry, M = minimap) */
   hudToggleRef?: React.MutableRefObject<(() => void) | null>
   minimapToggleRef?: React.MutableRefObject<(() => void) | null>
+  /** When true, ignore the localStorage-collapsed preference and render expanded.
+   * The user's preference is preserved (not mutated) so it returns to its
+   * previous state once forceExpanded becomes false. */
+  forceExpanded?: boolean
 }
 
 /** Right-side canvas sidebar: telemetry HUD on top, marshal terminal in the
  * middle, minimap on the bottom. Collapses to a thin button. */
 export function CanvasSidebar(props: Props) {
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(STORAGE_KEY) === 'true')
+  const [storedCollapsed, setStoredCollapsed] = useState(() => localStorage.getItem(STORAGE_KEY) === 'true')
+  const collapsed = props.forceExpanded ? false : storedCollapsed
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, String(collapsed))
-  }, [collapsed])
+    localStorage.setItem(STORAGE_KEY, String(storedCollapsed))
+  }, [storedCollapsed])
 
-  const toggle = useCallback(() => setCollapsed(c => !c), [])
+  const toggle = useCallback(() => setStoredCollapsed(c => !c), [])
 
   if (collapsed) {
     return (
@@ -61,14 +66,16 @@ export function CanvasSidebar(props: Props) {
       {/* Header — collapse handle */}
       <div className="flex items-center justify-between px-2 py-1 border-b border-white/10 text-2xs font-mono uppercase tracking-wider text-slate-500">
         <span>Canvas</span>
-        <button
-          onClick={toggle}
-          className="text-slate-500 hover:text-slate-300"
-          title="Collapse sidebar"
-          data-testid="canvas-sidebar-collapse"
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>dock_to_right</span>
-        </button>
+        {!props.forceExpanded && (
+          <button
+            onClick={toggle}
+            className="text-slate-500 hover:text-slate-300"
+            title="Collapse sidebar"
+            data-testid="canvas-sidebar-collapse"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>dock_to_right</span>
+          </button>
+        )}
       </div>
 
       {/* Telemetry HUD — top */}
