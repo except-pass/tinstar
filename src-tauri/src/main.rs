@@ -2,7 +2,9 @@
 
 mod config;
 
-const HARDCODED_BASE: &str = "http://infrapoc:5273";
+fn resolve_api_base(cfg: Option<&config::DesktopConfig>) -> String {
+    cfg.map(|c| c.backend.url.clone()).unwrap_or_default()
+}
 
 /// Strip trailing slashes and reject anything containing characters that would
 /// let an attacker break out of the JS string literal we eval. We never accept
@@ -41,6 +43,10 @@ fn main() {
             // WebView2: the inline placeholder `<script>__TINSTAR_API_BASE__ = ''</script>`
             // executes before our eval lands, leaving the global as empty
             // string. Using initialization_script eliminates the race.
+            use tauri::Manager;
+            let app_data_dir = app.path().app_data_dir().ok();
+            let cfg = app_data_dir.as_ref().and_then(|d| config::read_config(d));
+            let base = resolve_api_base(cfg.as_ref());
             tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -50,7 +56,7 @@ fn main() {
             .inner_size(1400.0, 900.0)
             .min_inner_size(900.0, 600.0)
             .decorations(true)
-            .initialization_script(build_eval_script(HARDCODED_BASE))
+            .initialization_script(build_eval_script(&base))
             .build()
             .expect("failed to build main window");
             Ok(())
@@ -97,5 +103,23 @@ mod tests {
             build_eval_script("http://x\"; alert(1)//"),
             "window.__TINSTAR_API_BASE__ = \"\";"
         );
+    }
+
+    #[test]
+    fn empty_when_no_config() {
+        assert_eq!(resolve_api_base(None), "");
+    }
+
+    #[test]
+    fn uses_config_url_when_present() {
+        use crate::config::{BackendConfig, BackendMode, DesktopConfig};
+        let cfg = DesktopConfig {
+            backend: BackendConfig {
+                mode: BackendMode::Remote,
+                url: "http://example.com:5273".to_string(),
+                manage_pid: None,
+            },
+        };
+        assert_eq!(resolve_api_base(Some(&cfg)), "http://example.com:5273");
     }
 }
