@@ -1,7 +1,7 @@
 import { existsSync, statSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { listSessions, setState, setConversationId, claudeStateDir, type Session, type SessionState } from './session'
-import { readSessionStatusDetailAt, parseNewEntries, getProjectDir, getTranscriptPath, resetOffset, findTranscriptByConvId } from './transcript-parser'
+import { readSessionStatusDetailAt, parseNewEntriesAt, getProjectDir, getTranscriptPath, resetOffset, findTranscriptByConvId } from './transcript-parser'
 import { discoverTranscript, readCodexStatus, parseCodexRecapEntries } from './codex-transcript'
 import { log } from '../logger'
 import { execFile } from 'node:child_process'
@@ -398,16 +398,21 @@ export class StatusWatcher {
 
     // Parse transcript for recap entries on idle transitions
     if (newState === 'idle' && this.opts.onRecapEntries) {
-      const workdir = session.workspace?.path
       const convId = session.conversation?.id
-      if (!workdir || !convId) return
+      if (!convId) return
 
+      const workdir = session.workspace?.path
       const stateDir = session.backend === 'docker'
         ? claudeStateDir(this.opts.sessionsDir, session.name)
         : undefined
 
+      // Resolve the path the same way the main poll loop does — handles
+      // the marshal/no-workspace case via findTranscriptByConvId.
+      const transcriptPath = this.resolveClaudeTranscriptPath(session, workdir, convId, stateDir)
+      if (!transcriptPath) return
+
       try {
-        const entries = parseNewEntries(session.name, workdir, convId, stateDir)
+        const entries = parseNewEntriesAt(session.name, transcriptPath)
         if (entries.length > 0) {
           this.opts.onRecapEntries(session.name, entries)
         }
