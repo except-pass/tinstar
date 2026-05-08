@@ -3234,6 +3234,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const { name, path } = JSON.parse(body)
         if (!name || !path) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'Name and path required' } }, 400)
         registerProject(cfg.files.projects, name, path)
+        ctx.sse.broadcastEvent('projects_changed', { action: 'register', name })
         json(res, { ok: true }, 201)
       })
       return true

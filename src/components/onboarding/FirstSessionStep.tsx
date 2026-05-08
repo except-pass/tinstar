@@ -12,9 +12,9 @@ export function FirstSessionStep() {
     let cancelled = false
     fetch(apiUrl('/api/projects'))
       .then(r => r.json())
-      .then((map: Record<string, string>) => {
+      .then((resp: { ok: boolean; data?: Record<string, string> }) => {
         if (cancelled) return
-        const names = Object.keys(map)
+        const names = Object.keys(resp.data ?? {})
         setProjects(names)
         if (names.length) setProject(prev => prev || names[0])
       })

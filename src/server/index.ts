@@ -238,7 +238,7 @@ export function initBackend(): RouteContext {
       } else if (docStore.getAllSpaces().length > 0) {
         const userSpace = docStore.getAllSpaces().find(s => s.name !== '_simulator')
         docStore.activeSpaceId = (userSpace ?? docStore.getAllSpaces()[0]!).id
-      } else {
+      } else if (process.env.TINSTAR_NO_DEFAULT_SPACE !== '1') {
         const defaultSpace = {
           id: shortId('spc'),
           name: 'Work Space',

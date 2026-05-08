@@ -147,6 +147,14 @@ function startSSE() {
     }
   })
 
+  es.addEventListener('projects_changed', (e: MessageEvent) => {
+    try {
+      window.dispatchEvent(new CustomEvent('tinstar:projects_changed', { detail: JSON.parse(e.data) }))
+    } catch {
+      // malformed event — drop silently
+    }
+  })
+
   es.addEventListener('heartbeat', () => {
     // Keep-alive, no action needed
   })

@@ -42,18 +42,26 @@ export function useOnboardingState() {
   const reachable = useBackendReachable()
   const { spaces, runRepo } = useBackendState()
   const [projects, setProjects] = useState<string[]>([])
+  const [projectsVersion, setProjectsVersion] = useState(0)
+
+  // Refresh when spaces change OR when the server notifies us of a project change
+  useEffect(() => {
+    const onChanged = () => setProjectsVersion(v => v + 1)
+    window.addEventListener('tinstar:projects_changed', onChanged)
+    return () => window.removeEventListener('tinstar:projects_changed', onChanged)
+  }, [])
 
   useEffect(() => {
     if (!reachable) return
     let cancelled = false
     fetch(apiUrl('/api/projects'))
       .then(r => r.json())
-      .then((map: Record<string, string>) => {
-        if (!cancelled) setProjects(Object.keys(map))
+      .then((resp: { ok: boolean; data?: Record<string, string> }) => {
+        if (!cancelled) setProjects(Object.keys(resp.data ?? {}))
       })
       .catch(() => { /* ignore — predicate just stays empty */ })
     return () => { cancelled = true }
-  }, [reachable, spaces.length])
+  }, [reachable, spaces.length, projectsVersion])
 
   return computeOnboardingState({
     reachable,
