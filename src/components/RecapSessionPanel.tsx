@@ -577,6 +577,12 @@ export function RecapSessionPanel({
   }
   const contentRef = useRef<HTMLDivElement>(null)
 
+  useEffect(() => {
+    if (contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight
+    }
+  }, [activeTab])
+
   return (
     <section
       className="flex-1 flex flex-col min-w-0 min-h-0 border-x bg-surface-base"
