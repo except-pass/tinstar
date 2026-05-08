@@ -54,6 +54,27 @@ async function main() {
     return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
   }
 
+  if (process.argv[2] === 'workspaces') {
+    const { run } = await import('./tinstar/commands/workspaces.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+  if (process.argv[2] === 'projects') {
+    const { run } = await import('./tinstar/commands/projects.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+  if (process.argv[2] === 'sessions') {
+    const { run } = await import('./tinstar/commands/sessions.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+  if (process.argv[2] === 'tasks') {
+    const { run } = await import('./tinstar/commands/tasks.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+  if (process.argv[2] === 'templates') {
+    const { run } = await import('./tinstar/commands/templates.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
   console.log(`\n${BOLD}Tinstar${RESET} — Agent Orchestrator\n`)
 
   // Pre-flight checks
