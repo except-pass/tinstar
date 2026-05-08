@@ -10,6 +10,8 @@ type MarshalState =
   | { phase: 'ready'; port: number; sessionName: string }
   | { phase: 'error'; message: string }
 
+const VISIBLE_STORAGE_KEY = 'tinstar-marshal-visible'
+
 /** Self-contained marshal panel for the canvas sidebar. Owns the marshal
  *  session lifecycle (ensure/restart) and renders the shared RecapSessionPanel
  *  with Recap as the default tab. */
@@ -17,9 +19,13 @@ export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
   const [state, setState] = useState<MarshalState>({ phase: 'idle' })
   const [tick, setTick] = useState(0)
   const [tab, setTab] = useState<'recap' | 'terminal'>('recap')
+  const [visible, setVisible] = useState(() => localStorage.getItem(VISIBLE_STORAGE_KEY) !== 'false')
   const ensuringRef = useRef(false)
   const { state: serverState } = useServerEvents()
   const marshal = serverState.marshal
+
+  useEffect(() => { localStorage.setItem(VISIBLE_STORAGE_KEY, String(visible)) }, [visible])
+  const toggleVisible = useCallback(() => setVisible(v => !v), [])
 
   const ensure = useCallback(async () => {
     if (ensuringRef.current) return
@@ -74,6 +80,20 @@ export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
   const port = state.phase === 'ready' ? state.port : undefined
   const status = marshal?.status
 
+  if (!visible) {
+    return (
+      <button
+        onClick={toggleVisible}
+        className="block w-full px-2 py-1 bg-surface-base/50 border-t border-white/10 text-slate-500 hover:text-slate-300 transition-colors select-none text-2xs font-mono uppercase tracking-wider"
+        title="Show marshal"
+        data-testid="marshal-toggle"
+      >
+        <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: '14px' }}>shield_person</span>
+        marshal
+      </button>
+    )
+  }
+
   return (
     <div className="flex-1 min-h-0 flex flex-col" data-testid="marshal-terminal">
       <div
@@ -122,6 +142,14 @@ export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
             data-testid="marshal-restart"
           >
             <span className="material-symbols-outlined" style={{ fontSize: 14 }}>power_settings_new</span>
+          </button>
+          <button
+            onClick={toggleVisible}
+            className="text-slate-500 hover:text-slate-300"
+            title="Hide marshal"
+            data-testid="marshal-collapse"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>close</span>
           </button>
         </div>
       </div>
