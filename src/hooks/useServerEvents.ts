@@ -3,7 +3,7 @@ declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
 import { useSyncExternalStore, useCallback } from 'react'
 import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata } from '../domain/types'
-import { isSystemSession } from '../domain/system-sessions'
+import { isSystemSession, extractMarshal } from '../domain/system-sessions'
 import { apiUrl } from '../apiClient'
 
 interface ServerState {
@@ -14,6 +14,9 @@ interface ServerState {
   tasks: Task[]
   worktrees: Worktree[]
   runs: Run[]
+  /** Marshal session (filtered out of `runs[]`). Drives the canvas-sidebar
+   *  marshal panel; null until the snapshot or first run-delta arrives. */
+  marshal: Run | null
   editorWidgets: EditorWidget[]
   browserWidgets: BrowserWidget[]
   imageWidgets: ImageWidget[]
@@ -30,6 +33,7 @@ const EMPTY_STATE: ServerState = {
   tasks: [],
   worktrees: [],
   runs: [],
+  marshal: null,
   editorWidgets: [],
   browserWidgets: [],
   imageWidgets: [],
@@ -100,13 +104,16 @@ function startSSE() {
 
   es.addEventListener('snapshot', (e: MessageEvent) => {
     const snapshot = JSON.parse(e.data) as ServerState & { ready_queue?: string[] }
+    const { marshal, rest } = extractMarshal(snapshot.runs ?? [])
     currentState = {
       ...snapshot,
       readyQueue: snapshot.ready_queue ?? [],
       topicMetadata: snapshot.topicMetadata ?? [],
       // System sessions (e.g. marshal) have dedicated UI — never enter the
-      // run set that feeds the canvas/hierarchy/sessions list.
-      runs: (snapshot.runs ?? []).filter(r => !isSystemSession(r)),
+      // run set that feeds the canvas/hierarchy/sessions list. They live on
+      // `marshal` instead.
+      runs: rest,
+      marshal,
     }
     uiBundle = { ...uiBundle, state: currentState, loading: false }
     notify()
@@ -220,20 +227,24 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
   }
 
   if (delta.entity === 'run') {
-    if (delta.data === null) return { ...prev, runs: prev.runs.filter(r => r.id !== delta.id) }
+    if (delta.data === null) {
+      // Could be either a marshal delete or a regular run delete.
+      if (prev.marshal && prev.marshal.id === delta.id) {
+        return { ...prev, marshal: null }
+      }
+      return { ...prev, runs: prev.runs.filter(r => r.id !== delta.id) }
+    }
     const run = delta.data as Run
-    // System sessions (e.g. marshal) are filtered at the SSE ingress so the
-    // canvas/hierarchy/sessions list never see them. The deletion branch
-    // above is a no-op for these because they were never added in the first
-    // place — safe to keep generic.
-    if (isSystemSession(run)) return prev
-    const exists = prev.runs.some(r => r.id === run.id)
     const mergeRun = (prevRun: Run | undefined, next: Run): Run => ({
       ...prevRun,
       ...next,
       touchedFiles: next.touchedFiles ?? prevRun?.touchedFiles ?? [],
       recapEntries: next.recapEntries ?? prevRun?.recapEntries ?? [],
     })
+    if (isSystemSession(run)) {
+      return { ...prev, marshal: mergeRun(prev.marshal ?? undefined, run) }
+    }
+    const exists = prev.runs.some(r => r.id === run.id)
     return {
       ...prev,
       runs: exists
