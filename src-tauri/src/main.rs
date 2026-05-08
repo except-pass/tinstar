@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use tauri::Manager;
+
+mod backend;
 mod config;
+mod dialog;
 
 fn resolve_api_base(cfg: Option<&config::DesktopConfig>) -> String {
     cfg.map(|c| c.backend.url.clone()).unwrap_or_default()
@@ -33,6 +37,8 @@ fn build_eval_script(base: &str) -> String {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(backend::ManagedBackend(std::sync::Mutex::new(None)))
         .setup(|app| {
             // Build the main window programmatically so we can attach an
             // `initialization_script` — that script is documented to run BEFORE
@@ -43,7 +49,6 @@ fn main() {
             // WebView2: the inline placeholder `<script>__TINSTAR_API_BASE__ = ''</script>`
             // executes before our eval lands, leaving the global as empty
             // string. Using initialization_script eliminates the race.
-            use tauri::Manager;
             let app_data_dir = app.path().app_data_dir().ok();
             let cfg = app_data_dir.as_ref().and_then(|d| config::read_config(d));
             let base = resolve_api_base(cfg.as_ref());
@@ -64,6 +69,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             config::get_config,
             config::save_config,
+            backend::probe_backend,
+            backend::start_local_backend,
+            backend::stop_local_backend,
+            dialog::open_directory_dialog,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
