@@ -49,3 +49,37 @@ describe('<RunSessionPanel> recap visuals', () => {
     expect((label as HTMLElement).style.color).toBe('rgb(255, 119, 0)')
   })
 })
+
+describe('<RunSessionPanel> composer placement', () => {
+  it('renders the prompt composer on the Recap tab', () => {
+    const { container } = render(
+      <RunSessionPanel
+        recapEntries={entries}
+        rawLogs=""
+        port={undefined}
+        sessionId="run-1"
+        status="idle"
+        color={ACCENT}
+        controlledTab="recap"
+        onControlledTabChange={() => {}}
+      />,
+    )
+    expect(container.querySelector('[data-testid="prompt-composer"]')).toBeTruthy()
+  })
+
+  it('does not render the composer when sessionId is missing', () => {
+    const { container } = render(
+      <RunSessionPanel
+        recapEntries={entries}
+        rawLogs=""
+        port={undefined}
+        sessionId={undefined}
+        status="idle"
+        color={ACCENT}
+        controlledTab="recap"
+        onControlledTabChange={() => {}}
+      />,
+    )
+    expect(container.querySelector('[data-testid="prompt-composer"]')).toBeFalsy()
+  })
+})

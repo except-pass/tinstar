@@ -348,7 +348,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   }, [])
 
   return (
-    <div ref={composerRootRef} className="border-t" style={{ borderColor: hexToRgba(accent, 0.2) }}>
+    <div ref={composerRootRef} data-testid="prompt-composer" className="border-t" style={{ borderColor: hexToRgba(accent, 0.2) }}>
       {!isExpanded && (
         <button
           onClick={toggleExpanded}
@@ -723,8 +723,8 @@ export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, session
         </div>
       )}
 
-      {/* Prompt composer — only show when terminal is available */}
-      {port && activeTab === 'terminal' && !isTerminated && (
+      {/* Prompt composer — visible on Recap (always) and Terminal (when port). */}
+      {sessionId && !isTerminated && (activeTab === 'recap' || (activeTab === 'terminal' && port)) && (
         <PromptComposer sessionId={sessionId} accent={accent} status={status} expanded={promptComposerExpanded} onToggle={onPromptComposerToggle} focusTrigger={composerFocusTrigger} />
       )}
     </section>
