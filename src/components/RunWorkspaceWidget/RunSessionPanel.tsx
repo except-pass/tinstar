@@ -10,15 +10,20 @@ import { SlashChips } from './SlashChips'
 import { apiFetch } from '../../apiClient'
 
 function MarkdownText({ content }: { content: string }) {
-  return (
-    <div className="whitespace-pre-wrap break-words">{content}</div>
-  )
+  return <div className="whitespace-pre-wrap break-words">{content}</div>
 }
 
-function DiffView({ diff }: { diff: DiffBlock }) {
+function DiffView({ diff, accent }: { diff: DiffBlock; accent: string }) {
   return (
-    <div className="border border-primary/15 bg-surface-base rounded-sm overflow-hidden mt-2">
-      <div className="flex items-center gap-2 px-2 py-1 bg-primary/[0.06] border-b border-primary/15 text-2xs text-primary/60 font-mono">
+    <div className="border rounded-sm overflow-hidden mt-2" style={{ borderColor: hexToRgba(accent, 0.15) }}>
+      <div
+        className="flex items-center gap-2 px-2 py-1 border-b text-2xs font-mono"
+        style={{
+          background: hexToRgba(accent, 0.06),
+          borderColor: hexToRgba(accent, 0.15),
+          color: hexToRgba(accent, 0.6),
+        }}
+      >
         <span className="material-symbols-outlined text-xs">difference</span>
         {diff.filename}
         <span className="text-slate-600 ml-auto">{diff.header}</span>
@@ -48,35 +53,43 @@ function DiffView({ diff }: { diff: DiffBlock }) {
   )
 }
 
-function AgentMessage({ entry }: { entry: RecapEntry }) {
+function AgentMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
   return (
     <div className="flex gap-3">
-      <div className="shrink-0 w-6 h-6 border border-primary/40 flex items-center justify-center bg-primary/10">
-        <span className="material-symbols-outlined text-primary text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>
+      <div
+        className="shrink-0 w-6 h-6 border flex items-center justify-center"
+        style={{ borderColor: hexToRgba(accent, 0.4), background: hexToRgba(accent, 0.1) }}
+      >
+        <span
+          className="material-symbols-outlined text-sm"
+          style={{ color: accent, fontVariationSettings: "'FILL' 1" }}
+        >
           smart_toy
         </span>
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-2xs font-mono text-primary/50 tracking-wide">AGENT</span>
+          <span
+            data-testid="recap-agent-label"
+            className="text-2xs font-mono tracking-wide"
+            style={{ color: accent }}
+          >
+            AGENT
+          </span>
           {entry.timestamp && (
             <span className="text-2xs font-mono text-slate-600">{entry.timestamp}</span>
           )}
         </div>
-        <div className="text-xs font-mono leading-relaxed text-slate-300 prose prose-invert prose-xs max-w-none
-          prose-headings:text-primary prose-headings:text-xs prose-headings:font-display prose-headings:mt-3 prose-headings:mb-1
-          prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0
-          prose-strong:text-primary prose-code:text-primary/80 prose-code:bg-primary/10 prose-code:px-1 prose-code:rounded
-          prose-pre:bg-surface-panel prose-pre:border prose-pre:border-primary/15">
+        <div className="text-xs font-mono leading-relaxed text-slate-400 max-w-none">
           <MarkdownText content={entry.content} />
         </div>
-        {entry.diff && <DiffView diff={entry.diff} />}
+        {entry.diff && <DiffView diff={entry.diff} accent={accent} />}
       </div>
     </div>
   )
 }
 
-function UserMessage({ entry }: { entry: RecapEntry }) {
+function UserMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
   return (
     <div className="flex gap-3 flex-row-reverse">
       <div className="shrink-0 w-6 h-6 border border-slate-600 flex items-center justify-center bg-surface-raised">
@@ -89,8 +102,13 @@ function UserMessage({ entry }: { entry: RecapEntry }) {
           )}
           <span className="text-2xs font-mono text-slate-500 tracking-wide">YOU</span>
         </div>
-        <div className="text-xs font-mono leading-relaxed text-primary/70 bg-primary/[0.04] p-2.5 border-r-2 border-primary/40 text-left prose prose-invert prose-xs max-w-none
-          prose-p:my-1 prose-strong:text-primary/80 prose-code:text-primary/70 prose-code:bg-primary/10 prose-code:px-1 prose-code:rounded">
+        <div
+          className="text-xs font-mono leading-relaxed p-2.5 border-r-2 text-left text-slate-300"
+          style={{
+            background: hexToRgba(accent, 0.05),
+            borderColor: hexToRgba(accent, 0.4),
+          }}
+        >
           <MarkdownText content={entry.content} />
         </div>
       </div>
@@ -98,15 +116,27 @@ function UserMessage({ entry }: { entry: RecapEntry }) {
   )
 }
 
-function StatusMessage({ entry }: { entry: RecapEntry }) {
+function StatusMessage({ entry, accent }: { entry: RecapEntry; accent: string }) {
   return (
     <div className="flex items-center gap-3 py-1">
-      <div className="h-px flex-1 bg-gradient-to-r from-transparent to-primary/15" />
-      <div className="flex items-center gap-2 text-2xs font-mono text-primary/50 tracking-wide uppercase">
-        <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse-glow shadow-[0_0_4px_#00f0ff]" />
+      <div
+        className="h-px flex-1"
+        style={{ background: `linear-gradient(to right, transparent, ${hexToRgba(accent, 0.15)})` }}
+      />
+      <div
+        className="flex items-center gap-2 text-2xs font-mono tracking-wide uppercase"
+        style={{ color: hexToRgba(accent, 0.5) }}
+      >
+        <span
+          className="w-1.5 h-1.5 rounded-full animate-pulse-glow"
+          style={{ background: accent, boxShadow: `0 0 4px ${accent}` }}
+        />
         {entry.content}
       </div>
-      <div className="h-px flex-1 bg-gradient-to-l from-transparent to-primary/15" />
+      <div
+        className="h-px flex-1"
+        style={{ background: `linear-gradient(to left, transparent, ${hexToRgba(accent, 0.15)})` }}
+      />
     </div>
   )
 }
@@ -657,13 +687,18 @@ export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, session
           onPointerFocus={onTerminalPointerFocus}
         />
       ) : activeTab === 'recap' ? (
-        <div ref={contentRef} data-scrollable className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4">
+        <div
+          ref={contentRef}
+          data-scrollable
+          data-testid="recap-pane"
+          className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4 bg-black"
+        >
           <div className="space-y-5">
             {recapEntries.map((entry) => {
               switch (entry.type) {
-                case 'agent': return <AgentMessage key={entry.id} entry={entry} />
-                case 'user': return <UserMessage key={entry.id} entry={entry} />
-                case 'status': return <StatusMessage key={entry.id} entry={entry} />
+                case 'agent': return <AgentMessage key={entry.id} entry={entry} accent={accent} />
+                case 'user': return <UserMessage key={entry.id} entry={entry} accent={accent} />
+                case 'status': return <StatusMessage key={entry.id} entry={entry} accent={accent} />
               }
             })}
           </div>
