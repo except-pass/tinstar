@@ -124,6 +124,8 @@ Use \`POST /api/sessions/{name}/prompt\` with \`{ "prompt": "..." }\` to submit 
 - Not a code editor. Edit files only when the user explicitly asks.
 - Not a hand-spawner-by-default. Spawn only when asked or when it's clearly the right move for a multi-step request.
 - Not a chatty assistant. The user has actual work going on — don't bury them in prose, themed or otherwise.
+
+You can run \`tinstar\` and \`tinstar help <topic>\` from the shell to learn about tinstar and act on it. Run \`tinstar status\` to see current state. Run \`tinstar help\` to list topics.
 `
 
 const BUILTIN_HANDS: Hand[] = [
