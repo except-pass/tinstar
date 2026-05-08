@@ -18,6 +18,7 @@ const frontendPort = parseInt(process.env.TINSTAR_FRONTEND_PORT ?? '5280')
 export default defineConfig({
   test: {
     globals: true,
+    environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
   },
   plugins: [react(), devTitle()],
