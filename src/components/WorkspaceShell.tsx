@@ -23,6 +23,7 @@ import { triggerWidgetFlourish, registerActionHandler, deregisterActionHandler }
 import type { FocusNode } from '../hotkeys/FocusPathContext'
 import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
+import { OnboardingCanvas } from './OnboardingCanvas'
 import { apiFetch } from '../apiClient'
 
 
@@ -960,10 +961,7 @@ function WorkspaceShellInner() {
       ) : (
         <TaxonomyProvider taxRepo={taxRepo}>
           <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
-            {/* Placeholder when no active space */}
-            <div className="flex items-center justify-center h-screen text-slate-500">
-              <span>No space selected</span>
-            </div>
+            <OnboardingCanvas />
           </div>
         </TaxonomyProvider>
       )}
