@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch } from '../../apiClient'
 import { useServerEvents } from '../../hooks/useServerEvents'
 import { RecapSessionPanel } from '../RecapSessionPanel'
+import { hexToRgba } from '../runAccent'
 
 type MarshalState =
   | { phase: 'idle' }
@@ -15,6 +16,7 @@ type MarshalState =
 export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
   const [state, setState] = useState<MarshalState>({ phase: 'idle' })
   const [tick, setTick] = useState(0)
+  const [tab, setTab] = useState<'recap' | 'terminal'>('recap')
   const ensuringRef = useRef(false)
   const { state: serverState } = useServerEvents()
   const marshal = serverState.marshal
@@ -84,6 +86,26 @@ export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
           {state.phase === 'creating' && <span className="text-slate-500 normal-case tracking-normal">starting…</span>}
           {state.phase === 'error' && <span className="text-accent-red normal-case tracking-normal">error</span>}
         </div>
+        <div className="flex rounded-sm overflow-hidden border" style={{ borderColor: hexToRgba(accent, 0.25) }}>
+          {([
+            { key: 'recap' as const, label: 'Recap' },
+            { key: 'terminal' as const, label: port ? 'Term' : 'Logs' },
+          ]).map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              aria-selected={tab === key}
+              data-testid={`marshal-tab-${key}`}
+              className="px-2 py-0 text-2xs font-bold tracking-[0.1em] uppercase transition-colors"
+              style={tab === key
+                ? { background: accent, color: 'var(--surface-base)' }
+                : { color: hexToRgba(accent, 0.5) }
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <div className="flex items-center gap-1">
           <button
             onClick={refresh}
@@ -120,7 +142,8 @@ export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
           port={port}
           recapEntries={marshal?.recapEntries ?? []}
           accent={accent}
-          defaultTab="recap"
+          controlledTab={tab}
+          onControlledTabChange={setTab}
           termTick={tick}
         />
       )}
