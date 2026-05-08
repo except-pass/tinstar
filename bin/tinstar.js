@@ -48,6 +48,12 @@ async function main() {
     return installSkills(process.argv.slice(3))
   }
 
+  // Subcommand: status
+  if (process.argv[2] === 'status') {
+    const { run } = await import('./tinstar/status.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
   console.log(`\n${BOLD}Tinstar${RESET} — Agent Orchestrator\n`)
 
   // Pre-flight checks
