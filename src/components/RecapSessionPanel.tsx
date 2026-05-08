@@ -1,3 +1,14 @@
+/**
+ * RecapSessionPanel — shared session-pane UI used by both RunSessionPanel
+ * (canvas run sessions) and MarshalTerminal (canvas-sidebar copilot).
+ *
+ * Owns: the Recap | Terminal tab toggle, the recap entry renderer, the
+ * ttyd terminal frame, the raw-logs fallback (when no port), and the
+ * collapsible PromptComposer at the bottom.
+ *
+ * Does NOT own: terminated-session resume/delete UI, focus-path bookkeeping,
+ * or marshal-specific lifecycle (ensure/restart). Those live in the callers.
+ */
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../types'
 import { hexToRgba } from './runAccent'

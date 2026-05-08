@@ -41,16 +41,20 @@ describe('<MarshalTerminal>', () => {
     })
   })
 
-  it('uses power_settings_new for the restart button', () => {
+  it('uses power_settings_new for the restart button', async () => {
     const { container } = render(<MarshalTerminal />)
-    const btn = container.querySelector('[data-testid="marshal-restart"]')
-    expect(btn).toBeTruthy()
-    expect(btn?.querySelector('.material-symbols-outlined')?.textContent).toBe('power_settings_new')
+    await waitFor(() => {
+      const btn = container.querySelector('[data-testid="marshal-restart"]')
+      expect(btn).toBeTruthy()
+      expect(btn?.querySelector('.material-symbols-outlined')?.textContent).toBe('power_settings_new')
+    })
   })
 
-  it('keeps refresh for the refresh button', () => {
+  it('keeps refresh for the refresh button', async () => {
     const { container } = render(<MarshalTerminal />)
-    const btn = container.querySelector('[data-testid="marshal-refresh"]')
-    expect(btn?.querySelector('.material-symbols-outlined')?.textContent).toBe('refresh')
+    await waitFor(() => {
+      const btn = container.querySelector('[data-testid="marshal-refresh"]')
+      expect(btn?.querySelector('.material-symbols-outlined')?.textContent).toBe('refresh')
+    })
   })
 })
