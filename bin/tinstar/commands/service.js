@@ -14,7 +14,7 @@
 // even if invoked from elsewhere.
 
 import { execSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, symlinkSync, lstatSync, readlinkSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir, userInfo } from 'node:os'
@@ -65,8 +65,82 @@ function detectNodePath() {
   }
 }
 
-function buildUnit({ repoRoot, nodePath, port, corsOrigins }) {
+// User-local bin dirs that are typically on an interactive shell's PATH but
+// NOT on systemd's default PATH. We add the ones that exist to the unit's
+// Environment=PATH so preflight checks (`claude --version` etc.) resolve.
+function collectUserBinDirs() {
+  const home = homedir()
+  const candidates = [
+    join(home, '.local/bin'),
+    join(home, '.bun/bin'),
+    join(home, 'bin'),
+    join(home, '.cargo/bin'),
+    '/usr/local/go/bin',
+  ]
+  // Also include the dir of `claude` if we can find it via the user's login
+  // PATH — handles non-standard installs.
+  try {
+    const claudePath = shCapture('bash -lc "command -v claude"')
+    if (claudePath) candidates.unshift(dirname(claudePath))
+  } catch { /* claude not on login PATH — ensureClaudeOnPath will catch it */ }
+  return candidates.filter(p => existsSync(p))
+}
+
+function ensureClaudeOnPath(extraPathDirs) {
+  for (const dir of extraPathDirs) {
+    if (existsSync(join(dir, 'claude'))) return
+  }
+  throw new Error(
+    `claude binary not found in any of: ${extraPathDirs.join(', ')}\n` +
+    `Install Claude Code first, or add its bin dir to one of those locations.`
+  )
+}
+
+// Drop a symlink to bin/tinstar.js into ~/bin (already on the user's PATH on
+// most setups) so `tinstar restart` etc. work without `node bin/tinstar.js`.
+function installCliShim(repoRoot) {
+  const userBin = join(homedir(), 'bin')
+  if (!existsSync(userBin)) {
+    console.log(`${DIM}~/bin missing — skipping CLI shim. Add ~/bin to PATH and re-run install.${RESET}`)
+    return
+  }
+  const linkPath = join(userBin, 'tinstar')
+  const targetPath = join(repoRoot, 'bin', 'tinstar.js')
+  try {
+    if (existsSync(linkPath) || (() => { try { lstatSync(linkPath); return true } catch { return false } })()) {
+      const existing = lstatSync(linkPath)
+      if (existing.isSymbolicLink() && readlinkSync(linkPath) === targetPath) {
+        console.log(`${GREEN}✓${RESET} CLI shim already in place: ${linkPath}`)
+        return
+      }
+      // Don't overwrite a non-symlink — could be a real script.
+      if (!existing.isSymbolicLink()) {
+        console.log(`${YELLOW}!${RESET} ${linkPath} exists and is not a symlink — leaving it alone`)
+        return
+      }
+      unlinkSync(linkPath)
+    }
+    symlinkSync(targetPath, linkPath)
+    console.log(`${GREEN}✓${RESET} installed CLI shim: ${linkPath} -> ${targetPath}`)
+  } catch (err) {
+    console.log(`${YELLOW}!${RESET} failed to install CLI shim at ${linkPath}: ${err.message}`)
+  }
+}
+
+function buildUnit({ repoRoot, nodePath, port, corsOrigins, extraPathDirs }) {
   const nodeBinDir = dirname(nodePath)
+  // PATH for the service. We include the user's local bin dirs (where `claude`
+  // and friends typically live) plus standard system paths. Preflight checks
+  // in bin/tinstar.js shell out to `claude --version` etc., so missing entries
+  // here turn into instant crashloops.
+  const pathEntries = [
+    nodeBinDir,
+    ...extraPathDirs,
+    '/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin',
+  ]
+  // De-dup while preserving order.
+  const seen = new Set()
+  const path = pathEntries.filter(p => p && !seen.has(p) && (seen.add(p), true)).join(':')
   // ExecStart resolves the tailscale IPv4 at start time so the unit keeps
   // working if the tailscale address changes (rare but free correctness).
   return `[Unit]
@@ -80,7 +154,8 @@ Type=simple
 WorkingDirectory=${repoRoot}
 Environment=NODE_ENV=production
 Environment=TINSTAR_CORS_ORIGINS=${corsOrigins}
-Environment=PATH=${nodeBinDir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH=${path}
+Environment=HOME=${homedir()}
 ExecStart=/bin/bash -c 'exec "${nodePath}" "${repoRoot}/bin/tinstar.js" --port ${port} --no-open --no-setup --host $(/usr/bin/tailscale ip --4 | head -n1)'
 Restart=on-failure
 RestartSec=2
@@ -110,6 +185,7 @@ async function installService(args) {
   const repoRoot = REPO_ROOT
   const nodePath = detectNodePath()
   const tsIp = detectTailscaleIp()
+  const extraPathDirs = collectUserBinDirs()
   const corsOrigins = [
     'tauri://localhost',
     'https://tauri.localhost',
@@ -124,12 +200,20 @@ async function installService(args) {
   console.log(`  ${DIM}Node:${RESET}      ${nodePath}`)
   console.log(`  ${DIM}Port:${RESET}      ${port}`)
   console.log(`  ${DIM}TS IPv4:${RESET}   ${tsIp} ${DIM}(re-resolved at every start)${RESET}`)
+  console.log(`  ${DIM}Extra PATH:${RESET} ${extraPathDirs.join(':') || '(none)'}`)
   console.log(`  ${DIM}Unit path:${RESET} ${UNIT_PATH}\n`)
 
+  // Sanity check: we need `claude` reachable from the unit, otherwise preflight
+  // exits 1 and systemd will crashloop. Refuse the install rather than ship a
+  // broken unit.
+  ensureClaudeOnPath(extraPathDirs)
+
   mkdirSync(UNIT_DIR, { recursive: true })
-  const unit = buildUnit({ repoRoot, nodePath, port, corsOrigins })
+  const unit = buildUnit({ repoRoot, nodePath, port, corsOrigins, extraPathDirs })
   writeFileSync(UNIT_PATH, unit)
   console.log(`${GREEN}✓${RESET} wrote ${UNIT_PATH}`)
+
+  installCliShim(repoRoot)
 
   writeServiceConfig({ repoRoot, port, nodePath, installedAt: new Date().toISOString() })
 
@@ -178,6 +262,18 @@ async function uninstallService() {
   }
   try { sh(`systemctl --user daemon-reload`) } catch { /* fine */ }
   try { unlinkSync(SERVICE_CONFIG_PATH) } catch { /* fine */ }
+  // Remove the CLI shim if it points at our repo.
+  const linkPath = join(homedir(), 'bin', 'tinstar')
+  try {
+    const st = lstatSync(linkPath)
+    if (st.isSymbolicLink()) {
+      const target = readlinkSync(linkPath)
+      if (target.startsWith(REPO_ROOT)) {
+        unlinkSync(linkPath)
+        console.log(`${GREEN}✓${RESET} removed CLI shim ${linkPath}`)
+      }
+    }
+  } catch { /* not present */ }
   console.log(`${GREEN}✓${RESET} tinstar service uninstalled`)
 }
 
