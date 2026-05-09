@@ -40,6 +40,12 @@ interface ServerOptions {
   port: number
   clientDir: string
   open?: boolean
+  /**
+   * Optional bind address. When omitted, Node binds to the unspecified address
+   * (all interfaces). Set to e.g. the tailscale IPv4 to restrict reachability
+   * to the tailnet without firewall rules.
+   */
+  host?: string
 }
 
 function killStalePidSync(pidFilePath: string): void {
@@ -194,20 +200,26 @@ export function startServer(opts: ServerOptions) {
 
   process.on('exit', () => { removePortFile(); removePidFile() })
 
+  const host = opts.host
+
   function listen(port: number, isRetry = false) {
-    server.listen(port, () => {
-      const url = `http://localhost:${port}`
+    const onListening = () => {
+      const displayHost = host ?? 'localhost'
+      const url = `http://${displayHost}:${port}`
       writePortFile(port)
       writePidFile()
-      log.info('server', `Tinstar running at ${url}`)
-      console.log(`\n  Tinstar running at ${url}\n`)
+      const bindNote = host ? ` (bound to ${host})` : ''
+      log.info('server', `Tinstar running at ${url}${bindNote}`)
+      console.log(`\n  Tinstar running at ${url}${bindNote}\n`)
       if (opts.open) {
         import('node:child_process').then(({ exec }) => {
           const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
           exec(`${cmd} ${url}`)
         })
       }
-    })
+    }
+    if (host) server.listen(port, host, onListening)
+    else server.listen(port, onListening)
 
     server.once('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
@@ -238,6 +250,8 @@ if (isDirectRun) {
   const args = process.argv.slice(2)
   const portIdx = args.indexOf('--port')
   const port = portIdx !== -1 ? parseInt(args[portIdx + 1]!) : parseInt(process.env.TINSTAR_BACKEND_PORT ?? '5273')
+  const hostIdx = args.indexOf('--host')
+  const host = hostIdx !== -1 ? args[hostIdx + 1] : process.env.TINSTAR_HOST
   const noOpen = args.includes('--no-open')
-  startServer({ port, clientDir: join(__dirname, '../../dist/client'), open: !noOpen })
+  startServer({ port, host, clientDir: join(__dirname, '../../dist/client'), open: !noOpen })
 }

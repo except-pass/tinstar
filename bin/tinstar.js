@@ -54,6 +54,15 @@ async function main() {
     return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
   }
 
+  // Service management — drives the systemd user unit
+  const SERVICE_SUBCOMMANDS = new Set([
+    'install-service', 'uninstall-service', 'start', 'stop', 'restart', 'logs',
+  ])
+  if (SERVICE_SUBCOMMANDS.has(process.argv[2])) {
+    const { run } = await import('./tinstar/commands/service.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
   if (process.argv[2] === 'workspaces') {
     const { run } = await import('./tinstar/commands/workspaces.js')
     return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
@@ -149,8 +158,10 @@ async function main() {
   const noOpen = process.argv.includes('--no-open')
   const portIdx = process.argv.indexOf('--port')
   const port = portIdx !== -1 ? parseInt(process.argv[portIdx + 1]) : 5273
+  const hostIdx = process.argv.indexOf('--host')
+  const host = hostIdx !== -1 ? process.argv[hostIdx + 1] : process.env.TINSTAR_HOST
   const { startServer } = await import('../dist/server/standalone.js')
-  startServer({ port, clientDir: join(import.meta.dirname, '..', 'dist', 'client'), open: !noOpen })
+  startServer({ port, host, clientDir: join(import.meta.dirname, '..', 'dist', 'client'), open: !noOpen })
 }
 
 main().catch(err => {
