@@ -149,4 +149,41 @@ describe('<SaloonRefreshButton>', () => {
     // Popover still mounted
     expect(getByTestId('saloon-orphan-popover')).toBeTruthy()
   })
+
+  it('shows error inline if /start fails after a successful /stop; popover stays open', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))  // bounce
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))  // /stop
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ ok: false, error: { code: 'START_FAILED', message: 'port in use' } }),
+        { status: 500 },
+      ))  // /start
+    const { getByTestId } = render(
+      <SaloonRefreshButton sessionName="alpha" natsControlOrphanedAt="2026-05-12T00:00:00Z" />,
+    )
+    fireEvent.click(getByTestId('saloon-refresh-btn'))
+    await waitFor(() => expect(getByTestId('saloon-orphan-popover')).toBeTruthy())
+    fireEvent.click(getByTestId('saloon-orphan-restart'))
+    await waitFor(() => expect(getByTestId('saloon-orphan-error').textContent).toMatch(/port in use/))
+    expect(getByTestId('saloon-orphan-popover')).toBeTruthy()
+  })
+
+  it('Escape does NOT dismiss the popover while restart is in flight', async () => {
+    let resolveStop!: (r: Response) => void
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))  // bounce
+      .mockImplementationOnce(() => new Promise<Response>(r => { resolveStop = r }))  // /stop hangs
+    const { getByTestId, queryByTestId } = render(
+      <SaloonRefreshButton sessionName="alpha" natsControlOrphanedAt="2026-05-12T00:00:00Z" />,
+    )
+    fireEvent.click(getByTestId('saloon-refresh-btn'))
+    await waitFor(() => expect(getByTestId('saloon-orphan-popover')).toBeTruthy())
+    fireEvent.click(getByTestId('saloon-orphan-restart'))
+    // Wait until restart is actually in flight (Restart button shows "Restarting…")
+    await waitFor(() => expect(getByTestId('saloon-orphan-restart').textContent).toContain('Restarting'))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(getByTestId('saloon-orphan-popover')).toBeTruthy()  // still mounted
+    // Cleanup so the test doesn't leak the pending promise
+    resolveStop(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+  })
 })

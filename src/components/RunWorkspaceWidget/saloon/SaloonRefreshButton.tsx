@@ -35,21 +35,25 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
     }
   }, [])
 
+  const onCancelRestart = useCallback(() => {
+    if (restartInFlight) return
+    setPopoverOpen(false)
+    setRestartError(null)
+  }, [restartInFlight])
+
   // Click-outside and Escape handlers for the popover
   useEffect(() => {
     if (!popoverOpen) return
 
     const handleMouseDown = (e: MouseEvent) => {
       if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        setPopoverOpen(false)
-        setRestartError(null)
+        onCancelRestart()
       }
     }
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setPopoverOpen(false)
-        setRestartError(null)
+        onCancelRestart()
       }
     }
 
@@ -59,7 +63,7 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
       document.removeEventListener('mousedown', handleMouseDown)
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [popoverOpen])
+  }, [popoverOpen, onCancelRestart])
 
   const baseTitle = natsControlOrphanedAt ? IDLE_TITLE_ORPHANED : IDLE_TITLE_HEALTHY
   const title = mode === 'inFlight'
@@ -111,11 +115,6 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
       timerRef.current = setTimeout(() => setErrorTitle(null), 4000)
     }
   }, [natsControlOrphanedAt])
-
-  const onCancelRestart = useCallback(() => {
-    setPopoverOpen(false)
-    setRestartError(null)
-  }, [])
 
   const onConfirmRestart = useCallback(async () => {
     setRestartInFlight(true)
