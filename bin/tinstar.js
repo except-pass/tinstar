@@ -158,10 +158,19 @@ async function main() {
   const noOpen = process.argv.includes('--no-open')
   const portIdx = process.argv.indexOf('--port')
   const port = portIdx !== -1 ? parseInt(process.argv[portIdx + 1]) : 5273
-  const hostIdx = process.argv.indexOf('--host')
-  const host = hostIdx !== -1 ? process.argv[hostIdx + 1] : process.env.TINSTAR_HOST
+  // Collect repeated --host flags and/or a comma-separated list.
+  const hosts = []
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === '--host' && process.argv[i + 1]) {
+      hosts.push(...process.argv[i + 1].split(',').map(s => s.trim()).filter(Boolean))
+      i++
+    }
+  }
+  if (hosts.length === 0 && process.env.TINSTAR_HOST) {
+    hosts.push(...process.env.TINSTAR_HOST.split(',').map(s => s.trim()).filter(Boolean))
+  }
   const { startServer } = await import('../dist/server/standalone.js')
-  startServer({ port, host, clientDir: join(import.meta.dirname, '..', 'dist', 'client'), open: !noOpen })
+  startServer({ port, host: hosts, clientDir: join(import.meta.dirname, '..', 'dist', 'client'), open: !noOpen })
 }
 
 main().catch(err => {

@@ -156,7 +156,7 @@ Environment=NODE_ENV=production
 Environment=TINSTAR_CORS_ORIGINS=${corsOrigins}
 Environment=PATH=${path}
 Environment=HOME=${homedir()}
-ExecStart=/bin/bash -c 'exec "${nodePath}" "${repoRoot}/bin/tinstar.js" --port ${port} --no-open --no-setup --host $(/usr/bin/tailscale ip --4 | head -n1)'
+ExecStart=/bin/bash -c 'exec "${nodePath}" "${repoRoot}/bin/tinstar.js" --port ${port} --no-open --no-setup --host 127.0.0.1 --host $(/usr/bin/tailscale ip --4 | head -n1)'
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=10
