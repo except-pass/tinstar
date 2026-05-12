@@ -37,6 +37,7 @@ import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import { spec as openapiSpec } from './openapi'
+import { bounceNatsTraffic } from './natsTrafficBounce'
 import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
@@ -489,7 +490,7 @@ async function createSessionInternal(
     recapEntries: [],
     rawLogs: '',
     port: sessionPort ?? null,
-    backend,
+    backend: 'tmux',
     backendInfo,
     agentIcon: resolvedTemplate?.icon ?? undefined,
     natsEnabled: resolvedNats?.enabled ?? false,
@@ -638,7 +639,6 @@ export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalRe
 
   const result = await createSessionInternal({
     name: MARSHAL_NAME,
-    backend: 'tmux',
     skipPermissions: true,
     cliTemplate: hand.cliTemplate,
     prompt: hand.prompt,
@@ -1492,6 +1492,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST /api/nats-traffic/bounce — stop+start the NATS observer connection
+  // and re-establish all widget subscriptions. Used by the Saloon refresh
+  // button. Safe: does not touch session control sockets or running agents.
+  if (method === 'POST' && url === '/api/nats-traffic/bounce') {
+    readBody(req).then(async () => {
+      try {
+        await bounceNatsTraffic(ctx.natsTraffic)
+        json(res, { ok: true })
+      } catch (err) {
+        const e = err as { code?: string; message?: string }
+        const status = e.code === 'BRIDGE_UNAVAILABLE' ? 503 : 500
+        json(res, {
+          ok: false,
+          error: { code: e.code ?? 'BOUNCE_FAILED', message: e.message ?? String(err) },
+        }, status)
+      }
+    })
+    return true
+  }
+
   // POST /api/nats-traffic-widgets — create a NATS traffic monitor widget
   if (method === 'POST' && url === '/api/nats-traffic-widgets') {
     readBody(req).then(body => {
@@ -2276,7 +2296,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const resolvedProject = settings?.resolved?.project
 
           const params: CreateSessionParams = {
-            backend: 'tmux',
             nats: { enabled: true },
             ...overrides,
             project: overrides.project ?? resolvedProject,
@@ -2530,6 +2549,35 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             env.VSCODE_IPC_HOOK_CLI = `/run/user/1000/${socks[0]!.name}`
           }
         } catch { /* non-Linux or no sockets — use inherited env */ }
+
+        // Discover Remote-SSH `code` binaries (VS Code / Cursor / Windsurf install
+        // them under ~/.<flavor>-server/bin/<arch>/<commit>/bin/remote-cli/). The
+        // systemd unit's PATH doesn't include these dirs, so spawn would ENOENT.
+        const home = process.env.HOME
+        if (home) {
+          const cliDirs: { dir: string; mtime: number }[] = []
+          for (const flavor of ['.vscode-server', '.cursor-server', '.windsurf-server']) {
+            const base = `${home}/${flavor}/bin`
+            try {
+              for (const arch of readdirSync(base)) {
+                const archDir = `${base}/${arch}`
+                try {
+                  for (const commit of readdirSync(archDir)) {
+                    const cli = `${archDir}/${commit}/bin/remote-cli`
+                    try {
+                      const st = statSync(`${cli}/code`)
+                      cliDirs.push({ dir: cli, mtime: st.mtimeMs })
+                    } catch { /* no code binary in this install */ }
+                  }
+                } catch { /* unreadable arch dir */ }
+              }
+            } catch { /* flavor not installed */ }
+          }
+          if (cliDirs.length > 0) {
+            cliDirs.sort((a, b) => b.mtime - a.mtime)
+            env.PATH = `${cliDirs[0]!.dir}:${env.PATH ?? ''}`
+          }
+        }
 
         import('node:child_process').then(({ spawn }) => {
           const child = spawn(bin!, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: true, env })
@@ -3100,7 +3148,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // GET /api/projects/:name/worktrees
     if (method === 'GET' && url.includes('/worktrees') && url.startsWith('/api/projects/')) {
       const rest = url.slice('/api/projects/'.length)
-      const name = rest.split('/')[0]
+      const rawName = rest.split('/')[0]
+      const name = rawName ? decodeURIComponent(rawName) : ''
       if (name) {
         const projectPath = getProject(cfg.files.projects, name)
         if (!projectPath) {
@@ -3116,7 +3165,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
     // DELETE /api/projects/:name
     if (method === 'DELETE' && url.startsWith('/api/projects/')) {
-      const name = url.slice('/api/projects/'.length)
+      const rawName = url.slice('/api/projects/'.length)
+      const name = decodeURIComponent(rawName)
       if (name) {
         const removed = unregisterProject(cfg.files.projects, name)
         if (!removed) {
