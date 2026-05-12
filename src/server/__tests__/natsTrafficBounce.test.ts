@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NatsTrafficBridge } from '../nats-traffic'
+import { bounceNatsTraffic } from '../api/natsTrafficBounce'
 
 // Mock the nats package — we never want a real broker for these tests.
 vi.mock('nats', () => {
@@ -52,5 +53,43 @@ describe('NatsTrafficBridge.start() re-syncs subscriptions', () => {
     await bridge.start()
     const subjectsAfter = nats.__fakeNc.subscribe.mock.calls.map((c: any[]) => c[0])
     expect(subjectsAfter).toEqual(expect.arrayContaining(['tinstar.a.b', 'tinstar.c.d']))
+  })
+})
+
+describe('bounceNatsTraffic(bridge)', () => {
+  it('throws BRIDGE_UNAVAILABLE when bridge is undefined', async () => {
+    await expect(bounceNatsTraffic(undefined)).rejects.toMatchObject({ code: 'BRIDGE_UNAVAILABLE' })
+  })
+
+  it('calls stop() then start() in order on the bridge', async () => {
+    const order: string[] = []
+    const bridge = {
+      stop: vi.fn(async () => { order.push('stop') }),
+      start: vi.fn(async () => { order.push('start') }),
+    }
+    await bounceNatsTraffic(bridge as any)
+    expect(order).toEqual(['stop', 'start'])
+  })
+
+  it('wraps a stop() failure as BOUNCE_FAILED with the original message', async () => {
+    const bridge = {
+      stop: vi.fn(async () => { throw new Error('nope') }),
+      start: vi.fn(async () => {}),
+    }
+    await expect(bounceNatsTraffic(bridge as any)).rejects.toMatchObject({
+      code: 'BOUNCE_FAILED',
+      message: expect.stringContaining('nope'),
+    })
+  })
+
+  it('wraps a start() failure as BOUNCE_FAILED with the original message', async () => {
+    const bridge = {
+      stop: vi.fn(async () => {}),
+      start: vi.fn(async () => { throw new Error('connect refused') }),
+    }
+    await expect(bounceNatsTraffic(bridge as any)).rejects.toMatchObject({
+      code: 'BOUNCE_FAILED',
+      message: expect.stringContaining('connect refused'),
+    })
   })
 })
