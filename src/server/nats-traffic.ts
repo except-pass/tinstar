@@ -178,7 +178,7 @@ export class NatsTrafficBridge {
     if (this.reconnectTimer) return
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      this.start().then(() => this.syncSubscriptions())
+      void this.start()
     }, 5000)
   }
 
