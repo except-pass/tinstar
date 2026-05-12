@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 interface Props {
   sessionName: string
@@ -27,6 +28,8 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const popoverRef = useRef<HTMLDivElement | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
 
   // Cleanup timer on unmount
   useEffect(() => {
@@ -102,6 +105,10 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
       acceptingClicksRef.current = true
       // If orphaned at click time, show restart popover
       if (orphanedAtClickTime) {
+        if (buttonRef.current) {
+          const rect = buttonRef.current.getBoundingClientRect()
+          setPopoverPos({ top: rect.bottom + 4, left: rect.left })
+        }
         setPopoverOpen(true)
         setRestartError(null)
       }
@@ -151,22 +158,13 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
   const iconName = mode === 'inFlight' ? 'progress_activity' : 'refresh'
   const iconClass = mode === 'inFlight' ? 'animate-spin' : ''
 
-  return (
-    <span className="relative inline-flex">
-      <button
-        data-testid="saloon-refresh-btn"
-        title={title}
-        disabled={disabled}
-        onClick={onClick}
-        className="text-slate-500 hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        <span className={`material-symbols-outlined text-sm ${iconClass}`}>{iconName}</span>
-      </button>
-      {popoverOpen && (
+  const popover = popoverOpen
+    ? createPortal(
         <div
           ref={popoverRef}
           data-testid="saloon-orphan-popover"
-          className="absolute top-full left-0 mt-1 z-50 w-72 rounded border border-slate-700 bg-surface-panel p-3 shadow-lg text-xs text-slate-200"
+          style={{ position: 'fixed', top: popoverPos.top, left: popoverPos.left }}
+          className="z-50 w-72 rounded border border-slate-700 bg-surface-panel p-3 shadow-lg text-xs text-slate-200"
         >
           <p className="mb-2">
             Session control socket is orphaned. Restart the session to recover dynamic subscriptions? This will kill the agent process.
@@ -193,8 +191,24 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
               {restartInFlight ? 'Restarting…' : 'Restart session'}
             </button>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body,
+      )
+    : null
+
+  return (
+    <span className="relative inline-flex">
+      <button
+        ref={buttonRef}
+        data-testid="saloon-refresh-btn"
+        title={title}
+        disabled={disabled}
+        onClick={onClick}
+        className="text-slate-500 hover:text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <span className={`material-symbols-outlined text-sm ${iconClass}`}>{iconName}</span>
+      </button>
+      {popover}
     </span>
   )
 }

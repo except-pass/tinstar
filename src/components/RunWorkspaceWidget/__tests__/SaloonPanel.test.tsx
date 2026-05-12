@@ -55,4 +55,11 @@ describe('<SaloonPanel>', () => {
     )
     expect(container.querySelector('[data-testid="saloon-refresh-btn"]')).toBeTruthy()
   })
+
+  it('renders the refresh button even when NATS is disabled', () => {
+    const { container } = render(
+      <SaloonPanel {...baseProps} natsEnabled={false} natsControlOrphanedAt={null} />,
+    )
+    expect(container.querySelector('[data-testid="saloon-refresh-btn"]')).toBeTruthy()
+  })
 })
