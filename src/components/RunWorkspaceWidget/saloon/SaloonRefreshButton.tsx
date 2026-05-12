@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 interface Props {
   sessionName: string
@@ -17,13 +17,28 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
   // Reserved for Task 5 — orphan-restart popover state lives here.
   void sessionName
 
+  // Fix 1: ref-guarded in-flight check — prevents two clicks that race before
+  // React re-renders from both firing.
+  const acceptingClicksRef = useRef(true)
+
+  // Fix 2: track the error-clear timer so we can cancel it on unmount and
+  // before scheduling a new one.
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
+  }, [])
+
   const baseTitle = natsControlOrphanedAt ? IDLE_TITLE_ORPHANED : IDLE_TITLE_HEALTHY
   const title = mode === 'inFlight'
     ? IN_FLIGHT_TITLE
     : (errorTitle ?? baseTitle)
 
   const onClick = useCallback(async () => {
-    if (mode !== 'idle') return
+    if (!acceptingClicksRef.current) return
+    acceptingClicksRef.current = false
     setMode('inFlight')
     setErrorTitle(null)
     try {
@@ -32,23 +47,33 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
         const body = await res.json().catch(() => ({}))
         setErrorTitle(body?.error?.message ?? 'NATS bridge is disabled in tinstar config')
         setMode('permaDisabled')
+        // permaDisabled: leave acceptingClicksRef false permanently
         return
       }
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        setErrorTitle(`Refresh failed: ${body?.error?.message ?? 'unknown error'}`)
+        // Fix 3: non-Error throw guard applied uniformly
+        const msg = body?.error?.message ?? 'unknown error'
+        setErrorTitle(`Refresh failed: ${msg}`)
         setMode('idle')
+        acceptingClicksRef.current = true
         // Clear the error after 4s, matching the spec.
-        setTimeout(() => setErrorTitle(null), 4000)
+        if (timerRef.current) clearTimeout(timerRef.current)
+        timerRef.current = setTimeout(() => setErrorTitle(null), 4000)
         return
       }
       setMode('idle')
+      acceptingClicksRef.current = true
     } catch (err) {
-      setErrorTitle(`Refresh failed: ${(err as Error).message}`)
+      // Fix 3: guard against non-Error throws
+      const msg = err instanceof Error ? err.message : String(err)
+      setErrorTitle(`Refresh failed: ${msg}`)
       setMode('idle')
-      setTimeout(() => setErrorTitle(null), 4000)
+      acceptingClicksRef.current = true
+      if (timerRef.current) clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => setErrorTitle(null), 4000)
     }
-  }, [mode])
+  }, [])
 
   const disabled = mode !== 'idle'
   const iconName = mode === 'inFlight' ? 'progress_activity' : 'refresh'
