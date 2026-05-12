@@ -85,4 +85,68 @@ describe('<SaloonRefreshButton>', () => {
     await waitFor(() => expect(btn.getAttribute('title')).toContain('connect refused'))
     expect(btn.disabled).toBe(false)
   })
+
+  it('does NOT show popover after successful bounce when not orphaned', async () => {
+    const { queryByTestId, getByTestId } = render(
+      <SaloonRefreshButton sessionName="alpha" natsControlOrphanedAt={null} />,
+    )
+    fireEvent.click(getByTestId('saloon-refresh-btn'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(queryByTestId('saloon-orphan-popover')).toBeNull()
+  })
+
+  it('shows popover after successful bounce when orphaned', async () => {
+    const { getByTestId } = render(
+      <SaloonRefreshButton sessionName="alpha" natsControlOrphanedAt="2026-05-12T00:00:00Z" />,
+    )
+    fireEvent.click(getByTestId('saloon-refresh-btn'))
+    await waitFor(() => expect(getByTestId('saloon-orphan-popover')).toBeTruthy())
+  })
+
+  it('Cancel dismisses the popover without further fetches', async () => {
+    const { getByTestId, queryByTestId } = render(
+      <SaloonRefreshButton sessionName="alpha" natsControlOrphanedAt="2026-05-12T00:00:00Z" />,
+    )
+    fireEvent.click(getByTestId('saloon-refresh-btn'))
+    await waitFor(() => expect(getByTestId('saloon-orphan-popover')).toBeTruthy())
+    const callsBefore = fetchMock.mock.calls.length
+    fireEvent.click(getByTestId('saloon-orphan-cancel'))
+    await waitFor(() => expect(queryByTestId('saloon-orphan-popover')).toBeNull())
+    expect(fetchMock.mock.calls.length).toBe(callsBefore)
+  })
+
+  it('Restart calls /stop then /start in order', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    const { getByTestId } = render(
+      <SaloonRefreshButton sessionName="alpha" natsControlOrphanedAt="2026-05-12T00:00:00Z" />,
+    )
+    fireEvent.click(getByTestId('saloon-refresh-btn'))
+    await waitFor(() => expect(getByTestId('saloon-orphan-popover')).toBeTruthy())
+    fireEvent.click(getByTestId('saloon-orphan-restart'))
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3))
+    const urls = fetchMock.mock.calls.map(c => c[0])
+    const stopIdx = urls.indexOf('/api/sessions/alpha/stop')
+    const startIdx = urls.indexOf('/api/sessions/alpha/start')
+    expect(stopIdx).toBeGreaterThan(-1)
+    expect(startIdx).toBeGreaterThan(stopIdx)
+  })
+
+  it('shows error inline if /stop fails; popover stays open', async () => {
+    // First call: bounce success. Second call (/stop): failure.
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ ok: false, error: { code: 'STOP_FAILED', message: 'no such tmux session' } }),
+        { status: 500 },
+      ))
+    const { getByTestId } = render(
+      <SaloonRefreshButton sessionName="alpha" natsControlOrphanedAt="2026-05-12T00:00:00Z" />,
+    )
+    fireEvent.click(getByTestId('saloon-refresh-btn'))
+    await waitFor(() => expect(getByTestId('saloon-orphan-popover')).toBeTruthy())
+    fireEvent.click(getByTestId('saloon-orphan-restart'))
+    await waitFor(() => expect(getByTestId('saloon-orphan-error').textContent).toMatch(/no such tmux session/))
+    // Popover still mounted
+    expect(getByTestId('saloon-orphan-popover')).toBeTruthy()
+  })
 })
