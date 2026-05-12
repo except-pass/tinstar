@@ -26,6 +26,7 @@ export async function bounceNatsTraffic(bridge: NatsTrafficBridge | undefined): 
     await bridge.stop()
     await bridge.start()
   } catch (err) {
-    throw new BounceError('BOUNCE_FAILED', (err as Error).message)
+    const msg = err instanceof Error ? err.message : String(err)
+    throw new BounceError('BOUNCE_FAILED', msg)
   }
 }
