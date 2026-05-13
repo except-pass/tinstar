@@ -145,4 +145,39 @@ export class TelemetryQuery {
     if (json.status !== 'success' || !json.data) throw new Error(`prom query error: ${json.error ?? 'unknown'}`)
     return json.data.result
   }
+
+  /**
+   * Range query. Returns oldest→newest `[unixSec, number | null]` samples.
+   * `null` is emitted for `NaN`/missing values so callers can render gaps.
+   */
+  async queryRange(
+    query: string,
+    startSec: number,
+    endSec: number,
+    stepSec: number,
+  ): Promise<[number, number | null][]> {
+    const params = new URLSearchParams({
+      query,
+      start: String(startSec),
+      end: String(endSec),
+      step: String(stepSec),
+    })
+    const url = `${this.baseUrl}/api/v1/query_range?${params}`
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
+    if (!res.ok) throw new Error(`prom query_range failed: ${res.status}`)
+    const json = (await res.json()) as {
+      status: string
+      error?: string
+      data?: { resultType: string; result: { metric: Record<string, string>; values: [number, string][] }[] }
+    }
+    if (json.status !== 'success' || !json.data) {
+      throw new Error(`prom query_range error: ${json.error ?? 'unknown'}`)
+    }
+    const first = json.data.result[0]
+    if (!first) return []
+    return first.values.map(([ts, v]) => {
+      const n = Number(v)
+      return [ts, isFinite(n) ? n : null] as [number, number | null]
+    })
+  }
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { TelemetryQuery } from '../query'
 
@@ -78,5 +78,48 @@ describe('TelemetryQuery.todayHud', () => {
   it('throws if Prometheus fails and no cache is available', async () => {
     const q = new TelemetryQuery(`http://127.0.0.1:1`)
     await expect(q.todayHud({ userEmail: 'x', tzOffsetMinutes: 0 })).rejects.toThrow()
+  })
+})
+
+describe('queryRange', () => {
+  it('hits /api/v1/query_range and normalizes [ts, "1.5"] pairs to [ts, 1.5]', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        data: {
+          resultType: 'matrix',
+          result: [{ metric: {}, values: [[100, '1.5'], [105, 'NaN'], [110, '2.0']] }],
+        },
+      }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const q = new TelemetryQuery('http://prom:9090')
+    const out = await q.queryRange('sum(foo)', 100, 110, 5)
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const url = fetchMock.mock.calls[0][0] as string
+    expect(url).toContain('/api/v1/query_range')
+    expect(url).toContain('query=sum%28foo%29')
+    expect(url).toContain('start=100')
+    expect(url).toContain('end=110')
+    expect(url).toContain('step=5')
+    expect(out).toEqual([[100, 1.5], [105, null], [110, 2.0]])
+  })
+
+  it('returns [] when Prom result is empty', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ status: 'success', data: { resultType: 'matrix', result: [] } }),
+    })))
+    const q = new TelemetryQuery('http://prom:9090')
+    expect(await q.queryRange('sum(foo)', 0, 60, 5)).toEqual([])
+  })
+
+  it('throws when prom returns non-200', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })))
+    const q = new TelemetryQuery('http://prom:9090')
+    await expect(q.queryRange('sum(foo)', 0, 60, 5)).rejects.toThrow(/500/)
   })
 })
