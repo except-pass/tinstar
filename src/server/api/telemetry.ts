@@ -3,7 +3,7 @@ import type { SSEBroadcaster } from './sse.js'
 import type { TelemetryQuery } from '../observability/query.js'
 import type { HudSnapshot, ObservabilityState } from '../observability/types.js'
 import { log } from '../logger.js'
-import { makeFakeHud } from '../observability/fast-sim.js'
+import { makeFakeHud, makeFakeSeries } from '../observability/fast-sim.js'
 
 // How often to broadcast a fresh HUD snapshot to connected SSE clients.
 const POLL_INTERVAL_MS = 1_500
@@ -132,7 +132,6 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
       }
       // FAST_SIM: synthesize series so demos/E2E render without Prometheus.
       if (process.env.TINSTAR_FAST_SIM === '1') {
-        const { makeFakeSeries } = await import('../observability/fast-sim.js')
         const fake = makeFakeSeries({ endSec: Math.floor(Date.now() / 1000), windowSec: 300, stepSec: 5 })
         res.writeHead(200, json)
         res.end(JSON.stringify(fake))
