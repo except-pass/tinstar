@@ -1,0 +1,85 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, fireEvent } from '@testing-library/react'
+import { RecapSessionPanel } from '../RecapSessionPanel'
+import type { RecapEntry } from '../../types'
+
+vi.mock('../../apiClient', () => ({
+  apiFetch: vi.fn(async () => ({
+    ok: true,
+    json: async () => ({ ok: true }),
+  })),
+  apiUrl: (path: string) => path,
+}))
+
+vi.mock('../../hooks/useSlashCommands', () => ({
+  useSlashCommands: () => ({ commands: [], usage: {}, refresh: () => {} }),
+}))
+
+import { apiFetch } from '../../apiClient'
+
+const ACCENT = '#ff7700'
+const NO_ENTRIES: RecapEntry[] = []
+
+function renderComposer(overrides: Partial<React.ComponentProps<typeof RecapSessionPanel>> = {}) {
+  return render(
+    <RecapSessionPanel
+      recapEntries={NO_ENTRIES}
+      rawLogs=""
+      port={undefined}
+      sessionId="run-1"
+      status="idle"
+      accent={ACCENT}
+      promptComposerExpanded={true}
+      controlledTab="recap"
+      onControlledTabChange={() => {}}
+      {...overrides}
+    />,
+  )
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
+describe('<RecapSessionPanel> quick-send buttons', () => {
+  it('renders all seven quick-send buttons when the textarea is empty', () => {
+    const { container } = renderComposer()
+    for (const key of ['1', '2', '3', '4', '5', 'y', 'n']) {
+      expect(container.querySelector(`[data-testid="quick-send-${key}"]`)).toBeTruthy()
+    }
+  })
+
+  it('hides quick-send buttons when the textarea has content', () => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea')!
+    fireEvent.change(textarea, { target: { value: 'drafting a prompt' } })
+    expect(container.querySelector('[data-testid="quick-send-1"]')).toBeFalsy()
+    expect(container.querySelector('[data-testid="quick-send-y"]')).toBeFalsy()
+  })
+
+  it('clicking quick-send button 3 posts send-keys with ["3"]', () => {
+    const { container } = renderComposer()
+    const btn = container.querySelector('[data-testid="quick-send-3"]') as HTMLButtonElement
+    fireEvent.click(btn)
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    const [path, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(path).toBe('/api/sessions/run-1/send-keys')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ keys: ['3'] })
+  })
+
+  it('clicking the Y button posts send-keys with ["y"] (lowercase)', () => {
+    const { container } = renderComposer()
+    const btn = container.querySelector('[data-testid="quick-send-y"]') as HTMLButtonElement
+    fireEvent.click(btn)
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    const [, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(JSON.parse(init.body)).toEqual({ keys: ['y'] })
+  })
+
+  it('does not render quick-send buttons when sessionId is missing', () => {
+    const { container } = renderComposer({ sessionId: undefined })
+    expect(container.querySelector('[data-testid="quick-send-1"]')).toBeFalsy()
+  })
+})

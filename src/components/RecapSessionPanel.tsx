@@ -20,6 +20,9 @@ import { useSlashCommands } from '../hooks/useSlashCommands'
 import { SlashChips } from './RunWorkspaceWidget/SlashChips'
 import { apiFetch } from '../apiClient'
 
+type QuickKey = '1' | '2' | '3' | '4' | '5' | 'y' | 'n'
+const QUICK_KEYS: readonly QuickKey[] = ['1', '2', '3', '4', '5', 'y', 'n']
+
 function MarkdownText({ content }: { content: string }) {
   return <div className="whitespace-pre-wrap break-words">{content}</div>
 }
@@ -208,6 +211,71 @@ function TerminalFrame({ src, tick, focused, accent, zoom = 1, onPointerFocus }:
   )
 }
 
+/** Compact row of quick-send buttons for in-terminal decision dialogs. */
+function QuickSendButtons({
+  accent,
+  flashedKey,
+  onFire,
+  disabled,
+}: {
+  accent: string
+  flashedKey: QuickKey | null
+  onFire: (key: QuickKey) => void
+  disabled: boolean
+}) {
+  return (
+    <div className="flex items-center gap-1 shrink-0" data-testid="quick-send-cluster">
+      {QUICK_KEYS.map(key => {
+        const isLetter = key === 'y' || key === 'n'
+        const isFirstLetter = key === 'y'
+        const flashing = flashedKey === key
+        const label = isLetter ? key.toUpperCase() : key
+        return (
+          <button
+            key={key}
+            type="button"
+            data-testid={`quick-send-${key}`}
+            disabled={disabled}
+            onClick={() => onFire(key)}
+            title={`Send "${key}" to terminal (Alt+${label})`}
+            className={`
+              flex items-center justify-center w-6 h-6 rounded-sm
+              text-2xs font-mono font-semibold
+              transition-all duration-150 ease-out
+              disabled:opacity-30 disabled:cursor-not-allowed
+              enabled:hover:scale-110 enabled:active:scale-95
+              ${flashing ? 'animate-[quick-pop_0.25s_ease-out]' : ''}
+              ${isFirstLetter ? 'ml-2' : ''}
+            `}
+            style={{
+              color: accent,
+              background: flashing ? hexToRgba(accent, 0.4) : hexToRgba(accent, 0.1),
+              border: `1px solid ${hexToRgba(accent, flashing ? 0.7 : 0.25)}`,
+              boxShadow: flashing
+                ? `0 0 10px ${hexToRgba(accent, 0.55)}, 0 0 20px ${hexToRgba(accent, 0.25)}`
+                : 'none',
+            }}
+            onMouseEnter={(e) => {
+              if (disabled) return
+              e.currentTarget.style.boxShadow = `0 0 8px ${hexToRgba(accent, 0.35)}`
+              e.currentTarget.style.background = hexToRgba(accent, 0.2)
+              e.currentTarget.style.borderColor = hexToRgba(accent, 0.5)
+            }}
+            onMouseLeave={(e) => {
+              if (flashing) return
+              e.currentTarget.style.boxShadow = 'none'
+              e.currentTarget.style.background = hexToRgba(accent, 0.1)
+              e.currentTarget.style.borderColor = hexToRgba(accent, 0.25)
+            }}
+          >
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 /** Collapsible prompt composer for sending text to the terminal */
 function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTrigger }: { sessionId?: string; accent: string; status?: SessionStatus; expanded?: boolean; onToggle?: () => void; focusTrigger?: number }) {
   const [internalExpanded, setInternalExpanded] = useState(false)
@@ -217,6 +285,25 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   const [sending, setSending] = useState(false)
   const [justSent, setJustSent] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [flashedKey, setFlashedKey] = useState<QuickKey | null>(null)
+
+  const fireQuickKey = useCallback(async (key: QuickKey) => {
+    if (!sessionId) return
+    setFlashedKey(key)
+    window.setTimeout(() => {
+      setFlashedKey(prev => (prev === key ? null : prev))
+    }, 250)
+    try {
+      await apiFetch(`/api/sessions/${sessionId}/send-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: [key] }),
+      })
+    } catch {
+      /* fire-and-forget — matches the existing PageUp/Escape passthrough */
+    }
+  }, [sessionId])
+
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const composerRootRef = useRef<HTMLDivElement>(null)
@@ -431,6 +518,14 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
               <span className="text-2xs text-slate-600 font-mono shrink-0">
                 {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
               </span>
+              {text.trim() === '' && (
+                <QuickSendButtons
+                  accent={accent}
+                  flashedKey={flashedKey}
+                  onFire={fireQuickKey}
+                  disabled={!sessionId}
+                />
+              )}
               {slashToken && (
                 <SlashChips
                   candidates={candidates}
