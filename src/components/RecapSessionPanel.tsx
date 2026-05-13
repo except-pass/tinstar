@@ -414,6 +414,14 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
       handleSend()
       return
     }
+    if (e.altKey && !e.ctrlKey && !e.metaKey) {
+      const match = e.code.match(/^Digit([1-5])$/) ?? e.code.match(/^Key([YN])$/)
+      if (match) {
+        e.preventDefault()
+        fireQuickKey(match[1].toLowerCase() as QuickKey)
+        return
+      }
+    }
     if ((e.key === 'PageUp' || e.key === 'PageDown' || e.key === 'Escape') && sessionId) {
       e.preventDefault()
       apiFetch(`/api/sessions/${sessionId}/send-keys`, {
@@ -427,7 +435,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
       e.preventDefault()
       setHistoryOpen(true)
     }
-  }, [handleSend, text, historyOpen, sessionId, slashToken, candidates, cycleState, slashCursor])
+  }, [handleSend, text, historyOpen, sessionId, slashToken, candidates, cycleState, slashCursor, fireQuickKey])
 
   // Focus textarea when expanded
   useEffect(() => {

@@ -83,3 +83,62 @@ describe('<RecapSessionPanel> quick-send buttons', () => {
     expect(container.querySelector('[data-testid="quick-send-1"]')).toBeFalsy()
   })
 })
+
+describe('<RecapSessionPanel> quick-send hotkeys', () => {
+  it('Alt+2 in the focused textarea posts send-keys with ["2"] (empty draft)', () => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: '2', code: 'Digit2', altKey: true })
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    const [path, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(path).toBe('/api/sessions/run-1/send-keys')
+    expect(JSON.parse(init.body)).toEqual({ keys: ['2'] })
+  })
+
+  it('Alt+2 still fires when the textarea has draft content', () => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'mid draft' } })
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: '2', code: 'Digit2', altKey: true })
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toEqual({ keys: ['2'] })
+  })
+
+  it('Alt+N posts send-keys with ["n"] (lowercase)', () => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: 'n', code: 'KeyN', altKey: true })
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toEqual({ keys: ['n'] })
+  })
+
+  it('Alt+Y posts send-keys with ["y"] regardless of e.key case', () => {
+    // On macOS, Alt+letter sometimes surfaces a non-ASCII e.key. The handler
+    // must dispatch off e.code so it works on every layout.
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: '¥', code: 'KeyY', altKey: true })
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toEqual({ keys: ['y'] })
+  })
+
+  it('Alt+9 does not fire (out of supported range)', () => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: '9', code: 'Digit9', altKey: true })
+    expect(apiFetch).not.toHaveBeenCalled()
+  })
+
+  it('plain "2" (no Alt) does not fire send-keys', () => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: '2', code: 'Digit2', altKey: false })
+    expect(apiFetch).not.toHaveBeenCalled()
+  })
+})
