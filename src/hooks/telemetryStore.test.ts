@@ -23,7 +23,7 @@ function makeSnap(name: string, costTotal: number): HudSnapshot {
     tokens: { total: 1000 },
     rate: { perMin: 10, perHour: 600 },
     cacheHitPct: 0.5,
-    autonomy: { ratio: 1, cliSeconds: 100, userSeconds: 100 },
+    dutyCycle: { value: 1, windowMinutes: 5 },
     progress: { name },
   } as unknown as HudSnapshot
 }

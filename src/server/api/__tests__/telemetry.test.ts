@@ -35,7 +35,7 @@ function makeReadySnapshot(overrides: Partial<HudSnapshot> = {}): HudSnapshot {
     tokens: { total: 100000 },
     rate: { perMin: 500, perHour: 30000 },
     cacheHitPct: 0.65,
-    autonomy: { ratio: 15.2, cliSeconds: 4500, userSeconds: 296 },
+    dutyCycle: { value: 2.4, windowMinutes: 5 },
     ...overrides,
   }
 }
@@ -130,9 +130,8 @@ describe('GET /api/telemetry/hud — state: downloading', () => {
     expect(body.rate.perMin).toBeNull()
     expect(body.rate.perHour).toBeNull()
     expect(body.cacheHitPct).toBeNull()
-    expect(body.autonomy.ratio).toBeNull()
-    expect(body.autonomy.cliSeconds).toBeNull()
-    expect(body.autonomy.userSeconds).toBeNull()
+    expect(body.dutyCycle.value).toBeNull()
+    expect(body.dutyCycle.windowMinutes).toBe(5)
   })
 })
 

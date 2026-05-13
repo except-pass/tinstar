@@ -35,9 +35,8 @@ beforeEach(async () => {
       } else if (q.includes('token_usage_tokens_total')) {
         respond([makeResult({}, 318422)])
       } else if (q.includes('active_time_seconds_total') && q.includes('type="cli"')) {
-        respond([makeResult({}, 4313)])
-      } else if (q.includes('active_time_seconds_total') && q.includes('type="user"')) {
-        respond([makeResult({}, 285)])
+        // rate() over a 5m window — fixture value is "agent-busy seconds per wall-clock second"
+        respond([makeResult({}, 2.4)])
       } else {
         respond([])
       }
@@ -59,9 +58,8 @@ describe('TelemetryQuery.todayHud', () => {
     expect(snap.cost.total).toBeCloseTo(4.82)
     expect(snap.cost.byModel['claude-opus-4-6']).toBeCloseTo(4.21)
     expect(snap.tokens.total).toBe(318422)
-    expect(snap.autonomy.ratio).toBeCloseTo(4313 / 285, 1)
-    expect(snap.autonomy.cliSeconds).toBe(4313)
-    expect(snap.autonomy.userSeconds).toBe(285)
+    expect(snap.dutyCycle.value).toBeCloseTo(2.4)
+    expect(snap.dutyCycle.windowMinutes).toBe(5)
     expect(snap.cacheHitPct).toBeCloseTo(0.78)
     expect(snap.state).toBe('ready')
   })

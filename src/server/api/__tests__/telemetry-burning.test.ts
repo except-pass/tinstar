@@ -16,7 +16,7 @@ function fakeQuery(overrides: Partial<{
       cost: { total: 0, byModel: {} },
       tokens: { total: 0 }, rate: { perMin: 0, perHour: 0 },
       cacheHitPct: null,
-      autonomy: { ratio: null, cliSeconds: null, userSeconds: null },
+      dutyCycle: { value: null, windowMinutes: 5 },
     })),
     burningSessions: overrides.burningSessions ?? (async () => []),
   } as any

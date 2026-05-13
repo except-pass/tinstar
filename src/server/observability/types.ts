@@ -11,7 +11,12 @@ export interface HudSnapshot {
   tokens: { total: number | null }
   rate: { perMin: number | null; perHour: number | null }
   cacheHitPct: number | null
-  autonomy: { ratio: number | null; cliSeconds: number | null; userSeconds: number | null }
+  /**
+   * Fraction of wall-clock time the agent was busy over the trailing `windowMinutes`.
+   * Per-session: 0..1 (one CLI, at most fully busy).
+   * Fleet/global: 0..N — summing across concurrent sessions exceeds 1 when hands run in parallel.
+   */
+  dutyCycle: { value: number | null; windowMinutes: number }
   /** Tinstar run IDs currently burning tokens (non-zero rate in the last 30s). */
   burningRunIds?: string[]
   staleSeconds?: number

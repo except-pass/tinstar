@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import squarify from 'squarify'
 import { hexToRgba } from '../runAccent'
-import { HudBar, AutonomyStat } from '../CanvasHud'
+import { HudBar, DutyCycleStat } from '../CanvasHud'
 import { fmtNum, fmtDollar, fmtRate } from '../CanvasHud/fmt'
 import { useTelemetrySession } from '../../hooks/useTelemetrySession'
 import { useSessionContextWindow } from '../../hooks/useSessionContextWindow'
@@ -129,7 +129,7 @@ function SessionSection({ sessionId }: { sessionId: string }) {
       <HudBar icon="$" label="COST" value={costValue} fill={costFill} accent="gold" />
       <HudBar icon="⚡" label={tokensLabel} value={tokensValue} fill={tokensFill} accent="blue" />
       <HudBar icon="◎" label="CACHE HIT" value={cacheValue} fill={cacheHit} accent="green" />
-      <AutonomyStat ratio={snap.autonomy.ratio} cliSeconds={snap.autonomy.cliSeconds} userSeconds={snap.autonomy.userSeconds} />
+      <DutyCycleStat value={snap.dutyCycle.value} windowMinutes={snap.dutyCycle.windowMinutes} mode="session" />
     </div>
   )
 }

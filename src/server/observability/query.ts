@@ -1,5 +1,8 @@
 import type { HudSnapshot, ModelBreakdown } from './types.js'
 
+/** Trailing window for the duty-cycle gauge. Read as "how many of the last N minutes was the agent busy". */
+const DUTY_CYCLE_WINDOW_MINUTES = 5
+
 interface PromResult {
   metric: Record<string, string>
   value: [number, string]
@@ -83,15 +86,18 @@ export class TelemetryQuery {
       ? `sum(${tokenMetric}${inputFilter})`
       : `sum(increase(${tokenMetric}${inputFilter}[${windowSec}s]))`
 
-    const [costTotal, costByModel, tokensTotal, rateMin, rateHour, cacheHit, cliSec, userSec] = await Promise.all([
+    const cliActiveFilter = this.mergeFilter(filter, 'type="cli"')
+    const [costTotal, costByModel, tokensTotal, rateMin, rateHour, cacheHit, dutyCycle] = await Promise.all([
       this.instant(`sum(increase(claude_code_cost_usage_USD_total${filter}[${windowSec}s]))`),
       this.instantVec(`sum by (model) (increase(claude_code_cost_usage_USD_total${filter}[${windowSec}s]))`),
       this.instant(tokensQuery),
       this.instant(`sum(rate(${tokenMetric}${tokenFilter}[1m])) * 60`),
       this.instant(`sum(rate(${tokenMetric}${tokenFilter}[1h])) * 3600`),
       this.instant(`${cacheReadQuery} / (${cacheReadQuery} + ${inputQuery})`),
-      this.instant(`sum(claude_code_active_time_seconds_total${this.mergeFilter(filter, 'type="cli"')})`),
-      this.instant(`sum(claude_code_active_time_seconds_total${this.mergeFilter(filter, 'type="user"')})`),
+      // Duty cycle: rate of agent-active seconds over the trailing window equals
+      // "agent-busy seconds per wall-clock second" = busy-fraction. Summed across
+      // sessions it naturally exceeds 1 when hands run concurrently.
+      this.instant(`sum(rate(claude_code_active_time_seconds_total${cliActiveFilter}[${DUTY_CYCLE_WINDOW_MINUTES}m]))`),
     ])
 
     const byModel: ModelBreakdown = {}
@@ -100,8 +106,8 @@ export class TelemetryQuery {
       byModel[model] = Number(r.value[1])
     }
 
-    const ratio = (cliSec === null || userSec === null || userSec === 0) ? null : cliSec / userSec
     const cacheHitPct = (cacheHit !== null && isFinite(cacheHit)) ? cacheHit : null
+    const dutyValue = (dutyCycle !== null && isFinite(dutyCycle)) ? dutyCycle : null
     return {
       window: 'today',
       state: 'ready',
@@ -109,7 +115,7 @@ export class TelemetryQuery {
       tokens: { total: tokensTotal !== null ? Math.floor(tokensTotal) : null },
       rate: { perMin: rateMin, perHour: rateHour },
       cacheHitPct,
-      autonomy: { ratio, cliSeconds: cliSec, userSeconds: userSec },
+      dutyCycle: { value: dutyValue, windowMinutes: DUTY_CYCLE_WINDOW_MINUTES },
     }
   }
 

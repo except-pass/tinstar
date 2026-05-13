@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { HudBar } from './HudBar'
-import { AutonomyStat } from './AutonomyStat'
+import { DutyCycleStat } from './DutyCycleStat'
 import { AgentQuadrant } from './AgentQuadrant'
 import { CcQuotaCard } from './CcQuotaCard'
 import { TelemetryBootstrap } from './TelemetryBootstrap'
@@ -130,7 +130,7 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
       )}
       <HudBar icon="⚡" label={tokensLabel} value={tokensValue} fill={tokensFill} accent="blue" />
       <HudBar icon="◎" label="CACHE HIT" value={cacheValue} fill={cacheFill} accent="green" />
-      <AutonomyStat ratio={snapshot.autonomy.ratio} cliSeconds={snapshot.autonomy.cliSeconds} userSeconds={snapshot.autonomy.userSeconds} />
+      <DutyCycleStat value={snapshot.dutyCycle.value} windowMinutes={snapshot.dutyCycle.windowMinutes} mode="fleet" />
       <CcQuotaCard snapshot={ccQuota}/>
       {onFocusRun && (
         <AgentQuadrant

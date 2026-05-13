@@ -15,7 +15,7 @@ describe('observability types', () => {
       tokens: { total: 0 },
       rate: { perMin: 0, perHour: 0 },
       cacheHitPct: 0,
-      autonomy: { ratio: 0, cliSeconds: 0, userSeconds: 0 },
+      dutyCycle: { value: 0, windowMinutes: 5 },
     }
     expect(snap.state).toBe('ready')
   })

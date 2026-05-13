@@ -44,6 +44,10 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
             perMin: (fake.rate.perMin ?? 0) * SESSION_SCALE,
             perHour: (fake.rate.perHour ?? 0) * SESSION_SCALE,
           },
+          dutyCycle: {
+            value: fake.dutyCycle.value == null ? null : Math.max(0, Math.min(1, fake.dutyCycle.value * SESSION_SCALE)),
+            windowMinutes: fake.dutyCycle.windowMinutes,
+          },
         }
       }
       return fake
@@ -56,7 +60,7 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
       tokens: { total: null },
       rate: { perMin: null, perHour: null },
       cacheHitPct: null,
-      autonomy: { ratio: null, cliSeconds: null, userSeconds: null },
+      dutyCycle: { value: null, windowMinutes: 5 },
       burningRunIds: [],
       progress: deps.getProgress(),
     }

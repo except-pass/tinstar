@@ -30,7 +30,8 @@ export function makeFakeHud(t = Date.now()): HudSnapshot {
     tokens: { total: tokens },
     rate: { perMin: Math.max(0, rate), perHour: Math.max(0, rate * 60) },
     cacheHitPct: 0.65 + Math.sin(secs / 45) * 0.15,
-    autonomy: { ratio: 4.5 + Math.sin(secs / 60), cliSeconds: 4500, userSeconds: 1000 },
+    // Oscillate around ~2 concurrent agents for a visible swarm-mode demo (sometimes peaks > 3×).
+    dutyCycle: { value: 2 + Math.sin(secs / 30) * 1.2, windowMinutes: 5 },
     burningRunIds: fakeBurning,
   }
 }
