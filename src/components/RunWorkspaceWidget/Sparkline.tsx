@@ -21,7 +21,7 @@ export function Sparkline({ data, accent, width = 200, height = 42 }: Props) {
 
   // Drop null gaps for min/max + path. With null bridging, the line goes straight
   // through gaps — visually identical to "no break" for these short series.
-  const real: number[] = data.filter((v): v is number => v !== null)
+  const real: number[] = data.filter((v): v is number => v !== null && Number.isFinite(v))
   if (real.length < 2) {
     return <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" />
   }
@@ -34,7 +34,7 @@ export function Sparkline({ data, accent, width = 200, height = 42 }: Props) {
 
   const pts: [number, number][] = []
   data.forEach((v, i) => {
-    if (v === null) return
+    if (v === null || !Number.isFinite(v)) return
     const x = i * dx
     const y = height - pad - ((v - min) / span) * (height - pad * 2)
     pts.push([x, y])

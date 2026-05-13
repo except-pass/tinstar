@@ -30,4 +30,14 @@ describe('<Sparkline>', () => {
     const stroke = container.querySelectorAll('path')[1]   // second path is the stroke
     expect(stroke.getAttribute('stroke')).toBe('#f6c155')
   })
+
+  it('skips NaN/Infinity values without producing invalid path strings', () => {
+    const { container } = render(<Sparkline data={[1, NaN, 3, Infinity, 5]} accent="#58c8ff" />)
+    const paths = container.querySelectorAll('path')
+    expect(paths.length).toBe(2)
+    for (const p of paths) {
+      expect(p.getAttribute('d')).not.toContain('NaN')
+      expect(p.getAttribute('d')).not.toContain('Infinity')
+    }
+  })
 })
