@@ -1,11 +1,13 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import squarify from 'squarify'
 import { hexToRgba } from '../runAccent'
-import { HudBar, DutyCycleStat } from '../CanvasHud'
-import { fmtNum, fmtDollar, fmtRate } from '../CanvasHud/fmt'
+import { fmtDollar, fmtRate } from '../CanvasHud/fmt'
 import { useTelemetrySession } from '../../hooks/useTelemetrySession'
 import { useSessionContextWindow } from '../../hooks/useSessionContextWindow'
 import { apiFetch } from '../../apiClient'
+import { StatSpark } from './StatSpark'
+import { computeDeltaChip } from './computeDeltaChip'
+import { useTelemetrySeries } from '../../hooks/useTelemetrySeries'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -101,35 +103,58 @@ function labelColor(opacity: number): string {
 
 function SessionSection({ sessionId }: { sessionId: string }) {
   const snap = useTelemetrySession(sessionId)
+  const series = useTelemetrySeries(sessionId)
   if (!snap || snap.state !== 'ready') return null
 
   const costTotal = snap.cost.total
-  const tokensTotal = snap.tokens.total
-  const rateMin = snap.rate.perMin
-  const cacheHit = snap.cacheHitPct
+  const tokenRate = snap.rate.perMin
+  const cacheHit  = snap.cacheHitPct
+  const duty      = snap.dutyCycle.value
 
-  const costValue = costTotal == null ? '--' : fmtDollar(costTotal)
-  const costFill = costTotal == null ? null : Math.min(1, costTotal / 5)
+  const costValue   = costTotal == null ? '--' : fmtDollar(costTotal)
+  const tokensValue = tokenRate == null ? '--' : `${fmtRate(tokenRate)}/min`
+  const cacheValue  = cacheHit  == null ? '--' : `${(cacheHit * 100).toFixed(1)}%`
+  const dutyValue   = duty      == null ? '--' : `${Math.round(duty * 100)}%`
 
-  const tokensLabel = rateMin == null ? 'TOKENS' : `TOKENS · ${fmtRate(rateMin)}/min`
-  const tokensValue = tokensTotal == null ? '--' : fmtNum(tokensTotal)
-  const tokensFill = rateMin == null ? null : Math.min(1, rateMin / 5000)
+  const costSeries   = series?.cost   ?? []
+  const tokenSeries  = series?.tokens ?? []
+  const cacheSeries  = series?.cache  ?? []
+  const dutySeries   = series?.duty   ?? []
 
-  const cacheValue = cacheHit == null ? '--' : `${(cacheHit * 100).toFixed(2)}%`
+  // computeDeltaChip wants [ts, v] pairs but we only need values for the rolling
+  // mean / rate. Synthesize timestamps at the assumed 5s step — the helper only
+  // uses relative timestamps for windowing.
+  const STEP = 5
+  const withTs = (arr: (number | null)[]): [number, number | null][] =>
+    arr.map((v, i) => [i * STEP, v] as [number, number | null])
+
+  const costDelta   = computeDeltaChip('cost',   withTs(costSeries))
+  const tokensDelta = computeDeltaChip('tokens', withTs(tokenSeries))
+  const cacheDelta  = computeDeltaChip('cache',  withTs(cacheSeries))
+  const dutyDelta   = computeDeltaChip('duty',   withTs(dutySeries))
 
   return (
-    <div style={{ padding: '10px 12px', borderBottom: '1px solid rgba(120,140,180,0.15)' }} data-testid="telemetry-session-section">
-      <div style={{ fontSize: 9, letterSpacing: 2, opacity: 0.55,
-          fontFamily: 'JetBrains Mono, monospace', marginBottom: 8,
-          display: 'flex', justifyContent: 'space-between' }}>
+    <div
+      style={{ padding: '10px 12px', borderBottom: '1px solid rgba(120,140,180,0.15)' }}
+      data-testid="telemetry-session-section"
+    >
+      <div style={{
+        fontSize: 9, letterSpacing: 2, opacity: 0.55,
+        fontFamily: 'JetBrains Mono, monospace', marginBottom: 8,
+        display: 'flex', justifyContent: 'space-between',
+      }}>
         <span>SESSION</span>
-        <span style={{ background: 'rgba(34,211,238,0.12)', color: '#22d3ee',
-            padding: '1px 6px', borderRadius: 2, letterSpacing: 1, fontSize: 8 }}>THIS RUN</span>
+        <span style={{
+          background: 'rgba(34,211,238,0.12)', color: '#22d3ee',
+          padding: '1px 6px', borderRadius: 2, letterSpacing: 1, fontSize: 8,
+        }}>THIS RUN</span>
       </div>
-      <HudBar icon="$" label="COST" value={costValue} fill={costFill} accent="gold" />
-      <HudBar icon="⚡" label={tokensLabel} value={tokensValue} fill={tokensFill} accent="blue" />
-      <HudBar icon="◎" label="CACHE HIT" value={cacheValue} fill={cacheHit} accent="green" />
-      <DutyCycleStat value={snap.dutyCycle.value} windowMinutes={snap.dutyCycle.windowMinutes} mode="session" />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <StatSpark accent="gold"   label="COST"        value={costValue}   series={costSeries}  delta={costDelta} />
+        <StatSpark accent="blue"   label="TOKENS/MIN"  value={tokensValue} series={tokenSeries} delta={tokensDelta} />
+        <StatSpark accent="green"  label="CACHE HIT"   value={cacheValue}  series={cacheSeries} delta={cacheDelta} />
+        <StatSpark accent="violet" label="DUTY · 60m"  value={dutyValue}   series={dutySeries}  delta={dutyDelta} />
+      </div>
     </div>
   )
 }
