@@ -15,8 +15,8 @@ interface PromResponse {
 
 export interface HudQueryOpts {
   userEmail: string
-  tzOffsetMinutes: number   // minutes west of UTC; matches Date.getTimezoneOffset()
-  sessionId?: string        // Claude Code session UUID → filters by session_id label
+  tzOffsetMinutes?: number   // minutes west of UTC; only required for the today-window query path
+  sessionId?: string
 }
 
 export class TelemetryQuery {
@@ -56,11 +56,12 @@ export class TelemetryQuery {
     return out
   }
 
-  private secondsSinceLocalMidnight(tzOffsetMinutes: number): number {
+  private secondsSinceLocalMidnight(tzOffsetMinutes: number | undefined): number {
+    const offset = tzOffsetMinutes ?? 0
     const now = new Date()
-    const local = new Date(now.getTime() - tzOffsetMinutes * 60_000)
+    const local = new Date(now.getTime() - offset * 60_000)
     const midnight = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()))
-    const midnightActual = new Date(midnight.getTime() + tzOffsetMinutes * 60_000)
+    const midnightActual = new Date(midnight.getTime() + offset * 60_000)
     return Math.max(1, Math.floor((now.getTime() - midnightActual.getTime()) / 1000))
   }
 
@@ -203,7 +204,7 @@ export class TelemetryQuery {
     const { sessionId, userEmail, endSec, windowSec, stepSec } = opts
     const startSec = endSec - windowSec
 
-    const filter = this.buildLabelFilter({ userEmail, sessionId, tzOffsetMinutes: 0 })
+    const filter = this.buildLabelFilter({ userEmail, sessionId })
     const tokenMetric = 'claude_code_token_usage_tokens_total'
     const ioFilter        = this.mergeFilter(filter, 'type=~"input|output"')
     const cacheReadFilter = this.mergeFilter(filter, 'type="cacheRead"')
@@ -212,9 +213,11 @@ export class TelemetryQuery {
 
     const costQ   = `sum(claude_code_cost_usage_USD_total${filter})`
     const tokQ    = `sum(rate(${tokenMetric}${ioFilter}[1m])) * 60`
-    const cacheQ  =
-      `sum(rate(${tokenMetric}${cacheReadFilter}[1m]))` +
-      ` / (sum(rate(${tokenMetric}${cacheReadFilter}[1m])) + sum(rate(${tokenMetric}${inputFilter}[1m])))`
+    const cacheReadRate = `sum(rate(${tokenMetric}${cacheReadFilter}[1m]))`
+    const inputRate     = `sum(rate(${tokenMetric}${inputFilter}[1m]))`
+    // 0/0 yields NaN → queryRange coerces to null → renders as a gap. Intentional:
+    // during idle periods we show no cache-hit value rather than a spurious 0%.
+    const cacheQ  = `${cacheReadRate} / (${cacheReadRate} + ${inputRate})`
     const dutyQ   = `sum(rate(claude_code_active_time_seconds_total${cliActiveFilter}[1m]))`
 
     const [cost, tokens, cache, duty] = await Promise.all([
