@@ -10,6 +10,8 @@ function makeResult(metric: Record<string, string>, value: number) {
 }
 
 beforeEach(async () => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   await new Promise<void>((resolve) => {
     server = createServer((req, res) => {
       const url = new URL(req.url!, `http://${req.headers.host}`)
@@ -49,6 +51,8 @@ beforeEach(async () => {
 
 afterEach(() => {
   try { server.close() } catch { /* already closed */ }
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('TelemetryQuery.todayHud', () => {
