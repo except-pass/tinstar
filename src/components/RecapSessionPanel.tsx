@@ -224,7 +224,11 @@ function QuickSendButtons({
   disabled: boolean
 }) {
   return (
-    <div className="flex items-center gap-1 shrink-0" data-testid="quick-send-cluster">
+    <div
+      className="flex items-center gap-1 shrink-0 ml-2 pl-3 border-l"
+      style={{ borderColor: hexToRgba(accent, 0.2) }}
+      data-testid="quick-send-cluster"
+    >
       {QUICK_KEYS.map(key => {
         const isLetter = key === 'y' || key === 'n'
         const isFirstLetter = key === 'y'
