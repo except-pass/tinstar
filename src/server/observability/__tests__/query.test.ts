@@ -127,3 +127,59 @@ describe('queryRange', () => {
     await expect(q.queryRange('sum(foo)', 0, 60, 5)).rejects.toThrow(/500/)
   })
 })
+
+describe('sessionSeries', () => {
+  it('returns 4 series with cost/tokens/cache/duty for a session', async () => {
+    // Each call returns 3 identical samples so we don't need to fake distinct payloads.
+    const sampleValues: [number, string][] = [[100, '1'], [105, '2'], [110, '3']]
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        data: { resultType: 'matrix', result: [{ metric: {}, values: sampleValues }] },
+      }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const q = new TelemetryQuery('http://prom:9090')
+    const out = await q.sessionSeries({
+      sessionId: 'sess-abc',
+      userEmail: 'u@x.com',
+      endSec: 110,
+      windowSec: 15,
+      stepSec: 5,
+    })
+
+    expect(fetchMock.mock.calls).toHaveLength(4) // one per metric
+    expect(out.stepSec).toBe(5)
+    expect(out.series.cost).toEqual([[100, 1], [105, 2], [110, 3]])
+    expect(out.series.tokens).toEqual([[100, 1], [105, 2], [110, 3]])
+    expect(out.series.cache).toEqual([[100, 1], [105, 2], [110, 3]])
+    expect(out.series.duty).toEqual([[100, 1], [105, 2], [110, 3]])
+    expect(out.startedAt).toBe(new Date(100 * 1000).toISOString())
+    expect(out.endedAt).toBe(new Date(110 * 1000).toISOString())
+    // All four queries include the session_id label filter
+    for (const call of fetchMock.mock.calls) {
+      expect(call[0]).toContain(encodeURIComponent('session_id="sess-abc"'))
+    }
+  })
+
+  it('returns empty arrays when Prom has no data', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ status: 'success', data: { resultType: 'matrix', result: [] } }),
+    })))
+    const q = new TelemetryQuery('http://prom:9090')
+    const out = await q.sessionSeries({
+      sessionId: 'sess-abc',
+      userEmail: 'u@x.com',
+      endSec: 110,
+      windowSec: 15,
+      stepSec: 5,
+    })
+    expect(out.series.cost).toEqual([])
+    expect(out.series.tokens).toEqual([])
+    expect(out.series.cache).toEqual([])
+    expect(out.series.duty).toEqual([])
+  })
+})

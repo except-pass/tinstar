@@ -180,4 +180,58 @@ export class TelemetryQuery {
       return [ts, isFinite(n) ? n : null] as [number, number | null]
     })
   }
+
+  /**
+   * Returns 5-minute (or `windowSec`) sparkline series for one session.
+   * - cost   = cumulative dollars (monotonically non-decreasing)
+   * - tokens = tokens-per-minute (rate over a trailing 1m sub-window per sample)
+   * - cache  = cache-read fraction over a trailing 1m sub-window (0..1)
+   * - duty   = busy-fraction over a trailing 1m sub-window (0..1 per session)
+   *
+   * NOTE on duty: the snapshot uses a 5-minute trailing window, but for a 5-min
+   * sparkline we evaluate over a trailing 1m so the sparkline shows motion. This
+   * means the rightmost sample will not equal the snapshot's dutyCycle value —
+   * by design. The headline number in the UI comes from the snapshot.
+   */
+  async sessionSeries(opts: {
+    sessionId: string
+    userEmail: string
+    endSec: number    // unix seconds; defaults caller-side
+    windowSec: number // typically 300
+    stepSec: number   // typically 5
+  }): Promise<import('./types.js').HudSeries> {
+    const { sessionId, userEmail, endSec, windowSec, stepSec } = opts
+    const startSec = endSec - windowSec
+
+    const filter = this.buildLabelFilter({ userEmail, sessionId, tzOffsetMinutes: 0 })
+    const tokenMetric = 'claude_code_token_usage_tokens_total'
+    const ioFilter        = this.mergeFilter(filter, 'type=~"input|output"')
+    const cacheReadFilter = this.mergeFilter(filter, 'type="cacheRead"')
+    const inputFilter     = this.mergeFilter(filter, 'type="input"')
+    const cliActiveFilter = this.mergeFilter(filter, 'type="cli"')
+
+    const costQ   = `sum(claude_code_cost_usage_USD_total${filter})`
+    const tokQ    = `sum(rate(${tokenMetric}${ioFilter}[1m])) * 60`
+    const cacheQ  =
+      `sum(rate(${tokenMetric}${cacheReadFilter}[1m]))` +
+      ` / (sum(rate(${tokenMetric}${cacheReadFilter}[1m])) + sum(rate(${tokenMetric}${inputFilter}[1m])))`
+    const dutyQ   = `sum(rate(claude_code_active_time_seconds_total${cliActiveFilter}[1m]))`
+
+    const [cost, tokens, cache, duty] = await Promise.all([
+      this.queryRange(costQ,  startSec, endSec, stepSec),
+      this.queryRange(tokQ,   startSec, endSec, stepSec),
+      this.queryRange(cacheQ, startSec, endSec, stepSec),
+      this.queryRange(dutyQ,  startSec, endSec, stepSec),
+    ])
+
+    const firstTs = cost[0]?.[0] ?? tokens[0]?.[0] ?? cache[0]?.[0] ?? duty[0]?.[0] ?? startSec
+    const lastTs  = cost.at(-1)?.[0] ?? tokens.at(-1)?.[0] ?? cache.at(-1)?.[0] ?? duty.at(-1)?.[0] ?? endSec
+
+    return {
+      startedAt: new Date(firstTs * 1000).toISOString(),
+      endedAt:   new Date(lastTs * 1000).toISOString(),
+      stepSec,
+      series: { cost, tokens, cache, duty },
+    }
+  }
 }
