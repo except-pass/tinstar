@@ -47,7 +47,10 @@ export function computeDeltaChip(
     const ratePerMin = ((last - firstInWindow[1]) * ONE_MIN_SEC) / elapsedSec
     const sign = ratePerMin >= 0 ? '+' : '−'
     const abs = Math.abs(ratePerMin)
-    return { text: `${sign}$${abs.toFixed(2)}/min`, tone: 'flat' }   // cost is always neutral-toned
+    const text = abs < 1
+      ? `${sign}${Math.round(abs * 100)}¢/min`
+      : `${sign}$${abs.toFixed(2)}/min`
+    return { text, tone: 'flat' }   // cost is always neutral-toned
   }
 
   const mean = window.reduce((s, p) => s + p[1], 0) / window.length

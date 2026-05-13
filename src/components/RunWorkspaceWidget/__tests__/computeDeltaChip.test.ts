@@ -12,13 +12,22 @@ describe('computeDeltaChip', () => {
     expect(computeDeltaChip('tokens', series)).toBeNull()
   })
 
-  it('cost: rate over last minute, neutral tone (always grows)', () => {
-    // 13 samples at 5s steps spanning 60s. Cost rises $0.10 → $0.22 over the minute.
+  it('cost: rate under $1/min renders as cents/min, neutral tone', () => {
+    // 13 samples at 5s steps spanning 60s. Cost rises $0.10 → $0.22 → rate = $0.12/min.
     const series: [number, number][] = Array.from({ length: 13 }, (_, i) => [i * 5, 0.10 + i * 0.01])
     const chip = computeDeltaChip('cost', series)
     expect(chip).not.toBeNull()
-    expect(chip!.tone).toBe('flat')  // neutral for cost rate
-    expect(chip!.text).toMatch(/\+\$0?\.12\/min/)
+    expect(chip!.tone).toBe('flat')
+    expect(chip!.text).toBe('+12¢/min')
+  })
+
+  it('cost: rate at or above $1/min renders as $X.XX/min', () => {
+    // Cost rises $0.00 → $1.20 over 60s → rate = $1.20/min.
+    const series: [number, number][] = Array.from({ length: 13 }, (_, i) => [i * 5, i * 0.10])
+    const chip = computeDeltaChip('cost', series)
+    expect(chip).not.toBeNull()
+    expect(chip!.tone).toBe('flat')
+    expect(chip!.text).toBe('+$1.20/min')
   })
 
   it('tokens: positive rate-of-change vs 1-min mean → up/green', () => {
