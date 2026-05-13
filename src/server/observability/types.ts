@@ -23,3 +23,20 @@ export interface HudSnapshot {
   progress?: import('../infra/types.js').DownloadProgress[]
   error?: string
 }
+
+/**
+ * Per-session 5-minute history returned by GET /api/telemetry/session/:name/series.
+ * Each series is `[unixSeconds, value | null][]`, oldest → newest.
+ * `null` means "Prometheus had no sample at this step" — render as a gap.
+ */
+export interface HudSeries {
+  startedAt: string  // ISO timestamp of the leftmost sample
+  endedAt: string    // ISO timestamp of the rightmost sample (≈ now)
+  stepSec: number    // resolution of each series (e.g., 5)
+  series: {
+    cost:   [number, number | null][]
+    tokens: [number, number | null][]  // tokens/min (rate)
+    cache:  [number, number | null][]  // 0..1
+    duty:   [number, number | null][]  // 0..1 per session, can exceed 1 for fleet
+  }
+}
