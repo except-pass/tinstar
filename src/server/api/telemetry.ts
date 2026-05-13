@@ -122,6 +122,50 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
       res.end(JSON.stringify(snap))
       return true
     }
+    const seriesMatch = pathname.match(/^\/api\/telemetry\/session\/([^/]+)\/series$/)
+    if (seriesMatch && req.method === 'GET') {
+      const empty = {
+        startedAt: new Date().toISOString(),
+        endedAt: new Date().toISOString(),
+        stepSec: 5,
+        series: { cost: [] as unknown[], tokens: [] as unknown[], cache: [] as unknown[], duty: [] as unknown[] },
+      }
+      // FAST_SIM: synthesize series so demos/E2E render without Prometheus.
+      if (process.env.TINSTAR_FAST_SIM === '1') {
+        const { makeFakeSeries } = await import('../observability/fast-sim.js')
+        const fake = makeFakeSeries({ endSec: Math.floor(Date.now() / 1000), windowSec: 300, stepSec: 5 })
+        res.writeHead(200, json)
+        res.end(JSON.stringify(fake))
+        return true
+      }
+      const state = deps.getState()
+      if (state !== 'ready' || !deps.query) {
+        res.writeHead(200, json)
+        res.end(JSON.stringify({ ...empty, state }))
+        return true
+      }
+      const conversationId = deps.getSessionConversationId(seriesMatch[1])
+      if (!conversationId) {
+        res.writeHead(200, json)
+        res.end(JSON.stringify(empty))
+        return true
+      }
+      try {
+        const out = await deps.query.sessionSeries({
+          sessionId: conversationId,
+          userEmail: deps.getDefaultUserEmail(),
+          endSec: Math.floor(Date.now() / 1000),
+          windowSec: 300,
+          stepSec: 5,
+        })
+        res.writeHead(200, json)
+        res.end(JSON.stringify(out))
+      } catch (err) {
+        res.writeHead(200, json)
+        res.end(JSON.stringify({ ...empty, state: 'degraded', error: (err as Error).message }))
+      }
+      return true
+    }
     const sessMatch = pathname.match(/^\/api\/telemetry\/session\/([^/]+)$/)
     if (sessMatch && req.method === 'GET') {
       const snap = await buildSnapshot(sessMatch[1])
