@@ -44,6 +44,7 @@ describe('telemetrySeriesStore', () => {
     const last = cb.mock.calls.at(-1)![0]
     expect(last.cost).toEqual([0.1, 0.2, 0.3])
     expect(last.tokens).toEqual([1000, 1100, 1200])
+    expect(last.tsSec).toEqual([100, 105, 110])
   })
 
   it('appends snapshot tick values to the tail', async () => {
@@ -57,6 +58,7 @@ describe('telemetrySeriesStore', () => {
     const last = cb.mock.calls.at(-1)![0]
     expect(last.cost).toEqual([0.1, 0.2, 0.3, 0.4])
     expect(last.tokens).toEqual([1000, 1100, 1200, 1300])
+    expect(last.tsSec).toEqual([100, 105, 110, 115])
   })
 
   it('caps the ring buffer length at 320 (5min + headroom)', async () => {
@@ -68,6 +70,8 @@ describe('telemetrySeriesStore', () => {
     const stored = _getSeriesForTests('sess-a')!
     expect(stored.cost.length).toBeLessThanOrEqual(320)
     expect(stored.cost.at(-1)).toBe(399)
+    expect(stored.tsSec.length).toBeLessThanOrEqual(320)
+    expect(stored.tsSec.at(-1)).toBe(1000 + 399)
   })
 
   it('drops session cache on last unsubscribe', async () => {

@@ -121,17 +121,14 @@ function SessionSection({ sessionId }: { sessionId: string }) {
   const cacheSeries  = series?.cache  ?? []
   const dutySeries   = series?.duty   ?? []
 
-  // computeDeltaChip wants [ts, v] pairs but we only need values for the rolling
-  // mean / rate. Synthesize timestamps at the assumed 5s step — the helper only
-  // uses relative timestamps for windowing.
-  const STEP = 5
-  const withTs = (arr: (number | null)[]): [number, number | null][] =>
-    arr.map((v, i) => [i * STEP, v] as [number, number | null])
+  const tsSec = series?.tsSec ?? []
+  const zip = (arr: (number | null)[]): [number, number | null][] =>
+    arr.map((v, i) => [tsSec[i] ?? i, v] as [number, number | null])
 
-  const costDelta   = computeDeltaChip('cost',   withTs(costSeries))
-  const tokensDelta = computeDeltaChip('tokens', withTs(tokenSeries))
-  const cacheDelta  = computeDeltaChip('cache',  withTs(cacheSeries))
-  const dutyDelta   = computeDeltaChip('duty',   withTs(dutySeries))
+  const costDelta   = computeDeltaChip('cost',   zip(costSeries))
+  const tokensDelta = computeDeltaChip('tokens', zip(tokenSeries))
+  const cacheDelta  = computeDeltaChip('cache',  zip(cacheSeries))
+  const dutyDelta   = computeDeltaChip('duty',   zip(dutySeries))
 
   return (
     <div

@@ -13,7 +13,8 @@ import type { HudSeries } from '../server/observability/types'
 const MAX_SAMPLES = 320
 
 export interface SeriesSnapshot {
-  /** Oldest → newest. Length up to MAX_SAMPLES. */
+  /** Oldest → newest. Length up to MAX_SAMPLES. Wall-clock unix seconds per sample. */
+  tsSec: number[]
   cost: (number | null)[]
   tokens: (number | null)[]
   cache: (number | null)[]
@@ -48,7 +49,7 @@ function ensure(name: string): PerSession {
   let entry = store.get(name)
   if (!entry) {
     entry = {
-      snap: { cost: [], tokens: [], cache: [], duty: [] },
+      snap: { tsSec: [], cost: [], tokens: [], cache: [], duty: [] },
       listeners: new Set(),
       backfillStarted: false,
     }
@@ -65,6 +66,7 @@ async function backfill(name: string) {
     const entry = store.get(name)
     if (!entry) return
     entry.snap = {
+      tsSec:  data.series.cost.map(p => p[0]),
       cost:   data.series.cost.map(p => p[1]),
       tokens: data.series.tokens.map(p => p[1]),
       cache:  data.series.cache.map(p => p[1]),
@@ -86,6 +88,7 @@ export function pushTick(name: string, tick: TickInput): void {
   const entry = store.get(name)
   if (!entry) return
   entry.snap = {
+    tsSec:  appendCapped(entry.snap.tsSec, tick.tsSec),
     cost:   appendCapped(entry.snap.cost, tick.cost),
     tokens: appendCapped(entry.snap.tokens, tick.tokens),
     cache:  appendCapped(entry.snap.cache, tick.cache),
