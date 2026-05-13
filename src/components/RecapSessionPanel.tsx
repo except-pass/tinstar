@@ -262,10 +262,11 @@ function QuickSendButtons({
               e.currentTarget.style.borderColor = hexToRgba(accent, 0.5)
             }}
             onMouseLeave={(e) => {
-              if (flashing) return
-              e.currentTarget.style.boxShadow = 'none'
-              e.currentTarget.style.background = hexToRgba(accent, 0.1)
-              e.currentTarget.style.borderColor = hexToRgba(accent, 0.25)
+              e.currentTarget.style.boxShadow = flashing
+                ? `0 0 10px ${hexToRgba(accent, 0.55)}, 0 0 20px ${hexToRgba(accent, 0.25)}`
+                : 'none'
+              e.currentTarget.style.background = hexToRgba(accent, flashing ? 0.4 : 0.1)
+              e.currentTarget.style.borderColor = hexToRgba(accent, flashing ? 0.7 : 0.25)
             }}
           >
             {label}
@@ -290,7 +291,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   const fireQuickKey = useCallback(async (key: QuickKey) => {
     if (!sessionId) return
     setFlashedKey(key)
-    window.setTimeout(() => {
+    setTimeout(() => {
       setFlashedKey(prev => (prev === key ? null : prev))
     }, 250)
     try {
