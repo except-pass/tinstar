@@ -142,3 +142,22 @@ describe('<RecapSessionPanel> quick-send hotkeys', () => {
     expect(apiFetch).not.toHaveBeenCalled()
   })
 })
+
+describe('<RecapSessionPanel> quick-send press flash', () => {
+  it('hotkey press flashes the matching button', () => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: '3', code: 'Digit3', altKey: true })
+    const btn = container.querySelector('[data-testid="quick-send-3"]') as HTMLButtonElement
+    expect(btn.className).toMatch(/animate-\[quick-pop/)
+  })
+
+  it('click press flashes the clicked button', () => {
+    const { container } = renderComposer()
+    const btn = container.querySelector('[data-testid="quick-send-y"]') as HTMLButtonElement
+    fireEvent.click(btn)
+    const flashed = container.querySelector('[data-testid="quick-send-y"]') as HTMLButtonElement
+    expect(flashed.className).toMatch(/animate-\[quick-pop/)
+  })
+})
