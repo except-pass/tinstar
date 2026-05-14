@@ -13,6 +13,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../types'
 import { hexToRgba } from './runAccent'
 import { usePromptHistory } from '../hooks/usePromptHistory'
+import { usePromptStash, STASH_SLOTS } from '../hooks/usePromptStash'
 import { PromptHistoryPopover } from './RunWorkspaceWidget/PromptHistoryPopover'
 import { useFocusPath } from '../hotkeys/FocusPathContext'
 import { findSlashToken, rankCommands, type SlashCommand } from '../lib/slashMatching'
@@ -281,6 +282,94 @@ function QuickSendButtons({
   )
 }
 
+function previewText(s: string, max = 80): string {
+  const flat = s.trim().replace(/\s+/g, ' ')
+  if (flat.length <= max) return flat
+  return flat.slice(0, max - 1).trimEnd() + '…'
+}
+
+/** Stash slots — click to store / swap / recall. Shift+click to clear. */
+function StashSlots({
+  accent,
+  slots,
+  onActivate,
+  onClear,
+  disabled,
+}: {
+  accent: string
+  slots: readonly (string | null)[]
+  onActivate: (index: number) => void
+  onClear: (index: number) => void
+  disabled: boolean
+}) {
+  return (
+    <div
+      className="flex items-center gap-1 shrink-0 ml-2 pl-3 border-l"
+      style={{ borderColor: hexToRgba(accent, 0.2) }}
+      data-testid="stash-cluster"
+    >
+      {Array.from({ length: STASH_SLOTS }).map((_, i) => {
+        const filled = !!slots[i]
+        const preview = filled ? previewText(slots[i]!) : ''
+        const label = `${i + 1}`
+        const baseTitle = filled
+          ? `Stash ${i + 1}: "${preview}"\nClick to swap with composer · Shift+click to clear`
+          : `Stash ${i + 1} (empty) — click to store current composer text`
+        return (
+          <button
+            key={i}
+            type="button"
+            data-testid={`stash-slot-${i + 1}`}
+            data-filled={filled || undefined}
+            disabled={disabled}
+            onClick={(e) => {
+              if (e.shiftKey && filled) {
+                onClear(i)
+                return
+              }
+              onActivate(i)
+            }}
+            title={baseTitle}
+            className="
+              flex items-center justify-center w-6 h-6 rounded-sm
+              text-2xs font-mono font-semibold
+              transition-all duration-150 ease-out
+              disabled:opacity-30 disabled:cursor-not-allowed
+              enabled:hover:scale-110 enabled:active:scale-95
+            "
+            style={{
+              color: accent,
+              background: hexToRgba(accent, filled ? 0.25 : 0.08),
+              border: `1px solid ${hexToRgba(accent, filled ? 0.55 : 0.2)}`,
+            }}
+            onMouseEnter={(e) => {
+              if (disabled) return
+              e.currentTarget.style.boxShadow = `0 0 8px ${hexToRgba(accent, 0.35)}`
+              e.currentTarget.style.background = hexToRgba(accent, filled ? 0.35 : 0.18)
+              e.currentTarget.style.borderColor = hexToRgba(accent, filled ? 0.7 : 0.45)
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.boxShadow = 'none'
+              e.currentTarget.style.background = hexToRgba(accent, filled ? 0.25 : 0.08)
+              e.currentTarget.style.borderColor = hexToRgba(accent, filled ? 0.55 : 0.2)
+            }}
+          >
+            <span className="flex items-center gap-0.5 leading-none">
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: '11px', opacity: filled ? 0.9 : 0.5 }}
+              >
+                {filled ? 'inventory_2' : 'inventory'}
+              </span>
+              {label}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 /** Collapsible prompt composer for sending text to the terminal */
 function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTrigger }: { sessionId?: string; accent: string; status?: SessionStatus; expanded?: boolean; onToggle?: () => void; focusTrigger?: number }) {
   const [internalExpanded, setInternalExpanded] = useState(false)
@@ -313,7 +402,30 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
   const buttonRef = useRef<HTMLButtonElement>(null)
   const composerRootRef = useRef<HTMLDivElement>(null)
   const { history, push: pushHistory } = usePromptHistory(sessionId)
+  const { slots: stashSlots, setSlot: setStashSlot } = usePromptStash(sessionId)
   const [historyOpen, setHistoryOpen] = useState(false)
+
+  const activateStash = useCallback((index: number) => {
+    const current = text
+    const stored = stashSlots[index] ?? null
+    // Swap semantics: empty composer + filled slot = recall (slot empties);
+    // filled composer + empty slot = store; filled both = swap.
+    if (!current && !stored) return
+    setText(stored ?? '')
+    setStashSlot(index, current.length > 0 ? current : null)
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus({ preventScroll: true })
+      const end = stored?.length ?? 0
+      ta.setSelectionRange(end, end)
+      setSlashCursor(end)
+    })
+  }, [text, stashSlots, setStashSlot])
+
+  const clearStash = useCallback((index: number) => {
+    setStashSlot(index, null)
+  }, [setStashSlot])
   const { pushFocus, popFocus, path } = useFocusPath()
   const composerFocusId = sessionId ? `${sessionId}:composer` : null
   const isOnFocusPath = useRef(false)
@@ -531,6 +643,15 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
               <span className="text-2xs text-slate-600 font-mono shrink-0">
                 {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
               </span>
+              {!slashToken && (
+                <StashSlots
+                  accent={accent}
+                  slots={stashSlots}
+                  onActivate={activateStash}
+                  onClear={clearStash}
+                  disabled={!sessionId}
+                />
+              )}
               {text.trim() === '' && (
                 <QuickSendButtons
                   accent={accent}
