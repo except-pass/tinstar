@@ -146,7 +146,7 @@ function SessionSection({ sessionId }: { sessionId: string }) {
           padding: '1px 6px', borderRadius: 2, letterSpacing: 1, fontSize: 8,
         }}>THIS RUN</span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6 }}>
         <StatSpark accent="gold"   label="COST"        value={costValue}   series={costSeries}  delta={costDelta} />
         <StatSpark accent="blue"   label="TOKENS/MIN"  value={tokensValue} series={tokenSeries} delta={tokensDelta} />
         <StatSpark accent="green"  label="CACHE HIT"   value={cacheValue}  series={cacheSeries} delta={cacheDelta} />

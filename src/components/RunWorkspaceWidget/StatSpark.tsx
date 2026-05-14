@@ -45,11 +45,11 @@ export function StatSpark({ accent, label, value, series, delta }: Props) {
       data-testid="stat-spark"
       style={{
         position: 'relative',
-        padding: '10px 12px 0',
+        padding: '6px 10px 0',
         border: '1px solid rgba(120,140,180,0.15)',
         borderRadius: 4,
         background: 'rgba(8,12,22,0.55)',
-        minHeight: 96,
+        minHeight: 64,
         overflow: 'hidden',
       }}
     >
@@ -82,12 +82,12 @@ export function StatSpark({ accent, label, value, series, delta }: Props) {
       </div>
       <div
         style={{
-          fontSize: 26,
+          fontSize: 20,
           fontWeight: 500,
           letterSpacing: '-0.5px',
           marginTop: 2,
           color: '#cfd6e4',
-          textShadow: `0 0 14px ${glow}`,
+          textShadow: `0 0 10px ${glow}`,
           fontVariantNumeric: 'tabular-nums',
           position: 'relative',
           zIndex: 1,
@@ -101,7 +101,7 @@ export function StatSpark({ accent, label, value, series, delta }: Props) {
           bottom: 0,
           left: 0,
           right: 0,
-          height: 42,
+          height: 28,
           pointerEvents: 'none',
         }}
       >
