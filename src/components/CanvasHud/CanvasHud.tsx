@@ -104,13 +104,14 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
   return (
     <HudShell wrapStyle={wrapStyle} onClose={toggle}>
       {(() => {
-        const costTotal = snapshot.cost.total
-        const tokenRate = snapshot.rate.perMin
-        const cacheHit  = snapshot.cacheHitPct
-        const duty      = snapshot.dutyCycle.value
-        const costValueStr   = costTotal == null ? '--' : fmtDollar(costTotal)
-        const tokensValueStr = tokenRate == null ? '--' : `${fmtRate(tokenRate)}/min`
-        const cacheValueStr  = cacheHit  == null ? '--' : `${(cacheHit * 100).toFixed(1)}%`
+        const costTotal  = snapshot.cost.total
+        const tokenTotal = snapshot.tokens.total
+        const tokenRate  = snapshot.rate.perMin
+        const cacheHit   = snapshot.cacheHitPct
+        const duty       = snapshot.dutyCycle.value
+        const costValueStr   = costTotal  == null ? '--' : fmtDollar(costTotal)
+        const tokensValueStr = tokenTotal == null ? '--' : fmtRate(tokenTotal)
+        const cacheValueStr  = cacheHit   == null ? '--' : `${(cacheHit * 100).toFixed(1)}%`
         // Fleet duty can exceed 1 (multiple concurrent sessions). Render as e.g. "240%".
         const dutyValueStr   = duty      == null ? '--' : `${Math.round(duty * 100)}%`
 
@@ -118,7 +119,7 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
           arr.map((v, i) => [fleetSeries.tsSec[i] ?? i, v])
 
         const costDelta   = computeDeltaChip('cost',   zip(fleetSeries.cost))
-        const tokensDelta = computeDeltaChip('tokens', zip(fleetSeries.tokens))
+        const tokensDelta = { text: tokenRate == null ? '—' : `${fmtRate(tokenRate)}/min`, tone: 'flat' as const }
         const cacheDelta  = computeDeltaChip('cache',  zip(fleetSeries.cache))
         const dutyDelta   = computeDeltaChip('duty',   zip(fleetSeries.duty))
 
@@ -137,7 +138,7 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
                 ))}
               </div>
             )}
-            <StatSpark accent="blue"   label="TOKENS/MIN"  value={tokensValueStr} series={fleetSeries.tokens} delta={tokensDelta} />
+            <StatSpark accent="blue"   label="TOKENS"      value={tokensValueStr} series={fleetSeries.tokens} delta={tokensDelta} />
             <StatSpark accent="green"  label="CACHE HIT"   value={cacheValueStr}  series={fleetSeries.cache}  delta={cacheDelta} />
             <StatSpark accent="violet" label="DUTY · FLEET" value={dutyValueStr}  series={fleetSeries.duty}   delta={dutyDelta} />
           </div>

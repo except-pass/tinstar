@@ -22,7 +22,7 @@ export function useTelemetrySeries(sessionName: string | null): SeriesSnapshot |
       pushTick(sessionName, {
         tsSec: Math.floor(Date.now() / 1000),
         cost:   hud.cost.total,
-        tokens: hud.rate.perMin,
+        tokens: hud.tokens.total,
         cache:  hud.cacheHitPct,
         duty:   hud.dutyCycle.value,
       })

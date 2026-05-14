@@ -31,7 +31,7 @@ export function useFleetTelemetrySeries(snapshot: HudSnapshot | null): SeriesSna
       return {
         tsSec:  appendCapped(prev.tsSec, tsSec),
         cost:   appendCapped(prev.cost, snapshot.cost.total),
-        tokens: appendCapped(prev.tokens, snapshot.rate.perMin),
+        tokens: appendCapped(prev.tokens, snapshot.tokens.total),
         cache:  appendCapped(prev.cache, snapshot.cacheHitPct),
         duty:   appendCapped(prev.duty, snapshot.dutyCycle.value),
       }

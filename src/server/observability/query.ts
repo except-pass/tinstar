@@ -185,7 +185,7 @@ export class TelemetryQuery {
   /**
    * Returns 5-minute (or `windowSec`) sparkline series for one session.
    * - cost   = cumulative dollars (monotonically non-decreasing)
-   * - tokens = tokens-per-minute (rate over a trailing 1m sub-window per sample)
+   * - tokens = cumulative input+output tokens (monotonically non-decreasing)
    * - cache  = cache-read fraction over a trailing 1m sub-window (0..1)
    * - duty   = busy-fraction over a trailing 1m sub-window (0..1 per session)
    *
@@ -212,7 +212,7 @@ export class TelemetryQuery {
     const cliActiveFilter = this.mergeFilter(filter, 'type="cli"')
 
     const costQ   = `sum(claude_code_cost_usage_USD_total${filter})`
-    const tokQ    = `sum(rate(${tokenMetric}${ioFilter}[1m])) * 60`
+    const tokQ    = `sum(${tokenMetric}${ioFilter})`
     const cacheReadRate = `sum(rate(${tokenMetric}${cacheReadFilter}[1m]))`
     const inputRate     = `sum(rate(${tokenMetric}${inputFilter}[1m]))`
     // 0/0 yields NaN → queryRange coerces to null → renders as a gap. Intentional:

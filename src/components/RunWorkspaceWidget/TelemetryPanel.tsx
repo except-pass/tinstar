@@ -106,15 +106,16 @@ function SessionSection({ sessionId }: { sessionId: string }) {
   const series = useTelemetrySeries(sessionId)
   if (!snap || snap.state !== 'ready') return null
 
-  const costTotal = snap.cost.total
-  const tokenRate = snap.rate.perMin
-  const cacheHit  = snap.cacheHitPct
-  const duty      = snap.dutyCycle.value
+  const costTotal  = snap.cost.total
+  const tokenTotal = snap.tokens.total
+  const tokenRate  = snap.rate.perMin
+  const cacheHit   = snap.cacheHitPct
+  const duty       = snap.dutyCycle.value
 
-  const costValue   = costTotal == null ? '--' : fmtDollar(costTotal)
-  const tokensValue = tokenRate == null ? '--' : `${fmtRate(tokenRate)}/min`
-  const cacheValue  = cacheHit  == null ? '--' : `${(cacheHit * 100).toFixed(1)}%`
-  const dutyValue   = duty      == null ? '--' : `${Math.round(duty * 100)}%`
+  const costValue   = costTotal  == null ? '--' : fmtDollar(costTotal)
+  const tokensValue = tokenTotal == null ? '--' : fmtRate(tokenTotal)
+  const cacheValue  = cacheHit   == null ? '--' : `${(cacheHit * 100).toFixed(1)}%`
+  const dutyValue   = duty       == null ? '--' : `${Math.round(duty * 100)}%`
 
   const costSeries   = series?.cost   ?? []
   const tokenSeries  = series?.tokens ?? []
@@ -126,7 +127,7 @@ function SessionSection({ sessionId }: { sessionId: string }) {
     arr.map((v, i) => [tsSec[i] ?? i, v] as [number, number | null])
 
   const costDelta   = computeDeltaChip('cost',   zip(costSeries))
-  const tokensDelta = computeDeltaChip('tokens', zip(tokenSeries))
+  const tokensDelta = { text: tokenRate == null ? '—' : `${fmtRate(tokenRate)}/min`, tone: 'flat' as const }
   const cacheDelta  = computeDeltaChip('cache',  zip(cacheSeries))
   const dutyDelta   = computeDeltaChip('duty',   zip(dutySeries))
 
@@ -148,7 +149,7 @@ function SessionSection({ sessionId }: { sessionId: string }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6 }}>
         <StatSpark accent="gold"   label="COST"        value={costValue}   series={costSeries}  delta={costDelta} />
-        <StatSpark accent="blue"   label="TOKENS/MIN"  value={tokensValue} series={tokenSeries} delta={tokensDelta} />
+        <StatSpark accent="blue"   label="TOKENS"      value={tokensValue} series={tokenSeries} delta={tokensDelta} />
         <StatSpark accent="green"  label="CACHE HIT"   value={cacheValue}  series={cacheSeries} delta={cacheDelta} />
         <StatSpark accent="violet" label="DUTY · 60m"  value={dutyValue}   series={dutySeries}  delta={dutyDelta} />
       </div>

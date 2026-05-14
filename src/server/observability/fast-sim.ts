@@ -58,7 +58,7 @@ export function makeFakeSeries(opts: {
   for (let t = startSec; t <= endSec; t += stepSec) {
     const secs = t % 3600
     cost.push([t, 0.10 + secs * 0.0015])
-    tokens.push([t, Math.max(0, 1200 + Math.sin(secs / 30) * 400)])
+    tokens.push([t, Math.floor(1000 + secs * 85)])
     cache.push([t, Math.max(0, Math.min(1, 0.65 + Math.sin(secs / 45) * 0.15))])
     duty.push([t, Math.max(0, Math.min(1, 0.5 + Math.sin(secs / 30) * 0.3))])
   }
