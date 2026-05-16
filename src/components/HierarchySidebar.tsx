@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import Fuse from 'fuse.js'
 import type { TreeNode, GroupingDimension, Space } from '../domain/types'
 import { getDimensionIcon } from '../domain/dimension-meta'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
@@ -13,6 +14,31 @@ import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 import { BindingRow, GLOBAL_KEYS, CANVAS_KEYS, QUICKDRAW_KEYS } from './HotkeyBindingRow'
 import { AgentIcon, isIconUrl } from './agentIcon'
 import { apiFetch } from '../apiClient'
+
+interface FlatNode {
+  id: string
+  entityId: string
+  type: string
+  label: string
+  ancestorIds: string[]
+}
+
+function flattenTree(nodes: TreeNode[], ancestors: string[] = [], out: FlatNode[] = []): FlatNode[] {
+  for (const n of nodes) {
+    out.push({ id: n.id, entityId: n.entityId, type: n.type, label: n.label, ancestorIds: ancestors })
+    if (n.children.length > 0) flattenTree(n.children, [...ancestors, n.id], out)
+  }
+  return out
+}
+
+function pruneTree(nodes: TreeNode[], visible: Set<string>): TreeNode[] {
+  const result: TreeNode[] = []
+  for (const n of nodes) {
+    if (!visible.has(n.id)) continue
+    result.push({ ...n, children: pruneTree(n.children, visible) })
+  }
+  return result
+}
 
 const LS_HOTKEYS_HEIGHT = 'tinstar-sidebar-hotkeys-height'
 const DEFAULT_HOTKEYS_HEIGHT = 200
@@ -148,6 +174,8 @@ function SidebarNode({
   onRenameComplete,
   hiddenRunIds,
   onToggleRunHidden,
+  matchIds,
+  cursorId,
 }: {
   node: TreeNode
   depth: number
@@ -165,6 +193,8 @@ function SidebarNode({
   onRenameComplete?: () => void
   hiddenRunIds?: Set<string>
   onToggleRunHidden?: (runId: string) => void
+  matchIds?: Set<string> | null
+  cursorId?: string | null
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
   const { slotsForNode } = useHotgroupContext()
@@ -180,6 +210,8 @@ function SidebarNode({
   const isWorkWidget = node.type in WORK_WIDGET_META
   const runHidden = isRun && hiddenRunIds?.has(node.entityId) === true
   const isDragging = dragNodeId === node.id
+  const isMatch = matchIds?.has(node.id) === true
+  const isCursor = cursorId === node.id
   const isDropInside = dropTarget?.nodeId === node.id && dropTarget?.position === 'inside'
   const isDropBefore = dropTarget?.nodeId === node.id && dropTarget?.position === 'before'
   const isDropAfter = dropTarget?.nodeId === node.id && dropTarget?.position === 'after'
@@ -231,6 +263,8 @@ function SidebarNode({
           isDragging ? 'opacity-40' : '',
           isDropInside ? 'bg-primary/10 ring-1 ring-primary/40' : '',
           runHidden ? 'opacity-50' : '',
+          isMatch && !selected ? 'text-primary' : '',
+          isCursor ? 'ring-1 ring-primary/60 bg-primary/10' : '',
         ].join(' ')}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         data-testid={`sidebar-node-${node.id}`}
@@ -477,6 +511,8 @@ function SidebarNode({
               onRenameComplete={onRenameComplete}
               hiddenRunIds={hiddenRunIds}
               onToggleRunHidden={onToggleRunHidden}
+              matchIds={matchIds}
+              cursorId={cursorId}
             />
           ))}
         </div>
@@ -521,6 +557,8 @@ function TreeWithOrphanSeparators({
   onRenameComplete,
   hiddenRunIds,
   onToggleRunHidden,
+  matchIds,
+  cursorId,
 }: {
   nodes: TreeNode[]
   depth: number
@@ -538,6 +576,8 @@ function TreeWithOrphanSeparators({
   onRenameComplete?: () => void
   hiddenRunIds?: Set<string>
   onToggleRunHidden?: (runId: string) => void
+  matchIds?: Set<string> | null
+  cursorId?: string | null
 }) {
   const normal = nodes.filter(n => !n.orphan)
   const orphans = nodes.filter(n => n.orphan)
@@ -563,6 +603,8 @@ function TreeWithOrphanSeparators({
           onRenameComplete={onRenameComplete}
           hiddenRunIds={hiddenRunIds}
           onToggleRunHidden={onToggleRunHidden}
+          matchIds={matchIds}
+          cursorId={cursorId}
         />
       ))}
       {orphans.length > 0 && <OrphanSeparator />}
@@ -585,6 +627,8 @@ function TreeWithOrphanSeparators({
           onRenameComplete={onRenameComplete}
           hiddenRunIds={hiddenRunIds}
           onToggleRunHidden={onToggleRunHidden}
+          matchIds={matchIds}
+          cursorId={cursorId}
         />
       ))}
     </>
@@ -592,8 +636,115 @@ function TreeWithOrphanSeparators({
 }
 
 export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
-  const { isExpanded, expandAll } = useSelection()
+  const { isExpanded, expandAll, select } = useSelection()
   const showEmpty = showEmptyEntities ?? true
+
+  // --- Fuzzy search ---
+  const [query, setQuery] = useState('')
+  const [cursorIdx, setCursorIdx] = useState(0)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  const flat = useMemo(() => flattenTree(tree), [tree])
+
+  const fuse = useMemo(
+    () => new Fuse(flat, {
+      keys: ['label'],
+      threshold: 0.4,
+      ignoreLocation: true,
+      minMatchCharLength: 1,
+    }),
+    [flat],
+  )
+
+  const trimmedQuery = query.trim()
+  const searchResults = useMemo<FlatNode[]>(() => {
+    if (!trimmedQuery) return []
+    return fuse.search(trimmedQuery, { limit: 50 }).map(r => r.item)
+  }, [fuse, trimmedQuery])
+
+  const matchIds = useMemo(() => {
+    if (!trimmedQuery) return null
+    return new Set(searchResults.map(r => r.id))
+  }, [searchResults, trimmedQuery])
+
+  const visibleIds = useMemo(() => {
+    if (!trimmedQuery) return null
+    const set = new Set<string>()
+    for (const r of searchResults) {
+      set.add(r.id)
+      for (const a of r.ancestorIds) set.add(a)
+    }
+    return set
+  }, [searchResults, trimmedQuery])
+
+  const cursorNode = searchResults[cursorIdx] ?? null
+  const cursorId = cursorNode?.id ?? null
+
+  // Auto-expand visible ancestors so matches are reachable
+  useEffect(() => {
+    if (!visibleIds) return
+    expandAll(Array.from(visibleIds))
+  }, [visibleIds, expandAll])
+
+  // Reset cursor when results change
+  useEffect(() => { setCursorIdx(0) }, [trimmedQuery])
+
+  // Keep the highlighted match row visible as the user arrows through results
+  useEffect(() => {
+    if (!cursorId) return
+    const el = document.querySelector(`[data-testid="sidebar-node-${CSS.escape(cursorId)}"]`) as HTMLElement | null
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [cursorId])
+
+  const displayedTree = useMemo(
+    () => visibleIds ? pruneTree(tree, visibleIds) : tree,
+    [tree, visibleIds],
+  )
+
+  const commitSelection = useCallback((node: FlatNode) => {
+    select(node.id, node.type as GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic')
+    if (node.type === 'run' && onFocusRun) onFocusRun(node.id)
+    // Scroll the row into view after React commits
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-testid="sidebar-node-${CSS.escape(node.id)}"]`) as HTMLElement | null
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+  }, [select, onFocusRun])
+
+  const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      setQuery('')
+      searchInputRef.current?.blur()
+      e.preventDefault()
+      return
+    }
+    if (searchResults.length === 0) return
+    if (e.key === 'ArrowDown') {
+      setCursorIdx(i => (i + 1) % searchResults.length)
+      e.preventDefault()
+    } else if (e.key === 'ArrowUp') {
+      setCursorIdx(i => (i - 1 + searchResults.length) % searchResults.length)
+      e.preventDefault()
+    } else if (e.key === 'Enter') {
+      const target = searchResults[cursorIdx]
+      if (target) commitSelection(target)
+      e.preventDefault()
+    }
+  }, [searchResults, cursorIdx, commitSelection])
+
+  // Global `/` hotkey: focus the search input when no editable element is focused
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return
+      const active = document.activeElement as HTMLElement | null
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return
+      e.preventDefault()
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   const levelMeta = useDimensionMeta()
   const dimensionIconMap = useMemo(
@@ -752,19 +903,49 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
         </div>
       </div>
 
+      {/* Search bar */}
+      <div className="flex items-center gap-1 px-2 py-1 border-b border-white/5">
+        <span className="material-symbols-outlined text-sm text-slate-500" aria-hidden>search</span>
+        <input
+          ref={searchInputRef}
+          type="text"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
+          placeholder="Search… (press /)"
+          className="flex-1 min-w-0 bg-transparent text-xs text-slate-200 placeholder:text-slate-600 outline-none px-1 py-0.5"
+          data-testid="hierarchy-search-input"
+          aria-label="Search workspace"
+          spellCheck={false}
+          autoComplete="off"
+        />
+        {query && (
+          <button
+            className="text-slate-500 hover:text-primary text-xs leading-none w-4 h-4 flex items-center justify-center flex-shrink-0"
+            onClick={() => { setQuery(''); searchInputRef.current?.focus() }}
+            aria-label="Clear search"
+            data-testid="hierarchy-search-clear"
+          >
+            ×
+          </button>
+        )}
+      </div>
+
       {/* Tree */}
       <div
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto scrollbar-thin py-1"
         style={{ cursor: dragState ? 'grabbing' : undefined }}
       >
-        {tree.length === 0 ? (
-          <div className="px-3 py-4 text-xs text-slate-500 text-center">
-            {(unfilteredTree ?? tree).length === 0 ? 'No items. Click + to create.' : 'All entities empty. Click filter to show.'}
+        {displayedTree.length === 0 ? (
+          <div className="px-3 py-4 text-xs text-slate-500 text-center" data-testid="hierarchy-empty">
+            {trimmedQuery
+              ? `No matches for "${trimmedQuery}"`
+              : (unfilteredTree ?? tree).length === 0 ? 'No items. Click + to create.' : 'All entities empty. Click filter to show.'}
           </div>
         ) : (
           <TreeWithOrphanSeparators
-            nodes={tree}
+            nodes={displayedTree}
             depth={0}
             dimensions={dimensions}
             dimensionIconMap={dimensionIconMap}
@@ -780,6 +961,8 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
             onRenameComplete={onRenameComplete}
             hiddenRunIds={hiddenRunIds}
             onToggleRunHidden={onToggleRunHidden}
+            matchIds={matchIds}
+            cursorId={cursorId}
           />
         )}
       </div>
