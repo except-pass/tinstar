@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdirSync, rmSync, existsSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { handlePluginRuntime } from '../pluginRuntime'
@@ -76,6 +76,27 @@ describe('handlePluginRuntime', () => {
     const handled = await handlePluginRuntime(req, res as any, { configRoot: TEST_ROOT })
     expect(handled).toBe(true)
     expect(res.statusCode).toBe(404)
+  })
+
+  it('rejects a symlink that escapes the plugin root', async () => {
+    const pluginRoot = join(TEST_ROOT, 'fake-plugin')
+    mkdirSync(pluginRoot, { recursive: true })
+    // Create a target outside the plugin root
+    const outsideFile = join(TEST_ROOT, 'secret.txt')
+    writeFileSync(outsideFile, 'top-secret')
+    // Plugin contains a symlink pointing to it
+    symlinkSync(outsideFile, join(pluginRoot, 'leak.js'))
+    writeFileSync(join(TEST_ROOT, 'plugins.json'), JSON.stringify({
+      disabled: [],
+      external: [{ name: 'fake-plugin', path: pluginRoot }],
+    }))
+
+    const req = makeReq('/api/plugin-runtime/local/fake-plugin/leak.js')
+    const res = makeRes()
+    const handled = await handlePluginRuntime(req, res as any, { configRoot: TEST_ROOT })
+    expect(handled).toBe(true)
+    expect(res.statusCode).toBe(400)
+    expect(res._body).toMatch(/symlink escape|path traversal/)
   })
 
   it('serves a file from a configured local-plugin folder', async () => {

@@ -1,5 +1,5 @@
-import { readFileSync, existsSync, statSync } from 'node:fs'
-import { normalize, resolve, sep } from 'node:path'
+import { readFileSync, existsSync, statSync, realpathSync } from 'node:fs'
+import { resolve, sep } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readPluginsConfig } from '../../core/pluginHost/pluginsConfig'
 
@@ -75,20 +75,36 @@ export async function handlePluginRuntime(
       return true
     }
     const absolute = resolve(entry.path, relPath)
-    const normalized = normalize(absolute)
-    const pluginRoot = resolve(entry.path)
-    if (!normalized.startsWith(pluginRoot + sep) && normalized !== pluginRoot) {
+    // Defense in depth: literal-path check first (catches '..' before any fs call).
+    const pluginRootResolved = resolve(entry.path)
+    if (!absolute.startsWith(pluginRootResolved + sep) && absolute !== pluginRootResolved) {
       res.statusCode = 400
       res.end('path traversal')
       return true
     }
-    if (!existsSync(normalized) || !statSync(normalized).isFile()) {
+    // Follow symlinks and re-verify the real target is inside the plugin root.
+    let real: string
+    let pluginRootReal: string
+    try {
+      real = realpathSync(absolute)
+      pluginRootReal = realpathSync(pluginRootResolved)
+    } catch {
+      res.statusCode = 404
+      res.end('file not found')
+      return true
+    }
+    if (!real.startsWith(pluginRootReal + sep) && real !== pluginRootReal) {
+      res.statusCode = 400
+      res.end('symlink escape')
+      return true
+    }
+    if (!existsSync(real) || !statSync(real).isFile()) {
       res.statusCode = 404
       res.end('file not found')
       return true
     }
     res.setHeader('Content-Type', 'application/javascript')
-    res.end(readFileSync(normalized, 'utf8'))
+    res.end(readFileSync(real, 'utf8'))
     return true
   }
 
