@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { Plugin } from '@tinstar/plugin-api'
-import { bootBundledPlugins } from '../loader'
+import { bootBundledPlugins, bootAllPlugins } from '../loader'
 import { PluginRegistry } from '../registry'
 
 function fakeBundle(
@@ -87,5 +87,36 @@ describe('bootBundledPlugins', () => {
     expect(reg.get('ok')?.state).toBe('active')    // boot loop continued
     expect(err).toHaveBeenCalledWith(expect.stringContaining('activate failed for "key2"'))
     err.mockRestore()
+  })
+})
+
+describe('bootAllPlugins', () => {
+  it('honors disabled[] for bundled plugins', async () => {
+    const reg = new PluginRegistry()
+    const bundle = {
+      one: fakeBundle('one'),
+      two: fakeBundle('two'),
+    }
+    const config = { disabled: ['one'], external: [] }
+    const importFn = async () => { throw new Error('unreachable') }
+    await bootAllPlugins(bundle, config, reg, importFn)
+    expect(reg.get('one')).toBeUndefined()      // disabled, skipped
+    expect(reg.get('two')?.state).toBe('active')
+  })
+
+  it('runs bundled before external', async () => {
+    const order: string[] = []
+    const reg = new PluginRegistry()
+    const recorded = (name: string): Plugin => ({
+      activate: () => { order.push(name); return [] }
+    })
+    const bundle = {
+      bundledA: { pkg: fakeBundle('bundledA').pkg, module: recorded('bundledA') },
+    }
+    const fakePkg = { name: 'extern', version: '0.0.1', tinstar: { apiVersion: '5', displayName: 'X' } }
+    const importFn = async () => ({ module: recorded('extern'), pkg: fakePkg })
+    const config = { disabled: [], external: [{ name: 'extern', path: '/abs' }] }
+    await bootAllPlugins(bundle, config, reg, importFn)
+    expect(order).toEqual(['bundledA', 'extern'])
   })
 })
