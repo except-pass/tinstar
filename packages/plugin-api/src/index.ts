@@ -15,6 +15,7 @@ export interface WidgetProps {
   isDropTarget: boolean
 }
 
+/** Describes a widget type a plugin contributes — the component, sizing, and behavior the host uses to render it on the canvas. */
 export interface WidgetRegistration {
   /** Unique string identifying this widget type. Conventionally prefixed with plugin name (e.g. "browser-widget"). */
   type: string
@@ -36,6 +37,7 @@ export interface PluginLogger {
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */
 export interface TinstarPluginAPI {
   readonly pluginId: string
+  /** The plugin's own version, copied from its package.json at activation time. */
   readonly version: string
   widgets: {
     register(reg: WidgetRegistration): Disposable
