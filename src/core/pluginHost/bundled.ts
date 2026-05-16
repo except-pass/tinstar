@@ -1,6 +1,8 @@
 import type { Plugin } from '@tinstar/plugin-api'
 import browserPkg from '../../plugins/browser/package.json'
 import * as browser from '../../plugins/browser/src/index'
+import natsTrafficPkg from '../../plugins/nats-traffic/package.json'
+import * as natsTraffic from '../../plugins/nats-traffic/src/index'
 
 /**
  * Static index of bundled plugins. Each entry is an ES module whose package
@@ -17,4 +19,5 @@ export interface BundledEntry {
 
 export const BUNDLED_PLUGINS: Record<string, BundledEntry> = {
   browser: { pkg: browserPkg, module: browser as Plugin },
+  'nats-traffic': { pkg: natsTrafficPkg, module: natsTraffic as Plugin },
 }

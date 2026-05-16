@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import type { NatsTrafficWidget } from '../../domain/types'
-import type { WidgetProps } from '../widgetComponentRegistry'
-import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
-import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
-import { apiFetch } from '../../apiClient'
+import type { NatsTrafficWidget } from '../../../domain/types'
+import type { WidgetProps } from '../../../widgets/widgetComponentRegistry'
+import { registerActionHandler, deregisterActionHandler } from '../../../hotkeys/actionHandlerRegistry'
+import { fitWidgetToViewport } from '../../../hotkeys/canvasActionsRegistry'
+import { apiFetch } from '../../../apiClient'
 
 interface TrafficEvent {
   timestamp: string

@@ -3,7 +3,6 @@ import './runWorkspace'
 import './taskGroup'
 import './fileEditor'      // registers FileEditorWidget
 import './imageViewer'     // registers ImageViewerWidget
-import './natsTraffic'     // registers NatsTrafficWidget
 
 import { PluginRegistry } from '../core/pluginHost/registry'
 import { bootBundledPlugins } from '../core/pluginHost/loader'
