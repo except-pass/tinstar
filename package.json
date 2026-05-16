@@ -1,6 +1,7 @@
 {
   "name": "tinstar",
   "version": "4.1.0",
+  "workspaces": ["packages/*"],
   "description": "Agent orchestrator — manage multiple Claude Code sessions from a visual canvas",
   "type": "module",
   "bin": {

@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { fileURLToPath } from 'node:url'
 /// <reference types="vitest" />
 
 function devTitle(): import('vite').Plugin {
@@ -22,6 +23,11 @@ export default defineConfig({
     setupFiles: ['./tests/setup.ts'],
   },
   plugins: [react(), devTitle()],
+  resolve: {
+    alias: {
+      '@tinstar/plugin-api': fileURLToPath(new URL('./packages/plugin-api/src/index.ts', import.meta.url)),
+    },
+  },
   build: {
     outDir: 'dist/client',
   },
