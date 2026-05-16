@@ -106,3 +106,22 @@ export interface PluginManifest {
   }
   permissions?: string[]
 }
+
+/**
+ * Compile-time constant matching the spec's apiVersion. Use this in your
+ * plugin to assert the version it was built against, or as a runtime
+ * sanity-check.
+ */
+export const TINSTAR_API_VERSION = '5' as const
+
+/**
+ * Identity helper for type inference of `activate` signatures.
+ *
+ * @example
+ * export default definePlugin({
+ *   activate(api) {
+ *     return [api.widgets.register({ ... })]
+ *   }
+ * })
+ */
+export function definePlugin(p: Plugin): Plugin { return p }

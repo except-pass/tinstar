@@ -1,6 +1,9 @@
 // src/widgets/widgetComponentRegistry.ts
-import type React from 'react'
-import type { Disposable } from '@tinstar/plugin-api'
+import type {
+  WidgetProps as PluginApiWidgetProps,
+  WidgetRegistration as PluginApiWidgetRegistration,
+  Disposable,
+} from '@tinstar/plugin-api'
 
 export interface GroupWidgetData {
   node: {
@@ -19,31 +22,14 @@ export interface GroupWidgetData {
   onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
 }
 
-export interface WidgetProps {
-  data: unknown
-  zoom: number
-  isSelected: boolean
-  isDragging: boolean
-  isHovered: boolean
-  isDropTarget: boolean
-}
+export type WidgetProps = PluginApiWidgetProps
+export type { WidgetFrameState } from '@tinstar/plugin-api'
 
-export interface WidgetFrameState {
-  isDragging: boolean
-  isSelected: boolean
-  isHovered: boolean
-  isDropTarget: boolean
-}
-
-export interface WidgetRegistration {
-  type: string
-  component: React.ComponentType<WidgetProps>
-  isContainer: boolean
-  defaultSize?: { width: number; height: number }
-  minSize: { width: number; height: number }
-  dragHandleSelector?: string
-  getFrameClass?: (state: WidgetFrameState) => string
-  supportsMinimize?: boolean
+/** Host-internal widget registration. Extends the public shape so any
+ * future host-only fields (perf hints, internal frame helpers) can live
+ * here without changing the public API. */
+export interface WidgetRegistration extends PluginApiWidgetRegistration {
+  // V5.0: no internal-only fields.
 }
 
 const registry = new Map<string, WidgetRegistration>()

@@ -30,9 +30,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
   const widgets = {
     register(reg: WidgetRegistration): Disposable {
       try {
-        // plugin-api.WidgetRegistration is a subset of widgetComponentRegistry.WidgetRegistration
-        // (the registry adds an optional getFrameClass field). Cast is safe widening.
-        const d = registerWidgetComponent(reg as Parameters<typeof registerWidgetComponent>[0])
+        const d = registerWidgetComponent(reg)
         record.disposables.push(d)
         return d
       } catch (e) {
