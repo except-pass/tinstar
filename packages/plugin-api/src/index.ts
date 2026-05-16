@@ -45,9 +45,14 @@ export interface TinstarPluginAPI {
   logger: PluginLogger
 }
 
-/** The shape of a plugin module's default export (or named `activate` export). */
+/** The shape of a plugin module's default export (or named `activate` export).
+ *
+ * `activate` may be synchronous (returns `Disposable[] | void`) or asynchronous
+ * (returns a `Promise`). The host awaits the result before marking the plugin active,
+ * so async setup (e.g. dynamic imports, deferred fetches) is fully supported.
+ */
 export interface Plugin {
-  activate(api: TinstarPluginAPI): Disposable[] | void
+  activate(api: TinstarPluginAPI): Disposable[] | void | Promise<Disposable[] | void>
 }
 
 /** Manifest stored under `tinstar` in a plugin's package.json. */

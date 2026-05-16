@@ -121,4 +121,32 @@ describe('PluginRegistry', () => {
     await reg.activate(makeRecord('b'), { activate: () => [] }, makeApi)
     expect(reg.list().map(r => r.name).sort()).toEqual(['a', 'b'])
   })
+
+  it('awaits an async activate before marking active', async () => {
+    const reg = new PluginRegistry()
+    let resolved = false
+    const plugin: Plugin = {
+      activate: async () => {
+        await new Promise(r => setTimeout(r, 5))
+        resolved = true
+        return []
+      },
+    }
+    const record = makeRecord('asyncOk')
+    await reg.activate(record, plugin, makeApi)
+    expect(resolved).toBe(true)
+    expect(reg.get('asyncOk')?.state).toBe('active')
+  })
+
+  it('catches an async activate rejection and marks failed', async () => {
+    const reg = new PluginRegistry()
+    const plugin: Plugin = {
+      activate: async () => { throw new Error('async-boom') },
+    }
+    const record = makeRecord('asyncFail')
+    await reg.activate(record, plugin, makeApi)
+    expect(reg.get('asyncFail')?.state).toBe('failed')
+    expect(reg.get('asyncFail')?.error).toContain('async-boom')
+    expect(reg.get('asyncFail')?.errorStack).toBeDefined()
+  })
 })

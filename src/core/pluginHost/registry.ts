@@ -39,14 +39,21 @@ export class PluginRegistry {
 
     try {
       const api = createApi(record)
-      const result = plugin.activate(api)
-      // activate() may also return additional disposables on top of whatever
-      // the API tracked internally. We treat the union as the plugin's full
-      // disposable set.
+      const result = await plugin.activate(api)
+      // activate() may return additional disposables on top of whatever the API
+      // tracked internally (via api.widgets.register etc.). Dedupe via Set so a
+      // disposable returned from activate() AND pushed by the API surface isn't
+      // disposed twice on teardown.
       if (Array.isArray(result)) {
-        record.disposables = [...record.disposables, ...result]
+        const tracked = new Set(record.disposables)
+        for (const d of result) {
+          if (!tracked.has(d)) {
+            record.disposables.push(d)
+            tracked.add(d)
+          }
+        }
       }
-      record.state = 'active'
+      record.state = 'active'   // only set after await resolves
     } catch (e) {
       record.state = 'failed'
       record.error = e instanceof Error ? e.message : String(e)
