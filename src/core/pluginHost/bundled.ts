@@ -1,4 +1,6 @@
 import type { Plugin } from '@tinstar/plugin-api'
+import browserPkg from '../../plugins/browser/package.json'
+import * as browser from '../../plugins/browser/src/index'
 
 /**
  * Static index of bundled plugins. Each entry is an ES module whose package
@@ -14,5 +16,5 @@ export interface BundledEntry {
 }
 
 export const BUNDLED_PLUGINS: Record<string, BundledEntry> = {
-  // populated in Task 9
+  browser: { pkg: browserPkg, module: browser as Plugin },
 }

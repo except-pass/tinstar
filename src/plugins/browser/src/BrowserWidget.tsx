@@ -1,12 +1,12 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import type { BrowserWidget } from '../../domain/types'
-import type { WidgetProps } from '../widgetComponentRegistry'
-import { hexToRgba, resolveRunAccent } from '../../components/runAccent'
-import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
-import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
-import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
-import { HotgroupBadge } from '../../components/HotgroupBadge'
-import { apiFetch } from '../../apiClient'
+import type { BrowserWidget } from '../../../domain/types'
+import type { WidgetProps } from '../../../widgets/widgetComponentRegistry'
+import { hexToRgba, resolveRunAccent } from '../../../components/runAccent'
+import { useHotgroupContext } from '../../../hotkeys/HotgroupContext'
+import { registerActionHandler, deregisterActionHandler } from '../../../hotkeys/actionHandlerRegistry'
+import { fitWidgetToViewport } from '../../../hotkeys/canvasActionsRegistry'
+import { HotgroupBadge } from '../../../components/HotgroupBadge'
+import { apiFetch } from '../../../apiClient'
 
 function proxyUrl(widgetId: string, targetUrl: string): string {
   try {
