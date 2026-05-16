@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { PluginsTab } from './Settings/PluginsTab'
 import { useDimensionMeta, autoPlural } from '../hooks/useDimensionMeta'
 import { useBackendState } from '../hooks/useBackendState'
 import type { LevelLabel } from '../domain/types'
@@ -19,7 +20,7 @@ interface CliTemplate {
   resumeCmd: string
 }
 
-type Section = 'projects' | 'agents' | 'editor' | 'labels' | 'widgets'
+type Section = 'projects' | 'agents' | 'editor' | 'labels' | 'widgets' | 'plugins'
 
 interface Props {
   onClose: () => void
@@ -32,6 +33,7 @@ export function SettingsDialog({ onClose }: Props) {
   const editorRef = useRef<HTMLDivElement>(null)
   const labelsRef = useRef<HTMLDivElement>(null)
   const widgetsRef = useRef<HTMLDivElement>(null)
+  const pluginsRef = useRef<HTMLDivElement | null>(null)
 
   const { activeSpaceId, spaces } = useBackendState()
   const activeSpace = spaces.find(s => s.id === activeSpaceId)
@@ -226,6 +228,7 @@ export function SettingsDialog({ onClose }: Props) {
     { key: 'editor', label: 'Editor', icon: 'edit', ref: editorRef },
     { key: 'labels', label: 'Entity Labels', icon: 'label', ref: labelsRef },
     { key: 'widgets', label: 'Widgets', icon: 'widgets', ref: widgetsRef },
+    { key: 'plugins', label: 'Plugins', icon: 'extension', ref: pluginsRef },
   ]
 
   return (
@@ -788,6 +791,15 @@ export function SettingsDialog({ onClose }: Props) {
                 When enabled, new session widgets will have the prompt composer expanded.
               </p>
             </div>
+          </div>
+
+          {/* ── Separator ── */}
+          <div className="mx-5 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
+          {/* ── Plugins ── */}
+          <div ref={pluginsRef} className="px-5 py-4 border-b border-white/10">
+            <h4 className="text-xs font-mono uppercase tracking-wider text-slate-400 mb-3">Plugins</h4>
+            <PluginsTab />
           </div>
 
           {/* ── Footer info ── */}
