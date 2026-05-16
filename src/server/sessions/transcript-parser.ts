@@ -32,7 +32,6 @@ function encodeWorkdir(workdir: string): string {
 /** Directory holding all .jsonl conversation files for a given workdir */
 export function getProjectDir(workdir: string, stateDir?: string): string {
   const encoded = encodeWorkdir(workdir)
-  // Docker sessions mount claude-state into a session-specific dir
   const base = stateDir ?? join(homedir(), '.claude', 'projects')
   return join(base, encoded)
 }
@@ -51,7 +50,15 @@ const offsets = new Map<string, OffsetState>()
  * Intermediate assistant messages (thinking-out-loud, tool-call narration) are skipped.
  */
 export function parseNewEntries(sessionName: string, workdir: string, conversationId: string, stateDir?: string): RecapEntry[] {
-  const path = getTranscriptPath(workdir, conversationId, stateDir)
+  return parseNewEntriesAt(sessionName, getTranscriptPath(workdir, conversationId, stateDir))
+}
+
+/**
+ * Same as parseNewEntries, but the caller supplies the transcript path
+ * directly. Use this when the path was discovered another way (e.g. via
+ * findTranscriptByConvId for a session with no workspace.path, like marshal).
+ */
+export function parseNewEntriesAt(sessionName: string, path: string): RecapEntry[] {
   if (!existsSync(path)) return []
 
   const size = statSync(path).size

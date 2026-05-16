@@ -44,4 +44,27 @@ test.describe('The Saloon', () => {
     await filter.fill('hello')
     await expect(filter).toHaveValue('hello')
   })
+
+  test('refresh button is visible, briefly disables on click, then re-enables', async ({ page }) => {
+    const widget = page.locator('[data-testid^="canvas-widget-run-"]').first()
+    await expect(widget).toBeVisible()
+
+    const refreshBtn = widget.getByTestId('saloon-refresh-btn')
+    await expect(refreshBtn).toBeVisible()
+
+    // Button should start enabled
+    await expect(refreshBtn).toBeEnabled()
+
+    await refreshBtn.click()
+
+    // Button should disable immediately after click
+    await expect(refreshBtn).toBeDisabled()
+
+    // Within 5 s it must re-enable (generous CI allowance)
+    await expect(refreshBtn).toBeEnabled({ timeout: 5000 })
+
+    // Panel should not have crashed — broker dot still present
+    const dot = widget.getByTestId('saloon-dot')
+    await expect(dot).toBeVisible()
+  })
 })

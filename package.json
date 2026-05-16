@@ -1,6 +1,6 @@
 {
   "name": "tinstar",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Agent orchestrator — manage multiple Claude Code sessions from a visual canvas",
   "type": "module",
   "bin": {
@@ -44,6 +44,8 @@
     "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/typography": "^0.5.19",
     "@xenova/transformers": "^2.17.2",
+    "fuse.js": "^7.3.0",
+    "gray-matter": "^4.0.3",
     "http-proxy": "^1.18.1",
     "image-size": "^2.0.2",
     "js-yaml": "^4.1.0",
@@ -60,6 +62,7 @@
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/cli": "^2.10.1",
     "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/http-proxy": "^1.17.17",
     "@types/js-yaml": "^4.0.9",

@@ -12,7 +12,7 @@ The UI must be snappy and responsive. It should feel like playing a video game �
 
 - **Frontend**: React + Tailwind, served by Vite
 - **Backend**: Vite plugin server (`src/server/`) — event bus, document store, SSE, session management
-- **Sessions**: `src/server/sessions/` — Docker/tmux backends, config at `~/.config/tinstar/`
+- **Sessions**: `src/server/sessions/` — tmux backend, config at `~/.config/tinstar/`
 - **E2E tests**: Playwright (`e2e/`), run with `TINSTAR_FAST_SIM=1 npx playwright test`
 
 ## Key Commands

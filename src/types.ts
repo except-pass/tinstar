@@ -53,7 +53,7 @@ export interface RunData {
   recapEntries: RecapEntry[]
   rawLogs: string
   port: number | null
-  backend: 'docker' | 'tmux' | null
+  backend: 'tmux' | null
   backendInfo?: string
   agentIcon?: string
   natsEnabled?: boolean

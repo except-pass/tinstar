@@ -3,7 +3,7 @@ import { apiFetch } from '../apiClient'
 
 interface SessionInfo {
   name: string
-  backend: 'docker' | 'tmux'
+  backend: 'tmux'
   state: string
   project: string | null
   port: number | null

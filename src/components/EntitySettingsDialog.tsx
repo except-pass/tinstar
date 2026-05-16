@@ -73,7 +73,6 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
   const [projects, setProjects] = useState<{ name: string; path: string }[]>([])
   const [cliTemplateOptions, setCliTemplateOptions] = useState<{ name: string; icon?: string }[]>([])
-  const [profiles, setProfiles] = useState<Array<{ name: string; image: string }>>([])
   const [worktrees, setWorktrees] = useState<{ path: string; branch?: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<EntitySettings>({})
@@ -90,18 +89,14 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
       apiFetch(`/api/${endpoint}/${entityId}/settings`).then(r => r.json()),
       apiFetch('/api/projects').then(r => r.json()),
       apiFetch('/api/cli-templates').then(r => r.json()),
-      apiFetch('/api/docker/profiles').then(r => r.json()),
       apiFetch(`/api/state`).then(r => r.json()),
-    ]).then(([settingsRes, projectsRes, templatesRes, profilesRes, stateRes]) => {
+    ]).then(([settingsRes, projectsRes, templatesRes, stateRes]) => {
       if (settingsRes.ok) setSettings(settingsRes.data)
       if (projectsRes?.ok && projectsRes.data && typeof projectsRes.data === 'object') {
         setProjects(Object.entries(projectsRes.data).map(([name, path]) => ({ name, path: path as string })))
       }
       if (templatesRes?.ok && Array.isArray(templatesRes.data)) {
         setCliTemplateOptions(templatesRes.data)
-      }
-      if (profilesRes?.ok && Array.isArray(profilesRes.data)) {
-        setProfiles(profilesRes.data)
       }
       // Load externalUrl from the entity
       if (stateRes) {
@@ -286,24 +281,11 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                     onChange={e => onChange(e.target.value || undefined)}
                   >
                     <option value="">Default</option>
-                    {cliTemplateOptions.length > 0 && (
-                      <optgroup label="🖥 CLI">
-                        {cliTemplateOptions.map(t => (
-                          <option key={t.name} value={t.name}>
-                            {t.icon ? `${t.icon} ` : ''}{t.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {profiles.length > 0 && (
-                      <optgroup label="🐳 Docker">
-                        {profiles.map(p => (
-                          <option key={`docker:${p.name}`} value={`docker:${p.name}`}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
+                    {cliTemplateOptions.map(t => (
+                      <option key={t.name} value={t.name}>
+                        {t.icon ? `${t.icon} ` : ''}{t.name}
+                      </option>
+                    ))}
                   </select>
                 )}
               </SettingRow>

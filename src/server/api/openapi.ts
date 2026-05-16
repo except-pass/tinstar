@@ -15,10 +15,9 @@ export const spec = {
     { name: 'Tasks', description: 'Leaf-level taxonomy nodes' },
     { name: 'Worktrees', description: 'Git worktree tracking' },
     { name: 'Runs', description: 'Agent run instances' },
-    { name: 'Sessions', description: 'Docker/tmux session lifecycle' },
+    { name: 'Sessions', description: 'Tmux session lifecycle' },
     { name: 'Hooks', description: 'Callbacks from Claude Code inside sessions' },
     { name: 'Projects', description: 'Registered project directories' },
-    { name: 'Docker', description: 'Image profiles and Docker management' },
     { name: 'Config', description: 'User configuration' },
     { name: 'Editor', description: 'Open files in external editor' },
     { name: 'Observability', description: 'OpenTelemetry spans and metrics' },
@@ -185,6 +184,30 @@ export const spec = {
         responses: { 200: { description: 'Resolved settings' } },
       },
     },
+    '/api/tasks/{taskId}/sessions': {
+      post: {
+        tags: ['Tasks', 'Sessions'],
+        summary: 'Create a session in a task with auto-resolved settings',
+        description: 'One-call session creation in task context. Auto-resolves project from the task hierarchy (Task → Epic → Initiative, closest wins) and fills in epicId/initiativeId from the task. Defaults: backend=tmux, nats enabled. Any field in the body overrides resolved/default values.',
+        parameters: [{ name: 'taskId', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: {
+            type: 'object',
+            required: ['name'],
+            properties: {
+              name: { type: 'string', description: 'Session name (unique identifier)' },
+              cliTemplate: { type: 'string' },
+              prompt: { type: 'string', description: 'Initial message to send to the agent' },
+              project: { type: 'string', description: 'Override the resolved project' },
+              color: { type: 'string' },
+              nats: { type: 'object', properties: { enabled: { type: 'boolean' }, subscriptions: { type: 'array', items: { type: 'string' } } } },
+            },
+          } } },
+        },
+        responses: { 201: { description: 'Session created and started' }, 400: { description: 'Missing name' }, 404: { description: 'Task not found' }, 409: { description: 'Session name already exists' } },
+      },
+    },
 
     // ── Worktrees ────────────────────────────────────────
     '/api/worktrees': {
@@ -226,13 +249,13 @@ export const spec = {
       get: {
         tags: ['Sessions'],
         summary: 'List all sessions',
-        description: 'Triggers backend reconciliation (checks Docker/tmux process state).',
+        description: 'Triggers backend reconciliation (checks tmux process state).',
         responses: { 200: { description: 'Session list', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, data: { type: 'array', items: { $ref: '#/components/schemas/Session' } } } } } } } },
       },
       post: {
         tags: ['Sessions'],
         summary: 'Create a new session',
-        description: 'Starts a Docker container or tmux session with Claude Code.',
+        description: 'Starts a tmux session with Claude Code.',
         requestBody: {
           required: true,
           content: { 'application/json': { schema: {
@@ -240,13 +263,10 @@ export const spec = {
             required: ['name'],
             properties: {
               name: { type: 'string', description: 'Session name (unique identifier)' },
-              backend: { type: 'string', enum: ['docker', 'tmux'], default: 'docker' },
-              project: { type: 'string', description: 'Project name for workspace mount' },
+              project: { type: 'string', description: 'Project name for workspace path' },
               worktree: { type: 'boolean', default: false },
               worktreePath: { type: 'string', description: 'Existing worktree path (if not creating new)' },
-              profile: { type: 'string', description: 'Docker image profile name' },
               prompt: { type: 'string', description: 'Initial message to send to Claude' },
-              oneshot: { type: 'boolean', default: false, description: 'Auto-stop after Claude finishes (Docker only)' },
               skipPermissions: { type: 'boolean', default: true },
               taskId: { type: 'string' },
               epicId: { type: 'string' },
@@ -268,7 +288,7 @@ export const spec = {
       delete: {
         tags: ['Sessions'],
         summary: 'Delete a session',
-        description: 'Responds immediately, then asynchronously stops backend, removes worktree, and cleans up.',
+        description: 'Responds immediately, then asynchronously stops the tmux session, removes worktree, and cleans up.',
         parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
         responses: { 200: { description: 'Deleted' } },
       },
@@ -304,7 +324,7 @@ export const spec = {
       post: {
         tags: ['Sessions'],
         summary: 'Send raw tmux keys to a session',
-        description: 'Sends arbitrary key sequences to the session\'s tmux pane. Works for both Docker and tmux backends.',
+        description: 'Sends arbitrary key sequences to the session\'s tmux pane.',
         parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: {
           required: true,
@@ -366,36 +386,6 @@ export const spec = {
         summary: 'List git worktrees for a project',
         parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
         responses: { 200: { description: 'Worktree list' } },
-      },
-    },
-
-    // ── Docker ───────────────────────────────────────────
-    '/api/docker/profiles': {
-      get: {
-        tags: ['Docker'],
-        summary: 'List image profiles',
-        responses: { 200: { description: 'Profile list' } },
-      },
-      post: {
-        tags: ['Docker'],
-        summary: 'Create an image profile',
-        requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['name', 'image'], properties: { name: { type: 'string' }, image: { type: 'string' }, home: { type: 'string' } } } } } },
-        responses: { 201: { description: 'Created' }, 409: { description: 'Duplicate name' } },
-      },
-    },
-    '/api/docker/profiles/{name}': {
-      delete: {
-        tags: ['Docker'],
-        summary: 'Delete an image profile',
-        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { 200: { description: 'Deleted' }, 404: { description: 'Not found' } },
-      },
-    },
-    '/api/docker/images': {
-      get: {
-        tags: ['Docker'],
-        summary: 'List local Docker images',
-        responses: { 200: { description: 'Image list', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, data: { type: 'array', items: { type: 'string' } } } } } } } },
       },
     },
 
@@ -598,7 +588,7 @@ export const spec = {
         description: 'Nullable fields — null means "inherit from parent".',
         properties: {
           project: { type: 'string', nullable: true },
-          backend: { type: 'string', enum: ['docker', 'tmux'], nullable: true },
+          backend: { type: 'string', enum: ['tmux'], nullable: true },
           worktreeMode: { type: 'string', enum: ['none', 'new', 'existing'], nullable: true },
           skipPermissions: { type: 'boolean', nullable: true },
           prompt: { type: 'string', nullable: true },
@@ -609,7 +599,7 @@ export const spec = {
         type: 'object',
         properties: {
           name: { type: 'string' },
-          backend: { type: 'string', enum: ['docker', 'tmux'] },
+          backend: { type: 'string', enum: ['tmux'] },
           state: { type: 'string', enum: ['running', 'idle', 'stopped', 'needs_attention'] },
           project: { type: 'string' },
           workspace: {

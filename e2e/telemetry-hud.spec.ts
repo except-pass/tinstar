@@ -27,12 +27,12 @@ test.describe('Telemetry HUD', () => {
     await expect(hud).toBeVisible()
   })
 
-  test('HUD shows cost, tokens, cache, and autonomy labels', async ({ page }) => {
+  test('HUD shows cost, tokens, cache, and duty-cycle labels', async ({ page }) => {
     const hud = page.getByTestId('canvas-hud')
     await expect(hud).toBeVisible({ timeout: 10_000 })
     await expect(hud).toContainText('COST')
     await expect(hud).toContainText('TOKENS')
     await expect(hud).toContainText('CACHE HIT')
-    await expect(hud).toContainText('AUTONOMY')
+    await expect(hud).toContainText('DUTY CYCLE')
   })
 })

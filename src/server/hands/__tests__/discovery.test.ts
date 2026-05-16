@@ -32,8 +32,8 @@ Do work.
 `)
 
     const hands = discoverHands(testDir)
-    expect(hands).toHaveLength(2)
-    expect(hands.map(h => h.name).sort()).toEqual(['reviewer', 'worker'])
+    const userHandNames = hands.map(h => h.name).filter(n => n === 'reviewer' || n === 'worker').sort()
+    expect(userHandNames).toEqual(['reviewer', 'worker'])
   })
 
   it('skips invalid files', () => {
@@ -48,13 +48,38 @@ Prompt.
     writeFileSync(join(testDir, 'readme.txt'), `Not a markdown file`)
 
     const hands = discoverHands(testDir)
-    expect(hands).toHaveLength(1)
-    expect(hands[0]!.name).toBe('valid')
+    const userHands = hands.filter(h => h.name === 'valid')
+    expect(userHands).toHaveLength(1)
+    expect(userHands[0]!.name).toBe('valid')
   })
 
-  it('returns empty array for non-existent directory', () => {
+  it('returns only built-ins for non-existent directory', () => {
     const hands = discoverHands('/nonexistent/path')
-    expect(hands).toEqual([])
+    // Builtins (e.g. the marshal) are always present even with no user hands dir
+    expect(hands.find(h => h.name === 'marshal')).toBeDefined()
+  })
+
+  it('includes the built-in marshal hand', () => {
+    const hands = discoverHands(testDir)
+    const marshal = hands.find(h => h.name === 'marshal')
+    expect(marshal).toBeDefined()
+    expect(marshal!.cliTemplate).toBe('Claude (multi-agent)')
+  })
+
+  it('lets user-defined hands override built-ins by name', () => {
+    writeFileSync(join(testDir, 'marshal.md'), `---
+name: marshal
+description: my custom marshal
+cliTemplate: Custom Template
+---
+
+Custom prompt.
+`)
+    const hands = discoverHands(testDir)
+    const marshals = hands.filter(h => h.name === 'marshal')
+    expect(marshals).toHaveLength(1)
+    expect(marshals[0]!.description).toBe('my custom marshal')
+    expect(marshals[0]!.cliTemplate).toBe('Custom Template')
   })
 })
 

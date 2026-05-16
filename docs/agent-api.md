@@ -75,7 +75,6 @@ curl -s -X POST "$TINSTAR_URL/api/sessions" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-agent",
-    "backend": "docker",
     "project": "my-project",
     "prompt": "Initial task description",
     "taskId": "task-id-to-attach-to"

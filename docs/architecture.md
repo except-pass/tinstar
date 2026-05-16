@@ -1,6 +1,6 @@
 # Tinstar Architecture
 
-Tinstar is a real-time dashboard for orchestrating and monitoring Claude Code sessions. It provides a visual workspace where users manage hierarchical entities (initiatives, epics, tasks), launch isolated coding sessions (via Docker or tmux), and observe progress through live-streamed state updates.
+Tinstar is a real-time dashboard for orchestrating and monitoring Claude Code sessions. It provides a visual workspace where users manage hierarchical entities (initiatives, epics, tasks), launch tmux-isolated coding sessions, and observe progress through live-streamed state updates.
 
 ---
 
@@ -13,9 +13,8 @@ Tinstar is a real-time dashboard for orchestrating and monitoring Claude Code se
 | Fonts | Chakra Petch (display), JetBrains Mono (mono) | Loaded from Google Fonts |
 | Build | Vite 6 | Dev server + production bundler |
 | Backend | Vite plugin (Node.js) | Runs inside the Vite dev server process |
-| Terminal proxy | Caddy 2 (Docker container) | Reverse-proxies ttyd terminals |
 | Terminal emulator | ttyd + xterm.js | Web-based terminal inside iframes |
-| Session isolation | Docker containers or tmux sessions | Two interchangeable backends |
+| Session isolation | tmux sessions | Local tmux sessions managed by the backend |
 | E2E tests | Playwright 1.58 | Runs against `TINSTAR_FAST_SIM=1` dev server |
 
 No external state management library (Redux, Zustand, etc.). State flows from the server via SSE and is held in React state + in-memory repositories.
@@ -70,18 +69,15 @@ No external state management library (Redux, Zustand, etc.). State flows from th
 │                                                                 │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │ Session Manager                                          │   │
-│  │  ├─ Docker backend (containers + volume mounts)          │   │
 │  │  ├─ Tmux backend (local tmux sessions + ttyd processes)  │   │
-│  │  ├─ Caddy proxy (dynamic route registration)             │   │
 │  │  └─ Reconciler (30s poll, corrects stale states)         │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
          │                    ▲
-         │ docker exec /      │ HTTP hooks
-         │ tmux send-keys     │ /api/hooks/*
+         │ tmux send-keys     │ HTTP hooks /api/hooks/*
          ▼                    │
 ┌─────────────────────────────────────────────────────────────────┐
-│  Session (Docker container or tmux session)                     │
+│  Session (tmux session)                                         │
 │                                                                 │
 │  tmux "main" ──► Claude Code ──► hooks fire on activity         │
 │       ▲                                                         │
@@ -107,7 +103,7 @@ The backend is a **Vite plugin** (`tinstarBackend()` in `src/server/index.ts`) t
 | OTel Processor | `src/server/processors/otel-processor.ts` | Subscribes to bus events, records spans/metrics. |
 | SSE Broadcaster | `src/server/api/sse.ts` | Pushes document store changes to all connected browsers. Sends full snapshot on connect, then incremental deltas. 15s heartbeat. |
 | API Routes | `src/server/api/routes.ts` | REST endpoints for CRUD, session management, hooks, and simulator control. |
-| Session Manager | `src/server/sessions/` | Docker + tmux backends, Caddy proxy, reconciliation, workspace/worktree management. |
+| Session Manager | `src/server/sessions/` | Tmux backend, reconciliation, workspace/worktree management. |
 | Simulator | `src/server/simulator/` | Mock event generator for development and testing. |
 | Observability | `src/server/observability/` | Supervises embedded Prometheus + Alloy subprocesses. Downloads platform-matched binaries to `~/.config/tinstar/bin/` on first launch, enforces a pidfile-based singleton lock, and exposes a typed PromQL query layer. Snapshots are served via `/api/telemetry/hud` and pushed over SSE to the canvas HUD. Disabled with `TINSTAR_TELEMETRY=0`; under `TINSTAR_FAST_SIM=1` the supervisor short-circuits to a synthetic fixture. |
 | Logger | `src/server/logger.ts` | Structured logging to console + `~/.config/tinstar/server.log`. Format: `[ISO] [LEVEL] [TAG] message {json}`. |
@@ -118,11 +114,10 @@ The backend is a **Vite plugin** (`tinstarBackend()` in `src/server/index.ts`) t
 2. Load config from `~/.config/tinstar/config.json` (merge with defaults)
 3. Enable document store file persistence; load existing `docstore.json`
 4. Rehydrate sessions from `~/.config/tinstar/sessions/` into document store
-5. Reconcile session states against actual Docker/tmux state
-6. Start Caddy reverse proxy; sync routes from active sessions
-7. Start 30-second periodic reconciliation loop
-8. Attach HTTP middleware to Vite server
-9. If `TINSTAR_FAST_SIM=1`: clear persisted data, start simulator
+5. Reconcile session states against actual tmux state
+6. Start 30-second periodic reconciliation loop
+7. Attach HTTP middleware to Vite server
+8. If `TINSTAR_FAST_SIM=1`: clear persisted data, start simulator
 
 ### REST API
 
@@ -132,29 +127,9 @@ Key endpoint groups: Entity CRUD, Sessions, Hooks, Settings, Spaces, OTel, Simul
 
 ---
 
-## Session Backends
+## Session Backend
 
-Sessions are isolated environments where Claude Code runs. Two interchangeable backends:
-
-### Docker backend (`src/server/sessions/backends/docker.ts`)
-
-| Step | What happens |
-|------|-------------|
-| Create | `docker run -d` with workspace volumes, env vars, port mapping. Container name: `tinstar-{sessionName}`. |
-| Start Claude | `docker exec` runs `start-ttyd.sh` which creates a tmux session inside the container, then starts ttyd on port 7681. |
-| Stop | `docker stop -t 5` (graceful 5s shutdown). |
-| Delete | `docker rm -f`. |
-
-**Volume mounts:**
-- `{sessionStateDir}` → `/home/tinstar/.claude/projects` (Claude state persistence)
-- `{workspacePath}` → same absolute path (workspace files)
-- `{basePath}/.git` → same path (for git worktree support)
-
-**Environment injected into container:**
-- `TINSTAR_SESSION_NAME`, `TINSTAR_DASHBOARD_URL`
-- `SESSION_ID` / `RESUME_SESSION_ID` (Claude session identity)
-- `WORKSPACE_DIR`, `SKIP_PERMISSIONS`
-- Secrets from `~/.config/tinstar/.secrets/`
+Sessions are isolated environments where Claude Code runs. Tmux is the only supported backend.
 
 ### Tmux backend (`src/server/sessions/backends/tmux.ts`)
 
@@ -170,7 +145,7 @@ Sessions are isolated environments where Claude Code runs. Two interchangeable b
 
 ### Claude Code hooks
 
-Both backends install hooks into `.claude/settings.json` in the workspace:
+The backend installs hooks into `.claude/settings.json` in the workspace:
 
 | Hook event | Calls | Purpose |
 |------------|-------|---------|
@@ -181,19 +156,12 @@ Both backends install hooks into `.claude/settings.json` in the workspace:
 
 Hooks filter on `$TINSTAR_SESSION_NAME` so they only fire for managed sessions.
 
-### Caddy reverse proxy (`src/server/sessions/caddy.ts`)
-
-Provides unified terminal access at `http://localhost:8088/s/{sessionName}/`. Runs as a Docker container with an admin API on port 2019. Routes are added/removed dynamically via REST calls to the admin API as sessions are created/destroyed.
-
-The Vite dev server proxies `/s/` → `localhost:8088` so the frontend accesses terminals through the same origin.
-
 ### State reconciliation (`src/server/sessions/reconcile.ts`)
 
 Runs on startup and every 30 seconds:
 
-1. For Docker sessions: `docker inspect` to check container state. Missing/exited → `stopped`.
-2. For tmux sessions: `tmux has-session` to check existence. Missing → `stopped`.
-3. Stale detection: if a session is `running` but hasn't been active for >2 minutes → `needs_attention`.
+1. `tmux has-session` checks each session's existence. Missing → `stopped`.
+2. Stale detection: if a session is `running` but hasn't been active for >2 minutes → `needs_attention`.
 
 ---
 
@@ -320,7 +288,7 @@ Supports move, resize, shrink-to-fit, and auto-expansion (parents grow when chil
 ```json
 {
   "name": "my-session",
-  "backend": "docker" | "tmux",
+  "backend": "tmux",
   "state": "creating" | "running" | "idle" | "needs_attention" | "stopped",
   "project": "acme/repo",
   "workspace": {

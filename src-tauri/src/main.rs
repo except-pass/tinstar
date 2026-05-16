@@ -1,6 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-const HARDCODED_BASE: &str = "http://infrapoc:5273";
+use tauri::Manager;
+
+mod backend;
+mod config;
+mod dialog;
+
+fn resolve_api_base(cfg: Option<&config::DesktopConfig>) -> String {
+    cfg.map(|c| c.backend.url.clone()).unwrap_or_default()
+}
 
 /// Strip trailing slashes and reject anything containing characters that would
 /// let an attacker break out of the JS string literal we eval. We never accept
@@ -29,6 +37,8 @@ fn build_eval_script(base: &str) -> String {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(backend::ManagedBackend::new())
         .setup(|app| {
             // Build the main window programmatically so we can attach an
             // `initialization_script` — that script is documented to run BEFORE
@@ -39,6 +49,9 @@ fn main() {
             // WebView2: the inline placeholder `<script>__TINSTAR_API_BASE__ = ''</script>`
             // executes before our eval lands, leaving the global as empty
             // string. Using initialization_script eliminates the race.
+            let app_data_dir = app.path().app_data_dir().ok();
+            let cfg = app_data_dir.as_ref().and_then(|d| config::read_config(d));
+            let base = resolve_api_base(cfg.as_ref());
             tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -48,11 +61,19 @@ fn main() {
             .inner_size(1400.0, 900.0)
             .min_inner_size(900.0, 600.0)
             .decorations(true)
-            .initialization_script(build_eval_script(HARDCODED_BASE))
+            .initialization_script(build_eval_script(&base))
             .build()
             .expect("failed to build main window");
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            config::get_config,
+            config::save_config,
+            backend::probe_backend,
+            backend::start_local_backend,
+            backend::stop_local_backend,
+            dialog::open_directory_dialog,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -91,5 +112,23 @@ mod tests {
             build_eval_script("http://x\"; alert(1)//"),
             "window.__TINSTAR_API_BASE__ = \"\";"
         );
+    }
+
+    #[test]
+    fn empty_when_no_config() {
+        assert_eq!(resolve_api_base(None), "");
+    }
+
+    #[test]
+    fn uses_config_url_when_present() {
+        use crate::config::{BackendConfig, BackendMode, DesktopConfig};
+        let cfg = DesktopConfig {
+            backend: BackendConfig {
+                mode: BackendMode::Remote,
+                url: "http://example.com:5273".to_string(),
+                manage_pid: None,
+            },
+        };
+        assert_eq!(resolve_api_base(Some(&cfg)), "http://example.com:5273");
     }
 }

@@ -20,7 +20,7 @@ export interface EntitySettings {
   project?: string
   worktree?: 'none' | 'new' | 'existing'
   defaultWorktreePath?: string
-  backend?: 'docker' | 'tmux'
+  backend?: 'tmux'
   skipPermissions?: boolean
   cliTemplate?: string
   defaultRunColor?: string
@@ -177,7 +177,7 @@ export interface TreeNode {
   activeCount: number
   color?: string
   orphan?: boolean
-  backend?: 'docker' | 'tmux' | null
+  backend?: 'tmux' | null
   agentIcon?: string
   percentDone?: number | null
   status?: string

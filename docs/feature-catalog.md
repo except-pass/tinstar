@@ -73,7 +73,7 @@ Group containers are recursive nesting boxes driven by the active grouping dimen
 ### Entity Settings & Inheritance
 - **Dialog**: Modal opened via "Settings..." in entity context menu
 - **Inheritance chain**: Task > Epic > Initiative (closest-ancestor-wins)
-- **Settings**: Project, Backend (docker/tmux), Worktree (none/new/existing), Skip Permissions, Profile
+- **Settings**: Project, Worktree (none/new/existing), Skip Permissions, CLI Template
 - **Visual language**:
   - **Cyan**: Local override (set on this entity)
   - **Amber pill**: Inherited from ancestor (shows source entity name)
@@ -325,12 +325,11 @@ POST   /api/spaces/:id/activate # Set as active space
 
 ### CreateSessionDialog
 - Modal for creating new Claude Code sessions
-- **Backend selection**: Docker or Tmux toggle
+- **Agent picker**: Dropdown of CLI templates (Claude / Codex / custom)
 - **Project picker**: Dropdown of registered projects (from `GET /api/projects`)
 - **Worktree mode**: None / New / Existing — "New" creates a fresh git worktree, "Existing" lets you pick one
 - **Initial prompt**: Optional text sent to Claude on session start
 - **Task assignment**: Optional dropdown to assign session to a task
-- **One-shot mode** (Docker only): Single-prompt execution, session auto-closes on completion
 - **Skip permissions**: Toggle to pass `--dangerously-skip-permissions` to Claude
 - **Submit**: `Ctrl/Cmd+Enter` keyboard shortcut
 
@@ -444,12 +443,10 @@ POST   /api/spaces/:id/activate # Set as active space
 | 1 | Config loading + secrets | `src/server/sessions/config.ts` | **done** |
 | 2 | Session CRUD + persistence | `src/server/sessions/session.ts` | **done** |
 | 3 | Workspace + project registry | `src/server/sessions/workspace.ts` | **done** |
-| 4 | Resume (deterministic session IDs) | `src/server/sessions/session.ts` + backends | **done** |
-| 5 | Docker backend | `src/server/sessions/backends/docker.ts` | **done** |
-| 6 | Tmux backend | `src/server/sessions/backends/tmux.ts` | **done** |
-| 7 | Reconciliation | `src/server/sessions/reconcile.ts` | **done** |
-| 8 | Shell scripts | `src/server/sessions/scripts/` | **done** |
-| 9 | Barrel export | `src/server/sessions/index.ts` | **done** |
+| 4 | Resume (deterministic session IDs) | `src/server/sessions/session.ts` + backend | **done** |
+| 5 | Tmux backend | `src/server/sessions/backends/tmux.ts` | **done** |
+| 6 | Reconciliation | `src/server/sessions/reconcile.ts` | **done** |
+| 7 | Barrel export | `src/server/sessions/index.ts` | **done** |
 
 ### API Routes (in `src/server/api/routes.ts`)
 
@@ -495,12 +492,11 @@ POST   /api/spaces/:id/activate # Set as active space
 ### Session Architecture
 
 ```
-API Routes → Session CRUD → Backend (Docker | Tmux)
+API Routes → Session CRUD → Tmux backend
                           → Workspace (worktree creation)
                           → Deterministic Session IDs (UUID on create, --resume on restart)
                           → Config/Secrets (~/.config/tinstar/)
                           → SSE (state change events via EventBus)
-                          → Caddy route management (add on create + resume)
 ```
 
 ### Session States
@@ -509,45 +505,26 @@ API Routes → Session CRUD → Backend (Docker | Tmux)
 - **idle**: Claude finished, waiting (Stop hook fired)
 - **needs_attention**: Stale >120s (likely waiting for user input)
 - **stopped**: User stopped the session
-- **terminated**: Backend process gone (tmux session missing or Docker container missing)
+- **terminated**: Tmux session missing
 
 ### Deterministic Session IDs
 - **On create**: `randomUUID()` generated and stored in `session.conversation.id`
-- **First launch (tmux)**: `claude --session-id <uuid>` — dictates the Claude session ID
-- **First launch (Docker)**: `SESSION_ID` env var → `claude --session-id <uuid>` (in `start-ttyd.sh`)
-- **Resume (tmux)**: `claude --resume <uuid>` — resumes previous conversation
-- **Resume (Docker)**: `RESUME_SESSION_ID` env var → `claude --resume <uuid>` (in `start-ttyd.sh`)
+- **First launch**: `claude --session-id <uuid>` — dictates the Claude session ID
+- **Resume**: `claude --resume <uuid>` — resumes previous conversation
 - **Missing ID guard**: Sessions created before this feature have `conversation.id: null` — resume returns `NO_SESSION_ID` error with instructions to delete and recreate
 - **Orphaned ttyd cleanup**: On start, `lsof -ti :<port>` kills any stale ttyd process holding the port (survives server restarts)
 
 ### Resume & Delete (Terminated Sessions)
 - **UI**: Terminated/stopped sessions show Resume and Delete button overlay in the session panel
-- **Resume flow**: Validates workspace directory still exists, finds a port, creates new tmux/Docker session with `--resume <uuid>`, adds Caddy route, syncs port on run
-- **Delete flow**: Kills tmux/Docker backend, removes session files, deletes the run from DocumentStore (widget disappears via SSE)
+- **Resume flow**: Validates workspace directory still exists, finds a port, recreates tmux session with `--resume <uuid>`, syncs port on run
+- **Delete flow**: Kills tmux session, removes session files, deletes the run from DocumentStore (widget disappears via SSE)
 
-### Backend: Tmux (local)
+### Tmux Backend
 - **Create**: `tmux new -d -s <prefix><name>`, configure status off + mouse on, inject env vars, send `claude --session-id <uuid>` command
 - **Resume**: If tmux session exists, send `claude --resume <uuid>` via `send-keys`; if missing, recreate tmux session then send `claude --resume <uuid>`
 - **Stop**: `tmux kill-session -t <name>`, release port, stop managed ttyd
 - **ttyd**: Managed child process per session with auto-restart on unexpected exit, orphan cleanup via `lsof`
 - **Port allocation**: Sequential scan from `ports.hostStart` (default 8681), claimed ports tracked in-memory
-
-### Backend: Docker (containerized)
-- **Create**: `docker run -d` with volume mounts (workspace, worktree .git, claude-state), then `docker exec -d` to launch `start-ttyd.sh` with `SESSION_ID` env var
-- **Resume**: `docker start` (if stopped) or `docker run` (if missing), then `docker exec -d` with `RESUME_SESSION_ID` env var
-- **Stop**: `docker stop -t 5 <name>`
-- **Delete**: `docker rm -f <name>`
-- **Shell script (`start-ttyd.sh`)**: Creates tmux session inside container, builds claude command from env vars (`SESSION_ID` → `--session-id`, `RESUME_SESSION_ID` → `--resume`), starts ttyd on port 7681
-- **Volume mounts**: Workspace path, worktree base .git, claude-state dir for conversation persistence
-- **One-shot mode**: `docker run --rm` with `-p` prompt flag, watcher process monitors exit
-
-### Caddy Reverse Proxy
-- **Purpose**: Consolidate dynamic ttyd ports behind a single port for terminal iframe access
-- **Routing**: `/s/{name}/` → `localhost:{port}/` per session
-- **Ports**: Caddy listens on 8088 (default), admin API on 2019
-- **Vite proxy**: `/s/*` proxied to Caddy so only port 5273 needs forwarding
-- **Lifecycle**: Started on server init (`ensureCaddy`), routes synced for surviving sessions, added/removed on session create/delete
-- **Implementation**: `src/server/sessions/caddy.ts`
 
 ### Hook Architecture (Status Bridge)
 - **Purpose**: Real-time session status updates without polling
@@ -574,5 +551,5 @@ API Routes → Session CRUD → Backend (Docker | Tmux)
 └── sessions/
     └── <name>/
         ├── session.json # Session state (includes conversation.id UUID)
-        └── claude-state/ # Claude conversation files (Docker volume mount)
+        └── claude-state/ # Claude conversation state directory
 ```

@@ -23,7 +23,9 @@ import { triggerWidgetFlourish, registerActionHandler, deregisterActionHandler }
 import type { FocusNode } from '../hotkeys/FocusPathContext'
 import { NoTasksToast } from './NoTasksToast'
 import { HotkeyPalette } from './HotkeyPalette'
+import { OnboardingCanvas } from './OnboardingCanvas'
 import { apiFetch } from '../apiClient'
+import { useOnboardingState } from '../hooks/useOnboardingState'
 
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
@@ -44,6 +46,9 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
 
 function WorkspaceShellInner() {
   const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, connected } = useBackendState()
+
+  const onboarding = useOnboardingState()
+  const forceMarshalOpen = onboarding.active !== null && onboarding.active !== 'connect'
 
   const levelMeta = useDimensionMeta()
   const dimensions = useMemo(
@@ -877,6 +882,7 @@ function WorkspaceShellInner() {
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
                     arrangeSwimlanesRef={arrangeSwimlanesRef}
+                    forceMarshalOpen={forceMarshalOpen}
                   />
                 </div>
 
@@ -960,10 +966,7 @@ function WorkspaceShellInner() {
       ) : (
         <TaxonomyProvider taxRepo={taxRepo}>
           <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">
-            {/* Placeholder when no active space */}
-            <div className="flex items-center justify-center h-screen text-slate-500">
-              <span>No space selected</span>
-            </div>
+            <OnboardingCanvas />
           </div>
         </TaxonomyProvider>
       )}

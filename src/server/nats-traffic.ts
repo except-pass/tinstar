@@ -43,6 +43,12 @@ export class NatsTrafficBridge {
         this.activeSubs.clear()
         this.scheduleReconnect()
       })
+
+      // Re-establish any subscriptions that were declared while we were
+      // disconnected (or before we ever started). `widgetSubscriptions` is
+      // preserved across stop()/start() so an explicit bounce resumes
+      // observing without callers having to re-register.
+      this.syncSubscriptions()
     } catch (err) {
       log.warn('nats-traffic', `failed to connect: ${(err as Error).message}`)
       this.scheduleReconnect()
@@ -172,10 +178,15 @@ export class NatsTrafficBridge {
     if (this.reconnectTimer) return
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      this.start().then(() => this.syncSubscriptions())
+      void this.start()
     }, 5000)
   }
 
+  /**
+   * Drain the active connection and clear active subscriptions. Does NOT clear
+   * `widgetSubscriptions` — that map is the authority for which subjects we
+   * need on the next connect, and is preserved across an explicit bounce.
+   */
   async stop(): Promise<void> {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)

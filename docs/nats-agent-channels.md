@@ -67,7 +67,7 @@ The MCP server `instructions` string (set at spawn time) tells Claude:
 
 - Spawned by Tinstar when a session is created with `natsEnabled: true`
 - Killed when the session stops
-- Tracked in session state alongside the tmux/docker process
+- Tracked in session state alongside the tmux process
 
 ### Subscriptions
 

@@ -35,7 +35,7 @@ function makeReadySnapshot(overrides: Partial<HudSnapshot> = {}): HudSnapshot {
     tokens: { total: 100000 },
     rate: { perMin: 500, perHour: 30000 },
     cacheHitPct: 0.65,
-    autonomy: { ratio: 15.2, cliSeconds: 4500, userSeconds: 296 },
+    dutyCycle: { value: 2.4, windowMinutes: 5 },
     ...overrides,
   }
 }
@@ -130,9 +130,8 @@ describe('GET /api/telemetry/hud — state: downloading', () => {
     expect(body.rate.perMin).toBeNull()
     expect(body.rate.perHour).toBeNull()
     expect(body.cacheHitPct).toBeNull()
-    expect(body.autonomy.ratio).toBeNull()
-    expect(body.autonomy.cliSeconds).toBeNull()
-    expect(body.autonomy.userSeconds).toBeNull()
+    expect(body.dutyCycle.value).toBeNull()
+    expect(body.dutyCycle.windowMinutes).toBe(5)
   })
 })
 
@@ -314,6 +313,83 @@ describe('unmatched routes', () => {
 
     const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/unknown')
     expect(handled).toBe(false)
+  })
+})
+
+describe('GET /api/telemetry/session/:name/series', () => {
+  it('returns the HudSeries from query.sessionSeries when ready and session resolves', async () => {
+    const sse = makeFakeSSE()
+    const fakeSeries = {
+      startedAt: '2026-05-13T18:00:00.000Z',
+      endedAt: '2026-05-13T18:05:00.000Z',
+      stepSec: 5,
+      series: { cost: [[1, 0.1]], tokens: [[1, 1000]], cache: [[1, 0.6]], duty: [[1, 0.4]] },
+    }
+    const query = {
+      todayHud: vi.fn(),
+      burningSessions: async () => [],
+      sessionSeries: vi.fn(async () => fakeSeries),
+    }
+    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    deps.getSessionConversationId = () => 'conv-uuid-123'
+    const routes = createTelemetryRoutes(deps)
+
+    const req = makeReq('GET', '/api/telemetry/session/my-sess/series')
+    const res = makeRes()
+    const handled = await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/session/my-sess/series')
+    routes.stopPolling()
+
+    expect(handled).toBe(true)
+    expect((res as unknown as FakeRes).statusCode).toBe(200)
+    expect((res as unknown as FakeRes).parsedBody).toEqual(fakeSeries)
+    expect(query.sessionSeries).toHaveBeenCalledOnce()
+    const args = query.sessionSeries.mock.calls[0][0]
+    expect(args.sessionId).toBe('conv-uuid-123')
+    expect(args.windowSec).toBe(300)
+    expect(args.stepSec).toBe(5)
+  })
+
+  it('returns empty series when session has no Claude conversation id yet', async () => {
+    const sse = makeFakeSSE()
+    const query = { todayHud: vi.fn(), burningSessions: async () => [], sessionSeries: vi.fn() }
+    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    deps.getSessionConversationId = () => null
+    const routes = createTelemetryRoutes(deps)
+
+    const req = makeReq('GET', '/api/telemetry/session/nope/series')
+    const res = makeRes()
+    await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/session/nope/series')
+    routes.stopPolling()
+
+    expect((res as unknown as FakeRes).statusCode).toBe(200)
+    const body = (res as unknown as FakeRes).parsedBody as { series: Record<string, unknown[]> }
+    expect(body.series.cost).toEqual([])
+    expect(body.series.tokens).toEqual([])
+    expect(body.series.cache).toEqual([])
+    expect(body.series.duty).toEqual([])
+    expect(query.sessionSeries).not.toHaveBeenCalled()
+  })
+
+  it('returns empty series + state=degraded fields when query throws', async () => {
+    const sse = makeFakeSSE()
+    const query = {
+      todayHud: vi.fn(),
+      burningSessions: async () => [],
+      sessionSeries: vi.fn(async () => { throw new Error('prom down') }),
+    }
+    const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
+    deps.getSessionConversationId = () => 'conv-1'
+    const routes = createTelemetryRoutes(deps)
+
+    const req = makeReq('GET', '/api/telemetry/session/a/series')
+    const res = makeRes()
+    await routes.handle(req, res as unknown as ServerResponse, '/api/telemetry/session/a/series')
+    routes.stopPolling()
+
+    expect((res as unknown as FakeRes).statusCode).toBe(200)
+    const body = (res as unknown as FakeRes).parsedBody as { series: Record<string, unknown[]>; error?: string }
+    expect(body.series.cost).toEqual([])
+    expect(body.error).toBe('prom down')
   })
 })
 

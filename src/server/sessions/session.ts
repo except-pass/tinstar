@@ -12,7 +12,7 @@ import type { SessionStatus } from '../../types'
 
 /** @deprecated Use SessionStatus from src/types.ts — kept as alias for compatibility */
 export type SessionState = SessionStatus
-export type SessionBackend = 'docker' | 'tmux'
+export type SessionBackend = 'tmux'
 
 export interface SessionWorkspace {
   path: string | null

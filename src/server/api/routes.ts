@@ -31,13 +31,13 @@ import {
   listSessions,
   reconcileSessionStates,
   loadSecrets,
-  dockerBackend,
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
 import { saveActiveSpaceId } from '../sessions/config'
 import { spec as openapiSpec } from './openapi'
+import { bounceNatsTraffic } from './natsTrafficBounce'
 import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
@@ -108,8 +108,8 @@ function buildNatsSubject(
 
   return `tinstar.${spaceName}.${initName}.${epicName}.${taskName}.${sanitize(sessionName)}`
 }
-import { discoverPatterns, getPatternByName, interpolateSessionConfig, buildOrchestrationPlan, type TemplateVars } from '../patterns'
 import { discoverHands, getHandByName } from '../hands'
+import { MARSHAL_AGENT_NAME, MARSHAL_AGENT_DESCRIPTION, MARSHAL_AGENT_PROMPT } from '../hands/builtins/index'
 
 // ─── NATS socket communication ─────────────────────────────────────────
 
@@ -326,11 +326,9 @@ function removeFileWatchSubscriber(absolutePath: string, subscriberId: string): 
 
 interface CreateSessionParams {
   name: string
-  backend: 'docker' | 'tmux'
   project?: string
   worktree?: boolean
   worktreePath?: string
-  profile?: string
   prompt?: string
   skipPermissions?: boolean
   cliTemplate?: string
@@ -339,6 +337,10 @@ interface CreateSessionParams {
   initiativeId?: string
   color?: string
   nats?: { enabled: boolean; subscriptions?: string[] }
+  /** Persistent persona for this session — substituted into the CLI template
+   * via {agentName}/{agentJson}/{agentPrompt}/{agentDescription} placeholders.
+   * Used by the marshal so its persona survives `/clear`. */
+  agent?: { name: string; description: string; prompt: string }
 }
 
 interface CreateSessionContext {
@@ -359,15 +361,14 @@ async function createSessionInternal(
   ctx: CreateSessionContext
 ): Promise<{ ok: true; session: Session } | { ok: false; error: { code: string; message: string } }> {
   const {
-    name, backend, project, worktree = false, worktreePath,
-    profile, prompt, skipPermissions = true, cliTemplate: cliTemplateName,
-    taskId, epicId, initiativeId, color: colorParam, nats
+    name, project, worktree = false, worktreePath,
+    prompt, skipPermissions = true, cliTemplate: cliTemplateName,
+    taskId, epicId, initiativeId, color: colorParam, nats, agent
   } = params
 
   const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl, natsTraffic, natsHealth } = ctx
 
   if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
-  if (!['docker', 'tmux'].includes(backend)) return { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }
 
   if (getSession(sessDir, name)) {
     return { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }
@@ -435,7 +436,7 @@ async function createSessionInternal(
 
   const session = createSession(sessDir, {
     name,
-    backend: resolvedTemplate ? 'tmux' : backend,
+    backend: 'tmux',
     project,
     workspace: {
       path: workspacePath,
@@ -443,8 +444,7 @@ async function createSessionInternal(
       branch,
       basePath: isWorktree ? projectPath : null,
     },
-    profile,
-    // Note: oneshot intentionally not supported in createSessionInternal - pattern sessions are always persistent
+    profile: null,
     oneshot: false,
     skipPermissions,
     cliTemplate: cliTemplateName ?? null,
@@ -456,36 +456,20 @@ async function createSessionInternal(
   enriched._stateDir = claudeStateDir(sessDir, name)
 
   const sec = secrets()
-  let sessionPort: number | undefined
+  const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+  if (prompt) enriched.initialPrompt = prompt
 
-  if (backend === 'docker') {
-    sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
-    await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: prompt || undefined })
-    updateSession(sessDir, name, { port: sessionPort, state: 'running' })
-  } else {
-    const port = await tmuxBackend.findPort(cfg.ports.hostStart)
-    if (prompt) enriched.initialPrompt = prompt
-
-    const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate })
-    sessionPort = result.port
-    updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
-    tmuxBackend.onTtydRestart(name, (newPid) => {
-      updateSession(sessDir, name, { ttydPid: newPid })
-    })
-  }
+  const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, agent: agent ?? null })
+  const sessionPort = result.port
+  updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+  tmuxBackend.onTtydRestart(name, (newPid) => {
+    updateSession(sessDir, name, { ttydPid: newPid })
+  })
 
   // Create Run entry
   const runId = name
   const initialStatus = prompt ? 'running' : 'idle'
-  let backendInfo: string | undefined
-  if (backend === 'docker') {
-    const container = dockerBackend.containerName(cfg, name)
-    const imageProfile = profile ? cfg.profiles.find(p => p.name === profile) : undefined
-    const image = imageProfile?.image ?? cfg.container.defaultImage
-    backendInfo = `container: ${container}\nimage: ${image}`
-  } else {
-    backendInfo = `tmux session: ${name}`
-  }
+  const backendInfo = `tmux session: ${name}`
 
   // Build NATS subject for this session
   const natsSubject = resolvedNats?.enabled
@@ -506,7 +490,7 @@ async function createSessionInternal(
     recapEntries: [],
     rawLogs: '',
     port: sessionPort ?? null,
-    backend,
+    backend: 'tmux',
     backendInfo,
     agentIcon: resolvedTemplate?.icon ?? undefined,
     natsEnabled: resolvedNats?.enabled ?? false,
@@ -543,7 +527,6 @@ export interface RouteContext {
   readyQueue: ReadyQueue
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
   natsHealth?: import('../nats-health').NatsHealthMonitor
-  readinessTracker?: import('../sessions/readiness').SessionReadinessTracker
   telemetryRoutes?: TelemetryRoutes
   ccQuotaService?: import('../cc-quota/service').CcQuotaService
   slashRegistry?: SlashCommandRegistry
@@ -611,6 +594,99 @@ function readBody(req: IncomingMessage): Promise<string> {
     req.on('data', (c: Buffer) => chunks.push(c))
     req.on('end', () => resolve(Buffer.concat(chunks).toString()))
   })
+}
+
+const MARSHAL_NAME = 'marshal'
+
+/** Build a CreateSessionContext from the long-lived RouteContext. The
+ * per-request handler builds this same shape inline; this helper lets the
+ * boot path and the marshal endpoints reuse it without duplicating wiring. */
+function buildCreateSessionContext(ctx: RouteContext): CreateSessionContext | null {
+  if (!ctx.sessionConfig) return null
+  const cfg = ctx.sessionConfig
+  return {
+    cfg,
+    sessDir: cfg.dirs.sessions,
+    docStore: ctx.docStore,
+    readyQueue: ctx.readyQueue,
+    sse: ctx.sse,
+    emitSessionEvent: (type, payload) => ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as unknown as Parameters<typeof ctx.bus.emit>[0]),
+    secrets: () => loadSecrets(cfg.dirs.secrets),
+    dashboardUrl: `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`,
+    natsTraffic: ctx.natsTraffic,
+    natsHealth: ctx.natsHealth,
+  }
+}
+
+type MarshalResult =
+  | { ok: true; data: { name: string; port: number | null; state: string } }
+  | { ok: false; error: { code: string; message: string } }
+
+/** Idempotent — returns the existing marshal session if one is on disk,
+ * otherwise creates a fresh one. Used by /api/marshal/ensure and called
+ * from server boot so the marshal is always available without a UI nudge. */
+export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalResult> {
+  const createCtx = buildCreateSessionContext(ctx)
+  if (!createCtx) return { ok: false, error: { code: 'NO_CONFIG', message: 'sessionConfig unavailable' } }
+
+  const existing = getSession(createCtx.sessDir, MARSHAL_NAME)
+  if (existing) {
+    return { ok: true, data: { name: existing.name, port: existing.port ?? null, state: existing.state } }
+  }
+
+  const hand = getHandByName('marshal')
+  if (!hand) return { ok: false, error: { code: 'HAND_NOT_FOUND', message: 'marshal hand definition is missing' } }
+
+  const result = await createSessionInternal({
+    name: MARSHAL_NAME,
+    skipPermissions: true,
+    cliTemplate: hand.cliTemplate,
+    prompt: hand.prompt,
+    agent: {
+      name: MARSHAL_AGENT_NAME,
+      description: MARSHAL_AGENT_DESCRIPTION,
+      prompt: MARSHAL_AGENT_PROMPT,
+    },
+  }, createCtx)
+  if (!result.ok) return { ok: false, error: result.error }
+
+  const sess = getSession(createCtx.sessDir, MARSHAL_NAME)
+  return { ok: true, data: { name: MARSHAL_NAME, port: sess?.port ?? null, state: sess?.state ?? 'running' } }
+}
+
+/** Tear down the existing marshal (if any) and create a fresh one. Used
+ * when the session has crashed or wedged — equivalent to the user clicking
+ * "restart marshal" in the sidebar. Synchronously awaits cleanup so the
+ * subsequent create won't race with disk-dir removal. */
+export async function restartMarshalSession(ctx: RouteContext): Promise<MarshalResult> {
+  const createCtx = buildCreateSessionContext(ctx)
+  if (!createCtx) return { ok: false, error: { code: 'NO_CONFIG', message: 'sessionConfig unavailable' } }
+  const { cfg, sessDir } = createCtx
+
+  const existing = getSession(sessDir, MARSHAL_NAME)
+  if (existing) {
+    try { writeFileSync(join(sessDir, MARSHAL_NAME, '.deleting'), '') } catch { /* dir may already be gone */ }
+    ctx.docStore.deleteRun(MARSHAL_NAME)
+    ctx.readyQueue.onDelete(MARSHAL_NAME)
+    ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
+    ctx.sse.broadcastReadyQueueUpdate()
+    createCtx.emitSessionEvent('managed_session.deleted', { name: MARSHAL_NAME })
+
+    try {
+      await tmuxBackend.deleteTmuxSession(cfg, existing)
+      if (existing.port) tmuxBackend.releasePort(existing.port)
+    } catch (err) {
+      log.warn('marshal-restart', `backend cleanup: ${(err as Error).message}`)
+    }
+    if (!deleteSession(sessDir, MARSHAL_NAME)) {
+      // Disk dir didn't go away — wait briefly then try once more so the
+      // following create doesn't trip the SESSION_EXISTS guard.
+      await new Promise(r => setTimeout(r, 500))
+      deleteSession(sessDir, MARSHAL_NAME)
+    }
+  }
+
+  return ensureMarshalSession(ctx)
 }
 
 export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -936,7 +1012,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     json(res, {
       ok: true,
       warning: orphanedRuns.length > 0
-        ? `${orphanedRuns.length} session(s) are still running. Use \`tmux ls\` or \`docker ps\` to manage them.`
+        ? `${orphanedRuns.length} session(s) are still running. Use \`tmux ls\` to manage them.`
         : undefined,
     })
     return true
@@ -1413,6 +1489,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const stream = createReadStream(absolutePath)
     req.on('close', () => stream.destroy())
     stream.pipe(res)
+    return true
+  }
+
+  // POST /api/nats-traffic/bounce — stop+start the NATS observer connection
+  // and re-establish all widget subscriptions. Used by the Saloon refresh
+  // button. Safe: does not touch session control sockets or running agents.
+  if (method === 'POST' && url === '/api/nats-traffic/bounce') {
+    readBody(req).then(async () => {
+      try {
+        await bounceNatsTraffic(ctx.natsTraffic)
+        json(res, { ok: true })
+      } catch (err) {
+        const e = err as { code?: string; message?: string }
+        const status = e.code === 'BRIDGE_UNAVAILABLE' ? 503 : 500
+        json(res, {
+          ok: false,
+          error: { code: e.code ?? 'BOUNCE_FAILED', message: e.message ?? String(err) },
+        }, status)
+      }
+    })
     return true
   }
 
@@ -1893,7 +1989,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // GET /api/sessions
     if (method === 'GET' && url === '/api/sessions') {
       reconcileSessionStates(sessDir, {
-        getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
         getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
         onStateChanged: (name, state) => {
           emitSessionEvent('managed_session.state_changed', { name, state })
@@ -1999,183 +2094,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, backend = 'docker', project, worktree = false, worktreePath, profile, prompt, oneshot = false, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, pattern: patternName, hand: handName } = JSON.parse(body)
-        log.info('sessions', `creating session: ${name}`, { backend, project, worktree, oneshot, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
+        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName } = JSON.parse(body)
+        log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
-        if (!['docker', 'tmux'].includes(backend)) return json(res, { ok: false, error: { code: 'INVALID_BACKEND', message: 'Backend must be "docker" or "tmux"' } }, 400)
-        if (oneshot && !prompt) return json(res, { ok: false, error: { code: 'MISSING_PROMPT', message: 'oneshot sessions require a prompt' } }, 400)
-        if (oneshot && backend !== 'docker') return json(res, { ok: false, error: { code: 'INVALID_BACKEND', message: 'oneshot is only supported for docker backend' } }, 400)
 
         if (getSession(sessDir, name)) {
           return json(res, { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }, 409)
-        }
-
-        // Handle pattern-based session creation with k8s-style orchestration
-        if (patternName) {
-          const pattern = getPatternByName(patternName)
-          if (!pattern) {
-            return json(res, { ok: false, error: { code: 'PATTERN_NOT_FOUND', message: `Pattern '${patternName}' not found` } }, 404)
-          }
-
-          if (!pattern.sessions.some(s => s.role === 'orchestrator')) {
-            return json(res, { ok: false, error: { code: 'INVALID_PATTERN', message: 'Pattern must have an orchestrator session' } }, 400)
-          }
-
-          // Build orchestration plan (handles replicas, topological sort)
-          const plan = buildOrchestrationPlan(pattern, name)
-          log.info('patterns', `orchestration plan for ${patternName}:`, {
-            spawnOrder: plan.spawnOrder.map(s => s.sessionName),
-            readinessRequired: [...plan.readinessRequired],
-          })
-
-          // Build NATS subjects for template interpolation
-          const sessionNames: Record<string, string> = {}
-          for (const entry of plan.spawnOrder) {
-            if (!sessionNames[entry.role]) {
-              sessionNames[entry.role] = entry.sessionName
-            }
-          }
-
-          const templateVars: TemplateVars = {
-            task: taskId ?? name,
-            taskId: taskId ?? '',
-          }
-          templateVars.orchestrator = sessionNames.orchestrator ? buildNatsSubject(sessionNames.orchestrator, ctx.docStore, taskId, epicId, initiativeId) : ''
-          templateVars.worker = sessionNames.worker ? buildNatsSubject(sessionNames.worker, ctx.docStore, taskId, epicId, initiativeId) : ''
-
-          const createCtx: CreateSessionContext = {
-            cfg,
-            sessDir,
-            docStore: ctx.docStore,
-            readyQueue: ctx.readyQueue,
-            sse: ctx.sse,
-            emitSessionEvent,
-            secrets,
-            dashboardUrl,
-            natsTraffic: ctx.natsTraffic,
-            natsHealth: ctx.natsHealth,
-          }
-
-          // Check if any session needs a worktree — if so, create ONE shared worktree for all
-          const needsWorktree = pattern.sessions.some(s => s.config.worktree)
-          let sharedWorktreePath: string | null = null
-
-          if (needsWorktree && project) {
-            const projectPath = getProject(cfg.files.projects, project)
-            if (projectPath) {
-              try {
-                sharedWorktreePath = await createWorktree(projectPath, name)
-                log.info('patterns', `created shared worktree for pattern: ${sharedWorktreePath}`)
-              } catch (err) {
-                log.warn('patterns', `failed to create shared worktree: ${(err as Error).message}`)
-              }
-            }
-          }
-
-          const createdSessions: string[] = []
-          const errors: string[] = []
-          const startedSessions = new Set<string>()
-
-          // Spawn sessions in order, waiting for readiness where required
-          for (const entry of plan.spawnOrder) {
-            const { sessionName, role, config } = entry
-            templateVars.sessionId = sessionName
-
-            // Check if we need to wait for any dependencies to be ready
-            const depRoles = plan.dependencies.get(sessionName) ?? []
-            for (const depRole of depRoles) {
-              const condition = config.dependsOn?.[depRole]?.condition ?? 'started'
-
-              if (condition === 'ready') {
-                // Wait for all sessions with this role to signal ready
-                const depSessions = plan.spawnOrder.filter(s => s.role === depRole).map(s => s.sessionName)
-                log.info('patterns', `${sessionName} waiting for ${depSessions.join(', ')} to be ready`)
-
-                if (ctx.readinessTracker) {
-                  const ready = await ctx.readinessTracker.waitForAllReady(depSessions, 60000)
-                  if (!ready) {
-                    errors.push(`${sessionName}: timed out waiting for ${depRole} to be ready`)
-                    continue
-                  }
-                  log.info('patterns', `${sessionName} dependencies ready, spawning`)
-                }
-              }
-            }
-
-            const interpolatedConfig = interpolateSessionConfig(config as unknown as Record<string, unknown>, templateVars) as typeof config
-
-            // Resolve hand reference if present
-            let sessionPrompt: string | undefined
-            if (interpolatedConfig.hand) {
-              const hand = getHandByName(interpolatedConfig.hand as string)
-              if (!hand) {
-                errors.push(`${sessionName}: hand '${interpolatedConfig.hand}' not found`)
-                continue
-              }
-              // Use hand's prompt and cliTemplate
-              sessionPrompt = hand.prompt
-              if (interpolatedConfig.prompt) {
-                sessionPrompt = `${hand.prompt}\n\n---\n\n${interpolatedConfig.prompt}`
-              }
-              // Override cliTemplate if not explicitly set
-              if (!interpolatedConfig.cliTemplate) {
-                interpolatedConfig.cliTemplate = hand.cliTemplate
-              }
-            } else if (role === 'orchestrator') {
-              const patternPrompt = (interpolatedConfig.prompt as string | undefined) ?? ''
-              sessionPrompt = prompt ? `${prompt}\n\n---\n\n${patternPrompt}` : patternPrompt
-            } else {
-              sessionPrompt = interpolatedConfig.prompt as string | undefined
-            }
-
-            // Mark session as started for readiness tracking
-            ctx.readinessTracker?.markStarted(sessionName)
-
-            // Use shared worktree for all pattern sessions (don't create individual worktrees)
-            const result = await createSessionInternal({
-              name: sessionName,
-              backend: (interpolatedConfig.backend ?? backend) as 'docker' | 'tmux',
-              project: interpolatedConfig.project ?? project,
-              worktree: false,  // Don't create new worktree — use shared one
-              worktreePath: sharedWorktreePath ?? interpolatedConfig.worktreePath as string | undefined,
-              profile: interpolatedConfig.profile ?? profile,
-              skipPermissions: interpolatedConfig.skipPermissions ?? skipPermissions,
-              cliTemplate: interpolatedConfig.cliTemplate ?? cliTemplateName,
-              prompt: sessionPrompt,
-              taskId,
-              epicId,
-              initiativeId,
-              color: colorParam,
-              nats: { enabled: true },
-            }, createCtx)
-
-            if (result.ok) {
-              createdSessions.push(sessionName)
-              startedSessions.add(sessionName)
-
-              // For sessions with readiness.nats: auto, publish ready signal
-              if (config.readiness?.nats === 'auto' && ctx.readinessTracker) {
-                // Fire and forget — don't block on the delay
-                ctx.readinessTracker.publishReady(sessionName).catch(err => {
-                  log.warn('patterns', `failed to publish ready for ${sessionName}: ${(err as Error).message}`)
-                })
-              }
-            } else {
-              errors.push(`${sessionName}: ${result.error.message}`)
-            }
-          }
-
-          if (createdSessions.length === 0) {
-            return json(res, { ok: false, error: { code: 'PATTERN_SPAWN_FAILED', message: `All pattern sessions failed: ${errors.join(', ')}` } }, 500)
-          }
-
-          if (errors.length > 0) {
-            log.warn('patterns', `some pattern sessions failed: ${errors.join(', ')}`)
-          }
-
-          log.info('patterns', `created pattern sessions: ${createdSessions.join(', ')}`)
-          return json(res, { ok: true, data: { pattern: patternName, sessions: createdSessions, errors: errors.length > 0 ? errors : undefined } }, 201)
         }
 
         try {
@@ -2250,7 +2175,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
           const session = createSession(sessDir, {
             name,
-            backend: resolvedTemplate ? 'tmux' : backend,
+            backend: 'tmux',
             project,
             workspace: {
               path: workspacePath,
@@ -2258,54 +2183,33 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               branch,
               basePath: isWorktree ? projectPath : null,
             },
-            profile,
-            oneshot,
+            profile: null,
+            oneshot: false,
             skipPermissions,
             cliTemplate: cliTemplateName ?? null,
             adapter: resolvedTemplate?.adapter ?? null,
             nats: resolvedNats,
           })
 
-          // Enrich session with state dir for Docker backend
           const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
           enriched._stateDir = claudeStateDir(sessDir, name)
 
           const sec = secrets()
-          let sessionPort: number | undefined
+          const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+          if (prompt) enriched.initialPrompt = prompt
 
-          if (backend === 'docker' && oneshot) {
-            await dockerBackend.createOneShotContainer(cfg, {
-              session: enriched,
-              secrets: sec,
-              prompt,
-              onComplete: (exitCode: number) => {
-                setState(sessDir, name, 'idle')
-                emitSessionEvent('managed_session.state_changed', { name, state: 'idle' })
-                log.info('oneshot', `${name} exited`, { exitCode })
-              },
-            })
-            updateSession(sessDir, name, { state: 'running' })
-          } else if (backend === 'docker') {
-            sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
-            await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: prompt || undefined })
-            updateSession(sessDir, name, { port: sessionPort, state: 'running' })
-          } else {
-            const port = await tmuxBackend.findPort(cfg.ports.hostStart)
-            if (prompt) enriched.initialPrompt = prompt
-
-            const result = await tmuxBackend.createTmuxSession(cfg, {
-              session: enriched,
-              secrets: sec,
-              port,
-              template: resolvedTemplate,
-              appendSystemPrompt: resolvedHand?.prompt ?? null,
-            })
-            sessionPort = result.port
-            updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
-            tmuxBackend.onTtydRestart(name, (newPid) => {
-              updateSession(sessDir, name, { ttydPid: newPid })
-            })
-          }
+          const result = await tmuxBackend.createTmuxSession(cfg, {
+            session: enriched,
+            secrets: sec,
+            port,
+            template: resolvedTemplate,
+            appendSystemPrompt: resolvedHand?.prompt ?? null,
+          })
+          const sessionPort = result.port
+          updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+          tmuxBackend.onTtydRestart(name, (newPid) => {
+            updateSession(sessDir, name, { ttydPid: newPid })
+          })
 
           const updated = getSession(sessDir, name)
 
@@ -2314,16 +2218,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // If not, Claude opens at the REPL waiting for input — 'idle'.
           const runId = name
           const initialStatus = prompt ? 'running' : 'idle'
-          // Build backend info for tooltip
-          let backendInfo: string | undefined
-          if (backend === 'docker') {
-            const container = dockerBackend.containerName(cfg, name)
-            const imageProfile = profile ? cfg.profiles.find(p => p.name === profile) : undefined
-            const image = imageProfile?.image ?? cfg.container.defaultImage
-            backendInfo = `container: ${container}\nimage: ${image}`
-          } else {
-            backendInfo = `tmux session: ${name}`
-          }
+          const backendInfo = `tmux session: ${name}`
 
           // Build NATS subject for this session
           const natsSubject = resolvedNats?.enabled
@@ -2344,7 +2239,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             recapEntries: [],
             rawLogs: '',
             port: sessionPort ?? null,
-            backend,
+            backend: 'tmux',
             backendInfo,
             agentIcon: resolvedTemplate?.icon ?? undefined,
             natsEnabled: resolvedNats?.enabled ?? false,
@@ -2364,7 +2259,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
           ctx.sse.broadcastReadyQueueUpdate()
           emitSessionEvent('managed_session.created', { name, state: 'running' })
-          log.info('sessions', `session created: ${name}`, { backend, port: sessionPort, state: 'running' })
+          log.info('sessions', `session created: ${name}`, { port: sessionPort, state: 'running' })
 
           json(res, { ok: true, data: updated }, 201)
         } catch (err) {
@@ -2373,6 +2268,63 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
       })
       return true
+    }
+
+    // POST /api/tasks/:taskId/sessions — create a session inside a task with
+    // automatic settings inheritance. Resolves the task's project (and any
+    // other inheritable fields) from the entity hierarchy so the caller only
+    // has to supply the session name. Designed for the marshal and other
+    // automation that wants one-call session creation in task context.
+    //
+    // Body: { name, ...overrides } where overrides may include any field
+    // that POST /api/sessions accepts (cliTemplate, backend, prompt, nats,
+    // color, etc). Explicit overrides win over resolved task settings.
+    {
+      const taskSessionsMatch = method === 'POST' && url.match(/^\/api\/tasks\/([^/]+)\/sessions$/)
+      if (taskSessionsMatch) {
+        const taskId = taskSessionsMatch[1]!
+        readBody(req).then(async (body) => {
+          const overrides = body ? JSON.parse(body) : {}
+          if (!overrides.name) {
+            return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
+          }
+
+          const task = ctx.docStore.getTask(taskId)
+          if (!task) return json(res, { ok: false, error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found` } }, 404)
+
+          const settings = resolveEntitySettings(taskId, 'task', ctx.docStore)
+          const resolvedProject = settings?.resolved?.project
+
+          const params: CreateSessionParams = {
+            nats: { enabled: true },
+            ...overrides,
+            project: overrides.project ?? resolvedProject,
+            taskId,
+            epicId: overrides.epicId ?? task.epicId,
+            initiativeId: overrides.initiativeId ?? task.initiativeId,
+          }
+
+          const createCtx: CreateSessionContext = {
+            cfg, sessDir,
+            docStore: ctx.docStore,
+            readyQueue: ctx.readyQueue,
+            sse: ctx.sse,
+            emitSessionEvent,
+            secrets,
+            dashboardUrl,
+            natsTraffic: ctx.natsTraffic,
+            natsHealth: ctx.natsHealth,
+          }
+
+          const result = await createSessionInternal(params, createCtx)
+          if (!result.ok) {
+            const status = result.error.code === 'SESSION_EXISTS' ? 409 : 500
+            return json(res, result, status)
+          }
+          json(res, { ok: true, data: result.session }, 201)
+        }).catch(err => json(res, { ok: false, error: { code: 'INTERNAL', message: (err as Error).message } }, 500))
+        return true
+      }
     }
 
     // POST /api/sessions/:name/stop
@@ -2384,12 +2336,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!session) return json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
 
           try {
-            if (session.backend === 'docker') {
-              await dockerBackend.stopContainer(cfg, session)
-            } else {
-              await tmuxBackend.stopTmuxSession(cfg, session)
-              if (session.port) tmuxBackend.releasePort(session.port)
-            }
+            await tmuxBackend.stopTmuxSession(cfg, session)
+            if (session.port) tmuxBackend.releasePort(session.port)
+
+            // Clear port/ttydPid so a later start re-allocates a fresh port via
+            // findPort(). Leaving stale values here causes the proxy /s/{name}
+            // to route to whichever ttyd later wins port 8703, and lets two
+            // managed-ttyd auto-restart handlers war over the same port.
+            updateSession(sessDir, session.name, { port: null, ttydPid: null })
+            const run = ctx.docStore.getRun(session.name)
+            if (run) ctx.docStore.upsertRun(session.name, { ...run, port: null })
 
             setState(sessDir, session.name, 'stopped')
             ctx.docStore.updateRunStatus(session.name, 'stopped')
@@ -2425,21 +2381,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           try {
             const sec = secrets()
 
-            if (session.backend === 'docker') {
-              const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
-              await dockerBackend.startContainer(cfg, { session: session as Session & { _stateDir?: string }, secrets: sec, port, dashboardUrl })
-              updateSession(sessDir, session.name, { port })
-            } else {
-              const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
-              const resumeTemplate = session.cliTemplate
-                ? cfg.cliTemplates.find(t => t.name === session.cliTemplate) ?? null
-                : null
-              const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port, template: resumeTemplate })
-              updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
-              tmuxBackend.onTtydRestart(session.name, (newPid) => {
-                updateSession(sessDir, session.name, { ttydPid: newPid })
-              })
-            }
+            const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
+            const resumeTemplate = session.cliTemplate
+              ? cfg.cliTemplates.find(t => t.name === session.cliTemplate) ?? null
+              : null
+            const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port, template: resumeTemplate })
+            updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
+            tmuxBackend.onTtydRestart(session.name, (newPid) => {
+              updateSession(sessDir, session.name, { ttydPid: newPid })
+            })
 
             // Re-read session to get updated port
             const updated = getSession(sessDir, session.name)
@@ -2515,12 +2465,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 }
               }
 
-              if (session.backend === 'docker') {
-                await dockerBackend.deleteContainer(cfg, session)
-              } else {
-                await tmuxBackend.deleteTmuxSession(cfg, session)
-                if (session.port) tmuxBackend.releasePort(session.port)
-              }
+              await tmuxBackend.deleteTmuxSession(cfg, session)
+              if (session.port) tmuxBackend.releasePort(session.port)
 
 
             }
@@ -2603,6 +2549,35 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             env.VSCODE_IPC_HOOK_CLI = `/run/user/1000/${socks[0]!.name}`
           }
         } catch { /* non-Linux or no sockets — use inherited env */ }
+
+        // Discover Remote-SSH `code` binaries (VS Code / Cursor / Windsurf install
+        // them under ~/.<flavor>-server/bin/<arch>/<commit>/bin/remote-cli/). The
+        // systemd unit's PATH doesn't include these dirs, so spawn would ENOENT.
+        const home = process.env.HOME
+        if (home) {
+          const cliDirs: { dir: string; mtime: number }[] = []
+          for (const flavor of ['.vscode-server', '.cursor-server', '.windsurf-server']) {
+            const base = `${home}/${flavor}/bin`
+            try {
+              for (const arch of readdirSync(base)) {
+                const archDir = `${base}/${arch}`
+                try {
+                  for (const commit of readdirSync(archDir)) {
+                    const cli = `${archDir}/${commit}/bin/remote-cli`
+                    try {
+                      const st = statSync(`${cli}/code`)
+                      cliDirs.push({ dir: cli, mtime: st.mtimeMs })
+                    } catch { /* no code binary in this install */ }
+                  }
+                } catch { /* unreadable arch dir */ }
+              }
+            } catch { /* flavor not installed */ }
+          }
+          if (cliDirs.length > 0) {
+            cliDirs.sort((a, b) => b.mtime - a.mtime)
+            env.PATH = `${cliDirs[0]!.dir}:${env.PATH ?? ''}`
+          }
+        }
 
         import('node:child_process').then(({ spawn }) => {
           const child = spawn(bin!, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: true, env })
@@ -2747,7 +2722,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // Create the spawned session
       const spawnedSession = createSession(sessDir, {
         name: spawnedName,
-        backend: parentSession.backend,
+        backend: 'tmux',
         project: effectiveRepo,
         workspace: {
           path: workspace?.path ?? null,
@@ -2774,33 +2749,25 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         : null
 
       try {
-        let sessionPort: number | undefined
+        const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+        if (fullPrompt) enriched.initialPrompt = fullPrompt
 
-        if (parentSession.backend === 'docker') {
-          sessionPort = await tmuxBackend.findPort(cfg.ports.hostStart)
-          await dockerBackend.createContainer(cfg, { session: enriched, secrets: sec, port: sessionPort, dashboardUrl, initialPrompt: fullPrompt || undefined })
-          updateSession(sessDir, spawnedName, { port: sessionPort, state: 'running' })
-        } else {
-          const port = await tmuxBackend.findPort(cfg.ports.hostStart)
-          if (fullPrompt) enriched.initialPrompt = fullPrompt
+        // Build hand system prompt pointing at the effective parent-child
+        // room. When fallback kicked in (parent's control socket was orphan/
+        // unreachable), effectiveRoom is the parent's persistent direct
+        // subject rather than the fresh breakout room.
+        const handSystemPrompt = hand.prompt
+          ? effectiveRoom
+            ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${effectiveRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${effectiveRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
+            : `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
+          : null
 
-          // Build hand system prompt pointing at the effective parent-child
-          // room. When fallback kicked in (parent's control socket was orphan/
-          // unreachable), effectiveRoom is the parent's persistent direct
-          // subject rather than the fresh breakout room.
-          const handSystemPrompt = hand.prompt
-            ? effectiveRoom
-              ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${effectiveRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${effectiveRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
-              : `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
-            : null
-
-          const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, appendSystemPrompt: handSystemPrompt })
-          sessionPort = result.port
-          updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
-          tmuxBackend.onTtydRestart(spawnedName, (newPid) => {
-            updateSession(sessDir, spawnedName, { ttydPid: newPid })
-          })
-        }
+        const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, appendSystemPrompt: handSystemPrompt })
+        const sessionPort = result.port
+        updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+        tmuxBackend.onTtydRestart(spawnedName, (newPid) => {
+          updateSession(sessDir, spawnedName, { ttydPid: newPid })
+        })
 
         emitSessionEvent('managed_session.state_changed', { name: spawnedName, state: 'running' })
 
@@ -2829,10 +2796,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           recapEntries: [],
           rawLogs: '',
           port: sessionPort ?? null,
-          backend: parentSession.backend,
-          backendInfo: parentSession.backend === 'docker'
-            ? `container: ${dockerBackend.containerName(cfg, spawnedName)}`
-            : `tmux session: ${spawnedName}`,
+          backend: 'tmux',
+          backendInfo: `tmux session: ${spawnedName}`,
           natsEnabled: natsConfig?.enabled ?? false,
           natsSubject,
           natsSubscriptions: natsConfig?.enabled ? natsConfig.subscriptions : undefined,
@@ -2945,11 +2910,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const session = getSession(sessDir, name)
         if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
         try {
-          if (session.backend === 'docker') {
-            await dockerBackend.sendKeys(cfg, name, keys)
-          } else {
-            await tmuxBackend.sendKeys(cfg, name, keys)
-          }
+          await tmuxBackend.sendKeys(cfg, name, keys)
           json(res, { ok: true })
         } catch (err) {
           json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
@@ -2971,11 +2932,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const session = getSession(sessDir, name)
         if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
         try {
-          if (session.backend === 'docker') {
-            await dockerBackend.sendPrompt(cfg, name, prompt)
-          } else {
-            await tmuxBackend.sendPrompt(cfg, name, prompt)
-          }
+          await tmuxBackend.sendPrompt(cfg, name, prompt)
           json(res, { ok: true })
         } catch (err) {
           json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
@@ -3146,23 +3103,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
-    // GET /api/patterns
-    if (method === 'GET' && url === '/api/patterns') {
-      const patterns = discoverPatterns()
-      // Return pattern info with session details for UI
-      const data = patterns.map(p => ({
-        name: p.name,
-        description: p.description,
-        sessions: p.sessions.map(s => ({
-          role: s.role,
-          cliTemplate: s.config.cliTemplate,
-          backend: s.config.backend,
-          worktree: s.config.worktree,
-        })),
-      }))
-      return json(res, { ok: true, data })
-    }
-
     // GET /api/hands
     if (method === 'GET' && url === '/api/hands') {
       const hands = discoverHands()
@@ -3185,69 +3125,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return json(res, { ok: true, data: hand })
     }
 
-    // GET /api/docker/profiles — configured image profiles (read from disk for freshness)
-    if (method === 'GET' && url === '/api/docker/profiles') {
-      let profiles = cfg.profiles
-      try {
-        const data = JSON.parse(readFileSync(cfg.files.config, 'utf-8'))
-        if (Array.isArray(data.profiles)) profiles = data.profiles
-      } catch { /* use frozen default */ }
-      json(res, { ok: true, data: profiles })
-      return true
-    }
-
-    // GET /api/docker/images — list local Docker images
-    if (method === 'GET' && url === '/api/docker/images') {
-      import('node:child_process').then(({ execFile }) => {
-        execFile('docker', ['images', '--format', '{{.Repository}}:{{.Tag}}'], { encoding: 'utf-8' }, (err, stdout) => {
-          if (err) {
-            json(res, { ok: false, error: { code: 'DOCKER_ERROR', message: err.message } }, 500)
-            return
-          }
-          const images = stdout.trim().split('\n').filter(Boolean).filter(i => i !== '<none>:<none>')
-          json(res, { ok: true, data: images })
-        })
-      })
-      return true
-    }
-
-    // POST /api/docker/profiles — add a new image profile
-    if (method === 'POST' && url === '/api/docker/profiles') {
-      readBody(req).then((body) => {
-        const { name, image, home } = JSON.parse(body)
-        if (!name || !image) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name and image are required' } }, 400)
-
-        // Read current config, update profiles array, persist
-        let data: Record<string, unknown> = {}
-        try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config yet */ }
-        const profiles: Array<{ name: string; image: string; home?: string }> = Array.isArray(data.profiles) ? data.profiles : []
-        if (profiles.some(p => p.name === name)) return json(res, { ok: false, error: { code: 'DUPLICATE', message: `Profile "${name}" already exists` } }, 409)
-
-        const profile: { name: string; image: string; home?: string } = { name, image }
-        if (home) profile.home = home
-        profiles.push(profile)
-        data.profiles = profiles
-        writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
-        json(res, { ok: true, data: profile })
-      }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
-      return true
-    }
-
-    // DELETE /api/docker/profiles/:name — remove an image profile
-    if (method === 'DELETE' && url.startsWith('/api/docker/profiles/')) {
-      const name = decodeURIComponent(url.slice('/api/docker/profiles/'.length))
-      let data: Record<string, unknown> = {}
-      try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
-      const profiles: Array<{ name: string; image: string; home?: string }> = Array.isArray(data.profiles) ? data.profiles : []
-      const idx = profiles.findIndex(p => p.name === name)
-      if (idx === -1) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Profile "${name}" not found` } }, 404), true
-      profiles.splice(idx, 1)
-      data.profiles = profiles
-      writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
-      json(res, { ok: true })
-      return true
-    }
-
     // --- Projects ---
 
     // GET /api/projects
@@ -3262,6 +3139,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const { name, path } = JSON.parse(body)
         if (!name || !path) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'Name and path required' } }, 400)
         registerProject(cfg.files.projects, name, path)
+        ctx.sse.broadcastEvent('projects_changed', { action: 'register', name })
         json(res, { ok: true }, 201)
       })
       return true
@@ -3270,7 +3148,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // GET /api/projects/:name/worktrees
     if (method === 'GET' && url.includes('/worktrees') && url.startsWith('/api/projects/')) {
       const rest = url.slice('/api/projects/'.length)
-      const name = rest.split('/')[0]
+      const rawName = rest.split('/')[0]
+      const name = rawName ? decodeURIComponent(rawName) : ''
       if (name) {
         const projectPath = getProject(cfg.files.projects, name)
         if (!projectPath) {
@@ -3286,7 +3165,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
     // DELETE /api/projects/:name
     if (method === 'DELETE' && url.startsWith('/api/projects/')) {
-      const name = url.slice('/api/projects/'.length)
+      const rawName = url.slice('/api/projects/'.length)
+      const name = decodeURIComponent(rawName)
       if (name) {
         const removed = unregisterProject(cfg.files.projects, name)
         if (!removed) {
@@ -3315,14 +3195,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         if (!text) { json(res, { error: 'missing text' }, 400); return }
         try {
-          if (session.backend === 'docker') {
-            await dockerBackend.sendPrompt(cfg, sessionId, text)
-          } else if (session.backend === 'tmux') {
-            await tmuxBackend.sendPrompt(cfg, sessionId, text)
-          } else {
-            json(res, { error: 'input-unavailable' }, 503)
-            return
-          }
+          await tmuxBackend.sendPrompt(cfg, sessionId, text)
           // Track slash usage (fire-and-forget; never blocks response).
           const slashName = extractLeadingSlashName(text)
           if (slashName) {
@@ -3342,6 +3215,44 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       })
       return true
     }
+
+    // POST /api/marshal/ensure — return (and create on first call) the global marshal session.
+    // The marshal is the user's persistent in-app copilot that lives in the canvas sidebar.
+    if (method === 'POST' && url === '/api/marshal/ensure') {
+      ensureMarshalSession(ctx)
+        .then(result => json(res, result, result.ok ? 200 : 500))
+        .catch(err => json(res, { ok: false, error: { code: 'MARSHAL_CREATE_FAILED', message: (err as Error).message } }, 500))
+      return true
+    }
+
+    // POST /api/marshal/restart — tear down the existing marshal session and
+    // create a fresh one. Used by the sidebar's restart button when the
+    // marshal has crashed or wedged and refresh-iframe alone won't recover.
+    if (method === 'POST' && url === '/api/marshal/restart') {
+      restartMarshalSession(ctx)
+        .then(result => json(res, result, result.ok ? 200 : 500))
+        .catch(err => json(res, { ok: false, error: { code: 'MARSHAL_RESTART_FAILED', message: (err as Error).message } }, 500))
+      return true
+    }
+  }
+
+  // POST /api/canvas/viewport — push a viewport directive to all connected clients.
+  // The frontend listens for the 'canvas:viewport' SSE event and updates the camera.
+  // Used by the marshal to drive the user's view (and potentially other automation).
+  if (method === 'POST' && url === '/api/canvas/viewport') {
+    readBody(req).then(body => {
+      let payload: Record<string, unknown>
+      try { payload = JSON.parse(body) } catch {
+        return json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400)
+      }
+      const action = payload.action
+      if (action !== 'set' && action !== 'focus' && action !== 'reset' && action !== 'fit') {
+        return json(res, { ok: false, error: { code: 'INVALID_ACTION', message: "action must be one of: set, focus, reset, fit" } }, 400)
+      }
+      ctx.sse.broadcastEvent('canvas:viewport', { ...payload, ts: Date.now() })
+      return json(res, { ok: true })
+    }).catch(err => json(res, { ok: false, error: { code: 'INTERNAL', message: (err as Error).message } }, 500))
+    return true
   }
 
   // POST /api/dev/restart — rebuild and restart the server

@@ -5,7 +5,7 @@ import { OTelStore } from './stores/otel-store'
 import { DocumentProcessor } from './processors/document-processor'
 import { OTelProcessor } from './processors/otel-processor'
 import { SSEBroadcaster } from './api/sse'
-import { handleRequest, type RouteContext } from './api/routes'
+import { handleRequest, ensureMarshalSession, type RouteContext } from './api/routes'
 import { MockSensorSimulator } from './simulator/mock-sensors'
 import { join } from 'node:path'
 import { readdirSync, existsSync, rmSync } from 'node:fs'
@@ -17,7 +17,6 @@ import {
   loadActiveSpaceId,
   saveActiveSpaceId,
   reconcileSessionStates,
-  dockerBackend,
   tmuxBackend,
   getSession,
   updateSession,
@@ -34,7 +33,6 @@ import { registerSaloonSubs } from './api/saloonBridge'
 import { bootstrapHierarchicalTopicMetadata } from './topic-metadata'
 import { NatsHealthMonitor } from './nats-health'
 import { natsControlSocketPath } from './sessions/backends/tmux'
-import { SessionReadinessTracker } from './sessions/readiness'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
 import { createTelemetryRoutes } from './api/telemetry.js'
@@ -107,14 +105,12 @@ export function initBackend(): RouteContext {
   let natsManager: NatsManager | undefined
   let natsTraffic: NatsTrafficBridge | undefined
   let natsHealth: NatsHealthMonitor | undefined
-  let readinessTracker: SessionReadinessTracker | undefined
 
   if (!shutdownRegistered) {
     shutdownRegistered = true
     const shutdown = async () => {
       try { natsHealth?.stop() } catch { /* ignore */ }
       try { await natsTraffic?.stop() } catch { /* ignore */ }
-      try { await readinessTracker?.stop() } catch { /* ignore */ }
       try { await natsManager?.stop() } catch { /* ignore */ }
       try { await observability.stop() } catch { /* ignore */ }
       try { telemetryRoutes.stopPolling() } catch { /* ignore */ }
@@ -193,10 +189,6 @@ export function initBackend(): RouteContext {
       }
       natsHealth.start()
     }
-
-    // Start session readiness tracker — listens for tinstar.ready.> signals
-    readinessTracker = new SessionReadinessTracker(natsManager!.url)
-    readinessTracker.start()
   })
 
   const fastSim = process.env.TINSTAR_FAST_SIM === '1'
@@ -245,7 +237,7 @@ export function initBackend(): RouteContext {
       } else if (docStore.getAllSpaces().length > 0) {
         const userSpace = docStore.getAllSpaces().find(s => s.name !== '_simulator')
         docStore.activeSpaceId = (userSpace ?? docStore.getAllSpaces()[0]!).id
-      } else {
+      } else if (process.env.TINSTAR_NO_DEFAULT_SPACE !== '1') {
         const defaultSpace = {
           id: shortId('spc'),
           name: 'Work Space',
@@ -269,6 +261,11 @@ export function initBackend(): RouteContext {
         }
         const sess = getSession(sessionConfig.dirs.sessions, entry.name)
         if (!sess) continue
+        // Reclaim any port already bound to this session so a different session's
+        // start path can't grab it via findPort() and trigger a ttyd kill war.
+        if (sess.backend === 'tmux' && sess.port) {
+          tmuxBackend.claimPort(sess.port)
+        }
         const existingRun = docStore.getRun(sess.name)
         const tpl = sess.cliTemplate ? sessionConfig.cliTemplates.find(t => t.name === sess.cliTemplate) : null
         if (!existingRun) {
@@ -358,7 +355,6 @@ export function initBackend(): RouteContext {
       }
 
       reconcileSessionStates(cfg.dirs.sessions, {
-        getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
         getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
         onStateChanged: (name, state) => {
           onStateChanged(name, state)
@@ -368,7 +364,6 @@ export function initBackend(): RouteContext {
         // Reattach ttyd for tmux sessions that survived a server crash
         for (const session of sessions) {
           if (session.state === 'stopped' || session.state === 'creating') continue
-          if (session.backend !== 'tmux') continue
           const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
           try {
             const result = await tmuxBackend.reattachTmuxSession(cfg, { session, port })
@@ -410,7 +405,6 @@ export function initBackend(): RouteContext {
       // Periodic session state reconciliation (30s)
       setInterval(() => {
         reconcileSessionStates(cfg.dirs.sessions, {
-          getContainerState: (name) => dockerBackend.getContainerState(cfg, name),
           getTmuxSessionState: (name) => tmuxBackend.getTmuxSessionState(cfg, name),
           onStateChanged: (name, state) => {
             onStateChanged(name, state)
@@ -448,14 +442,27 @@ export function initBackend(): RouteContext {
     startSimulator()
   }
 
-  return {
+  const ctx: RouteContext = {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
     sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
     slashRegistry, slashUsage, otlpExporter,
     get natsTraffic() { return natsTraffic },
     get natsHealth() { return natsHealth },
-    get readinessTracker() { return readinessTracker },
   }
+
+  // Auto-start the marshal so it's always available without a UI nudge.
+  // Deferred so it doesn't block server startup or interleave with the
+  // session rehydration that just ran above.
+  setImmediate(() => {
+    ensureMarshalSession(ctx)
+      .then(result => {
+        if (!result.ok) log.warn('marshal-boot', `auto-start failed: ${result.error.code} ${result.error.message}`)
+        else log.info('marshal-boot', `marshal session ready: ${result.data.state}`)
+      })
+      .catch(err => log.warn('marshal-boot', `auto-start threw: ${(err as Error).message}`))
+  })
+
+  return ctx
 }
 
 export function tinstarBackend(): Plugin {

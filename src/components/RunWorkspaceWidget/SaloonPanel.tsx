@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { SaloonRefreshButton } from './saloon/SaloonRefreshButton'
 import { SubscriptionsList } from './saloon/SubscriptionsList'
 import { StreamView } from './saloon/StreamView'
 import { useSaloonStream } from './saloon/useSaloonStream'
@@ -61,6 +62,10 @@ export function SaloonPanel({
           data-status={healthy ? 'ok' : 'bad'}
           title={healthy ? 'Connected to NATS' : (natsEnabled ? 'Control socket orphaned — restart session to recover' : 'NATS not enabled for this session')}
           className={`inline-block w-2 h-2 rounded-full shrink-0 ${healthy ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-rose-500 shadow-[0_0_6px_#f43f5e]'}`}
+        />
+        <SaloonRefreshButton
+          sessionName={sessionName}
+          natsControlOrphanedAt={natsControlOrphanedAt}
         />
         <h3 className="panel-label">Saloon</h3>
         <span className="text-2xs font-mono text-slate-600 ml-auto">

@@ -48,6 +48,52 @@ async function main() {
     return installSkills(process.argv.slice(3))
   }
 
+  // Subcommand: status
+  if (process.argv[2] === 'status') {
+    const { run } = await import('./tinstar/status.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
+  // Service management — drives the systemd user unit
+  const SERVICE_SUBCOMMANDS = new Set([
+    'install-service', 'uninstall-service', 'start', 'stop', 'restart', 'logs',
+  ])
+  if (SERVICE_SUBCOMMANDS.has(process.argv[2])) {
+    const { run } = await import('./tinstar/commands/service.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
+  if (process.argv[2] === 'workspaces') {
+    const { run } = await import('./tinstar/commands/workspaces.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+  if (process.argv[2] === 'projects') {
+    const { run } = await import('./tinstar/commands/projects.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+  if (process.argv[2] === 'sessions') {
+    const { run } = await import('./tinstar/commands/sessions.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+  if (process.argv[2] === 'tasks') {
+    const { run } = await import('./tinstar/commands/tasks.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+  if (process.argv[2] === 'templates') {
+    const { run } = await import('./tinstar/commands/templates.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
+  if (process.argv[2] === 'help' && process.argv[3] === 'api') {
+    const { run } = await import('./tinstar/commands/help-api.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
+  if (process.argv[2] === 'help' && process.argv[3] !== 'api') {
+    const { run } = await import('./tinstar/help.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
   console.log(`\n${BOLD}Tinstar${RESET} — Agent Orchestrator\n`)
 
   // Pre-flight checks
@@ -112,8 +158,19 @@ async function main() {
   const noOpen = process.argv.includes('--no-open')
   const portIdx = process.argv.indexOf('--port')
   const port = portIdx !== -1 ? parseInt(process.argv[portIdx + 1]) : 5273
+  // Collect repeated --host flags and/or a comma-separated list.
+  const hosts = []
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === '--host' && process.argv[i + 1]) {
+      hosts.push(...process.argv[i + 1].split(',').map(s => s.trim()).filter(Boolean))
+      i++
+    }
+  }
+  if (hosts.length === 0 && process.env.TINSTAR_HOST) {
+    hosts.push(...process.env.TINSTAR_HOST.split(',').map(s => s.trim()).filter(Boolean))
+  }
   const { startServer } = await import('../dist/server/standalone.js')
-  startServer({ port, clientDir: join(import.meta.dirname, '..', 'dist', 'client'), open: !noOpen })
+  startServer({ port, host: hosts, clientDir: join(import.meta.dirname, '..', 'dist', 'client'), open: !noOpen })
 }
 
 main().catch(err => {

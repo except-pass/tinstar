@@ -5,12 +5,10 @@ import { apiFetch } from '../apiClient'
 
 export interface SessionPrefill {
   project?: string
-  backend?: 'docker' | 'tmux'
   worktreeMode?: 'none' | 'new' | 'existing'
   defaultWorktreePath?: string
   skipPermissions?: boolean
   cliTemplate?: string
-  profile?: string
   runColor?: string
   taskId?: string
   epicId?: string
@@ -23,7 +21,6 @@ interface Props {
   prefill?: SessionPrefill
 }
 
-type Backend = 'docker' | 'tmux'
 type WorktreeMode = 'none' | 'new' | 'existing'
 
 interface EntityOption { id: string; name: string }
@@ -57,31 +54,9 @@ function InheritedFrom({ source }: { source?: { type: string; name: string } }) 
 export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [placeholder] = useState(generateName)
   const [name, setName] = useState('')
-  const [backend, setBackend] = useState<Backend>(prefill?.backend ?? 'tmux')
-  const [profile, setProfile] = useState(prefill?.profile ?? '')
-  const [profiles, setProfiles] = useState<Array<{ name: string; image: string }>>([])
   const [cliTemplate, setCliTemplate] = useState(prefill?.cliTemplate ?? '')
   const [cliTemplates, setCliTemplates] = useState<Array<{ name: string; icon?: string }>>([])
   const [project, setProject] = useState(prefill?.project ?? '')
-
-  // Combined agent key: "tmux:<template>" or "docker:<profile>"
-  const agentKey = backend === 'docker' && profile
-    ? `docker:${profile}`
-    : cliTemplate ? `tmux:${cliTemplate}` : ''
-
-  const handleAgentChange = (key: string) => {
-    if (key.startsWith('docker:')) {
-      const p = key.slice('docker:'.length)
-      setBackend('docker')
-      setProfile(p)
-      setCliTemplate('')
-    } else if (key.startsWith('tmux:')) {
-      const t = key.slice('tmux:'.length)
-      setBackend('tmux')
-      setCliTemplate(t)
-      setProfile('')
-    }
-  }
   const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
   const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>(prefill?.worktreeMode ?? 'none')
   const [worktreePath, setWorktreePath] = useState('')
@@ -91,12 +66,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [runColor, setRunColor] = useState(() => prefill?.runColor ?? pickRandomPaletteColor())
   const [taskId, setTaskId] = useState(prefill?.taskId ?? '')
   const [entities, setEntities] = useState<{ initiatives: EntityOption[]; epics: EntityOption[]; tasks: EntityOption[] }>({ initiatives: [], epics: [], tasks: [] })
-  const [patterns, setPatterns] = useState<Array<{
-    name: string
-    description: string
-    sessions: Array<{ role: string; cliTemplate?: string; backend?: string; worktree?: boolean }>
-  }>>([])
-  const [pattern, setPattern] = useState<string>('')
   const [addingProject, setAddingProject] = useState(false)
   const [newProjectPath, setNewProjectPath] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -132,13 +101,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       })
       .catch(() => {})
 
-    apiFetch('/api/patterns')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        if (d?.ok && Array.isArray(d.data)) setPatterns(d.data)
-      })
-      .catch(() => {})
-
     apiFetch('/api/state')
       .then(r => r.ok ? r.json() : null)
       .then(state => {
@@ -148,16 +110,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
           epics: (state.epics ?? []).map((e: { id: string; name: string }) => ({ id: e.id, name: e.name })),
           tasks: (state.tasks ?? []).map((t: { id: string; name: string }) => ({ id: t.id, name: t.name })),
         })
-      })
-      .catch(() => {})
-  }, [])
-
-  // Fetch docker image profiles (always, so they appear in the unified dropdown)
-  useEffect(() => {
-    apiFetch('/api/docker/profiles')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        if (d?.ok && Array.isArray(d.data)) setProfiles(d.data)
       })
       .catch(() => {})
   }, [])
@@ -191,11 +143,9 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
 
     const body: Record<string, unknown> = {
       name: effectiveName,
-      backend,
       skipPermissions,
     }
     if (cliTemplate) body.cliTemplate = cliTemplate
-    if (profile) body.profile = profile
     if (project) body.project = project
     if (worktreeMode === 'new') body.worktree = true
     if (worktreeMode === 'existing' && worktreePath) body.worktreePath = worktreePath
@@ -204,7 +154,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
     if (runColor) body.color = runColor
     if (prefill?.epicId) body.epicId = prefill.epicId
     if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
-    if (pattern) body.pattern = pattern
 
     try {
       const res = await apiFetch('/api/sessions', {
@@ -223,7 +172,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
       setError((err as Error).message)
       setSubmitting(false)
     }
-  }, [effectiveName, backend, profile, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, pattern, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
+  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -260,89 +209,24 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
           />
         </div>
 
-        {/* Pattern (above agent since it can override agent choice) */}
-        {patterns.length > 0 && (
-          <div className="mb-3">
-            <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">
-              Pattern
-            </label>
-            <select
-              value={pattern}
-              onChange={e => setPattern(e.target.value)}
-              className="w-full px-3 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
-            >
-              <option value="">Single Agent</option>
-              {patterns.map(p => (
-                <option key={p.name} value={p.name}>
-                  {p.name} — {p.sessions.map(s => s.role).join(' + ')}
-                </option>
-              ))}
-            </select>
-            {pattern && (() => {
-              const selectedPattern = patterns.find(p => p.name === pattern)
-              if (!selectedPattern) return null
-              return (
-                <div className="mt-2 p-2.5 bg-surface-base/50 border border-white/5 rounded">
-                  {selectedPattern.description && (
-                    <div className="text-2xs text-slate-400 mb-2">{selectedPattern.description}</div>
-                  )}
-                  <div className="space-y-1">
-                    {selectedPattern.sessions.map(s => (
-                      <div key={s.role} className="flex items-center gap-2 text-2xs">
-                        <span className="text-slate-300 font-medium w-20">{s.role}</span>
-                        <span className="text-slate-500">→</span>
-                        <span className="text-slate-400">
-                          {s.cliTemplate ?? s.backend ?? 'default'}
-                          {s.worktree && <span className="ml-1 text-slate-600">(worktree)</span>}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )
-            })()}
-          </div>
-        )}
-
         {/* Agent + Project row */}
         <div className="flex gap-3 mb-3">
-          {/* Agent picker (CLI templates + Docker profiles) */}
+          {/* Agent picker (CLI templates) */}
           <div className="flex-1">
             <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block">
               Agent
-              {pattern ? (
-                <span className="ml-1.5 text-slate-500 normal-case tracking-normal font-normal">· set by pattern</span>
-              ) : (
-                <InheritedFrom source={sources.cliTemplate ?? sources.backend} />
-              )}
+              <InheritedFrom source={sources.cliTemplate} />
             </label>
             <select
-              value={agentKey}
-              onChange={e => handleAgentChange(e.target.value)}
-              disabled={!!pattern}
-              className={[
-                'w-full px-3 py-2 bg-surface-base border border-white/10 rounded text-sm focus:border-primary/50 focus:outline-none',
-                pattern ? 'text-slate-500 cursor-not-allowed' : 'text-slate-200',
-              ].join(' ')}
+              value={cliTemplate}
+              onChange={e => setCliTemplate(e.target.value)}
+              className="w-full px-3 py-2 bg-surface-base border border-white/10 rounded text-sm text-slate-200 focus:border-primary/50 focus:outline-none"
             >
-              {cliTemplates.length > 0 && (
-                <optgroup label="🖥 CLI">
-                  {cliTemplates.map(t => (
-                    <option key={`tmux:${t.name}`} value={`tmux:${t.name}`}>
-                      {t.icon && !isIconUrl(t.icon) ? `${t.icon} ` : ''}{t.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {profiles.length > 0 && (
-                <optgroup label="🐳 Docker">
-                  {profiles.map(p => (
-                    <option key={`docker:${p.name}`} value={`docker:${p.name}`}>
-                      {p.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
+              {cliTemplates.map(t => (
+                <option key={t.name} value={t.name}>
+                  {t.icon && !isIconUrl(t.icon) ? `${t.icon} ` : ''}{t.name}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -351,7 +235,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
             <label className="text-2xs text-slate-400 uppercase tracking-wider mb-1 block group relative cursor-default">
               Project<InheritedFrom source={sources.project} />
               <span className="pointer-events-none absolute left-0 top-full mt-1 z-50 hidden group-hover:block w-56 px-2 py-1.5 rounded bg-slate-800 border border-white/10 text-2xs text-slate-300 leading-relaxed shadow-lg normal-case tracking-normal">
-                Sets the working directory. For tmux: opens at the project path (or a sibling worktree dir). For Docker: bind-mounted the same way. None = no mount.
+                Sets the working directory. Opens tmux at the project path (or a sibling worktree dir). None = no project.
               </span>
             </label>
             <select

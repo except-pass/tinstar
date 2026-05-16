@@ -147,11 +147,6 @@ async function doctor() {
       return { status: 'pass', label: `expect${v ? ' ' + v.replace('expect version ', '') : ''}` }
     })(),
     (() => {
-      const v = cmdVersion('docker', ['--version'])
-      if (!v) return { status: 'warn', label: 'docker — not installed', detail: 'docker sessions unavailable' }
-      return { status: 'pass', label: v.replace('Docker version ', 'docker ').replace(/,.*/, '') }
-    })(),
-    (() => {
       const v = cmdVersion('git', ['--version'])
       if (!v) return { status: 'fail', label: 'git — not found', detail: 'commit tracking broken' }
       return { status: 'pass', label: v }
@@ -375,44 +370,22 @@ async function doctor() {
       }
     }
 
-    // Determine backend type from session state file
-    function readSessionBackend(name) {
-      try {
-        const stateFile = join(SESSIONS_DIR, name, 'state.json')
-        if (existsSync(stateFile)) {
-          const data = JSON.parse(readFileSync(stateFile, 'utf-8'))
-          return data.backend || 'tmux'
-        }
-      } catch {}
-      return 'tmux'
-    }
 
     const tmuxPrefix = 'tinstar-'
 
     for (const entry of sessionDirs) {
       const name = entry.name
-      const backend = readSessionBackend(name)
       const port = portMap.get(name)
       const parts = []
       let hasFail = false
 
-      // Backend alive check
-      if (backend === 'docker') {
-        const r = spawnSync('docker', ['inspect', '--format', '{{.State.Status}}', `${tmuxPrefix}${name}`], { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' })
-        if (r.status === 0 && r.stdout.trim() === 'running') {
-          parts.push('docker alive')
-        } else {
-          parts.push(`${RED}docker dead${RESET}`)
-          hasFail = true
-        }
+      // Backend alive check (tmux)
+      const r = spawnSync('tmux', ['has-session', '-t', `${tmuxPrefix}${name}`], { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' })
+      if (r.status === 0) {
+        parts.push('tmux alive')
       } else {
-        const r = spawnSync('tmux', ['has-session', '-t', `${tmuxPrefix}${name}`], { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' })
-        if (r.status === 0) {
-          parts.push('tmux alive')
-        } else {
-          parts.push(`${RED}tmux dead${RESET}`)
-          hasFail = true
-        }
+        parts.push(`${RED}tmux dead${RESET}`)
+        hasFail = true
       }
 
       // ttyd checks (only if we know the port)

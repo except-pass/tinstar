@@ -3,7 +3,7 @@ import type { SSEBroadcaster } from './sse.js'
 import type { TelemetryQuery } from '../observability/query.js'
 import type { HudSnapshot, ObservabilityState } from '../observability/types.js'
 import { log } from '../logger.js'
-import { makeFakeHud } from '../observability/fast-sim.js'
+import { makeFakeHud, makeFakeSeries } from '../observability/fast-sim.js'
 
 // How often to broadcast a fresh HUD snapshot to connected SSE clients.
 const POLL_INTERVAL_MS = 1_500
@@ -44,6 +44,10 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
             perMin: (fake.rate.perMin ?? 0) * SESSION_SCALE,
             perHour: (fake.rate.perHour ?? 0) * SESSION_SCALE,
           },
+          dutyCycle: {
+            value: fake.dutyCycle.value == null ? null : Math.max(0, Math.min(1, fake.dutyCycle.value * SESSION_SCALE)),
+            windowMinutes: fake.dutyCycle.windowMinutes,
+          },
         }
       }
       return fake
@@ -56,7 +60,7 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
       tokens: { total: null },
       rate: { perMin: null, perHour: null },
       cacheHitPct: null,
-      autonomy: { ratio: null, cliSeconds: null, userSeconds: null },
+      dutyCycle: { value: null, windowMinutes: 5 },
       burningRunIds: [],
       progress: deps.getProgress(),
     }
@@ -116,6 +120,49 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
       const snap = await buildSnapshot()
       res.writeHead(200, json)
       res.end(JSON.stringify(snap))
+      return true
+    }
+    const seriesMatch = pathname.match(/^\/api\/telemetry\/session\/([^/]+)\/series$/)
+    if (seriesMatch && req.method === 'GET') {
+      const empty = {
+        startedAt: new Date().toISOString(),
+        endedAt: new Date().toISOString(),
+        stepSec: 5,
+        series: { cost: [] as unknown[], tokens: [] as unknown[], cache: [] as unknown[], duty: [] as unknown[] },
+      }
+      // FAST_SIM: synthesize series so demos/E2E render without Prometheus.
+      if (process.env.TINSTAR_FAST_SIM === '1') {
+        const fake = makeFakeSeries({ endSec: Math.floor(Date.now() / 1000), windowSec: 300, stepSec: 5 })
+        res.writeHead(200, json)
+        res.end(JSON.stringify(fake))
+        return true
+      }
+      const state = deps.getState()
+      if (state !== 'ready' || !deps.query) {
+        res.writeHead(200, json)
+        res.end(JSON.stringify({ ...empty, state }))
+        return true
+      }
+      const conversationId = deps.getSessionConversationId(seriesMatch[1])
+      if (!conversationId) {
+        res.writeHead(200, json)
+        res.end(JSON.stringify(empty))
+        return true
+      }
+      try {
+        const out = await deps.query.sessionSeries({
+          sessionId: conversationId,
+          userEmail: deps.getDefaultUserEmail(),
+          endSec: Math.floor(Date.now() / 1000),
+          windowSec: 300,
+          stepSec: 5,
+        })
+        res.writeHead(200, json)
+        res.end(JSON.stringify(out))
+      } catch (err) {
+        res.writeHead(200, json)
+        res.end(JSON.stringify({ ...empty, state: 'degraded', error: (err as Error).message }))
+      }
       return true
     }
     const sessMatch = pathname.match(/^\/api\/telemetry\/session\/([^/]+)$/)

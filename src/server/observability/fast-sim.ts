@@ -1,4 +1,4 @@
-import type { HudSnapshot } from './types.js'
+import type { HudSnapshot, HudSeries } from './types.js'
 
 /**
  * Returns a synthetic HUD snapshot that slowly accumulates. Used when
@@ -30,7 +30,42 @@ export function makeFakeHud(t = Date.now()): HudSnapshot {
     tokens: { total: tokens },
     rate: { perMin: Math.max(0, rate), perHour: Math.max(0, rate * 60) },
     cacheHitPct: 0.65 + Math.sin(secs / 45) * 0.15,
-    autonomy: { ratio: 4.5 + Math.sin(secs / 60), cliSeconds: 4500, userSeconds: 1000 },
+    // Oscillate around ~2 concurrent agents for a visible swarm-mode demo (sometimes peaks > 3×).
+    dutyCycle: { value: 2 + Math.sin(secs / 30) * 1.2, windowMinutes: 5 },
     burningRunIds: fakeBurning,
+  }
+}
+
+/**
+ * Synthetic HudSeries used when TINSTAR_FAST_SIM=1 so the sparkline panel
+ * renders without a real Prometheus. Mirrors makeFakeHud's curves.
+ *
+ * Note: cost uses `secs = t % 3600`, so it resets across hour boundaries.
+ * Acceptable for FAST_SIM demo/E2E purposes — windows are short enough that
+ * a wrap is rarely visible in practice.
+ */
+export function makeFakeSeries(opts: {
+  endSec: number    // unix seconds
+  windowSec: number
+  stepSec: number
+}): HudSeries {
+  const { endSec, windowSec, stepSec } = opts
+  const startSec = endSec - windowSec
+  const cost: [number, number | null][] = []
+  const tokens: [number, number | null][] = []
+  const cache: [number, number | null][] = []
+  const duty:  [number, number | null][] = []
+  for (let t = startSec; t <= endSec; t += stepSec) {
+    const secs = t % 3600
+    cost.push([t, 0.10 + secs * 0.0015])
+    tokens.push([t, Math.floor(1000 + secs * 85)])
+    cache.push([t, Math.max(0, Math.min(1, 0.65 + Math.sin(secs / 45) * 0.15))])
+    duty.push([t, Math.max(0, Math.min(1, 0.5 + Math.sin(secs / 30) * 0.3))])
+  }
+  return {
+    startedAt: new Date(startSec * 1000).toISOString(),
+    endedAt:   new Date(endSec * 1000).toISOString(),
+    stepSec,
+    series: { cost, tokens, cache, duty },
   }
 }
