@@ -26,6 +26,7 @@ import { HotkeyPalette } from './HotkeyPalette'
 import { OnboardingCanvas } from './OnboardingCanvas'
 import { apiFetch } from '../apiClient'
 import { useOnboardingState } from '../hooks/useOnboardingState'
+import { PluginFailedBanner } from './PluginFailedBanner'
 
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
@@ -762,6 +763,7 @@ function WorkspaceShellInner() {
 
   return (
     <>
+      <PluginFailedBanner />
       {activeSpaceId ? (
         <HotgroupProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
