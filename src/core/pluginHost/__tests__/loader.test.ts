@@ -35,7 +35,7 @@ describe('bootBundledPlugins', () => {
     expect(reg.get('beta')?.state).toBe('active')
   })
 
-  it('skips plugins with apiVersion mismatch and marks them failed', async () => {
+  it('skips plugins with apiVersion mismatch (record absent from registry)', async () => {
     const reg = new PluginRegistry()
     const bundle = { gamma: fakeBundle('gamma', { apiVersion: '4' }) }
     await bootBundledPlugins(bundle, reg)
