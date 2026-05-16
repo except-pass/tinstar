@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { Plugin } from '@tinstar/plugin-api'
-import { bootBundledPlugins } from '../loader'
+import { bootAllPlugins } from '../loader'
 import { PluginRegistry } from '../registry'
 import { getWidgetComponent } from '../../../widgets/widgetComponentRegistry'
 
@@ -28,7 +28,7 @@ describe('full bundled pipeline', () => {
       },
     }
     const registry = new PluginRegistry()
-    await bootBundledPlugins(bundle, registry)
+    await bootAllPlugins(bundle, { disabled: [], external: [] }, registry, async () => { throw new Error('unreachable') })
 
     expect(registry.get('integration')?.state).toBe('active')
     expect(getWidgetComponent('integration-widget')?.component).toBe(FakeWidget)

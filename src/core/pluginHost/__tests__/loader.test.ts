@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { Plugin } from '@tinstar/plugin-api'
-import { bootBundledPlugins, bootAllPlugins } from '../loader'
+import { bootAllPlugins } from '../loader'
 import { PluginRegistry } from '../registry'
 
 function fakeBundle(
@@ -26,11 +26,13 @@ function fakeBundle(
   }
 }
 
-describe('bootBundledPlugins', () => {
+const noExternals = async () => { throw new Error('no externals expected') }
+
+describe('bootAllPlugins', () => {
   it('activates every plugin in the bundled index', async () => {
     const reg = new PluginRegistry()
     const bundle = { alpha: fakeBundle('alpha'), beta: fakeBundle('beta') }
-    await bootBundledPlugins(bundle, reg)
+    await bootAllPlugins(bundle, { disabled: [], external: [] }, reg, noExternals)
     expect(reg.get('alpha')?.state).toBe('active')
     expect(reg.get('beta')?.state).toBe('active')
   })
@@ -38,7 +40,7 @@ describe('bootBundledPlugins', () => {
   it('skips plugins with apiVersion mismatch (record absent from registry)', async () => {
     const reg = new PluginRegistry()
     const bundle = { gamma: fakeBundle('gamma', { apiVersion: '4' }) }
-    await bootBundledPlugins(bundle, reg)
+    await bootAllPlugins(bundle, { disabled: [], external: [] }, reg, noExternals)
     // Note: parseManifest throws on apiVersion mismatch BEFORE registry.activate is called.
     // The loader should catch that throw and surface it. The expected outcome is that
     // 'gamma' is either marked failed in the registry OR absent from it — depending on
@@ -54,7 +56,7 @@ describe('bootBundledPlugins', () => {
       crash: fakeBundle('crash', { throws: true }),
       also:  fakeBundle('also'),
     }
-    await bootBundledPlugins(bundle, reg)
+    await bootAllPlugins(bundle, { disabled: [], external: [] }, reg, noExternals)
     expect(reg.get('good')?.state).toBe('active')
     expect(reg.get('crash')?.state).toBe('failed')
     expect(reg.get('also')?.state).toBe('active')
@@ -67,7 +69,7 @@ describe('bootBundledPlugins', () => {
       ok:  fakeBundle('ok'),
     }
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    await bootBundledPlugins(bundle, reg)
+    await bootAllPlugins(bundle, { disabled: [], external: [] }, reg, noExternals)
     expect(reg.get('ok')?.state).toBe('active')
     // 'bad' is not in registry because manifest parsing rejected it before activate
     expect(reg.get('bad')).toBeUndefined()
@@ -82,15 +84,13 @@ describe('bootBundledPlugins', () => {
     const dup2 = { ...fakeBundle('dup') }
     const bundle = { key1: dup1, key2: dup2, ok: fakeBundle('ok') }
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    await bootBundledPlugins(bundle, reg)
+    await bootAllPlugins(bundle, { disabled: [], external: [] }, reg, noExternals)
     expect(reg.get('dup')?.state).toBe('active')   // first one wins
     expect(reg.get('ok')?.state).toBe('active')    // boot loop continued
     expect(err).toHaveBeenCalledWith(expect.stringContaining('activate failed for "key2"'))
     err.mockRestore()
   })
-})
 
-describe('bootAllPlugins', () => {
   it('honors disabled[] for bundled plugins', async () => {
     const reg = new PluginRegistry()
     const bundle = {
