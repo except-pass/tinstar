@@ -9,8 +9,10 @@ import './taskGroup'
 
 export const pluginRegistry = new PluginRegistry()
 
-// Plan 2: client uses empty config. Plan 3's settings UI will fetch real
-// config from a server endpoint and wire enable/disable + external entries.
+// TODO(v5-plan-3): replace EMPTY_CONFIG with a real fetch of plugins.json
+// via a /api/plugins-config endpoint. Until then, external plugins listed in
+// ~/.config/tinstar/plugins.json are NOT loaded in the client — only the
+// server-side runtime route is wired up.
 const EMPTY_CONFIG: PluginsConfig = { disabled: [], external: [] }
 
 export const pluginsReady: Promise<void> = bootAllPlugins(
