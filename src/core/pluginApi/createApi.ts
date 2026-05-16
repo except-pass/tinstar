@@ -28,13 +28,15 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
         record.disposables.push(d)
         return d
       } catch (e) {
-        // Duplicate registration or invalid input — log and return a no-op so the
-        // rest of activate() can proceed.
-        logger.warn(
-          `widgets.register("${reg.type}") rejected:`,
-          e instanceof Error ? e.message : String(e),
-        )
-        return NOOP_DISPOSABLE
+        const msg = e instanceof Error ? e.message : String(e)
+        // Only the "already registered" throw is recoverable via no-op + warn.
+        // Anything else (validation errors, future host-internal failures) must
+        // propagate to registry.activate's catch so the plugin is marked failed.
+        if (msg.startsWith('Widget type already registered:')) {
+          logger.warn(`widgets.register("${reg.type}") rejected: ${msg}`)
+          return NOOP_DISPOSABLE
+        }
+        throw e
       }
     },
   }
