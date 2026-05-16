@@ -51,12 +51,15 @@ export interface PluginHttpApi {
   fetch(path: string, init?: RequestInit): Promise<Response>
 }
 
-/** Channels a plugin can subscribe to. Patterns in v5.0:
- * - 'managed_session.*' — all managed-session lifecycle events
- * - 'managed_session.<sessionId>' — events for one specific session
- * - 'nats.*' — all NATS messages crossing the broker
- * - 'nats.<subject>' — NATS messages matching one subject pattern
- * - 'selection.change' — canvas selection changes
+/** SSE event names emitted by the host. Subscribe by exact name; wildcards
+ * are not supported in v5.0.
+ *
+ * Known channels: 'snapshot', 'delta', 'file_watch', 'nats_traffic',
+ * 'telemetry:hud', 'canvas:viewport', 'projects_changed',
+ * 'ready_queue_update', 'heartbeat'.
+ *
+ * Subscribe before app boot is fully ready (the bridge connects lazily and
+ * the host's SSE stream replays the latest snapshot on connect).
  */
 export type EventChannel = string
 

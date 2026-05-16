@@ -8,7 +8,7 @@ const NOOP_DISPOSABLE: Disposable = { dispose: () => {} }
 
 let sharedBridge: EventBridge | null = null
 function getBridge(): EventBridge {
-  if (!sharedBridge) sharedBridge = new EventBridge('/s/events')
+  if (!sharedBridge) sharedBridge = new EventBridge('/api/events')
   return sharedBridge
 }
 
