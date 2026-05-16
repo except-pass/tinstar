@@ -1,0 +1,17 @@
+{
+  "name": "image-viewer",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.tsx",
+  "tinstar": {
+    "apiVersion": "5",
+    "displayName": "Image viewer",
+    "description": "View images on the canvas",
+    "contributes": {
+      "widgets": [
+        { "type": "image-viewer", "label": "Image viewer", "defaultSize": { "width": 640, "height": 480 } }
+      ]
+    },
+    "permissions": []
+  }
+}
