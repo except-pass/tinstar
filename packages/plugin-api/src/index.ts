@@ -15,15 +15,27 @@ export interface WidgetProps {
   isDropTarget: boolean
 }
 
-/** Describes a widget type a plugin contributes — the component, sizing, and behavior the host uses to render it on the canvas. */
+/** State a widget frame's chrome can react to (used by getFrameClass). */
+export interface WidgetFrameState {
+  isDragging: boolean
+  isSelected: boolean
+  isHovered: boolean
+  isDropTarget: boolean
+}
+
+/**
+ * Describes a widget type a plugin contributes — the component, sizing, and
+ * behavior the host uses to render it on the canvas.
+ */
 export interface WidgetRegistration {
-  /** Unique string identifying this widget type. Conventionally prefixed with plugin name (e.g. "browser-widget"). */
   type: string
   component: ComponentType<WidgetProps>
   isContainer: boolean
   defaultSize?: { width: number; height: number }
   minSize: { width: number; height: number }
   dragHandleSelector?: string
+  /** Optional function returning CSS class names for the widget's outer frame, given the current chrome state. */
+  getFrameClass?: (state: WidgetFrameState) => string
   supportsMinimize?: boolean
 }
 
