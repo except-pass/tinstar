@@ -53,8 +53,11 @@ describe('readPluginsConfig', () => {
         { name: 'also-good', npm: '@scope/foo' },
       ],
     }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const cfg = readPluginsConfig(TEST_ROOT)
     expect(cfg.external.map(e => e.name)).toEqual(['good', 'also-good'])
+    expect(warn).toHaveBeenCalledTimes(2)  // 'bad' (no path or npm) and the one with no name
+    warn.mockRestore()
   })
 
   it('coerces non-array disabled to empty array', () => {

@@ -33,16 +33,31 @@ export function readPluginsConfig(configRoot: string): PluginsConfig {
     : []
 
   const externalRaw = obj.external
-  const external: ExternalPluginEntry[] = Array.isArray(externalRaw)
-    ? externalRaw.filter((e): e is ExternalPluginEntry => {
-        if (!e || typeof e !== 'object') return false
-        const r = e as Record<string, unknown>
-        if (typeof r.name !== 'string' || r.name === '') return false
-        const hasPath = typeof r.path === 'string'
-        const hasNpm  = typeof r.npm === 'string'
-        return hasPath || hasNpm
-      })
-    : []
+  const external: ExternalPluginEntry[] = []
+  if (Array.isArray(externalRaw)) {
+    for (let i = 0; i < externalRaw.length; i++) {
+      const e = externalRaw[i]
+      if (!e || typeof e !== 'object') {
+        // eslint-disable-next-line no-console
+        console.warn(`[plugin-host] plugins.json external[${i}] rejected: not an object`)
+        continue
+      }
+      const r = e as Record<string, unknown>
+      if (typeof r.name !== 'string' || r.name === '') {
+        // eslint-disable-next-line no-console
+        console.warn(`[plugin-host] plugins.json external[${i}] rejected: missing or empty 'name'`)
+        continue
+      }
+      const hasPath = typeof r.path === 'string'
+      const hasNpm = typeof r.npm === 'string'
+      if (!hasPath && !hasNpm) {
+        // eslint-disable-next-line no-console
+        console.warn(`[plugin-host] plugins.json external[${i}] rejected: needs 'path' or 'npm'`)
+        continue
+      }
+      external.push(r as unknown as ExternalPluginEntry)
+    }
+  }
 
   return { disabled, external }
 }
