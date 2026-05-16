@@ -21,8 +21,20 @@ import { useSlashCommands } from '../hooks/useSlashCommands'
 import { SlashChips } from './RunWorkspaceWidget/SlashChips'
 import { apiFetch } from '../apiClient'
 
-type QuickKey = '1' | '2' | '3' | '4' | '5' | 'y' | 'n'
+type QuickKey = '1' | '2' | '3' | '4' | '5' | 'y' | 'n' | 'up' | 'down' | 'left' | 'right' | 'enter'
 const QUICK_KEYS: readonly QuickKey[] = ['1', '2', '3', '4', '5', 'y', 'n']
+const NAV_KEYS: readonly QuickKey[] = ['up', 'down', 'left', 'right', 'enter']
+
+// tmux key names for the keys we passthrough; ASCII chars map to themselves.
+const TMUX_KEY: Record<QuickKey, string> = {
+  '1': '1', '2': '2', '3': '3', '4': '4', '5': '5',
+  y: 'y', n: 'n',
+  up: 'Up', down: 'Down', left: 'Left', right: 'Right', enter: 'Enter',
+}
+
+const NAV_GLYPH: Record<'up' | 'down' | 'left' | 'right' | 'enter', string> = {
+  up: '↑', down: '↓', left: '←', right: '→', enter: '⏎',
+}
 
 function MarkdownText({ content }: { content: string }) {
   return <div className="whitespace-pre-wrap break-words">{content}</div>
@@ -230,11 +242,17 @@ function QuickSendButtons({
       style={{ borderColor: hexToRgba(accent, 0.2) }}
       data-testid="quick-send-cluster"
     >
-      {QUICK_KEYS.map(key => {
+      {[...QUICK_KEYS, ...NAV_KEYS].map(key => {
         const isLetter = key === 'y' || key === 'n'
+        const isNav = key === 'up' || key === 'down' || key === 'left' || key === 'right' || key === 'enter'
         const isFirstLetter = key === 'y'
+        const isFirstNav = key === 'up'
         const flashing = flashedKey === key
         const label = isLetter ? key.toUpperCase() : key
+        const display = isNav ? NAV_GLYPH[key] : label
+        const hint = isNav
+          ? `Send ${TMUX_KEY[key]} to terminal (when prompt is empty)`
+          : `Send "${key}" to terminal (Alt+${label})`
         return (
           <button
             key={key}
@@ -242,7 +260,7 @@ function QuickSendButtons({
             data-testid={`quick-send-${key}`}
             disabled={disabled}
             onClick={() => onFire(key)}
-            title={`Send "${key}" to terminal (Alt+${label})`}
+            title={hint}
             className={`
               flex items-center justify-center w-6 h-6 rounded-sm
               text-2xs font-mono font-semibold
@@ -250,7 +268,7 @@ function QuickSendButtons({
               disabled:opacity-30 disabled:cursor-not-allowed
               enabled:hover:scale-110 enabled:active:scale-95
               ${flashing ? 'animate-[quick-pop_0.25s_ease-out]' : ''}
-              ${isFirstLetter ? 'ml-2' : ''}
+              ${isFirstLetter || isFirstNav ? 'ml-2' : ''}
             `}
             style={{
               color: accent,
@@ -274,7 +292,7 @@ function QuickSendButtons({
               e.currentTarget.style.borderColor = hexToRgba(accent, flashing ? 0.7 : 0.25)
             }}
           >
-            {label}
+            {display}
           </button>
         )
       })}
@@ -391,7 +409,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
       await apiFetch(`/api/sessions/${sessionId}/send-keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keys: [key] }),
+        body: JSON.stringify({ keys: [TMUX_KEY[key]] }),
       })
     } catch {
       /* fire-and-forget — matches the existing PageUp/Escape passthrough */
@@ -547,9 +565,23 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
       }).catch(() => { /* swallow — passthrough keys are fire-and-forget */ })
       return
     }
-    if (e.key === 'ArrowUp' && text.length === 0 && !historyOpen) {
-      e.preventDefault()
-      setHistoryOpen(true)
+    // Empty-prompt passthrough: arrow keys + Enter go straight to terminal,
+    // matching the Alt+1..5 / Alt+Y / Alt+N quick-send affordance. History is
+    // still reachable via the history button.
+    if (text.length === 0 && !historyOpen && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      const navMap: Partial<Record<string, QuickKey>> = {
+        ArrowUp: 'up',
+        ArrowDown: 'down',
+        ArrowLeft: 'left',
+        ArrowRight: 'right',
+        Enter: 'enter',
+      }
+      const navKey = navMap[e.key]
+      if (navKey) {
+        e.preventDefault()
+        fireQuickKey(navKey)
+        return
+      }
     }
   }, [handleSend, text, historyOpen, sessionId, slashToken, candidates, cycleState, slashCursor, fireQuickKey])
 
@@ -640,7 +672,7 @@ function PromptComposer({ sessionId, accent, status, expanded, onToggle, focusTr
               >
                 <span className="material-symbols-outlined text-sm rotate-180">expand_less</span>
               </button>
-              <span className="text-2xs text-slate-600 font-mono shrink-0">
+              <span className="text-2xs text-slate-600 font-mono shrink-0 inline-block w-[6.5rem] truncate">
                 {status === 'idle' ? 'Ready' : status === 'running' ? 'Wait for idle...' : status ?? 'Unknown'}
               </span>
               {!slashToken && (

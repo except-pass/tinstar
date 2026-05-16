@@ -143,6 +143,67 @@ describe('<RecapSessionPanel> quick-send hotkeys', () => {
   })
 })
 
+describe('<RecapSessionPanel> empty-prompt arrow/Enter passthrough', () => {
+  it.each([
+    ['ArrowUp',    'Up'],
+    ['ArrowDown',  'Down'],
+    ['ArrowLeft',  'Left'],
+    ['ArrowRight', 'Right'],
+    ['Enter',      'Enter'],
+  ])('plain %s on empty prompt sends ["%s"] to terminal', (key, tmuxKey) => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key })
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    const [path, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(path).toBe('/api/sessions/run-1/send-keys')
+    expect(JSON.parse(init.body)).toEqual({ keys: [tmuxKey] })
+  })
+
+  it('arrow keys do NOT passthrough when textarea has content', () => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'drafting' } })
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: 'ArrowUp' })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(apiFetch).not.toHaveBeenCalled()
+  })
+
+  it('Shift+Enter on empty prompt does NOT passthrough (lets newline through)', () => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true })
+    expect(apiFetch).not.toHaveBeenCalled()
+  })
+
+  it('renders nav quick-send buttons (up/down/left/right/enter)', () => {
+    const { container } = renderComposer()
+    for (const key of ['up', 'down', 'left', 'right', 'enter']) {
+      expect(container.querySelector(`[data-testid="quick-send-${key}"]`)).toBeTruthy()
+    }
+  })
+
+  it('clicking the up nav button sends ["Up"]', () => {
+    const { container } = renderComposer()
+    const btn = container.querySelector('[data-testid="quick-send-up"]') as HTMLButtonElement
+    fireEvent.click(btn)
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toEqual({ keys: ['Up'] })
+  })
+
+  it('plain ArrowUp flashes the up nav button', () => {
+    const { container } = renderComposer()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    textarea.focus()
+    fireEvent.keyDown(textarea, { key: 'ArrowUp' })
+    const btn = container.querySelector('[data-testid="quick-send-up"]') as HTMLButtonElement
+    expect(btn.className).toMatch(/animate-\[quick-pop/)
+  })
+})
+
 describe('<RecapSessionPanel> quick-send press flash', () => {
   it('hotkey press flashes the matching button', () => {
     const { container } = renderComposer()
