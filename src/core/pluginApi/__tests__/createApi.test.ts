@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import type { PluginRecord } from '../../pluginHost/registry'
 import type { PluginManifest } from '@tinstar/plugin-api'
 import { createPluginApi } from '../createApi'
@@ -17,10 +17,8 @@ function makeRecord(name = 'browser'): PluginRecord {
 const FakeWidget = () => null
 
 describe('createPluginApi', () => {
-  beforeEach(() => {
-    // Clear any registrations that might leak between tests
-    // (registry is module-level; we use a unique type per test to avoid clashes)
-  })
+  // Tests use unique widget type names per case to avoid cross-test pollution
+  // of the module-level widget registry (no global reset hook exists yet).
 
   it('exposes pluginId and version from the record', () => {
     const rec = makeRecord('alpha')
@@ -98,6 +96,8 @@ describe('createPluginApi', () => {
       minSize: { width: 100, height: 100 },
     })
     expect(warn).toHaveBeenCalled()
+    const firstCall = warn.mock.calls[0]
+    expect(firstCall.join(' ')).toContain('zeta-shared')
     expect(recB.disposables.length).toBe(0)
     d.dispose()  // should be safe no-op
     expect(getWidgetComponent('zeta-shared')).toBeDefined()  // original still there
