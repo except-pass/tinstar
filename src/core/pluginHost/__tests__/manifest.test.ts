@@ -25,13 +25,15 @@ describe('parseManifest', () => {
     expect(() => parseManifest('hello')).toThrow(ManifestError)
   })
 
-  it('throws when name is missing or not a string', () => {
+  it('throws when name is missing, wrong type, or empty', () => {
     expect(() => parseManifest({ ...validPkg, name: undefined })).toThrow(/name/)
     expect(() => parseManifest({ ...validPkg, name: 42 })).toThrow(/name/)
+    expect(() => parseManifest({ ...validPkg, name: '' })).toThrow(/name/)
   })
 
   it('throws when version is missing or not a string', () => {
     expect(() => parseManifest({ ...validPkg, version: undefined })).toThrow(/version/)
+    expect(() => parseManifest({ ...validPkg, version: 42 })).toThrow(/version/)
   })
 
   it('throws when tinstar manifest is missing', () => {
@@ -45,8 +47,13 @@ describe('parseManifest', () => {
       .toThrow(/apiVersion 6.*expected 5/)
   })
 
-  it('throws when displayName is missing', () => {
+  it('throws when displayName is missing or empty', () => {
     expect(() => parseManifest({ ...validPkg, tinstar: { apiVersion: '5' } })).toThrow(/displayName/)
+    expect(() => parseManifest({ ...validPkg, tinstar: { apiVersion: '5', displayName: '' } })).toThrow(/displayName/)
+  })
+
+  it('rejects an array tinstar field via the apiVersion path', () => {
+    expect(() => parseManifest({ ...validPkg, tinstar: [] })).toThrow(ManifestError)
   })
 
   it('accepts optional contributes and permissions', () => {

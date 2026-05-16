@@ -19,11 +19,11 @@ export function parseManifest(pkgJson: unknown): ParsedManifest {
   }
   const pkg = pkgJson as Record<string, unknown>
 
-  if (typeof pkg.name !== 'string') {
-    throw new ManifestError('package.json: name must be a string')
+  if (typeof pkg.name !== 'string' || pkg.name === '') {
+    throw new ManifestError('package.json: name must be a non-empty string')
   }
   if (typeof pkg.version !== 'string') {
-    throw new ManifestError(`${pkg.name ?? '<unnamed>'}: package.json version must be a string`)
+    throw new ManifestError(`${pkg.name}: package.json version must be a string`)
   }
 
   const tinstar = pkg.tinstar
@@ -35,8 +35,8 @@ export function parseManifest(pkgJson: unknown): ParsedManifest {
   if (m.apiVersion !== '5') {
     throw new ManifestError(`${pkg.name}: incompatible apiVersion ${String(m.apiVersion)}, expected 5`)
   }
-  if (typeof m.displayName !== 'string') {
-    throw new ManifestError(`${pkg.name}: tinstar.displayName must be a string`)
+  if (typeof m.displayName !== 'string' || m.displayName === '') {
+    throw new ManifestError(`${pkg.name}: tinstar.displayName must be a non-empty string`)
   }
 
   return {
