@@ -51,6 +51,20 @@ export interface PluginHttpApi {
   fetch(path: string, init?: RequestInit): Promise<Response>
 }
 
+/** Channels a plugin can subscribe to. Patterns in v5.0:
+ * - 'managed_session.*' — all managed-session lifecycle events
+ * - 'managed_session.<sessionId>' — events for one specific session
+ * - 'nats.*' — all NATS messages crossing the broker
+ * - 'nats.<subject>' — NATS messages matching one subject pattern
+ * - 'selection.change' — canvas selection changes
+ */
+export type EventChannel = string
+
+/** Payload shape is channel-dependent; plugins cast to the type they expect. */
+export interface PluginEventsApi {
+  subscribe<T = unknown>(channel: EventChannel, handler: (msg: T) => void): Disposable
+}
+
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */
 export interface TinstarPluginAPI {
   readonly pluginId: string
@@ -60,6 +74,7 @@ export interface TinstarPluginAPI {
     register(reg: WidgetRegistration): Disposable
   }
   http: PluginHttpApi
+  events: PluginEventsApi
   logger: PluginLogger
 }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { PluginRecord } from '../../pluginHost/registry'
 import type { PluginManifest } from '@tinstar/plugin-api'
 import { createPluginApi } from '../createApi'
@@ -102,6 +102,33 @@ describe('createPluginApi', () => {
     d.dispose()  // should be safe no-op
     expect(getWidgetComponent('zeta-shared')).toBeDefined()  // original still there
     warn.mockRestore()
+  })
+})
+
+describe('createPluginApi — api.events', () => {
+  beforeEach(() => {
+    // Stub EventSource so the shared bridge can instantiate inside this test.
+    (globalThis as Record<string, unknown>).EventSource = class FakeES {
+      url: string
+      constructor(u: string) { this.url = u }
+      addEventListener() {}
+      removeEventListener() {}
+      close() {}
+    } as unknown as new (url: string) => EventSource
+  })
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).EventSource
+    // Reset the module-level sharedBridge so it doesn't leak into other tests.
+    vi.resetModules()
+  })
+
+  it('api.events.subscribe pushes a disposable onto the plugin record', async () => {
+    const { createPluginApi } = await import('../createApi')
+    const rec = makeRecord('evt-test')
+    const api = createPluginApi(rec)
+    api.events.subscribe('selection.change', () => {})
+    expect(rec.disposables.length).toBe(1)
   })
 })
 

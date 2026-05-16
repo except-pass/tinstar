@@ -2,8 +2,15 @@ import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger } f
 import type { PluginRecord } from '../pluginHost/registry'
 import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
 import { apiFetch } from '../../apiClient'
+import { EventBridge } from './eventBridge'
 
 const NOOP_DISPOSABLE: Disposable = { dispose: () => {} }
+
+let sharedBridge: EventBridge | null = null
+function getBridge(): EventBridge {
+  if (!sharedBridge) sharedBridge = new EventBridge('/s/events')
+  return sharedBridge
+}
 
 function makeLogger(pluginId: string): PluginLogger {
   const prefix = `[${pluginId}]`
@@ -50,11 +57,20 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     },
   }
 
+  const events = {
+    subscribe<T = unknown>(channel: string, handler: (msg: T) => void): Disposable {
+      const d = getBridge().subscribe(channel, handler as (msg: unknown) => void)
+      record.disposables.push(d)
+      return d
+    },
+  }
+
   return {
     pluginId: record.name,
     version: record.version,
     widgets,
     http,
+    events,
     logger,
   }
 }
