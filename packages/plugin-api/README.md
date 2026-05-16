@@ -12,8 +12,9 @@ and React.
 ## Installation
 
 ```bash
-npm install --save-peer @tinstar/plugin-api react
-npm install --save-dev @tinstar/plugin-api
+npm install --save-dev @tinstar/plugin-api react
+# Then in your package.json, add:
+#   "peerDependencies": { "@tinstar/plugin-api": "^5.0.0", "react": "^18 || ^19" }
 ```
 
 ## Minimal plugin

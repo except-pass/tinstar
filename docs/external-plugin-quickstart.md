@@ -13,8 +13,9 @@ Step-by-step guide for creating a plugin that lives in its own repository and in
 ```bash
 mkdir my-plugin && cd my-plugin
 npm init -y
-npm install --save-peer @tinstar/plugin-api react
 npm install --save-dev @tinstar/plugin-api react esbuild typescript @types/react
+# Then in your package.json, add:
+#   "peerDependencies": { "@tinstar/plugin-api": "^5.0.0", "react": "^18 || ^19" }
 ```
 
 ## 2. Add a `tinstar` block to `package.json`

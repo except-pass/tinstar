@@ -9,7 +9,7 @@ export function PluginFailedBanner() {
   useEffect(() => {
     const id = setInterval(() => {
       setFailed(pluginRegistry.list().filter(r => r.state === 'failed'))
-    }, 1000)
+    }, 5000)
     return () => clearInterval(id)
   }, [])
 
