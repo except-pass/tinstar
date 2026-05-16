@@ -11,8 +11,14 @@ import { BUNDLED_PLUGINS } from '../core/pluginHost/bundled'
 
 export const pluginRegistry = new PluginRegistry()
 
-// Kick off plugin activation. Bundled plugins (currently: browser) activate
-// here; other widgets remain side-effect-registered until plan 2 migrates them.
-// Top-level await is supported by Vite's ESM module graph; if tsc complains
-// about target, switch to `void bootBundledPlugins(...)`.
-void bootBundledPlugins(BUNDLED_PLUGINS, pluginRegistry)
+/**
+ * Resolves once all bundled plugins have been activated (or failed and
+ * captured in the registry). App code that needs widgets to be registered
+ * before rendering can await this. The .catch is a hard backstop — any
+ * uncaught path inside the boot pipeline ends here, not as an
+ * unhandledrejection.
+ */
+export const pluginsReady: Promise<void> = bootBundledPlugins(BUNDLED_PLUGINS, pluginRegistry).catch(e => {
+  // eslint-disable-next-line no-console
+  console.error('[plugin-host] boot pipeline failed', e)
+})
