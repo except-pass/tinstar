@@ -1,5 +1,6 @@
 // src/widgets/widgetComponentRegistry.ts
 import type React from 'react'
+import type { Disposable } from '@tinstar/plugin-api'
 
 export interface GroupWidgetData {
   node: {
@@ -47,11 +48,20 @@ export interface WidgetRegistration {
 
 const registry = new Map<string, WidgetRegistration>()
 
-export function registerWidgetComponent(reg: WidgetRegistration): void {
+export function registerWidgetComponent(reg: WidgetRegistration): Disposable {
   if (registry.has(reg.type)) {
     throw new Error(`Widget type already registered: ${reg.type}`)
   }
   registry.set(reg.type, reg)
+  return {
+    dispose: () => {
+      // Only delete if we're still the registered entry — avoid clobbering a
+      // re-registration that happened in between.
+      if (registry.get(reg.type) === reg) {
+        registry.delete(reg.type)
+      }
+    },
+  }
 }
 
 export function getWidgetComponent(type: string): WidgetRegistration | undefined {
