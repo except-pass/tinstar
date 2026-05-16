@@ -82,6 +82,7 @@ describe('PluginRegistry', () => {
     const stored = reg.get('gamma')
     expect(stored?.state).toBe('failed')
     expect(stored?.error).toContain('boom')
+    expect(stored?.errorStack).toBeDefined()
     expect(dispose).toHaveBeenCalledTimes(1)  // partial registration was disposed
     expect(stored?.disposables).toEqual([])    // and cleared from the record
   })
@@ -98,6 +99,20 @@ describe('PluginRegistry', () => {
     expect(dispose).toHaveBeenCalledTimes(2)
     expect(reg.get('delta')?.state).toBe('pending')
     expect(reg.get('delta')?.disposables).toEqual([])
+  })
+
+  it('refuses to re-activate an already-active plugin (no silent clobber)', async () => {
+    const reg = new PluginRegistry()
+    const dispose = vi.fn()
+    const plugin = { activate: () => [{ dispose }] }
+    const record = makeRecord('reentry')
+
+    await reg.activate(record, plugin, makeApi)
+    expect(reg.get('reentry')?.state).toBe('active')
+
+    // Second activate on the same name must throw without touching existing disposables.
+    await expect(reg.activate(record, plugin, makeApi)).rejects.toThrow(/already-active/)
+    expect(dispose).not.toHaveBeenCalled()  // first registration NOT clobbered
   })
 
   it('list() returns all known plugin records', async () => {

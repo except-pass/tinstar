@@ -8,6 +8,7 @@ export interface PluginRecord {
   manifest: PluginManifest
   state: PluginState
   error?: string
+  errorStack?: string
   /** Disposables returned from activate(), plus anything tracked during activate(). */
   disposables: Disposable[]
 }
@@ -26,6 +27,13 @@ export class PluginRegistry {
   }
 
   async activate(record: PluginRecord, plugin: Plugin, createApi: CreateApiFn): Promise<void> {
+    const existing = this.plugins.get(record.name)
+    if (existing && existing.state === 'active') {
+      throw new Error(
+        `[plugin-host] activate() called for already-active plugin "${record.name}". ` +
+        `Deactivate first if you want to re-activate.`,
+      )
+    }
     record.disposables = []
     this.plugins.set(record.name, record)
 
@@ -42,6 +50,7 @@ export class PluginRegistry {
     } catch (e) {
       record.state = 'failed'
       record.error = e instanceof Error ? e.message : String(e)
+      record.errorStack = e instanceof Error ? e.stack : undefined
       this.disposeAll(record)
     }
   }
