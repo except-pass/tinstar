@@ -30,6 +30,15 @@ export async function bootBundledPlugins(
       disposables: [],
     }
 
-    await registry.activate(record, entry.module, createPluginApi)
+    try {
+      await registry.activate(record, entry.module, createPluginApi)
+    } catch (e) {
+      // registry.activate's own try/catch handles activate throws; this
+      // catches the re-activation guard throw (duplicate plugin name) so the
+      // boot loop continues past it instead of aborting.
+      const msg = e instanceof Error ? e.message : String(e)
+      // eslint-disable-next-line no-console
+      console.error(`[plugin-host] activate failed for "${key}": ${msg}`)
+    }
   }
 }

@@ -74,4 +74,18 @@ describe('bootBundledPlugins', () => {
     expect(err).toHaveBeenCalled()
     err.mockRestore()
   })
+
+  it('continues past a duplicate plugin name (re-activation guard throw)', async () => {
+    const reg = new PluginRegistry()
+    // Two entries with the same `name` in their package.json.
+    const dup1 = { ...fakeBundle('dup') }
+    const dup2 = { ...fakeBundle('dup') }
+    const bundle = { key1: dup1, key2: dup2, ok: fakeBundle('ok') }
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await bootBundledPlugins(bundle, reg)
+    expect(reg.get('dup')?.state).toBe('active')   // first one wins
+    expect(reg.get('ok')?.state).toBe('active')    // boot loop continued
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('activate failed for "key2"'))
+    err.mockRestore()
+  })
 })
