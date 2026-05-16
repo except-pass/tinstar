@@ -66,13 +66,22 @@ export async function bootExternalPlugins(
  */
 export const defaultImportExternalFn: ImportExternalFn = async (entry) => {
   if (entry.path) {
-    const pkgRes = await fetch(`/api/plugin-runtime/local/${entry.name}/package.json`)
-    if (!pkgRes.ok) throw new Error(`could not fetch package.json: ${pkgRes.status}`)
-    const pkg = await pkgRes.json()
-    const main = typeof pkg.main === 'string' ? pkg.main : 'index.js'
-    const moduleUrl = `/api/plugin-runtime/local/${entry.name}/${main}`
-    const mod = await import(/* @vite-ignore */ moduleUrl) as Plugin
-    return { module: mod, pkg }
+    const ctl = new AbortController()
+    const t = setTimeout(() => ctl.abort(), 10_000)
+    try {
+      const pkgRes = await fetch(`/api/plugin-runtime/local/${entry.name}/package.json`, { signal: ctl.signal })
+      if (!pkgRes.ok) throw new Error(`could not fetch package.json: ${pkgRes.status}`)
+      const pkg = await pkgRes.json()
+      const main = typeof pkg.main === 'string' ? pkg.main : 'index.js'
+      const moduleUrl = `/api/plugin-runtime/local/${entry.name}/${main}`
+      // Note: dynamic import() does not respect AbortSignal in any browser as of 2026.
+      // We accept that the import itself can hang past the 10s budget. The package.json
+      // fetch has the AbortController guarding the first leg.
+      const mod = await import(/* @vite-ignore */ moduleUrl) as Plugin
+      return { module: mod, pkg }
+    } finally {
+      clearTimeout(t)
+    }
   }
   if (entry.npm) {
     throw new Error('npm externals not yet supported in plan 2')
