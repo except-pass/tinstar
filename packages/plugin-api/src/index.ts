@@ -46,6 +46,11 @@ export interface PluginLogger {
   error(...args: unknown[]): void
 }
 
+/** HTTP helper that goes through tinstar's auth context. Relative paths only. */
+export interface PluginHttpApi {
+  fetch(path: string, init?: RequestInit): Promise<Response>
+}
+
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */
 export interface TinstarPluginAPI {
   readonly pluginId: string
@@ -54,6 +59,7 @@ export interface TinstarPluginAPI {
   widgets: {
     register(reg: WidgetRegistration): Disposable
   }
+  http: PluginHttpApi
   logger: PluginLogger
 }
 

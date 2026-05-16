@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { PluginRecord } from '../../pluginHost/registry'
 import type { PluginManifest } from '@tinstar/plugin-api'
 import { createPluginApi } from '../createApi'
@@ -102,5 +102,44 @@ describe('createPluginApi', () => {
     d.dispose()  // should be safe no-op
     expect(getWidgetComponent('zeta-shared')).toBeDefined()  // original still there
     warn.mockRestore()
+  })
+})
+
+describe('createPluginApi — api.http', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  it('forwards path + init to apiFetch with X-Tinstar-Plugin header', async () => {
+    const mockApiFetch = vi.fn().mockResolvedValue(new Response('{}'))
+    vi.doMock('../../../apiClient', () => ({ apiFetch: mockApiFetch }))
+
+    const { createPluginApi } = await import('../createApi')
+    const rec = makeRecord('http-test')
+    const api = createPluginApi(rec)
+    await api.http.fetch('/api/foo', { method: 'GET' })
+
+    expect(mockApiFetch).toHaveBeenCalledTimes(1)
+    const [path, init] = mockApiFetch.mock.calls[0]
+    expect(path).toBe('/api/foo')
+    expect(init.method).toBe('GET')
+    const headers = new Headers(init.headers)
+    expect(headers.get('X-Tinstar-Plugin')).toBe('http-test')
+  })
+
+  it('preserves existing headers when X-Tinstar-Plugin is added', async () => {
+    const mockApiFetch = vi.fn().mockResolvedValue(new Response('{}'))
+    vi.doMock('../../../apiClient', () => ({ apiFetch: mockApiFetch }))
+
+    const { createPluginApi } = await import('../createApi')
+    const rec = makeRecord('hdr-test')
+    const api = createPluginApi(rec)
+    await api.http.fetch('/x', { headers: { 'X-Custom': 'v' } })
+
+    const init = mockApiFetch.mock.calls[0][1]
+    const headers = new Headers(init.headers)
+    expect(headers.get('X-Custom')).toBe('v')
+    expect(headers.get('X-Tinstar-Plugin')).toBe('hdr-test')
   })
 })

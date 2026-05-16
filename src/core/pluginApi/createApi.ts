@@ -1,6 +1,7 @@
 import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger } from '@tinstar/plugin-api'
 import type { PluginRecord } from '../pluginHost/registry'
 import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
+import { apiFetch } from '../../apiClient'
 
 const NOOP_DISPOSABLE: Disposable = { dispose: () => {} }
 
@@ -41,10 +42,19 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     },
   }
 
+  const http = {
+    fetch(path: string, init?: RequestInit): Promise<Response> {
+      const headers = new Headers(init?.headers)
+      headers.set('X-Tinstar-Plugin', record.name)
+      return apiFetch(path, { ...init, headers })
+    },
+  }
+
   return {
     pluginId: record.name,
     version: record.version,
     widgets,
+    http,
     logger,
   }
 }
