@@ -1,0 +1,17 @@
+{
+  "name": "file-editor",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.tsx",
+  "tinstar": {
+    "apiVersion": "5",
+    "displayName": "File editor",
+    "description": "Edit text files on the canvas",
+    "contributes": {
+      "widgets": [
+        { "type": "file-editor", "label": "File editor", "defaultSize": { "width": 640, "height": 480 } }
+      ]
+    },
+    "permissions": []
+  }
+}

@@ -3,6 +3,8 @@ import browserPkg from '../../plugins/browser/package.json'
 import * as browser from '../../plugins/browser/src/index'
 import natsTrafficPkg from '../../plugins/nats-traffic/package.json'
 import * as natsTraffic from '../../plugins/nats-traffic/src/index'
+import fileEditorPkg from '../../plugins/file-editor/package.json'
+import * as fileEditor from '../../plugins/file-editor/src/index'
 
 /**
  * Static index of bundled plugins. Each entry is an ES module whose package
@@ -20,4 +22,5 @@ export interface BundledEntry {
 export const BUNDLED_PLUGINS: Record<string, BundledEntry> = {
   browser: { pkg: browserPkg, module: browser as Plugin },
   'nats-traffic': { pkg: natsTrafficPkg, module: natsTraffic as Plugin },
+  'file-editor': { pkg: fileEditorPkg, module: fileEditor as Plugin },
 }
