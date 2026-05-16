@@ -1,7 +1,8 @@
 import { httpJson } from '../http.js'
+import { getApiBase } from '../../apiBase.js'
 
 export async function run(argv) {
-  const baseUrl = process.env.TINSTAR_API_BASE || 'http://localhost:5273'
+  const baseUrl = getApiBase()
   const spec = await httpJson(`${baseUrl}/api/docs/openapi.json`)
   const target = argv[4]
   if (!target) {

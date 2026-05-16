@@ -1,17 +1,28 @@
 // bin/tinstar/status.js
 import http from 'node:http'
+import https from 'node:https'
+import { getApiBase } from '../apiBase.js'
 
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
-    const req = http.get(url, { timeout: 3000 }, res => {
+    const u = new URL(url)
+    const lib = u.protocol === 'https:' ? https : http
+    const req = lib.get(u, { timeout: 3000 }, res => {
       let data = ''
       res.on('data', chunk => { data += chunk })
       res.on('end', () => {
-        try { resolve(JSON.parse(data)) } catch (e) { reject(e) }
+        const trimmed = data.trimStart()
+        if (trimmed.startsWith('<')) {
+          reject(new Error(`got HTML from ${url} (status ${res.statusCode}) — another process is listening on this port`))
+          return
+        }
+        try { resolve(JSON.parse(data)) } catch (e) {
+          reject(new Error(`bad JSON from ${url}: ${e.message}`))
+        }
       })
     })
     req.on('error', reject)
-    req.on('timeout', () => { req.destroy(new Error('timeout')) })
+    req.on('timeout', () => { req.destroy(new Error(`timeout calling ${url}`)) })
   })
 }
 
@@ -64,7 +75,7 @@ export function renderStatus(snapshot, asJson) {
 }
 
 export async function run(argv) {
-  const baseUrl = process.env.TINSTAR_API_BASE || 'http://localhost:5273'
+  const baseUrl = getApiBase()
   const asJson = argv.includes('--json')
   const snap = await gather(baseUrl)
   console.log(renderStatus(snap, asJson))

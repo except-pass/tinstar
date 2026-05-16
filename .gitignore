@@ -11,3 +11,5 @@ backlog/
 .claude/worktrees/*
 screenshots/
 docs/superpowers/
+data-alloy/
+todos.txt

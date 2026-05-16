@@ -1,8 +1,9 @@
 // bin/tinstar/commands/tasks.js
 import { httpJson } from '../http.js'
+import { getApiBase } from '../../apiBase.js'
 
 export async function run(argv) {
-  const baseUrl = process.env.TINSTAR_API_BASE || 'http://localhost:5273'
+  const baseUrl = getApiBase()
   const sub = argv[3]
   if (sub === 'list') {
     const state = await httpJson(`${baseUrl}/api/state`)

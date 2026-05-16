@@ -225,6 +225,15 @@ export function startServer(opts: ServerOptions) {
     ? opts.host.filter(h => h && h.length > 0)
     : (opts.host ? [opts.host] : [])
 
+  // Always bind 127.0.0.1 alongside any explicit host so localhost-pointing
+  // hooks (project .claude/settings.json, the cc-quota statusline) keep
+  // working when the server is exposed on a specific external interface.
+  // Skip when a wildcard already covers localhost.
+  const coversLocalhost = hosts.some(h => h === '0.0.0.0' || h === '::' || h === '127.0.0.1' || h === 'localhost')
+  if (hosts.length > 0 && !coversLocalhost) {
+    hosts.push('127.0.0.1')
+  }
+
   async function listenAll(port: number, isRetry = false): Promise<void> {
     const targets: Array<string | undefined> = hosts.length > 0 ? hosts : [undefined]
     const opened: Server[] = []

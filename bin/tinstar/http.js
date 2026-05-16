@@ -19,6 +19,11 @@ export function httpJson(rawUrl, opts = {}) {
       res.on('data', chunk => { data += chunk })
       res.on('end', () => {
         if (!data) return resolve({})
+        const trimmed = data.trimStart()
+        if (trimmed.startsWith('<')) {
+          reject(new Error(`got HTML from ${rawUrl} (status ${res.statusCode}) — another process is listening on this port`))
+          return
+        }
         try { resolve(JSON.parse(data)) } catch (e) { reject(new Error(`bad json from ${rawUrl}: ${e.message}`)) }
       })
     })
