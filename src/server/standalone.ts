@@ -16,6 +16,7 @@ import httpProxy from 'http-proxy'
 
 import { initBackend } from './index'
 import { handleRequest } from './api/routes'
+import { handlePluginRuntime } from './api/pluginRuntime'
 import { log } from './logger'
 import { getConfigRoot } from './configRoot'
 
@@ -119,6 +120,7 @@ export function startServer(opts: ServerOptions) {
 
     // 2. API requests
     try {
+      if (await handlePluginRuntime(req, res, { configRoot: configDir })) return
       const handled = await handleRequest(ctx, req, res)
       if (handled) return
     } catch (err) {
