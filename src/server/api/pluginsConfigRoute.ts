@@ -12,14 +12,28 @@ export async function handlePluginsConfig(
   if (req.url !== '/api/plugins-config') return false
 
   if (req.method === 'GET') {
-    const cfg = readPluginsConfig(opts.configRoot)
-    res.setHeader('Content-Type', 'application/json')
-    res.end(JSON.stringify(cfg))
+    try {
+      const cfg = readPluginsConfig(opts.configRoot)
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify(cfg))
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[plugin-host] /api/plugins-config GET failed', e)
+      res.statusCode = 500
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: 'config read failed' }))
+    }
     return true
   }
 
   if (req.method === 'PUT') {
-    const body = await readBody(req)
+    let body: string
+    try { body = await readBody(req) }
+    catch (e) {
+      res.statusCode = 400
+      res.end(`body read failed: ${e instanceof Error ? e.message : 'unknown'}`)
+      return true
+    }
     let parsed: unknown
     try { parsed = JSON.parse(body) } catch {
       res.statusCode = 400
@@ -42,7 +56,16 @@ export async function handlePluginsConfig(
           return typeof r.name === 'string' && r.name !== '' && (typeof r.path === 'string' || typeof r.npm === 'string')
         })
       : []
-    writePluginsConfig(opts.configRoot, { disabled, external })
+    try {
+      writePluginsConfig(opts.configRoot, { disabled, external })
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[plugin-host] /api/plugins-config PUT write failed', e)
+      res.statusCode = 500
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: 'config write failed' }))
+      return true
+    }
     res.setHeader('Content-Type', 'application/json')
     res.end(JSON.stringify({ disabled, external }))
     return true
@@ -53,11 +76,34 @@ export async function handlePluginsConfig(
   return true
 }
 
+const MAX_BODY_BYTES = 1_000_000  // 1MB — plugins.json is tiny
+const READ_TIMEOUT_MS = 5_000
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
-    let body = ''
-    req.on('data', (chunk: Buffer) => { body += chunk.toString('utf8') })
-    req.on('end', () => resolve(body))
-    req.on('error', reject)
+    let size = 0
+    const chunks: Buffer[] = []
+    const timer = setTimeout(() => {
+      try { req.destroy() } catch { /* ignore */ }
+      reject(new Error('body read timeout'))
+    }, READ_TIMEOUT_MS)
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > MAX_BODY_BYTES) {
+        clearTimeout(timer)
+        try { req.destroy() } catch { /* ignore */ }
+        reject(new Error('body too large'))
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      clearTimeout(timer)
+      resolve(Buffer.concat(chunks).toString('utf8'))
+    })
+    req.on('error', e => {
+      clearTimeout(timer)
+      reject(e)
+    })
   })
 }
