@@ -8,6 +8,7 @@ import { createConnection } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { log } from '../logger'
+import { getMetricsText, register as turnLengthRegister } from '../observability/turn-length'
 import type { DocumentStore } from '../stores/document-store'
 import type { OTelStore } from '../stores/otel-store'
 import type { SSEBroadcaster } from './sse'
@@ -736,8 +737,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // GET /api/metrics — Prometheus exposition for turn-length histogram
   if (method === 'GET' && url === '/api/metrics') {
     try {
-      const { getMetricsText, register } = await import('../observability/turn-length')
-      res.writeHead(200, { ...corsHeaders, 'Content-Type': register.contentType })
+      res.writeHead(200, { ...corsHeaders, 'Content-Type': turnLengthRegister.contentType })
       res.end(await getMetricsText())
     } catch (err) {
       log.warn('metrics', `failed to render: ${(err as Error).message}`)
