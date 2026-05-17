@@ -74,6 +74,19 @@ export function SettingsDialog({ onClose }: Props) {
     localStorage.getItem('tinstar-prompt-composer-default') === 'true'
   )
 
+  // File Explorer settings
+  const [uploadMaxMb, setUploadMaxMb] = useState<number>(100)
+  const [uploadSaveError, setUploadSaveError] = useState<string | null>(null)
+
+  useEffect(() => {
+    apiFetch('/api/server-prefs')
+      .then(r => r.json())
+      .then(j => {
+        if (j?.data?.uploadMaxBytes) setUploadMaxMb(Math.round(j.data.uploadMaxBytes / (1024 * 1024)))
+      })
+      .catch(() => { /* keep default */ })
+  }, [])
+
   const fetchProjects = useCallback(() => {
     apiFetch('/api/projects')
       .then(r => r.ok ? r.json() : null)
@@ -789,6 +802,44 @@ export function SettingsDialog({ onClose }: Props) {
               </label>
               <p className="text-2xs text-slate-600 mt-1 ml-7">
                 When enabled, new session widgets will have the prompt composer expanded.
+              </p>
+            </div>
+
+            {/* File Explorer */}
+            <div className="mb-4">
+              <h5 className="text-2xs font-mono uppercase tracking-wider text-slate-500 mb-2">
+                File Explorer
+              </h5>
+              <label className="flex items-center gap-3">
+                <span className="text-xs text-slate-300">Max upload size (MB)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={1024}
+                  value={uploadMaxMb}
+                  onChange={e => setUploadMaxMb(Math.max(1, Math.min(1024, Number(e.target.value) || 1)))}
+                  onBlur={() => {
+                    const bytes = uploadMaxMb * 1024 * 1024
+                    apiFetch('/api/server-prefs', {
+                      method: 'PUT',
+                      headers: { 'content-type': 'application/json' },
+                      body: JSON.stringify({ uploadMaxBytes: bytes }),
+                    })
+                      .then(r => r.json())
+                      .then(j => {
+                        if (j?.ok) setUploadSaveError(null)
+                        else setUploadSaveError(j?.error?.message || 'Save failed')
+                      })
+                      .catch(err => setUploadSaveError(String(err)))
+                  }}
+                  className="w-20 px-2 py-1 text-xs font-mono bg-surface-base border border-white/20 rounded text-slate-200 focus:outline-none focus:border-primary/60"
+                />
+              </label>
+              {uploadSaveError && (
+                <p className="text-2xs text-red-400 mt-1 ml-3">{uploadSaveError}</p>
+              )}
+              <p className="text-2xs text-slate-600 mt-1">
+                Server-enforced cap for files uploaded via drag-and-drop onto the file tree.
               </p>
             </div>
           </div>
