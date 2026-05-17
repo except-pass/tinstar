@@ -126,7 +126,7 @@ export function startServer(opts: ServerOptions) {
       if (await handlePluginRuntime(req, res, { configRoot: configDir })) return
       if (await handlePluginsConfig(req, res, { configRoot: configDir })) return
       if (await handleServerPrefs(req, res, { configRoot: configDir })) return
-      if (await handleFileUpload(req, res, { sessDir: ctx.sessDir, configRoot: configDir })) return
+      if (await handleFileUpload(req, res, { sessDir: ctx.sessionConfig?.dirs.sessions ?? '', configRoot: configDir })) return
       const handled = await handleRequest(ctx, req, res)
       if (handled) return
     } catch (err) {

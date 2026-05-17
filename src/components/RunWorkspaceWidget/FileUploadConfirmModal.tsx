@@ -55,7 +55,7 @@ export function FileUploadConfirmModal({ files, initialTargetDir, existingPaths,
       onClick={onCancel}
     >
       <div
-        className="bg-surface-base border border-white/10 rounded-lg shadow-2xl w-[640px] max-h-[80vh] flex flex-col"
+        className="bg-surface-panel border border-white/10 rounded-lg shadow-2xl w-[640px] max-h-[80vh] flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         <div className="px-5 py-3 border-b border-white/10">
@@ -75,7 +75,7 @@ export function FileUploadConfirmModal({ files, initialTargetDir, existingPaths,
                   type="text"
                   value={r.path}
                   onChange={e => updatePath(i, e.target.value)}
-                  className={`flex-1 text-xs font-mono bg-surface-deep border rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-primary/60 ${
+                  className={`flex-1 text-xs font-mono bg-surface-base border rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-primary/60 ${
                     v.invalid || v.tooLarge ? 'border-red-500/60' : 'border-white/10'
                   }`}
                 />
@@ -109,7 +109,7 @@ export function FileUploadConfirmModal({ files, initialTargetDir, existingPaths,
             onClick={() => onConfirm(rows)}
             className={`px-3 py-1.5 text-xs font-mono rounded transition-colors ${
               allValid
-                ? 'bg-primary text-surface-deep hover:bg-primary/90'
+                ? 'bg-primary text-surface-base hover:bg-primary/90'
                 : 'bg-white/5 text-slate-600 cursor-not-allowed'
             }`}
           >
