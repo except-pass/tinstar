@@ -13,7 +13,8 @@ beforeEach(() => {
   rmSync(ROOT, { recursive: true, force: true })
   mkdirSync(SESS_DIR, { recursive: true })
   mkdirSync(WS, { recursive: true })
-  writeFileSync(join(SESS_DIR, 'sess-a.json'), JSON.stringify({
+  mkdirSync(join(SESS_DIR, 'sess-a'), { recursive: true })
+  writeFileSync(join(SESS_DIR, 'sess-a', 'session.json'), JSON.stringify({
     name: 'sess-a',
     workspace: { path: WS },
   }))

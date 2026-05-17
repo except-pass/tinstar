@@ -1,9 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import Busboy from 'busboy'
 import { loadServerPrefs } from '../serverPrefs'
+import { getSession } from '../sessions/session'
 
 interface Ctx { sessDir: string; configRoot: string }
 
@@ -16,14 +17,7 @@ function json(res: ServerResponse, payload: unknown, status = 200) {
 }
 
 function getSessionWorkspace(sessDir: string, name: string): string | null {
-  const path = join(sessDir, `${name}.json`)
-  if (!existsSync(path)) return null
-  try {
-    const sess = JSON.parse(readFileSync(path, 'utf8'))
-    return sess?.workspace?.path ?? null
-  } catch {
-    return null
-  }
+  return getSession(sessDir, name)?.workspace?.path ?? null
 }
 
 export async function handleFileUpload(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Promise<boolean> {
