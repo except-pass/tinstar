@@ -44,8 +44,9 @@ export function observeFromRecapEntries(name: string, entries: RecapEntry[], ses
   }
 }
 
-export function flushOnStateChange(_name: string, _newState: SessionState): void {
-  throw new Error('not implemented')
+export function flushOnStateChange(name: string, newState: SessionState): void {
+  if (newState !== 'stopped') return
+  flush(name)
 }
 
 export function reconcileLiveSessions(_currentNames: Set<string>): void {

@@ -127,3 +127,53 @@ describe('turn-length: edge cases', () => {
     expect(sum).toBe(5)
   })
 })
+
+describe('turn-length: flushOnStateChange', () => {
+  beforeEach(() => _resetForTests())
+
+  it('flushes pending turn when session transitions to stopped', async () => {
+    const s = fakeSession('eta')
+    observeFromRecapEntries('eta', [
+      entry('user',  '2026-05-17T12:00:00.000Z'),
+      entry('agent', '2026-05-17T12:00:07.000Z'),
+    ], s)
+    // No following user line yet — without flush the turn would be lost
+    flushOnStateChange('eta', 'stopped')
+
+    const sum = (await turnLengthHist.get()).values.find(
+      v => v.metricName === 'tinstar_turn_length_seconds_sum' && v.labels.tinstar_session === 'eta',
+    )?.value
+    expect(sum).toBe(7)
+  })
+
+  it('does not flush on non-stopped transitions', async () => {
+    const s = fakeSession('theta')
+    observeFromRecapEntries('theta', [
+      entry('user',  '2026-05-17T12:00:00.000Z'),
+      entry('agent', '2026-05-17T12:00:07.000Z'),
+    ], s)
+    flushOnStateChange('theta', 'idle')
+    flushOnStateChange('theta', 'running')
+    flushOnStateChange('theta', 'needs_attention')
+
+    const sum = (await turnLengthHist.get()).values.find(
+      v => v.metricName === 'tinstar_turn_length_seconds_sum' && v.labels.tinstar_session === 'theta',
+    )?.value ?? 0
+    expect(sum).toBe(0)
+  })
+
+  it('is idempotent — flushing twice does not double-count', async () => {
+    const s = fakeSession('iota')
+    observeFromRecapEntries('iota', [
+      entry('user',  '2026-05-17T12:00:00.000Z'),
+      entry('agent', '2026-05-17T12:00:07.000Z'),
+    ], s)
+    flushOnStateChange('iota', 'stopped')
+    flushOnStateChange('iota', 'stopped')
+
+    const count = (await turnLengthHist.get()).values.find(
+      v => v.metricName === 'tinstar_turn_length_seconds_count' && v.labels.tinstar_session === 'iota',
+    )?.value
+    expect(count).toBe(1)
+  })
+})
