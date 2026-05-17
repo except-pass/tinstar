@@ -66,3 +66,64 @@ describe('turn-length: observeFromRecapEntries', () => {
     expect(sum).toBe(12)
   })
 })
+
+describe('turn-length: edge cases', () => {
+  beforeEach(() => _resetForTests())
+
+  it('does not emit when user line has no following agent line', async () => {
+    const s = fakeSession('beta')
+    observeFromRecapEntries('beta', [
+      entry('user', '2026-05-17T12:00:00.000Z'),
+      entry('user', '2026-05-17T12:01:00.000Z'),
+    ], s)
+    const counts = await bucketCounts({ tinstar_session: 'beta', cc_conversation_id: 'conv-1' })
+    expect(counts.find(c => c.metricName === 'tinstar_turn_length_seconds_count')?.value ?? 0).toBe(0)
+  })
+
+  it('drops negative-duration turns and logs', async () => {
+    const s = fakeSession('gamma')
+    observeFromRecapEntries('gamma', [
+      entry('user',  '2026-05-17T12:00:10.000Z'),
+      entry('agent', '2026-05-17T12:00:05.000Z'),  // before user — corrupt
+      entry('user',  '2026-05-17T12:00:20.000Z'),
+    ], s)
+    const counts = await bucketCounts({ tinstar_session: 'gamma', cc_conversation_id: 'conv-1' })
+    expect(counts.find(c => c.metricName === 'tinstar_turn_length_seconds_count')?.value ?? 0).toBe(0)
+  })
+
+  it('drops absurdly large duration (>24h)', async () => {
+    const s = fakeSession('delta')
+    observeFromRecapEntries('delta', [
+      entry('user',  '2026-05-17T00:00:00.000Z'),
+      entry('agent', '2026-05-18T01:00:00.000Z'), // 25h
+      entry('user',  '2026-05-18T02:00:00.000Z'),
+    ], s)
+    const counts = await bucketCounts({ tinstar_session: 'delta', cc_conversation_id: 'conv-1' })
+    expect(counts.find(c => c.metricName === 'tinstar_turn_length_seconds_count')?.value ?? 0).toBe(0)
+  })
+
+  it('uses "unknown" when conversation.id is null', async () => {
+    const s = fakeSession('eps', null)
+    observeFromRecapEntries('eps', [
+      entry('user',  '2026-05-17T12:00:00.000Z'),
+      entry('agent', '2026-05-17T12:00:04.000Z'),
+      entry('user',  '2026-05-17T12:01:00.000Z'),
+    ], s)
+    const counts = await bucketCounts({ tinstar_session: 'eps', cc_conversation_id: 'unknown' })
+    expect(counts.find(c => c.metricName === 'tinstar_turn_length_seconds_count')?.value).toBe(1)
+  })
+
+  it('ignores status-type entries', async () => {
+    const s = fakeSession('zeta')
+    observeFromRecapEntries('zeta', [
+      entry('user',  '2026-05-17T12:00:00.000Z'),
+      { id: 'st', type: 'status', content: 'whatever', timestamp: '2026-05-17T12:00:01.000Z' },
+      entry('agent', '2026-05-17T12:00:05.000Z'),
+      entry('user',  '2026-05-17T12:01:00.000Z'),
+    ], s)
+    const sum = (await turnLengthHist.get()).values.find(
+      v => v.metricName === 'tinstar_turn_length_seconds_sum' && v.labels.tinstar_session === 'zeta',
+    )?.value
+    expect(sum).toBe(5)
+  })
+})
