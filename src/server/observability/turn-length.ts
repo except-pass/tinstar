@@ -49,8 +49,10 @@ export function flushOnStateChange(name: string, newState: SessionState): void {
   flush(name)
 }
 
-export function reconcileLiveSessions(_currentNames: Set<string>): void {
-  throw new Error('not implemented')
+export function reconcileLiveSessions(currentNames: Set<string>): void {
+  for (const name of pending.keys()) {
+    if (!currentNames.has(name)) flush(name)
+  }
 }
 
 function flush(name: string): void {

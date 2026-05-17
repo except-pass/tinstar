@@ -177,3 +177,56 @@ describe('turn-length: flushOnStateChange', () => {
     expect(count).toBe(1)
   })
 })
+
+describe('turn-length: reconcileLiveSessions', () => {
+  beforeEach(() => _resetForTests())
+
+  it('flushes pending turns for sessions that have disappeared', async () => {
+    const s = fakeSession('kappa')
+    observeFromRecapEntries('kappa', [
+      entry('user',  '2026-05-17T12:00:00.000Z'),
+      entry('agent', '2026-05-17T12:00:09.000Z'),
+    ], s)
+
+    reconcileLiveSessions(new Set(['other-session']))  // kappa missing
+
+    const sum = (await turnLengthHist.get()).values.find(
+      v => v.metricName === 'tinstar_turn_length_seconds_sum' && v.labels.tinstar_session === 'kappa',
+    )?.value
+    expect(sum).toBe(9)
+  })
+
+  it('preserves pending state for sessions that are still alive', async () => {
+    const s = fakeSession('lambda')
+    observeFromRecapEntries('lambda', [
+      entry('user',  '2026-05-17T12:00:00.000Z'),
+      entry('agent', '2026-05-17T12:00:09.000Z'),
+    ], s)
+
+    reconcileLiveSessions(new Set(['lambda', 'other']))
+
+    // Pending should still be there; verify by sending the next user line
+    observeFromRecapEntries('lambda', [entry('user', '2026-05-17T12:01:00.000Z')], s)
+
+    const count = (await turnLengthHist.get()).values.find(
+      v => v.metricName === 'tinstar_turn_length_seconds_count' && v.labels.tinstar_session === 'lambda',
+    )?.value
+    expect(count).toBe(1)
+  })
+
+  it('handles repeated reconcile calls (idempotent for already-flushed names)', async () => {
+    const s = fakeSession('mu')
+    observeFromRecapEntries('mu', [
+      entry('user',  '2026-05-17T12:00:00.000Z'),
+      entry('agent', '2026-05-17T12:00:09.000Z'),
+    ], s)
+
+    reconcileLiveSessions(new Set())
+    reconcileLiveSessions(new Set())
+
+    const count = (await turnLengthHist.get()).values.find(
+      v => v.metricName === 'tinstar_turn_length_seconds_count' && v.labels.tinstar_session === 'mu',
+    )?.value
+    expect(count).toBe(1)
+  })
+})
