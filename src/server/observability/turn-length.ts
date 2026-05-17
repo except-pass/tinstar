@@ -27,8 +27,21 @@ export function _resetForTests(): void {
   turnLengthHist.reset()
 }
 
-export function observeFromRecapEntries(_name: string, _entries: RecapEntry[], _session: Session): void {
-  throw new Error('not implemented')
+export function observeFromRecapEntries(name: string, entries: RecapEntry[], session: Session): void {
+  for (const e of entries) {
+    if (e.type === 'user') {
+      flush(name)
+      if (!e.timestamp) continue
+      pending.set(name, {
+        userTs: e.timestamp,
+        lastAssistantTs: null,
+        ccConvId: session.conversation.id ?? 'unknown',
+      })
+    } else if (e.type === 'agent') {
+      const p = pending.get(name)
+      if (p && e.timestamp) p.lastAssistantTs = e.timestamp
+    }
+  }
 }
 
 export function flushOnStateChange(_name: string, _newState: SessionState): void {
@@ -37,6 +50,23 @@ export function flushOnStateChange(_name: string, _newState: SessionState): void
 
 export function reconcileLiveSessions(_currentNames: Set<string>): void {
   throw new Error('not implemented')
+}
+
+function flush(name: string): void {
+  const p = pending.get(name)
+  if (!p) return
+  pending.delete(name)
+  if (!p.lastAssistantTs) return
+  const seconds = (Date.parse(p.lastAssistantTs) - Date.parse(p.userTs)) / 1000
+  if (!Number.isFinite(seconds) || seconds < 0 || seconds > 86400) {
+    log.warn('turn-length', `dropping ${name}: out-of-range seconds=${seconds}`)
+    return
+  }
+  try {
+    turnLengthHist.labels(name, p.ccConvId).observe(seconds)
+  } catch (err) {
+    log.warn('turn-length', `observe failed for ${name}: ${(err as Error).message}`)
+  }
 }
 
 export async function getMetricsText(): Promise<string> {
