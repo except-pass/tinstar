@@ -1,6 +1,6 @@
 # Adding a bundled plugin to tinstar
 
-For plugins that live **inside the tinstar repo** and ship as part of the tinstar build. Sibling guide for external plugins (in their own repo, installed via `plugins.json`) is [`external-plugin-quickstart.md`](external-plugin-quickstart.md). Canonical reference is [`plugin-system.md`](plugin-system.md).
+For plugins that live **inside the tinstar repo** and ship as part of the tinstar build. Sibling guide for external plugins (in their own repo, installed via `plugins.json`) is [`external-quickstart.md`](external-quickstart.md). Canonical reference is [`README.md`](README.md).
 
 A bundled plugin is just an in-repo plugin: same activate(api) entry, same manifest shape. The only differences from external are (a) it's statically imported into the tinstar bundle at build time and (b) it can `import` from anywhere in `src/` via relative paths, including the existing `apiClient`/`apiFetch`. No build pipeline of its own.
 
@@ -42,7 +42,7 @@ Conventionally `kebab-case` for the folder. The plugin's `name` (in its `package
 }
 ```
 
-Manifest field reference is in [`plugin-system.md`](plugin-system.md#plugin-manifest).
+Manifest field reference is in [`README.md`](README.md#plugin-manifest).
 
 ---
 
@@ -141,7 +141,7 @@ export function activate(api: TinstarPluginAPI) {
 }
 ```
 
-Subscribe to **exact** SSE event names from the [known channels list](plugin-system.md#eventssubscribe). Wildcards not supported in V5.0.
+Subscribe to **exact** SSE event names from the [known channels list](README.md#eventssubscribe). Wildcards not supported in V5.0.
 
 ### Hitting tinstar's REST API
 
@@ -166,7 +166,7 @@ api.widgets.register({
 })
 ```
 
-The frame state object also includes `isHovered` and `isDropTarget`. See [`WidgetFrameState`](../packages/plugin-api/src/index.ts).
+The frame state object also includes `isHovered` and `isDropTarget`. See [`WidgetFrameState`](../../packages/plugin-api/src/index.ts).
 
 ### Plugin-specific persistent state
 

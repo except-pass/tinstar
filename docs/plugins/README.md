@@ -3,9 +3,9 @@
 Tinstar's V5 plugin system lets sibling projects (and you) extend the canvas with new widgets, panes, and commands without forking core. Built-in widgets ship as bundled plugins through the same API external plugins use — there's no first/second class tier.
 
 This doc is the canonical reference. Author guides:
-- **Bundled (in-repo) plugin** → [`docs/bundled-plugin-howto.md`](bundled-plugin-howto.md)
-- **External (own repo) plugin** → [`docs/external-plugin-quickstart.md`](external-plugin-quickstart.md)
-- **npm consumers** → [`packages/plugin-api/README.md`](../packages/plugin-api/README.md)
+- **Bundled (in-repo) plugin** → [`bundled-howto.md`](bundled-howto.md)
+- **External (own repo) plugin** → [`external-quickstart.md`](external-quickstart.md)
+- **npm consumers** → [`packages/plugin-api/README.md`](../../packages/plugin-api/README.md)
 
 ---
 
@@ -357,8 +357,8 @@ Every registration call returns a `Disposable`. The registry tracks them per plu
 
 ## References
 
-- Public types: [`packages/plugin-api/src/index.ts`](../packages/plugin-api/src/index.ts)
-- npm consumer README: [`packages/plugin-api/README.md`](../packages/plugin-api/README.md)
-- External plugin author guide: [`docs/external-plugin-quickstart.md`](external-plugin-quickstart.md)
-- Bundled plugin author guide: [`docs/bundled-plugin-howto.md`](bundled-plugin-howto.md)
-- SSE event source of truth: [`src/server/api/sse.ts`](../src/server/api/sse.ts), [`src/hooks/useServerEvents.ts`](../src/hooks/useServerEvents.ts)
+- Public types: [`packages/plugin-api/src/index.ts`](../../packages/plugin-api/src/index.ts)
+- npm consumer README: [`packages/plugin-api/README.md`](../../packages/plugin-api/README.md)
+- External plugin author guide: [`external-quickstart.md`](external-quickstart.md)
+- Bundled plugin author guide: [`bundled-howto.md`](bundled-howto.md)
+- SSE event source of truth: [`src/server/api/sse.ts`](../../src/server/api/sse.ts), [`src/hooks/useServerEvents.ts`](../../src/hooks/useServerEvents.ts)

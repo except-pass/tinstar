@@ -325,10 +325,10 @@ External plugins ship as pre-built ESM bundles in their own repos. The host:
 
 ### Reference
 
-Full design + author guides:
-- [`docs/plugin-system.md`](plugin-system.md) — canonical reference, design decisions
-- [`docs/bundled-plugin-howto.md`](bundled-plugin-howto.md) — author guide for in-repo plugins
-- [`docs/external-plugin-quickstart.md`](external-plugin-quickstart.md) — author guide for plugins in their own repo
+Full design + author guides under [`docs/plugins/`](plugins/):
+- [`docs/plugins/README.md`](plugins/README.md) — canonical reference, design decisions
+- [`docs/plugins/bundled-howto.md`](plugins/bundled-howto.md) — author guide for in-repo plugins
+- [`docs/plugins/external-quickstart.md`](plugins/external-quickstart.md) — author guide for plugins in their own repo
 - [`packages/plugin-api/README.md`](../packages/plugin-api/README.md) — npm-consumer-facing reference
 
 ---
