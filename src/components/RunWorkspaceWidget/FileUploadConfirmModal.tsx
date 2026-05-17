@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 
 export interface PendingUpload {
   file: File
@@ -48,7 +49,7 @@ export function FileUploadConfirmModal({ files, initialTargetDir, existingPaths,
     return null
   }
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={onCancel}
@@ -116,7 +117,8 @@ export function FileUploadConfirmModal({ files, initialTargetDir, existingPaths,
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
