@@ -733,6 +733,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // GET /api/metrics — Prometheus exposition for turn-length histogram
+  if (method === 'GET' && url === '/api/metrics') {
+    try {
+      const { getMetricsText, register } = await import('../observability/turn-length')
+      res.writeHead(200, { ...corsHeaders, 'Content-Type': register.contentType })
+      res.end(await getMetricsText())
+    } catch (err) {
+      log.warn('metrics', `failed to render: ${(err as Error).message}`)
+      res.writeHead(500, { ...corsHeaders, 'Content-Type': 'text/plain' })
+      res.end('# error generating metrics\n')
+    }
+    return true
+  }
+
   // GET /api/state
   if (method === 'GET' && url === '/api/state') {
     // Include sessions from disk alongside document store snapshot
