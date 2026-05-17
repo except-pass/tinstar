@@ -49,6 +49,9 @@ export function FileUploadConfirmModal({ files, initialTargetDir, existingPaths,
     return null
   }
 
+  // Portal to document.body: InfiniteCanvas applies `transform: translate(...) scale(...)`
+  // to widget containers, which makes `position: fixed` resolve against the transformed
+  // ancestor instead of the viewport. Without the portal the modal renders displaced/scaled.
   return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
