@@ -320,6 +320,34 @@ export const spec = {
         responses: { 200: { description: 'File listing', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, data: { type: 'array', items: { $ref: '#/components/schemas/FileEntry' } } } } } } } },
       },
     },
+    '/api/sessions/{name}/files/upload': {
+      post: {
+        tags: ['Sessions'],
+        summary: 'Upload a file into the session workspace',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string', description: 'Workspace-relative target path' },
+                  file: { type: 'string', format: 'binary' },
+                },
+                required: ['path', 'file'],
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Uploaded' },
+          '400': { description: 'Invalid path or multipart' },
+          '404': { description: 'Session not found' },
+          '413': { description: 'File too large' },
+        },
+      },
+    },
     '/api/sessions/{name}/send-keys': {
       post: {
         tags: ['Sessions'],
@@ -402,6 +430,22 @@ export const spec = {
         description: 'Deep-merges into ~/.config/tinstar/config.json.',
         requestBody: { content: { 'application/json': { schema: { type: 'object' } } } },
         responses: { 200: { description: 'Merged config' } },
+      },
+    },
+    '/api/server-prefs': {
+      get: {
+        tags: ['Config'],
+        summary: 'Get server preferences',
+        responses: { 200: { description: 'OK' } },
+      },
+      put: {
+        tags: ['Config'],
+        summary: 'Update server preferences',
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', properties: { uploadMaxBytes: { type: 'integer' } } } } },
+        },
+        responses: { 200: { description: 'OK' }, 400: { description: 'Invalid prefs' } },
       },
     },
 
