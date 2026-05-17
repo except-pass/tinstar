@@ -13,6 +13,8 @@ export interface StatusWatcherOpts {
   onStatusChanged: (name: string, state: SessionState) => void
   /** Called with new recap entries parsed from the transcript */
   onRecapEntries?: (name: string, entries: RecapEntry[]) => void
+  /** Called once per tick with the set of session names currently on disk */
+  onSessionsListed?: (names: Set<string>) => void
   /** Poll interval in ms (default 3000) */
   intervalMs?: number
 }
@@ -62,6 +64,7 @@ export class StatusWatcher {
     try {
       const sessions = await listSessions(this.opts.sessionsDir)
       this.peerSessions = sessions
+      this.opts.onSessionsListed?.(new Set(sessions.map(s => s.name)))
       for (const session of sessions) {
         // Only check sessions that are actually alive (running or idle)
         if (session.state !== 'running' && session.state !== 'idle') continue
