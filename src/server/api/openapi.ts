@@ -459,6 +459,44 @@ export const spec = {
         responses: { 200: { description: 'Metric list' } },
       },
     },
+    '/api/telemetry/turn-length': {
+      get: {
+        tags: ['Observability'],
+        summary: 'Recent turn-length observations for heatmap rendering',
+        parameters: [
+          { name: 'windowSec', in: 'query', schema: { type: 'integer', minimum: 60, maximum: 3600 }, description: 'Time window in seconds (default 3600; clamped)' },
+          { name: 'session', in: 'query', schema: { type: 'string' }, description: 'Tinstar session name (omit for fleet)' },
+        ],
+        responses: {
+          200: {
+            description: 'Turn-length observations',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    observations: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          tsSec: { type: 'integer' },
+                          sec: { type: 'number' },
+                          session: { type: 'string' },
+                          ccConvId: { type: 'string' },
+                        },
+                      },
+                    },
+                    lastUpdated: { type: 'integer' },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: 'invalid windowSec' },
+        },
+      },
+    },
 
     // ── Widgets ────────────────────────────────────────────
     '/api/browser-widgets': {
