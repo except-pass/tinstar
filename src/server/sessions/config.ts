@@ -40,6 +40,21 @@ export interface TinstarConfig {
      */
     jetstream: boolean
   }
+  /** Max upload size in bytes for file-upload route. Must be >= 1 MB. */
+  uploadMaxBytes: number
+  /** UI preferences. Client-controlled; server only stores. */
+  ui: {
+    promptComposerDefault: boolean
+    showEmptyEntities: boolean
+    layouts: Record<string, unknown>
+    telemetryPanels: {
+      cost: boolean
+      tokens: boolean
+      cacheHit: boolean
+      duty: boolean
+      turnLength: boolean
+    }
+  }
 }
 
 // --- Helpers ---
@@ -54,7 +69,7 @@ function deepFreeze<T>(obj: T): T {
   return obj
 }
 
-function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+export function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
   const result = { ...target }
   for (const key of Object.keys(source)) {
     const sv = source[key]
@@ -133,7 +148,7 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
 
 // --- Base config (hardcoded defaults) ---
 
-const BASE_CONFIG = {
+export const BASE_CONFIG = {
   sessions: {
     prefix: 'tinstar-',
   },
@@ -153,6 +168,19 @@ const BASE_CONFIG = {
     bunPath: join(homedir(), '.bun/bin/bun'),
     // Off by default; requires nats-server -js
     jetstream: false,
+  },
+  uploadMaxBytes: 100 * 1024 * 1024,
+  ui: {
+    promptComposerDefault: false,
+    showEmptyEntities: true,
+    layouts: {},
+    telemetryPanels: {
+      cost: true,
+      tokens: true,
+      cacheHit: false,
+      duty: true,
+      turnLength: true,
+    },
   },
 }
 
@@ -221,6 +249,8 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
         ? (userConfig.nats as Record<string, boolean>).jetstream!
         : merged.nats.jetstream,
     },
+    uploadMaxBytes: merged.uploadMaxBytes,
+    ui: merged.ui,
   }
 
   return deepFreeze(config)
