@@ -423,6 +423,10 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
   const layoutsRef = useRef(layouts)
   layoutsRef.current = layouts
 
+  // When the next layouts change is itself a hydration from the server, we
+  // don't want the persistence effect to echo it right back as a PATCH.
+  const skipNextPersistRef = useRef(false)
+
   // When config first arrives (or storage key flips), hydrate layouts from it.
   useEffect(() => {
     if (!config) return
@@ -432,6 +436,8 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
       hydratedRef.current = true
       const fresh = hydrateLayouts(tree, persisted)
       layoutsRef.current = fresh
+      // Hydration arrives from server — don't echo it back as a PATCH.
+      skipNextPersistRef.current = true
       setLayouts(fresh)
     }
     // We intentionally only hydrate once per storageKey; ongoing config changes
@@ -486,6 +492,8 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     if (persisted) hydratedRef.current = true
     const fresh = hydrateLayouts(tree, persisted)
     layoutsRef.current = fresh
+    // Space switch is a hydration from persisted state — don't echo back.
+    if (persisted) skipNextPersistRef.current = true
     queueMicrotask(() => setLayouts(fresh))
   }
 
@@ -503,6 +511,10 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
   useEffect(() => {
     if (firstPersistRef.current) {
       firstPersistRef.current = false
+      return
+    }
+    if (skipNextPersistRef.current) {
+      skipNextPersistRef.current = false
       return
     }
     // Carry forward other storage keys' entries in the same PATCH so the
