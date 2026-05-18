@@ -5,6 +5,7 @@ import { useBackendState } from '../hooks/useBackendState'
 import type { LevelLabel } from '../domain/types'
 import { AgentIcon, isIconUrl } from './agentIcon'
 import { apiFetch } from '../apiClient'
+import { useConfig, useConfigPatch } from '../context/ConfigContext'
 
 interface Project {
   name: string
@@ -38,6 +39,8 @@ export function SettingsDialog({ onClose }: Props) {
   const { activeSpaceId, spaces } = useBackendState()
   const activeSpace = spaces.find(s => s.id === activeSpaceId)
   const currentMeta = useDimensionMeta()
+  const config = useConfig()
+  const patchConfig = useConfigPatch()
 
   const [labelLevels, setLabelLevels] = useState<LevelLabel[]>(() =>
     currentMeta.map(m => ({ icon: m.icon, label: m.label, plural: '' }))
@@ -69,23 +72,20 @@ export function SettingsDialog({ onClose }: Props) {
   const [editingTemplate, setEditingTemplate] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<CliTemplate | null>(null)
 
-  // Widget settings (localStorage)
-  const [promptComposerDefault, setPromptComposerDefault] = useState(() =>
-    localStorage.getItem('tinstar-prompt-composer-default') === 'true'
-  )
+  // Widget settings (config)
+  const [promptComposerDefault, setPromptComposerDefault] = useState(() => config?.ui.promptComposerDefault ?? false)
+
+  useEffect(() => {
+    if (config) setPromptComposerDefault(config.ui.promptComposerDefault)
+  }, [config?.ui.promptComposerDefault])
 
   // File Explorer settings
-  const [uploadMaxMb, setUploadMaxMb] = useState<number>(100)
+  const [uploadMaxMb, setUploadMaxMb] = useState(() => Math.round((config?.uploadMaxBytes ?? 100 * 1024 * 1024) / (1024 * 1024)))
   const [uploadSaveError, setUploadSaveError] = useState<string | null>(null)
 
   useEffect(() => {
-    apiFetch('/api/server-prefs')
-      .then(r => r.json())
-      .then(j => {
-        if (j?.data?.uploadMaxBytes) setUploadMaxMb(Math.round(j.data.uploadMaxBytes / (1024 * 1024)))
-      })
-      .catch(() => { /* keep default */ })
-  }, [])
+    if (config) setUploadMaxMb(Math.round(config.uploadMaxBytes / (1024 * 1024)))
+  }, [config?.uploadMaxBytes])
 
   const fetchProjects = useCallback(() => {
     apiFetch('/api/projects')
@@ -792,7 +792,9 @@ export function SettingsDialog({ onClose }: Props) {
                   onChange={e => {
                     const val = e.target.checked
                     setPromptComposerDefault(val)
-                    localStorage.setItem('tinstar-prompt-composer-default', String(val))
+                    patchConfig({ ui: { promptComposerDefault: val } as never }).catch(err => {
+                      console.warn('[settings] composer default patch failed:', err)
+                    })
                   }}
                   className="w-4 h-4 rounded border border-white/20 bg-surface-base accent-primary cursor-pointer"
                 />
@@ -820,17 +822,12 @@ export function SettingsDialog({ onClose }: Props) {
                   onChange={e => setUploadMaxMb(Math.max(1, Math.min(1024, Number(e.target.value) || 1)))}
                   onBlur={() => {
                     const bytes = uploadMaxMb * 1024 * 1024
-                    apiFetch('/api/server-prefs', {
-                      method: 'PUT',
-                      headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ uploadMaxBytes: bytes }),
-                    })
-                      .then(r => r.json())
-                      .then(j => {
-                        if (j?.ok) setUploadSaveError(null)
-                        else setUploadSaveError(j?.error?.message || 'Save failed')
+                    patchConfig({ uploadMaxBytes: bytes })
+                      .then(() => setUploadSaveError(null))
+                      .catch(err => {
+                        console.warn('[settings] upload size patch failed:', err)
+                        setUploadSaveError(String(err))
                       })
-                      .catch(err => setUploadSaveError(String(err)))
                   }}
                   className="w-20 px-2 py-1 text-xs font-mono bg-surface-base border border-white/20 rounded text-slate-200 focus:outline-none focus:border-primary/60"
                 />
