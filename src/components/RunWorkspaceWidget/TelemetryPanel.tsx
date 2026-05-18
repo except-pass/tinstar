@@ -8,6 +8,8 @@ import { apiFetch } from '../../apiClient'
 import { StatSpark } from './StatSpark'
 import { computeDeltaChip } from './computeDeltaChip'
 import { useTelemetrySeries } from '../../hooks/useTelemetrySeries'
+import { useConfig } from '../../context/ConfigContext'
+import { TurnLengthPanel } from './TurnLengthPanel'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -102,6 +104,8 @@ function labelColor(opacity: number): string {
 /* ------------------------------------------------------------------ */
 
 function SessionSection({ sessionId }: { sessionId: string }) {
+  const config = useConfig()
+  const panels = config?.ui.telemetryPanels ?? { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true }
   const snap = useTelemetrySession(sessionId)
   const series = useTelemetrySeries(sessionId)
   if (!snap || snap.state !== 'ready') return null
@@ -148,10 +152,11 @@ function SessionSection({ sessionId }: { sessionId: string }) {
         }}>THIS RUN</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6 }}>
-        <StatSpark accent="gold"   label="COST"        value={costValue}   series={costSeries}  delta={costDelta} />
-        <StatSpark accent="blue"   label="TOKENS"      value={tokensValue} series={tokenSeries} delta={tokensDelta} />
-        <StatSpark accent="green"  label="CACHE HIT"   value={cacheValue}  series={cacheSeries} delta={cacheDelta} />
-        <StatSpark accent="violet" label="DUTY · 60m"  value={dutyValue}   series={dutySeries}  delta={dutyDelta} />
+        {panels.cost      && <StatSpark accent="gold"   label="COST"        value={costValue}   series={costSeries}  delta={costDelta} />}
+        {panels.tokens    && <StatSpark accent="blue"   label="TOKENS"      value={tokensValue} series={tokenSeries} delta={tokensDelta} />}
+        {panels.cacheHit  && <StatSpark accent="green"  label="CACHE HIT"   value={cacheValue}  series={cacheSeries} delta={cacheDelta} />}
+        {panels.duty      && <StatSpark accent="violet" label="DUTY · 60m"  value={dutyValue}   series={dutySeries}  delta={dutyDelta} />}
+        {panels.turnLength && <TurnLengthPanel sessionId={sessionId} />}
       </div>
     </div>
   )
