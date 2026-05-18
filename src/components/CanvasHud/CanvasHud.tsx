@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { AgentQuadrant } from './AgentQuadrant'
 import { CcQuotaCard } from './CcQuotaCard'
 import { TelemetryBootstrap } from './TelemetryBootstrap'
+import { TurnLengthFleet } from './TurnLengthFleet'
 import { useTelemetryHud } from '../../hooks/useTelemetryHud'
 import { useCcQuota } from '../../hooks/useCcQuota'
 import { fmtDollar, fmtRate } from './fmt'
@@ -141,6 +142,7 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
             <StatSpark accent="blue"   label="TOKENS"      value={tokensValueStr} series={fleetSeries.tokens} delta={tokensDelta} />
             <StatSpark accent="green"  label="CACHE HIT"   value={cacheValueStr}  series={fleetSeries.cache}  delta={cacheDelta} />
             <StatSpark accent="violet" label="DUTY · FLEET" value={dutyValueStr}  series={fleetSeries.duty}   delta={dutyDelta} />
+            <TurnLengthFleet />
           </div>
         )
       })()}
