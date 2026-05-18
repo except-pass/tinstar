@@ -75,7 +75,7 @@ describe('handleFileUpload', () => {
   })
 
   it('rejects oversize Content-Length immediately with 413', async () => {
-    writeFileSync(join(ROOT, 'server-prefs.json'), JSON.stringify({ uploadMaxBytes: 1024 * 1024 }))
+    writeFileSync(join(ROOT, 'config.json'), JSON.stringify({ uploadMaxBytes: 1024 * 1024 }))
     const boundary = 'b1'
     const body = multipartBody(boundary, 'big.bin', 'big.bin', Buffer.alloc(10))
     const res = makeRes()
@@ -95,7 +95,7 @@ describe('handleFileUpload', () => {
   })
 
   it('leaves no temp file when busboy reports truncation', async () => {
-    writeFileSync(join(ROOT, 'server-prefs.json'), JSON.stringify({ uploadMaxBytes: 1024 * 1024 }))
+    writeFileSync(join(ROOT, 'config.json'), JSON.stringify({ uploadMaxBytes: 1024 * 1024 }))
     const boundary = 'b1'
     const big = Buffer.alloc(2 * 1024 * 1024, 'A')
     const body = multipartBody(boundary, 'big.bin', 'big.bin', big)

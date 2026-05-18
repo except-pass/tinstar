@@ -3,7 +3,7 @@ import { createWriteStream, existsSync, mkdirSync, renameSync, unlinkSync } from
 import { dirname, join, relative } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import Busboy from 'busboy'
-import { loadServerPrefs } from '../serverPrefs'
+import { loadConfigMerged } from '../sessions/config'
 import { getSession } from '../sessions/session'
 
 interface Ctx { sessDir: string; configRoot: string }
@@ -32,8 +32,8 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
     return true
   }
 
-  const prefs = loadServerPrefs(ctx.configRoot)
-  const maxBytes = prefs.uploadMaxBytes
+  const cfg = loadConfigMerged(ctx.configRoot) as { uploadMaxBytes: number }
+  const maxBytes = cfg.uploadMaxBytes
 
   const declared = Number(req.headers['content-length'] || 0)
   if (declared && declared > maxBytes + 16 * 1024) {
