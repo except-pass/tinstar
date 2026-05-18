@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import type { TreeNode } from '../domain/types'
 import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
+import { useConfig, useDebouncedConfigPatch } from '../context/ConfigContext'
 
 export interface WidgetLayout {
   x: number
@@ -16,7 +17,7 @@ export interface TreeMaps {
   depthMap: Map<string, number>
 }
 
-const STORAGE_KEY_PREFIX = 'tinstar-layouts-v3'
+const LAYOUTS_KEY_PREFIX = 'tinstar-layouts-v3'
 const DEFAULT_RUN_WIDTH = 1560
 const DEFAULT_RUN_HEIGHT = 1410
 const MIN_WIDTH = 300
@@ -245,21 +246,28 @@ function collectTreeIds(tree: TreeNode[]): Set<string> {
 
 // --- Persistence ---
 
-function loadLayouts(tree: TreeNode[], storageKey: string): Map<string, WidgetLayout> {
+/**
+ * Hydrate a layouts Map from an already-loaded persisted record (id → WidgetLayout).
+ * Used to seed local state from config.ui.layouts[storageKey]. Filling/regeneration
+ * policy matches the previous loader (regenerate from scratch if >20% missing,
+ * otherwise fill missing nodes via smart placement or defaults).
+ */
+function hydrateLayouts(
+  tree: TreeNode[],
+  persisted: Record<string, WidgetLayout> | null | undefined,
+): Map<string, WidgetLayout> {
   const allIds = collectTreeIds(tree)
+  if (!persisted) return generateDefaultLayouts(tree)
   try {
-    const raw = localStorage.getItem(storageKey)
-    if (!raw) return generateDefaultLayouts(tree)
-    const parsed = JSON.parse(raw) as Record<string, WidgetLayout>
     const map = new Map<string, WidgetLayout>()
     for (const id of allIds) {
-      const saved = parsed[id]
+      const saved = persisted[id]
       if (saved && typeof saved.x === 'number') map.set(id, snap(saved))
     }
     // Also load any saved positions not in the current tree
     // (e.g. editor widgets arriving via SSE after initial mount)
-    for (const [id, layout] of Object.entries(parsed)) {
-      if (!map.has(id) && typeof (layout as WidgetLayout).x === 'number') {
+    for (const [id, layout] of Object.entries(persisted)) {
+      if (!map.has(id) && layout && typeof (layout as WidgetLayout).x === 'number') {
         map.set(id, snap(layout as WidgetLayout))
       }
     }
@@ -284,10 +292,10 @@ function loadLayouts(tree: TreeNode[], storageKey: string): Map<string, WidgetLa
   }
 }
 
-function saveLayouts(layouts: Map<string, WidgetLayout>, storageKey: string) {
+function layoutsToRecord(layouts: Map<string, WidgetLayout>): Record<string, WidgetLayout> {
   const obj: Record<string, WidgetLayout> = {}
   for (const [id, layout] of layouts) obj[id] = layout
-  localStorage.setItem(storageKey, JSON.stringify(obj))
+  return obj
 }
 
 // --- Enforce containment ---
@@ -396,14 +404,40 @@ function computeTightBounds(
 // --- The hook ---
 
 export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
-  const storageKey = spaceId ? `${STORAGE_KEY_PREFIX}-${spaceId}` : STORAGE_KEY_PREFIX
+  const storageKey = spaceId ? `${LAYOUTS_KEY_PREFIX}-${spaceId}` : LAYOUTS_KEY_PREFIX
   const storageKeyRef = useRef(storageKey)
 
+  const config = useConfig()
+  const patchConfig = useDebouncedConfigPatch(500)
+
+  // Read-once-on-mount seed from config (config may still be null on first render —
+  // we hydrate when it arrives via the effect below).
+  const initialPersistedRef = useRef<Record<string, WidgetLayout> | null>(
+    (config?.ui.layouts as Record<string, Record<string, WidgetLayout>> | undefined)?.[storageKey] ?? null,
+  )
+  const hydratedRef = useRef<boolean>(initialPersistedRef.current !== null)
+
   const [layouts, setLayouts] = useState<Map<string, WidgetLayout>>(() =>
-    loadLayouts(tree, storageKey),
+    hydrateLayouts(tree, initialPersistedRef.current),
   )
   const layoutsRef = useRef(layouts)
   layoutsRef.current = layouts
+
+  // When config first arrives (or storage key flips), hydrate layouts from it.
+  useEffect(() => {
+    if (!config) return
+    const all = config.ui.layouts as Record<string, Record<string, WidgetLayout>> | undefined
+    const persisted = all?.[storageKeyRef.current] ?? null
+    if (!hydratedRef.current && persisted) {
+      hydratedRef.current = true
+      const fresh = hydrateLayouts(tree, persisted)
+      layoutsRef.current = fresh
+      setLayouts(fresh)
+    }
+    // We intentionally only hydrate once per storageKey; ongoing config changes
+    // come from our own writes and would clobber in-flight drag state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, storageKey])
 
   const treeMapsRef = useRef<TreeMaps>(buildTreeMaps(tree))
   const prevTreeRef = useRef(tree)
@@ -446,15 +480,40 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
   // Reload layouts when space changes
   if (storageKey !== storageKeyRef.current) {
     storageKeyRef.current = storageKey
-    const fresh = loadLayouts(tree, storageKey)
+    hydratedRef.current = false
+    const all = config?.ui.layouts as Record<string, Record<string, WidgetLayout>> | undefined
+    const persisted = all?.[storageKey] ?? null
+    if (persisted) hydratedRef.current = true
+    const fresh = hydrateLayouts(tree, persisted)
     layoutsRef.current = fresh
     queueMicrotask(() => setLayouts(fresh))
   }
 
-  // Persist on change
+  // Persist on change — debounced (500ms) to coalesce window-drag churn.
+  // The first render is purely a hydration step (we just loaded from config),
+  // so skip writing it back.
+  //
+  // The server PATCH handler deep-merges `ui.layouts`, so sending only our
+  // storageKey here is safe — other spaces' entries are preserved server-side.
+  // The optimistic client merge is shallower (replaces ui.layouts wholesale)
+  // but the next /api/config response from the server reconciles.
+  const firstPersistRef = useRef(true)
+  const configLayoutsRef = useRef<Record<string, Record<string, WidgetLayout>>>({})
+  configLayoutsRef.current = (config?.ui.layouts as Record<string, Record<string, WidgetLayout>> | undefined) ?? {}
   useEffect(() => {
-    saveLayouts(layouts, storageKeyRef.current)
-  }, [layouts])
+    if (firstPersistRef.current) {
+      firstPersistRef.current = false
+      return
+    }
+    // Carry forward other storage keys' entries in the same PATCH so the
+    // client-side optimistic merge (which replaces ui.layouts wholesale)
+    // doesn't visibly drop them between request and server response.
+    const merged: Record<string, Record<string, WidgetLayout>> = {
+      ...configLayoutsRef.current,
+      [storageKeyRef.current]: layoutsToRecord(layouts),
+    }
+    patchConfig({ ui: { layouts: merged as never } })
+  }, [layouts, patchConfig])
 
   // Move a run (leaf), auto-expand ancestor chain
   const updateRunPosition = useCallback((id: string, x: number, y: number) => {
