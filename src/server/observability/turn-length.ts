@@ -3,6 +3,13 @@ import type { RecapEntry } from '../../types'
 import type { Session, SessionState } from '../sessions/session'
 import { log } from '../logger'
 
+export interface Observation {
+  tsSec: number
+  sec: number
+  session: string
+  ccConvId: string
+}
+
 export const register = new Registry()
 
 export const turnLengthHist = new Histogram({
@@ -21,10 +28,30 @@ interface PendingTurn {
 
 const pending = new Map<string, PendingTurn>()
 
+const RETENTION_SEC = 3600
+const ringBuffer: Observation[] = []
+
+function recordObservation(o: Observation): void {
+  ringBuffer.push(o)
+  const cutoff = Math.floor(Date.now() / 1000) - RETENTION_SEC
+  while (ringBuffer.length && ringBuffer[0].tsSec < cutoff) ringBuffer.shift()
+}
+
+export function getRecentObservations(opts: { windowSec: number; session?: string }): Observation[] {
+  const windowSec = Math.max(60, Math.min(3600, Math.floor(opts.windowSec)))
+  const cutoff = Math.floor(Date.now() / 1000) - windowSec
+  return ringBuffer.filter(o => {
+    if (o.tsSec < cutoff) return false
+    if (opts.session && o.session !== opts.session) return false
+    return true
+  })
+}
+
 // Exposed for tests only
 export function _resetForTests(): void {
   pending.clear()
   turnLengthHist.reset()
+  ringBuffer.length = 0
 }
 
 export function observeFromRecapEntries(name: string, entries: RecapEntry[], session: Session): void {
@@ -70,6 +97,12 @@ function flush(name: string): void {
   } catch (err) {
     log.warn('turn-length', `observe failed for ${name}: ${(err as Error).message}`)
   }
+  recordObservation({
+    tsSec: Math.floor(Date.now() / 1000),
+    sec: seconds,
+    session: name,
+    ccConvId: p.ccConvId,
+  })
 }
 
 export async function getMetricsText(): Promise<string> {
