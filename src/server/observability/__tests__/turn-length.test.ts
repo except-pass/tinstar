@@ -230,3 +230,71 @@ describe('turn-length: reconcileLiveSessions', () => {
     expect(count).toBe(1)
   })
 })
+
+import { getRecentObservations } from '../turn-length'
+
+describe('turn-length: ring buffer', () => {
+  beforeEach(() => _resetForTests())
+
+  it('records observation when flush emits a turn', async () => {
+    const s = fakeSession('rb-1', 'conv-rb1')
+    observeFromRecapEntries('rb-1', [
+      entry('user',  '2026-05-18T12:00:00.000Z'),
+      entry('agent', '2026-05-18T12:00:05.000Z'),
+      entry('user',  '2026-05-18T12:01:00.000Z'),
+    ], s)
+    const obs = getRecentObservations({ windowSec: 3600 })
+    expect(obs).toHaveLength(1)
+    expect(obs[0].sec).toBe(5)
+    expect(obs[0].session).toBe('rb-1')
+    expect(obs[0].ccConvId).toBe('conv-rb1')
+  })
+
+  it('filters by session', async () => {
+    observeFromRecapEntries('a', [
+      entry('user',  '2026-05-18T12:00:00.000Z'),
+      entry('agent', '2026-05-18T12:00:03.000Z'),
+      entry('user',  '2026-05-18T12:01:00.000Z'),
+    ], fakeSession('a'))
+    observeFromRecapEntries('b', [
+      entry('user',  '2026-05-18T12:00:00.000Z'),
+      entry('agent', '2026-05-18T12:00:04.000Z'),
+      entry('user',  '2026-05-18T12:01:00.000Z'),
+    ], fakeSession('b'))
+
+    expect(getRecentObservations({ windowSec: 3600, session: 'a' })).toHaveLength(1)
+    expect(getRecentObservations({ windowSec: 3600, session: 'b' })).toHaveLength(1)
+    expect(getRecentObservations({ windowSec: 3600 })).toHaveLength(2)
+  })
+
+  it('clamps windowSec to [60, 3600] without throwing', async () => {
+    expect(getRecentObservations({ windowSec: 0 })).toEqual([])
+    expect(getRecentObservations({ windowSec: 999999 })).toEqual([])
+  })
+
+  it('prunes entries older than RETENTION_SEC', async () => {
+    const realNow = Date.now
+    try {
+      // First entry at "now"
+      Date.now = () => 1_000_000_000_000  // arbitrary epoch
+      observeFromRecapEntries('old', [
+        entry('user',  '2026-05-18T12:00:00.000Z'),
+        entry('agent', '2026-05-18T12:00:02.000Z'),
+        entry('user',  '2026-05-18T12:00:03.000Z'),
+      ], fakeSession('old'))
+
+      // Advance Date.now past RETENTION_SEC, then record another
+      Date.now = () => 1_000_000_000_000 + 4_000_000   // +4000s, past 3600
+      observeFromRecapEntries('new', [
+        entry('user',  '2026-05-18T13:00:00.000Z'),
+        entry('agent', '2026-05-18T13:00:02.000Z'),
+        entry('user',  '2026-05-18T13:00:03.000Z'),
+      ], fakeSession('new'))
+
+      const obs = getRecentObservations({ windowSec: 3600 })
+      expect(obs.map(o => o.session)).toEqual(['new'])
+    } finally {
+      Date.now = realNow
+    }
+  })
+})
