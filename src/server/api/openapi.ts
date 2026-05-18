@@ -432,23 +432,6 @@ export const spec = {
         responses: { 200: { description: 'Merged config' } },
       },
     },
-    '/api/server-prefs': {
-      get: {
-        tags: ['Config'],
-        summary: 'Get server preferences',
-        responses: { 200: { description: 'OK' } },
-      },
-      put: {
-        tags: ['Config'],
-        summary: 'Update server preferences',
-        requestBody: {
-          required: true,
-          content: { 'application/json': { schema: { type: 'object', properties: { uploadMaxBytes: { type: 'integer' } } } } },
-        },
-        responses: { 200: { description: 'OK' }, 400: { description: 'Invalid prefs' } },
-      },
-    },
-
     // ── Editor ───────────────────────────────────────────
     '/api/editor/open': {
       post: {
