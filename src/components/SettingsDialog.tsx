@@ -807,6 +807,40 @@ export function SettingsDialog({ onClose }: Props) {
               </p>
             </div>
 
+            {/* Telemetry panels */}
+            <div className="mb-4">
+              <h5 className="text-2xs font-mono uppercase tracking-wider text-slate-500 mb-2">
+                Telemetry panels
+              </h5>
+              <p className="text-2xs text-slate-600 mb-2">
+                Show or hide individual panels in per-session telemetry and the canvas HUD.
+              </p>
+              <div className="space-y-1">
+                {([
+                  ['cost',       'Cost'],
+                  ['tokens',     'Tokens'],
+                  ['cacheHit',   'Cache hit'],
+                  ['duty',       'Duty cycle'],
+                  ['turnLength', 'Turn length'],
+                ] as const).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-3 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={config?.ui.telemetryPanels?.[key] ?? (key === 'cacheHit' ? false : true)}
+                      onChange={e => {
+                        const val = e.target.checked
+                        patchConfig({ ui: { telemetryPanels: { [key]: val } as never } as never }).catch(err => {
+                          console.warn('[settings] telemetry toggle failed:', err)
+                        })
+                      }}
+                      className="w-4 h-4 rounded border border-white/20 bg-surface-base accent-primary cursor-pointer"
+                    />
+                    <span className="text-xs text-slate-300 group-hover:text-slate-100 transition-colors">{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
             {/* File Explorer */}
             <div className="mb-4">
               <h5 className="text-2xs font-mono uppercase tracking-wider text-slate-500 mb-2">
