@@ -27,7 +27,7 @@ export function TurnLengthHeatmap({ cells, accent, windowSec, bucketBounds }: Pr
           return (
             <rect key={`${r}-${c}`}
                   x={padLeft + c * cellW}
-                  y={r * cellH}
+                  y={(NUM_ROWS - 1 - r) * cellH}
                   width={cellW - 1}
                   height={cellH - 1}
                   fill={`rgba(${accent}, ${alpha})`}
@@ -36,11 +36,11 @@ export function TurnLengthHeatmap({ cells, accent, windowSec, bucketBounds }: Pr
           )
         })
       )}
-      {/* Y-axis bucket labels */}
+      {/* Y-axis bucket labels (longer durations on top) */}
       {bucketBounds.map((b, r) => (
         <text key={`y-${r}`}
               x={padLeft - 4}
-              y={r * cellH + cellH * 0.75}
+              y={(NUM_ROWS - 1 - r) * cellH + cellH * 0.75}
               fill="rgba(180,200,220,0.5)"
               textAnchor="end">
           {fmtBucket(b)}
