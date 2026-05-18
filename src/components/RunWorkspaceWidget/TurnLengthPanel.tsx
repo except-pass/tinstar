@@ -1,5 +1,5 @@
 import { useConfig } from '../../context/ConfigContext'
-import { useTurnLengthObservations, TURN_LENGTH_BUCKETS } from '../../hooks/useTurnLengthObservations'
+import { useTurnLengthObservations, TURN_LENGTH_BUCKETS, TURN_LENGTH_HELP } from '../../hooks/useTurnLengthObservations'
 import { TurnLengthHeatmap } from '../Telemetry/TurnLengthHeatmap'
 
 const TURN_LENGTH_ACCENT = '255, 132, 100'
@@ -19,6 +19,7 @@ function TurnLengthPanelInner({ sessionId }: { sessionId: string }) {
         fontFamily: 'JetBrains Mono, monospace', marginBottom: 4,
       }}>
         TURN LENGTH · 60m
+        <span title={TURN_LENGTH_HELP} style={{ marginLeft: 4, opacity: 0.7, cursor: 'help' }}>ⓘ</span>
       </div>
       <TurnLengthHeatmap
         cells={cells}
