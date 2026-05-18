@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { apiFetch } from '../../apiClient'
+import { useConfig } from '../../context/ConfigContext'
 import { FileUploadConfirmModal, type PendingUpload } from './FileUploadConfirmModal'
 import { useFileUpload } from './useFileUpload'
 
@@ -29,15 +30,9 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
   const [dirs, setDirs] = useState<Map<string, TreeNodeState>>(() => new Map())
   const [pending, setPending] = useState<{ files: File[]; dir: string } | null>(null)
   const [hoverDir, setHoverDir] = useState<string | null>(null)
-  const [maxBytes, setMaxBytes] = useState<number>(100 * 1024 * 1024)
+  const config = useConfig()
+  const maxBytes = config?.uploadMaxBytes ?? 100 * 1024 * 1024
   const { start: startUpload } = useFileUpload()
-
-  useEffect(() => {
-    apiFetch('/api/server-prefs')
-      .then(r => r.json())
-      .then(j => { if (j?.data?.uploadMaxBytes) setMaxBytes(j.data.uploadMaxBytes) })
-      .catch(() => { /* keep default */ })
-  }, [])
 
   const loadDir = useCallback(async (dirPath: string) => {
     setDirs(prev => {
