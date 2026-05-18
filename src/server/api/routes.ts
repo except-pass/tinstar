@@ -35,7 +35,7 @@ import {
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
-import { saveActiveSpaceId } from '../sessions/config'
+import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
 import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
@@ -2485,26 +2485,37 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
     }
 
-    // GET /api/config — read the full user config
+    // GET /api/config — read the full user config (defaults + on-disk, deep-merged)
     if (method === 'GET' && url === '/api/config') {
       try {
-        const data = JSON.parse(readFileSync(cfg.files.config, 'utf-8'))
+        const data = loadConfigMerged(ctx.sessionConfig?.dirs.root)
         json(res, { ok: true, data })
-      } catch {
-        json(res, { ok: true, data: {} })
+      } catch (err) {
+        log.warn('config', `GET /api/config failed: ${(err as Error).message}`)
+        json(res, { ok: false, error: { code: 'INTERNAL', message: 'failed to load config' } }, 500)
       }
       return true
     }
 
-    // PATCH /api/config — merge keys into user config and persist
+    // PATCH /api/config — deep-merge keys into user config and persist
     if (method === 'PATCH' && url === '/api/config') {
       readBody(req).then((body) => {
-        const patch = JSON.parse(body)
+        let patch: Record<string, unknown>
+        try { patch = JSON.parse(body) } catch {
+          return json(res, { ok: false, error: { code: 'BAD_JSON', message: 'invalid JSON' } }, 400)
+        }
+        // Validate uploadMaxBytes if present
+        if ('uploadMaxBytes' in patch) {
+          const v = patch.uploadMaxBytes
+          if (!Number.isInteger(v) || (v as number) < 1024 * 1024) {
+            return json(res, { ok: false, error: { code: 'BAD_VALUE', message: 'uploadMaxBytes must be an integer >= 1 MB' } }, 400)
+          }
+        }
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no existing config */ }
-        Object.assign(data, patch)
-        writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
-        json(res, { ok: true, data })
+        const merged = deepMerge(data, patch)
+        writeFileSync(cfg.files.config, JSON.stringify(merged, null, 2))
+        json(res, { ok: true, data: loadConfigMerged(ctx.sessionConfig?.dirs.root) })
       })
       return true
     }

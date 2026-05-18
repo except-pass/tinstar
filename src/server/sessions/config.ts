@@ -299,3 +299,12 @@ export function saveActiveSpaceId(rootDir: string, spaceId: string): void {
   data.activeSpaceId = spaceId
   writeFileSync(configPath, JSON.stringify(data, null, 2))
 }
+
+/** Returns the user's on-disk config deep-merged over defaults. Source of truth for `GET /api/config`. */
+export function loadConfigMerged(configRoot?: string): Record<string, unknown> {
+  const root = configRoot ?? getConfigRoot()
+  const path = join(root, 'config.json')
+  let userConfig: Record<string, unknown> = {}
+  try { userConfig = JSON.parse(readFileSync(path, 'utf-8')) } catch { /* defaults only */ }
+  return deepMerge(BASE_CONFIG as unknown as Record<string, unknown>, userConfig)
+}
