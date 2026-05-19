@@ -166,6 +166,18 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 - **Reconciliation**: Git diff resolves real +/- stats after 2s of hook silence; shimmer stops and stats fade in
 - **Shimmer**: 1.5s ease-in-out pulse animation on pending file stats
 
+### File Tree Panel
+- Lazy-loading tree of the session's workspace (one directory level per fetch)
+- Click a directory row to expand/collapse; click a file row to select
+- **Drag a file row out** to the terminal to insert its path; the editor widget accepts the same drag for opening a file
+- **Drag files in from the OS** to upload them into the workspace
+  - Hovered row determines the target directory: directory row → into that dir; file row → into its parent dir; panel background → workspace root
+  - Confirmation modal opens with one editable workspace-relative path per dropped file
+  - Per-row warnings: amber "will overwrite" when path collides with an existing entry; red "too large" / "invalid" otherwise
+  - Confirm closes the modal; each file appears optimistically in the tree with a left-to-right primary-color background fill driven by `xhr.upload.onprogress`
+  - On success the parent directory re-fetches from the server to reconcile; on failure the row turns red with the server error in `title`
+- **Size cap**: 100 MB per file by default, server-enforced. Override under Settings → File Explorer → Max upload size (MB)
+
 ### Center Panel — Session (Recap / Raw Logs / Terminal)
 - **Terminal**: Embedded ttyd iframe showing the live Claude Code session via Caddy proxy (`/s/{sessionId}/`)
 - **Recap tab**: Threaded messages populated from Claude Code's conversation transcript

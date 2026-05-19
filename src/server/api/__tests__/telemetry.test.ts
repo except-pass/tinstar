@@ -450,3 +450,74 @@ describe('startPolling — change detection', () => {
     routes.stopPolling()
   })
 })
+
+import {
+  observeFromRecapEntries,
+  _resetForTests as _resetTL,
+} from '../../observability/turn-length'
+
+function seedTurn(sessionName: string, seconds: number, ccConvId = 'conv-X') {
+  const t0 = `2026-05-18T12:00:00.000Z`
+  const t1 = new Date(Date.parse(t0) + seconds * 1000).toISOString()
+  const t2 = new Date(Date.parse(t0) + 60_000).toISOString()
+  observeFromRecapEntries(sessionName, [
+    { id: 'u1', type: 'user',  content: '', timestamp: t0 },
+    { id: 'a1', type: 'agent', content: '', timestamp: t1 },
+    { id: 'u2', type: 'user',  content: '', timestamp: t2 },
+  ], {
+    name: sessionName, backend: 'tmux', state: 'running', project: null,
+    workspace: { path: null, branch: null } as never,
+    conversation: { id: ccConvId },
+    profile: null, oneshot: false, skipPermissions: false,
+    cliTemplate: null, adapter: 'claude', nats: null,
+    port: null, ttydPid: null, natsControlOrphanedAt: null,
+    created: '2026-05-18T00:00:00.000Z', lastActive: '2026-05-18T00:00:00.000Z',
+  } as never)
+}
+
+async function callTelemetry(path: string): Promise<{ status: number; body: any }> {
+  const sse = makeFakeSSE()
+  const deps = makeDeps('ready', null, sse)
+  const routes = createTelemetryRoutes(deps)
+  const pathname = path.split('?')[0]
+  const req = makeReq('GET', path)
+  const res = makeRes()
+  await routes.handle(req, res as unknown as ServerResponse, pathname)
+  routes.stopPolling()
+  const fr = res as unknown as FakeRes
+  return { status: fr.statusCode, body: fr.parsedBody }
+}
+
+describe('GET /api/telemetry/turn-length', () => {
+  beforeEach(() => _resetTL())
+
+  it('returns observations for all sessions when no filter', async () => {
+    seedTurn('a', 5)
+    seedTurn('b', 12)
+    const resp = await callTelemetry('/api/telemetry/turn-length')
+    expect(resp.status).toBe(200)
+    expect(resp.body.observations).toHaveLength(2)
+    expect(resp.body.observations.map((o: { session: string }) => o.session).sort()).toEqual(['a', 'b'])
+  })
+
+  it('filters by session', async () => {
+    seedTurn('a', 5)
+    seedTurn('b', 12)
+    const resp = await callTelemetry('/api/telemetry/turn-length?session=a')
+    expect(resp.body.observations).toHaveLength(1)
+    expect(resp.body.observations[0].session).toBe('a')
+  })
+
+  it('rejects non-integer windowSec with 400', async () => {
+    const resp = await callTelemetry('/api/telemetry/turn-length?windowSec=abc')
+    expect(resp.status).toBe(400)
+    expect(resp.body.error).toBe('invalid windowSec')
+  })
+
+  it('clamps out-of-range windowSec without rejecting', async () => {
+    seedTurn('a', 5)
+    const resp = await callTelemetry('/api/telemetry/turn-length?windowSec=999999')
+    expect(resp.status).toBe(200)
+    expect(resp.body.observations).toHaveLength(1)
+  })
+})

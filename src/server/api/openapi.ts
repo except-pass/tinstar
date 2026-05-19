@@ -320,6 +320,34 @@ export const spec = {
         responses: { 200: { description: 'File listing', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, data: { type: 'array', items: { $ref: '#/components/schemas/FileEntry' } } } } } } } },
       },
     },
+    '/api/sessions/{name}/files/upload': {
+      post: {
+        tags: ['Sessions'],
+        summary: 'Upload a file into the session workspace',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string', description: 'Workspace-relative target path' },
+                  file: { type: 'string', format: 'binary' },
+                },
+                required: ['path', 'file'],
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Uploaded' },
+          '400': { description: 'Invalid path or multipart' },
+          '404': { description: 'Session not found' },
+          '413': { description: 'File too large' },
+        },
+      },
+    },
     '/api/sessions/{name}/send-keys': {
       post: {
         tags: ['Sessions'],
@@ -404,7 +432,6 @@ export const spec = {
         responses: { 200: { description: 'Merged config' } },
       },
     },
-
     // ── Editor ───────────────────────────────────────────
     '/api/editor/open': {
       post: {
@@ -430,6 +457,44 @@ export const spec = {
         summary: 'Query OpenTelemetry metrics',
         parameters: [{ name: 'name', in: 'query', schema: { type: 'string' }, description: 'Filter by metric name' }],
         responses: { 200: { description: 'Metric list' } },
+      },
+    },
+    '/api/telemetry/turn-length': {
+      get: {
+        tags: ['Observability'],
+        summary: 'Recent turn-length observations for heatmap rendering',
+        parameters: [
+          { name: 'windowSec', in: 'query', schema: { type: 'integer', minimum: 60, maximum: 3600 }, description: 'Time window in seconds (default 3600; clamped)' },
+          { name: 'session', in: 'query', schema: { type: 'string' }, description: 'Tinstar session name (omit for fleet)' },
+        ],
+        responses: {
+          200: {
+            description: 'Turn-length observations',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    observations: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          tsSec: { type: 'integer' },
+                          sec: { type: 'number' },
+                          session: { type: 'string' },
+                          ccConvId: { type: 'string' },
+                        },
+                      },
+                    },
+                    lastUpdated: { type: 'integer' },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: 'invalid windowSec' },
+        },
       },
     },
 

@@ -26,6 +26,8 @@ import { HotkeyPalette } from './HotkeyPalette'
 import { OnboardingCanvas } from './OnboardingCanvas'
 import { apiFetch } from '../apiClient'
 import { useOnboardingState } from '../hooks/useOnboardingState'
+import { PluginFailedBanner } from './PluginFailedBanner'
+import { useConfig, useConfigPatch } from '../context/ConfigContext'
 
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
@@ -104,7 +106,13 @@ function WorkspaceShellInner() {
     }, [])
   }, [])
 
-  const [showEmptyEntities, setShowEmptyEntities] = useState(() => localStorage.getItem('tinstar-show-empty-entities') !== 'false')
+  const config = useConfig()
+  const patchConfig = useConfigPatch()
+  const [showEmptyEntities, setShowEmptyEntities] = useState(() => config?.ui.showEmptyEntities ?? true)
+
+  useEffect(() => {
+    if (config) setShowEmptyEntities(config.ui.showEmptyEntities)
+  }, [config?.ui.showEmptyEntities])
 
   // Figma-style per-run visibility — hidden runs stay in the sidebar (dimmed) but
   // are pruned from the canvas and skipped by Ctrl+[ / Ctrl+] cycling.
@@ -450,7 +458,9 @@ function WorkspaceShellInner() {
     if (type === 'run') return
     if (!showEmptyEntities) {
       setShowEmptyEntities(true)
-      localStorage.setItem('tinstar-show-empty-entities', 'true')
+      patchConfig({ ui: { showEmptyEntities: true } as never }).catch(err => {
+        console.warn('[workspace] showEmptyEntities patch failed:', err)
+      })
     }
     const typeIdx = dimensions.indexOf(type as 'task' | 'epic' | 'initiative')
     const parentType = typeIdx > 0 ? (dimensions[typeIdx - 1] ?? null) : null
@@ -698,14 +708,18 @@ function WorkspaceShellInner() {
       if (!childType) return
       if (!showEmptyEntities) {
         setShowEmptyEntities(true)
-        localStorage.setItem('tinstar-show-empty-entities', 'true')
+        patchConfig({ ui: { showEmptyEntities: true } as never }).catch(err => {
+          console.warn('[workspace] showEmptyEntities patch failed:', err)
+        })
       }
       setCreateDialog({ parentId: rawId, parentType: selectedType as GroupingDimension, childType })
     }, [selectionState, dimensions, showEmptyEntities]),
     onToggleEmptyEntities: useCallback(() => {
       const next = !showEmptyEntities
       setShowEmptyEntities(next)
-      localStorage.setItem('tinstar-show-empty-entities', String(next))
+      patchConfig({ ui: { showEmptyEntities: next } as never }).catch(err => {
+        console.warn('[workspace] showEmptyEntities patch failed:', err)
+      })
     }, [showEmptyEntities]),
     onEntitySettings: useCallback(() => {
       const { selectedType, selectedIds } = selectionState
@@ -762,6 +776,7 @@ function WorkspaceShellInner() {
 
   return (
     <>
+      <PluginFailedBanner />
       {activeSpaceId ? (
         <HotgroupProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
@@ -826,7 +841,9 @@ function WorkspaceShellInner() {
                         onToggleShowEmpty={() => {
                           const next = !showEmptyEntities
                           setShowEmptyEntities(next)
-                          localStorage.setItem('tinstar-show-empty-entities', String(next))
+                          patchConfig({ ui: { showEmptyEntities: next } as never }).catch(err => {
+                            console.warn('[workspace] showEmptyEntities patch failed:', err)
+                          })
                         }}
                         onActivateSpace={handleActivateSpace}
                         onCreateSpace={handleCreateSpace}

@@ -1,10 +1,16 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { apiFetch } from '../../apiClient'
+import { useConfig } from '../../context/ConfigContext'
+import { FileUploadConfirmModal, type PendingUpload } from './FileUploadConfirmModal'
+import { useFileUpload } from './useFileUpload'
 
 interface FileEntry {
   name: string
   path: string
   isDir: boolean
+  uploading?: boolean
+  progress?: number   // 0..1
+  uploadError?: string
 }
 
 interface TreeNodeState {
@@ -22,6 +28,11 @@ interface Props {
 /** Lazy-loading file tree panel — fetches one directory level at a time */
 export function FileTreePanel({ sessionId, onOpenFile }: Props) {
   const [dirs, setDirs] = useState<Map<string, TreeNodeState>>(() => new Map())
+  const [pending, setPending] = useState<{ files: File[]; dir: string } | null>(null)
+  const [hoverDir, setHoverDir] = useState<string | null>(null)
+  const config = useConfig()
+  const maxBytes = config?.uploadMaxBytes ?? 100 * 1024 * 1024
+  const { start: startUpload } = useFileUpload()
 
   const loadDir = useCallback(async (dirPath: string) => {
     setDirs(prev => {
@@ -67,6 +78,105 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
     e.dataTransfer.effectAllowed = 'copy'
   }, [sessionId])
 
+  function isFilesDrag(e: React.DragEvent): boolean {
+    return Array.from(e.dataTransfer.types).includes('Files')
+  }
+
+  function dirnameRel(p: string): string {
+    if (!p.includes('/')) return '.'
+    return p.slice(0, p.lastIndexOf('/'))
+  }
+
+  const handleRowDragOver = useCallback((e: React.DragEvent, rowPath: string, isDir: boolean) => {
+    if (!isFilesDrag(e)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    setHoverDir(isDir ? rowPath : dirnameRel(rowPath))
+  }, [])
+
+  const handlePanelDragOver = useCallback((e: React.DragEvent) => {
+    if (!isFilesDrag(e)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    if (hoverDir === null) setHoverDir('.')
+  }, [hoverDir])
+
+  const handleDragLeavePanel = useCallback((e: React.DragEvent) => {
+    if (e.currentTarget === e.target) setHoverDir(null)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    if (!isFilesDrag(e)) return
+    e.preventDefault()
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length === 0) return
+    const dir = hoverDir ?? '.'
+    setPending({ files, dir })
+    setHoverDir(null)
+  }, [hoverDir])
+
+  const existingPaths = useMemo(() => {
+    const set = new Set<string>()
+    for (const node of dirs.values()) {
+      if (!node.entries) continue
+      for (const e of node.entries) set.add(e.path)
+    }
+    return set
+  }, [dirs])
+
+  const handleConfirm = useCallback((rows: PendingUpload[]) => {
+    setPending(null)
+    for (const row of rows) {
+      const dir = dirnameRel(row.path)
+      const name = row.path.slice(row.path.lastIndexOf('/') + 1)
+      const optimistic: FileEntry = { name, path: row.path, isDir: false, uploading: true, progress: 0 }
+
+      setDirs(prev => {
+        const next = new Map(prev)
+        const node = next.get(dir)
+        if (!node?.entries) return prev
+        const filtered = node.entries.filter(e => e.path !== row.path)
+        next.set(dir, { ...node, entries: [...filtered, optimistic].sort(sortEntries) })
+        return next
+      })
+
+      const handle = startUpload({
+        sessionId,
+        file: row.file,
+        path: row.path,
+        onProgress: (frac) => {
+          setDirs(prev => {
+            const next = new Map(prev)
+            const node = next.get(dir)
+            if (!node?.entries) return prev
+            next.set(dir, {
+              ...node,
+              entries: node.entries.map(e => e.path === row.path ? { ...e, progress: frac } : e),
+            })
+            return next
+          })
+        },
+      })
+
+      handle.promise.then(() => {
+        loadDir(dir)
+      }).catch((err: { code?: string; message?: string }) => {
+        setDirs(prev => {
+          const next = new Map(prev)
+          const node = next.get(dir)
+          if (!node?.entries) return prev
+          next.set(dir, {
+            ...node,
+            entries: node.entries.map(e => e.path === row.path
+              ? { ...e, uploading: false, uploadError: err?.message || err?.code || 'Upload failed' }
+              : e),
+          })
+          return next
+        })
+      })
+    }
+  }, [sessionId, loadDir, startUpload])
+
   function renderEntries(dirPath: string, depth: number): React.ReactNode {
     const state = dirs.get(dirPath)
     if (!state || !state.open) return null
@@ -89,8 +199,12 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
                 if (!existing?.entries) loadDir(entry.path)
                 else toggleDir(entry.path)
               }}
-              className="w-full flex items-center gap-1 py-[2px] text-left hover:bg-surface-hover group"
+              className={`w-full flex items-center gap-1 py-[2px] text-left group ${
+                hoverDir === entry.path ? 'outline outline-1 outline-primary/60 bg-primary/10' : 'hover:bg-surface-hover'
+              }`}
               style={{ paddingLeft: depth * 14 + 4 }}
+              onDragOver={(e) => handleRowDragOver(e, entry.path, true)}
+              onDrop={handleDrop}
             >
               <span className="material-symbols-outlined text-xs text-slate-500 w-4 text-center">
                 {dirs.get(entry.path)?.open ? 'expand_more' : 'chevron_right'}
@@ -102,18 +216,29 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
           </>
         ) : (
           <div
-            draggable
-            onDragStart={(e) => { e.stopPropagation(); handleDragStart(e, entry.path) }}
+            draggable={!entry.uploading}
+            onDragStart={(e) => { if (entry.uploading) return; e.stopPropagation(); handleDragStart(e, entry.path) }}
+            onDragOver={(e) => handleRowDragOver(e, entry.path, false)}
+            onDrop={handleDrop}
             onDoubleClick={(e) => { e.stopPropagation(); onOpenFile?.(entry.path) }}
             onPointerDown={(e) => { if (e.button === 0) e.stopPropagation() }}
-            className="flex items-center gap-1 py-[2px] hover:bg-surface-hover cursor-grab active:cursor-grabbing group"
-            style={{ paddingLeft: depth * 14 + 22 }}
-            title={`Double-click to open · Drag to terminal`}
+            className={`flex items-center gap-1 py-[2px] cursor-grab active:cursor-grabbing group relative ${
+              hoverDir === dirnameRel(entry.path) ? 'outline outline-1 outline-primary/60 bg-primary/5' : 'hover:bg-surface-hover'
+            } ${entry.uploadError ? 'bg-red-500/10' : ''}`}
+            style={{
+              paddingLeft: depth * 14 + 22,
+              background: entry.uploading && entry.progress !== undefined
+                ? `linear-gradient(to right, rgb(var(--color-primary) / 0.18) ${entry.progress * 100}%, transparent ${entry.progress * 100}%)`
+                : undefined,
+            }}
+            title={entry.uploadError ? entry.uploadError : `Double-click to open · Drag to terminal`}
           >
             <span className="material-symbols-outlined text-sm text-slate-600 group-hover:text-slate-400">
-              {fileIcon(entry.name)}
+              {entry.uploadError ? 'error' : fileIcon(entry.name)}
             </span>
-            <span className="text-[11px] font-mono text-slate-400 group-hover:text-slate-200 truncate">{entry.name}</span>
+            <span className={`text-[11px] font-mono truncate ${entry.uploadError ? 'text-red-300' : 'text-slate-400 group-hover:text-slate-200'}`}>
+              {entry.name}
+            </span>
           </div>
         )}
       </div>
@@ -121,8 +246,25 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
   }
 
   return (
-    <div data-scrollable className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin py-1">
+    <div
+      data-scrollable
+      data-testid="file-tree-panel"
+      className={`flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin py-1 ${hoverDir === '.' ? 'outline outline-1 outline-primary/40' : ''}`}
+      onDragOver={handlePanelDragOver}
+      onDragLeave={handleDragLeavePanel}
+      onDrop={handleDrop}
+    >
       {renderEntries('.', 0)}
+      {pending && (
+        <FileUploadConfirmModal
+          files={pending.files}
+          initialTargetDir={pending.dir}
+          existingPaths={existingPaths}
+          maxBytes={maxBytes}
+          onConfirm={handleConfirm}
+          onCancel={() => setPending(null)}
+        />
+      )}
     </div>
   )
 }
@@ -139,4 +281,9 @@ function fileIcon(name: string): string {
     case 'sh': case 'bash': case 'zsh': return 'terminal'
     default: return 'draft'
   }
+}
+
+function sortEntries(a: FileEntry, b: FileEntry): number {
+  if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+  return a.name.localeCompare(b.name)
 }

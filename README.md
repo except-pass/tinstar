@@ -70,6 +70,11 @@ The CLI checks for dependencies (Claude Code, tmux, ttyd), offers to register yo
 - **Image viewer widget** — Live-updating image display on canvas; watches files via SSE and refreshes automatically
 - **File tree explorer** — Track touched files with live git-diff; toggle to hide viewed-only files
 
+### Plugins (V5+)
+- **Plugin system** — All built-in widgets above ship as **bundled plugins** through a public API; you can disable any of them from `Settings → Plugins` or load **external plugins** from your own repo via `~/.config/tinstar/plugins.json`. See [`docs/plugins/`](docs/plugins/) for the canonical reference and author guides.
+- **For plugin authors** — Build a plugin in your own repo against `@tinstar/plugin-api`; the host externalizes React and the API at runtime via an importmap so your bundle stays slim. Step-by-step in [`docs/plugins/external-quickstart.md`](docs/plugins/external-quickstart.md), or [`docs/plugins/bundled-howto.md`](docs/plugins/bundled-howto.md) for adding one inside this repo.
+- **Failed-plugin banner** — Any plugin that fails to load surfaces as a top-right banner with the error, so you don't have to dig through DevTools to know what broke.
+
 ### Hierarchy & Hotkeys
 - **Entity Labels** — Rename Initiative / Epic / Task to any terminology per space (e.g. Project / Feature / Story); configured in the Entity Labels tab of Space Settings
 - **Grouping** — Nest sessions into recursive group containers; double-click to expand/collapse in sidebar

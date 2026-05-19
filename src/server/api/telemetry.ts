@@ -4,6 +4,7 @@ import type { TelemetryQuery } from '../observability/query.js'
 import type { HudSnapshot, ObservabilityState } from '../observability/types.js'
 import { log } from '../logger.js'
 import { makeFakeHud, makeFakeSeries } from '../observability/fast-sim.js'
+import { getRecentObservations } from '../observability/turn-length.js'
 
 // How often to broadcast a fresh HUD snapshot to connected SSE clients.
 const POLL_INTERVAL_MS = 1_500
@@ -205,6 +206,29 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
       for (const [name, snap] of settled) result[name] = snap
       res.writeHead(200, json)
       res.end(JSON.stringify(result))
+      return true
+    }
+    if (pathname === '/api/telemetry/turn-length' && req.method === 'GET') {
+      const url = new URL(req.url ?? '', 'http://localhost')
+      const windowSecRaw = url.searchParams.get('windowSec')
+      let windowSec = 3600
+      if (windowSecRaw !== null) {
+        const parsed = Number.parseInt(windowSecRaw, 10)
+        if (!Number.isInteger(parsed) || String(parsed) !== windowSecRaw.trim()) {
+          res.writeHead(400, json)
+          res.end(JSON.stringify({ error: 'invalid windowSec' }))
+          return true
+        }
+        windowSec = parsed  // getRecentObservations clamps to [60, 3600] internally
+      }
+      const session = url.searchParams.get('session') ?? undefined
+
+      const observations = getRecentObservations({ windowSec, session })
+      res.writeHead(200, json)
+      res.end(JSON.stringify({
+        observations,
+        lastUpdated: Math.floor(Date.now() / 1000),
+      }))
       return true
     }
     if (pathname === '/api/telemetry/restart' && req.method === 'POST') {

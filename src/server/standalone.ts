@@ -16,6 +16,9 @@ import httpProxy from 'http-proxy'
 
 import { initBackend } from './index'
 import { handleRequest } from './api/routes'
+import { handlePluginRuntime } from './api/pluginRuntime'
+import { handlePluginsConfig } from './api/pluginsConfigRoute'
+import { handleFileUpload } from './api/fileUploadRoute'
 import { log } from './logger'
 import { getConfigRoot } from './configRoot'
 
@@ -119,6 +122,9 @@ export function startServer(opts: ServerOptions) {
 
     // 2. API requests
     try {
+      if (await handlePluginRuntime(req, res, { configRoot: configDir })) return
+      if (await handlePluginsConfig(req, res, { configRoot: configDir })) return
+      if (await handleFileUpload(req, res, { sessDir: ctx.sessionConfig?.dirs.sessions ?? '', configRoot: configDir })) return
       const handled = await handleRequest(ctx, req, res)
       if (handled) return
     } catch (err) {

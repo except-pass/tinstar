@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { PluginsTab } from './Settings/PluginsTab'
 import { useDimensionMeta, autoPlural } from '../hooks/useDimensionMeta'
 import { useBackendState } from '../hooks/useBackendState'
 import type { LevelLabel } from '../domain/types'
 import { AgentIcon, isIconUrl } from './agentIcon'
 import { apiFetch } from '../apiClient'
+import { useConfig, useConfigPatch } from '../context/ConfigContext'
 
 interface Project {
   name: string
@@ -19,7 +21,7 @@ interface CliTemplate {
   resumeCmd: string
 }
 
-type Section = 'projects' | 'agents' | 'editor' | 'labels' | 'widgets'
+type Section = 'projects' | 'agents' | 'editor' | 'labels' | 'widgets' | 'plugins'
 
 interface Props {
   onClose: () => void
@@ -32,10 +34,13 @@ export function SettingsDialog({ onClose }: Props) {
   const editorRef = useRef<HTMLDivElement>(null)
   const labelsRef = useRef<HTMLDivElement>(null)
   const widgetsRef = useRef<HTMLDivElement>(null)
+  const pluginsRef = useRef<HTMLDivElement | null>(null)
 
   const { activeSpaceId, spaces } = useBackendState()
   const activeSpace = spaces.find(s => s.id === activeSpaceId)
   const currentMeta = useDimensionMeta()
+  const config = useConfig()
+  const patchConfig = useConfigPatch()
 
   const [labelLevels, setLabelLevels] = useState<LevelLabel[]>(() =>
     currentMeta.map(m => ({ icon: m.icon, label: m.label, plural: '' }))
@@ -67,10 +72,20 @@ export function SettingsDialog({ onClose }: Props) {
   const [editingTemplate, setEditingTemplate] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState<CliTemplate | null>(null)
 
-  // Widget settings (localStorage)
-  const [promptComposerDefault, setPromptComposerDefault] = useState(() =>
-    localStorage.getItem('tinstar-prompt-composer-default') === 'true'
-  )
+  // Widget settings (config)
+  const [promptComposerDefault, setPromptComposerDefault] = useState(() => config?.ui.promptComposerDefault ?? false)
+
+  useEffect(() => {
+    if (config) setPromptComposerDefault(config.ui.promptComposerDefault)
+  }, [config?.ui.promptComposerDefault])
+
+  // File Explorer settings
+  const [uploadMaxMb, setUploadMaxMb] = useState(() => Math.round((config?.uploadMaxBytes ?? 100 * 1024 * 1024) / (1024 * 1024)))
+  const [uploadSaveError, setUploadSaveError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (config) setUploadMaxMb(Math.round(config.uploadMaxBytes / (1024 * 1024)))
+  }, [config?.uploadMaxBytes])
 
   const fetchProjects = useCallback(() => {
     apiFetch('/api/projects')
@@ -226,6 +241,7 @@ export function SettingsDialog({ onClose }: Props) {
     { key: 'editor', label: 'Editor', icon: 'edit', ref: editorRef },
     { key: 'labels', label: 'Entity Labels', icon: 'label', ref: labelsRef },
     { key: 'widgets', label: 'Widgets', icon: 'widgets', ref: widgetsRef },
+    { key: 'plugins', label: 'Plugins', icon: 'extension', ref: pluginsRef },
   ]
 
   return (
@@ -776,7 +792,9 @@ export function SettingsDialog({ onClose }: Props) {
                   onChange={e => {
                     const val = e.target.checked
                     setPromptComposerDefault(val)
-                    localStorage.setItem('tinstar-prompt-composer-default', String(val))
+                    patchConfig({ ui: { promptComposerDefault: val } as never }).catch(err => {
+                      console.warn('[settings] composer default patch failed:', err)
+                    })
                   }}
                   className="w-4 h-4 rounded border border-white/20 bg-surface-base accent-primary cursor-pointer"
                 />
@@ -788,6 +806,82 @@ export function SettingsDialog({ onClose }: Props) {
                 When enabled, new session widgets will have the prompt composer expanded.
               </p>
             </div>
+
+            {/* Telemetry panels */}
+            <div className="mb-4">
+              <h5 className="text-2xs font-mono uppercase tracking-wider text-slate-500 mb-2">
+                Telemetry panels
+              </h5>
+              <p className="text-2xs text-slate-600 mb-2">
+                Show or hide individual panels in per-session telemetry and the canvas HUD.
+              </p>
+              <div className="space-y-1">
+                {([
+                  ['cost',       'Cost'],
+                  ['tokens',     'Tokens'],
+                  ['cacheHit',   'Cache hit'],
+                  ['duty',       'Duty cycle'],
+                  ['turnLength', 'Turn length'],
+                ] as const).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-3 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={config?.ui.telemetryPanels?.[key] ?? (key === 'cacheHit' ? false : true)}
+                      onChange={e => {
+                        const val = e.target.checked
+                        patchConfig({ ui: { telemetryPanels: { [key]: val } as never } as never }).catch(err => {
+                          console.warn('[settings] telemetry toggle failed:', err)
+                        })
+                      }}
+                      className="w-4 h-4 rounded border border-white/20 bg-surface-base accent-primary cursor-pointer"
+                    />
+                    <span className="text-xs text-slate-300 group-hover:text-slate-100 transition-colors">{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* File Explorer */}
+            <div className="mb-4">
+              <h5 className="text-2xs font-mono uppercase tracking-wider text-slate-500 mb-2">
+                File Explorer
+              </h5>
+              <label className="flex items-center gap-3">
+                <span className="text-xs text-slate-300">Max upload size (MB)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={1024}
+                  value={uploadMaxMb}
+                  onChange={e => setUploadMaxMb(Math.max(1, Math.min(1024, Number(e.target.value) || 1)))}
+                  onBlur={() => {
+                    const bytes = uploadMaxMb * 1024 * 1024
+                    patchConfig({ uploadMaxBytes: bytes })
+                      .then(() => setUploadSaveError(null))
+                      .catch(err => {
+                        console.warn('[settings] upload size patch failed:', err)
+                        setUploadSaveError(String(err))
+                      })
+                  }}
+                  className="w-20 px-2 py-1 text-xs font-mono bg-surface-base border border-white/20 rounded text-slate-200 focus:outline-none focus:border-primary/60"
+                />
+              </label>
+              {uploadSaveError && (
+                <p className="text-2xs text-red-400 mt-1 ml-3">{uploadSaveError}</p>
+              )}
+              <p className="text-2xs text-slate-600 mt-1">
+                Server-enforced cap for files uploaded via drag-and-drop onto the file tree.
+              </p>
+            </div>
+          </div>
+
+          {/* ── Separator ── */}
+          <div className="mx-5 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
+          {/* ── Plugins ── */}
+          <div ref={pluginsRef} className="px-5 py-4 border-b border-white/10">
+            <h4 className="text-xs font-mono uppercase tracking-wider text-slate-400 mb-3">Plugins</h4>
+            <PluginsTab />
           </div>
 
           {/* ── Footer info ── */}

@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 const execFileAsync = promisify(execFile)
 
 import type { SessionStatus } from '../../types'
+import { flushOnStateChange } from '../observability/turn-length'
 
 // --- Types ---
 
@@ -205,10 +206,14 @@ export function setConversationId(sessionsDir: string, name: string, conversatio
 }
 
 export function setState(sessionsDir: string, name: string, state: SessionState): Session | null {
-  return updateSession(sessionsDir, name, {
+  const result = updateSession(sessionsDir, name, {
     state,
     lastActive: new Date().toISOString(),
   })
+  if (result && state === 'stopped') {
+    flushOnStateChange(name, state)
+  }
+  return result
 }
 
 export function claudeStateDir(sessionsDir: string, sessionName: string): string {

@@ -1,0 +1,122 @@
+import { describe, it, expect, vi } from 'vitest'
+import type { Plugin } from '@tinstar/plugin-api'
+import { bootAllPlugins } from '../loader'
+import { PluginRegistry } from '../registry'
+
+function fakeBundle(
+  name: string,
+  opts: { apiVersion?: string; throws?: boolean; disposable?: () => void } = {},
+) {
+  const plugin: Plugin = {
+    activate: () => {
+      if (opts.throws) throw new Error('boom')
+      return opts.disposable ? [{ dispose: opts.disposable }] : []
+    },
+  }
+  return {
+    pkg: {
+      name,
+      version: '0.1.0',
+      tinstar: {
+        apiVersion: opts.apiVersion ?? '5',
+        displayName: name,
+      },
+    },
+    module: plugin,
+  }
+}
+
+const noExternals = async () => { throw new Error('no externals expected') }
+
+describe('bootAllPlugins', () => {
+  it('activates every plugin in the bundled index', async () => {
+    const reg = new PluginRegistry()
+    const bundle = { alpha: fakeBundle('alpha'), beta: fakeBundle('beta') }
+    await bootAllPlugins(bundle, { disabled: [], external: [] }, reg, noExternals)
+    expect(reg.get('alpha')?.state).toBe('active')
+    expect(reg.get('beta')?.state).toBe('active')
+  })
+
+  it('skips plugins with apiVersion mismatch (record absent from registry)', async () => {
+    const reg = new PluginRegistry()
+    const bundle = { gamma: fakeBundle('gamma', { apiVersion: '4' }) }
+    await bootAllPlugins(bundle, { disabled: [], external: [] }, reg, noExternals)
+    // Note: parseManifest throws on apiVersion mismatch BEFORE registry.activate is called.
+    // The loader should catch that throw and surface it. The expected outcome is that
+    // 'gamma' is either marked failed in the registry OR absent from it — depending on
+    // how the loader handles pre-activation manifest errors. The plan's implementation
+    // logs the error and skips entirely (no record created).
+    expect(reg.get('gamma')).toBeUndefined()
+  })
+
+  it('continues activating other plugins when one throws during activate', async () => {
+    const reg = new PluginRegistry()
+    const bundle = {
+      good:  fakeBundle('good'),
+      crash: fakeBundle('crash', { throws: true }),
+      also:  fakeBundle('also'),
+    }
+    await bootAllPlugins(bundle, { disabled: [], external: [] }, reg, noExternals)
+    expect(reg.get('good')?.state).toBe('active')
+    expect(reg.get('crash')?.state).toBe('failed')
+    expect(reg.get('also')?.state).toBe('active')
+  })
+
+  it('skips entries with malformed package.json', async () => {
+    const reg = new PluginRegistry()
+    const bundle = {
+      bad: { pkg: { name: 'bad' /* no version, no tinstar */ }, module: { activate: () => [] } },
+      ok:  fakeBundle('ok'),
+    }
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await bootAllPlugins(bundle, { disabled: [], external: [] }, reg, noExternals)
+    expect(reg.get('ok')?.state).toBe('active')
+    // 'bad' is not in registry because manifest parsing rejected it before activate
+    expect(reg.get('bad')).toBeUndefined()
+    expect(err).toHaveBeenCalled()
+    err.mockRestore()
+  })
+
+  it('continues past a duplicate plugin name (re-activation guard throw)', async () => {
+    const reg = new PluginRegistry()
+    // Two entries with the same `name` in their package.json.
+    const dup1 = { ...fakeBundle('dup') }
+    const dup2 = { ...fakeBundle('dup') }
+    const bundle = { key1: dup1, key2: dup2, ok: fakeBundle('ok') }
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await bootAllPlugins(bundle, { disabled: [], external: [] }, reg, noExternals)
+    expect(reg.get('dup')?.state).toBe('active')   // first one wins
+    expect(reg.get('ok')?.state).toBe('active')    // boot loop continued
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('activate failed for "key2"'))
+    err.mockRestore()
+  })
+
+  it('honors disabled[] for bundled plugins', async () => {
+    const reg = new PluginRegistry()
+    const bundle = {
+      one: fakeBundle('one'),
+      two: fakeBundle('two'),
+    }
+    const config = { disabled: ['one'], external: [] }
+    const importFn = async () => { throw new Error('unreachable') }
+    await bootAllPlugins(bundle, config, reg, importFn)
+    expect(reg.get('one')).toBeUndefined()      // disabled, skipped
+    expect(reg.get('two')?.state).toBe('active')
+  })
+
+  it('runs bundled before external', async () => {
+    const order: string[] = []
+    const reg = new PluginRegistry()
+    const recorded = (name: string): Plugin => ({
+      activate: () => { order.push(name); return [] }
+    })
+    const bundle = {
+      bundledA: { pkg: fakeBundle('bundledA').pkg, module: recorded('bundledA') },
+    }
+    const fakePkg = { name: 'extern', version: '0.0.1', tinstar: { apiVersion: '5', displayName: 'X' } }
+    const importFn = async () => ({ module: recorded('extern'), pkg: fakePkg })
+    const config = { disabled: [], external: [{ name: 'extern', path: '/abs' }] }
+    await bootAllPlugins(bundle, config, reg, importFn)
+    expect(order).toEqual(['bundledA', 'extern'])
+  })
+})
