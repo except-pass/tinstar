@@ -39,7 +39,7 @@ export function TurnLengthHistogram({ cells, accent, bucketBounds }: Props) {
   const height = PAD_TOP + PLOT_H + PAD_BOTTOM
 
   return (
-    <div ref={containerRef} style={{ width: '100%' }}>
+    <div ref={containerRef} style={{ width: '100%', minWidth: 0, overflow: 'hidden' }}>
       <svg width={width} height={height} role="img" aria-label="turn length histogram"
            style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 8, display: 'block' }}>
         {/* Y-axis: 0 and max */}
