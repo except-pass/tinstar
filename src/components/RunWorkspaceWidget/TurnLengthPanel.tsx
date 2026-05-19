@@ -1,6 +1,6 @@
 import { useConfig } from '../../context/ConfigContext'
 import { useTurnLengthObservations, TURN_LENGTH_BUCKETS, TURN_LENGTH_HELP } from '../../hooks/useTurnLengthObservations'
-import { TurnLengthHeatmap } from '../Telemetry/TurnLengthHeatmap'
+import { TurnLengthHistogram } from '../Telemetry/TurnLengthHistogram'
 
 const TURN_LENGTH_ACCENT = '255, 132, 100'
 
@@ -21,10 +21,9 @@ function TurnLengthPanelInner({ sessionId }: { sessionId: string }) {
         TURN LENGTH · 60m
         <span title={TURN_LENGTH_HELP} style={{ marginLeft: 4, opacity: 0.7, cursor: 'help' }}>ⓘ</span>
       </div>
-      <TurnLengthHeatmap
+      <TurnLengthHistogram
         cells={cells}
         accent={TURN_LENGTH_ACCENT}
-        windowSec={3600}
         bucketBounds={TURN_LENGTH_BUCKETS}
       />
       <div style={{

@@ -11,10 +11,9 @@ export interface Observation {
 export const TURN_LENGTH_BUCKETS = [1, 3, 10, 30, 60, 120, 300, 600, 1800, 3600] as const
 
 export const TURN_LENGTH_HELP =
-  'How long each turn took (user submit → assistant done). ' +
-  'X axis: time (last 60m, newest on right). ' +
-  'Y axis: duration bucket (longer turns near top, ≤1s near bottom). ' +
-  'Color intensity: number of turns in that cell. ' +
+  'How long each turn took (user submit → assistant done), over the last 60m. ' +
+  'X axis: duration bucket (≤1s on the left, ≤1h on the right). ' +
+  'Y axis: number of turns that fell into that bucket. ' +
   'p50 / p95: median and 95th-percentile turn length across the window. ' +
   'n: total turns counted.'
 
