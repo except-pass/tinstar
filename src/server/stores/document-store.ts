@@ -269,6 +269,7 @@ export class DocumentStore {
   updateRunStatus(runId: string, status: RunStatus): void {
     const run = this.runs.get(runId)
     if (!run) return
+    if (run.status === status) return
     run.status = status
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
