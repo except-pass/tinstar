@@ -406,6 +406,7 @@ export function initBackend(): RouteContext {
             if (session) observeFromRecapEntries(name, entries, session)
           },
           onSessionsListed: (names) => reconcileLiveSessions(names),
+          resolveTmuxName: (name) => tmuxBackend.tmuxSessionName(cfg, name),
         })
         watcher.start()
       }).catch(err => log.warn('reconcile', `startup reconciliation failed: ${(err as Error).message}`))
