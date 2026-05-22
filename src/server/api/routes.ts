@@ -1542,7 +1542,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ctx.docStore.upsertNatsTrafficWidget(widget.id, widget)
         // Update NATS bridge subscriptions
         ctx.natsTraffic?.updateWidgetSubscriptions(widget.id, widget.subscriptions)
-        ctx.sse.broadcastSnapshot()
         json(res, { ok: true, data: widget })
       } catch {
         json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
@@ -1571,7 +1570,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const updated = { ...existing, subscriptions: subs }
         ctx.docStore.upsertNatsTrafficWidget(id, updated)
         ctx.natsTraffic?.updateWidgetSubscriptions(id, subs)
-        ctx.sse.broadcastSnapshot()
         json(res, { ok: true, data: updated })
       } catch {
         json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
@@ -1599,7 +1597,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const updated = { ...existing, subscriptions: subs }
         ctx.docStore.upsertNatsTrafficWidget(id, updated)
         ctx.natsTraffic?.updateWidgetSubscriptions(id, subs)
-        ctx.sse.broadcastSnapshot()
         json(res, { ok: true, data: updated })
       } catch {
         json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
