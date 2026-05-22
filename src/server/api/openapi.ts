@@ -665,7 +665,7 @@ export const spec = {
         properties: {
           name: { type: 'string' },
           backend: { type: 'string', enum: ['tmux'] },
-          state: { type: 'string', enum: ['running', 'idle', 'stopped', 'needs_attention'] },
+          state: { type: 'string', enum: ['creating', 'running', 'idle', 'needs_attention', 'stopped'] },
           project: { type: 'string' },
           workspace: {
             type: 'object',
