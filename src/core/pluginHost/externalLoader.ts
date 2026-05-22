@@ -3,6 +3,7 @@ import { parseManifest, ManifestError } from './manifest'
 import type { PluginRegistry, PluginRecord } from './registry'
 import { createPluginApi } from '../pluginApi/createApi'
 import type { PluginsConfig, ExternalPluginEntry } from './pluginsConfig'
+import { apiFetch, apiUrl } from '../../apiClient'
 
 export interface ImportedExternalPlugin {
   module: Plugin
@@ -69,11 +70,11 @@ export const defaultImportExternalFn: ImportExternalFn = async (entry) => {
     const ctl = new AbortController()
     const t = setTimeout(() => ctl.abort(), 10_000)
     try {
-      const pkgRes = await fetch(`/api/plugin-runtime/local/${entry.name}/package.json`, { signal: ctl.signal })
+      const pkgRes = await apiFetch(`/api/plugin-runtime/local/${entry.name}/package.json`, { signal: ctl.signal })
       if (!pkgRes.ok) throw new Error(`could not fetch package.json: ${pkgRes.status}`)
       const pkg = await pkgRes.json()
       const main = typeof pkg.main === 'string' ? pkg.main : 'index.js'
-      const moduleUrl = `/api/plugin-runtime/local/${entry.name}/${main}`
+      const moduleUrl = apiUrl(`/api/plugin-runtime/local/${entry.name}/${main}`)
       // Note: dynamic import() does not respect AbortSignal in any browser as of 2026.
       // We accept that the import itself can hang past the 10s budget. The package.json
       // fetch has the AbortController guarding the first leg.
