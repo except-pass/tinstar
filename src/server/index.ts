@@ -41,6 +41,7 @@ import { OtlpExporter } from './stores/otlp-exporter'
 import { CcQuotaService } from './cc-quota/service'
 import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
 import { SlashUsage } from './sessions/slashUsage'
+import { resolveSlashUsagePath } from './sessions/slashUsage-path'
 
 // Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
 // If initBackend runs twice (Vite HMR), the second invocation skips registration
@@ -59,7 +60,7 @@ export function initBackend(): RouteContext {
   const otlpExporter = new OtlpExporter()
   otlpExporter.start()
   const slashRegistry = new SlashCommandRegistry()
-  const slashUsage = new SlashUsage(join(homedir(), '.config/tinstar/slash-usage.json'))
+  const slashUsage = new SlashUsage(resolveSlashUsagePath())
   // Debounced flush every 5s while dirty
   setInterval(() => { void slashUsage.flush() }, 5_000).unref()
   const ccQuotaService = new CcQuotaService({ sink: otlpExporter })
