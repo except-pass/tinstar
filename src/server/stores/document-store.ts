@@ -5,6 +5,39 @@ import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, Browse
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 
+function runShallowEqual(a: Run, b: Run): boolean {
+  if (a === b) return true
+  // RunData fields
+  if (a.id !== b.id) return false
+  if (a.color !== b.color) return false
+  if (a.status !== b.status) return false
+  if (a.sessionId !== b.sessionId) return false
+  if (a.taskId !== b.taskId) return false
+  if (a.initiative !== b.initiative) return false
+  if (a.epic !== b.epic) return false
+  if (a.task !== b.task) return false
+  if (a.repo !== b.repo) return false
+  if (a.worktree !== b.worktree) return false
+  if (a.touchedFiles !== b.touchedFiles) return false
+  if (a.recapEntries !== b.recapEntries) return false
+  if (a.rawLogs !== b.rawLogs) return false
+  if (a.port !== b.port) return false
+  if (a.backend !== b.backend) return false
+  if (a.backendInfo !== b.backendInfo) return false
+  if (a.agentIcon !== b.agentIcon) return false
+  if (a.natsEnabled !== b.natsEnabled) return false
+  if (a.natsSubject !== b.natsSubject) return false
+  if (a.natsSubscriptions !== b.natsSubscriptions) return false
+  if (a.natsControlOrphanedAt !== b.natsControlOrphanedAt) return false
+  if (a.parentId !== b.parentId) return false
+  if (a.breakoutRooms !== b.breakoutRooms) return false
+  // Run-only fields
+  if (a.worktreeId !== b.worktreeId) return false
+  if (a.createdAt !== b.createdAt) return false
+  if (a.spaceId !== b.spaceId) return false
+  return true
+}
+
 function touchedFilesEqual(a: TouchedFile[], b: TouchedFile[]): boolean {
   if (a.length !== b.length) return false
   const sortBy = (arr: TouchedFile[]) => [...arr].sort((x, y) => x.path.localeCompare(y.path))
@@ -211,6 +244,8 @@ export class DocumentStore {
   // --- Runs ---
 
   upsertRun(id: string, data: Run): void {
+    const prev = this.runs.get(id)
+    if (prev && runShallowEqual(prev, data)) return
     this.runs.set(id, data)
     this.changes.emit('change', { entity: 'run', id, data })
   }
