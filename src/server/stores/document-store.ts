@@ -5,6 +5,23 @@ import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, Browse
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 
+function touchedFilesEqual(a: TouchedFile[], b: TouchedFile[]): boolean {
+  if (a.length !== b.length) return false
+  const sortBy = (arr: TouchedFile[]) => [...arr].sort((x, y) => x.path.localeCompare(y.path))
+  const aa = sortBy(a)
+  const bb = sortBy(b)
+  for (let i = 0; i < aa.length; i++) {
+    const x = aa[i]!
+    const y = bb[i]!
+    if (x.path !== y.path) return false
+    if (x.additions !== y.additions) return false
+    if (x.deletions !== y.deletions) return false
+    if ((x.readOnly ?? false) !== (y.readOnly ?? false)) return false
+    if ((x.pending ?? false) !== (y.pending ?? false)) return false
+  }
+  return true
+}
+
 export class DocumentStore {
   private initiatives = new Map<string, Initiative>()
   private epics = new Map<string, Epic>()
@@ -262,7 +279,10 @@ export class DocumentStore {
       ? []
       : run.touchedFiles.filter(f => f.readOnly && !gitPaths.has(f.path))
 
-    run.touchedFiles = [...gitFiles, ...readOnlyCarry]
+    const next = [...gitFiles, ...readOnlyCarry]
+    if (touchedFilesEqual(run.touchedFiles, next)) return
+
+    run.touchedFiles = next
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
 
