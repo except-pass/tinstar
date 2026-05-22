@@ -13,6 +13,7 @@ import type { DocumentStore } from '../stores/document-store'
 import type { OTelStore } from '../stores/otel-store'
 import type { SSEBroadcaster } from './sse'
 import type { EventBus } from '../event-bus'
+import type { BusEvent, BusEventType, PayloadFor } from '../types'
 import type { TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
@@ -350,7 +351,7 @@ interface CreateSessionContext {
   docStore: DocumentStore
   readyQueue: ReadyQueue
   sse: SSEBroadcaster
-  emitSessionEvent: (event: string, payload: Record<string, unknown>) => void
+  emitSessionEvent: <T extends BusEventType>(type: T, payload: PayloadFor<T>) => void
   secrets: () => Record<string, string>
   dashboardUrl: string
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
@@ -611,7 +612,7 @@ function buildCreateSessionContext(ctx: RouteContext): CreateSessionContext | nu
     docStore: ctx.docStore,
     readyQueue: ctx.readyQueue,
     sse: ctx.sse,
-    emitSessionEvent: (type, payload) => ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as unknown as Parameters<typeof ctx.bus.emit>[0]),
+    emitSessionEvent: (type, payload) => ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as BusEvent),
     secrets: () => loadSecrets(cfg.dirs.secrets),
     dashboardUrl: `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`,
     natsTraffic: ctx.natsTraffic,
@@ -1989,8 +1990,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const secrets = () => loadSecrets(cfg.dirs.secrets)
     const dashboardUrl = `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`
 
-    function emitSessionEvent(type: string, payload: Record<string, unknown>) {
-      ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as unknown as Parameters<typeof ctx.bus.emit>[0])
+    function emitSessionEvent<T extends BusEventType>(type: T, payload: PayloadFor<T>): void {
+      ctx.bus.emit({ type, timestamp: new Date().toISOString(), payload } as BusEvent)
     }
 
     // Helper to extract :name from URL patterns like /api/sessions/foo or /api/sessions/foo/start
@@ -2762,7 +2763,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         nats: natsConfig,
       })
 
-      emitSessionEvent('managed_session.created', { session: spawnedSession })
+      emitSessionEvent('managed_session.created', { name: spawnedSession.name, state: spawnedSession.state })
 
       // Start the session with the combined prompt
       const enriched = spawnedSession as Session & { _stateDir?: string; initialPrompt?: string }

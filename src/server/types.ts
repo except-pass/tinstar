@@ -66,6 +66,13 @@ export interface ManagedSessionDeletedPayload {
   name: string
 }
 
+export interface ManagedSessionNatsOrphanedPayload {
+  name: string
+  orphanedAt: string
+  reason: string
+  restartRecommended: boolean
+}
+
 export interface SessionDeletedPayload {
   sessionId: string
 }
@@ -144,6 +151,7 @@ export type BusEvent =
   | { type: 'managed_session.created'; timestamp: string; payload: ManagedSessionCreatedPayload }
   | { type: 'managed_session.state_changed'; timestamp: string; payload: ManagedSessionStateChangedPayload }
   | { type: 'managed_session.deleted'; timestamp: string; payload: ManagedSessionDeletedPayload }
+  | { type: 'managed_session.nats_orphaned'; timestamp: string; payload: ManagedSessionNatsOrphanedPayload }
   | { type: 'ready_queue.update'; timestamp: string; payload: { queue: string[] } }
 
 export type BusEventType = BusEvent['type']
