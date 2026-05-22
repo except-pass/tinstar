@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -68,13 +68,39 @@ function sessionFile(sessionsDir: string, name: string): string {
   return join(sessionsDir, name, 'session.json')
 }
 
+// Branch cache keyed by workdir. The branch only changes when .git/HEAD
+// changes, so stat'ing one file lets us skip the git subprocess on the 3s
+// status-watcher tick when nothing has moved. Memory grows with unique
+// workdirs the server has ever seen; bounded by the session count.
+const branchCache = new Map<string, { headMtime: number; branch: string | null }>()
+
+export function _resetBranchCacheForTests(): void {
+  branchCache.clear()
+}
+
 export async function detectBranch(path: string): Promise<string | null> {
   if (!path) return null
+  let headMtime: number | null = null
+  try {
+    headMtime = statSync(join(path, '.git/HEAD')).mtimeMs
+  } catch {
+    // No .git/HEAD — not a git repo, or detached worktree pointing elsewhere.
+    // Fall through and let git rev-parse handle it; just don't cache.
+  }
+
+  if (headMtime !== null) {
+    const cached = branchCache.get(path)
+    if (cached && cached.headMtime === headMtime) return cached.branch
+  }
+
   try {
     const { stdout } = await execFileAsync('git', ['-C', path, 'rev-parse', '--abbrev-ref', 'HEAD'])
     const branch = stdout.trim()
-    return branch && branch !== 'HEAD' ? branch : null
+    const result = branch && branch !== 'HEAD' ? branch : null
+    if (headMtime !== null) branchCache.set(path, { headMtime, branch: result })
+    return result
   } catch {
+    if (headMtime !== null) branchCache.set(path, { headMtime, branch: null })
     return null
   }
 }
