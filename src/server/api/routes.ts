@@ -14,6 +14,7 @@ import type { OTelStore } from '../stores/otel-store'
 import type { SSEBroadcaster } from './sse'
 import type { EventBus } from '../event-bus'
 import type { BusEvent, BusEventType, PayloadFor } from '../types'
+import { buildAgentSubject, BREAKOUT_PREFIX } from '../nats/subjects'
 import type { TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
@@ -108,7 +109,13 @@ function buildNatsSubject(
   const epicName = epic ? sanitize(epic.name) : BLANK
   const taskName = task ? sanitize(task.name) : BLANK
 
-  return `tinstar.${spaceName}.${initName}.${epicName}.${taskName}.${sanitize(sessionName)}`
+  return buildAgentSubject({
+    space: spaceName,
+    init: initName,
+    epic: epicName,
+    task: taskName,
+    session: sanitize(sessionName),
+  })
 }
 import { discoverHands, getHandByName } from '../hands'
 import { MARSHAL_AGENT_NAME, MARSHAL_AGENT_DESCRIPTION, MARSHAL_AGENT_PROMPT } from '../hands/builtins/index'
@@ -2675,7 +2682,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       // Generate a breakout room for parent-child communication
       const breakoutRoom = natsConfig?.enabled
-        ? `tinstar.room.${randomUUID().slice(0, 8)}`
+        ? `${BREAKOUT_PREFIX}${randomUUID().slice(0, 8)}`
         : undefined
 
       // Pre-flight: subscribe parent to the breakout room BEFORE we start the
