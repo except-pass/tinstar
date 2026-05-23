@@ -1,6 +1,6 @@
 # ADR 0002 — Plugin API boundary
 
-**Status:** Accepted (implementation in progress)
+**Status:** Implemented (2026-05-23)
 **Date:** 2026-05-23
 **Builds on:** [ADR 0001 — Response envelope](./0001-response-envelope.md) (introduces the precedent of a closed contract enforced at the type level)
 
