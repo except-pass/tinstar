@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import Fuse from 'fuse.js'
+import { getPref, setPref } from '../lib/uiPrefs'
 import type { TreeNode, GroupingDimension, Space } from '../domain/types'
 import { getDimensionIcon } from '../domain/dimension-meta'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
@@ -40,7 +41,6 @@ function pruneTree(nodes: TreeNode[], visible: Set<string>): TreeNode[] {
   return result
 }
 
-const LS_HOTKEYS_HEIGHT = 'tinstar-sidebar-hotkeys-height'
 const DEFAULT_HOTKEYS_HEIGHT = 200
 const MIN_HOTKEYS_HEIGHT = 28
 const MAX_HOTKEYS_HEIGHT = 600
@@ -785,8 +785,8 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
 
   // Hotkeys panel height (resizable by dragging the divider)
   const [hotkeysHeight, setHotkeysHeight] = useState(() => {
-    const saved = localStorage.getItem(LS_HOTKEYS_HEIGHT)
-    return saved ? Math.max(MIN_HOTKEYS_HEIGHT, Math.min(MAX_HOTKEYS_HEIGHT, parseInt(saved))) : DEFAULT_HOTKEYS_HEIGHT
+    const saved = getPref('hotkeysHeight')
+    return saved !== undefined ? Math.max(MIN_HOTKEYS_HEIGHT, Math.min(MAX_HOTKEYS_HEIGHT, saved)) : DEFAULT_HOTKEYS_HEIGHT
   })
   const hotkeysHeightRef = useRef(hotkeysHeight)
   hotkeysHeightRef.current = hotkeysHeight
@@ -807,7 +807,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
       const delta = dividerDragRef.current.startY - e.clientY
       const newH = Math.max(MIN_HOTKEYS_HEIGHT, Math.min(MAX_HOTKEYS_HEIGHT, dividerDragRef.current.startH + delta))
       setHotkeysHeight(newH)
-      localStorage.setItem(LS_HOTKEYS_HEIGHT, String(newH))
+      setPref('hotkeysHeight', newH)
     }
   }, [dragState, dragInitiated, handleDragMove])
 

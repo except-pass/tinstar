@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react'
-
-const DISMISSED_KEY = 'tinstar-no-tasks-nudge-dismissed'
+import { getPref, setPref } from '../lib/uiPrefs'
 
 export function NoTasksToast({ taskCount, runCount }: { taskCount: number; runCount: number }) {
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
-    if (runCount > 0 && taskCount === 0 && !localStorage.getItem(DISMISSED_KEY)) {
+    if (runCount > 0 && taskCount === 0 && !getPref('noTasksNudgeDismissed')) {
       setVisible(true)
     }
   }, [taskCount, runCount])
@@ -22,7 +21,7 @@ export function NoTasksToast({ taskCount, runCount }: { taskCount: number; runCo
         </div>
         <button
           onClick={() => {
-            localStorage.setItem(DISMISSED_KEY, '1')
+            setPref('noTasksNudgeDismissed', true)
             setVisible(false)
           }}
           className="text-slate-500 hover:text-slate-300 shrink-0"

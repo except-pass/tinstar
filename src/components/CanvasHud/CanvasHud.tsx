@@ -12,8 +12,7 @@ import { StatSpark } from '../RunWorkspaceWidget/StatSpark'
 import { computeDeltaChip } from '../RunWorkspaceWidget/computeDeltaChip'
 import { useFleetTelemetrySeries } from '../../hooks/useFleetTelemetrySeries'
 import { useConfig } from '../../context/ConfigContext'
-
-const STORAGE_KEY = 'tinstar-hud-visible'
+import { getPref, setPref } from '../../lib/uiPrefs'
 
 interface Props {
   toggleRef?: React.MutableRefObject<(() => void) | null>
@@ -30,13 +29,10 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
   const { snapshot: ccQuota } = useCcQuota()
   const config = useConfig()
   const panels = config?.ui.telemetryPanels ?? { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true }
-  const [visible, setVisible] = useState(() => {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    return stored !== 'false'
-  })
+  const [visible, setVisible] = useState(() => getPref('hudVisible') ?? true)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, String(visible))
+    setPref('hudVisible', visible)
   }, [visible])
 
   const toggle = useCallback(() => setVisible(v => !v), [])

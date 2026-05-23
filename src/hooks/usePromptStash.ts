@@ -1,39 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { familyKeys, readJSON, writeJSON } from '../lib/uiPrefs'
 
 export const STASH_SLOTS = 2
-const STORAGE_PREFIX = 'tinstar-prompt-stash-v1:'
 
 export type StashSlots = readonly (string | null)[]
 
 const EMPTY: StashSlots = Object.freeze(Array(STASH_SLOTS).fill(null))
 
-function storageKey(sessionId: string) {
-  return `${STORAGE_PREFIX}${sessionId}`
-}
-
 function load(sessionId: string): StashSlots {
-  try {
-    const raw = localStorage.getItem(storageKey(sessionId))
-    if (!raw) return EMPTY
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return EMPTY
-    const normalized: (string | null)[] = Array(STASH_SLOTS).fill(null)
-    for (let i = 0; i < STASH_SLOTS; i++) {
-      const v = parsed[i]
-      normalized[i] = typeof v === 'string' && v.length > 0 ? v : null
-    }
-    return normalized
-  } catch {
-    return EMPTY
+  const parsed = readJSON<unknown>(familyKeys.promptStash(sessionId), null)
+  if (!Array.isArray(parsed)) return EMPTY
+  const normalized: (string | null)[] = Array(STASH_SLOTS).fill(null)
+  for (let i = 0; i < STASH_SLOTS; i++) {
+    const v = parsed[i]
+    normalized[i] = typeof v === 'string' && v.length > 0 ? v : null
   }
+  return normalized
 }
 
 function save(sessionId: string, slots: StashSlots) {
-  try {
-    localStorage.setItem(storageKey(sessionId), JSON.stringify(slots))
-  } catch {
-    /* quota or disabled storage — silent */
-  }
+  writeJSON(familyKeys.promptStash(sessionId), slots)
 }
 
 export interface PromptStash {

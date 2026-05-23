@@ -1,26 +1,18 @@
 // src/hooks/useHotgroups.ts
 import { useState, useCallback, useEffect, useMemo } from 'react'
+import { familyKeys, readJSON, writeJSON } from '../lib/uiPrefs'
 
 export type HotgroupSlot = '1'|'2'|'3'|'4'|'5'|'6'|'7'|'8'|'9'|'0'
 type HotgroupStore = Record<string, string[]> // slot → nodeId[]
 
 // v2: stores full node IDs (e.g. 'run-R-241', 'editor-abc', 'browser-xyz')
 // v1 stored raw run IDs without prefix — incompatible, bumped key
-function storageKey(spaceId: string) {
-  return `tinstar-hotgroups-v2-${spaceId}`
-}
-
 function load(spaceId: string): HotgroupStore {
-  try {
-    const raw = localStorage.getItem(storageKey(spaceId))
-    return raw ? JSON.parse(raw) : {}
-  } catch {
-    return {}
-  }
+  return readJSON<HotgroupStore>(familyKeys.hotgroups(spaceId), {})
 }
 
 function save(spaceId: string, store: HotgroupStore) {
-  localStorage.setItem(storageKey(spaceId), JSON.stringify(store))
+  writeJSON(familyKeys.hotgroups(spaceId), store)
 }
 
 export function useHotgroups(spaceId: string, nodeIds: string[]) {

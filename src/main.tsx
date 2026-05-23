@@ -7,6 +7,7 @@ import './hotkeys/widgets'  // register hotkey WidgetDefinitions
 import './widgets'           // register widget components
 import App from './App'
 import { ConfigProvider } from './context/ConfigContext'
+import { migrateLegacyPrefs } from './lib/uiPrefs'
 
 // Expose React for external plugins loaded via importmap.
 ;(window as Window & { __tinstar_react?: typeof React }).__tinstar_react = React
@@ -17,6 +18,10 @@ import { ConfigProvider } from './context/ConfigContext'
 // the base on first read, so we reset that cache here to guarantee the
 // next read sees whatever the eval set, regardless of ordering.
 resetApiBaseFromGlobal()
+
+// One-time migration: fold legacy per-key localStorage prefs into the
+// consolidated tinstar-ui-prefs blob. Idempotent — safe to call every boot.
+migrateLegacyPrefs()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
