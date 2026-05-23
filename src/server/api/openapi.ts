@@ -738,15 +738,46 @@ export const spec = {
           headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Custom HTTP headers injected on proxied requests' },
         },
       },
+      // ── Response envelope (ADR 0001) ──────────────────
+      //
+      // Every application API endpoint returns one of two shapes. Wire-protocol
+      // endpoints (this spec, OTLP/Prom exports, /api/state SSE snapshot,
+      // cc-quota snapshot) are documented exceptions and return raw payloads.
+      ErrorCode: {
+        type: 'string',
+        enum: [
+          'BAD_REQUEST', 'INVALID_PARAMS', 'NOT_FOUND', 'SESSION_NOT_FOUND',
+          'CONFLICT', 'PATH_OUTSIDE_WORKSPACE', 'FORBIDDEN',
+          'INTERNAL', 'BACKEND_UNAVAILABLE', 'BRIDGE_UNAVAILABLE',
+          'CONFIG_UNAVAILABLE', 'LIST_FAILED',
+        ],
+        description: 'Closed taxonomy of error categories. Adding a new code requires an ADR amendment.',
+      },
+      Ok: {
+        type: 'object',
+        required: ['ok', 'data'],
+        properties: {
+          ok: { const: true },
+          data: { description: 'Success payload — type depends on the endpoint.' },
+          warnings: {
+            type: 'object',
+            additionalProperties: { type: 'array', items: {} },
+            description: 'Optional soft-failure carrier. Keys are warning categories (e.g. "nats"); values are arrays of category-specific entries.',
+          },
+        },
+      },
       Error: {
         type: 'object',
+        required: ['ok', 'error'],
         properties: {
           ok: { const: false },
           error: {
             type: 'object',
+            required: ['code', 'message'],
             properties: {
-              code: { type: 'string' },
+              code: { $ref: '#/components/schemas/ErrorCode' },
               message: { type: 'string' },
+              details: { description: 'Structured context for specific handlers (e.g. field validation maps). Opaque to generic readers.' },
             },
           },
         },

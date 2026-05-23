@@ -34,7 +34,10 @@ function makeMultipartReq(boundary: string, body: Buffer, contentLength?: number
 function makeRes() {
   let body = ''; let status = 200
   return {
+    headersSent: false,
+    writableEnded: false,
     setHeader: () => {},
+    writeHead: (s: number) => { status = s },
     end: (chunk?: string) => { if (chunk) body += chunk },
     get statusCode() { return status }, set statusCode(v: number) { status = v },
     get _body() { return body },
@@ -81,16 +84,16 @@ describe('handleFileUpload', () => {
     const res = makeRes()
     await handleFileUpload(makeMultipartReq(boundary, body, 5 * 1024 * 1024), res, { sessDir: SESS_DIR, configRoot: ROOT })
     expect(res.statusCode).toBe(413)
-    expect(JSON.parse(res._body).error.code).toBe('FILE_TOO_LARGE')
+    expect(JSON.parse(res._body).error.code).toBe('INVALID_PARAMS')
   })
 
-  it('rejects paths that escape the workspace with 400', async () => {
+  it('rejects paths that escape the workspace with 403', async () => {
     const boundary = 'b1'
     const body = multipartBody(boundary, '../escape.txt', 'escape.txt', Buffer.from('x'))
     const res = makeRes()
     await handleFileUpload(makeMultipartReq(boundary, body), res, { sessDir: SESS_DIR, configRoot: ROOT })
-    expect(res.statusCode).toBe(400)
-    expect(JSON.parse(res._body).error.code).toBe('INVALID_PATH')
+    expect(res.statusCode).toBe(403)
+    expect(JSON.parse(res._body).error.code).toBe('PATH_OUTSIDE_WORKSPACE')
     expect(existsSync(join(WS, '..', 'escape.txt'))).toBe(false)
   })
 

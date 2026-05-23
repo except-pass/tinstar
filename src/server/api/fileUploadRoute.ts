@@ -5,16 +5,11 @@ import { randomBytes } from 'node:crypto'
 import Busboy from 'busboy'
 import { loadConfigMerged } from '../sessions/config'
 import { getSession } from '../sessions/session'
+import { ok, fail } from './envelope'
 
 interface Ctx { sessDir: string; configRoot: string }
 
 const URL_RE = /^\/api\/sessions\/([^/]+)\/files\/upload\/?$/
-
-function json(res: ServerResponse, payload: unknown, status = 200) {
-  res.statusCode = status
-  res.setHeader('content-type', 'application/json')
-  res.end(JSON.stringify(payload))
-}
 
 function getSessionWorkspace(sessDir: string, name: string): string | null {
   return getSession(sessDir, name)?.workspace?.path ?? null
@@ -28,7 +23,7 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
   const sessionName = decodeURIComponent(m[1])
   const wsRoot = getSessionWorkspace(ctx.sessDir, sessionName)
   if (!wsRoot) {
-    json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${sessionName}' not found` } }, 404)
+    fail(res, 'SESSION_NOT_FOUND', `Session '${sessionName}' not found`)
     return true
   }
 
@@ -37,7 +32,10 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
 
   const declared = Number(req.headers['content-length'] || 0)
   if (declared && declared > maxBytes + 16 * 1024) {
-    json(res, { ok: false, error: { code: 'FILE_TOO_LARGE', message: `Upload exceeds ${maxBytes} bytes` } }, 413)
+    // 413 Payload Too Large — not in the canonical HTTP_STATUS table since
+    // FILE_TOO_LARGE doesn't map to a generic ErrorCode; classify as
+    // INVALID_PARAMS at the body layer and override the HTTP status.
+    fail(res, 'INVALID_PARAMS', `Upload exceeds ${maxBytes} bytes`, { status: 413 })
     return true
   }
 
@@ -46,7 +44,7 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
     try {
       bb = Busboy({ headers: req.headers, limits: { fileSize: maxBytes, files: 1, fields: 5 } })
     } catch (err) {
-      json(res, { ok: false, error: { code: 'INVALID_MULTIPART', message: (err as Error).message } }, 400)
+      fail(res, 'BAD_REQUEST', (err as Error).message)
       return resolve(true)
     }
 
@@ -57,10 +55,16 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
     let aborted = false
     let responded = false
 
-    function send(payload: unknown, status: number) {
+    function sendOk(data: unknown) {
       if (responded) return
       responded = true
-      json(res, payload, status)
+      ok(res, data)
+      resolve(true)
+    }
+    function sendFail(code: Parameters<typeof fail>[1], message: string, opts: Parameters<typeof fail>[3] = {}) {
+      if (responded) return
+      responded = true
+      fail(res, code, message, opts)
       resolve(true)
     }
     function cleanup() {
@@ -76,14 +80,14 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
     bb.on('file', (_name, fileStream, _info) => {
       if (!targetPath) {
         fileStream.resume()
-        send({ ok: false, error: { code: 'PATH_REQUIRED', message: 'path field must precede file' } }, 400)
+        sendFail('BAD_REQUEST', 'path field must precede file')
         return
       }
       const rel = targetPath
       const abs = join(wsRoot, rel)
       if (!abs.startsWith(wsRoot + '/') && abs !== wsRoot) {
         fileStream.resume()
-        send({ ok: false, error: { code: 'INVALID_PATH', message: 'Path escapes workspace' } }, 400)
+        sendFail('PATH_OUTSIDE_WORKSPACE', 'Path escapes workspace')
         return
       }
       finalPath = abs
@@ -95,26 +99,26 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
         aborted = true
         out.destroy()
         cleanup()
-        send({ ok: false, error: { code: 'FILE_TOO_LARGE', message: `Upload exceeds ${maxBytes} bytes` } }, 413)
+        sendFail('INVALID_PARAMS', `Upload exceeds ${maxBytes} bytes`, { status: 413 })
       })
       fileStream.pipe(out)
       out.on('error', () => {
         aborted = true
         cleanup()
-        send({ ok: false, error: { code: 'WRITE_FAILED', message: 'Failed writing file' } }, 500)
+        sendFail('INTERNAL', 'Failed writing file')
       })
       out.on('finish', () => {
         if (aborted || responded) return
         if (!tempPath || !finalPath || !targetPath) {
-          send({ ok: false, error: { code: 'NO_FILE', message: 'No file part received' } }, 400)
+          sendFail('BAD_REQUEST', 'No file part received')
           return
         }
         try {
           renameSync(tempPath, finalPath)
-          send({ ok: true, data: { path: relative(wsRoot, finalPath), bytes: bytesWritten } }, 200)
+          sendOk({ path: relative(wsRoot, finalPath), bytes: bytesWritten })
         } catch (err) {
           cleanup()
-          send({ ok: false, error: { code: 'WRITE_FAILED', message: (err as Error).message } }, 500)
+          sendFail('INTERNAL', (err as Error).message)
         }
       })
     })
@@ -122,14 +126,14 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
     bb.on('error', (err) => {
       aborted = true
       cleanup()
-      send({ ok: false, error: { code: 'PARSE_FAILED', message: (err as Error).message } }, 400)
+      sendFail('BAD_REQUEST', (err as Error).message)
     })
 
     bb.on('close', () => {
       if (aborted || responded) return
       // If no file was received (e.g. no file part in body), report missing file
       if (!tempPath && !finalPath) {
-        send({ ok: false, error: { code: 'NO_FILE', message: 'No file part received' } }, 400)
+        sendFail('BAD_REQUEST', 'No file part received')
       }
     })
 
