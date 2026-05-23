@@ -2,6 +2,7 @@ import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger } f
 import type { PluginRecord } from '../pluginHost/registry'
 import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
 import { apiFetch } from '../../apiClient'
+import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
 import { EventBridge } from './eventBridge'
 
 const NOOP_DISPOSABLE: Disposable = { dispose: () => {} }
@@ -63,12 +64,22 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     },
   }
 
+  const hotkeys = {
+    onAction(widgetId: string, handler: (action: string) => void): Disposable {
+      registerActionHandler(widgetId, handler)
+      const d: Disposable = { dispose: () => deregisterActionHandler(widgetId) }
+      record.disposables.push(d)
+      return d
+    },
+  }
+
   return {
     pluginId: record.name,
     version: record.version,
     widgets,
     http,
     events,
+    hotkeys,
     logger,
   }
 }

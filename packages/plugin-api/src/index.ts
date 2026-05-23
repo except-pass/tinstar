@@ -71,6 +71,16 @@ export interface PluginEventsApi {
   subscribe<T = unknown>(channel: EventChannel, handler: (msg: T) => void): Disposable
 }
 
+/** Hotkey action dispatch. The host's focus-path router decides which
+ *  action strings fire (e.g. `'fit-viewport'`) when bindings activate
+ *  while a widget has focus. Plugins react to those actions here. */
+export interface PluginHotkeysApi {
+  /** Register an action handler for `widgetId`. The returned Disposable
+   *  removes the handler when disposed. Two handlers for the same widget
+   *  id is a misuse — only the last registration wins. */
+  onAction(widgetId: string, handler: (action: string) => void): Disposable
+}
+
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */
 export interface TinstarPluginAPI {
   readonly pluginId: string
@@ -81,6 +91,7 @@ export interface TinstarPluginAPI {
   }
   http: PluginHttpApi
   events: PluginEventsApi
+  hotkeys: PluginHotkeysApi
   logger: PluginLogger
 }
 
