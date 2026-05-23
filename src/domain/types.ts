@@ -1,18 +1,97 @@
-// Re-export base types
-export type {
-  SessionStatus,
-  RunStatus,
-  FileKind,
-  RecapEntryType,
-  DiffLineType,
-  DiffLine,
-  DiffBlock,
-  RecapEntry,
-  TouchedFile,
-  RunData,
-} from '../types'
+// Single source of truth for all shared domain types.
+//
+// Previously these types lived in two places: src/types.ts and this file,
+// with src/types.ts owning the primitives and src/domain/types.ts owning
+// the entity shapes. 37 files imported from src/types.ts directly,
+// duplicating the domain root. This file is now the canonical home;
+// src/types.ts is a thin re-export shim for backwards compatibility.
 
-import type { RunData, SessionStatus as RunStatus } from '../types'
+/** Single source of truth for session/run status — matches Qala's session states */
+export type SessionStatus = 'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped'
+
+/** @deprecated Use SessionStatus instead */
+export type RunStatus = SessionStatus
+export type FileKind = 'code' | 'config' | 'test' | 'script' | 'doc'
+export type RecapEntryType = 'agent' | 'user' | 'status'
+export type DiffLineType = 'context' | 'addition' | 'deletion' | 'header'
+
+export interface DiffLine {
+  type: DiffLineType
+  content: string
+}
+
+export interface DiffBlock {
+  filename: string
+  header: string
+  lines: DiffLine[]
+}
+
+export interface RecapEntry {
+  id: string
+  type: RecapEntryType
+  content: string
+  diff?: DiffBlock
+  timestamp?: string
+}
+
+export interface TouchedFile {
+  id: string
+  name: string
+  path: string
+  additions: number
+  deletions: number
+  kind: FileKind
+  pending?: boolean
+  /** File was read (e.g. by Read tool) but has no uncommitted changes */
+  readOnly?: boolean
+}
+
+export interface RunData {
+  id: string
+  color?: string
+  status: SessionStatus
+  sessionId: string
+  taskId: string
+  initiative: string
+  epic: string
+  task: string
+  repo: string
+  worktree: string
+  touchedFiles: TouchedFile[]
+  recapEntries: RecapEntry[]
+  rawLogs: string
+  port: number | null
+  backend: 'tmux' | null
+  backendInfo?: string
+  agentIcon?: string
+  natsEnabled?: boolean
+  natsSubject?: string
+  natsSubscriptions?: string[]
+  /**
+   * ISO timestamp when the session's NATS control socket was detected
+   * as orphaned. null means healthy or NATS disabled. Mirrors
+   * Session.natsControlOrphanedAt — drives the Saloon broker-health dot.
+   */
+  natsControlOrphanedAt?: string | null
+  parentId?: string  // ID of the run that spawned this one (for hands)
+  breakoutRooms?: string[]  // NATS room subjects for parent-child communication
+}
+
+
+export interface CommitRecord {
+  sha: string
+  subject: string
+  body?: string
+  authorName: string
+  authorEmail: string
+  authorDate: string
+  observedAt: string
+  repo: string
+  branch: string
+  worktreeId?: string
+  taskTags: string[]
+  source: 'hook' | 'reconcile'
+}
 
 // --- Entity settings (closest-ancestor inheritance) ---
 
