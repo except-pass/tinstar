@@ -88,6 +88,21 @@ export interface PluginCanvasApi {
   fitWidget(widgetId: string): void
 }
 
+/** Hotgroup (keyboard slot) integration: read which slots a widget belongs to
+ *  and render the host's `⌨ 1 3 5` badge. */
+export interface PluginHotgroupsApi {
+  /** React hook: read which keyboard hotgroup slots a node belongs to and
+   *  which nodes are in a slot. Must be called from inside a host
+   *  HotgroupProvider — the host wraps the canvas in this provider, so any
+   *  widget component rendered inside the canvas is safe. */
+  useContext(): {
+    slotsForNode: (nodeId: string) => string[]
+    nodesInSlot: (slot: string) => string[]
+  }
+  /** Renders the `⌨ 1 3 5` chip. Empty slot list renders nothing. */
+  Badge: ComponentType<{ slots: string[]; testId?: string }>
+}
+
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */
 export interface TinstarPluginAPI {
   readonly pluginId: string
@@ -100,6 +115,7 @@ export interface TinstarPluginAPI {
   events: PluginEventsApi
   hotkeys: PluginHotkeysApi
   canvas: PluginCanvasApi
+  hotgroups: PluginHotgroupsApi
   logger: PluginLogger
 }
 

@@ -4,6 +4,8 @@ import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
 import { apiFetch } from '../../apiClient'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
+import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
+import { HotgroupBadge } from '../../components/HotgroupBadge'
 import { EventBridge } from './eventBridge'
 
 const NOOP_DISPOSABLE: Disposable = { dispose: () => {} }
@@ -80,6 +82,17 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     },
   }
 
+  const hotgroups = {
+    useContext: (): { slotsForNode: (nodeId: string) => string[]; nodesInSlot: (slot: string) => string[] } => {
+      const ctx = useHotgroupContext()
+      return {
+        slotsForNode: (nodeId: string) => ctx.slotsForNode(nodeId),
+        nodesInSlot: (slot: string) => ctx.nodesInSlot(slot as never),
+      }
+    },
+    Badge: HotgroupBadge,
+  }
+
   return {
     pluginId: record.name,
     version: record.version,
@@ -88,6 +101,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     events,
     hotkeys,
     canvas,
+    hotgroups,
     logger,
   }
 }
