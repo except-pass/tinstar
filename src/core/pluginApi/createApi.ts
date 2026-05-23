@@ -8,6 +8,7 @@ import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
 import { HotgroupBadge } from '../../components/HotgroupBadge'
 import { useFileWatch } from '../../hooks/useFileWatch'
 import { useImageWatch } from '../../hooks/useImageWatch'
+import { resolveRunAccent, hexToRgba } from '../../components/runAccent'
 import { EventBridge } from './eventBridge'
 
 const NOOP_DISPOSABLE: Disposable = { dispose: () => {} }
@@ -100,6 +101,13 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     image: useImageWatch,
   }
 
+  const theme = {
+    accent: {
+      resolve: resolveRunAccent,
+      hexToRgba,
+    },
+  }
+
   return {
     pluginId: record.name,
     version: record.version,
@@ -110,6 +118,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     canvas,
     hotgroups,
     watch,
+    theme,
     logger,
   }
 }

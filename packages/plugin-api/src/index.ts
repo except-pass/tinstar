@@ -108,6 +108,17 @@ export interface PluginWatchApi {
   }
 }
 
+/** Accent color helpers (normalize + alpha blend). Mirrors the host's
+ *  `runAccent` utility used to style widget chrome by run color. */
+export interface PluginThemeApi {
+  accent: {
+    /** Normalize a color string to the default accent if missing/invalid. */
+    resolve(color?: string): string
+    /** Convert a hex color (with default fallback if invalid) to rgba(). */
+    hexToRgba(hex: string, alpha: number): string
+  }
+}
+
 /** Hotgroup (keyboard slot) integration: read which slots a widget belongs to
  *  and render the host's `⌨ 1 3 5` badge. */
 export interface PluginHotgroupsApi {
@@ -137,6 +148,7 @@ export interface TinstarPluginAPI {
   canvas: PluginCanvasApi
   hotgroups: PluginHotgroupsApi
   watch: PluginWatchApi
+  theme: PluginThemeApi
   logger: PluginLogger
 }
 
