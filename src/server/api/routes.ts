@@ -15,6 +15,8 @@ import type { SSEBroadcaster } from './sse'
 import type { EventBus } from '../event-bus'
 import type { BusEvent, BusEventType, PayloadFor } from '../types'
 import { buildAgentSubject, BREAKOUT_PREFIX } from '../nats/subjects'
+import { ok as okEnvelope, fail as failEnvelope, type OkOpts, type FailOpts } from './envelope'
+import type { ErrorCode } from '../../domain/api'
 import type { TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
@@ -712,6 +714,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   const json = (res: ServerResponse, data: unknown, status = 200): true =>
     moduleJson(res, data, status, corsHeaders)
 
+  // ok() and fail() are the application-API envelope helpers (ADR 0001).
+  // Per-request shadows that thread corsHeaders through automatically, so call
+  // sites read like English: `ok(res, data)` or `fail(res, 'NOT_FOUND', 'missing')`.
+  const ok = <T>(res: ServerResponse, data: T, opts: OkOpts = {}): true =>
+    okEnvelope(res, data, { ...opts, headers: { ...corsHeaders, ...(opts.headers ?? {}) } })
+  const fail = (res: ServerResponse, code: ErrorCode, message: string, opts: FailOpts = {}): true =>
+    failEnvelope(res, code, message, { ...opts, headers: { ...corsHeaders, ...(opts.headers ?? {}) } })
+
   // CORS preflight
   if (method === 'OPTIONS' && url.startsWith('/api/')) {
     res.writeHead(204, corsHeaders)
@@ -815,7 +825,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     try {
       payload = JSON.parse(body)
     } catch {
-      json(res, { error: 'malformed_json' }, 400)
+      fail(res, 'BAD_REQUEST', 'malformed_json')
       return true
     }
     const snap = ctx.ccQuotaService.ingest(payload)
@@ -865,13 +875,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           authorDate: string
           worktreeId?: string
         }
-        if (!ctx.sessionConfig) return json(res, { error: 'session config unavailable' }, 503)
-        if (!payload.sha || !payload.message) return json(res, { error: 'invalid payload' }, 400)
+        if (!ctx.sessionConfig) return fail(res, 'CONFIG_UNAVAILABLE', 'session config unavailable')
+        if (!payload.sha || !payload.message) return fail(res, 'BAD_REQUEST', 'invalid payload')
         const record = buildCommitRecord(payload, 'hook', ctx.sessionConfig.git.taskMarkerRegex)
         const inserted = ctx.docStore.upsertCommit(record)
         json(res, { ok: true, inserted })
       } catch {
-        json(res, { error: 'invalid json' }, 400)
+        fail(res, 'BAD_REQUEST', 'invalid json')
       }
     })
     return true
@@ -880,7 +890,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/git/reconcile
   if (method === 'POST' && url === '/api/git/reconcile') {
     if (!ctx.sessionConfig) {
-      json(res, { error: 'session config unavailable' }, 503)
+      fail(res, 'CONFIG_UNAVAILABLE', 'session config unavailable')
       return true
     }
     const result = reconcileGitHistory(ctx.docStore, ctx.sessionConfig)
@@ -936,12 +946,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       try {
         const { taskTag } = JSON.parse(body) as { taskTag: string }
-        if (!taskTag) return json(res, { error: 'taskTag is required' }, 400)
+        if (!taskTag) return fail(res, 'BAD_REQUEST', 'taskTag is required')
         const updated = ctx.docStore.assignTaskTag(sha, taskTag)
-        if (!updated) return json(res, { error: 'not found' }, 404)
+        if (!updated) return fail(res, 'NOT_FOUND', 'not found')
         json(res, { ok: true, commit: updated })
       } catch {
-        json(res, { error: 'invalid json' }, 400)
+        fail(res, 'BAD_REQUEST', 'invalid json')
       }
     })
     return true
@@ -974,7 +984,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'POST' && /^\/api\/spaces\/[^/]+\/activate$/.test(url)) {
     const id = url.split('/')[3]!
     const space = ctx.docStore.getSpace(id)
-    if (!space) { json(res, { error: 'not found' }, 404); return true }
+    if (!space) { fail(res, 'NOT_FOUND', 'not found'); return true }
     ctx.docStore.activeSpaceId = id
     if (ctx.sessionConfig) {
       saveActiveSpaceId(ctx.sessionConfig.dirs.root, id)
@@ -989,7 +999,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/spaces/'.length)
     readBody(req).then(body => {
       const existing = ctx.docStore.getSpace(id)
-      if (!existing) return json(res, { error: 'not found' }, 404)
+      if (!existing) return fail(res, 'NOT_FOUND', 'not found')
       const patch = JSON.parse(body)
 
       // Validate labelConfig if present
@@ -1018,11 +1028,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'DELETE' && url.startsWith('/api/spaces/') && !url.includes('/activate')) {
     const id = url.slice('/api/spaces/'.length)
     if (id === ctx.docStore.activeSpaceId) {
-      json(res, { error: 'Cannot delete the active space. Switch to another space first.' }, 400)
+      fail(res, 'CONFLICT', 'Cannot delete the active space. Switch to another space first.')
       return true
     }
     if (ctx.docStore.getAllSpaces().length <= 1) {
-      json(res, { error: 'Cannot delete the last space.' }, 400)
+      fail(res, 'CONFLICT', 'Cannot delete the last space.')
       return true
     }
     const orphanedRuns = ctx.docStore.getAllRuns().filter(r =>
@@ -1121,7 +1131,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/initiatives\/[^/]+$/.test(url)) {
     const id = url.slice('/api/initiatives/'.length)
     const entity = ctx.docStore.getInitiative(id)
-    if (!entity) { json(res, { error: 'not found' }, 404); return true }
+    if (!entity) { fail(res, 'NOT_FOUND', 'not found'); return true }
     json(res, { ok: true, data: entity })
     return true
   }
@@ -1130,7 +1140,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/epics\/[^/]+$/.test(url)) {
     const id = url.slice('/api/epics/'.length)
     const entity = ctx.docStore.getEpic(id)
-    if (!entity) { json(res, { error: 'not found' }, 404); return true }
+    if (!entity) { fail(res, 'NOT_FOUND', 'not found'); return true }
     json(res, { ok: true, data: entity })
     return true
   }
@@ -1139,7 +1149,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/tasks\/[^/]+$/.test(url)) {
     const id = url.slice('/api/tasks/'.length)
     const entity = ctx.docStore.getTask(id)
-    if (!entity) { json(res, { error: 'not found' }, 404); return true }
+    if (!entity) { fail(res, 'NOT_FOUND', 'not found'); return true }
     json(res, { ok: true, data: entity })
     return true
   }
@@ -1148,7 +1158,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/initiatives\/[^/]+\/settings$/.test(url)) {
     const id = url.slice('/api/initiatives/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'initiative', ctx.docStore)
-    if (!result) { json(res, { error: 'not found' }, 404); return true }
+    if (!result) { fail(res, 'NOT_FOUND', 'not found'); return true }
     json(res, { ok: true, data: result })
     return true
   }
@@ -1157,7 +1167,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/epics\/[^/]+\/settings$/.test(url)) {
     const id = url.slice('/api/epics/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'epic', ctx.docStore)
-    if (!result) { json(res, { error: 'not found' }, 404); return true }
+    if (!result) { fail(res, 'NOT_FOUND', 'not found'); return true }
     json(res, { ok: true, data: result })
     return true
   }
@@ -1166,7 +1176,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && /^\/api\/tasks\/[^/]+\/settings$/.test(url)) {
     const id = url.slice('/api/tasks/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'task', ctx.docStore)
-    if (!result) { json(res, { error: 'not found' }, 404); return true }
+    if (!result) { fail(res, 'NOT_FOUND', 'not found'); return true }
     json(res, { ok: true, data: result })
     return true
   }
@@ -1176,7 +1186,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/initiatives/'.length)
     readBody(req).then(body => {
       const existing = ctx.docStore.getInitiative(id)
-      if (!existing) return json(res, { error: 'not found' }, 404)
+      if (!existing) return fail(res, 'NOT_FOUND', 'not found')
       const patch = JSON.parse(body) as Record<string, unknown>
       const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertInitiative(id, merged)
@@ -1190,7 +1200,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/epics/'.length)
     readBody(req).then(body => {
       const existing = ctx.docStore.getEpic(id)
-      if (!existing) return json(res, { error: 'not found' }, 404)
+      if (!existing) return fail(res, 'NOT_FOUND', 'not found')
       const patch = JSON.parse(body) as Record<string, unknown>
       const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertEpic(id, merged)
@@ -1204,7 +1214,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/tasks/'.length)
     readBody(req).then(body => {
       const existing = ctx.docStore.getTask(id)
-      if (!existing) return json(res, { error: 'not found' }, 404)
+      if (!existing) return fail(res, 'NOT_FOUND', 'not found')
       const patch = JSON.parse(body) as Record<string, unknown>
       const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertTask(id, merged)
@@ -1218,7 +1228,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/worktrees/'.length)
     readBody(req).then(body => {
       const existing = ctx.docStore.getWorktree(id)
-      if (!existing) return json(res, { error: 'not found' }, 404)
+      if (!existing) return fail(res, 'NOT_FOUND', 'not found')
       const patch = JSON.parse(body)
       ctx.docStore.upsertWorktree(id, { ...existing, ...patch })
       json(res, { ok: true, data: ctx.docStore.getWorktree(id) })
@@ -1238,7 +1248,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && url.startsWith('/api/topics/') && !url.endsWith('/refresh')) {
     const subject = decodeURIComponent(url.slice('/api/topics/'.length))
     const md = ctx.docStore.getTopicMetadata(subject)
-    if (!md) return json(res, { error: 'not found' }, 404)
+    if (!md) return fail(res, 'NOT_FOUND', 'not found')
     json(res, { ok: true, data: joinParticipants(md, listAllSessions(ctx)) })
     return true
   }
@@ -1255,7 +1265,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       try {
         parsed = JSON.parse(body)
       } catch {
-        return json(res, { error: 'invalid json' }, 400)
+        return fail(res, 'BAD_REQUEST', 'invalid json')
       }
       const existing = ctx.docStore.getTopicMetadata(subject) ?? {
         subject,
@@ -1278,7 +1288,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'POST' && url.startsWith('/api/topics/') && url.endsWith('/refresh')) {
     const subject = decodeURIComponent(url.slice('/api/topics/'.length, -('/refresh'.length)))
     const existing = ctx.docStore.getTopicMetadata(subject)
-    if (!existing) return json(res, { error: 'not found' }, 404)
+    if (!existing) return fail(res, 'NOT_FOUND', 'not found')
     if (existing.kind !== 'broadcast' && existing.kind !== 'dm') {
       return json(res, { ok: true, data: joinParticipants(existing, listAllSessions(ctx)) })
     }
@@ -1472,7 +1482,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const filePath = qs.get('path')
 
     if (!sessionId || !filePath) {
-      json(res, { error: 'session and path required' }, 400)
+      fail(res, 'BAD_REQUEST', 'session and path required')
       return true
     }
 
@@ -1481,22 +1491,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       absolutePath = filePath
     } else {
       const sessDir = ctx.sessionConfig?.dirs.sessions
-      if (!sessDir) { json(res, { error: 'session config unavailable' }, 503); return true }
+      if (!sessDir) { fail(res, 'CONFIG_UNAVAILABLE', 'session config unavailable'); return true }
       const session = getSession(sessDir, sessionId)
-      if (!session) { json(res, { error: 'session not found' }, 404); return true }
+      if (!session) { fail(res, 'SESSION_NOT_FOUND', 'session not found'); return true }
       const workspacePath = session.workspace?.path ?? null
-      if (!workspacePath) { json(res, { error: 'session workspace unavailable' }, 400); return true }
+      if (!workspacePath) { fail(res, 'BAD_REQUEST', 'session workspace unavailable'); return true }
       absolutePath = filePath.startsWith('/')
         ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
         : resolve(workspacePath, filePath)
       if (!absolutePath.startsWith(workspacePath + '/')) {
-        json(res, { error: 'path outside workspace' }, 403)
+        fail(res, 'PATH_OUTSIDE_WORKSPACE', 'path outside workspace')
         return true
       }
     }
 
     if (!existsSync(absolutePath)) {
-      json(res, { error: 'file not found' }, 404)
+      fail(res, 'NOT_FOUND', 'file not found')
       return true
     }
 
@@ -1656,20 +1666,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(async body => {
       try {
         const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
-        if (!sessionId || !filePath) { json(res, { error: 'sessionId and filePath required' }, 400); return }
+        if (!sessionId || !filePath) { fail(res, 'BAD_REQUEST', 'sessionId and filePath required'); return }
 
         const sessDir = ctx.sessionConfig?.dirs.sessions
-        if (!sessDir) { json(res, { error: 'session config unavailable' }, 503); return }
+        if (!sessDir) { fail(res, 'CONFIG_UNAVAILABLE', 'session config unavailable'); return }
         const session = getSession(sessDir, sessionId)
-        if (!session) { json(res, { error: 'session not found' }, 404); return }
+        if (!session) { fail(res, 'SESSION_NOT_FOUND', 'session not found'); return }
         const workspacePath = session.workspace?.path ?? null
-        if (!workspacePath) { json(res, { error: 'session workspace unavailable' }, 400); return }
+        if (!workspacePath) { fail(res, 'BAD_REQUEST', 'session workspace unavailable'); return }
 
         const absolutePath = filePath.startsWith('/')
           ? filePath
           : resolve(workspacePath, filePath)
         if (!absolutePath.startsWith(workspacePath + '/')) {
-          json(res, { error: 'path outside workspace' }, 403); return
+          fail(res, 'PATH_OUTSIDE_WORKSPACE', 'path outside workspace'); return
         }
         const relPath = relative(workspacePath, absolutePath)
 
@@ -1683,7 +1693,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         if (msg.includes('does not exist') || msg.includes('bad revision')) {
           json(res, { ok: true, content: null })
         } else {
-          json(res, { error: 'failed to read git base', detail: msg }, 500)
+          fail(res, 'LIST_FAILED', 'failed to read git base', { details: { detail: msg } })
         }
       }
     })
@@ -1698,7 +1708,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           sessionId?: string; filePath?: string; subscriberId?: string; mode?: 'content' | 'notify'
         }
         if (!sessionId || !filePath || !subscriberId) {
-          json(res, { error: 'sessionId, filePath, and subscriberId required' }, 400)
+          fail(res, 'BAD_REQUEST', 'sessionId, filePath, and subscriberId required')
           return
         }
 
@@ -1707,16 +1717,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           absolutePath = filePath
         } else {
           const sessDir = ctx.sessionConfig?.dirs.sessions
-          if (!sessDir) { json(res, { error: 'session config unavailable' }, 503); return }
+          if (!sessDir) { fail(res, 'CONFIG_UNAVAILABLE', 'session config unavailable'); return }
           const session = getSession(sessDir, sessionId)
-          if (!session) { json(res, { error: 'session not found' }, 404); return }
+          if (!session) { fail(res, 'SESSION_NOT_FOUND', 'session not found'); return }
           const workspacePath = session.workspace?.path ?? null
-          if (!workspacePath) { json(res, { error: 'session workspace unavailable' }, 400); return }
+          if (!workspacePath) { fail(res, 'BAD_REQUEST', 'session workspace unavailable'); return }
           absolutePath = filePath.startsWith('/')
             ? resolve(workspacePath, filePath.replace(/^\/+/, ''))
             : resolve(workspacePath, filePath)
           if (!absolutePath.startsWith(workspacePath + '/')) {
-            json(res, { error: 'path outside workspace' }, 403)
+            fail(res, 'PATH_OUTSIDE_WORKSPACE', 'path outside workspace')
             return
           }
         }
@@ -1737,7 +1747,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           json(res, { ok: true, absolutePath })
         }
       } catch {
-        json(res, { error: 'invalid request body' }, 400)
+        fail(res, 'BAD_REQUEST', 'invalid request body')
       }
     })
     return true
@@ -1751,13 +1761,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           absolutePath?: string; subscriberId?: string
         }
         if (!absolutePath || !subscriberId) {
-          json(res, { error: 'absolutePath and subscriberId required' }, 400)
+          fail(res, 'BAD_REQUEST', 'absolutePath and subscriberId required')
           return
         }
         removeFileWatchSubscriber(absolutePath, subscriberId)
         json(res, { ok: true })
       } catch {
-        json(res, { error: 'invalid request body' }, 400)
+        fail(res, 'BAD_REQUEST', 'invalid request body')
       }
     })
     return true
@@ -3220,10 +3230,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       readBody(req).then(async (body) => {
         const { text, force } = JSON.parse(body) as { text: string; force?: boolean }
         if (!force && session.state !== 'idle') {
-          json(res, { error: 'session-not-ready' }, 400)
+          fail(res, 'CONFLICT', 'session-not-ready')
           return
         }
-        if (!text) { json(res, { error: 'missing text' }, 400); return }
+        if (!text) { fail(res, 'BAD_REQUEST', 'missing text'); return }
         try {
           await tmuxBackend.sendPrompt(cfg, sessionId, text)
           // Track slash usage (fire-and-forget; never blocks response).
@@ -3240,7 +3250,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           }
           json(res, { ok: true })
         } catch (err) {
-          json(res, { error: (err as Error).message }, 500)
+          fail(res, 'INTERNAL', (err as Error).message)
         }
       })
       return true

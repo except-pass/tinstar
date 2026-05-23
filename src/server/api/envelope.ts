@@ -29,7 +29,13 @@ function write(
   body: unknown,
   headers?: Headers,
 ): true {
-  const allHeaders: Headers = { 'Content-Type': 'application/json', ...(headers ?? {}) }
+  // Some routes respond asynchronously. If the client disconnected or another
+  // codepath already wrote the response, don't crash with ERR_HTTP_HEADERS_SENT.
+  if (res.headersSent || res.writableEnded) return true
+  const allHeaders: Headers = {
+    'Content-Type': 'application/json',
+    ...(headers ?? { 'Access-Control-Allow-Origin': '*' }),
+  }
   res.writeHead(status, allHeaders)
   res.end(JSON.stringify(body))
   return true
