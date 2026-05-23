@@ -37,7 +37,7 @@ Without step 2, commits from agent sessions will not appear in Task Activity unt
 
 ## Multi-Agent / NATS
 
-Agents communicate via NATS pub/sub. Subject scheme: `tinstar.<init>.<epic>.<task>.<agent>`
+Agents communicate via NATS pub/sub. Subject scheme: `tinstar.<space>.<init>.<epic>.<task>.<agent>`
 
 - Each agent auto-subscribes to task broadcast (`*`) and ancestor wildcards (`>`)
 - Use `reply` MCP tool to publish messages

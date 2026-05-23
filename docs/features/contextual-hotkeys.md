@@ -10,7 +10,7 @@ Three tightly coupled pieces:
 
 1. **Widget Contract** — `WidgetDefinition` interface; every widget type self-registers its bindings and navigable sub-contexts.
 2. **Context Router** — global keydown listener that resolves bindings from the active focus path and dispatches actions.
-3. **Hotkey Sidebar** — `HotkeysSidebar.tsx`: right-side panel that reactively shows the current context's bindings.
+3. **Hotkey Sidebar** — the `HotkeysSection` inside `src/components/HierarchySidebar.tsx`: a resizable panel at the bottom of the hierarchy sidebar that reactively shows the current context's bindings.
 
 ---
 
@@ -157,9 +157,9 @@ Implemented in `src/hooks/useFlourish.ts`. Keyframes: `ignite` (bloom), `ripple-
 
 ---
 
-## Hotkey Sidebar (`src/components/HotkeysSidebar.tsx`)
+## Hotkey Sidebar (HotkeysSection in `src/components/HierarchySidebar.tsx`)
 
-Fixed right-side panel showing all available bindings for the current context.
+Resizable panel at the bottom of the hierarchy sidebar showing all available bindings for the current context.
 
 **Layout:**
 ```

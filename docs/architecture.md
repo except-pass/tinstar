@@ -218,9 +218,7 @@ WorkspaceShell
 ├── CreateEntityDialog
 ├── CreateSessionDialog
 ├── EntityMenu (right-click context menu)
-├── EntitySettingsDialog (inheritance-based settings)
-├── ReassignDialog (drag-to-reassign run to different task)
-└── SessionsList
+└── EntitySettingsDialog (inheritance-based settings)
 ```
 
 ### Layout engine (`useWidgetLayouts` hook)

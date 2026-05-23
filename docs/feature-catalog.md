@@ -121,8 +121,7 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 
 ### Drag-to-Reassign
 - **Drag a widget over a group container**: Container highlights with cyan border (2px), brighter background, and glow box-shadow
-- **Drop**: Opens a `ReassignDialog` confirmation modal showing run ID, target type, and target label
-- **Confirm ("Move")**: PATCHes `run.taskId` via `PATCH /api/runs/:id`, repositions widget inside target container, auto-resizes target container to fit
+- **Drop**: PATCHes `run.taskId` via `PATCH /api/runs/:id`, repositions widget inside target container, auto-resizes target container to fit
 - **Parent filtering**: Drop targets exclude the run's current parent container (no-op reassignment prevented via `buildParentMap()`)
 - **Hit testing**: Canvas-level pointer coords converted via `clientToCanvas()`, tested against all group container bounds, deepest match wins
 - **150ms transitions** on highlight border/background/box-shadow
@@ -348,11 +347,6 @@ POST   /api/spaces/:id/activate # Set as active space
 ### CreateEntityDialog
 - Generic modal for creating initiatives, epics, tasks, and worktrees
 - Parent relationship selection based on entity type
-
-### ReassignDialog
-- Confirmation modal for drag-to-reassign operations
-- Shows run ID, target entity type, and target name
-- "Move" to confirm, "Cancel" to abort
 
 ### SettingsDialog
 - Project management: view, add, and remove registered projects
