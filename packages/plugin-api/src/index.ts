@@ -5,9 +5,12 @@ export interface Disposable {
   dispose(): void
 }
 
-/** Props a host passes to every widget component. */
-export interface WidgetProps {
-  data: unknown
+/** Props a host passes to every widget component. `T` is the shape of the
+ *  widget's `data` payload — typically the plugin's own domain type (e.g.
+ *  `WidgetProps<BrowserWidget>`). Defaults to `unknown` for the host registry,
+ *  which is type-agnostic across widget kinds. */
+export interface WidgetProps<T = unknown> {
+  data: T
   zoom: number
   isSelected: boolean
   isDragging: boolean
