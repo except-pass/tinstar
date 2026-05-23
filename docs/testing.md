@@ -89,10 +89,44 @@ The global setup (`e2e/global-setup.ts`) kills any orphaned backends on the work
 
 ---
 
+## Unit tests (vitest)
+
+```bash
+# Full suite
+npx vitest run --exclude='e2e/**'
+
+# Single file
+npx vitest run src/server/__tests__/openapi-session-status.test.ts
+
+# Single test by name
+npx vitest run src/server/__tests__/document-store-equality.test.ts -t "updateRunStatus"
+```
+
+The `--exclude='e2e/**'` is mandatory. Vitest's auto-discovery globs `e2e/*.spec.ts` and the files use Playwright's `test.describe` which throws at module load — every run crashes 30+ "test files" before getting to the actual unit tests. There is currently no `npm test` script that wraps this.
+
+### Test file locations
+
+| Location | When to use |
+|---|---|
+| `src/<area>/__tests__/<thing>.test.ts(x)` | Default. Unit/integration tests for code in the same `src/<area>/` directory. The majority pattern. |
+| `tests/<area>/` | Cross-cutting tests that exercise multiple `src/` areas at once (e.g., `tests/server/`, `tests/onboarding/`). |
+| `e2e/<spec>.spec.ts` | Browser-driven Playwright tests only. |
+
+Avoid sibling `*.test.ts` files (a single one exists at `src/hooks/telemetryStore.test.ts` — not the convention).
+
+### Reusable test patterns
+
+When you need to fake browser APIs that jsdom doesn't ship:
+
+- **`EventSource`** — see the `MockEventSource` class in `src/core/pluginApi/__tests__/eventBridge.test.ts`. Stub it with `vi.stubGlobal('EventSource', MockEventSource)` in `beforeEach`. Reset module state between tests via `_resetServerEventsForTests()` from `src/hooks/useServerEvents.ts`.
+- **`apiFetch`** — see the `vi.mock('../../apiClient', ...)` block in `src/components/__tests__/RecapSessionPanel.quickSend.test.tsx` and `SaloonRefreshButton.apiFetch.test.tsx`. Returns a vi.fn() that resolves to a `Response`.
+
 ## Type checking
 
 ```bash
-npx tsc --noEmit
+npx tsc -p tsconfig.app.json --noEmit
 ```
 
-Run this before committing. The CI equivalent is included in `prepublishOnly`.
+**Use the `-p tsconfig.app.json` flag.** The root `tsconfig.json` is a solution file with only `references` — `npx tsc --noEmit` against the root config compiles nothing and returns 0 even when the project has type errors. This silently masks regressions.
+
+The codebase has a known baseline of pre-existing tsc errors (~119 as of V5.0); to tell which errors a change introduces, compare counts before and after, or use `git stash && tsc && git stash pop && tsc`.

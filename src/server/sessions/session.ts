@@ -72,6 +72,12 @@ function sessionFile(sessionsDir: string, name: string): string {
 // changes, so stat'ing one file lets us skip the git subprocess on the 3s
 // status-watcher tick when nothing has moved. Memory grows with unique
 // workdirs the server has ever seen; bounded by the session count.
+//
+// Invalidation guarantees: `.git/HEAD`'s mtime advances on every `git
+// checkout`, `git switch`, and most ref updates. `git reset` and operations
+// that only mutate packed-refs may not advance HEAD's mtime — those are
+// rare in normal session workflows. If a caller observes stale branch info,
+// touch HEAD or call _resetBranchCacheForTests in test setup.
 const branchCache = new Map<string, { headMtime: number; branch: string | null }>()
 
 export function _resetBranchCacheForTests(): void {

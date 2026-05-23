@@ -1,3 +1,22 @@
+// Mutator contract:
+//   Every mutator that emits `change` must equality-short-circuit on no-op
+//   writes. Status-watcher (3s), reconcile (30s), and the git-diff loop
+//   (10s) all re-assert state every tick — without the short-circuit they
+//   broadcast SSE deltas and reschedule persist writes for nothing.
+//
+//   When you add a mutator, follow the existing pattern:
+//     - read prev state from the relevant Map
+//     - compare; return if equal
+//     - mutate + emit
+//
+// Caller contract for upsertRun:
+//   Use { ...existing, foo: x } — never { ...makeFreshRun() }. The shallow
+//   equality check uses reference identity for touchedFiles / recapEntries
+//   arrays. Spread preserves the refs; a fresh-from-factory rebuild defeats
+//   the check and reintroduces the SSE/persist storm.
+//
+// See docs/conventions.md → "Docstore mutators".
+
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -321,6 +340,12 @@ export class DocumentStore {
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
 
+  /**
+   * Mutates the stored run in place — callers holding a Run reference will
+   * see `.status` change under them. The mutation is intentional (the same
+   * object reference flows out via SSE deltas) but easy to miss from the
+   * signature.
+   */
   updateRunStatus(runId: string, status: RunStatus): void {
     const run = this.runs.get(runId)
     if (!run) return

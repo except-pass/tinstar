@@ -430,4 +430,4 @@ Playwright config auto-starts the dev server with `TINSTAR_FAST_SIM=1`. Tests co
 - Sidebar drag-to-reparent
 - Data persistence across restarts
 
-Type checking: `npx tsc --noEmit`
+Type checking and unit-test invocation: see [docs/testing.md](./testing.md#type-checking).
