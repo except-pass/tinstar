@@ -91,6 +91,91 @@ function subscribe(listener: () => void): () => void {
   }
 }
 
+// ─── Generic channel API for non-React subscribers (plugins) ────────────
+// Plugins used to open their own EventSource, exhausting the HTTP/1.1
+// 6-connection cap (the same bug the singleton was created to fix).
+// subscribeToChannel routes through this module's shared EventSource —
+// one connection for the React app and every plugin combined.
+
+type ChannelHandler = (payload: unknown) => void
+
+interface ChannelBinding {
+  handlers: Set<ChannelHandler>
+  esListener: ((ev: MessageEvent) => void) | null
+}
+
+const channelBindings = new Map<string, ChannelBinding>()
+
+function attachESListener(channel: string, binding: ChannelBinding): void {
+  if (binding.esListener || !es) return
+  const listener = (ev: MessageEvent) => {
+    let payload: unknown
+    try { payload = JSON.parse(ev.data) } catch {
+      // eslint-disable-next-line no-console
+      console.warn(`[sse-channel] dropped malformed frame on '${channel}'`)
+      return
+    }
+    for (const h of binding.handlers) {
+      try { h(payload) } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[sse-channel] handler for '${channel}' threw`, err)
+      }
+    }
+  }
+  binding.esListener = listener
+  es.addEventListener(channel, listener)
+}
+
+function detachESListener(channel: string, binding: ChannelBinding): void {
+  if (binding.esListener && es) {
+    es.removeEventListener(channel, binding.esListener)
+  }
+  binding.esListener = null
+}
+
+/** Reattach all known channel listeners — called from startSSE after the
+ *  EventSource is (re)created so bindings registered while SSE was stopped
+ *  pick up the new connection. */
+function reattachChannelListeners(): void {
+  for (const [channel, binding] of channelBindings) {
+    if (!binding.esListener) attachESListener(channel, binding)
+  }
+}
+
+export function subscribeToChannel(channel: string, handler: ChannelHandler): () => void {
+  let binding = channelBindings.get(channel)
+  if (!binding) {
+    binding = { handlers: new Set(), esListener: null }
+    channelBindings.set(channel, binding)
+  }
+  binding.handlers.add(handler)
+  refCount++
+  if (refCount === 1) startSSE()
+  attachESListener(channel, binding)
+  return () => {
+    binding!.handlers.delete(handler)
+    if (binding!.handlers.size === 0) {
+      detachESListener(channel, binding!)
+      channelBindings.delete(channel)
+    }
+    refCount--
+    if (refCount === 0) stopSSE()
+  }
+}
+
+/** Test-only: clear singleton state between tests. Do not call in production. */
+export function _resetServerEventsForTests(): void {
+  if (es) {
+    try { es.close() } catch {/* mock may not implement close */}
+    es = null
+  }
+  listeners.clear()
+  channelBindings.clear()
+  refCount = 0
+  currentState = EMPTY_STATE
+  uiBundle = { state: EMPTY_STATE, connected: false, loading: true }
+}
+
 function startSSE() {
   if (es) return
 
@@ -174,6 +259,9 @@ function startSSE() {
 
   es.onopen = () => { setConnected(true) }
   es.onerror = () => { setConnected(false) }
+
+  // Re-attach any plugin-registered channel listeners after the new EventSource is up.
+  reattachChannelListeners()
 
   const onBeforeUnload = () => es?.close()
   window.addEventListener('beforeunload', onBeforeUnload)
