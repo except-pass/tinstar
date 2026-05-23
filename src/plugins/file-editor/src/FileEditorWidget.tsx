@@ -2,14 +2,8 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import Editor, { DiffEditor } from '@monaco-editor/react'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import type { editor as MonacoEditor } from 'monaco-editor'
+import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { EditorWidget } from '../../../domain/types'
-import type { WidgetProps } from '../../../widgets/widgetComponentRegistry'
-import { useFileWatch } from '../../../hooks/useFileWatch'
-import { registerActionHandler, deregisterActionHandler } from '../../../hotkeys/actionHandlerRegistry'
-import { fitWidgetToViewport } from '../../../hotkeys/canvasActionsRegistry'
-import { useHotgroupContext } from '../../../hotkeys/HotgroupContext'
-import { HotgroupBadge } from '../../../components/HotgroupBadge'
-import { apiFetch } from '../../../apiClient'
 
 function getLanguage(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
@@ -33,10 +27,13 @@ function isBinaryOrLarge(content: string): boolean {
   return sample.includes('\x00')
 }
 
-export function FileEditorWidget({ data }: WidgetProps) {
-  const widget = data as EditorWidget
-  const { content, connected, lastUpdatedAt } = useFileWatch(widget.sessionId, widget.filePath)
-  const { slotsForNode } = useHotgroupContext()
+export function makeFileEditorWidget(api: TinstarPluginAPI) {
+  const HotgroupBadge = api.hotgroups.Badge
+
+  return function FileEditorWidget({ data }: WidgetProps<EditorWidget>) {
+  const widget = data
+  const { content, connected, lastUpdatedAt } = api.watch.file(widget.sessionId, widget.filePath)
+  const { slotsForNode } = api.hotgroups.useContext()
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
   // Ref so handleEditorMount always reads the latest content, avoiding stale closure
   const contentRef = useRef<string | null>(null)
@@ -54,7 +51,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
   const fetchBaseContent = useCallback(() => {
     setDiffLoading(true)
     baseFetchedRef.current = true
-    apiFetch('/api/file-content/git-base', {
+    api.http.fetch('/api/file-content/git-base', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: widget.sessionId, filePath: widget.filePath }),
@@ -101,7 +98,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOpenInEditor = useCallback(() => {
-    apiFetch('/api/editor/open', {
+    api.http.fetch('/api/editor/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: widget.filePath, sessionId: widget.sessionId }),
@@ -109,7 +106,7 @@ export function FileEditorWidget({ data }: WidgetProps) {
   }, [widget.filePath, widget.sessionId])
 
   const handleClose = useCallback(() => {
-    apiFetch(`/api/editor-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
+    api.http.fetch(`/api/editor-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
   }, [widget.id])
 
   const [wordWrap, setWordWrap] = useState(false)
@@ -129,14 +126,14 @@ export function FileEditorWidget({ data }: WidgetProps) {
 
   // Register hotkey action handlers for when this widget is the focused context
   useEffect(() => {
-    registerActionHandler(widget.id, (action) => {
+    const d = api.hotkeys.onAction(widget.id, (action) => {
       if (action === 'open-in-editor') handleOpenInEditor()
       if (action === 'toggle-word-wrap') toggleWordWrap()
       if (action === 'toggle-diff') toggleDiff()
-      if (action === 'fit-viewport') fitWidgetToViewport(widget.id)
+      if (action === 'fit-viewport') api.canvas.fitWidget(widget.id)
       if (action === 'toggle-rendered' && isMarkdown) toggleRendered()
     })
-    return () => deregisterActionHandler(widget.id)
+    return () => d.dispose()
   }, [widget.id, handleOpenInEditor, toggleWordWrap, toggleDiff, toggleRendered, isMarkdown])
 
   const [now, setNow] = useState(() => Date.now())
@@ -276,4 +273,5 @@ export function FileEditorWidget({ data }: WidgetProps) {
       </div>
     </div>
   )
+  }
 }
