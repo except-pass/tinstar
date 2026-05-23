@@ -1,5 +1,5 @@
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
-import { execFile, spawn } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
@@ -3282,32 +3282,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       ctx.sse.broadcastEvent('canvas:viewport', { ...payload, ts: Date.now() })
       return json(res, { ok: true })
     }).catch(err => json(res, { ok: false, error: { code: 'INTERNAL', message: (err as Error).message } }, 500))
-    return true
-  }
-
-  // POST /api/dev/restart — rebuild and restart the server
-  if (method === 'POST' && url === '/api/dev/restart') {
-    // process.cwd() is the project root — tinstar is always launched from there
-    const projectRoot = process.cwd()
-    const portArgs = process.argv.slice(2)
-    const portIdx = portArgs.indexOf('--port')
-    const port = portIdx !== -1 ? portArgs[portIdx + 1] : '5273'
-
-    json(res, { ok: true, message: 'Rebuilding and restarting...' })
-    log.info('dev', `restart requested — rebuilding in ${projectRoot} then starting on port ${port}`)
-
-    // Spawn a detached process that waits for us to die, rebuilds, and restarts
-    const child = spawn('bash', ['-c',
-      `sleep 1 && npm run build:all && node bin/tinstar.js --no-open --port ${port}`,
-    ], {
-      cwd: projectRoot,
-      detached: true,
-      stdio: 'ignore',
-    })
-    child.unref()
-
-    // Give the response time to flush, then exit
-    setTimeout(() => process.exit(0), 200)
     return true
   }
 

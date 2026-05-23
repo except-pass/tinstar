@@ -330,8 +330,6 @@ function WorkspaceShellInner() {
   const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(240)
   // Feature-flagged: commit activity buttons disabled for now
-  // const [commitViewMode, setCommitViewMode] = useState<'task' | 'unassigned' | 'standup' | null>(null)
-  // const [selectedTaskTag, setSelectedTaskTag] = useState('')
   const sidebarResizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
 
   const onSidebarResizePointerDown = useCallback((e: React.PointerEvent) => {
@@ -902,16 +900,6 @@ function WorkspaceShellInner() {
                     forceMarshalOpen={forceMarshalOpen}
                   />
                 </div>
-
-              {/* Feature-flagged: commit activity panel disabled for now
-              {commitViewMode && (
-                <CommitActivityPanel
-                  mode={commitViewMode}
-                  selectedTaskTag={selectedTaskTag}
-                  onTaskTagChange={setSelectedTaskTag}
-                />
-              )}
-              */}
 
               {createDialog && (
                 <CreateEntityDialog
