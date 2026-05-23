@@ -3,6 +3,7 @@ import type { PluginRecord } from '../pluginHost/registry'
 import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
 import { apiFetch } from '../../apiClient'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
+import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { EventBridge } from './eventBridge'
 
 const NOOP_DISPOSABLE: Disposable = { dispose: () => {} }
@@ -73,6 +74,12 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     },
   }
 
+  const canvas = {
+    fitWidget(widgetId: string): void {
+      fitWidgetToViewport(widgetId)
+    },
+  }
+
   return {
     pluginId: record.name,
     version: record.version,
@@ -80,6 +87,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     http,
     events,
     hotkeys,
+    canvas,
     logger,
   }
 }

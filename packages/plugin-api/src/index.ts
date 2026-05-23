@@ -81,6 +81,13 @@ export interface PluginHotkeysApi {
   onAction(widgetId: string, handler: (action: string) => void): Disposable
 }
 
+/** Canvas integration: zoom/pan operations bound to widget ids. */
+export interface PluginCanvasApi {
+  /** Zoom and pan the canvas so the given widget fits in the viewport.
+   *  No-op if the widget is not currently in the layout. */
+  fitWidget(widgetId: string): void
+}
+
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */
 export interface TinstarPluginAPI {
   readonly pluginId: string
@@ -92,6 +99,7 @@ export interface TinstarPluginAPI {
   http: PluginHttpApi
   events: PluginEventsApi
   hotkeys: PluginHotkeysApi
+  canvas: PluginCanvasApi
   logger: PluginLogger
 }
 
