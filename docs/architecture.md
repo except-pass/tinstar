@@ -265,7 +265,11 @@ Supports move, resize, shrink-to-fit, and auto-expansion (parents grow when chil
 
 ## Plugin System
 
-Since V5, the canvas widgets and a subset of chrome are extended via a **trusted, in-process plugin system**. Built-in widgets (browser, nats-traffic, file-editor, image-viewer) ship as bundled plugins through the same API external plugins use — there's no first/second class tier. Saloon, minimap, run-workspace, and hierarchy sidebar remain core.
+Since V5, the canvas widgets and a subset of chrome are extended via a **trusted, in-process plugin system**. Built-in widgets (browser, nats-traffic, file-editor, image-viewer) ship as bundled plugins. Saloon, minimap, run-workspace, and hierarchy sidebar remain core.
+
+**Built-in vs external plugins — the API boundary is aspirational.** The published `@tinstar/plugin-api` surface (widgets, http, events, logger) is what external plugins like papershore and stretchplan link against. **Built-in plugins under `src/plugins/<name>/` currently reach into host internals directly** — `useFileWatch`, `registerActionHandler`, `useHotgroupContext`, `HotgroupBadge`, `fitWidgetToViewport`, `runAccent` — bypassing the API. Extracting any built-in plugin to its own package today would fail to compile. This is intentional first-party convenience while the V5 plugin surface stabilizes, **not** a contract for external plugins.
+
+The path back to a clean boundary is to expand `TinstarPluginAPI` with `hotkeys.registerAction`, `canvas.fitWidget`, `hotgroups` accessors, and `watch.file/image` wrappers, then migrate the four built-in plugins to consume the API instead of importing internals. External plugins should not assume these host modules are stable — the published API is the only stable surface.
 
 ### Key components
 
