@@ -13,6 +13,7 @@ import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
 import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
+import { EV } from '../lib/windowEvents'
 
 interface Props {
   tree: TreeNode[]
@@ -307,8 +308,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         centerOn(minX, minY, maxX - minX, maxY - minY, rect.width, rect.height, detail.padding ?? 80)
       }
     }
-    window.addEventListener('tinstar:canvas:viewport', onViewport)
-    return () => window.removeEventListener('tinstar:canvas:viewport', onViewport)
+    window.addEventListener(EV.canvasViewport, onViewport)
+    return () => window.removeEventListener(EV.canvasViewport, onViewport)
   }, [setCamera, centerOn, getLayout, layouts, runMap])
 
   // Attach wheel listener with { passive: false }

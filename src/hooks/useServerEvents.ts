@@ -5,6 +5,7 @@ import { useSyncExternalStore, useCallback } from 'react'
 import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata } from '../domain/types'
 import { isSystemSession, extractMarshal } from '../domain/system-sessions'
 import { apiUrl } from '../apiClient'
+import { dispatchWindowEvent } from '../lib/windowEvents'
 
 interface ServerState {
   activeSpaceId: string
@@ -216,35 +217,23 @@ function startSSE() {
   })
 
   es.addEventListener('file_watch', (e: MessageEvent) => {
-    window.dispatchEvent(new CustomEvent('tinstar:file_watch', { detail: JSON.parse(e.data) }))
+    try { dispatchWindowEvent('tinstar:file_watch', JSON.parse(e.data)) } catch { /* malformed — drop */ }
   })
 
   es.addEventListener('nats_traffic', (e: MessageEvent) => {
-    window.dispatchEvent(new CustomEvent('tinstar:nats_traffic', { detail: JSON.parse(e.data) }))
+    try { dispatchWindowEvent('tinstar:nats_traffic', JSON.parse(e.data)) } catch { /* malformed — drop */ }
   })
 
   es.addEventListener('telemetry:hud', (e: MessageEvent) => {
-    try {
-      window.dispatchEvent(new CustomEvent('tinstar:telemetry:hud', { detail: JSON.parse(e.data) }))
-    } catch {
-      // malformed event — drop silently
-    }
+    try { dispatchWindowEvent('tinstar:telemetry:hud', JSON.parse(e.data)) } catch { /* malformed — drop */ }
   })
 
   es.addEventListener('canvas:viewport', (e: MessageEvent) => {
-    try {
-      window.dispatchEvent(new CustomEvent('tinstar:canvas:viewport', { detail: JSON.parse(e.data) }))
-    } catch {
-      // malformed event — drop silently
-    }
+    try { dispatchWindowEvent('tinstar:canvas:viewport', JSON.parse(e.data)) } catch { /* malformed — drop */ }
   })
 
   es.addEventListener('projects_changed', (e: MessageEvent) => {
-    try {
-      window.dispatchEvent(new CustomEvent('tinstar:projects_changed', { detail: JSON.parse(e.data) }))
-    } catch {
-      // malformed event — drop silently
-    }
+    try { dispatchWindowEvent('tinstar:projects_changed', JSON.parse(e.data)) } catch { /* malformed — drop */ }
   })
 
   es.addEventListener('heartbeat', () => {
@@ -382,7 +371,7 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
   }
 
   if (delta.entity === 'commit') {
-    window.dispatchEvent(new Event('tinstar:commit-delta'))
+    dispatchWindowEvent('tinstar:commit-delta', undefined)
     return prev
   }
 

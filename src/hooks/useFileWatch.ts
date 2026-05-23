@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { apiFetch } from '../apiClient'
+import { useWindowEvent } from '../lib/windowEvents'
 
 interface FileWatchState {
   content: string | null
@@ -41,22 +42,8 @@ export function useFileWatch(sessionId: string, filePath: string): FileWatchStat
         if (!cancelled) setConnected(false)
       })
 
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { path: string; type: string; data?: string }
-      if (detail.path !== absolutePathRef.current) return
-      if (detail.type === 'content' && detail.data !== undefined) {
-        setContent(detail.data)
-        setConnected(true)
-        setLastUpdatedAt(new Date())
-      } else if (detail.type === 'error') {
-        setConnected(false)
-      }
-    }
-    window.addEventListener('tinstar:file_watch', handler)
-
     return () => {
       cancelled = true
-      window.removeEventListener('tinstar:file_watch', handler)
       const absPath = absolutePathRef.current
       if (absPath) {
         apiFetch('/api/file-watch/unsubscribe', {
@@ -67,6 +54,18 @@ export function useFileWatch(sessionId: string, filePath: string): FileWatchStat
       }
     }
   }, [sessionId, filePath])
+
+  useWindowEvent('tinstar:file_watch', (detail) => {
+    const d = detail as { path: string; type: string; data?: string } | undefined
+    if (!d || d.path !== absolutePathRef.current) return
+    if (d.type === 'content' && d.data !== undefined) {
+      setContent(d.data)
+      setConnected(true)
+      setLastUpdatedAt(new Date())
+    } else if (d.type === 'error') {
+      setConnected(false)
+    }
+  })
 
   return { content, connected, lastUpdatedAt }
 }

@@ -4,6 +4,7 @@ import type { WidgetProps } from '../../../widgets/widgetComponentRegistry'
 import { registerActionHandler, deregisterActionHandler } from '../../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../../hotkeys/canvasActionsRegistry'
 import { apiFetch } from '../../../apiClient'
+import { EV } from '../../../lib/windowEvents'
 
 interface TrafficEvent {
   timestamp: string
@@ -57,9 +58,9 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
       }
     }
 
-    window.addEventListener('tinstar:nats_traffic', handler)
+    window.addEventListener(EV.natsTraffic, handler)
     return () => {
-      window.removeEventListener('tinstar:nats_traffic', handler)
+      window.removeEventListener(EV.natsTraffic, handler)
       if (natsRafRef.current !== null) cancelAnimationFrame(natsRafRef.current)
       natsBatchRef.current = []
     }
