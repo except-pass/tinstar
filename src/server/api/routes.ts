@@ -765,9 +765,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // GET /api/state
+  // GET /api/state — raw SSE snapshot shape (ADR 0001 exception); useServerEvents
+  // consumes the same shape over SSE, so the body cannot be wrapped in the envelope.
   if (method === 'GET' && url === '/api/state') {
-    // Include sessions from disk alongside document store snapshot
     const sessDir = ctx.sessionConfig?.dirs.sessions
     const sessions = sessDir ? await listSessions(sessDir) : []
     json(res, { ...ctx.docStore.snapshot(), sessions })
@@ -785,6 +785,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const parsed = new URL(url, 'http://localhost')
     const traceId = parsed.searchParams.get('traceId')
     const spans = traceId ? ctx.otelStore.getSpansByTrace(traceId) : ctx.otelStore.getAllSpans()
+    // Raw OTLP span array (ADR 0001 exception).
     json(res, spans)
     return true
   }
@@ -794,19 +795,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const parsed = new URL(url, 'http://localhost')
     const name = parsed.searchParams.get('name')
     const metrics = name ? ctx.otelStore.getMetricsByName(name) : ctx.otelStore.getAllMetrics()
+    // Raw OTLP metric array (ADR 0001 exception).
     json(res, metrics)
     return true
   }
 
   // GET /api/cc-quota — returns the last pushed snapshot
   if (method === 'GET' && ctx.ccQuotaService && url === '/api/cc-quota') {
+    // Raw cc-quota snapshot shape (ADR 0001 exception); consumed by useCcQuota
+    // which expects the raw payload, not the envelope.
     json(res, ctx.ccQuotaService.getSnapshot())
     return true
   }
 
   // GET /api/slash-commands — returns registered slash commands merged with usage stats
   if (method === 'GET' && url === '/api/slash-commands') {
-    if (!ctx.slashRegistry) return json(res, { commands: [] })
+    if (!ctx.slashRegistry) return ok(res, { commands: [] })
     const commands = await ctx.slashRegistry.list()
     const usage = ctx.slashUsage?.snapshot() ?? {}
     const merged = commands.map(c => ({
@@ -814,7 +818,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       useCount: usage[c.name]?.count ?? 0,
       lastUsedAt: usage[c.name]?.lastUsedAt ?? null,
     }))
-    return json(res, { commands: merged })
+    return ok(res, { commands: merged })
   }
 
   // POST /api/cc-quota/ingest — Claude Code statusline hook pushes its full
@@ -829,6 +833,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
     const snap = ctx.ccQuotaService.ingest(payload)
+    // Raw cc-quota snapshot shape (ADR 0001 exception). The snapshot's own
+    // .data field would collide with the envelope's .data; consumers of the
+    // POST response (just the test suite — statusline hooks ignore the body)
+    // expect the raw shape that GET /api/cc-quota returns.
     json(res, snap)
     return true
   }
@@ -836,14 +844,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/simulator/start
   if (method === 'POST' && url === '/api/simulator/start') {
     ctx.startSimulator()
-    json(res, { status: 'started' })
+    ok(res, { status: 'started' })
     return true
   }
 
   // POST /api/simulator/reset
   if (method === 'POST' && url === '/api/simulator/reset') {
     ctx.resetSimulator()
-    json(res, { status: 'reset' })
+    ok(res, { status: 'reset' })
     return true
   }
 
@@ -852,10 +860,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const body = await readBody(req)
     const { id, ...patch } = JSON.parse(body) as { id: string } & Record<string, unknown>
     const run = ctx.docStore.getRun(id)
-    if (!run) { json(res, { ok: false, error: 'run not found' }, 404); return true }
+    if (!run) { fail(res, 'NOT_FOUND', 'run not found'); return true }
     const updated = { ...run, ...patch }
     ctx.docStore.upsertRun(id, updated)
-    json(res, { ok: true })
+    ok(res, null)
     return true
   }
 
@@ -879,7 +887,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         if (!payload.sha || !payload.message) return fail(res, 'BAD_REQUEST', 'invalid payload')
         const record = buildCommitRecord(payload, 'hook', ctx.sessionConfig.git.taskMarkerRegex)
         const inserted = ctx.docStore.upsertCommit(record)
-        json(res, { ok: true, inserted })
+        ok(res, { inserted })
       } catch {
         fail(res, 'BAD_REQUEST', 'invalid json')
       }
@@ -894,7 +902,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
     const result = reconcileGitHistory(ctx.docStore, ctx.sessionConfig)
-    json(res, { ok: true, ...result })
+    ok(res, result)
     return true
   }
 
@@ -911,7 +919,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (since) commits = commits.filter(c => new Date(c.authorDate).getTime() >= new Date(since).getTime())
     if (until) commits = commits.filter(c => new Date(c.authorDate).getTime() <= new Date(until).getTime())
     commits = commits.sort((a, b) => new Date(b.authorDate).getTime() - new Date(a.authorDate).getTime())
-    json(res, commits)
+    ok(res, commits)
     return true
   }
 
@@ -936,7 +944,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         grouped[tag].push(commit)
       }
     }
-    json(res, { grouped, unassigned })
+    ok(res, { grouped, unassigned })
     return true
   }
 
@@ -961,7 +969,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // GET /api/spaces
   if (method === 'GET' && url === '/api/spaces') {
-    json(res, ctx.docStore.getAllSpaces())
+    ok(res, ctx.docStore.getAllSpaces())
     return true
   }
 
@@ -975,7 +983,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         createdAt: new Date().toISOString(),
       }
       ctx.docStore.upsertSpace(space.id, space)
-      json(res, space, 201)
+      ok(res, space, { status: 201 })
     })
     return true
   }
@@ -1006,20 +1014,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (patch.labelConfig !== undefined) {
         const levels = patch.labelConfig?.levels
         if (!Array.isArray(levels) || levels.length < 1 || levels.length > 3) {
-          return json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'labelConfig.levels must be an array of length 1–3' } }, 400)
+          return fail(res, 'INVALID_PARAMS', 'labelConfig.levels must be an array of length 1–3')
         }
         for (const lvl of levels) {
           if (typeof lvl.label !== 'string' || !lvl.label.trim()) {
-            return json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'Each level must have a non-empty label' } }, 400)
+            return fail(res, 'INVALID_PARAMS', 'Each level must have a non-empty label')
           }
           if (typeof lvl.icon !== 'string' || !lvl.icon.trim()) {
-            return json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'Each level must have a non-empty icon' } }, 400)
+            return fail(res, 'INVALID_PARAMS', 'Each level must have a non-empty icon')
           }
         }
       }
 
       ctx.docStore.upsertSpace(id, { ...existing, ...patch })
-      json(res, { ok: true, data: ctx.docStore.getSpace(id) })
+      ok(res, ctx.docStore.getSpace(id))
     })
     return true
   }
@@ -1041,12 +1049,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     )
     ctx.docStore.clearSpace(id)
     ctx.docStore.deleteSpace(id)
-    json(res, {
-      ok: true,
-      warning: orphanedRuns.length > 0
-        ? `${orphanedRuns.length} session(s) are still running. Use \`tmux ls\` to manage them.`
+    ok(
+      res,
+      null,
+      orphanedRuns.length > 0
+        ? { warnings: { orphanedRuns: [`${orphanedRuns.length} session(s) are still running. Use \`tmux ls\` to manage them.`] } }
         : undefined,
-    })
+    )
     return true
   }
 
@@ -1064,7 +1073,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         externalUrl: externalUrl ?? null,
       }
       ctx.docStore.upsertInitiative(entity.id, entity)
-      json(res, entity, 201)
+      ok(res, entity, { status: 201 })
     })
     return true
   }
@@ -1083,7 +1092,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         externalUrl: externalUrl ?? null,
       }
       ctx.docStore.upsertEpic(entity.id, entity)
-      json(res, entity, 201)
+      ok(res, entity, { status: 201 })
     })
     return true
   }
@@ -1104,7 +1113,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
       ctx.docStore.upsertTask(entity.id, entity)
 
-      json(res, entity, 201)
+      ok(res, entity, { status: 201 })
     })
     return true
   }
@@ -1122,7 +1131,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         spaceId: ctx.docStore.activeSpaceId,
       }
       ctx.docStore.upsertWorktree(entity.id, entity)
-      json(res, entity, 201)
+      ok(res, entity, { status: 201 })
     })
     return true
   }
@@ -1132,7 +1141,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/initiatives/'.length)
     const entity = ctx.docStore.getInitiative(id)
     if (!entity) { fail(res, 'NOT_FOUND', 'not found'); return true }
-    json(res, { ok: true, data: entity })
+    ok(res, entity)
     return true
   }
 
@@ -1141,7 +1150,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/epics/'.length)
     const entity = ctx.docStore.getEpic(id)
     if (!entity) { fail(res, 'NOT_FOUND', 'not found'); return true }
-    json(res, { ok: true, data: entity })
+    ok(res, entity)
     return true
   }
 
@@ -1150,7 +1159,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/tasks/'.length)
     const entity = ctx.docStore.getTask(id)
     if (!entity) { fail(res, 'NOT_FOUND', 'not found'); return true }
-    json(res, { ok: true, data: entity })
+    ok(res, entity)
     return true
   }
 
@@ -1159,7 +1168,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/initiatives/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'initiative', ctx.docStore)
     if (!result) { fail(res, 'NOT_FOUND', 'not found'); return true }
-    json(res, { ok: true, data: result })
+    ok(res, result)
     return true
   }
 
@@ -1168,7 +1177,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/epics/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'epic', ctx.docStore)
     if (!result) { fail(res, 'NOT_FOUND', 'not found'); return true }
-    json(res, { ok: true, data: result })
+    ok(res, result)
     return true
   }
 
@@ -1177,7 +1186,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/tasks/'.length, url.lastIndexOf('/settings'))
     const result = resolveEntitySettings(id, 'task', ctx.docStore)
     if (!result) { fail(res, 'NOT_FOUND', 'not found'); return true }
-    json(res, { ok: true, data: result })
+    ok(res, result)
     return true
   }
 
@@ -1190,7 +1199,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const patch = JSON.parse(body) as Record<string, unknown>
       const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertInitiative(id, merged)
-      json(res, { ok: true, data: ctx.docStore.getInitiative(id) })
+      ok(res, ctx.docStore.getInitiative(id))
     })
     return true
   }
@@ -1204,7 +1213,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const patch = JSON.parse(body) as Record<string, unknown>
       const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertEpic(id, merged)
-      json(res, { ok: true, data: ctx.docStore.getEpic(id) })
+      ok(res, ctx.docStore.getEpic(id))
     })
     return true
   }
@@ -1218,7 +1227,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const patch = JSON.parse(body) as Record<string, unknown>
       const merged = deepMergeEntity(existing as unknown as Record<string, unknown>, patch) as unknown as typeof existing
       ctx.docStore.upsertTask(id, merged)
-      json(res, { ok: true, data: ctx.docStore.getTask(id) })
+      ok(res, ctx.docStore.getTask(id))
     })
     return true
   }
@@ -1231,7 +1240,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!existing) return fail(res, 'NOT_FOUND', 'not found')
       const patch = JSON.parse(body)
       ctx.docStore.upsertWorktree(id, { ...existing, ...patch })
-      json(res, { ok: true, data: ctx.docStore.getWorktree(id) })
+      ok(res, ctx.docStore.getWorktree(id))
     })
     return true
   }
@@ -1240,7 +1249,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && url === '/api/topics') {
     const sessions = listAllSessions(ctx)
     const data = ctx.docStore.getAllTopicMetadata().map(m => joinParticipants(m, sessions))
-    json(res, { ok: true, data })
+    ok(res, data)
     return true
   }
 
@@ -1249,7 +1258,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const subject = decodeURIComponent(url.slice('/api/topics/'.length))
     const md = ctx.docStore.getTopicMetadata(subject)
     if (!md) return fail(res, 'NOT_FOUND', 'not found')
-    json(res, { ok: true, data: joinParticipants(md, listAllSessions(ctx)) })
+    ok(res, joinParticipants(md, listAllSessions(ctx)))
     return true
   }
 
@@ -1278,7 +1287,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ...(typeof parsed.description === 'string' ? { description: parsed.description } : {}),
       }
       ctx.docStore.upsertTopicMetadata(subject, merged)
-      json(res, { ok: true, data: joinParticipants(merged, listAllSessions(ctx)) })
+      ok(res, joinParticipants(merged, listAllSessions(ctx)))
     })
     return true
   }
@@ -1290,15 +1299,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const existing = ctx.docStore.getTopicMetadata(subject)
     if (!existing) return fail(res, 'NOT_FOUND', 'not found')
     if (existing.kind !== 'broadcast' && existing.kind !== 'dm') {
-      return json(res, { ok: true, data: joinParticipants(existing, listAllSessions(ctx)) })
+      return ok(res, joinParticipants(existing, listAllSessions(ctx)))
     }
     const refreshedName = deriveHierarchicalName(subject, ctx.docStore, existing.kind)
     if (refreshedName) {
       const merged = { ...existing, name: refreshedName }
       ctx.docStore.upsertTopicMetadata(subject, merged)
-      return json(res, { ok: true, data: joinParticipants(merged, listAllSessions(ctx)) })
+      return ok(res, joinParticipants(merged, listAllSessions(ctx)))
     }
-    json(res, { ok: true, data: joinParticipants(existing, listAllSessions(ctx)) })
+    ok(res, joinParticipants(existing, listAllSessions(ctx)))
     return true
   }
 
@@ -1306,7 +1315,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'DELETE' && url.startsWith('/api/initiatives/')) {
     const id = url.slice('/api/initiatives/'.length)
     ctx.docStore.deleteInitiative(id)
-    json(res, { ok: true })
+    ok(res, null)
     return true
   }
 
@@ -1314,7 +1323,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'DELETE' && url.startsWith('/api/epics/')) {
     const id = url.slice('/api/epics/'.length)
     ctx.docStore.deleteEpic(id)
-    json(res, { ok: true })
+    ok(res, null)
     return true
   }
 
@@ -1322,7 +1331,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'DELETE' && url.startsWith('/api/tasks/')) {
     const id = url.slice('/api/tasks/'.length)
     ctx.docStore.deleteTask(id)
-    json(res, { ok: true })
+    ok(res, null)
     return true
   }
 
@@ -1330,7 +1339,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'DELETE' && url.startsWith('/api/worktrees/')) {
     const id = url.slice('/api/worktrees/'.length)
     ctx.docStore.deleteWorktree(id)
-    json(res, { ok: true })
+    ok(res, null)
     return true
   }
 
@@ -1339,12 +1348,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
       if (!sessionId || !filePath) {
-        json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId and filePath required' } }, 400)
+        fail(res, 'INVALID_PARAMS', 'sessionId and filePath required')
         return
       }
       const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
       if (!run) {
-        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }, 404)
+        fail(res, 'SESSION_NOT_FOUND', `No run with sessionId ${sessionId}`)
         return
       }
       // Resolve display names from taxonomy
@@ -1377,7 +1386,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         color: run.color,
       }
       ctx.docStore.upsertEditorWidget(widget.id, widget)
-      json(res, { ok: true, data: widget })
+      ok(res, widget)
     })
     return true
   }
@@ -1387,11 +1396,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/editor-widgets/'.length)
     const existing = ctx.docStore.getAllEditorWidgets().find(w => w.id === id)
     if (!existing) {
-      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `EditorWidget ${id} not found` } }, 404)
+      fail(res, 'NOT_FOUND', `EditorWidget ${id} not found`)
       return true
     }
     ctx.docStore.deleteEditorWidget(id)
-    json(res, { ok: true })
+    ok(res, null)
     return true
   }
 
@@ -1401,12 +1410,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       try {
       const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
       if (!sessionId || !filePath) {
-        json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId and filePath required' } }, 400)
+        fail(res, 'INVALID_PARAMS', 'sessionId and filePath required')
         return
       }
       const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
       if (!run) {
-        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }, 404)
+        fail(res, 'SESSION_NOT_FOUND', `No run with sessionId ${sessionId}`)
         return
       }
       const task = ctx.docStore.getAllTasks().find(t => t.id === run.taskId)
@@ -1424,7 +1433,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       })()
 
       if (workspacePath && !absoluteFilePath.startsWith(workspacePath + '/')) {
-        json(res, { ok: false, error: { code: 'PATH_OUTSIDE_WORKSPACE', message: 'filePath must be inside the session workspace' } }, 403)
+        fail(res, 'PATH_OUTSIDE_WORKSPACE', 'filePath must be inside the session workspace')
         return
       }
 
@@ -1454,9 +1463,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         naturalHeight,
       }
       ctx.docStore.upsertImageWidget(widget.id, widget)
-      json(res, { ok: true, data: widget })
+      ok(res, widget)
       } catch {
-        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+        fail(res, 'BAD_REQUEST', 'Invalid request body')
       }
     })
     return true
@@ -1467,11 +1476,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/image-widgets/'.length)
     const existing = ctx.docStore.getAllImageWidgets().find(w => w.id === id)
     if (!existing) {
-      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `ImageWidget ${id} not found` } }, 404)
+      fail(res, 'NOT_FOUND', `ImageWidget ${id} not found`)
       return true
     }
     ctx.docStore.deleteImageWidget(id)
-    json(res, { ok: true })
+    ok(res, null)
     return true
   }
 
@@ -1531,14 +1540,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(async () => {
       try {
         await bounceNatsTraffic(ctx.natsTraffic)
-        json(res, { ok: true })
+        ok(res, null)
       } catch (err) {
         const e = err as { code?: string; message?: string }
-        const status = e.code === 'BRIDGE_UNAVAILABLE' ? 503 : 500
-        json(res, {
-          ok: false,
-          error: { code: e.code ?? 'BOUNCE_FAILED', message: e.message ?? String(err) },
-        }, status)
+        // Map the NATS bridge's BRIDGE_UNAVAILABLE through; otherwise classify as INTERNAL.
+        if (e.code === 'BRIDGE_UNAVAILABLE') {
+          fail(res, 'BRIDGE_UNAVAILABLE', e.message ?? String(err))
+        } else {
+          fail(res, 'INTERNAL', e.message ?? String(err))
+        }
       }
     })
     return true
@@ -1559,9 +1569,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ctx.docStore.upsertNatsTrafficWidget(widget.id, widget)
         // Update NATS bridge subscriptions
         ctx.natsTraffic?.updateWidgetSubscriptions(widget.id, widget.subscriptions)
-        json(res, { ok: true, data: widget })
+        ok(res, widget)
       } catch {
-        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+        fail(res, 'BAD_REQUEST', 'Invalid request body')
       }
     })
     return true
@@ -1574,12 +1584,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       try {
         const { subject } = JSON.parse(body) as { subject: string }
         if (!subject) {
-          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject required' } }, 400)
+          fail(res, 'BAD_REQUEST', 'subject required')
           return
         }
         const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
         if (!existing) {
-          json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Widget ${id} not found` } }, 404)
+          fail(res, 'NOT_FOUND', `Widget ${id} not found`)
           return
         }
         const existingSubs = existing.subscriptions || []
@@ -1587,9 +1597,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const updated = { ...existing, subscriptions: subs }
         ctx.docStore.upsertNatsTrafficWidget(id, updated)
         ctx.natsTraffic?.updateWidgetSubscriptions(id, subs)
-        json(res, { ok: true, data: updated })
+        ok(res, updated)
       } catch {
-        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+        fail(res, 'BAD_REQUEST', 'Invalid request body')
       }
     })
     return true
@@ -1602,21 +1612,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       try {
         const { subject } = JSON.parse(body) as { subject: string }
         if (!subject) {
-          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject required' } }, 400)
+          fail(res, 'BAD_REQUEST', 'subject required')
           return
         }
         const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
         if (!existing) {
-          json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Widget ${id} not found` } }, 404)
+          fail(res, 'NOT_FOUND', `Widget ${id} not found`)
           return
         }
         const subs = (existing.subscriptions || []).filter(s => s !== subject)
         const updated = { ...existing, subscriptions: subs }
         ctx.docStore.upsertNatsTrafficWidget(id, updated)
         ctx.natsTraffic?.updateWidgetSubscriptions(id, subs)
-        json(res, { ok: true, data: updated })
+        ok(res, updated)
       } catch {
-        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+        fail(res, 'BAD_REQUEST', 'Invalid request body')
       }
     })
     return true
@@ -1629,18 +1639,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       try {
         const { subject, message } = JSON.parse(body) as { subject: string; message: string }
         if (!subject || !message) {
-          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject and message required' } }, 400)
+          fail(res, 'BAD_REQUEST', 'subject and message required')
           return
         }
         const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
         if (!existing) {
-          json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Widget ${id} not found` } }, 404)
+          fail(res, 'NOT_FOUND', `Widget ${id} not found`)
           return
         }
         ctx.natsTraffic?.publish(subject, message, 'tinstar-ui')
-        json(res, { ok: true })
+        ok(res, null)
       } catch {
-        json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid request body' } }, 400)
+        fail(res, 'BAD_REQUEST', 'Invalid request body')
       }
     })
     return true
@@ -1651,12 +1661,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/nats-traffic-widgets/'.length)
     const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
     if (!existing) {
-      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `NatsTrafficWidget ${id} not found` } }, 404)
+      fail(res, 'NOT_FOUND', `NatsTrafficWidget ${id} not found`)
       return true
     }
     ctx.natsTraffic?.removeWidget(id)
     ctx.docStore.deleteNatsTrafficWidget(id)
-    json(res, { ok: true })
+    ok(res, null)
     return true
   }
 
@@ -1739,12 +1749,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // absolutePath isn't set yet).
         if ((mode ?? 'notify') === 'content' && existsSync(absolutePath)) {
           readFile(absolutePath, 'utf-8').then(content => {
-            json(res, { ok: true, absolutePath, content })
+            ok(res, { absolutePath, content })
           }).catch(() => {
-            json(res, { ok: true, absolutePath })
+            ok(res, { absolutePath })
           })
         } else {
-          json(res, { ok: true, absolutePath })
+          ok(res, { absolutePath })
         }
       } catch {
         fail(res, 'BAD_REQUEST', 'invalid request body')
@@ -1765,7 +1775,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           return
         }
         removeFileWatchSubscriber(absolutePath, subscriberId)
-        json(res, { ok: true })
+        ok(res, null)
       } catch {
         fail(res, 'BAD_REQUEST', 'invalid request body')
       }
@@ -1877,12 +1887,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       const { sessionId, url: widgetUrl = '', headers: widgetHeaders } = JSON.parse(body) as { sessionId?: string; url?: string; headers?: Record<string, string> }
       if (!sessionId) {
-        json(res, { ok: false, error: { code: 'INVALID_PARAMS', message: 'sessionId required' } }, 400)
+        fail(res, 'INVALID_PARAMS', 'sessionId required')
         return
       }
       const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
       if (!run) {
-        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }, 404)
+        fail(res, 'SESSION_NOT_FOUND', `No run with sessionId ${sessionId}`)
         return
       }
       const widget: import('../../domain/types').BrowserWidget = {
@@ -1894,7 +1904,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ...(widgetHeaders && Object.keys(widgetHeaders).length > 0 ? { headers: widgetHeaders } : {}),
       }
       ctx.docStore.upsertBrowserWidget(widget.id, widget)
-      json(res, { ok: true, data: widget })
+      ok(res, widget)
     })
     return true
   }
@@ -1905,13 +1915,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       const existing = ctx.docStore.getAllBrowserWidgets().find(w => w.id === id)
       if (!existing) {
-        json(res, { ok: false, error: { code: 'NOT_FOUND', message: `BrowserWidget ${id} not found` } }, 404)
+        fail(res, 'NOT_FOUND', `BrowserWidget ${id} not found`)
         return
       }
       const patch = JSON.parse(body) as { url?: string; title?: string; headers?: Record<string, string> }
       const updated = { ...existing, ...patch }
       ctx.docStore.upsertBrowserWidget(id, updated)
-      json(res, { ok: true, data: updated })
+      ok(res, updated)
     })
     return true
   }
@@ -1921,11 +1931,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/browser-widgets/'.length)
     const existing = ctx.docStore.getAllBrowserWidgets().find(w => w.id === id)
     if (!existing) {
-      json(res, { ok: false, error: { code: 'NOT_FOUND', message: `BrowserWidget ${id} not found` } }, 404)
+      fail(res, 'NOT_FOUND', `BrowserWidget ${id} not found`)
       return true
     }
     ctx.docStore.deleteBrowserWidget(id)
-    json(res, { ok: true })
+    ok(res, null)
     return true
   }
 
@@ -1937,7 +1947,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const id = url.slice('/api/runs/'.length)
     readBody(req).then(async body => {
       const existing = ctx.docStore.getRun(id)
-      if (!existing) return json(res, { ok: false, error: 'not found' }, 404)
+      if (!existing) return fail(res, 'NOT_FOUND', 'not found')
       const patch = JSON.parse(body)
 
       // Check if taskId changed and NATS is enabled — need to update subscriptions
@@ -1985,13 +1995,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
           if (natsWarnings.length > 0) {
             ctx.docStore.upsertRun(id, { ...existing, ...patch })
-            return json(res, { ok: true, data: ctx.docStore.getRun(id), warnings: { nats: natsWarnings } })
+            return ok(res, ctx.docStore.getRun(id), { warnings: { nats: natsWarnings } })
           }
         }
       }
 
       ctx.docStore.upsertRun(id, { ...existing, ...patch })
-      json(res, { ok: true, data: ctx.docStore.getRun(id) })
+      ok(res, ctx.docStore.getRun(id))
     })
     return true
   }
@@ -2022,8 +2032,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         onStateChanged: (name, state) => {
           emitSessionEvent('managed_session.state_changed', { name, state })
         },
-      }).then(sessions => json(res, { ok: true, data: sessions }))
-        .catch(err => json(res, { ok: false, error: { code: 'LIST_FAILED', message: (err as Error).message } }, 500))
+      }).then(sessions => ok(res, sessions))
+        .catch(err => fail(res, 'LIST_FAILED', (err as Error).message))
       return true
     }
 
@@ -2033,9 +2043,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (name) {
         const session = getSession(sessDir, name)
         if (!session) {
-          json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
+          fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
         } else {
-          json(res, { ok: true, data: session })
+          ok(res, session)
         }
         return true
       }
@@ -2047,7 +2057,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (name) {
         const session = getSession(sessDir, name)
         if (!session?.workspace?.path) {
-          json(res, { ok: false, error: { code: 'NO_WORKSPACE', message: 'Session has no workspace' } }, 404)
+          fail(res, 'CONFLICT', 'Session has no workspace')
           return true
         }
         const wsRoot = session.workspace.path
@@ -2057,7 +2067,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         // Safety: ensure we don't escape the workspace
         if (!absPath.startsWith(wsRoot)) {
-          json(res, { ok: false, error: { code: 'INVALID_PATH', message: 'Path escapes workspace' } }, 400)
+          fail(res, 'PATH_OUTSIDE_WORKSPACE', 'Path escapes workspace')
           return true
         }
 
@@ -2073,9 +2083,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
               return a.name.localeCompare(b.name)
             })
-          json(res, { ok: true, data: entries })
+          ok(res, entries)
         } catch (err) {
-          json(res, { ok: false, error: { code: 'READ_FAILED', message: (err as Error).message } }, 500)
+          fail(res, 'INTERNAL', (err as Error).message)
         }
         return true
       }
@@ -2087,12 +2097,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (name) {
         const session = getSession(sessDir, name)
         if (!session) {
-          json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
+          fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
           return true
         }
         const convId = session.conversation?.id
         const snap = convId && ctx.ccQuotaService ? ctx.ccQuotaService.getSessionContext(convId) : null
-        json(res, { ok: true, data: snap })
+        ok(res, snap)
         return true
       }
     }
@@ -2103,18 +2113,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (name) {
         const session = getSession(sessDir, name)
         if (!session) {
-          json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
+          fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
           return true
         }
         if (!session.conversation?.id) {
-          json(res, { ok: false, error: { code: 'NO_CONVERSATION', message: 'Session has no active conversation' } }, 404)
+          fail(res, 'CONFLICT', 'Session has no active conversation')
           return true
         }
         getDetailedUsage(session.conversation.id)
-          .then(data => json(res, { ok: true, data }))
+          .then(data => ok(res, data))
           .catch(err => {
             log.error('api', `context fetch failed for ${name}: ${(err as Error).message}`)
-            json(res, { ok: false, error: { code: 'CONTEXT_FETCH_FAILED', message: (err as Error).message } }, 500)
+            fail(res, 'INTERNAL', (err as Error).message)
           })
         return true
       }
@@ -2126,10 +2136,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
-        if (!name) return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
+        if (!name) return fail(res, 'BAD_REQUEST', 'Session name is required')
 
         if (getSession(sessDir, name)) {
-          return json(res, { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }, 409)
+          return fail(res, 'CONFLICT', `Session '${name}' already exists`)
         }
 
         try {
@@ -2137,7 +2147,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           let projectPath: string | null = null
           if (project) {
             projectPath = getProject(cfg.files.projects, project)
-            if (!projectPath) return json(res, { ok: false, error: { code: 'PROJECT_NOT_FOUND', message: `Project '${project}' not found` } }, 404)
+            if (!projectPath) return fail(res, 'NOT_FOUND', `Project '${project}' not found`)
           }
 
           // Create worktree or use existing
@@ -2178,7 +2188,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (handName) {
             resolvedHand = getHandByName(handName)
             if (!resolvedHand) {
-              return json(res, { ok: false, error: { code: 'HAND_NOT_FOUND', message: `Hand '${handName}' not found` } }, 404)
+              return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
             }
           }
 
@@ -2290,10 +2300,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           emitSessionEvent('managed_session.created', { name, state: 'running' })
           log.info('sessions', `session created: ${name}`, { port: sessionPort, state: 'running' })
 
-          json(res, { ok: true, data: updated }, 201)
+          ok(res, updated, { status: 201 })
         } catch (err) {
           log.error('sessions', `session creation failed: ${name}`, { error: (err as Error).message })
-          json(res, { ok: false, error: { code: 'CREATE_FAILED', message: (err as Error).message } }, 500)
+          fail(res, 'INTERNAL', (err as Error).message)
         }
       })
       return true
@@ -2315,11 +2325,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         readBody(req).then(async (body) => {
           const overrides = body ? JSON.parse(body) : {}
           if (!overrides.name) {
-            return json(res, { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }, 400)
+            return fail(res, 'BAD_REQUEST', 'Session name is required')
           }
 
           const task = ctx.docStore.getTask(taskId)
-          if (!task) return json(res, { ok: false, error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found` } }, 404)
+          if (!task) return fail(res, 'NOT_FOUND', `Task '${taskId}' not found`)
 
           const settings = resolveEntitySettings(taskId, 'task', ctx.docStore)
           const resolvedProject = settings?.resolved?.project
@@ -2347,11 +2357,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
           const result = await createSessionInternal(params, createCtx)
           if (!result.ok) {
-            const status = result.error.code === 'SESSION_EXISTS' ? 409 : 500
-            return json(res, result, status)
+            // createSessionInternal returns its own error codes; map the ones we know to envelope codes,
+            // everything else collapses to INTERNAL with the original message.
+            if (result.error.code === 'SESSION_EXISTS') return fail(res, 'CONFLICT', result.error.message)
+            return fail(res, 'INTERNAL', result.error.message)
           }
-          json(res, { ok: true, data: result.session }, 201)
-        }).catch(err => json(res, { ok: false, error: { code: 'INTERNAL', message: (err as Error).message } }, 500))
+          ok(res, result.session, { status: 201 })
+        }).catch(err => fail(res, 'INTERNAL', (err as Error).message))
         return true
       }
     }
@@ -2362,7 +2374,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (name) {
         readBody(req).then(async () => {
           const session = getSession(sessDir, name)
-          if (!session) return json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
+          if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
 
           try {
             await tmuxBackend.stopTmuxSession(cfg, session)
@@ -2379,9 +2391,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             setState(sessDir, session.name, 'stopped')
             ctx.docStore.updateRunStatus(session.name, 'stopped')
             emitSessionEvent('managed_session.state_changed', { name: session.name, state: 'stopped' })
-            json(res, { ok: true, data: getSession(sessDir, session.name) })
+            ok(res, getSession(sessDir, session.name))
           } catch (err) {
-            json(res, { ok: false, error: { code: 'STOP_FAILED', message: (err as Error).message } }, 500)
+            fail(res, 'INTERNAL', (err as Error).message)
           }
         })
         return true
@@ -2394,17 +2406,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (name) {
         readBody(req).then(async () => {
           const session = getSession(sessDir, name)
-          if (!session) return json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${name}' not found` } }, 404)
+          if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
 
           // Verify workspace directory still exists
           const wsPath = session.workspace?.path
           if (wsPath && !existsSync(wsPath)) {
-            return json(res, { ok: false, error: { code: 'WORKSPACE_MISSING', message: `Workspace directory no longer exists: ${wsPath}` } }, 400)
+            return fail(res, 'CONFLICT', `Workspace directory no longer exists: ${wsPath}`)
           }
 
           // Require a conversation ID to resume — sessions created before this change won't have one
           if (!session.conversation?.id) {
-            return json(res, { ok: false, error: { code: 'NO_SESSION_ID', message: `Session '${name}' has no conversation ID. Delete and recreate it.` } }, 400)
+            return fail(res, 'BAD_REQUEST', `Session '${name}' has no conversation ID. Delete and recreate it.`)
           }
 
           try {
@@ -2439,9 +2451,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               }
             }
             emitSessionEvent('managed_session.state_changed', { name: session.name, state: 'running' })
-            json(res, { ok: true, data: updated })
+            ok(res, updated)
           } catch (err) {
-            json(res, { ok: false, error: { code: 'START_FAILED', message: (err as Error).message } }, 500)
+            fail(res, 'INTERNAL', (err as Error).message)
           }
         })
         return true
@@ -2465,7 +2477,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ctx.readyQueue.onDelete(name)
         ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
         ctx.sse.broadcastReadyQueueUpdate()
-        json(res, { ok: true })
+        ok(res, null)
 
         // Cleanup: stop backend first (releases bind mounts), then remove session dir
         ;(async () => {
@@ -2518,10 +2530,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'GET' && url === '/api/config') {
       try {
         const data = loadConfigMerged(ctx.sessionConfig?.dirs.root)
-        json(res, { ok: true, data })
+        ok(res, data)
       } catch (err) {
         log.warn('config', `GET /api/config failed: ${(err as Error).message}`)
-        json(res, { ok: false, error: { code: 'INTERNAL', message: 'failed to load config' } }, 500)
+        fail(res, 'INTERNAL', 'failed to load config')
       }
       return true
     }
@@ -2531,20 +2543,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       readBody(req).then((body) => {
         let patch: Record<string, unknown>
         try { patch = JSON.parse(body) } catch {
-          return json(res, { ok: false, error: { code: 'BAD_JSON', message: 'invalid JSON' } }, 400)
+          return fail(res, 'BAD_REQUEST', 'invalid JSON')
         }
         // Validate uploadMaxBytes if present
         if ('uploadMaxBytes' in patch) {
           const v = patch.uploadMaxBytes
           if (!Number.isInteger(v) || (v as number) < 1024 * 1024) {
-            return json(res, { ok: false, error: { code: 'BAD_VALUE', message: 'uploadMaxBytes must be an integer >= 1 MB' } }, 400)
+            return fail(res, 'INVALID_PARAMS', 'uploadMaxBytes must be an integer >= 1 MB')
           }
         }
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no existing config */ }
         const merged = deepMerge(data, patch)
         writeFileSync(cfg.files.config, JSON.stringify(merged, null, 2))
-        json(res, { ok: true, data: loadConfigMerged(ctx.sessionConfig?.dirs.root) })
+        ok(res, loadConfigMerged(ctx.sessionConfig?.dirs.root))
       })
       return true
     }
@@ -2553,7 +2565,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url === '/api/editor/open') {
       readBody(req).then((body) => {
         const { path: filePath, sessionId } = JSON.parse(body)
-        if (!filePath) return json(res, { ok: false, error: { code: 'MISSING_PATH', message: 'path is required' } }, 400)
+        if (!filePath) return fail(res, 'BAD_REQUEST', 'path is required')
 
         // Resolve relative paths against the session's workspace directory
         let resolvedPath = filePath
@@ -2625,7 +2637,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           child.on('error', (err) => log.error('editor', `spawn error: ${err.message}`))
           child.on('exit', (code) => { if (code) log.warn('editor', `exited with code ${code}`) })
           child.unref()
-          json(res, { ok: true })
+          ok(res, null)
         })
       })
       return true
@@ -2634,10 +2646,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions/:name/spawn — spawn a companion hand on the same task
     if (method === 'POST' && url.startsWith('/api/sessions/') && url.endsWith('/spawn')) {
       const parentName = extractSessionName(url, '/api/sessions/')?.replace('/spawn', '')
-      if (!parentName) return json(res, { ok: false, error: { code: 'INVALID_REQUEST', message: 'Session name required' } }, 400)
+      if (!parentName) return fail(res, 'BAD_REQUEST', 'Session name required')
 
       const parentSession = getSession(sessDir, parentName)
-      if (!parentSession) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Session '${parentName}' not found` } }, 404)
+      if (!parentSession) return fail(res, 'NOT_FOUND', `Session '${parentName}' not found`)
 
       const body = await readBody(req)
       const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride } = JSON.parse(body) as {
@@ -2649,12 +2661,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
 
       if (!handName) {
-        return json(res, { ok: false, error: { code: 'MISSING_HAND', message: 'hand field is required' } }, 400)
+        return fail(res, 'BAD_REQUEST', 'hand field is required')
       }
 
       const hand = getHandByName(handName)
       if (!hand) {
-        return json(res, { ok: false, error: { code: 'HAND_NOT_FOUND', message: `Hand '${handName}' not found` } }, 404)
+        return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
       }
 
       // Generate unique session name
@@ -2902,37 +2914,31 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           }
         }
 
-        return json(res, {
-          ok: true,
-          data: {
-            session: spawnedName,
-            hand: handName,
-            parentSession: parentName,
-            orchestrator: orchestrator ?? false,
-            // `room` is the subject the child was actually told to use. When
-            // the breakout subscribe failed and we fell back, this is the
-            // parent's persistent direct subject rather than a fresh room.
-            room: effectiveRoom ?? null,
-            // `breakoutRoom` is what we would have used if the parent's
-            // control socket were healthy. Kept for observability.
-            breakoutRoom: breakoutRoom ?? null,
-            breakoutFallback,
-            ...(breakoutFallback
-              ? {
-                  fallbackReason: breakoutWarning?.code ?? 'NATS_SOCKET_ERROR',
-                  restartRecommended: breakoutWarning?.restartRecommended ?? false,
-                }
-              : {}),
-            natsWarning: breakoutWarning ?? undefined,
-          },
-        }, 201)
+        return ok(res, {
+          session: spawnedName,
+          hand: handName,
+          parentSession: parentName,
+          orchestrator: orchestrator ?? false,
+          // `room` is the subject the child was actually told to use. When
+          // the breakout subscribe failed and we fell back, this is the
+          // parent's persistent direct subject rather than a fresh room.
+          room: effectiveRoom ?? null,
+          // `breakoutRoom` is what we would have used if the parent's
+          // control socket were healthy. Kept for observability.
+          breakoutRoom: breakoutRoom ?? null,
+          breakoutFallback,
+          ...(breakoutFallback
+            ? {
+                fallbackReason: breakoutWarning?.code ?? 'NATS_SOCKET_ERROR',
+                restartRecommended: breakoutWarning?.restartRecommended ?? false,
+              }
+            : {}),
+          natsWarning: breakoutWarning ?? undefined,
+        }, { status: 201 })
       } catch (err) {
         // Clean up on failure
         deleteSession(sessDir, spawnedName)
-        return json(res, {
-          ok: false,
-          error: { code: 'SPAWN_FAILED', message: (err as Error).message },
-        }, 500)
+        return fail(res, 'INTERNAL', (err as Error).message)
       }
       return true
     }
@@ -2944,16 +2950,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const body = JSON.parse(await readBody(req))
         const keys: string[] = body.keys
         if (!Array.isArray(keys) || keys.length === 0) {
-          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'keys must be a non-empty array of strings' } }, 400)
+          fail(res, 'BAD_REQUEST', 'keys must be a non-empty array of strings')
           return true
         }
         const session = getSession(sessDir, name)
-        if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
+        if (!session) { fail(res, 'NOT_FOUND', 'Session not found'); return true }
         try {
           await tmuxBackend.sendKeys(cfg, name, keys)
-          json(res, { ok: true })
+          ok(res, null)
         } catch (err) {
-          json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
+          fail(res, 'INTERNAL', (err as Error).message)
         }
         return true
       }
@@ -2966,16 +2972,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const body = JSON.parse(await readBody(req))
         const prompt: string = body.prompt
         if (!prompt || typeof prompt !== 'string') {
-          json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'prompt must be a non-empty string' } }, 400)
+          fail(res, 'BAD_REQUEST', 'prompt must be a non-empty string')
           return true
         }
         const session = getSession(sessDir, name)
-        if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
+        if (!session) { fail(res, 'NOT_FOUND', 'Session not found'); return true }
         try {
           await tmuxBackend.sendPrompt(cfg, name, prompt)
-          json(res, { ok: true })
+          ok(res, null)
         } catch (err) {
-          json(res, { ok: false, error: { code: 'SEND_FAILED', message: (err as Error).message } }, 500)
+          fail(res, 'INTERNAL', (err as Error).message)
         }
         return true
       }
@@ -2986,8 +2992,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)
-        if (!session) { json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404); return true }
-        json(res, { ok: true, data: { subscriptions: session.nats?.subscriptions ?? [] } })
+        if (!session) { fail(res, 'NOT_FOUND', 'Session not found'); return true }
+        ok(res, { subscriptions: session.nats?.subscriptions ?? [] })
         return true
       }
     }
@@ -2999,11 +3005,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         readBody(req).then(async (body) => {
           const { subject } = JSON.parse(body)
           if (!subject || typeof subject !== 'string') {
-            return json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject must be a non-empty string' } }, 400)
+            return fail(res, 'BAD_REQUEST', 'subject must be a non-empty string')
           }
           const session = getSession(sessDir, name)
-          if (!session) { return json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404) }
-          if (!session.nats?.enabled) { return json(res, { ok: false, error: { code: 'NATS_DISABLED', message: 'NATS is not enabled for this session' } }, 400) }
+          if (!session) { return fail(res, 'NOT_FOUND', 'Session not found') }
+          if (!session.nats?.enabled) { return fail(res, 'BRIDGE_UNAVAILABLE', 'NATS is not enabled for this session') }
 
           // Add to subscriptions if not already present
           const subs = session.nats.subscriptions
@@ -3025,12 +3031,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             // Mirror the updated subscription list into the traffic bridge.
             registerSaloonSubs(ctx.natsTraffic, name, subs)
           }
-          json(res, {
-            ok: true,
-            data: { subscriptions: subs },
-            ...(natsWarning ? { warnings: { nats: [natsWarning] } } : {}),
-          })
-        }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+          ok(res, { subscriptions: subs }, natsWarning ? { warnings: { nats: [natsWarning] } } : undefined)
+        }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
         return true
       }
     }
@@ -3042,11 +3044,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         readBody(req).then(async (body) => {
           const { subject } = JSON.parse(body)
           if (!subject || typeof subject !== 'string') {
-            return json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'subject must be a non-empty string' } }, 400)
+            return fail(res, 'BAD_REQUEST', 'subject must be a non-empty string')
           }
           const session = getSession(sessDir, name)
-          if (!session) { return json(res, { ok: false, error: { code: 'NOT_FOUND', message: 'Session not found' } }, 404) }
-          if (!session.nats?.enabled) { return json(res, { ok: false, error: { code: 'NATS_DISABLED', message: 'NATS is not enabled for this session' } }, 400) }
+          if (!session) { return fail(res, 'NOT_FOUND', 'Session not found') }
+          if (!session.nats?.enabled) { return fail(res, 'BRIDGE_UNAVAILABLE', 'NATS is not enabled for this session') }
 
           // Remove from subscriptions
           const subs = session.nats.subscriptions.filter(s => s !== subject)
@@ -3063,19 +3065,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           // Mirror the updated subscription list into the traffic bridge.
           registerSaloonSubs(ctx.natsTraffic, name, subs)
 
-          json(res, {
-            ok: true,
-            data: { subscriptions: subs },
-            ...(natsWarning ? { warnings: { nats: [natsWarning] } } : {}),
-          })
-        }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+          ok(res, { subscriptions: subs }, natsWarning ? { warnings: { nats: [natsWarning] } } : undefined)
+        }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
         return true
       }
     }
 
     // GET /api/cli-templates — configured CLI templates for agent backends
     if (method === 'GET' && url === '/api/cli-templates') {
-      json(res, { ok: true, data: cfg.cliTemplates })
+      ok(res, cfg.cliTemplates)
       return true
     }
 
@@ -3083,7 +3081,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url === '/api/cli-templates') {
       readBody(req).then((body) => {
         const { name, icon, adapter, telemetry, startCmd, resumeCmd } = JSON.parse(body)
-        if (!name || !startCmd || !resumeCmd) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name, startCmd, and resumeCmd are required' } }, 400)
+        if (!name || !startCmd || !resumeCmd) return fail(res, 'BAD_REQUEST', 'name, startCmd, and resumeCmd are required')
 
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
@@ -3094,8 +3092,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         else templates.push(entry)
         data.cliTemplates = templates
         writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
-        json(res, { ok: true, data: entry })
-      }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+        ok(res, entry)
+      }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
       return true
     }
 
@@ -3104,11 +3102,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const oldName = decodeURIComponent(url.slice('/api/cli-templates/'.length))
       readBody(req).then((body) => {
         const { name, icon, adapter, telemetry, startCmd, resumeCmd } = JSON.parse(body)
-        if (!name || !startCmd || !resumeCmd) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'name, startCmd, and resumeCmd are required' } }, 400)
+        if (!name || !startCmd || !resumeCmd) return fail(res, 'BAD_REQUEST', 'name, startCmd, and resumeCmd are required')
 
         // Check if template exists in merged config (includes defaults)
         const existsInMerged = cfg.cliTemplates.some(t => t.name === oldName)
-        if (!existsInMerged) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Template "${oldName}" not found` } }, 404)
+        if (!existsInMerged) return fail(res, 'NOT_FOUND', `Template "${oldName}" not found`)
 
         let data: Record<string, unknown> = {}
         try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
@@ -3123,8 +3121,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         data.cliTemplates = templates
         writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
-        json(res, { ok: true, data: entry })
-      }).catch(() => json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400))
+        ok(res, entry)
+      }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
       return true
     }
 
@@ -3135,11 +3133,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       try { data = JSON.parse(readFileSync(cfg.files.config, 'utf-8')) } catch { /* no config */ }
       const templates: Array<{ name: string }> = Array.isArray(data.cliTemplates) ? data.cliTemplates : []
       const idx = templates.findIndex(t => t.name === name)
-      if (idx === -1) return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Template "${name}" not found` } }, 404), true
+      if (idx === -1) return fail(res, 'NOT_FOUND', `Template "${name}" not found`), true
       templates.splice(idx, 1)
       data.cliTemplates = templates
       writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
-      json(res, { ok: true })
+      ok(res, null)
       return true
     }
 
@@ -3151,7 +3149,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         description: h.description,
         cliTemplate: h.cliTemplate,
       }))
-      return json(res, { ok: true, data })
+      return ok(res, data)
     }
 
     // GET /api/hands/:name — get full hand definition including prompt
@@ -3160,16 +3158,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const handName = decodeURIComponent(handsMatch[1]!)
       const hand = getHandByName(handName)
       if (!hand) {
-        return json(res, { ok: false, error: { code: 'NOT_FOUND', message: `Hand '${handName}' not found` } }, 404)
+        return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
       }
-      return json(res, { ok: true, data: hand })
+      return ok(res, hand)
     }
 
     // --- Projects ---
 
     // GET /api/projects
     if (method === 'GET' && url === '/api/projects') {
-      json(res, { ok: true, data: listProjects(cfg.files.projects) })
+      ok(res, listProjects(cfg.files.projects))
       return true
     }
 
@@ -3177,10 +3175,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url === '/api/projects') {
       readBody(req).then((body) => {
         const { name, path } = JSON.parse(body)
-        if (!name || !path) return json(res, { ok: false, error: { code: 'MISSING_FIELDS', message: 'Name and path required' } }, 400)
+        if (!name || !path) return fail(res, 'BAD_REQUEST', 'Name and path required')
         registerProject(cfg.files.projects, name, path)
         ctx.sse.broadcastEvent('projects_changed', { action: 'register', name })
-        json(res, { ok: true }, 201)
+        ok(res, null, { status: 201 })
       })
       return true
     }
@@ -3193,11 +3191,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (name) {
         const projectPath = getProject(cfg.files.projects, name)
         if (!projectPath) {
-          json(res, { ok: false, error: { code: 'PROJECT_NOT_FOUND', message: `Project '${name}' not found` } }, 404)
+          fail(res, 'NOT_FOUND', `Project '${name}' not found`)
         } else {
           listWorktrees(projectPath)
-            .then(wts => json(res, { ok: true, data: wts }))
-            .catch(err => json(res, { ok: false, error: { code: 'WORKTREE_LIST_FAILED', message: (err as Error).message } }, 500))
+            .then(wts => ok(res, wts))
+            .catch(err => fail(res, 'LIST_FAILED', (err as Error).message))
         }
         return true
       }
@@ -3210,9 +3208,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (name) {
         const removed = unregisterProject(cfg.files.projects, name)
         if (!removed) {
-          json(res, { ok: false, error: { code: 'PROJECT_NOT_FOUND', message: `Project '${name}' not found` } }, 404)
+          fail(res, 'NOT_FOUND', `Project '${name}' not found`)
         } else {
-          json(res, { ok: true })
+          ok(res, null)
         }
         return true
       }
@@ -3224,7 +3222,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const sessionId = promptMatch[1]!
       const session = getSession(sessDir, sessionId)
       if (!session) {
-        json(res, { ok: false, error: { code: 'SESSION_NOT_FOUND', message: `Session '${sessionId}' not found` } }, 404)
+        fail(res, 'SESSION_NOT_FOUND', `Session '${sessionId}' not found`)
         return true
       }
       readBody(req).then(async (body) => {
@@ -3248,7 +3246,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               timestamp: new Date().toISOString(),
             })
           }
-          json(res, { ok: true })
+          ok(res, null)
         } catch (err) {
           fail(res, 'INTERNAL', (err as Error).message)
         }
@@ -3260,8 +3258,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // The marshal is the user's persistent in-app copilot that lives in the canvas sidebar.
     if (method === 'POST' && url === '/api/marshal/ensure') {
       ensureMarshalSession(ctx)
-        .then(result => json(res, result, result.ok ? 200 : 500))
-        .catch(err => json(res, { ok: false, error: { code: 'MARSHAL_CREATE_FAILED', message: (err as Error).message } }, 500))
+        .then(result => result.ok
+          ? ok(res, result.data)
+          : fail(res, result.error.code === 'NO_CONFIG' ? 'CONFIG_UNAVAILABLE' : 'INTERNAL', result.error.message))
+        .catch(err => fail(res, 'INTERNAL', (err as Error).message))
       return true
     }
 
@@ -3270,8 +3270,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // marshal has crashed or wedged and refresh-iframe alone won't recover.
     if (method === 'POST' && url === '/api/marshal/restart') {
       restartMarshalSession(ctx)
-        .then(result => json(res, result, result.ok ? 200 : 500))
-        .catch(err => json(res, { ok: false, error: { code: 'MARSHAL_RESTART_FAILED', message: (err as Error).message } }, 500))
+        .then(result => result.ok
+          ? ok(res, result.data)
+          : fail(res, result.error.code === 'NO_CONFIG' ? 'CONFIG_UNAVAILABLE' : 'INTERNAL', result.error.message))
+        .catch(err => fail(res, 'INTERNAL', (err as Error).message))
       return true
     }
   }
@@ -3283,15 +3285,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       let payload: Record<string, unknown>
       try { payload = JSON.parse(body) } catch {
-        return json(res, { ok: false, error: { code: 'BAD_REQUEST', message: 'Invalid JSON' } }, 400)
+        return fail(res, 'BAD_REQUEST', 'Invalid JSON')
       }
       const action = payload.action
       if (action !== 'set' && action !== 'focus' && action !== 'reset' && action !== 'fit') {
-        return json(res, { ok: false, error: { code: 'INVALID_ACTION', message: "action must be one of: set, focus, reset, fit" } }, 400)
+        return fail(res, 'INVALID_PARAMS', "action must be one of: set, focus, reset, fit")
       }
       ctx.sse.broadcastEvent('canvas:viewport', { ...payload, ts: Date.now() })
-      return json(res, { ok: true })
-    }).catch(err => json(res, { ok: false, error: { code: 'INTERNAL', message: (err as Error).message } }, 500))
+      return ok(res, null)
+    }).catch(err => fail(res, 'INTERNAL', (err as Error).message))
     return true
   }
 

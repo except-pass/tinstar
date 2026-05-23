@@ -79,6 +79,8 @@ describe('POST /api/cc-quota/ingest', () => {
     expect(body.data.five_hour.utilization).toBe(33)
     expect(body.data.seven_day.utilization).toBe(77)
     expect(body.error).toBeNull()
+    // Raw cc-quota snapshot — not enveloped per ADR 0001 (snapshot has its
+    // own .data field; ingest body is only consumed by tests).
   })
 
   it('returns 400 on malformed JSON', async () => {

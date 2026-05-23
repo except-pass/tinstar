@@ -77,7 +77,7 @@ describe('PATCH /api/config', () => {
     const root = mkdtempSync(join(tmpdir(), 'cfg-'))
     const { status, data } = await call('PATCH', { uploadMaxBytes: 1024 }, root)
     expect(status).toBe(400)
-    expect((data as { error: { code: string } }).error.code).toBe('BAD_VALUE')
+    expect((data as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
   })
 
   it('rejects non-integer uploadMaxBytes with 400', async () => {

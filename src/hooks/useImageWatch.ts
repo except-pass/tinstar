@@ -25,10 +25,10 @@ export function useImageWatch(sessionId: string, filePath: string): ImageWatchSt
       body: JSON.stringify({ sessionId, filePath, subscriberId, mode: 'notify' }),
     })
       .then(r => r.json())
-      .then((data: { ok?: boolean; absolutePath?: string }) => {
+      .then((body: { ok?: boolean; data?: { absolutePath?: string } }) => {
         if (cancelled) return
-        if (data.ok && data.absolutePath) {
-          absolutePathRef.current = data.absolutePath
+        if (body.ok && body.data?.absolutePath) {
+          absolutePathRef.current = body.data.absolutePath
           setConnected(true)
         }
       })

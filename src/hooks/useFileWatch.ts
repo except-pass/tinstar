@@ -27,13 +27,13 @@ export function useFileWatch(sessionId: string, filePath: string): FileWatchStat
       body: JSON.stringify({ sessionId, filePath, subscriberId, mode: 'content' }),
     })
       .then(r => r.json())
-      .then((data: { ok?: boolean; absolutePath?: string; content?: string }) => {
+      .then((body: { ok?: boolean; data?: { absolutePath?: string; content?: string } }) => {
         if (cancelled) return
-        if (data.ok && data.absolutePath) {
-          absolutePathRef.current = data.absolutePath
+        if (body.ok && body.data?.absolutePath) {
+          absolutePathRef.current = body.data.absolutePath
           setConnected(true)
-          if (data.content !== undefined) {
-            setContent(data.content)
+          if (body.data.content !== undefined) {
+            setContent(body.data.content)
             setLastUpdatedAt(new Date())
           }
         }
