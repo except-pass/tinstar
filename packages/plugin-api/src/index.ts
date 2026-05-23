@@ -88,6 +88,26 @@ export interface PluginCanvasApi {
   fitWidget(widgetId: string): void
 }
 
+/** Live file/image observation. Wrappers over the host's file-watch SSE
+ *  channel. Plugin traffic from these hooks is not currently tagged with
+ *  `X-Tinstar-Plugin` (the hooks call apiFetch directly); acceptable because
+ *  they're observation, not state mutation. */
+export interface PluginWatchApi {
+  /** React hook: subscribes to file content updates for a workspace path.
+   *  The host's file watcher pushes updates via SSE; this hook surfaces
+   *  the current content and connection state. */
+  file(sessionId: string, filePath: string): {
+    content: string | null
+    connected: boolean
+    lastUpdatedAt: Date | null
+  }
+  /** React hook: subscribes to image-change notifications (no payload). */
+  image(sessionId: string, filePath: string): {
+    connected: boolean
+    lastUpdatedAt: Date | null
+  }
+}
+
 /** Hotgroup (keyboard slot) integration: read which slots a widget belongs to
  *  and render the host's `⌨ 1 3 5` badge. */
 export interface PluginHotgroupsApi {
@@ -116,6 +136,7 @@ export interface TinstarPluginAPI {
   hotkeys: PluginHotkeysApi
   canvas: PluginCanvasApi
   hotgroups: PluginHotgroupsApi
+  watch: PluginWatchApi
   logger: PluginLogger
 }
 

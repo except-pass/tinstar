@@ -6,6 +6,8 @@ import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/ac
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
 import { HotgroupBadge } from '../../components/HotgroupBadge'
+import { useFileWatch } from '../../hooks/useFileWatch'
+import { useImageWatch } from '../../hooks/useImageWatch'
 import { EventBridge } from './eventBridge'
 
 const NOOP_DISPOSABLE: Disposable = { dispose: () => {} }
@@ -93,6 +95,11 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     Badge: HotgroupBadge,
   }
 
+  const watch = {
+    file: useFileWatch,
+    image: useImageWatch,
+  }
+
   return {
     pluginId: record.name,
     version: record.version,
@@ -102,6 +109,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     hotkeys,
     canvas,
     hotgroups,
+    watch,
     logger,
   }
 }
