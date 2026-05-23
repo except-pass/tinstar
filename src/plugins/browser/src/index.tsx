@@ -1,3 +1,6 @@
+// Built-in plugin — consumes @tinstar/plugin-api only.
+// Host imports are forbidden by ESLint (see docs/adrs/0002-plugin-api-boundary.md).
+// Lone exception: `import type` from src/domain/types for widget data shapes.
 import type { ComponentType } from 'react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import { makeBrowserWidget } from './BrowserWidget'

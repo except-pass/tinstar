@@ -88,9 +88,7 @@ Shared types live in [`src/domain/types.ts`](../src/domain/types.ts). `src/types
 
 ### Plugins: built-in vs external
 
-Built-in plugins (`src/plugins/<name>/`) are first-party and currently reach into host modules directly (`useFileWatch`, `registerActionHandler`, `HotgroupBadge`, `fitWidgetToViewport`, `runAccent`). External plugins (npm/path-loaded via [`externalLoader`](../src/core/pluginHost/externalLoader.ts)) get only the published [`@tinstar/plugin-api`](../packages/plugin-api/src/index.ts) surface.
-
-External plugin authors should not assume host modules are stable. The boundary will tighten as the API expands; see the discussion in [`docs/architecture.md`](./architecture.md#plugin-system) for the planned migration.
+Built-in and external plugins both consume only [`@tinstar/plugin-api`](../packages/plugin-api/src/index.ts); host runtime imports from `src/plugins/*/src/**` are forbidden by ESLint. See [ADR 0002](./adrs/0002-plugin-api-boundary.md).
 
 ---
 

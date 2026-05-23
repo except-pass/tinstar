@@ -1,3 +1,7 @@
+// Built-in plugin — consumes @tinstar/plugin-api only.
+// Host imports are forbidden by ESLint (see docs/adrs/0002-plugin-api-boundary.md).
+// Lone exception: `import type` from src/domain/types for widget data shapes.
+// Additional exception: `EV` from src/lib/windowEvents (shared window-events schema).
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { NatsTrafficWidget } from '../../../domain/types'
