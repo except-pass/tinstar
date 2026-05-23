@@ -1,12 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { BrowserWidget } from '../../../domain/types'
-import type { WidgetProps } from '../../../widgets/widgetComponentRegistry'
-import { hexToRgba, resolveRunAccent } from '../../../components/runAccent'
-import { useHotgroupContext } from '../../../hotkeys/HotgroupContext'
-import { registerActionHandler, deregisterActionHandler } from '../../../hotkeys/actionHandlerRegistry'
-import { fitWidgetToViewport } from '../../../hotkeys/canvasActionsRegistry'
-import { HotgroupBadge } from '../../../components/HotgroupBadge'
-import { apiFetch } from '../../../apiClient'
 
 function proxyUrl(widgetId: string, targetUrl: string): string {
   try {
@@ -24,10 +18,14 @@ interface ConsoleEntry {
   ts: number
 }
 
-export function BrowserWidget({ data, isSelected, isDragging, isHovered }: WidgetProps) {
-  const widget = data as BrowserWidget
-  const accent = resolveRunAccent(widget.color)
-  const { slotsForNode } = useHotgroupContext()
+export function makeBrowserWidget(api: TinstarPluginAPI) {
+  const HotgroupBadge = api.hotgroups.Badge
+
+  function BrowserWidget({ data, isSelected, isDragging, isHovered }: WidgetProps<BrowserWidget>) {
+  const widget = data
+  const accent = api.theme.accent.resolve(widget.color)
+  const hexToRgba = (c: string, a: number) => api.theme.accent.hexToRgba(c, a)
+  const { slotsForNode } = api.hotgroups.useContext()
   const hasHeaders = widget.headers && Object.keys(widget.headers).length > 0
 
   const [url, setUrl] = useState(widget.url)
@@ -69,11 +67,11 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
 
   // Register hotkey action handler for this widget
   useEffect(() => {
-    registerActionHandler(widget.id, (action) => {
-      if (action === 'fit-viewport') fitWidgetToViewport(widget.id)
+    const d = api.hotkeys.onAction(widget.id, (action) => {
+      if (action === 'fit-viewport') api.canvas.fitWidget(widget.id)
       else if (action === 'reload') reloadRef.current()
     })
-    return () => deregisterActionHandler(widget.id)
+    return () => d.dispose()
   }, [widget.id])
 
   const navigate = useCallback((target: string) => {
@@ -83,7 +81,7 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
     setInputValue(normalized)
     setEditing(false)
     if (normalized) {
-      apiFetch(`/api/browser-widgets/${widget.id}`, {
+      api.http.fetch(`/api/browser-widgets/${widget.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: normalized }),
@@ -100,7 +98,7 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
   }, [inputValue, url, navigate])
 
   const handleClose = useCallback(() => {
-    apiFetch(`/api/browser-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
+    api.http.fetch(`/api/browser-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
   }, [widget.id])
 
   const reload = useCallback(() => {
@@ -244,9 +242,9 @@ export function BrowserWidget({ data, isSelected, isDragging, isHovered }: Widge
       )}
     </div>
   )
-}
+  }
 
-function ConsolePanel({ entries, onClear }: { entries: ConsoleEntry[]; onClear: () => void }) {
+  function ConsolePanel({ entries, onClear }: { entries: ConsoleEntry[]; onClear: () => void }) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -286,9 +284,9 @@ function ConsolePanel({ entries, onClear }: { entries: ConsoleEntry[]; onClear: 
       </div>
     </div>
   )
-}
+  }
 
-function HeadersEditor({ widgetId, headers, onClose }: { widgetId: string; headers: Record<string, string>; onClose: () => void }) {
+  function HeadersEditor({ widgetId, headers, onClose }: { widgetId: string; headers: Record<string, string>; onClose: () => void }) {
   const [rows, setRows] = useState<Array<{ key: string; value: string }>>(() => {
     const entries = Object.entries(headers)
     return entries.length > 0 ? entries.map(([key, value]) => ({ key, value })) : [{ key: '', value: '' }]
@@ -300,7 +298,7 @@ function HeadersEditor({ widgetId, headers, onClose }: { widgetId: string; heade
       const k = key.trim()
       if (k) hdrs[k] = value
     }
-    apiFetch(`/api/browser-widgets/${widgetId}`, {
+    api.http.fetch(`/api/browser-widgets/${widgetId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ headers: hdrs }),
@@ -366,4 +364,7 @@ function HeadersEditor({ widgetId, headers, onClose }: { widgetId: string; heade
       ))}
     </div>
   )
+  }
+
+  return BrowserWidget
 }

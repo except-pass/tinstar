@@ -1,12 +1,13 @@
-import type { TinstarPluginAPI } from '@tinstar/plugin-api'
-import { BrowserWidget } from './BrowserWidget'
+import type { ComponentType } from 'react'
+import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
+import { makeBrowserWidget } from './BrowserWidget'
 
 export function activate(api: TinstarPluginAPI) {
   api.logger.info('browser plugin activating')
   return [
     api.widgets.register({
       type: 'browser-widget',
-      component: BrowserWidget,
+      component: makeBrowserWidget(api) as ComponentType<WidgetProps>,
       isContainer: false,
       defaultSize: { width: 800, height: 600 },
       minSize: { width: 320, height: 240 },
