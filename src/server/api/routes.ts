@@ -949,7 +949,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         if (!taskTag) return fail(res, 'BAD_REQUEST', 'taskTag is required')
         const updated = ctx.docStore.assignTaskTag(sha, taskTag)
         if (!updated) return fail(res, 'NOT_FOUND', 'not found')
-        json(res, { ok: true, commit: updated })
+        ok(res, updated)
       } catch {
         fail(res, 'BAD_REQUEST', 'invalid json')
       }
@@ -990,7 +990,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       saveActiveSpaceId(ctx.sessionConfig.dirs.root, id)
     }
     ctx.sse.broadcastSnapshot()
-    json(res, { ok: true, activeSpaceId: id })
+    ok(res, { activeSpaceId: id })
     return true
   }
 
@@ -1687,11 +1687,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           'git', ['show', `HEAD:${relPath}`],
           { cwd: workspacePath, encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024, timeout: 5000 },
         )
-        json(res, { ok: true, content: stdout })
+        ok(res, { content: stdout })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
         if (msg.includes('does not exist') || msg.includes('bad revision')) {
-          json(res, { ok: true, content: null })
+          ok(res, { content: null })
         } else {
           fail(res, 'LIST_FAILED', 'failed to read git base', { details: { detail: msg } })
         }

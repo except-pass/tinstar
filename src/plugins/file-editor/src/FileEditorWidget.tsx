@@ -60,9 +60,9 @@ export function FileEditorWidget({ data }: WidgetProps) {
       body: JSON.stringify({ sessionId: widget.sessionId, filePath: widget.filePath }),
     })
       .then(r => r.json())
-      .then((data: { ok?: boolean; content?: string | null }) => {
+      .then((body: { ok?: boolean; data?: { content?: string | null } }) => {
         // null content means new file (not in HEAD) — use empty string so diff still works
-        setBaseContent(data.content ?? '')
+        setBaseContent(body.data?.content ?? '')
         setDiffLoading(false)
       })
       .catch(() => {
