@@ -106,6 +106,10 @@ The headline traps:
 
 ---
 
-## Response envelopes (NOT YET decided)
+## Response envelopes
 
-`routes.ts` currently ships four shapes for response bodies: `{error: string}`, `{ok: false, error: string}`, `{ok: false, error: {code, message}}`, and `{ok, message}`. The frontend can't write a generic error reader. **Picking one shape and migrating is a known open task** — until then, mirror whatever the nearest sibling route does and don't invent a fifth variant. This will eventually become an ADR.
+Application APIs return `{ ok: true, data, warnings? }` or `{ ok: false, error: { code, message, details? } }`. Use the `ok()` and `fail()` helpers in [`src/server/api/envelope.ts`](../src/server/api/envelope.ts) — they auto-derive the HTTP status from the `ErrorCode`.
+
+Wire-protocol endpoints (OpenAPI spec, OTLP/Prometheus exports, `/api/state` SSE snapshot) stay raw and are documented at the route.
+
+Decision + rationale + migration plan: [ADR 0001](./adrs/0001-response-envelope.md).

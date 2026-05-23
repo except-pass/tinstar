@@ -125,6 +125,8 @@ Full endpoint reference with schemas and examples: **[`/api/docs`](http://localh
 
 Key endpoint groups: Entity CRUD, Sessions, Hooks, Settings, Spaces, OTel, Simulator.
 
+**Response envelope:** `{ ok: true, data, warnings? }` on success, `{ ok: false, error: { code, message, details? } }` on failure. Use the `ok()` and `fail()` helpers in `src/server/api/envelope.ts`. Wire-protocol endpoints (`openapi.json`, OTLP/Prom exports, `/api/state` SSE snapshot) are documented exceptions and return raw JSON. See [ADR 0001](./adrs/0001-response-envelope.md).
+
 ---
 
 ## Session Backend
