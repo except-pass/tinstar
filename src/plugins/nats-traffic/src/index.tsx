@@ -1,12 +1,13 @@
-import type { TinstarPluginAPI } from '@tinstar/plugin-api'
-import { NatsTrafficWidget } from './NatsTrafficWidget'
+import type { ComponentType } from 'react'
+import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
+import { makeNatsTrafficWidget } from './NatsTrafficWidget'
 
 export function activate(api: TinstarPluginAPI) {
   api.logger.info('nats-traffic plugin activating')
   return [
     api.widgets.register({
       type: 'nats-traffic',
-      component: NatsTrafficWidget,
+      component: makeNatsTrafficWidget(api) as ComponentType<WidgetProps>,
       isContainer: false,
       defaultSize: { width: 1200, height: 600 },
       minSize: { width: 400, height: 200 },

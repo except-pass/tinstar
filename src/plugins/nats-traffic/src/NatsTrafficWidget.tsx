@@ -1,9 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { NatsTrafficWidget } from '../../../domain/types'
-import type { WidgetProps } from '../../../widgets/widgetComponentRegistry'
-import { registerActionHandler, deregisterActionHandler } from '../../../hotkeys/actionHandlerRegistry'
-import { fitWidgetToViewport } from '../../../hotkeys/canvasActionsRegistry'
-import { apiFetch } from '../../../apiClient'
 import { EV } from '../../../lib/windowEvents'
 
 interface TrafficEvent {
@@ -16,8 +13,9 @@ interface TrafficEvent {
 
 const MAX_EVENTS = 200
 
-export function NatsTrafficWidget({ data }: WidgetProps) {
-  const widget = data as NatsTrafficWidget
+export function makeNatsTrafficWidget(api: TinstarPluginAPI) {
+  return function NatsTrafficWidget({ data }: WidgetProps<NatsTrafficWidget>) {
+  const widget = data
   const [events, setEvents] = useState<TrafficEvent[]>([])
   const [filter, setFilter] = useState('')
   const [paused, setPaused] = useState(false)
@@ -75,14 +73,14 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
 
   // Register hotkey action handler for this widget
   useEffect(() => {
-    registerActionHandler(widget.id, (action) => {
-      if (action === 'fit-viewport') fitWidgetToViewport(widget.id)
+    const d = api.hotkeys.onAction(widget.id, (action) => {
+      if (action === 'fit-viewport') api.canvas.fitWidget(widget.id)
     })
-    return () => deregisterActionHandler(widget.id)
+    return () => d.dispose()
   }, [widget.id])
 
   const handleClose = useCallback(() => {
-    apiFetch(`/api/nats-traffic-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
+    api.http.fetch(`/api/nats-traffic-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})
   }, [widget.id])
 
   const clearEvents = useCallback(() => {
@@ -91,7 +89,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
 
   const addSubscription = useCallback(() => {
     if (!newSub.trim()) return
-    apiFetch(`/api/nats-traffic-widgets/${widget.id}/subscribe`, {
+    api.http.fetch(`/api/nats-traffic-widgets/${widget.id}/subscribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject: newSub.trim() }),
@@ -99,7 +97,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
   }, [widget.id, newSub])
 
   const removeSubscription = useCallback((subject: string) => {
-    apiFetch(`/api/nats-traffic-widgets/${widget.id}/subscribe`, {
+    api.http.fetch(`/api/nats-traffic-widgets/${widget.id}/subscribe`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject }),
@@ -108,7 +106,7 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
 
   const publishNats = useCallback(() => {
     if (!publishSubject.trim() || !publishMessage.trim()) return
-    apiFetch(`/api/nats-traffic-widgets/${widget.id}/publish`, {
+    api.http.fetch(`/api/nats-traffic-widgets/${widget.id}/publish`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject: publishSubject.trim(), message: publishMessage.trim() }),
@@ -348,4 +346,5 @@ export function NatsTrafficWidget({ data }: WidgetProps) {
       </div>
     </div>
   )
+  }
 }
