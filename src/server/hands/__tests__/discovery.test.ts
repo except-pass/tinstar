@@ -63,7 +63,9 @@ Prompt.
     const hands = discoverHands(testDir)
     const marshal = hands.find(h => h.name === 'marshal')
     expect(marshal).toBeDefined()
-    expect(marshal!.cliTemplate).toBe('Claude (multi-agent)')
+    // Marshal uses a dedicated CLI template (claude + haiku, NATS-enabled);
+    // see src/server/hands/builtins/index.ts.
+    expect(marshal!.cliTemplate).toBe('Marshal')
   })
 
   it('lets user-defined hands override built-ins by name', () => {
