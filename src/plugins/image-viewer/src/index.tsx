@@ -1,12 +1,13 @@
-import type { TinstarPluginAPI } from '@tinstar/plugin-api'
-import { ImageViewerWidget } from './ImageViewerWidget'
+import type { ComponentType } from 'react'
+import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
+import { makeImageViewerWidget } from './ImageViewerWidget'
 
 export function activate(api: TinstarPluginAPI) {
   api.logger.info('image-viewer plugin activating')
   return [
     api.widgets.register({
       type: 'image-viewer',
-      component: ImageViewerWidget,
+      component: makeImageViewerWidget(api) as ComponentType<WidgetProps>,
       isContainer: false,
       defaultSize: { width: 640, height: 480 },
       minSize: { width: 200, height: 150 },
