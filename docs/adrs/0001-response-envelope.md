@@ -1,8 +1,8 @@
 # ADR 0001 — Unified response envelope and error codes
 
-**Status:** Accepted (planned, not yet implemented)
+**Status:** Implemented (2026-05-23)
 **Date:** 2026-05-23
-**Supersedes:** the four ad-hoc shapes currently in `src/server/api/routes.ts`
+**Supersedes:** the eight ad-hoc shapes that were in `src/server/api/routes.ts` and `src/server/api/fileUploadRoute.ts`
 
 ---
 
