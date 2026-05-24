@@ -961,8 +961,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         const newCamera = fitToRect(box, { width: canvasRect.width, height: canvasRect.height }, 40)
         setCamera(newCamera)
         // Primary member: most-recently-focused (if it's in this slot), else first
-        const memberIds = constellations.nodesInSlot(slot)
-        const primary = memberIds.find(id => id === focusedWidgetId) ?? memberIds[0]
+        const liveMemberIds = constellations.nodesInSlot(slot).filter(id => layouts.has(id))
+        const primary = liveMemberIds.find(id => id === focusedWidgetId) ?? liveMemberIds[0]
         if (primary) setFocusedWidgetId(primary)
       }
     },
@@ -1224,6 +1224,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         layout={layout}
         zoom={camera.zoom}
         isSelected={isSelected(node.id)}
+        isFocused={focusedWidgetId === node.id}
         isSpawning={spawnedNodeIds.has(node.id)}
         spawnColor={node.type === 'run' ? runMap.get(node.entityId)?.color : undefined}
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
