@@ -77,7 +77,7 @@ export function useConstellations(spaceId: string, nodeIds: string[]) {
   }, [nodeToSlots])
 
   /** Returns all node IDs in a slot */
-  const nodesInSlot = useCallback((slot: ConstellationSlot): string[] => {
+  const nodesInSlot = useCallback((slot: string): string[] => {
     return store[slot] ?? []
   }, [store])
 

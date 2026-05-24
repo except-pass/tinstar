@@ -90,7 +90,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
       const ctx = useConstellationContext()
       return {
         slotsForNode: (nodeId: string) => ctx.slotsForNode(nodeId),
-        nodesInSlot: (slot: string) => ctx.nodesInSlot(slot as never),
+        nodesInSlot: (slot: string) => ctx.nodesInSlot(slot),
       }
     },
     Badge: ConstellationBadge,

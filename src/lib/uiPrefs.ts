@@ -61,6 +61,8 @@ export function setPref<K extends keyof UiPrefs>(key: K, value: UiPrefs[K]): voi
 // Per-entity-id families
 export const familyKeys = {
   promptStash: (sessionId: string): string => `tinstar-prompt-stash-v1:${sessionId}`,
+  // constellations: V5 rename of the legacy `hotgroups` family. Storage version reset to v1
+  // since the schema is unchanged but the key is new — pre-V5 data is intentionally not migrated.
   constellations: (spaceId: string): string => `tinstar-constellations-v1-${spaceId}`,
   hiddenRuns: 'tinstar-hidden-runs',
 } as const

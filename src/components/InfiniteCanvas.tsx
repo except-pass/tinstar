@@ -787,7 +787,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   useCanvasHotkeys({
     onConstellationNavigate: (slot) => {
       // constellations stores full node IDs (e.g. 'run-R-241', 'editor-abc', 'browser-xyz')
-      const slotNodeIds = constellations.nodesInSlot(slot as never).filter(id => layouts.has(id))
+      const slotNodeIds = constellations.nodesInSlot(slot).filter(id => layouts.has(id))
       if (slotNodeIds.length === 0) return
       // Determine selection type from first node prefix
       const first = slotNodeIds[0]!
