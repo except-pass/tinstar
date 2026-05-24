@@ -9,11 +9,14 @@ import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegi
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useConstellationContext } from '../hotkeys/ConstellationContext'
+import type { ConstellationSlot } from '../hooks/useConstellations'
 import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
 import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
 import { EV } from '../lib/windowEvents'
+import { ConstellationChrome } from '../canvas/ConstellationChrome'
+import type { WidgetLayout } from '../canvas/constellationCohesion'
 
 interface Props {
   tree: TreeNode[]
@@ -781,6 +784,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => { if (panToRunsRef) panToRunsRef.current = null }
   }, [panToRunsRef, panToRuns])
 
+  // Constellation chrome: active slot driven by digit hotkey in PR 5
+  // setActiveConstellationSlot wired in PR 5 (digit hotkey); kept here for API stability
+  const [activeConstellationSlot, _setActiveConstellationSlot] = useState<ConstellationSlot | null>(null)
+
   // Constellation context and canvas hotkeys
   const constellations = useConstellationContext()
 
@@ -1192,6 +1199,25 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       >
         {renderedNodes}
         {dragGhost && <div style={dragGhost} />}
+        {(['1','2','3','4','5','6','7','8','9'] as const).map(slot => {
+          const memberIds = constellations.nodesInSlot(slot)
+          const memberLayouts = memberIds
+            .map(id => {
+              const l = layouts.get(id)
+              if (!l) return null
+              return { id, x: l.x, y: l.y, width: l.width, height: l.height } as WidgetLayout
+            })
+            .filter((l): l is WidgetLayout => Boolean(l))
+          const active = activeConstellationSlot === slot
+          return (
+            <ConstellationChrome
+              key={`constellation-chrome-${slot}`}
+              slot={slot}
+              layouts={memberLayouts}
+              active={active}
+            />
+          )
+        })}
       </div>
 
       {/* Empty canvas hint */}
