@@ -1,4 +1,5 @@
-import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger } from '@tinstar/plugin-api'
+import { useSyncExternalStore } from 'react'
+import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer } from '@tinstar/plugin-api'
 import type { PluginRecord } from '../pluginHost/registry'
 import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
 import { apiFetch } from '../../apiClient'
@@ -10,6 +11,21 @@ import { useFileWatch } from '../../hooks/useFileWatch'
 import { useImageWatch } from '../../hooks/useImageWatch'
 import { resolveRunAccent, hexToRgba } from '../../components/runAccent'
 import { EventBridge } from './eventBridge'
+import { useWidgetId } from './widgetIdContext'
+import { capabilityRegistry } from '../constellationCapabilities'
+
+/** Derive a coarse widget "kind" from its full node id. Mirrors the
+ *  prefix convention the host uses when constructing TreeNode ids
+ *  (see src/domain/grouping.ts and the widget render path). */
+function kindOfWidgetId(id: string): string {
+  if (id.startsWith('run-')) return 'run'
+  if (id.startsWith('editor-')) return 'file-editor'
+  if (id.startsWith('browser-')) return 'browser'
+  if (id.startsWith('image-')) return 'image'
+  if (id.startsWith('nats-')) return 'nats-traffic'
+  const dash = id.indexOf('-')
+  return dash > 0 ? id.slice(0, dash) : id
+}
 
 const NOOP_DISPOSABLE: Disposable = { dispose: () => {} }
 
@@ -86,6 +102,8 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
   }
 
   const constellations = {
+    Badge: ConstellationBadge,
+
     useContext: (): { slotsForNode: (nodeId: string) => string[]; nodesInSlot: (slot: string) => string[] } => {
       const ctx = useConstellationContext()
       return {
@@ -93,7 +111,105 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
         nodesInSlot: (slot: string) => ctx.nodesInSlot(slot),
       }
     },
-    Badge: ConstellationBadge,
+
+    useMyNodeId(): string {
+      return useWidgetId()
+    },
+
+    useMySlots(): string[] {
+      const widgetId = useWidgetId()
+      const ctx = useConstellationContext()
+      return ctx.slotsForNode(widgetId)
+    },
+
+    useMySlot(): number | null {
+      const widgetId = useWidgetId()
+      const ctx = useConstellationContext()
+      const slots = ctx.slotsForNode(widgetId)
+      return slots.length > 0 ? Number(slots[0]) : null
+    },
+
+    usePeers(): ConstellationPeer[] {
+      const widgetId = useWidgetId()
+      const ctx = useConstellationContext()
+
+      // Re-render whenever the capability registry changes — the snapshot
+      // string is intentionally cheap and order-stable per widget.
+      useSyncExternalStore(
+        (listener) => capabilityRegistry.subscribe(listener),
+        () => {
+          const slots = ctx.slotsForNode(widgetId)
+          if (slots.length === 0) return ''
+          const peers = ctx.nodesInSlot(slots[0]!).filter((id) => id !== widgetId)
+          return peers.map((id) => `${id}:${capabilityRegistry.capabilitiesOf(id).join(',')}`).join('|')
+        },
+        () => '',
+      )
+
+      const slots = ctx.slotsForNode(widgetId)
+      if (slots.length === 0) return []
+      const slot = slots[0]!
+      const peerIds = ctx.nodesInSlot(slot).filter((id) => id !== widgetId)
+      return peerIds.map((id) => ({
+        id,
+        kind: kindOfWidgetId(id),
+        capabilities: capabilityRegistry.capabilitiesOf(id),
+      }))
+    },
+
+    usePublishCapability(): (
+      name: string,
+      handler: (args: unknown) => Promise<unknown>,
+    ) => Disposable {
+      const widgetId = useWidgetId()
+      return (name, handler) => {
+        const undo = capabilityRegistry.publish(widgetId, name, handler)
+        const d: Disposable = { dispose: undo }
+        record.disposables.push(d)
+        return d
+      }
+    },
+
+    useInvokePeerCapability(): (
+      peerId: string,
+      name: string,
+      args: unknown,
+    ) => Promise<unknown> {
+      const widgetId = useWidgetId()
+      const ctx = useConstellationContext()
+      return async (peerId, name, args) => {
+        const mySlots = ctx.slotsForNode(widgetId)
+        const peerSlots = ctx.slotsForNode(peerId)
+        const shared = mySlots.find((s) => peerSlots.includes(s))
+        if (!shared) throw new Error(`peer ${peerId} is not in the same constellation`)
+        return capabilityRegistry.invoke(peerId, name, args)
+      }
+    },
+
+    useFitToMine(): () => void {
+      const widgetId = useWidgetId()
+      return () => {
+        window.dispatchEvent(new CustomEvent('constellation:fit-mine', { detail: { widgetId } }))
+      }
+    },
+    useTidyMine(): () => void {
+      const widgetId = useWidgetId()
+      return () => {
+        window.dispatchEvent(new CustomEvent('constellation:tidy-mine', { detail: { widgetId } }))
+      }
+    },
+    useAssignToSlot(): (slot: number) => void {
+      const widgetId = useWidgetId()
+      return (slot) => {
+        window.dispatchEvent(new CustomEvent('constellation:assign', { detail: { widgetId, slot } }))
+      }
+    },
+    useLeave(): () => void {
+      const widgetId = useWidgetId()
+      return () => {
+        window.dispatchEvent(new CustomEvent('constellation:leave', { detail: { widgetId } }))
+      }
+    },
   }
 
   const watch = {

@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useEffect, type RefObject, type PointerEvent as ReactPointerEvent } from 'react'
 import type { WidgetRegistration } from './widgetComponentRegistry'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
+import { WidgetIdProvider } from '../core/pluginApi/widgetIdContext'
 
 const DRAG_THRESHOLD = 5
 
@@ -244,14 +245,16 @@ export function CanvasWidgetShell({
       onPointerEnter={() => setIsHovered(true)}
       onPointerLeave={() => setIsHovered(false)}
     >
-      <WidgetComponent
-        data={data}
-        zoom={zoom}
-        isSelected={isSelected}
-        isDragging={isDragging}
-        isHovered={isHovered}
-        isDropTarget={isDropTarget}
-      />
+      <WidgetIdProvider id={nodeId}>
+        <WidgetComponent
+          data={data}
+          zoom={zoom}
+          isSelected={isSelected}
+          isDragging={isDragging}
+          isHovered={isHovered}
+          isDropTarget={isDropTarget}
+        />
+      </WidgetIdProvider>
 
       {/* Resize handle — bottom-right corner */}
       <div

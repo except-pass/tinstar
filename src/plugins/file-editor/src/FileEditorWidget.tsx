@@ -37,6 +37,13 @@ export function makeFileEditorWidget(api: TinstarPluginAPI) {
   const widget = data
   const { content, connected, lastUpdatedAt } = api.watch.file(widget.sessionId, widget.filePath)
   const { slotsForNode } = api.constellations.useContext()
+  const publishCapability = api.constellations.usePublishCapability()
+
+  // Publish file.path so peers (e.g. a future "open in editor" widget) can
+  // discover what file I'm showing without snooping at data props.
+  useEffect(() => {
+    return publishCapability('file.path', async () => widget.filePath).dispose
+  }, [widget.filePath, publishCapability])
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
   // Ref so handleEditorMount always reads the latest content, avoiding stale closure
   const contentRef = useRef<string | null>(null)

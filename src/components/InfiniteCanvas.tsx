@@ -1031,6 +1031,67 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     },
   })
 
+  // Plugin-API constellation actions: widgets call
+  // api.constellations.fitToMine() / tidyMine() / assignToSlot(n) / leave()
+  // which dispatch window CustomEvents. The host fulfills them here using
+  // the same primitives as the digit/Z/Shift+Z hotkey paths above.
+  useEffect(() => {
+    const onFit = (e: Event) => {
+      const detail = (e as CustomEvent<{ widgetId: string }>).detail
+      const slot = constellations.slotsForNode(detail.widgetId)[0] as ConstellationSlot | undefined
+      if (!slot) return
+      setActiveConstellationSlot(slot)
+      const memberRects = constellations.nodesInSlot(slot)
+        .map(memberId => {
+          const l = layouts.get(memberId)
+          if (!l) return null
+          return { id: memberId, x: l.x, y: l.y, width: l.width, height: l.height }
+        })
+        .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
+      const box = boundingBoxOf(memberRects)
+      if (!box) return
+      const canvasRect = containerRef.current?.getBoundingClientRect()
+      if (!canvasRect) return
+      setCamera(fitToRect(box, { width: canvasRect.width, height: canvasRect.height }, 40))
+    }
+    const onTidy = (e: Event) => {
+      const detail = (e as CustomEvent<{ widgetId: string }>).detail
+      const slot = constellations.slotsForNode(detail.widgetId)[0] as ConstellationSlot | undefined
+      if (!slot) return
+      const memberRects = constellations.nodesInSlot(slot)
+        .map(memberId => {
+          const l = layouts.get(memberId)
+          if (!l) return null
+          return { id: memberId, x: l.x, y: l.y, width: l.width, height: l.height }
+        })
+        .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
+      if (memberRects.length === 0) return
+      const positions = tidyGrid(memberRects, 40)
+      for (const [posId, p] of positions) updateRunPosition(posId, p.x, p.y)
+    }
+    const onAssign = (e: Event) => {
+      const detail = (e as CustomEvent<{ widgetId: string; slot: number }>).detail
+      const slotStr = String(detail.slot) as ConstellationSlot
+      constellations.assign(slotStr, detail.widgetId)
+    }
+    const onLeave = (e: Event) => {
+      const detail = (e as CustomEvent<{ widgetId: string }>).detail
+      const slot = constellations.slotsForNode(detail.widgetId)[0] as ConstellationSlot | undefined
+      if (!slot) return
+      constellations.remove(slot, detail.widgetId)
+    }
+    window.addEventListener('constellation:fit-mine', onFit)
+    window.addEventListener('constellation:tidy-mine', onTidy)
+    window.addEventListener('constellation:assign', onAssign)
+    window.addEventListener('constellation:leave', onLeave)
+    return () => {
+      window.removeEventListener('constellation:fit-mine', onFit)
+      window.removeEventListener('constellation:tidy-mine', onTidy)
+      window.removeEventListener('constellation:assign', onAssign)
+      window.removeEventListener('constellation:leave', onLeave)
+    }
+  }, [constellations, layouts, updateRunPosition, setCamera])
+
   // Register the canvas-level fit implementation so widget action handlers
   // can call fitWidgetToViewport(id) in response to the 'fit-viewport'
   // binding (Z key).

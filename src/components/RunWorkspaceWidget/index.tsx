@@ -16,6 +16,7 @@ import '../../hotkeys/widgets/runWorkspaceWidget'  // side-effect: registers Wid
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 import { apiFetch } from '../../apiClient'
 import { useConfig } from '../../context/ConfigContext'
+import { capabilityRegistry } from '../../core/constellationCapabilities'
 
 interface Props {
   run: RunData
@@ -184,6 +185,22 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
     registerScanHandler(run.id, triggerScanLine)
     return () => deregisterFlourishHandler(run.id)
   }, [run.id, triggerHollywoodHit, triggerScanLine])
+
+  // Publish the `session.prompt` capability so peers in this widget's
+  // constellation (e.g. the canned-prompts plugin) can RPC into us to
+  // send text into the underlying tmux session.
+  useEffect(() => {
+    return capabilityRegistry.publish(`run-${run.id}`, 'session.prompt', async (args) => {
+      const { text } = args as { text: string }
+      const res = await apiFetch(`/api/sessions/${run.id}/prompt`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+      if (!res.ok) throw new Error(`session.prompt failed: ${res.status}`)
+      return null
+    })
+  }, [run.id])
 
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()

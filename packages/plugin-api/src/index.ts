@@ -119,8 +119,20 @@ export interface PluginThemeApi {
   }
 }
 
-/** Constellation (keyboard slot) integration: read which slots a widget belongs to
- *  and render the host's `⌨ 1 3 5` badge. */
+/** A peer widget discovered in the same constellation. */
+export interface ConstellationPeer {
+  /** The peer widget's full node id (e.g. `editor-abc`, `run-R-241`). */
+  id: string
+  /** Coarse-grained widget kind, derived from the id prefix
+   *  (`run`, `file-editor`, `browser`, `image`, `nats-traffic`, …). */
+  kind: string
+  /** Names of capabilities the peer has currently published. */
+  capabilities: string[]
+}
+
+/** Constellation (keyboard slot) integration: read which slots a widget belongs to,
+ *  discover peers, publish/invoke capabilities, and trigger host actions
+ *  (fit / tidy / assign / leave) scoped to "this widget". */
 export interface PluginConstellationsApi {
   /** React hook: read which keyboard constellation slots a node belongs to and
    *  which nodes are in a slot. Must be called from inside a host
@@ -130,8 +142,68 @@ export interface PluginConstellationsApi {
     slotsForNode: (nodeId: string) => string[]
     nodesInSlot: (slot: string) => string[]
   }
-  /** Renders the `⌨ 1 3 5` chip. Empty slot list renders nothing. */
-  Badge: ComponentType<{ slots: string[]; testId?: string }>
+  /** Renders the `⌨ 1 3 5` chip. Empty slot list renders nothing. The optional
+   *  `onLeave` callback is invoked when the user clicks a slot chip to remove
+   *  the widget from that slot. */
+  Badge: ComponentType<{ slots: string[]; testId?: string; onLeave?: (slot: string) => void }>
+
+  /** React hook: returns this widget's full host node id (e.g. `editor-abc`,
+   *  `run-R-241`). Throws if called outside a host widget shell — plugin
+   *  widgets are always wrapped, so this is safe from any component the
+   *  plugin renders inside its widget. */
+  useMyNodeId(): string
+
+  /** React hook: returns the slots (as the underlying host string keys
+   *  '1'..'9') this widget is assigned to. Empty array if not in any
+   *  constellation. Useful for rendering `<Badge slots={...} />`. */
+  useMySlots(): string[]
+
+  /** React hook: returns the host widget's primary constellation slot as a
+   *  number (1–9), or null if the widget is not assigned to any slot. */
+  useMySlot(): number | null
+
+  /** React hook: returns the peers sharing my constellation, with their
+   *  currently-published capabilities. Re-renders whenever the capability
+   *  registry changes. */
+  usePeers(): ConstellationPeer[]
+
+  /** React hook: returns a `publish(name, handler)` function bound to the
+   *  current widget. Typical usage:
+   *  ```ts
+   *  const publish = api.constellations.usePublishCapability()
+   *  useEffect(() => publish('file.path', async () => path).dispose, [path])
+   *  ```
+   */
+  usePublishCapability(): (
+    name: string,
+    handler: (args: unknown) => Promise<unknown>,
+  ) => Disposable
+
+  /** React hook: returns an `invoke(peerId, name, args)` function bound to
+   *  the current widget. The returned promise rejects if the peer is not in
+   *  the same constellation, or if the peer hasn't published the capability.
+   *  The function is safe to call from event handlers. */
+  useInvokePeerCapability(): (
+    peerId: string,
+    name: string,
+    args: unknown,
+  ) => Promise<unknown>
+
+  /** React hook: returns a `fit()` function that fits the canvas viewport
+   *  to this widget's constellation. No-op if not in a constellation. */
+  useFitToMine(): () => void
+
+  /** React hook: returns a `tidy()` function that tidy-arranges this
+   *  widget's constellation into a grid. No-op if not in a constellation. */
+  useTidyMine(): () => void
+
+  /** React hook: returns an `assign(slot)` function that assigns this widget
+   *  to the given constellation slot (1–9). */
+  useAssignToSlot(): (slot: number) => void
+
+  /** React hook: returns a `leave()` function that removes this widget from
+   *  its constellation. No-op if not in a constellation. */
+  useLeave(): () => void
 }
 
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */

@@ -7,6 +7,8 @@ import fileEditorPkg from '../../plugins/file-editor/package.json'
 import * as fileEditor from '../../plugins/file-editor/src/index'
 import imageViewerPkg from '../../plugins/image-viewer/package.json'
 import * as imageViewer from '../../plugins/image-viewer/src/index'
+import cannedPromptsPkg from '../../plugins/canned-prompts/package.json'
+import * as cannedPrompts from '../../plugins/canned-prompts/src/index'
 
 /**
  * Static index of bundled plugins. Each entry is an ES module whose package
@@ -26,4 +28,5 @@ export const BUNDLED_PLUGINS: Record<string, BundledEntry> = {
   'nats-traffic': { pkg: natsTrafficPkg, module: natsTraffic as Plugin },
   'file-editor': { pkg: fileEditorPkg, module: fileEditor as Plugin },
   'image-viewer': { pkg: imageViewerPkg, module: imageViewer as Plugin },
+  'canned-prompts': { pkg: cannedPromptsPkg, module: cannedPrompts as Plugin },
 }
