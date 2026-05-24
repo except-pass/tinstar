@@ -25,11 +25,11 @@ export function boundingBoxOf(rects: Rect[]): Rect | null {
 
 export interface DragDelta { dx: number; dy: number }
 
-// Member shape for group-drag operations: a Rect plus an id to key the result Map.
-export type DraggableMember = Rect & { id: string }
+// Member shape for group-drag operations: a Point plus an id to key the result Map.
+export type DragMember = Point & { id: string }
 
 export function applyGroupDrag(
-  members: DraggableMember[],
+  members: DragMember[],
   delta: DragDelta,
 ): Map<string, Point> {
   const result = new Map<string, Point>()

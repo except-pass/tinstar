@@ -18,7 +18,7 @@ import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
 import type { Rect } from '../canvas/constellationCohesion'
 import { applyGroupDrag } from '../canvas/constellationCohesion'
-import type { DraggableMember } from '../canvas/constellationCohesion'
+import type { DragMember } from '../canvas/constellationCohesion'
 
 interface Props {
   tree: TreeNode[]
@@ -612,9 +612,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       if (origin) {
         const dx = newX - origin.x
         const dy = newY - origin.y
-        const members: DraggableMember[] = []
+        const members: DragMember[] = []
         for (const [memberId, pos] of cSnap) {
-          members.push({ id: memberId, x: pos.x, y: pos.y, width: 0, height: 0 })
+          members.push({ id: memberId, x: pos.x, y: pos.y })
         }
         const updated = applyGroupDrag(members, { dx, dy })
         for (const [memberId, pos] of updated) {
@@ -636,7 +636,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       if (peerNodeId === '__origin__') continue
       updateRunPosition(peerNodeId, pos.x + dx, pos.y + dy)
     }
-  }, [updateRunPosition, constellations])
+  }, [updateRunPosition])
 
   // Grid arrange: treemap-style nested layout filling the viewport
   const arrangeGrid = useCallback(() => {

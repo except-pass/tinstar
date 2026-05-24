@@ -205,15 +205,19 @@ function SidebarNode({
 
   // Listen for constellation:flourish events dispatched when a widget is alt-dragged out of a constellation
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
     function onFlourish(e: Event) {
       const { nodeId: targetId } = (e as CustomEvent).detail as { nodeId: string }
       if (targetId !== node.id) return
       setIsFlourishy(true)
-      const timer = setTimeout(() => setIsFlourishy(false), 600)
-      return () => clearTimeout(timer)
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => setIsFlourishy(false), 600)
     }
     window.addEventListener('constellation:flourish', onFlourish)
-    return () => window.removeEventListener('constellation:flourish', onFlourish)
+    return () => {
+      window.removeEventListener('constellation:flourish', onFlourish)
+      if (timer) clearTimeout(timer)
+    }
   }, [node.id])
 
   const selected = isSelected(node.id)

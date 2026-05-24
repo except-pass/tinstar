@@ -36,8 +36,8 @@ describe('applyGroupDrag', () => {
   it('returns a map of memberId → new position', () => {
     const result = applyGroupDrag(
       [
-        { id: 'a', x: 0, y: 0, width: 100, height: 100 },
-        { id: 'b', x: 200, y: 100, width: 100, height: 100 },
+        { id: 'a', x: 0, y: 0 },
+        { id: 'b', x: 200, y: 100 },
       ],
       { dx: 10, dy: -5 },
     )
