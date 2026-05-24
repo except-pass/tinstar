@@ -38,3 +38,24 @@ export function applyGroupDrag(
   }
   return result
 }
+
+export interface ViewportSize { width: number; height: number }
+export interface Camera { x: number; y: number; zoom: number }
+
+export function fitToRect(
+  rect: Rect,
+  viewport: ViewportSize,
+  margin: number,
+): Camera {
+  if (rect.width <= 0 || rect.height <= 0) {
+    return { x: 0, y: 0, zoom: 1 }
+  }
+  const availW = Math.max(1, viewport.width - margin * 2)
+  const availH = Math.max(1, viewport.height - margin * 2)
+  const zoom = Math.min(availW / rect.width, availH / rect.height)
+  const rectCx = rect.x + rect.width / 2
+  const rectCy = rect.y + rect.height / 2
+  const vpCx = viewport.width / 2
+  const vpCy = viewport.height / 2
+  return { x: vpCx - rectCx * zoom, y: vpCy - rectCy * zoom, zoom }
+}

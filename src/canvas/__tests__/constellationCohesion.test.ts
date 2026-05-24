@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { centroidOf, boundingBoxOf, applyGroupDrag } from '../constellationCohesion'
+import { centroidOf, boundingBoxOf, applyGroupDrag, fitToRect } from '../constellationCohesion'
 import type { Rect } from '../constellationCohesion'
 
 const R = (x: number, y: number, w = 100, h = 100): Rect =>
@@ -47,5 +47,26 @@ describe('applyGroupDrag', () => {
 
   it('returns an empty map for no members', () => {
     expect(applyGroupDrag([], { dx: 10, dy: 10 }).size).toBe(0)
+  })
+})
+
+describe('fitToRect', () => {
+  it('computes camera transform that fits a rect inside the viewport with margin', () => {
+    const camera = fitToRect(
+      { x: 100, y: 100, width: 400, height: 200 },
+      { width: 800, height: 600 },
+      40,
+    )
+    // Effective viewport after margin: 720x520
+    // Rect 400x200 → zoom = min(720/400=1.8, 520/200=2.6) = 1.8 (width-limited)
+    expect(camera.zoom).toBeCloseTo(1.8, 1)
+    // rect center (300, 200), viewport center (400, 300)
+    expect(camera.x).toBeCloseTo(400 - 300 * 1.8, 1)
+    expect(camera.y).toBeCloseTo(300 - 200 * 1.8, 1)
+  })
+
+  it('returns identity-ish camera for empty rect', () => {
+    const camera = fitToRect({ x: 0, y: 0, width: 0, height: 0 }, { width: 800, height: 600 }, 40)
+    expect(camera).toEqual({ x: 0, y: 0, zoom: 1 })
   })
 })

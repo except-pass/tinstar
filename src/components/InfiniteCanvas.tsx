@@ -17,7 +17,7 @@ import { apiFetch } from '../apiClient'
 import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
 import type { Rect } from '../canvas/constellationCohesion'
-import { applyGroupDrag } from '../canvas/constellationCohesion'
+import { applyGroupDrag, boundingBoxOf, fitToRect } from '../canvas/constellationCohesion'
 import type { DragMember } from '../canvas/constellationCohesion'
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
 import { resolveSnapDrop } from '../canvas/snapZoneResolver'
@@ -183,7 +183,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     batchSetLayouts,
   } = useWidgetLayouts(tree, activeSpaceId)
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
-  const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState, expandAll } = useSelection()
+  const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState } = useSelection()
 
   // Drag state
   const draggingRunRef = useRef<string | null>(null)
@@ -484,8 +484,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           }
         }
       } else if (!marqueeRef.current.active) {
-        // Plain click on empty canvas = deselect all
+        // Plain click on empty canvas = deselect all and clear active constellation
         deselect()
+        setActiveConstellationSlot(null)
       }
 
       marqueeRef.current = { startX: 0, startY: 0, active: false }
@@ -543,9 +544,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     }
   }, [])
 
-  // Constellation chrome: active slot driven by digit hotkey in PR 5
-  // setActiveConstellationSlot wired in PR 5 (digit hotkey); kept here for API stability
-  const [activeConstellationSlot, _setActiveConstellationSlot] = useState<ConstellationSlot | null>(null)
+  // Constellation chrome: active slot driven by digit hotkey
+  const [activeConstellationSlot, setActiveConstellationSlot] = useState<ConstellationSlot | null>(null)
+
+  // Focused widget for digit-hotkey cycle bookkeeping (not wired to rendering in this PR)
+  const [focusedWidgetId, setFocusedWidgetId] = useState<string | null>(null)
 
   // Constellation context — must be declared before widget drag callbacks that reference it
   const constellations = useConstellationContext()
@@ -933,29 +936,35 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   }, [panToRunsRef, panToRuns])
 
   useCanvasHotkeys({
-    onConstellationNavigate: (slot) => {
-      // constellations stores full node IDs (e.g. 'run-R-241', 'editor-abc', 'browser-xyz')
-      const slotNodeIds = constellations.nodesInSlot(slot).filter(id => layouts.has(id))
-      if (slotNodeIds.length === 0) return
-      // Determine selection type from first node prefix
-      const first = slotNodeIds[0]!
-      const selType = first.startsWith('run-') ? 'run'
-        : first.startsWith('editor-') ? 'file-editor'
-        : first.startsWith('image-') ? 'image-viewer'
-        : first.startsWith('nats-') ? 'nats-traffic'
-        : 'browser-widget'
-      selectMany(slotNodeIds, selType as import('../domain/types').GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic')
-      // Expand all ancestors in sidebar so the nodes become visible
-      const ancestorIds: string[] = []
-      for (const nodeId of slotNodeIds) {
-        let cur = parentMapRef.current.get(nodeId) ?? null
-        while (cur) {
-          ancestorIds.push(cur)
-          cur = parentMapRef.current.get(cur) ?? null
-        }
+    onConstellationNavigate: (slot: ConstellationSlot) => {
+      if (activeConstellationSlot === slot) {
+        // Repeat press: advance focus through members
+        const memberIds = constellations.nodesInSlot(slot).filter(id => layouts.has(id))
+        if (memberIds.length === 0) return
+        const currentIdx = memberIds.indexOf(focusedWidgetId ?? '')
+        const nextIdx = (currentIdx + 1) % memberIds.length
+        setFocusedWidgetId(memberIds[nextIdx] ?? null)
+      } else {
+        // First press: activate, zoom-to-fit, focus primary member
+        setActiveConstellationSlot(slot)
+        const memberRects = constellations.nodesInSlot(slot)
+          .map(id => {
+            const l = layouts.get(id)
+            if (!l) return null
+            return { x: l.x, y: l.y, width: l.width, height: l.height } as Rect
+          })
+          .filter((r): r is Rect => r !== null)
+        const box = boundingBoxOf(memberRects)
+        if (!box) return
+        const canvasRect = containerRef.current?.getBoundingClientRect()
+        if (!canvasRect) return
+        const newCamera = fitToRect(box, { width: canvasRect.width, height: canvasRect.height }, 40)
+        setCamera(newCamera)
+        // Primary member: most-recently-focused (if it's in this slot), else first
+        const memberIds = constellations.nodesInSlot(slot)
+        const primary = memberIds.find(id => id === focusedWidgetId) ?? memberIds[0]
+        if (primary) setFocusedWidgetId(primary)
       }
-      if (ancestorIds.length > 0) expandAll(ancestorIds)
-      zoomToFitRuns(slotNodeIds)
     },
     onConstellationAssign: (slot) => {
       const { selectedType, selectedIds } = selectionState
