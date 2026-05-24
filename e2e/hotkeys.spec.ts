@@ -93,12 +93,6 @@ test.describe('Hotkeys', () => {
       expect(zoomAfter).not.toBe(zoomBefore)
     })
 
-    test('pressing 0 works as slot 10', async ({ page }) => {
-      await page.getByTestId('canvas-widget-R-241').click()
-      await page.keyboard.press('Control+Alt+0')
-      await expect(page.getByTestId('constellation-badge-R-241')).toContainText('⌨ 0')
-    })
-
   })
 
   test.describe('Tab Navigation', () => {

@@ -813,14 +813,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const { selectedType, selectedIds } = selectionState
       if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
       for (const nodeId of selectedIds) {
-        constellations.assign(slot as never, nodeId)
+        constellations.assign(slot, nodeId)
       }
     },
     onConstellationRemove: (slot) => {
       const { selectedType, selectedIds } = selectionState
       if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
       for (const nodeId of selectedIds) {
-        constellations.remove(slot as never, nodeId)
+        constellations.remove(slot, nodeId)
       }
     },
     onArrangeGrid: () => arrangeGridRef?.current?.(),
