@@ -17,6 +17,8 @@ import { apiFetch } from '../apiClient'
 import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
 import type { Rect } from '../canvas/constellationCohesion'
+import { applyGroupDrag } from '../canvas/constellationCohesion'
+import type { DraggableMember } from '../canvas/constellationCohesion'
 
 interface Props {
   tree: TreeNode[]
@@ -189,6 +191,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   // Multi-drag: snapshot of other selected widgets' positions at drag start
   const multiDragSnapshot = useRef<Map<string, { x: number; y: number }> | null>(null)
+
+  // Constellation group-drag: snapshot of ALL members' start positions (including dragged widget)
+  const constellationDragSnapshot = useRef<Map<string, { x: number; y: number }> | null>(null)
+  // Which constellation slot the current drag belongs to (null = no constellation drag)
+  const constellationDragSlot = useRef<import('../hooks/useConstellations').ConstellationSlot | null>(null)
+  // Whether alt was held at drag-start (triggers pop-out on drag-end)
+  const altHeldAtDragStart = useRef(false)
 
   // Marquee state
   const [marquee, setMarquee] = useState<MarqueeRect | null>(null)
@@ -513,10 +522,52 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [endPan, deselect])
 
+  // Track alt key state globally so drag-start can read it even though onDragStart
+  // receives only nodeId (no pointer event). Use a ref so it doesn't cause re-renders.
+  const altKeyRef = useRef(false)
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyRef.current = true }
+    const onUp = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyRef.current = false }
+    window.addEventListener('keydown', onDown)
+    window.addEventListener('keyup', onUp)
+    return () => {
+      window.removeEventListener('keydown', onDown)
+      window.removeEventListener('keyup', onUp)
+    }
+  }, [])
+
+  // Constellation chrome: active slot driven by digit hotkey in PR 5
+  // setActiveConstellationSlot wired in PR 5 (digit hotkey); kept here for API stability
+  const [activeConstellationSlot, _setActiveConstellationSlot] = useState<ConstellationSlot | null>(null)
+
+  // Constellation context — must be declared before widget drag callbacks that reference it
+  const constellations = useConstellationContext()
+
   // Widget drag callbacks
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
     setDraggingNodeId(nodeId)
+
+    // Snapshot alt-key state at drag-start for pop-out decision at drag-end
+    altHeldAtDragStart.current = altKeyRef.current
+
+    // Constellation group-drag: if the widget is in a constellation and alt is NOT held,
+    // capture start positions for all members so we can move them as one.
+    const slot = constellations.slotsForNode(nodeId)[0] ?? null
+    if (slot && !altKeyRef.current) {
+      constellationDragSlot.current = slot
+      const memberIds = constellations.nodesInSlot(slot)
+      const snap = new Map<string, { x: number; y: number }>()
+      for (const memberId of memberIds) {
+        const layout = layouts.get(memberId)
+        if (layout) snap.set(memberId, { x: layout.x, y: layout.y })
+      }
+      constellationDragSnapshot.current = snap
+    } else {
+      constellationDragSlot.current = null
+      constellationDragSnapshot.current = null
+    }
+
     if (isSelected(nodeId)) {
       const snap = new Map<string, { x: number; y: number }>()
       for (const leafId of runNodeIdsRef.current) {
@@ -531,16 +582,49 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     } else {
       multiDragSnapshot.current = null
     }
-  }, [isSelected, layouts])
+  }, [isSelected, layouts, constellations])
 
-  const handleWidgetDragEnd = useCallback(() => {
+  const handleWidgetDragEnd = useCallback((nodeId: string) => {
+    // Alt-pop-out: if alt was held at drag-start, remove the widget from its constellation slot
+    const slot = constellationDragSlot.current
+    if (slot && altHeldAtDragStart.current) {
+      constellations.remove(slot, nodeId)
+      // Dispatch flourish event so the sidebar row flashes
+      window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId } }))
+    }
+
     draggingRunRef.current = null
     setDraggingNodeId(null)
     multiDragSnapshot.current = null
-  }, [])
+    constellationDragSnapshot.current = null
+    constellationDragSlot.current = null
+    altHeldAtDragStart.current = false
+  }, [constellations])
 
-  // Multi-drag aware move: when dragging a selected widget, move all selected peers by the same delta
+  // Multi-drag + constellation-aware move:
+  // - If dragging a widget that's in a constellation (and alt was NOT held), move all members together.
+  // - Otherwise fall through to the existing multi-drag / single-drag path.
   const handleMultiMove = useCallback((nodeId: string, newX: number, newY: number) => {
+    const cSnap = constellationDragSnapshot.current
+    if (cSnap) {
+      // Group drag: compute delta from this widget's start position, apply to all members
+      const origin = cSnap.get(nodeId)
+      if (origin) {
+        const dx = newX - origin.x
+        const dy = newY - origin.y
+        const members: DraggableMember[] = []
+        for (const [memberId, pos] of cSnap) {
+          members.push({ id: memberId, x: pos.x, y: pos.y, width: 0, height: 0 })
+        }
+        const updated = applyGroupDrag(members, { dx, dy })
+        for (const [memberId, pos] of updated) {
+          updateRunPosition(memberId, pos.x, pos.y)
+        }
+        return
+      }
+    }
+
+    // Existing single / multi-selection drag path
     updateRunPosition(nodeId, newX, newY)
     const snap = multiDragSnapshot.current
     if (!snap) return
@@ -552,7 +636,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       if (peerNodeId === '__origin__') continue
       updateRunPosition(peerNodeId, pos.x + dx, pos.y + dy)
     }
-  }, [updateRunPosition])
+  }, [updateRunPosition, constellations])
 
   // Grid arrange: treemap-style nested layout filling the viewport
   const arrangeGrid = useCallback(() => {
@@ -783,13 +867,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     if (panToRunsRef) panToRunsRef.current = panToRuns
     return () => { if (panToRunsRef) panToRunsRef.current = null }
   }, [panToRunsRef, panToRuns])
-
-  // Constellation chrome: active slot driven by digit hotkey in PR 5
-  // setActiveConstellationSlot wired in PR 5 (digit hotkey); kept here for API stability
-  const [activeConstellationSlot, _setActiveConstellationSlot] = useState<ConstellationSlot | null>(null)
-
-  // Constellation context and canvas hotkeys
-  const constellations = useConstellationContext()
 
   useCanvasHotkeys({
     onConstellationNavigate: (slot) => {

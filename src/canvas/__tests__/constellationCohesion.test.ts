@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { centroidOf, boundingBoxOf } from '../constellationCohesion'
+import { centroidOf, boundingBoxOf, applyGroupDrag } from '../constellationCohesion'
 import type { Rect } from '../constellationCohesion'
 
 const R = (x: number, y: number, w = 100, h = 100): Rect =>
@@ -29,5 +29,23 @@ describe('boundingBoxOf', () => {
       R(0, 0, 100, 100),
       R(200, 50, 100, 100),
     ])).toEqual({ x: 0, y: 0, width: 300, height: 150 })
+  })
+})
+
+describe('applyGroupDrag', () => {
+  it('returns a map of memberId → new position', () => {
+    const result = applyGroupDrag(
+      [
+        { id: 'a', x: 0, y: 0, width: 100, height: 100 },
+        { id: 'b', x: 200, y: 100, width: 100, height: 100 },
+      ],
+      { dx: 10, dy: -5 },
+    )
+    expect(result.get('a')).toEqual({ x: 10, y: -5 })
+    expect(result.get('b')).toEqual({ x: 210, y: 95 })
+  })
+
+  it('returns an empty map for no members', () => {
+    expect(applyGroupDrag([], { dx: 10, dy: 10 }).size).toBe(0)
   })
 })

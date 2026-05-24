@@ -201,6 +201,20 @@ function SidebarNode({
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const [isFlourishy, setIsFlourishy] = useState(false)
+
+  // Listen for constellation:flourish events dispatched when a widget is alt-dragged out of a constellation
+  useEffect(() => {
+    function onFlourish(e: Event) {
+      const { nodeId: targetId } = (e as CustomEvent).detail as { nodeId: string }
+      if (targetId !== node.id) return
+      setIsFlourishy(true)
+      const timer = setTimeout(() => setIsFlourishy(false), 600)
+      return () => clearTimeout(timer)
+    }
+    window.addEventListener('constellation:flourish', onFlourish)
+    return () => window.removeEventListener('constellation:flourish', onFlourish)
+  }, [node.id])
 
   const selected = isSelected(node.id)
   const expanded = isExpanded(node.id)
@@ -265,6 +279,7 @@ function SidebarNode({
           runHidden ? 'opacity-50' : '',
           isMatch && !selected ? 'text-primary' : '',
           isCursor ? 'ring-1 ring-primary/60 bg-primary/10' : '',
+          isFlourishy ? 'animate-pulse' : '',
         ].join(' ')}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         data-testid={`sidebar-node-${node.id}`}
