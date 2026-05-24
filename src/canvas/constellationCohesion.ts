@@ -1,32 +1,24 @@
-export interface WidgetLayout {
-  id: string
-  x: number
-  y: number
-  width: number
-  height: number
-}
-
 export interface Point { x: number; y: number }
 export interface Rect { x: number; y: number; width: number; height: number }
 
-export function centroidOf(widgets: WidgetLayout[]): Point | null {
-  if (widgets.length === 0) return null
+export function centroidOf(rects: Rect[]): Point | null {
+  if (rects.length === 0) return null
   let sx = 0, sy = 0
-  for (const w of widgets) {
-    sx += w.x + w.width / 2
-    sy += w.y + w.height / 2
+  for (const r of rects) {
+    sx += r.x + r.width / 2
+    sy += r.y + r.height / 2
   }
-  return { x: sx / widgets.length, y: sy / widgets.length }
+  return { x: sx / rects.length, y: sy / rects.length }
 }
 
-export function boundingBoxOf(widgets: WidgetLayout[]): Rect | null {
-  if (widgets.length === 0) return null
+export function boundingBoxOf(rects: Rect[]): Rect | null {
+  if (rects.length === 0) return null
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-  for (const w of widgets) {
-    if (w.x < minX) minX = w.x
-    if (w.y < minY) minY = w.y
-    if (w.x + w.width > maxX) maxX = w.x + w.width
-    if (w.y + w.height > maxY) maxY = w.y + w.height
+  for (const r of rects) {
+    if (r.x < minX) minX = r.x
+    if (r.y < minY) minY = r.y
+    if (r.x + r.width > maxX) maxX = r.x + r.width
+    if (r.y + r.height > maxY) maxY = r.y + r.height
   }
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
 }

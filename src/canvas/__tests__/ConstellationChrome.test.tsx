@@ -6,7 +6,7 @@ import { ConstellationChrome } from '../ConstellationChrome'
 describe('ConstellationChrome', () => {
   it('renders nothing when no widgets in the slot', () => {
     const { container } = render(
-      <ConstellationChrome slot="3" layouts={[]} active={true} />,
+      <ConstellationChrome slot="3" rects={[]} active={true} />,
     )
     expect(container.firstChild).toBeNull()
   })
@@ -15,7 +15,7 @@ describe('ConstellationChrome', () => {
     const { container } = render(
       <ConstellationChrome
         slot="3"
-        layouts={[{ id: 'a', x: 0, y: 0, width: 100, height: 100 }]}
+        rects={[{ x: 0, y: 0, width: 100, height: 100 }]}
         active={true}
       />,
     )
@@ -27,7 +27,7 @@ describe('ConstellationChrome', () => {
     const { container } = render(
       <ConstellationChrome
         slot="3"
-        layouts={[{ id: 'a', x: 0, y: 0, width: 100, height: 100 }]}
+        rects={[{ x: 0, y: 0, width: 100, height: 100 }]}
         active={false}
       />,
     )

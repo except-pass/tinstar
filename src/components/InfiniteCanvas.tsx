@@ -16,7 +16,7 @@ import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
 import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
-import type { WidgetLayout } from '../canvas/constellationCohesion'
+import type { Rect } from '../canvas/constellationCohesion'
 
 interface Props {
   tree: TreeNode[]
@@ -1199,21 +1199,22 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       >
         {renderedNodes}
         {dragGhost && <div style={dragGhost} />}
+        {/* Chrome is inside the camera transform so it scales with canvas zoom — unlike the screen-space marquee. */}
         {(['1','2','3','4','5','6','7','8','9'] as const).map(slot => {
           const memberIds = constellations.nodesInSlot(slot)
-          const memberLayouts = memberIds
+          const memberRects = memberIds
             .map(id => {
               const l = layouts.get(id)
               if (!l) return null
-              return { id, x: l.x, y: l.y, width: l.width, height: l.height } as WidgetLayout
+              return { x: l.x, y: l.y, width: l.width, height: l.height } as Rect
             })
-            .filter((l): l is WidgetLayout => Boolean(l))
+            .filter((r): r is Rect => r !== null)
           const active = activeConstellationSlot === slot
           return (
             <ConstellationChrome
               key={`constellation-chrome-${slot}`}
               slot={slot}
-              layouts={memberLayouts}
+              rects={memberRects}
               active={active}
             />
           )

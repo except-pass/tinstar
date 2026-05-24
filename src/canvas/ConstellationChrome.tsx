@@ -1,16 +1,16 @@
-import { boundingBoxOf, type WidgetLayout } from './constellationCohesion'
+import { boundingBoxOf, type Rect } from './constellationCohesion'
 import type { ConstellationSlot } from '../hooks/useConstellations'
 
 interface Props {
   slot: ConstellationSlot
-  layouts: WidgetLayout[]
+  rects: Rect[]
   active: boolean
 }
 
-export function ConstellationChrome({ slot, layouts, active }: Props) {
-  if (layouts.length === 0) return null
+export function ConstellationChrome({ slot, rects, active }: Props) {
+  if (rects.length === 0) return null
 
-  const box = boundingBoxOf(layouts)
+  const box = boundingBoxOf(rects)
   if (!box) return null
 
   return (
@@ -18,7 +18,7 @@ export function ConstellationChrome({ slot, layouts, active }: Props) {
       {active && (
         <div
           data-testid={`constellation-outline-${slot}`}
-          className="pointer-events-none absolute border-2 border-sky-400/80 rounded-md"
+          className="pointer-events-none absolute border-2 border-primary/80 rounded-md"
           style={{
             left: box.x - 8,
             top: box.y - 8,
@@ -30,7 +30,7 @@ export function ConstellationChrome({ slot, layouts, active }: Props) {
       {active && (
         <div
           data-testid={`constellation-badge-large-${slot}`}
-          className="pointer-events-none absolute bg-sky-500 text-white text-sm font-bold rounded px-2 py-0.5"
+          className="pointer-events-none absolute bg-primary text-white text-sm font-bold rounded px-2 py-0.5"
           style={{ left: box.x - 8, top: box.y - 28 }}
         >
           {slot}
