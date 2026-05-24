@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useRef, useEffect, useCallback, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
 import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { findNodeLabel } from '../domain/view-models'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
@@ -19,6 +19,9 @@ import { ConstellationChrome } from '../canvas/ConstellationChrome'
 import type { Rect } from '../canvas/constellationCohesion'
 import { applyGroupDrag } from '../canvas/constellationCohesion'
 import type { DragMember } from '../canvas/constellationCohesion'
+import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
+import { resolveSnapDrop } from '../canvas/snapZoneResolver'
+import type { SnapWidget } from '../canvas/snapZoneResolver'
 
 interface Props {
   tree: TreeNode[]
@@ -180,9 +183,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
   const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState, expandAll } = useSelection()
 
+  // Snap-zone snap distance (canvas units)
+  const SNAP_DISTANCE = 60
+
   // Drag state
   const draggingRunRef = useRef<string | null>(null)
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null)
+  // Snap-zone drag state: tracks dragged widget's current rect for overlay + drop resolution
+  const [draggingSnap, setDraggingSnap] = useState<{ id: string; rect: Rect } | null>(null)
 
   // File-drag overlay: shows a full-canvas drop target when a tinstar-editor drag enters,
   // so the terminal iframe doesn't swallow the drop
@@ -543,10 +551,35 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // Constellation context — must be declared before widget drag callbacks that reference it
   const constellations = useConstellationContext()
 
+  // Memoized inverted index: nodeId → slot (first slot only) and occupied slot set
+  const slotByNode = useMemo(() => {
+    const map = new Map<string, import('../hooks/useConstellations').ConstellationSlot>()
+    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../hooks/useConstellations').ConstellationSlot, string[]][]) {
+      for (const id of nodeIds) {
+        if (!map.has(id)) map.set(id, slot)
+      }
+    }
+    return map
+  }, [constellations.store])
+
+  const occupiedSlots = useMemo(() => {
+    const set = new Set<import('../hooks/useConstellations').ConstellationSlot>()
+    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../hooks/useConstellations').ConstellationSlot, string[]][]) {
+      if (nodeIds.length > 0) set.add(slot)
+    }
+    return set
+  }, [constellations.store])
+
   // Widget drag callbacks
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
     setDraggingNodeId(nodeId)
+
+    // Initialize draggingSnap with the widget's current rect
+    const startLayout = layouts.get(nodeId)
+    if (startLayout) {
+      setDraggingSnap({ id: nodeId, rect: { x: startLayout.x, y: startLayout.y, width: startLayout.width, height: startLayout.height } })
+    }
 
     // Snapshot alt-key state at drag-start for pop-out decision at drag-end
     altHeldAtDragStart.current = altKeyRef.current
@@ -593,13 +626,38 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId } }))
     }
 
+    // Snap-zone drop resolution: only when alt was NOT held and the dragged widget is not
+    // already in a constellation (formation-only, not membership-change)
+    setDraggingSnap(prev => {
+      if (!altHeldAtDragStart.current && prev && constellations.slotsForNode(nodeId).length === 0) {
+        const allLayouts: SnapWidget[] = Array.from(layouts.entries()).map(([id, l]) => ({
+          id, x: l.x, y: l.y, width: l.width, height: l.height,
+        }))
+        const result = resolveSnapDrop({
+          draggedId: nodeId,
+          draggedRect: prev.rect,
+          allWidgets: allLayouts,
+          slotByNode,
+          occupiedSlots,
+          snapDistance: SNAP_DISTANCE,
+        })
+        if (result.kind === 'join') {
+          constellations.assign(result.slot, nodeId)
+        } else if (result.kind === 'form') {
+          constellations.assign(result.slot, nodeId)
+          constellations.assign(result.slot, result.withId)
+        }
+      }
+      return null
+    })
+
     draggingRunRef.current = null
     setDraggingNodeId(null)
     multiDragSnapshot.current = null
     constellationDragSnapshot.current = null
     constellationDragSlot.current = null
     altHeldAtDragStart.current = false
-  }, [constellations])
+  }, [constellations, layouts, slotByNode, occupiedSlots, SNAP_DISTANCE])
 
   // Multi-drag + constellation-aware move:
   // - If dragging a widget that's in a constellation (and alt was NOT held), move all members together.
@@ -626,6 +684,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
     // Existing single / multi-selection drag path
     updateRunPosition(nodeId, newX, newY)
+    // Keep draggingSnap rect in sync with the dragged widget's current position
+    setDraggingSnap(prev => {
+      if (!prev || prev.id !== nodeId) return prev
+      const layout = layouts.get(nodeId)
+      if (!layout) return prev
+      return { id: nodeId, rect: { x: newX, y: newY, width: layout.width, height: layout.height } }
+    })
     const snap = multiDragSnapshot.current
     if (!snap) return
     const origin = snap.get('__origin__')
@@ -636,7 +701,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       if (peerNodeId === '__origin__') continue
       updateRunPosition(peerNodeId, pos.x + dx, pos.y + dy)
     }
-  }, [updateRunPosition])
+  }, [updateRunPosition, layouts])
 
   // Grid arrange: treemap-style nested layout filling the viewport
   const arrangeGrid = useCallback(() => {
@@ -1180,6 +1245,18 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   const renderedNodes = collectRenderOrder(tree, 0)
 
+  // Snap overlay: only show halos when the dragged widget is not already in a constellation
+  const draggingSnapForOverlay = (draggingSnap && constellations.slotsForNode(draggingSnap.id).length === 0)
+    ? draggingSnap
+    : null
+
+  // All widget rects for snap-zone overlay
+  const allWidgetsForSnap = useMemo((): SnapWidget[] =>
+    Array.from(layouts.entries()).map(([id, l]) => ({
+      id, x: l.x, y: l.y, width: l.width, height: l.height,
+    })),
+  [layouts])
+
   // Compute drag ghost: precise dashed outline at the widget's current drag position.
   // Sits behind the widget (z-index 50 < widget's 100) so the widget floats on top.
   let dragGhost: React.CSSProperties | null = null
@@ -1296,6 +1373,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             />
           )
         })}
+        <SnapZoneOverlay
+          dragging={draggingSnapForOverlay}
+          widgets={allWidgetsForSnap}
+          slotByNode={slotByNode}
+          occupiedSlots={occupiedSlots}
+          snapDistance={SNAP_DISTANCE}
+        />
       </div>
 
       {/* Empty canvas hint */}
