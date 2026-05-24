@@ -8,6 +8,7 @@ import { useSelection } from './SelectionProvider'
 import { useSidebarDrag, type DropTarget } from '../hooks/useSidebarDrag'
 import { SpaceSwitcher } from './SpaceSwitcher'
 import { useConstellationContext } from '../hotkeys/ConstellationContext'
+import type { ConstellationSlot } from '../hooks/useConstellations'
 import { ConstellationBadge } from './ConstellationBadge'
 import { useHotkeyContext } from '../hotkeys/FocusPathContext'
 import { onBindingFired } from '../hotkeys/bindingFiredBus'
@@ -197,7 +198,7 @@ function SidebarNode({
   cursorId?: string | null
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
-  const { slotsForNode } = useConstellationContext()
+  const { slotsForNode, remove } = useConstellationContext()
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -388,7 +389,14 @@ function SidebarNode({
 
         {/* Constellation badge for all work widgets */}
         {isWorkWidget && !editing && (
-          <ConstellationBadge slots={slotsForNode(node.id)} testId={`sidebar-constellation-badge-${node.id}`} />
+          <ConstellationBadge
+            slots={slotsForNode(node.id)}
+            testId={`sidebar-constellation-badge-${node.id}`}
+            onLeave={(slot) => {
+              remove(slot as ConstellationSlot, node.id)
+              window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId: node.id } }))
+            }}
+          />
         )}
 
         {/* Visibility eyeball — runs only.

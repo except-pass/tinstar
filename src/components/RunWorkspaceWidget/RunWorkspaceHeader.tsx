@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo, type PointerEvent as
 import { createPortal } from 'react-dom'
 import type { RunData, SessionStatus } from '../../types'
 import { useConstellationContext } from '../../hotkeys/ConstellationContext'
+import type { ConstellationSlot } from '../../hooks/useConstellations'
 import { useBackendState } from '../../hooks/useBackendState'
 import { ConstellationBadge } from '../ConstellationBadge'
 import { hexToRgba, resolveRunAccent } from '../runAccent'
@@ -47,7 +48,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   const [palettePos, setPalettePos] = useState<{ top: number; right: number } | null>(null)
   const paletteRef = useRef<HTMLDivElement>(null)
   const paletteButtonRef = useRef<HTMLButtonElement>(null)
-  const { slotsForNode } = useConstellationContext()
+  const { slotsForNode, remove } = useConstellationContext()
   const { taxRepo } = useBackendState()
 
   // Resolve entity hierarchy names from IDs for the breadcrumb
@@ -167,7 +168,14 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
 
           {/* Constellation badge */}
           <div className="flex items-center px-2">
-            <ConstellationBadge slots={slotsForNode(`run-${run.id}`)} testId={`constellation-badge-${run.id}`} />
+            <ConstellationBadge
+              slots={slotsForNode(`run-${run.id}`)}
+              testId={`constellation-badge-${run.id}`}
+              onLeave={(slot) => {
+                remove(slot as ConstellationSlot, `run-${run.id}`)
+                window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId: `run-${run.id}` } }))
+              }}
+            />
           </div>
 
           {/* Error banner — shown inline before buttons when present */}

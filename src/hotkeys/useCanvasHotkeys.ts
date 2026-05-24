@@ -20,6 +20,10 @@ export interface CanvasHotkeyHandlers {
   onArrangeSwimlanes: () => void
   onToggleMinimap: () => void
   onToggleHud: () => void
+  onConstellationZoomFit: () => void
+  onConstellationTidy: () => void
+  onConstellationLeave: () => void
+  onConstellationDissolve: () => void
 }
 
 export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
@@ -71,6 +75,30 @@ export function useCanvasHotkeys(handlers: CanvasHotkeyHandlers) {
         if (inEditable) return
         e.preventDefault()
         h.onToggleHud()
+        return
+      }
+
+      // Z — constellation zoom-to-fit / Shift+Z — tidy-arrange
+      if (e.code === 'KeyZ' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (inEditable) return
+        e.preventDefault()
+        if (e.shiftKey) {
+          h.onConstellationTidy()
+        } else {
+          h.onConstellationZoomFit()
+        }
+        return
+      }
+
+      // Backspace — leave constellation (single) / Shift+Backspace — dissolve
+      if (e.code === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (inEditable) return
+        e.preventDefault()
+        if (e.shiftKey) {
+          h.onConstellationDissolve()
+        } else {
+          h.onConstellationLeave()
+        }
         return
       }
 

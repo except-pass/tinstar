@@ -18,6 +18,7 @@ import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
 import type { Rect } from '../canvas/constellationCohesion'
 import { applyGroupDrag, boundingBoxOf, fitToRect } from '../canvas/constellationCohesion'
+import { tidyGrid } from '../canvas/tidyArrange'
 import type { DragMember } from '../canvas/constellationCohesion'
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
 import { resolveSnapDrop } from '../canvas/snapZoneResolver'
@@ -985,6 +986,49 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     onArrangeSwimlanes: () => arrangeSwimlanesRef?.current?.(),
     onToggleMinimap: () => minimapToggleRef.current?.(),
     onToggleHud: () => hudToggleRef.current?.(),
+    onConstellationZoomFit: () => {
+      if (!activeConstellationSlot) return
+      const memberRects = constellations.nodesInSlot(activeConstellationSlot)
+        .map(id => {
+          const l = layouts.get(id)
+          if (!l) return null
+          return { id, x: l.x, y: l.y, width: l.width, height: l.height }
+        })
+        .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
+      if (memberRects.length === 0) return
+      const box = boundingBoxOf(memberRects)
+      if (!box) return
+      const canvasRect = containerRef.current?.getBoundingClientRect()
+      if (!canvasRect) return
+      setCamera(fitToRect(box, { width: canvasRect.width, height: canvasRect.height }, 40))
+    },
+    onConstellationTidy: () => {
+      if (!activeConstellationSlot) return
+      const memberRects = constellations.nodesInSlot(activeConstellationSlot)
+        .map(id => {
+          const l = layouts.get(id)
+          if (!l) return null
+          return { id, x: l.x, y: l.y, width: l.width, height: l.height }
+        })
+        .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
+      if (memberRects.length === 0) return
+      const positions = tidyGrid(memberRects, 40)
+      for (const [id, p] of positions) updateRunPosition(id, p.x, p.y)
+    },
+    onConstellationLeave: () => {
+      if (!activeConstellationSlot || !focusedWidgetId) return
+      constellations.remove(activeConstellationSlot, focusedWidgetId)
+      window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId: focusedWidgetId } }))
+    },
+    onConstellationDissolve: () => {
+      if (!activeConstellationSlot) return
+      const ids = constellations.nodesInSlot(activeConstellationSlot).slice()
+      for (const id of ids) {
+        constellations.remove(activeConstellationSlot, id)
+        window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId: id } }))
+      }
+      setActiveConstellationSlot(null)
+    },
   })
 
   // Register the canvas-level fit implementation so widget action handlers
