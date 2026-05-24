@@ -187,8 +187,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   }, [run.id, triggerHollywoodHit, triggerScanLine])
 
   // Publish the `session.prompt` capability so peers in this widget's
-  // constellation (e.g. the canned-prompts plugin) can RPC into us to
-  // send text into the underlying tmux session.
+  // constellation can RPC into us to send text into the underlying tmux session.
   useEffect(() => {
     return capabilityRegistry.publish(`run-${run.id}`, 'session.prompt', async (args) => {
       const { text } = args as { text: string }
