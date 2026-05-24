@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useSyncExternalStore, useCallback, useRef } from 'react'
 import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer } from '@tinstar/plugin-api'
 import type { PluginRecord } from '../pluginHost/registry'
 import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
@@ -162,12 +162,12 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
       handler: (args: unknown) => Promise<unknown>,
     ) => Disposable {
       const widgetId = useWidgetId()
-      return (name, handler) => {
+      return useCallback((name, handler) => {
         const undo = capabilityRegistry.publish(widgetId, name, handler)
         const d: Disposable = { dispose: undo }
         record.disposables.push(d)
         return d
-      }
+      }, [widgetId])
     },
 
     useInvokePeerCapability(): (
@@ -177,38 +177,40 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     ) => Promise<unknown> {
       const widgetId = useWidgetId()
       const ctx = useConstellationContext()
-      return async (peerId, name, args) => {
-        const mySlots = ctx.slotsForNode(widgetId)
-        const peerSlots = ctx.slotsForNode(peerId)
+      const ctxRef = useRef(ctx)
+      ctxRef.current = ctx
+      return useCallback(async (peerId, name, args) => {
+        const mySlots = ctxRef.current.slotsForNode(widgetId)
+        const peerSlots = ctxRef.current.slotsForNode(peerId)
         const shared = mySlots.find((s) => peerSlots.includes(s))
         if (!shared) throw new Error(`peer ${peerId} is not in the same constellation`)
         return capabilityRegistry.invoke(peerId, name, args)
-      }
+      }, [widgetId])
     },
 
     useFitToMine(): () => void {
       const widgetId = useWidgetId()
-      return () => {
+      return useCallback(() => {
         window.dispatchEvent(new CustomEvent('constellation:fit-mine', { detail: { widgetId } }))
-      }
+      }, [widgetId])
     },
     useTidyMine(): () => void {
       const widgetId = useWidgetId()
-      return () => {
+      return useCallback(() => {
         window.dispatchEvent(new CustomEvent('constellation:tidy-mine', { detail: { widgetId } }))
-      }
+      }, [widgetId])
     },
     useAssignToSlot(): (slot: number) => void {
       const widgetId = useWidgetId()
-      return (slot) => {
+      return useCallback((slot) => {
         window.dispatchEvent(new CustomEvent('constellation:assign', { detail: { widgetId, slot } }))
-      }
+      }, [widgetId])
     },
     useLeave(): () => void {
       const widgetId = useWidgetId()
-      return () => {
+      return useCallback(() => {
         window.dispatchEvent(new CustomEvent('constellation:leave', { detail: { widgetId } }))
-      }
+      }, [widgetId])
     },
   }
 
