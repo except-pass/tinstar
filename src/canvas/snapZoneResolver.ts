@@ -22,7 +22,7 @@ export type SnapDropResult =
 
 const ALL_SLOTS: ConstellationSlot[] = ['1','2','3','4','5','6','7','8','9']
 
-function rectDistance(a: Rect, b: Rect): number {
+export function rectDistance(a: Rect, b: Rect): number {
   const dx = Math.max(0, Math.max(a.x - (b.x + b.width), b.x - (a.x + a.width)))
   const dy = Math.max(0, Math.max(a.y - (b.y + b.height), b.y - (a.y + a.height)))
   return Math.hypot(dx, dy)

@@ -1,9 +1,7 @@
 import type { ConstellationSlot } from '../hooks/useConstellations'
 import type { Rect } from './constellationCohesion'
-
-interface SnapWidget extends Rect {
-  id: string
-}
+import { rectDistance } from './snapZoneResolver'
+import type { SnapWidget } from './snapZoneResolver'
 
 interface DragState {
   id: string
@@ -19,12 +17,6 @@ interface Props {
 }
 
 const HALO_PAD = 12
-
-function rectDistance(a: Rect, b: Rect): number {
-  const dx = Math.max(0, Math.max(a.x - (b.x + b.width), b.x - (a.x + a.width)))
-  const dy = Math.max(0, Math.max(a.y - (b.y + b.height), b.y - (a.y + a.height)))
-  return Math.hypot(dx, dy)
-}
 
 export function SnapZoneOverlay({ dragging, widgets, slotByNode, occupiedSlots, snapDistance }: Props) {
   if (!dragging) return null

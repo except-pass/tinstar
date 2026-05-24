@@ -164,6 +164,8 @@ interface MarqueeRect {
 }
 
 const MARQUEE_THRESHOLD = 5
+// Snap-zone snap distance (canvas units)
+const SNAP_DISTANCE = 60
 
 export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -182,9 +184,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   } = useWidgetLayouts(tree, activeSpaceId)
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
   const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState, expandAll } = useSelection()
-
-  // Snap-zone snap distance (canvas units)
-  const SNAP_DISTANCE = 60
 
   // Drag state
   const draggingRunRef = useRef<string | null>(null)
@@ -657,7 +656,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     constellationDragSnapshot.current = null
     constellationDragSlot.current = null
     altHeldAtDragStart.current = false
-  }, [constellations, layouts, slotByNode, occupiedSlots, SNAP_DISTANCE])
+  }, [constellations, layouts, slotByNode, occupiedSlots])
 
   // Multi-drag + constellation-aware move:
   // - If dragging a widget that's in a constellation (and alt was NOT held), move all members together.
