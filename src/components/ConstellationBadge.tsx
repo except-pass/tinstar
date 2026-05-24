@@ -3,7 +3,7 @@ interface Props {
   testId?: string
 }
 
-export function HotgroupBadge({ slots, testId }: Props) {
+export function ConstellationBadge({ slots, testId }: Props) {
   if (slots.length === 0) return null
 
   const displayed = slots.slice(0, 3)

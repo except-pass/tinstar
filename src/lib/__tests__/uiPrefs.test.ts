@@ -45,7 +45,7 @@ describe('uiPrefs JSON helpers', () => {
 describe('familyKeys', () => {
   it('builds stable per-id keys', () => {
     expect(familyKeys.promptStash('demo')).toBe('tinstar-prompt-stash-v1:demo')
-    expect(familyKeys.hotgroups('space-1')).toBe('tinstar-hotgroups-v2-space-1')
+    expect(familyKeys.constellations('space-1')).toBe('tinstar-constellations-v1-space-1')
     expect(familyKeys.hiddenRuns).toBe('tinstar-hidden-runs')
   })
 })

@@ -7,8 +7,8 @@ import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { useSelection } from './SelectionProvider'
 import { useSidebarDrag, type DropTarget } from '../hooks/useSidebarDrag'
 import { SpaceSwitcher } from './SpaceSwitcher'
-import { useHotgroupContext } from '../hotkeys/HotgroupContext'
-import { HotgroupBadge } from './HotgroupBadge'
+import { useConstellationContext } from '../hotkeys/ConstellationContext'
+import { ConstellationBadge } from './ConstellationBadge'
 import { useHotkeyContext } from '../hotkeys/FocusPathContext'
 import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
@@ -197,7 +197,7 @@ function SidebarNode({
   cursorId?: string | null
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
-  const { slotsForNode } = useHotgroupContext()
+  const { slotsForNode } = useConstellationContext()
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -367,9 +367,9 @@ function SidebarNode({
           </span>
         )}
 
-        {/* Hotgroup badge for all work widgets */}
+        {/* Constellation badge for all work widgets */}
         {isWorkWidget && !editing && (
-          <HotgroupBadge slots={slotsForNode(node.id)} testId={`sidebar-hotgroup-badge-${node.id}`} />
+          <ConstellationBadge slots={slotsForNode(node.id)} testId={`sidebar-constellation-badge-${node.id}`} />
         )}
 
         {/* Visibility eyeball — runs only.

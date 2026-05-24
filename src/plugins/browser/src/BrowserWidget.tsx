@@ -22,13 +22,13 @@ interface ConsoleEntry {
 }
 
 export function makeBrowserWidget(api: TinstarPluginAPI) {
-  const HotgroupBadge = api.hotgroups.Badge
+  const ConstellationBadge = api.constellations.Badge
 
   function BrowserWidget({ data, isSelected, isDragging, isHovered }: WidgetProps<BrowserWidget>) {
   const widget = data
   const accent = api.theme.accent.resolve(widget.color)
   const hexToRgba = (c: string, a: number) => api.theme.accent.hexToRgba(c, a)
-  const { slotsForNode } = api.hotgroups.useContext()
+  const { slotsForNode } = api.constellations.useContext()
   const hasHeaders = widget.headers && Object.keys(widget.headers).length > 0
 
   const [url, setUrl] = useState(widget.url)
@@ -198,7 +198,7 @@ export function makeBrowserWidget(api: TinstarPluginAPI) {
             </span>
           )}
         </button>
-        <HotgroupBadge slots={slotsForNode(`browser-${widget.id}`)} />
+        <ConstellationBadge slots={slotsForNode(`browser-${widget.id}`)} />
         <button
           onPointerDown={e => e.stopPropagation()}
           onClick={handleClose}

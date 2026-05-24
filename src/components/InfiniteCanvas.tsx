@@ -8,7 +8,7 @@ import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
 import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
-import { useHotgroupContext } from '../hotkeys/HotgroupContext'
+import { useConstellationContext } from '../hotkeys/ConstellationContext'
 import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
 import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
@@ -781,13 +781,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => { if (panToRunsRef) panToRunsRef.current = null }
   }, [panToRunsRef, panToRuns])
 
-  // Hotgroup context and canvas hotkeys
-  const hotgroups = useHotgroupContext()
+  // Constellation context and canvas hotkeys
+  const constellations = useConstellationContext()
 
   useCanvasHotkeys({
-    onHotgroupNavigate: (slot) => {
-      // hotgroups stores full node IDs (e.g. 'run-R-241', 'editor-abc', 'browser-xyz')
-      const slotNodeIds = hotgroups.nodesInSlot(slot).filter(id => layouts.has(id))
+    onConstellationNavigate: (slot) => {
+      // constellations stores full node IDs (e.g. 'run-R-241', 'editor-abc', 'browser-xyz')
+      const slotNodeIds = constellations.nodesInSlot(slot as never).filter(id => layouts.has(id))
       if (slotNodeIds.length === 0) return
       // Determine selection type from first node prefix
       const first = slotNodeIds[0]!
@@ -809,18 +809,18 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       if (ancestorIds.length > 0) expandAll(ancestorIds)
       zoomToFitRuns(slotNodeIds)
     },
-    onHotgroupAssign: (slot) => {
+    onConstellationAssign: (slot) => {
       const { selectedType, selectedIds } = selectionState
       if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
       for (const nodeId of selectedIds) {
-        hotgroups.assign(slot, nodeId)
+        constellations.assign(slot as never, nodeId)
       }
     },
-    onHotgroupRemove: (slot) => {
+    onConstellationRemove: (slot) => {
       const { selectedType, selectedIds } = selectionState
       if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
       for (const nodeId of selectedIds) {
-        hotgroups.remove(slot, nodeId)
+        constellations.remove(slot as never, nodeId)
       }
     },
     onArrangeGrid: () => arrangeGridRef?.current?.(),

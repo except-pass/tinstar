@@ -6,12 +6,12 @@ import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { ImageWidget } from '../../../domain/types'
 
 export function makeImageViewerWidget(api: TinstarPluginAPI) {
-  const HotgroupBadge = api.hotgroups.Badge
+  const ConstellationBadge = api.constellations.Badge
 
   return function ImageViewerWidget({ data }: WidgetProps<ImageWidget>) {
     const widget = data
     const { connected, lastUpdatedAt } = api.watch.image(widget.sessionId, widget.filePath)
-    const { slotsForNode } = api.hotgroups.useContext()
+    const { slotsForNode } = api.constellations.useContext()
 
     const filename = widget.filePath.split('/').pop() ?? widget.filePath
 
@@ -66,7 +66,7 @@ export function makeImageViewerWidget(api: TinstarPluginAPI) {
           >
             ↗ Open
           </button>
-          <HotgroupBadge slots={slotsForNode(`image-${widget.id}`)} />
+          <ConstellationBadge slots={slotsForNode(`image-${widget.id}`)} />
           <button
             onPointerDown={e => e.stopPropagation()}
             onClick={handleClose}

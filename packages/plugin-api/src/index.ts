@@ -119,12 +119,12 @@ export interface PluginThemeApi {
   }
 }
 
-/** Hotgroup (keyboard slot) integration: read which slots a widget belongs to
+/** Constellation (keyboard slot) integration: read which slots a widget belongs to
  *  and render the host's `⌨ 1 3 5` badge. */
-export interface PluginHotgroupsApi {
-  /** React hook: read which keyboard hotgroup slots a node belongs to and
+export interface PluginConstellationsApi {
+  /** React hook: read which keyboard constellation slots a node belongs to and
    *  which nodes are in a slot. Must be called from inside a host
-   *  HotgroupProvider — the host wraps the canvas in this provider, so any
+   *  ConstellationProvider — the host wraps the canvas in this provider, so any
    *  widget component rendered inside the canvas is safe. */
   useContext(): {
     slotsForNode: (nodeId: string) => string[]
@@ -146,7 +146,7 @@ export interface TinstarPluginAPI {
   events: PluginEventsApi
   hotkeys: PluginHotkeysApi
   canvas: PluginCanvasApi
-  hotgroups: PluginHotgroupsApi
+  constellations: PluginConstellationsApi
   watch: PluginWatchApi
   theme: PluginThemeApi
   logger: PluginLogger

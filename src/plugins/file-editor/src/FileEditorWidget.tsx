@@ -31,12 +31,12 @@ function isBinaryOrLarge(content: string): boolean {
 }
 
 export function makeFileEditorWidget(api: TinstarPluginAPI) {
-  const HotgroupBadge = api.hotgroups.Badge
+  const ConstellationBadge = api.constellations.Badge
 
   return function FileEditorWidget({ data }: WidgetProps<EditorWidget>) {
   const widget = data
   const { content, connected, lastUpdatedAt } = api.watch.file(widget.sessionId, widget.filePath)
-  const { slotsForNode } = api.hotgroups.useContext()
+  const { slotsForNode } = api.constellations.useContext()
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
   // Ref so handleEditorMount always reads the latest content, avoiding stale closure
   const contentRef = useRef<string | null>(null)
@@ -196,7 +196,7 @@ export function makeFileEditorWidget(api: TinstarPluginAPI) {
         >
           ↗ Open in Editor
         </button>
-        <HotgroupBadge slots={slotsForNode(`editor-${widget.id}`)} />
+        <ConstellationBadge slots={slotsForNode(`editor-${widget.id}`)} />
         <button
           onPointerDown={e => e.stopPropagation()}
           onClick={handleClose}

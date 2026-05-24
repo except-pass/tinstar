@@ -16,7 +16,7 @@ import { SelectionProvider, useSelection } from './SelectionProvider'
 import { TaxonomyProvider } from './TaxonomyContext'
 import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
-import { HotgroupProvider } from '../hotkeys/HotgroupContext'
+import { ConstellationProvider } from '../hotkeys/ConstellationContext'
 import { FocusPathProvider, useFocusPath } from '../hotkeys/FocusPathContext'
 import { useContextRouter } from '../hotkeys/contextRouter'
 import { triggerWidgetFlourish, registerActionHandler, deregisterActionHandler } from '../hotkeys/actionHandlerRegistry'
@@ -776,7 +776,7 @@ function WorkspaceShellInner() {
     <>
       <PluginFailedBanner />
       {activeSpaceId ? (
-        <HotgroupProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
+        <ConstellationProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
             <div className="flex h-screen w-screen bg-surface-base text-slate-200 font-mono">
               {/* Left column: top bar + sidebar stacked — canvas gets full height */}
@@ -967,7 +967,7 @@ function WorkspaceShellInner() {
               )}
             </div>
           </TaxonomyProvider>
-        </HotgroupProvider>
+        </ConstellationProvider>
       ) : (
         <TaxonomyProvider taxRepo={taxRepo}>
           <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">

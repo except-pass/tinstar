@@ -10,7 +10,7 @@
 // - Singletons (booleans, numbers, simple flags) are folded into ONE blob
 //   at `tinstar-ui-prefs` so localStorage isn't littered with one key per
 //   setting.
-// - Per-id families (per-session prompt stash, per-space hotgroups, hidden
+// - Per-id families (per-session prompt stash, per-space constellations, hidden
 //   runs) keep their own keys — they're larger, more frequently updated,
 //   and would hurt the singleton blob's read/write cost if merged. They
 //   still route through this module's readJSON/writeJSON so the
@@ -61,7 +61,7 @@ export function setPref<K extends keyof UiPrefs>(key: K, value: UiPrefs[K]): voi
 // Per-entity-id families
 export const familyKeys = {
   promptStash: (sessionId: string): string => `tinstar-prompt-stash-v1:${sessionId}`,
-  hotgroups: (spaceId: string): string => `tinstar-hotgroups-v2-${spaceId}`,
+  constellations: (spaceId: string): string => `tinstar-constellations-v1-${spaceId}`,
   hiddenRuns: 'tinstar-hidden-runs',
 } as const
 

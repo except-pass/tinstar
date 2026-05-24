@@ -4,8 +4,8 @@ import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
 import { apiFetch } from '../../apiClient'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
-import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
-import { HotgroupBadge } from '../../components/HotgroupBadge'
+import { useConstellationContext } from '../../hotkeys/ConstellationContext'
+import { ConstellationBadge } from '../../components/ConstellationBadge'
 import { useFileWatch } from '../../hooks/useFileWatch'
 import { useImageWatch } from '../../hooks/useImageWatch'
 import { resolveRunAccent, hexToRgba } from '../../components/runAccent'
@@ -85,15 +85,15 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     },
   }
 
-  const hotgroups = {
+  const constellations = {
     useContext: (): { slotsForNode: (nodeId: string) => string[]; nodesInSlot: (slot: string) => string[] } => {
-      const ctx = useHotgroupContext()
+      const ctx = useConstellationContext()
       return {
         slotsForNode: (nodeId: string) => ctx.slotsForNode(nodeId),
         nodesInSlot: (slot: string) => ctx.nodesInSlot(slot as never),
       }
     },
-    Badge: HotgroupBadge,
+    Badge: ConstellationBadge,
   }
 
   const watch = {
@@ -116,7 +116,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     events,
     hotkeys,
     canvas,
-    hotgroups,
+    constellations,
     watch,
     theme,
     logger,

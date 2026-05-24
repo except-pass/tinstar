@@ -49,13 +49,13 @@ test.describe('Hotkeys', () => {
     })
   })
 
-  test.describe('Hotgroups', () => {
+  test.describe('Constellations', () => {
     test('Ctrl+Alt+1 assigns selected run and shows badge', async ({ page }) => {
       await page.getByTestId('canvas-widget-R-241').click()
       await page.keyboard.press('Control+Alt+1')
-      await expect(page.getByTestId('hotgroup-badge-R-241')).toContainText('⌨ 1')
+      await expect(page.getByTestId('constellation-badge-R-241')).toContainText('⌨ 1')
       // Also check sidebar
-      const sidebarBadge = page.getByTestId('sidebar-hotgroup-badge-R-241')
+      const sidebarBadge = page.getByTestId('sidebar-constellation-badge-R-241')
       await expect(sidebarBadge).toContainText('⌨ 1')
     })
 
@@ -63,7 +63,7 @@ test.describe('Hotkeys', () => {
       await page.getByTestId('canvas-widget-R-241').click()
       await page.keyboard.press('Control+Alt+1')
       await page.keyboard.press('Control+Alt+2')
-      await expect(page.getByTestId('hotgroup-badge-R-241')).toContainText('⌨ 1 2')
+      await expect(page.getByTestId('constellation-badge-R-241')).toContainText('⌨ 1 2')
     })
 
     test('Ctrl+Shift+1 removes slot 1', async ({ page }) => {
@@ -71,13 +71,13 @@ test.describe('Hotkeys', () => {
       await page.keyboard.press('Control+Alt+1')
       await page.keyboard.press('Control+Alt+2')
       await page.keyboard.press('Control+Shift+1')
-      await expect(page.getByTestId('hotgroup-badge-R-241')).toContainText('⌨ 2')
+      await expect(page.getByTestId('constellation-badge-R-241')).toContainText('⌨ 2')
     })
 
     test('Ctrl+Shift+1 on unassigned slot is no-op', async ({ page }) => {
       await page.getByTestId('canvas-widget-R-241').click()
       await page.keyboard.press('Control+Shift+1') // slot 1 is empty
-      await expect(page.getByTestId('hotgroup-badge-R-241')).not.toBeVisible()
+      await expect(page.getByTestId('constellation-badge-R-241')).not.toBeVisible()
     })
 
     test('Ctrl+1 navigates (zoom-to-fit) to group', async ({ page }) => {
@@ -96,7 +96,7 @@ test.describe('Hotkeys', () => {
     test('pressing 0 works as slot 10', async ({ page }) => {
       await page.getByTestId('canvas-widget-R-241').click()
       await page.keyboard.press('Control+Alt+0')
-      await expect(page.getByTestId('hotgroup-badge-R-241')).toContainText('⌨ 0')
+      await expect(page.getByTestId('constellation-badge-R-241')).toContainText('⌨ 0')
     })
 
   })
@@ -271,7 +271,7 @@ test.describe('Hotkeys', () => {
       const terminalTabBtn = widget.getByRole('button', { name: 'Terminal', exact: true })
       await expect(terminalTabBtn).toBeVisible({ timeout: 3000 })
 
-      // Assign R-241 to hotgroup 1
+      // Assign R-241 to constellation 1
       await page.getByTestId('canvas-widget-R-241').click()
       await page.keyboard.press('Control+1')
 
@@ -279,7 +279,7 @@ test.describe('Hotkeys', () => {
       await page.getByTestId('infinite-canvas').click({ position: { x: 10, y: 10 } })
       await page.waitForTimeout(100)
 
-      // Press 1 to re-select via hotgroup
+      // Press 1 to re-select via constellation
       await page.keyboard.press('1')
       await expect(page.getByTestId('canvas-widget-R-241')).toHaveAttribute('data-selected', 'true')
 
