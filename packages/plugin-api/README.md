@@ -84,6 +84,12 @@ Then restart Tinstar. The Settings → Plugins tab will list your plugin.
 - `api.events.subscribe(channel, handler): Disposable` — subscribe to host SSE events.
 - `api.logger.{debug,info,warn,error}` — plugin-id-prefixed logger.
 - `api.pluginId`, `api.version` — identity fields.
+- `api.canvas.fitWidget(widgetId)` — zoom/pan the canvas to frame a specific widget.
+- `api.hotkeys.onAction(widgetId, handler): Disposable` — receive hotkey action strings (e.g. `'fit-viewport'`) when this widget has focus.
+- `api.theme.accent.{resolve,hexToRgba}` — normalize and alpha-blend accent colors consistent with host chrome.
+- `api.watch.file(sessionId, filePath)` — React hook: live file content from the host's file-watcher SSE channel.
+- `api.watch.image(sessionId, filePath)` — React hook: image-change notifications.
+- `api.constellations` — peer discovery, capability publish/invoke, slot membership, and arrange actions. See [constellations & capabilities](#constellations--capabilities).
 
 ### Known SSE event channels
 
@@ -111,6 +117,56 @@ esbuild src/tinstar-plugin.tsx --bundle --format=esm --platform=browser \
   --external:@tinstar/plugin-api --external:react --external:react-dom \
   --outfile=dist/tinstar-plugin.js
 ```
+
+## Constellations & capabilities
+
+A constellation is a cluster of widgets that move together, share a slot key (1–9), and can discover and invoke each other via capability-based RPC. See the full guide: [`docs/plugins/constellations-and-capabilities.md`](../../docs/plugins/constellations-and-capabilities.md).
+
+## Migrating from V4
+
+### `api.hotgroups` → `api.constellations`
+
+The `api.hotgroups` surface is renamed to `api.constellations`. It is a search-and-replace fix at every call site:
+
+```ts
+// before
+api.hotgroups.useContext()
+api.hotgroups.Badge
+// after
+api.constellations.useContext()
+api.constellations.Badge
+```
+
+`api.constellations.Badge` and `api.constellations.useContext()` keep the same signatures — the rename is backward-compatible at the type level.
+
+### New surfaces on `api.constellations`
+
+The following hooks were added in V5.0 and have no V4 equivalent:
+
+- `useMyNodeId()` — returns this widget's full host node id
+- `useMySlots()` — returns the slot keys (`'1'..'9'`) this widget belongs to
+- `useMySlot()` — returns the primary slot as a number (1–9), or null
+- `usePeers()` — returns `ConstellationPeer[]` for all peers in the same constellation
+- `usePublishCapability()` — returns a `publish(name, handler)` function
+- `useInvokePeerCapability()` — returns an `invoke(peerId, name, args)` function
+- `useFitToMine()` — returns a `fit()` callback that frames this widget's constellation
+- `useTidyMine()` — returns a `tidy()` callback that grid-arranges the constellation
+- `useAssignToSlot()` — returns an `assign(slot)` callback
+- `useLeave()` — returns a `leave()` callback that removes this widget from its constellation
+
+### `apiVersion` bump: `"4"` → `"5"`
+
+Change the `apiVersion` field in your `package.json` `tinstar` block:
+
+```json
+{ "tinstar": { "apiVersion": "5" } }
+```
+
+The host hard-rejects plugins with a mismatched major. Rebuild and reload after updating the manifest.
+
+### Storage key change
+
+The host's internal constellation storage key changed from `tinstar-hotgroups-v2-<spaceId>` to `tinstar-constellations-v1-<spaceId>`. Plugins should never read this key directly — it is host-internal. If you were reading it (you should not have been), migrate to `api.constellations.useMySlots()` / `usePeers()`.
 
 ## License
 

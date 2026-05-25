@@ -145,6 +145,31 @@ These are valid follow-ups but explicitly deferred:
 - API additions land before migrations — old plugin code keeps working until per-plugin migration.
 - Manual smoke after the file-editor migration: open a file-editor widget, edit the watched file, verify content updates + connected dot.
 
+## Postscript — V5.0 constellations growth (2026-05-25)
+
+The `api.constellations` surface expanded significantly during the V5.0 cycle with the Constellations feature. The boundary contract from this ADR was fully preserved throughout:
+
+- No plugin reads host internals — the ESLint rule (`src/plugins/*/src/**` forbids host imports) continued to pass without modification.
+- The vitest plugin-boundary contract test (`src/core/pluginApi/__tests__/boundary.test.ts`) remained green.
+- The capability registry (`src/core/constellationCapabilities`) is host-internal and exposed only through `api.constellations.usePublishCapability` / `useInvokePeerCapability`.
+
+What grew on `api.constellations` relative to what ADR-0002 specified as `api.hotgroups`:
+
+| Added | Notes |
+|---|---|
+| `useMyNodeId()` | Widget's own node id |
+| `useMySlots()` | Slot key strings this widget belongs to |
+| `useMySlot()` | Primary slot as a number, or null |
+| `usePeers()` | Peers in same constellation with their capability list |
+| `usePublishCapability()` | Publish an RPC capability |
+| `useInvokePeerCapability()` | Invoke a peer's capability |
+| `useFitToMine()` | Fit viewport to this constellation |
+| `useTidyMine()` | Tidy-arrange this constellation |
+| `useAssignToSlot()` | Programmatic slot join |
+| `useLeave()` | Self-remove from constellation |
+
+The `Badge` component gained an optional `onLeave` prop (backward compatible — existing callers that omit it are unaffected). The host renamed `api.hotgroups` to `api.constellations`; callers do a search-replace, signatures are unchanged.
+
 ## Implementation plan
 
 See `docs/superpowers/plans/2026-05-23-plugin-api-boundary.md` (gitignored scratch). The plan is structured in four phases:

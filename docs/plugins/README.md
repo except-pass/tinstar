@@ -221,14 +221,126 @@ api.logger.error('oh no', { detail: 42 })  // → console.error('[my-plugin]', '
 
 `(...args: unknown[]) => void` — same shape as `console.*`. Pure pass-through after the pluginId prefix. Browser devtools object inspection still works because args are forwarded as-is, not stringified.
 
-### Out of scope for V5.0
+### Shipped in V5.0
 
-These are deferred to V5.1. If you need them today, drop a note — they're scoped, not blocked:
+Beyond `widgets`, `http`, `events`, and `logger`, these surfaces are live and usable today:
+
+- `api.canvas.fitWidget(widgetId)` — zoom/pan the canvas to frame a specific widget.
+- `api.hotkeys.onAction(widgetId, handler): Disposable` — handle hotkey action strings when a widget has focus.
+- `api.theme.accent.{resolve,hexToRgba}` — accent-color utilities matching host chrome.
+- `api.watch.file(sessionId, filePath)` — React hook: live file content over the host's SSE file-watcher.
+- `api.watch.image(sessionId, filePath)` — React hook: image-change notifications.
+- `api.constellations` — peer discovery, capability publish/invoke, slot membership, and arrange actions. See [Constellations & capabilities](#constellations--capabilities) below.
+
+### Still future (V5.1)
+
+These are deferred. If you need them today, drop a note — they're scoped, not blocked:
 
 - `api.commands.register` — register commands + hotkeys
 - `api.storage.{get,set}` — plugin-scoped server-backed storage
 - `api.panes.register` — pane-shaped chrome contributions
 - React hooks layer (`useSessions`, `useTask`, `useTelemetrySeries`, `useViewport`, `useNats`, `useSelection`)
+
+---
+
+## Constellations & capabilities
+
+A constellation is a cluster of widgets that share a numbered slot (1–9), move together on the canvas, and can discover and RPC into each other through the capability system. Constellations are the primary composition primitive in V5.0: the way a plugin widget finds and talks to the session, file-editor, or other plugin widget it's sitting next to.
+
+For the full narrative, worked examples, and failure-mode reference, see [`docs/plugins/constellations-and-capabilities.md`](constellations-and-capabilities.md).
+
+### Reading your own membership
+
+All `useX()` factories on `api.constellations` are React hooks — call them at component render top-level, not inside event handlers or effects. The closures they return (e.g. `fit()`, `publish()`, `invoke()`) are stable and safe to call from anywhere.
+
+```tsx
+function MyWidget() {
+  const slot  = api.constellations.useMySlot()    // number | null
+  const slots = api.constellations.useMySlots()   // string[] e.g. ['3']
+  const id    = api.constellations.useMyNodeId()  // e.g. 'my-widget-abc'
+
+  return <div>{slot !== null ? `Slot ${slot}` : 'Not in a constellation'}</div>
+}
+```
+
+Use the `Badge` component to render the `⌨ 3` chip that users click to leave a slot:
+
+```tsx
+function MyWidget() {
+  const slots  = api.constellations.useMySlots()
+  const leave  = api.constellations.useLeave()
+  const { slotsForNode } = api.constellations.useContext()
+
+  return (
+    <api.constellations.Badge
+      slots={slotsForNode(myNodeId)}
+      onLeave={(_slot) => leave()}
+    />
+  )
+}
+```
+
+`useContext()` and `Badge` also exist for backward compatibility with pre-V5 `api.hotgroups.*` usage — they are available under `api.constellations.*` with the same signatures.
+
+### Discovering peers
+
+```tsx
+const peers = api.constellations.usePeers()
+// peers: Array<{ id: string; kind: string; capabilities: string[] }>
+```
+
+`usePeers()` returns peers in the same constellation (excluding the calling widget). It re-renders whenever membership or the capability registry changes. If the widget is not in any constellation, it returns `[]`.
+
+### Publishing a capability
+
+```tsx
+const publish = api.constellations.usePublishCapability()
+
+useEffect(() => {
+  return publish('my.capability', async (args) => {
+    // args is whatever the invoker passed
+    return 'result'
+  }).dispose
+}, [publish])
+```
+
+Call `publish` inside a `useEffect`. Return `.dispose` as the cleanup so the capability is unpublished when the widget unmounts or the effect re-runs.
+
+### Invoking a peer's capability
+
+```tsx
+const invoke = api.constellations.useInvokePeerCapability()
+
+async function handleClick() {
+  const result = await invoke(peerId, 'my.capability', { foo: 'bar' })
+}
+```
+
+`invoke` rejects if the peer is not in the same constellation, or if the named capability has not been published.
+
+### Host-published capabilities
+
+Two built-in widget types publish capabilities your plugin can consume:
+
+| Widget | Capability | Args | Returns |
+|---|---|---|---|
+| Run workspace | `session.prompt` | `{ text: string }` | `null` (posts text to the tmux session) |
+| File editor | `file.path` | _(none)_ | The file path string |
+
+### Action triggers
+
+Each returns a stable callback safe to call from event handlers:
+
+- `useFitToMine()` → `fit()` — frame all members of this constellation in the viewport.
+- `useTidyMine()` → `tidy()` — grid-arrange this constellation around its centroid.
+- `useAssignToSlot()` → `assign(slot: number)` — programmatically join a slot (1–9).
+- `useLeave()` → `leave()` — remove this widget from its constellation.
+
+### Trust boundary
+
+- Capability invocations across constellation boundaries are rejected at the registry level.
+- `usePeers()` only returns widgets in your own constellation — there is no cross-constellation discovery.
+- A widget can only `leave()` itself, not remove peers.
 
 ---
 

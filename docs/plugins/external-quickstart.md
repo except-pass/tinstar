@@ -152,7 +152,41 @@ npm run build
 
 Reload Tinstar (V5.0 doesn't hot-reload external plugins — restart the app).
 
+## Using constellations
+
+Constellations let your widget discover and RPC-call other widgets it's been dropped near on the canvas. The quick version:
+
+```tsx
+function MyWidget() {
+  const peers  = api.constellations.usePeers()
+  const invoke = api.constellations.useInvokePeerCapability()
+
+  const sessionPeer = peers.find(p => p.capabilities.includes('session.prompt'))
+
+  if (!sessionPeer) return <div>Drop me next to a session to wire up.</div>
+
+  return (
+    <button onClick={() => invoke(sessionPeer.id, 'session.prompt', { text: 'hello' })}>
+      Send to session
+    </button>
+  )
+}
+```
+
+And to publish a capability from your own widget:
+
+```tsx
+const publish = api.constellations.usePublishCapability()
+useEffect(() => publish('my.capability', async (args) => 'result').dispose, [publish])
+```
+
+Full reference: [`docs/plugins/constellations-and-capabilities.md`](constellations-and-capabilities.md).
+
 ## What's next (V5.1)
+
+**Shipped in V5.0** (beyond `widgets`, `http`, `events`, `logger`): `api.canvas`, `api.hotkeys`, `api.theme`, `api.watch`, `api.constellations` — all available now.
+
+**Still future:**
 
 - `api.commands.register` — register commands + hotkeys
 - `api.storage.{get,set}` — plugin-scoped server-backed storage
