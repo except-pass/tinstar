@@ -1,6 +1,8 @@
 import { useSyncExternalStore, useCallback, useRef } from 'react'
 import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi } from '@tinstar/plugin-api'
 import { usePluginWidgetData } from './usePluginWidgetData'
+import { useDeletePluginWidget } from './useDeletePluginWidget'
+import { useInitialContext } from './useInitialContext'
 import type { PluginRecord } from '../pluginHost/registry'
 import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
 import { apiFetch } from '../../apiClient'
@@ -232,14 +234,10 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
       return usePluginWidgetData<T>()
     },
     useDelete: function useWidgetDeleteBound(): () => Promise<void> {
-      // STUB for Task 7. Task 8 replaces with real implementation.
-      return async () => {
-        throw new Error('api.widget.useDelete: not implemented until Task 8')
-      }
+      return useDeletePluginWidget()
     },
     useInitialContext: function useWidgetInitialContextBound<T>(): T | null {
-      // STUB for Task 7. Task 8 replaces (always returns null in V5.1).
-      return null
+      return useInitialContext<T>()
     },
   }
 
