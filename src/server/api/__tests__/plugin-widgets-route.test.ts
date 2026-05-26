@@ -33,6 +33,45 @@ function makeCtx(root: string): RouteContext {
   return { sessionConfig: cfg, docStore } as unknown as RouteContext
 }
 
+let tmpRoot: string
+let pluginDir: string
+let testCtx: TestCtx
+
+beforeEach(() => {
+  invalidateWidgetRegistryCache()
+  tmpRoot = mkdtempSync(join(tmpdir(), 'tinstar-pw-test-'))
+  pluginDir = join(tmpRoot, 'fixture-plugin')
+  mkdirSync(pluginDir, { recursive: true })
+
+  writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({
+    name: 'fixture-plugin',
+    version: '0.1.0',
+    tinstar: {
+      apiVersion: '5',
+      displayName: 'Fixture',
+      contributes: {
+        widgets: [
+          { type: 'fixture-widget', label: 'Fixture' },
+          { type: 'fixture-singleton', label: 'Fixture singleton', singleton: true },
+        ],
+      },
+    },
+  }))
+
+  writeFileSync(join(tmpRoot, 'plugins.json'), JSON.stringify({
+    disabled: [],
+    external: [{ name: 'fixture-plugin', path: pluginDir }],
+  }))
+
+  testCtx = createTestServer(tmpRoot)
+})
+
+afterEach(async () => {
+  invalidateWidgetRegistryCache()
+  await testCtx.close()
+  rmSync(tmpRoot, { recursive: true, force: true })
+})
+
 interface TestCtx {
   fetch(path: string, init?: RequestInit): Promise<Response>
   activeSpaceId: string
@@ -65,44 +104,6 @@ function createTestServer(root: string): TestCtx {
 }
 
 describe('POST /api/plugin-widgets', () => {
-  let tmpRoot: string
-  let pluginDir: string
-  let testCtx: TestCtx
-
-  beforeEach(() => {
-    invalidateWidgetRegistryCache()
-    tmpRoot = mkdtempSync(join(tmpdir(), 'tinstar-pw-test-'))
-    pluginDir = join(tmpRoot, 'fixture-plugin')
-    mkdirSync(pluginDir, { recursive: true })
-
-    writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({
-      name: 'fixture-plugin',
-      version: '0.1.0',
-      tinstar: {
-        apiVersion: '5',
-        displayName: 'Fixture',
-        contributes: {
-          widgets: [
-            { type: 'fixture-widget', label: 'Fixture' },
-            { type: 'fixture-singleton', label: 'Fixture singleton', singleton: true },
-          ],
-        },
-      },
-    }))
-
-    writeFileSync(join(tmpRoot, 'plugins.json'), JSON.stringify({
-      disabled: [],
-      external: [{ name: 'fixture-plugin', path: pluginDir }],
-    }))
-
-    testCtx = createTestServer(tmpRoot)
-  })
-
-  afterEach(async () => {
-    invalidateWidgetRegistryCache()
-    await testCtx.close()
-    rmSync(tmpRoot, { recursive: true, force: true })
-  })
 
   it('creates an instance and returns it', async () => {
     const res = await testCtx.fetch('/api/plugin-widgets', {
@@ -188,5 +189,75 @@ describe('POST /api/plugin-widgets', () => {
     expect(res.status).toBe(409)
     const body = await res.json() as { error: { message: string } }
     expect(body.error.message).toContain('singleton_violation')
+  })
+})
+
+describe('PATCH /api/plugin-widgets/:id', () => {
+  it('sparse update: position only leaves data untouched', async () => {
+    const created = await testCtx.fetch('/api/plugin-widgets', {
+      method: 'POST',
+      body: JSON.stringify({
+        pluginId: 'fixture-plugin', widgetType: 'fixture-widget',
+        spaceId: testCtx.activeSpaceId,
+        position: { x: 0, y: 0 }, size: { width: 100, height: 100 },
+        data: { keep: 'me' },
+      }),
+    }).then(r => r.json())
+    const id = created.data.id
+
+    const res = await testCtx.fetch(`/api/plugin-widgets/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ position: { x: 50, y: 50 } }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.position).toEqual({ x: 50, y: 50 })
+    expect(body.data.data).toEqual({ keep: 'me' })
+    expect(body.data.updatedAt).not.toBe(created.data.updatedAt)
+  })
+
+  it('data: replaces whole, no deep-merge', async () => {
+    const created = await testCtx.fetch('/api/plugin-widgets', {
+      method: 'POST',
+      body: JSON.stringify({
+        pluginId: 'fixture-plugin', widgetType: 'fixture-widget',
+        spaceId: testCtx.activeSpaceId,
+        position: { x: 0, y: 0 }, size: { width: 100, height: 100 },
+        data: { plan: 'a', taskId: 't1' },
+      }),
+    }).then(r => r.json())
+
+    const res = await testCtx.fetch(`/api/plugin-widgets/${created.data.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ data: { plan: 'b' } }),
+    })
+    const body = await res.json()
+    expect(body.data.data).toEqual({ plan: 'b' })  // taskId NOT preserved
+  })
+
+  it('returns 404 NOT_FOUND for unknown id', async () => {
+    const res = await testCtx.fetch('/api/plugin-widgets/pw-nope', {
+      method: 'PATCH',
+      body: JSON.stringify({ position: { x: 0, y: 0 } }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 413 data_too_large on oversized data', async () => {
+    const created = await testCtx.fetch('/api/plugin-widgets', {
+      method: 'POST',
+      body: JSON.stringify({
+        pluginId: 'fixture-plugin', widgetType: 'fixture-widget',
+        spaceId: testCtx.activeSpaceId,
+        position: { x: 0, y: 0 }, size: { width: 100, height: 100 },
+      }),
+    }).then(r => r.json())
+
+    const big = 'x'.repeat(65537)
+    const res = await testCtx.fetch(`/api/plugin-widgets/${created.data.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ data: { big } }),
+    })
+    expect(res.status).toBe(413)
   })
 })

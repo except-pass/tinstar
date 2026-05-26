@@ -2012,6 +2012,45 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // PATCH /api/plugin-widgets/:id
+  if (method === 'PATCH' && url.startsWith('/api/plugin-widgets/')) {
+    const id = url.slice('/api/plugin-widgets/'.length)
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getAllPluginWidgets().find(p => p.id === id)
+      if (!existing) {
+        fail(res, 'NOT_FOUND', `PluginWidget ${id} not found`)
+        return
+      }
+      const patch = JSON.parse(body) as {
+        position?: { x: number; y: number };
+        size?: { width: number; height: number };
+        data?: unknown;
+      }
+
+      // Size cap on the proposed data
+      if ('data' in patch) {
+        let serialized: string
+        try { serialized = JSON.stringify(patch.data) }
+        catch { fail(res, 'BAD_REQUEST', 'bad_data: not JSON-serializable'); return }
+        if (serialized.length > 65536) {
+          fail(res, 'BAD_REQUEST', 'data_too_large: serialized data exceeds 64KB', { status: 413 })
+          return
+        }
+      }
+
+      const updated: PluginWidgetInstance = {
+        ...existing,
+        ...(patch.position ? { position: patch.position } : {}),
+        ...(patch.size ? { size: patch.size } : {}),
+        ...('data' in patch ? { data: patch.data } : {}),
+        updatedAt: new Date().toISOString(),
+      }
+      ctx.docStore.upsertPluginWidget(id, updated)
+      ok(res, updated)
+    })
+    return true
+  }
+
   // NOTE: GET /api/file-watch SSE endpoint removed — file watching now goes
   // through POST /api/file-watch/subscribe and the main SSE connection.
 
