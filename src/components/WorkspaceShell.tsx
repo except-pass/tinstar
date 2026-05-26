@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, PluginWidgetInstance, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView, findNodeLabel } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
@@ -48,7 +48,7 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
 
 
 function WorkspaceShellInner() {
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, connected } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, pluginWidgets, connected } = useBackendState()
 
   const onboarding = useOnboardingState()
   const forceMarshalOpen = onboarding.active !== null && onboarding.active !== 'connect'
@@ -216,8 +216,28 @@ function WorkspaceShellInner() {
     return map
   }, [natsTrafficWidgets])
 
+  const syntheticPluginWidgetNodes: TreeNode[] = useMemo(
+    () =>
+      pluginWidgets.map(w => ({
+        id: w.id,
+        label: w.widgetType,   // palette has the proper label; using type is fine for V5.1
+        type: w.widgetType,    // matches what the plugin registered via api.widgets.register({ type })
+        entityId: w.id,
+        children: [],
+        runCount: 0,
+        activeCount: 0,
+      })),
+    [pluginWidgets],
+  )
+
+  const pluginWidgetMap = useMemo(() => {
+    const map = new Map<string, PluginWidgetInstance>()
+    for (const w of pluginWidgets) map.set(w.id, w)
+    return map
+  }, [pluginWidgets])
+
   const canvasTree = useMemo(() => {
-    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticNatsTrafficNodes]
+    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticNatsTrafficNodes, ...syntheticPluginWidgetNodes]
     if (allSynthetic.length === 0) return sidebarTree
 
     // Map taskNodeId → synthetic nodes to nest inside it
@@ -267,6 +287,11 @@ function WorkspaceShellInner() {
       orphans.push(node)
     }
 
+    // Add plugin widgets as orphans (top-level, no entity anchor)
+    for (const node of syntheticPluginWidgetNodes) {
+      orphans.push(node)
+    }
+
     if (byTaskNode.size === 0) return [...sidebarTree, ...orphans]
 
     function inject(nodes: TreeNode[]): TreeNode[] {
@@ -279,7 +304,7 @@ function WorkspaceShellInner() {
     }
 
     return [...inject(sidebarTree), ...orphans]
-  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticNatsTrafficNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
+  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticNatsTrafficNodes, syntheticPluginWidgetNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
 
   // Canvas view: drop run nodes the user has hidden via the eyeball. The sidebar
   // still shows them (dimmed) so the user can re-show them.
@@ -892,6 +917,7 @@ function WorkspaceShellInner() {
                     browserWidgetMap={browserWidgetMap}
                     imageWidgetMap={imageWidgetMap}
                     natsTrafficWidgetMap={natsTrafficWidgetMap}
+                    pluginWidgetMap={pluginWidgetMap}
                     runMap={runMap}
                     focusRunId={focusRunId}
                     activeSpaceId={activeSpaceId}
@@ -905,6 +931,7 @@ function WorkspaceShellInner() {
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
                     onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
                     onNatsWidgetCreated={(widget) => addOptimistic('natsTrafficWidget', widget)}
+                    onPluginWidgetCreated={(instance) => addOptimistic('pluginWidget', instance)}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
                     arrangeSwimlanesRef={arrangeSwimlanesRef}

@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, PluginWidgetInstance, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { findNodeLabel } from '../domain/view-models'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
@@ -31,6 +31,8 @@ interface Props {
   browserWidgetMap?: Map<string, BrowserWidget>
   imageWidgetMap?: Map<string, ImageWidget>
   natsTrafficWidgetMap?: Map<string, NatsTrafficWidget>
+  pluginWidgetMap?: Map<string, PluginWidgetInstance>
+  onPluginWidgetCreated?: (instance: PluginWidgetInstance) => void
   onImageWidgetCreated?: (widget: ImageWidget) => void
   focusRunId: string | null
   activeSpaceId?: string
@@ -168,7 +170,7 @@ const MARQUEE_THRESHOLD = 5
 // Snap-zone snap distance (canvas units)
 const SNAP_DISTANCE = 60
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -1214,6 +1216,40 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return
       }
 
+      const rawPluginWidget = e.dataTransfer.getData('application/tinstar-plugin-widget')
+      if (rawPluginWidget) {
+        const { pluginId, widgetType, defaultSize } = JSON.parse(rawPluginWidget) as {
+          pluginId: string
+          widgetType: string
+          defaultSize: { width: number; height: number }
+        }
+        const spawnLayout = { x: dropX, y: dropY, width: defaultSize.width, height: defaultSize.height }
+        const res = await apiFetch('/api/plugin-widgets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pluginId,
+            widgetType,
+            spaceId: activeSpaceId,
+            position: { x: dropX, y: dropY },
+            size: defaultSize,
+            data: null,
+          }),
+        })
+        const resJson = await res.json() as { ok: boolean; data?: PluginWidgetInstance }
+        if (!resJson.ok || !resJson.data) {
+          // Server validation rejected the spawn (unknown widget type, singleton violation, etc.).
+          // The palette UI should reflect this through the SSE delta path for singletons; for
+          // unknown types, the next palette load will exclude the entry. Logging only for now.
+          // eslint-disable-next-line no-console
+          console.warn('[canvas] plugin-widget spawn rejected:', resJson)
+          return
+        }
+        insertLayout(resJson.data.id, spawnLayout)
+        onPluginWidgetCreated?.(resJson.data)
+        return
+      }
+
       const rawBrowser = e.dataTransfer.getData('application/tinstar-browser')
       if (rawBrowser) {
         const { sessionId } = JSON.parse(rawBrowser) as { sessionId: string }
@@ -1283,7 +1319,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return
       }
     },
-    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated],
+    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated],
   )
 
   // Recursive render: groups render behind their children (natural DOM order)
@@ -1308,7 +1344,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
               ? imageWidgetMap.get(node.entityId)
               : node.type === 'nats-traffic'
                 ? natsTrafficWidgetMap.get(node.entityId)
-                : ({
+                : pluginWidgetMap.has(node.entityId)
+                  // Plugin widget: pass the instance as data. The widget's useData hook
+                  // reads live state from the singleton SSE store; this prop is a
+                  // convenience snapshot the component may optionally reference.
+                  ? pluginWidgetMap.get(node.entityId)
+                  : ({
               node,
               depth: depthMapRef.current.get(node.id) ?? 0,
               onShrinkToFit: shrinkNode,
@@ -1335,7 +1376,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}
-        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' || node.type === 'nats-traffic' ? handleDoubleClickZoom : undefined)}
+        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' || node.type === 'nats-traffic' || pluginWidgetMap.has(node.entityId) ? handleDoubleClickZoom : undefined)}
         onMove={moveHandler}
         onResize={resizeHandler}
         onDragStart={node.type === 'run' ? handleWidgetDragStart : undefined}
