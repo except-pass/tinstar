@@ -20,7 +20,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 
@@ -87,6 +87,7 @@ export class DocumentStore {
   private imageWidgets = new Map<string, ImageWidget>()
   private natsTrafficWidgets = new Map<string, NatsTrafficWidget>()
   private topicMetadata = new Map<string, TopicMetadata>()
+  private pluginWidgets = new Map<string, PluginWidgetInstance>()
 
   activeSpaceId: string = ''
 
@@ -124,6 +125,7 @@ export class DocumentStore {
       if (data.browserWidgets) for (const w of data.browserWidgets) this.browserWidgets.set(w.id, w)
       if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
       if (data.natsTrafficWidgets) for (const w of data.natsTrafficWidgets) this.natsTrafficWidgets.set(w.id, w)
+      if (data.pluginWidgets) for (const w of data.pluginWidgets) this.pluginWidgets.set(w.id, w)
       if (data.topicMetadata) for (const m of data.topicMetadata) this.topicMetadata.set(m.subject, m)
     } catch {
       // No file or corrupt — start fresh
@@ -412,6 +414,22 @@ export class DocumentStore {
     return [...this.browserWidgets.values()]
   }
 
+  // --- PluginWidgets ---
+
+  upsertPluginWidget(id: string, data: PluginWidgetInstance): void {
+    this.pluginWidgets.set(id, data)
+    this.changes.emit('change', { entity: 'pluginWidget', id, data })
+  }
+
+  deletePluginWidget(id: string): void {
+    this.pluginWidgets.delete(id)
+    this.changes.emit('change', { entity: 'pluginWidget', id, data: null })
+  }
+
+  getAllPluginWidgets(): PluginWidgetInstance[] {
+    return [...this.pluginWidgets.values()]
+  }
+
   // --- Image Widgets ---
 
   upsertImageWidget(id: string, data: ImageWidget): void {
@@ -483,6 +501,7 @@ export class DocumentStore {
       browserWidgets: this.getAllBrowserWidgets().filter(inSpace),
       imageWidgets: this.getAllImageWidgets().filter(inSpace),
       natsTrafficWidgets: this.getAllNatsTrafficWidgets().filter(inSpace),
+      pluginWidgets: this.getAllPluginWidgets().filter(inSpace),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -502,6 +521,7 @@ export class DocumentStore {
       browserWidgets: this.getAllBrowserWidgets(),
       imageWidgets: this.getAllImageWidgets(),
       natsTrafficWidgets: this.getAllNatsTrafficWidgets(),
+      pluginWidgets: this.getAllPluginWidgets(),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -519,6 +539,7 @@ export class DocumentStore {
     for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) this.browserWidgets.delete(id)
     for (const [id, e] of this.imageWidgets) if (e.spaceId === spaceId) this.imageWidgets.delete(id)
     for (const [id, e] of this.natsTrafficWidgets) if (e.spaceId === spaceId) this.natsTrafficWidgets.delete(id)
+    for (const [id, e] of this.pluginWidgets) if (e.spaceId === spaceId) this.pluginWidgets.delete(id)
     this.changes.emit('change', { entity: 'all', id: '*', data: null })
   }
 

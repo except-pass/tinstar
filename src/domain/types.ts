@@ -229,6 +229,18 @@ export interface NatsTrafficWidget {
   color?: string
 }
 
+export interface PluginWidgetInstance {
+  id: string                                                    // host-generated: `pw-${shortId}`
+  pluginId: string                                              // matches manifest.name
+  widgetType: string                                            // matches manifest.contributes.widgets[].type
+  spaceId: string
+  position: { x: number; y: number }
+  size: { width: number; height: number }
+  data: unknown                                                 // plugin-controlled; capped at 64KB serialized
+  createdAt: string                                             // ISO 8601
+  updatedAt: string                                             // ISO 8601
+}
+
 export interface TopicMetadata {
   subject: string
   name?: string
