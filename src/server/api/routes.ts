@@ -2051,6 +2051,29 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // DELETE /api/plugin-widgets/:id
+  if (method === 'DELETE' && url.startsWith('/api/plugin-widgets/')) {
+    const id = url.slice('/api/plugin-widgets/'.length)
+    const existing = ctx.docStore.getAllPluginWidgets().find(p => p.id === id)
+    if (!existing) {
+      fail(res, 'NOT_FOUND', `PluginWidget ${id} not found`)
+      return true
+    }
+    ctx.docStore.deletePluginWidget(id)
+    ok(res, null)
+    return true
+  }
+
+  // GET /api/plugin-widgets and /api/plugin-widgets?spaceId=...
+  if (method === 'GET' && (url === '/api/plugin-widgets' || url.startsWith('/api/plugin-widgets?'))) {
+    const parsedUrl = new URL(url, 'http://placeholder')
+    const spaceId = parsedUrl.searchParams.get('spaceId')
+    const all = ctx.docStore.getAllPluginWidgets()
+    const filtered = spaceId ? all.filter(p => p.spaceId === spaceId) : all
+    ok(res, filtered)
+    return true
+  }
+
   // NOTE: GET /api/file-watch SSE endpoint removed — file watching now goes
   // through POST /api/file-watch/subscribe and the main SSE connection.
 

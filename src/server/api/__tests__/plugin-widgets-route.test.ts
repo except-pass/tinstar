@@ -261,3 +261,62 @@ describe('PATCH /api/plugin-widgets/:id', () => {
     expect(res.status).toBe(413)
   })
 })
+
+describe('DELETE /api/plugin-widgets/:id', () => {
+  it('removes the instance', async () => {
+    const created = await testCtx.fetch('/api/plugin-widgets', {
+      method: 'POST',
+      body: JSON.stringify({
+        pluginId: 'fixture-plugin', widgetType: 'fixture-widget',
+        spaceId: testCtx.activeSpaceId,
+        position: { x: 0, y: 0 }, size: { width: 100, height: 100 },
+      }),
+    }).then(r => r.json())
+
+    const del = await testCtx.fetch(`/api/plugin-widgets/${created.data.id}`, { method: 'DELETE' })
+    expect(del.status).toBe(200)
+    expect((await del.json()).ok).toBe(true)
+
+    const list = await testCtx.fetch(`/api/plugin-widgets?spaceId=${testCtx.activeSpaceId}`).then(r => r.json())
+    expect(list.data).toEqual([])
+  })
+
+  it('returns 404 for unknown id', async () => {
+    const res = await testCtx.fetch('/api/plugin-widgets/pw-nope', { method: 'DELETE' })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /api/plugin-widgets', () => {
+  it('returns only instances in the queried space when spaceId is provided', async () => {
+    await testCtx.fetch('/api/plugin-widgets', {
+      method: 'POST',
+      body: JSON.stringify({
+        pluginId: 'fixture-plugin', widgetType: 'fixture-widget',
+        spaceId: testCtx.activeSpaceId,
+        position: { x: 0, y: 0 }, size: { width: 100, height: 100 },
+      }),
+    })
+    const list = await testCtx.fetch(`/api/plugin-widgets?spaceId=${testCtx.activeSpaceId}`).then(r => r.json())
+    expect(list.data).toHaveLength(1)
+    expect(list.data[0].spaceId).toBe(testCtx.activeSpaceId)
+  })
+
+  it('returns empty array for an empty space', async () => {
+    const list = await testCtx.fetch(`/api/plugin-widgets?spaceId=spc-other`).then(r => r.json())
+    expect(list.data).toEqual([])
+  })
+
+  it('returns all instances when spaceId is omitted', async () => {
+    await testCtx.fetch('/api/plugin-widgets', {
+      method: 'POST',
+      body: JSON.stringify({
+        pluginId: 'fixture-plugin', widgetType: 'fixture-widget',
+        spaceId: testCtx.activeSpaceId,
+        position: { x: 0, y: 0 }, size: { width: 100, height: 100 },
+      }),
+    })
+    const list = await testCtx.fetch(`/api/plugin-widgets`).then(r => r.json())
+    expect(list.data.length).toBeGreaterThanOrEqual(1)
+  })
+})
