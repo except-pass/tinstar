@@ -2064,6 +2064,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // GET /api/plugin-widgets/registry — palette UI lists available widget types
+  if (method === 'GET' && url === '/api/plugin-widgets/registry') {
+    const configRoot = ctx.sessionConfig?.dirs.root
+    if (!configRoot) {
+      ok(res, [])
+      return true
+    }
+    ok(res, resolveWidgetRegistry(configRoot))
+    return true
+  }
+
   // GET /api/plugin-widgets and /api/plugin-widgets?spaceId=...
   if (method === 'GET' && (url === '/api/plugin-widgets' || url.startsWith('/api/plugin-widgets?'))) {
     const parsedUrl = new URL(url, 'http://placeholder')

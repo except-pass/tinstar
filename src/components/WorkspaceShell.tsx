@@ -27,6 +27,7 @@ import { OnboardingCanvas } from './OnboardingCanvas'
 import { apiFetch } from '../apiClient'
 import { useOnboardingState } from '../hooks/useOnboardingState'
 import { PluginFailedBanner } from './PluginFailedBanner'
+import { WidgetsPalette } from './WidgetsPalette/WidgetsPalette'
 import { useConfig, useConfigPatch } from '../context/ConfigContext'
 
 
@@ -623,6 +624,15 @@ function WorkspaceShellInner() {
     return () => { deregisterActionHandler(id) }
   }, [selectedFocusNode])
 
+  // Open settings dialog when the WidgetsPalette "Open Settings → Plugins" link fires
+  useEffect(() => {
+    function onOpenSettings() {
+      setShowSettings(true)
+    }
+    window.addEventListener('tinstar:open-settings', onOpenSettings)
+    return () => window.removeEventListener('tinstar:open-settings', onOpenSettings)
+  }, [])
+
   useContextRouter({
     path,
     chordState,
@@ -862,6 +872,7 @@ function WorkspaceShellInner() {
                         hiddenRunIds={hiddenRunIds}
                         onToggleRunHidden={toggleRunHidden}
                       />
+                      <WidgetsPalette />
                     </div>
                     <div
                       className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
