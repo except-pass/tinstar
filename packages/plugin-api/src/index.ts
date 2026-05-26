@@ -206,6 +206,26 @@ export interface PluginConstellationsApi {
   useLeave(): () => void
 }
 
+/** Per-widget host services available inside a plugin widget's React
+ *  component. All hooks must be called at the top of the component
+ *  (standard React rules). They read the host's per-widget context, so
+ *  they only work inside a widget the host has mounted via the widget
+ *  shell — calling them outside that shell throws. */
+export interface PluginWidgetApi {
+  /** React hook: returns `[data, setData]` for this widget's
+   *  per-instance `data` blob. The setter PATCHes the host with a 250ms
+   *  debounce; remote updates (e.g., another tab) re-render the caller
+   *  via the host's SSE delta stream. */
+  useData<T>(): [T | null, (next: T) => void]
+  /** React hook: returns a stable callback that DELETEs this widget
+   *  instance from the host. */
+  useDelete(): () => Promise<void>
+  /** React hook: returns the initial-context blob the spawn drag
+   *  carried, or null. In V5.1 always null — reserved for the eventual
+   *  `spawn: 'palette+context'` migration. */
+  useInitialContext<T>(): T | null
+}
+
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */
 export interface TinstarPluginAPI {
   readonly pluginId: string
@@ -222,6 +242,7 @@ export interface TinstarPluginAPI {
   watch: PluginWatchApi
   theme: PluginThemeApi
   logger: PluginLogger
+  widget: PluginWidgetApi
 }
 
 /** The shape of a plugin module's default export (or named `activate` export).
