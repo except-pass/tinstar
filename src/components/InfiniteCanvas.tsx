@@ -12,6 +12,7 @@ import { useConstellationContext } from '../hotkeys/ConstellationContext'
 import type { ConstellationSlot } from '../hooks/useConstellations'
 import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
+import { PluginWidgetDisabledPlaceholder } from './PluginWidgetDisabledPlaceholder'
 import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
 import { EV } from '../lib/windowEvents'
@@ -1327,6 +1328,33 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const widgetType = toWidgetType(node.type)
     const reg = getWidgetComponent(widgetType)
     if (!reg) {
+      // If this is a plugin widget whose type is no longer registered (plugin disabled,
+      // uninstalled, or type renamed), render a host-owned placeholder instead of crashing.
+      if (pluginWidgetMap.has(node.entityId)) {
+        const instance = pluginWidgetMap.get(node.entityId)!
+        const layout = layouts.get(node.id)
+        if (!layout) return null
+        return (
+          <CanvasWidgetShell
+            key={node.id}
+            registration={{ type: node.type, component: () => <PluginWidgetDisabledPlaceholder instance={instance} reason="unknown-type" />, isContainer: false }}
+            nodeId={node.id}
+            data={instance}
+            layout={layout}
+            zoom={camera.zoom}
+            isSelected={isSelected(node.id)}
+            isFocused={focusedWidgetId === node.id}
+            isSpawning={spawnedNodeIds.has(node.id)}
+            spawnColor={undefined}
+            isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
+            spaceHeldRef={spaceHeld}
+            onSelect={handleSelect}
+            onDoubleClickZoom={handleDoubleClickZoom}
+            onMove={handleMultiMove}
+            onResize={updateRunSize}
+          />
+        )
+      }
       console.warn(`No widget registered for type: ${node.type}`)
       return null
     }

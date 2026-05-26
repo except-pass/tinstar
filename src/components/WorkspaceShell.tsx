@@ -448,6 +448,12 @@ function WorkspaceShellInner() {
   }, [])
 
   const handleDelete = useCallback((entityId: string, type: GroupingDimension | string) => {
+    if (pluginWidgetMap.has(entityId)) {
+      apiFetch(`/api/plugin-widgets/${entityId}`, { method: 'DELETE' }).catch(err => {
+        console.error('[plugin-widget] delete failed:', err)
+      })
+      return
+    }
     if (type === 'run') {
       apiFetch(`/api/sessions/${entityId}`, { method: 'DELETE' })
       return
@@ -477,7 +483,7 @@ function WorkspaceShellInner() {
     const endpoint = endpointMap[type]
     if (!endpoint) return
     fetch(`${endpoint}/${entityId}`, { method: 'DELETE' })
-  }, [])
+  }, [pluginWidgetMap])
 
   const handleAdd = useCallback((parentId: string | null, type: GroupingDimension | 'run') => {
     if (type === 'run') return
