@@ -58,6 +58,8 @@ import type { SlashUsage } from '../sessions/slashUsage'
 import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
+import { resolveWidgetRegistry } from './pluginWidgetRegistry'
+import type { PluginWidgetInstance } from '../../domain/types'
 
 function currentCorsAllowlist(): string[] {
   return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
@@ -1936,6 +1938,77 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
     ctx.docStore.deleteBrowserWidget(id)
     ok(res, null)
+    return true
+  }
+
+  // POST /api/plugin-widgets
+  if (method === 'POST' && url === '/api/plugin-widgets') {
+    readBody(req).then(body => {
+      const parsed = JSON.parse(body) as {
+        pluginId?: string; widgetType?: string; spaceId?: string;
+        position?: { x: number; y: number };
+        size?: { width: number; height: number };
+        data?: unknown;
+      }
+      const { pluginId, widgetType, spaceId, position, size, data } = parsed
+
+      if (!pluginId || !widgetType || !spaceId || !position || !size) {
+        fail(res, 'INVALID_PARAMS', 'pluginId, widgetType, spaceId, position, size all required')
+        return
+      }
+
+      const configRoot = ctx.sessionConfig?.dirs.root
+      if (!configRoot) {
+        fail(res, 'CONFIG_UNAVAILABLE', 'configRoot unavailable')
+        return
+      }
+      const registry = resolveWidgetRegistry(configRoot)
+      const reg = registry.find(r => r.pluginId === pluginId && r.widgetType === widgetType)
+      if (!reg) {
+        fail(res, 'CONFLICT', `unknown_widget_type: ${pluginId}/${widgetType}`)
+        return
+      }
+
+      if (!ctx.docStore.getAllSpaces().some(s => s.id === spaceId)) {
+        fail(res, 'NOT_FOUND', `unknown_space: ${spaceId}`)
+        return
+      }
+
+      if (data !== undefined) {
+        let serialized: string
+        try { serialized = JSON.stringify(data) }
+        catch { fail(res, 'BAD_REQUEST', 'bad_data: not JSON-serializable'); return }
+        if (serialized.length > 65536) {
+          fail(res, 'BAD_REQUEST', 'data_too_large: serialized data exceeds 64KB', { status: 413 })
+          return
+        }
+      }
+
+      if (reg.singleton) {
+        const existing = ctx.docStore.getAllPluginWidgets().find(
+          p => p.pluginId === pluginId && p.widgetType === widgetType && p.spaceId === spaceId,
+        )
+        if (existing) {
+          fail(res, 'CONFLICT', `singleton_violation: existing instance id=${existing.id}`)
+          return
+        }
+      }
+
+      const now = new Date().toISOString()
+      const instance: PluginWidgetInstance = {
+        id: shortId('pw'),
+        pluginId,
+        widgetType,
+        spaceId,
+        position,
+        size,
+        data: data ?? null,
+        createdAt: now,
+        updatedAt: now,
+      }
+      ctx.docStore.upsertPluginWidget(instance.id, instance)
+      ok(res, instance)
+    })
     return true
   }
 
