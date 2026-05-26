@@ -28,6 +28,7 @@ import { apiFetch } from '../apiClient'
 import { useOnboardingState } from '../hooks/useOnboardingState'
 import { PluginFailedBanner } from './PluginFailedBanner'
 import { WidgetsPalette } from './WidgetsPalette/WidgetsPalette'
+import { PaletteDragGhost } from './WidgetsPalette/PaletteDragGhost'
 import { useConfig, useConfigPatch } from '../context/ConfigContext'
 
 
@@ -937,6 +938,7 @@ function WorkspaceShellInner() {
                     arrangeSwimlanesRef={arrangeSwimlanesRef}
                     forceMarshalOpen={forceMarshalOpen}
                   />
+                  <PaletteDragGhost />
                 </div>
 
               {createDialog && (
