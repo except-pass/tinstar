@@ -47,23 +47,16 @@ export function resolveWidgetRegistry(configRoot: string): ResolvedWidgetType[] 
 
     const widgets = parsed.manifest.contributes?.widgets ?? []
     for (const w of widgets) {
-      // Task 6 adds typed singleton/spawn/description/icon; until then, read via cast.
-      const wExt = w as typeof w & {
-        description?: string
-        icon?: string
-        singleton?: boolean
-        spawn?: 'palette' | 'palette+context'
-      }
       out.push({
         pluginId: parsed.name,
         pluginDisplayName: parsed.manifest.displayName,
         widgetType: w.type,
         label: w.label,
-        description: wExt.description,
-        icon: wExt.icon,
+        description: w.description,
+        icon: w.icon,
         defaultSize: w.defaultSize,
-        singleton: wExt.singleton === true,
-        spawn: wExt.spawn ?? 'palette',
+        singleton: w.singleton === true,
+        spawn: w.spawn ?? 'palette',
       })
     }
   }

@@ -245,6 +245,16 @@ export interface PluginManifest {
       type: string
       label: string
       defaultSize?: { width: number; height: number }
+      /** Free-form description shown in the WIDGETS palette. */
+      description?: string
+      /** Path to an SVG icon, relative to the plugin's package.json. */
+      icon?: string
+      /** If true, host rejects spawning a second instance per space. */
+      singleton?: boolean
+      /** 'palette' (default) — draggable in the WIDGETS sidebar.
+       *  'palette+context' — reserved for entity-drag shortcuts; in V5.1
+       *  the palette entry renders greyed and non-draggable. */
+      spawn?: 'palette' | 'palette+context'
     }>
   }
   permissions?: string[]
