@@ -245,6 +245,17 @@ Beyond `widgets`, `http`, `events`, and `logger`, these surfaces are live and us
 - `api.widget.useData<T>()` — React hook returning `[data, setData]` for this widget instance's persistent state. The setter debounces 250ms and PATCHes the host; SSE deltas keep the value fresh across tabs.
 - `api.widget.useDelete()` — returns a stable callback that DELETEs this widget's instance.
 - `api.widget.useInitialContext<T>()` — returns the spawn-drag context blob, or `null` for palette spawns. Reserved for `spawn: 'palette+context'` in V5.2+; always `null` in V5.1.
+- `api.widget.useAttention()` — React hook returning `[attention, setAttention]` for this widget's current attention signal. Plugins call `setAttention({ level, reason })` to surface the widget in the workspace **Inbox** view; pass `null` to clear. `level` is `'urgent' | 'attention' | 'info'`. `reason` is a short headline (≈80 chars; longer is truncated by the UI). The host server-stamps `setAt`. Identical re-sets (same level + reason) are no-ops and do not bump the row back to "unread". Attention is auto-purged when the widget instance is deleted.
+
+  ```tsx
+  function MyWidget() {
+    const [, setAttention] = api.widget.useAttention()
+    // when something needs the user's eyes:
+    setAttention({ level: 'urgent', reason: 'Build failed: 3 tests red' })
+    // when resolved:
+    setAttention(null)
+  }
+  ```
 - `api.constellations` — peer discovery, capability publish/invoke, slot membership, and arrange actions. See [Constellations & capabilities](#constellations--capabilities) below.
 
 ### Still future (V5.1)
