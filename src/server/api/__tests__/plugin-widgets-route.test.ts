@@ -260,6 +260,64 @@ describe('PATCH /api/plugin-widgets/:id', () => {
     })
     expect(res.status).toBe(413)
   })
+
+  it('attention: { level, reason } is accepted and server-stamps setAt', async () => {
+    const created = await testCtx.fetch('/api/plugin-widgets', {
+      method: 'POST',
+      body: JSON.stringify({
+        pluginId: 'fixture-plugin', widgetType: 'fixture-widget',
+        spaceId: testCtx.activeSpaceId,
+        position: { x: 0, y: 0 }, size: { width: 100, height: 100 },
+      }),
+    }).then(r => r.json())
+    const res = await testCtx.fetch(`/api/plugin-widgets/${created.data.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ attention: { level: 'urgent', reason: 'Build failed' } }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.attention.level).toBe('urgent')
+    expect(body.data.attention.reason).toBe('Build failed')
+    expect(typeof body.data.attention.setAt).toBe('string')
+  })
+
+  it('attention: null clears existing attention', async () => {
+    const created = await testCtx.fetch('/api/plugin-widgets', {
+      method: 'POST',
+      body: JSON.stringify({
+        pluginId: 'fixture-plugin', widgetType: 'fixture-widget',
+        spaceId: testCtx.activeSpaceId,
+        position: { x: 0, y: 0 }, size: { width: 100, height: 100 },
+      }),
+    }).then(r => r.json())
+    await testCtx.fetch(`/api/plugin-widgets/${created.data.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ attention: { level: 'urgent', reason: 'x' } }),
+    })
+    const res = await testCtx.fetch(`/api/plugin-widgets/${created.data.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ attention: null }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.attention).toBeUndefined()
+  })
+
+  it('attention with unknown level returns 400', async () => {
+    const created = await testCtx.fetch('/api/plugin-widgets', {
+      method: 'POST',
+      body: JSON.stringify({
+        pluginId: 'fixture-plugin', widgetType: 'fixture-widget',
+        spaceId: testCtx.activeSpaceId,
+        position: { x: 0, y: 0 }, size: { width: 100, height: 100 },
+      }),
+    }).then(r => r.json())
+    const res = await testCtx.fetch(`/api/plugin-widgets/${created.data.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ attention: { level: 'critical', reason: 'x' } }),
+    })
+    expect(res.status).toBe(400)
+  })
 })
 
 describe('DELETE /api/plugin-widgets/:id', () => {

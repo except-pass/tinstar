@@ -2025,6 +2025,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         position?: { x: number; y: number };
         size?: { width: number; height: number };
         data?: unknown;
+        attention?: { level: string; reason: string } | null;
       }
 
       // Size cap on the proposed data
@@ -2038,8 +2039,36 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
       }
 
+      // Attention handling — validate and apply, then strip from the path the data-update takes.
+      let attentionApplied = false
+      if ('attention' in patch) {
+        const attn = patch.attention
+        if (attn === null) {
+          ctx.docStore.setPluginWidgetAttention(id, null)
+          attentionApplied = true
+        } else if (
+          attn && typeof attn === 'object'
+          && (attn.level === 'urgent' || attn.level === 'attention' || attn.level === 'info')
+          && typeof attn.reason === 'string'
+        ) {
+          ctx.docStore.setPluginWidgetAttention(id, {
+            level: attn.level,
+            reason: attn.reason.slice(0, 200),
+            setAt: new Date().toISOString(),
+          })
+          attentionApplied = true
+        } else {
+          fail(res, 'BAD_REQUEST', 'invalid_attention: shape must be { level: urgent|attention|info, reason: string } or null')
+          return
+        }
+      }
+
+      const baseline = attentionApplied
+        ? ctx.docStore.getAllPluginWidgets().find(p => p.id === id)!
+        : existing
+
       const updated: PluginWidgetInstance = {
-        ...existing,
+        ...baseline,
         ...(patch.position ? { position: patch.position } : {}),
         ...(patch.size ? { size: patch.size } : {}),
         ...('data' in patch ? { data: patch.data } : {}),
