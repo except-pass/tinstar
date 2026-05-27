@@ -3,6 +3,7 @@ import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, Co
 import { usePluginWidgetData } from './usePluginWidgetData'
 import { useDeletePluginWidget } from './useDeletePluginWidget'
 import { useInitialContext } from './useInitialContext'
+import { useAttention } from './useAttention'
 import type { PluginRecord } from '../pluginHost/registry'
 import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
 import { apiFetch } from '../../apiClient'
@@ -238,6 +239,9 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     },
     useInitialContext: function useWidgetInitialContextBound<T>(): T | null {
       return useInitialContext<T>()
+    },
+    useAttention: function useWidgetAttentionBound() {
+      return useAttention()
     },
   }
 
