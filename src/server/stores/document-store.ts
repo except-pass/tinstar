@@ -20,9 +20,27 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance, AttentionState } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
+
+/** Translate a run's status into a default attention signal.
+ *  Returns null when the inbox shouldn't surface the run. */
+function attentionForRunStatus(status: SessionStatus): AttentionState | null {
+  const now = new Date().toISOString()
+  switch (status) {
+    case 'needs_attention':
+      return { level: 'urgent', reason: 'Needs your attention', setAt: now }
+    case 'stopped':
+      return { level: 'info', reason: 'Run stopped', setAt: now }
+    case 'creating':
+    case 'running':
+    case 'idle':
+      return null
+  }
+}
+
+export { attentionForRunStatus }
 
 function runShallowEqual(a: Run, b: Run): boolean {
   if (a === b) return true
@@ -354,6 +372,14 @@ export class DocumentStore {
     if (run.status === status) return
     run.status = status
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
+    // Derive attention from the new status. Skip the setRunAttention call
+    // when both prior attention and mapped attention are absent — otherwise
+    // setRunAttention would emit a redundant change event (its dedupe guard
+    // only fires when both sides are non-null).
+    const mapped = attentionForRunStatus(status)
+    if (mapped !== null || run.attention !== undefined) {
+      this.setRunAttention(runId, mapped)
+    }
   }
 
 
