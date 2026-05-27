@@ -20,7 +20,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance, AttentionState } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 
@@ -419,6 +419,36 @@ export class DocumentStore {
   upsertPluginWidget(id: string, data: PluginWidgetInstance): void {
     this.pluginWidgets.set(id, data)
     this.changes.emit('change', { entity: 'pluginWidget', id, data })
+  }
+
+  setPluginWidgetAttention(id: string, state: AttentionState | null): void {
+    const existing = this.pluginWidgets.get(id)
+    if (!existing) return
+    if (state && existing.attention
+        && existing.attention.level === state.level
+        && existing.attention.reason === state.reason) {
+      return
+    }
+    const next = state === null
+      ? { ...existing, attention: undefined }
+      : { ...existing, attention: state, updatedAt: state.setAt }
+    this.pluginWidgets.set(id, next)
+    this.changes.emit('change', { entity: 'pluginWidget', id, data: next })
+  }
+
+  setRunAttention(runId: string, state: AttentionState | null): void {
+    const existing = this.runs.get(runId)
+    if (!existing) return
+    if (state && existing.attention
+        && existing.attention.level === state.level
+        && existing.attention.reason === state.reason) {
+      return
+    }
+    const next: typeof existing = state === null
+      ? { ...existing, attention: undefined }
+      : { ...existing, attention: state }
+    this.runs.set(runId, next)
+    this.changes.emit('change', { entity: 'run', id: runId, data: next })
   }
 
   deletePluginWidget(id: string): void {
