@@ -1,9 +1,10 @@
-// test-fixtures/plugin-widget-fixture/src/index.tsx
+// src/index.tsx
 import React from "react";
 function makeFixtureWidget(api) {
   return function FixtureWidget() {
     const [data, setData] = api.widget.useData();
     const deleteMe = api.widget.useDelete();
+    const [, setAttention] = api.widget.useAttention();
     const counter = data?.counter ?? 0;
     return /* @__PURE__ */ React.createElement("div", { "data-testid": "fixture-widget", style: {
       padding: 12,
@@ -13,7 +14,7 @@ function makeFixtureWidget(api) {
       display: "flex",
       flexDirection: "column",
       gap: 8
-    } }, /* @__PURE__ */ React.createElement("div", { "data-testid": "fixture-counter", style: { fontSize: 20 } }, counter), /* @__PURE__ */ React.createElement("button", { "data-testid": "fixture-increment", onClick: () => setData({ counter: counter + 1 }) }, "+1"), /* @__PURE__ */ React.createElement("button", { "data-testid": "fixture-delete", onClick: () => deleteMe() }, "delete"));
+    } }, /* @__PURE__ */ React.createElement("div", { "data-testid": "fixture-counter", style: { fontSize: 20 } }, counter), /* @__PURE__ */ React.createElement("button", { "data-testid": "fixture-increment", onClick: () => setData({ counter: counter + 1 }) }, "+1"), /* @__PURE__ */ React.createElement("button", { "data-testid": "fixture-delete", onClick: () => deleteMe() }, "delete"), /* @__PURE__ */ React.createElement("button", { "data-testid": "fixture-mark-urgent", onClick: () => setAttention({ level: "urgent", reason: "Fixture urgent" }) }, "mark urgent"), /* @__PURE__ */ React.createElement("button", { "data-testid": "fixture-clear-attention", onClick: () => setAttention(null) }, "clear attention"));
   };
 }
 function activate(api) {

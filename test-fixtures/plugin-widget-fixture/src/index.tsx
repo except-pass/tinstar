@@ -5,6 +5,7 @@ function makeFixtureWidget(api: TinstarPluginAPI) {
   return function FixtureWidget() {
     const [data, setData] = api.widget.useData<{ counter?: number }>()
     const deleteMe = api.widget.useDelete()
+    const [, setAttention] = api.widget.useAttention()
     const counter = data?.counter ?? 0
     return (
       <div data-testid="fixture-widget" style={{
@@ -17,6 +18,12 @@ function makeFixtureWidget(api: TinstarPluginAPI) {
         </button>
         <button data-testid="fixture-delete" onClick={() => deleteMe()}>
           delete
+        </button>
+        <button data-testid="fixture-mark-urgent" onClick={() => setAttention({ level: 'urgent', reason: 'Fixture urgent' })}>
+          mark urgent
+        </button>
+        <button data-testid="fixture-clear-attention" onClick={() => setAttention(null)}>
+          clear attention
         </button>
       </div>
     )
