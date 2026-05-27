@@ -335,6 +335,42 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => window.removeEventListener(EV.canvasViewport, onViewport)
   }, [setCamera, centerOn, getLayout, layouts, runMap])
 
+  // Listen for widget:flash-focus — pan to, flash, and (for runs) focus a widget by id.
+  // Dispatched by `dispatchFlashFocus` (see src/canvas/flashAndFocus.ts), used by the inbox.
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ widgetId: string; source: 'run' | 'plugin' }>).detail
+      if (!detail) return
+      const { widgetId, source } = detail
+
+      // Build nodeId for layout lookup. Runs are stored with the `run-` prefix in the layouts map;
+      // plugin widgets use their bare id.
+      const nodeId = source === 'run' ? `run-${widgetId}` : widgetId
+      const layout = getLayout(nodeId)
+      if (!layout) return
+
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect) return
+
+      // Pan + light zoom-to-fit at current zoom-ish; use centerOn for consistency.
+      centerOn(layout.x, layout.y, layout.width, layout.height, rect.width, rect.height, 80)
+
+      // Flash: add a CSS class to the widget's DOM element for ~700ms.
+      const el = document.querySelector(`[data-widget-id="${CSS.escape(widgetId)}"]`) as HTMLElement | null
+      if (el) {
+        el.classList.add('widget-flash')
+        window.setTimeout(() => el.classList.remove('widget-flash'), 700)
+      }
+
+      // Focus path — forward to onFocusRun for runs (existing behavior), otherwise nothing extra.
+      if (source === 'run' && onFocusRun) {
+        onFocusRun(widgetId)
+      }
+    }
+    window.addEventListener('widget:flash-focus', handler as EventListener)
+    return () => window.removeEventListener('widget:flash-focus', handler as EventListener)
+  }, [getLayout, centerOn, onFocusRun])
+
   // Attach wheel listener with { passive: false }
   useEffect(() => {
     const el = containerRef.current
@@ -1339,6 +1375,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             key={node.id}
             registration={{ type: node.type, component: () => <PluginWidgetDisabledPlaceholder instance={instance} reason="unknown-type" />, isContainer: false }}
             nodeId={node.id}
+            widgetId={node.entityId}
             data={instance}
             layout={layout}
             zoom={camera.zoom}
@@ -1394,6 +1431,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         key={node.id}
         registration={reg}
         nodeId={node.id}
+        widgetId={node.entityId}
         data={data}
         layout={layout}
         zoom={camera.zoom}

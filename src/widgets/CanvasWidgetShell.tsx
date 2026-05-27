@@ -30,6 +30,10 @@ function spawnGlowVars(color: string): React.CSSProperties {
 interface CanvasWidgetShellProps {
   registration: WidgetRegistration
   nodeId: string
+  /** Bare entity id (run id sans `run-` prefix, or plugin widget id). Used as
+   *  the value of `data-widget-id` so window-event handlers (e.g. the inbox
+   *  flash-focus dispatcher) can locate the widget's DOM element. */
+  widgetId?: string
   data: unknown
   layout: WidgetLayout
   zoom: number
@@ -52,6 +56,7 @@ interface CanvasWidgetShellProps {
 export function CanvasWidgetShell({
   registration,
   nodeId,
+  widgetId,
   data,
   layout,
   zoom,
@@ -224,6 +229,7 @@ export function CanvasWidgetShell({
     <div
       ref={containerRef}
       data-testid={`canvas-widget-${nodeId}`}
+      data-widget-id={widgetId}
       data-selected={isSelected ? 'true' : undefined}
       data-focused={isFocused ? 'true' : undefined}
       data-widget-type={registration.type}
