@@ -8,6 +8,9 @@ export default async function globalSetup() {
   for (let i = 0; i < numWorkers; i++) {
     const port = 5290 + i
     try { execSync(`lsof -ti tcp:${port} | xargs kill -9`, { stdio: 'ignore' }) } catch { /* port free */ }
+    // Also clear plugin-test ports (offset by 100 from base)
+    const pluginPort = 5390 + i
+    try { execSync(`lsof -ti tcp:${pluginPort} | xargs kill -9`, { stdio: 'ignore' }) } catch { /* port free */ }
   }
 
   const indexHtml = join(process.cwd(), 'dist/client/index.html')

@@ -30,6 +30,7 @@ import { PluginFailedBanner } from './PluginFailedBanner'
 import { WidgetsPalette } from './WidgetsPalette/WidgetsPalette'
 import { PaletteDragGhost } from './WidgetsPalette/PaletteDragGhost'
 import { useConfig, useConfigPatch } from '../context/ConfigContext'
+import { pluginsReady } from '../widgets'
 
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
@@ -50,6 +51,16 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
 
 function WorkspaceShellInner() {
   const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, pluginWidgets, connected } = useBackendState()
+
+  // Force a re-render once the plugin boot pipeline completes so that any
+  // plugin widgets already in the SSE snapshot (e.g. on page reload) switch
+  // from their PluginWidgetDisabledPlaceholder to the real component.
+  const [, setPluginsBooted] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    pluginsReady.then(() => { if (!cancelled) setPluginsBooted(true) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   const onboarding = useOnboardingState()
   const forceMarshalOpen = onboarding.active !== null && onboarding.active !== 'connect'
