@@ -75,6 +75,7 @@ export interface RunData {
   natsControlOrphanedAt?: string | null
   parentId?: string  // ID of the run that spawned this one (for hands)
   breakoutRooms?: string[]  // NATS room subjects for parent-child communication
+  attention?: AttentionState
 }
 
 
@@ -229,6 +230,19 @@ export interface NatsTrafficWidget {
   color?: string
 }
 
+/** Urgency of a widget's current attention request.
+ *  Drives both color and sort order in the Inbox view. */
+export type AttentionLevel = 'urgent' | 'attention' | 'info'
+
+/** A widget's current "needs attention" signal. Replacing, not append:
+ *  each widget has at most one of these at a time. `setAt` is server-stamped
+ *  on the PATCH that actually changed the state (identical re-sets are no-ops). */
+export interface AttentionState {
+  level: AttentionLevel
+  reason: string       // ~80 char budget for display; longer is truncated by the UI
+  setAt: string        // ISO 8601
+}
+
 export interface PluginWidgetInstance {
   id: string                                                    // host-generated: `pw-${shortId}`
   pluginId: string                                              // matches manifest.name
@@ -239,6 +253,7 @@ export interface PluginWidgetInstance {
   data: unknown                                                 // plugin-controlled; capped at 64KB serialized
   createdAt: string                                             // ISO 8601
   updatedAt: string                                             // ISO 8601
+  attention?: AttentionState
 }
 
 export interface TopicMetadata {
