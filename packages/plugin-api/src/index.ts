@@ -206,6 +206,24 @@ export interface PluginConstellationsApi {
   useLeave(): () => void
 }
 
+/** Urgency of a widget's "needs attention" signal. */
+export type AttentionLevel = 'urgent' | 'attention' | 'info'
+
+/** A widget's current attention state as exposed to plugins. The host
+ *  server-stamps `setAt` when the PATCH lands; plugins read this but
+ *  don't construct it themselves. */
+export interface AttentionState {
+  level: AttentionLevel
+  reason: string
+  setAt: string
+}
+
+/** What plugins pass to setAttention — no setAt; the host stamps it. */
+export interface AttentionInput {
+  level: AttentionLevel
+  reason: string
+}
+
 /** Per-widget host services available inside a plugin widget's React
  *  component. All hooks must be called at the top of the component
  *  (standard React rules). They read the host's per-widget context, so
@@ -224,6 +242,12 @@ export interface PluginWidgetApi {
    *  carried, or null. In V5.1 always null — reserved for the eventual
    *  `spawn: 'palette+context'` migration. */
   useInitialContext<T>(): T | null
+  /** React hook: returns `[attention, setAttention]` for this widget's
+   *  current attention signal. Call `setAttention({ level, reason })` to
+   *  surface the widget in the Inbox view; pass `null` to clear. Identical
+   *  re-sets (same level + reason) are no-ops and do not bump the row to
+   *  "unread" again. Auto-purges when the widget instance is deleted. */
+  useAttention(): [AttentionState | null, (next: AttentionInput | null) => void]
 }
 
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */
