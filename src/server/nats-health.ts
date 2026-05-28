@@ -5,8 +5,8 @@
  * existing `status` action. Three outcomes drive Session.natsControlOrphanedAt
  * (mirrored to the Run projection):
  *
- *   healthy   socket OK + natsState === 'connected' → clear flag, 30s cadence
- *   degraded  socket OK but natsState !== 'connected' → leave flag, slow probes
+ *   healthy   socket OK + natsState in {'OPEN','connected'} → clear flag, 30s cadence
+ *   degraded  socket OK but natsState is something else → leave flag, slow probes
  *   orphaned  socket connect fails → set flag, slow probes
  *
  * Backoff: 30s base, doubling per failure, capped at 5min. Healthy resets.
@@ -233,7 +233,10 @@ function defaultProbe(socketPath: string): Promise<ProbeOutcome> {
       clearTimeout(timer)
       try {
         const reply = JSON.parse(line) as { natsState?: string }
-        finish(reply.natsState === 'connected'
+        // channel-server emits 'OPEN' | 'DRAINING' | 'CLOSED'; older builds
+        // used 'connected'. Both mean the NATS connection is up.
+        const healthy = reply.natsState === 'OPEN' || reply.natsState === 'connected'
+        finish(healthy
           ? { kind: 'healthy', natsState: reply.natsState }
           : { kind: 'degraded', natsState: reply.natsState })
       } catch (err) {
