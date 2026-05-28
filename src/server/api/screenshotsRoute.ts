@@ -60,6 +60,7 @@ export async function handleScreenshotUpload(
     let finalPath: string | null = null
     let responded = false
     let receivedFile = false
+    let aborted = false
 
     function sendOk(data: unknown) {
       if (responded) return
@@ -94,6 +95,7 @@ export async function handleScreenshotUpload(
       const ws = createWriteStream(tempPath)
       fileStream.pipe(ws)
       fileStream.on('limit', () => {
+        ws.destroy()
         cleanup()
         sendFail('INVALID_PARAMS', `Upload exceeds ${MAX_BYTES} bytes`, { status: 413 })
       })
@@ -103,6 +105,10 @@ export async function handleScreenshotUpload(
       })
       ws.on('close', () => {
         if (responded) return
+        if (aborted) {
+          cleanup()
+          return
+        }
         try {
           renameSync(tempPath!, finalPath!)
           sendOk({ path: finalPath })
@@ -122,6 +128,11 @@ export async function handleScreenshotUpload(
     bb.on('error', (err) => {
       cleanup()
       sendFail('BAD_REQUEST', (err as Error).message)
+    })
+
+    req.on('aborted', () => {
+      aborted = true
+      cleanup()
     })
 
     req.pipe(bb)
