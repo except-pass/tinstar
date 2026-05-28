@@ -44,7 +44,7 @@ export function ThumbnailStrip({ tiles, onRemove }: Props) {
           <button
             type="button"
             data-testid={`thumb-remove-${t.clientId}`}
-            onClick={() => onRemove(t.clientId)}
+            onClick={(e) => { e.stopPropagation(); onRemove(t.clientId) }}
             className="absolute top-0 right-0 px-1 text-xs text-white bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity"
             aria-label="Remove screenshot"
           >

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 export type TileStatus = 'pending' | 'ready' | 'error'
 
@@ -37,6 +37,17 @@ export function useScreenshotUpload(): UseScreenshotUploadReturn {
   const [tiles, setTiles] = useState<Tile[]>([])
   // Track blob URLs so we can revoke on remove
   const blobUrlsRef = useRef<Map<string, string>>(new Map())
+
+  // Revoke any remaining blob URLs when the component unmounts
+  useEffect(() => {
+    const urls = blobUrlsRef.current
+    return () => {
+      for (const url of urls.values()) {
+        URL.revokeObjectURL(url)
+      }
+      urls.clear()
+    }
+  }, [])
 
   const startUpload = useCallback(async (file: File): Promise<string> => {
     const clientId = nextClientId()
