@@ -58,15 +58,12 @@ export function InboxList({ activeSpaceId, searchQuery = '' }: Props) {
     const endpoint = row.source === 'plugin'
       ? `/api/plugin-widgets/${widgetId}`
       : `/api/runs/${widgetId}`
+    // Clearing run attention is server-supported (PATCH /api/runs/:id with attention:null);
+    // for a run it stays cleared until the next status transition re-derives it.
     apiFetch(endpoint, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ attention: null }),
-    }).then(res => {
-      if (res.status === 404 && row.source === 'run') {
-        // eslint-disable-next-line no-console
-        console.warn('[inbox] run-attention clear not supported by server; will auto-clear on next status transition')
-      }
     }).catch((err: unknown) => {
       // eslint-disable-next-line no-console
       console.error('[inbox] clear failed:', err)
