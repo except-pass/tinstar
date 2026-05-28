@@ -44,8 +44,10 @@ describe('DocumentStore equality short-circuits', () => {
   it('updateRunStatus: DOES emit when status changes', () => {
     store.upsertRun('r1', makeRun())
     changes.length = 0
+    // running → idle emits twice: once for the status field, once for the
+    // derived "Ready for input" attention that surfaces the run in the inbox.
     store.updateRunStatus('r1', 'idle')
-    expect(changes).toHaveLength(1)
+    expect(changes).toHaveLength(2)
   })
 
   it('reconcileFiles: does NOT emit when the file set is identical', () => {

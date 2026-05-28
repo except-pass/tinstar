@@ -26,7 +26,7 @@ describe('useInbox', () => {
     expect(result.current.unreadCount).toBe(0)
   })
 
-  it('only returns widgets with attention in the active space', () => {
+  it('only surfaces plugin widgets that have attention in the active space', () => {
     mockState = {
       pluginWidgets: [
         { id: 'pw-1', spaceId: 'spc-1', widgetType: 'w', attention: attn('info', 'r', '2026-05-27T00:00:00.000Z') },
@@ -40,6 +40,48 @@ describe('useInbox', () => {
     expect(result.current.rows[0]?.widgetId).toBe('pw-1')
   })
 
+  it('shows every session in the space, even without attention', () => {
+    mockState = {
+      pluginWidgets: [],
+      runs: [
+        { id: 'r-idle', spaceId: 'spc-1', status: 'idle', sessionId: 's1', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-05-27T00:00:00.000Z' },
+        { id: 'r-other', spaceId: 'spc-2', status: 'running', sessionId: 's2', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-05-27T00:00:00.000Z' },
+      ],
+    }
+    const { result } = renderHook(() => useInbox('spc-1'))
+    expect(result.current.rows).toHaveLength(1)
+    expect(result.current.rows[0]?.widgetId).toBe('r-idle')
+    expect(result.current.rows[0]?.attention).toBeNull()
+    expect(result.current.rows[0]?.status).toBe('idle')
+    expect(result.current.rows[0]?.unread).toBe(false)
+    expect(result.current.unreadCount).toBe(0)
+  })
+
+  it('sorts attention sessions above attention-free ones', () => {
+    mockState = {
+      pluginWidgets: [],
+      runs: [
+        { id: 'r-idle', spaceId: 'spc-1', status: 'idle', sessionId: 's1', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-05-27T00:09:00.000Z' },
+        { id: 'r-urgent', spaceId: 'spc-1', status: 'needs_attention', sessionId: 's2', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-05-27T00:01:00.000Z', attention: attn('urgent', 'help', '2026-05-27T00:01:00.000Z') },
+      ],
+    }
+    const { result } = renderHook(() => useInbox('spc-1'))
+    expect(result.current.rows.map(r => r.widgetId)).toEqual(['r-urgent', 'r-idle'])
+    expect(result.current.unreadCount).toBe(1)
+  })
+
+  it('sorts attention-free sessions by createdAt descending', () => {
+    mockState = {
+      pluginWidgets: [],
+      runs: [
+        { id: 'r-old', spaceId: 'spc-1', status: 'idle', sessionId: 's1', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-05-27T00:01:00.000Z' },
+        { id: 'r-new', spaceId: 'spc-1', status: 'running', sessionId: 's2', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-05-27T00:09:00.000Z' },
+      ],
+    }
+    const { result } = renderHook(() => useInbox('spc-1'))
+    expect(result.current.rows.map(r => r.widgetId)).toEqual(['r-new', 'r-old'])
+  })
+
   it('sorts urgent before attention before info, then by setAt desc', () => {
     mockState = {
       pluginWidgets: [
@@ -50,7 +92,7 @@ describe('useInbox', () => {
       runs: [],
     }
     const { result } = renderHook(() => useInbox('spc-1'))
-    expect(result.current.rows.map(r => r.attention.level)).toEqual(['urgent', 'attention', 'info'])
+    expect(result.current.rows.map(r => r.attention?.level)).toEqual(['urgent', 'attention', 'info'])
   })
 
   it('within same level, sorts by setAt descending', () => {

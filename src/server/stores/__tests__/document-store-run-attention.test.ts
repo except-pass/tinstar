@@ -27,9 +27,12 @@ describe('attentionForRunStatus', () => {
   it('maps stopped to info', () => {
     expect(attentionForRunStatus('stopped')?.level).toBe('info')
   })
-  it('returns null for running/idle/creating', () => {
+  it('maps idle (quiet + ready) to attention', () => {
+    expect(attentionForRunStatus('idle')?.level).toBe('attention')
+    expect(attentionForRunStatus('idle')?.reason).toBe('Ready for input')
+  })
+  it('returns null for running/creating', () => {
     expect(attentionForRunStatus('running')).toBeNull()
-    expect(attentionForRunStatus('idle')).toBeNull()
     expect(attentionForRunStatus('creating')).toBeNull()
   })
 })
@@ -48,6 +51,26 @@ describe('updateRunStatus → attention', () => {
     store.updateRunStatus('r1', 'needs_attention')
     store.updateRunStatus('r1', 'running')
     expect(store.getAllRuns()[0]?.attention).toBeUndefined()
+  })
+
+  it('transitioning to idle sets a "ready for input" attention', () => {
+    const store = new DocumentStore()
+    seedRun(store)               // seeded as 'running'
+    store.updateRunStatus('r1', 'idle')
+    const attn = store.getAllRuns()[0]?.attention
+    expect(attn?.level).toBe('attention')
+    expect(attn?.reason).toBe('Ready for input')
+  })
+
+  it('going idle → running → idle clears then re-arms the inbox signal', () => {
+    const store = new DocumentStore()
+    seedRun(store)
+    store.updateRunStatus('r1', 'idle')
+    expect(store.getAllRuns()[0]?.attention?.level).toBe('attention')
+    store.updateRunStatus('r1', 'running')
+    expect(store.getAllRuns()[0]?.attention).toBeUndefined()
+    store.updateRunStatus('r1', 'idle')
+    expect(store.getAllRuns()[0]?.attention?.level).toBe('attention')
   })
 
   it('does not emit twice when status is unchanged', () => {

@@ -2,8 +2,14 @@ import { useState, useMemo } from 'react'
 import { apiFetch } from '../apiClient'
 import { useInbox, type InboxRow as InboxRowData } from '../hooks/useInbox'
 import { InboxRow } from './InboxRow'
-import { markInboxRead, markInboxUnread } from '../lib/uiPrefs'
+import { markInboxRead } from '../lib/uiPrefs'
 import { dispatchFlashFocus } from '../canvas/flashAndFocus'
+import { useSelection } from './SelectionProvider'
+
+// Canvas selection stores runs under a `run-` prefix; plugin widgets use their bare id.
+function selectionId(row: InboxRowData): string {
+  return row.source === 'run' ? `run-${row.widgetId}` : row.widgetId
+}
 
 const LEVELS = ['all', 'urgent', 'attention', 'info'] as const
 type Filter = typeof LEVELS[number]
@@ -15,6 +21,7 @@ interface Props {
 
 export function InboxList({ activeSpaceId, searchQuery = '' }: Props) {
   const { rows } = useInbox(activeSpaceId)
+  const { isSelected } = useSelection()
   const [filter, setFilter] = useState<Filter>('all')
   const [unreadOnly, setUnreadOnly] = useState(false)
   // Local tick to force re-render after read/unread toggles (since uiPrefs is outside React state).
@@ -24,10 +31,11 @@ export function InboxList({ activeSpaceId, searchQuery = '' }: Props) {
     void readTick
     const q = searchQuery.trim().toLowerCase()
     return rows.filter(r => {
-      if (filter !== 'all' && r.attention.level !== filter) return false
+      if (filter !== 'all' && r.attention?.level !== filter) return false
       if (unreadOnly && !r.unread) return false
       if (q) {
-        const hay = `${r.attention.reason} ${r.sourceLabel} ${r.taskPath.join(' ')} ${r.sessionName ?? ''} ${r.worktree ?? ''}`.toLowerCase()
+        const headline = r.attention?.reason ?? r.status ?? ''
+        const hay = `${headline} ${r.sourceLabel} ${r.taskPath.join(' ')} ${r.sessionName ?? ''} ${r.worktree ?? ''}`.toLowerCase()
         if (!hay.includes(q)) return false
       }
       return true
@@ -37,8 +45,10 @@ export function InboxList({ activeSpaceId, searchQuery = '' }: Props) {
   function handleClick(widgetId: string) {
     const row = rows.find(r => r.widgetId === widgetId)
     if (!row) return
-    markInboxRead(`${widgetId}:${row.attention.setAt}`)
-    setReadTick(t => t + 1)
+    if (row.attention) {
+      markInboxRead(row.readKey)
+      setReadTick(t => t + 1)
+    }
     dispatchFlashFocus({ widgetId, source: row.source })
   }
 
@@ -61,15 +71,6 @@ export function InboxList({ activeSpaceId, searchQuery = '' }: Props) {
       // eslint-disable-next-line no-console
       console.error('[inbox] clear failed:', err)
     })
-  }
-
-  function handleToggleRead(widgetId: string) {
-    const row = rows.find(r => r.widgetId === widgetId)
-    if (!row) return
-    const key = `${widgetId}:${row.attention.setAt}`
-    if (row.unread) markInboxRead(key)
-    else markInboxUnread(key)
-    setReadTick(t => t + 1)
   }
 
   return (
@@ -98,16 +99,16 @@ export function InboxList({ activeSpaceId, searchQuery = '' }: Props) {
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         {visible.length === 0 ? (
           <div className="px-3 py-8 text-xs text-slate-500 text-center" data-testid="inbox-empty">
-            Nothing needs your attention.
+            No sessions to show.
           </div>
         ) : (
           visible.map(row => (
             <InboxRow
               key={row.widgetId}
               row={row}
+              selected={isSelected(selectionId(row))}
               onClick={handleClick}
               onClear={handleClear}
-              onToggleRead={handleToggleRead}
             />
           ))
         )}

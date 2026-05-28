@@ -31,11 +31,14 @@ function attentionForRunStatus(status: SessionStatus): AttentionState | null {
   switch (status) {
     case 'needs_attention':
       return { level: 'urgent', reason: 'Needs your attention', setAt: now }
+    case 'idle':
+      // Quiet + ready: the agent finished its turn and is waiting for you.
+      // Surfaces in the inbox as a fresh "your turn" item each time it lands here.
+      return { level: 'attention', reason: 'Ready for input', setAt: now }
     case 'stopped':
       return { level: 'info', reason: 'Run stopped', setAt: now }
     case 'creating':
     case 'running':
-    case 'idle':
       return null
   }
 }

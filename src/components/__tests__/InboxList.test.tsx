@@ -14,6 +14,11 @@ vi.mock('../../lib/uiPrefs', () => ({
   markInboxUnread: vi.fn(),
 }))
 
+let selectedId: string | null = null
+vi.mock('../SelectionProvider', () => ({
+  useSelection: () => ({ isSelected: (id: string) => id === selectedId }),
+}))
+
 vi.mock('../../apiClient', () => ({
   apiFetch: vi.fn().mockResolvedValue({ ok: true }),
 }))
@@ -24,12 +29,14 @@ vi.mock('../../canvas/flashAndFocus', () => ({
 
 beforeEach(() => {
   fixtures.length = 0
+  selectedId = null
 })
 
 function row(overrides: Partial<any> = {}) {
   return {
     widgetId: 'pw-1', source: 'plugin', widgetType: 'w', sourceLabel: 'w',
     attention: { level: 'info', reason: 'r', setAt: '2026-05-27T00:00:00.000Z' },
+    status: null, color: null, createdAt: null, readKey: 'pw-1:2026-05-27T00:00:00.000Z',
     unread: true, taskPath: [], sessionName: null, worktree: null,
     ...overrides,
   }
@@ -55,6 +62,17 @@ describe('InboxList', () => {
     expect(screen.getAllByTestId(ROW_RE)).toHaveLength(1)
   })
 
+  it('shows attention-free sessions under "all" but hides them under a level filter', () => {
+    fixtures.push(
+      row({ widgetId: 'a', attention: { level: 'urgent', reason: 'r', setAt: 't' } }),
+      row({ widgetId: 'b', source: 'run', attention: null, status: 'idle', unread: false, readKey: 'b' }),
+    )
+    render(<InboxList activeSpaceId="spc-1" />)
+    expect(screen.getAllByTestId(ROW_RE)).toHaveLength(2)
+    fireEvent.click(screen.getByTestId('inbox-filter-urgent'))
+    expect(screen.getAllByTestId(ROW_RE)).toHaveLength(1)
+  })
+
   it('unread-only toggle filters out read rows', () => {
     fixtures.push(row({ widgetId: 'a', unread: false }), row({ widgetId: 'b', unread: true }))
     render(<InboxList activeSpaceId="spc-1" />)
@@ -74,6 +92,17 @@ describe('InboxList', () => {
   it('renders empty state when no rows match', () => {
     render(<InboxList activeSpaceId="spc-1" searchQuery="nomatch-xyz" />)
     expect(screen.getByTestId('inbox-empty')).toBeInTheDocument()
+  })
+
+  it('highlights the row whose canvas widget is selected', () => {
+    selectedId = 'run-tailscale'
+    fixtures.push(
+      row({ widgetId: 'tailscale', source: 'run', sourceLabel: 'tailscale', status: 'idle', attention: null }),
+      row({ widgetId: 'other', source: 'run', sourceLabel: 'other', status: 'idle', attention: null }),
+    )
+    render(<InboxList activeSpaceId="spc-1" />)
+    expect(screen.getByTestId('inbox-row-tailscale')).toHaveAttribute('data-selected', 'true')
+    expect(screen.getByTestId('inbox-row-other')).not.toHaveAttribute('data-selected')
   })
 
   it('clicking a row dispatches flash-focus', async () => {
