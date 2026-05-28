@@ -58,6 +58,8 @@ import type { SlashUsage } from '../sessions/slashUsage'
 import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
+import { resolveWidgetRegistry } from './pluginWidgetRegistry'
+import type { PluginWidgetInstance } from '../../domain/types'
 
 function currentCorsAllowlist(): string[] {
   return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
@@ -1936,6 +1938,179 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
     ctx.docStore.deleteBrowserWidget(id)
     ok(res, null)
+    return true
+  }
+
+  // POST /api/plugin-widgets
+  if (method === 'POST' && url === '/api/plugin-widgets') {
+    readBody(req).then(body => {
+      const parsed = JSON.parse(body) as {
+        pluginId?: string; widgetType?: string; spaceId?: string;
+        position?: { x: number; y: number };
+        size?: { width: number; height: number };
+        data?: unknown;
+      }
+      const { pluginId, widgetType, spaceId, position, size, data } = parsed
+
+      if (!pluginId || !widgetType || !spaceId || !position || !size) {
+        fail(res, 'INVALID_PARAMS', 'pluginId, widgetType, spaceId, position, size all required')
+        return
+      }
+
+      const configRoot = ctx.sessionConfig?.dirs.root
+      if (!configRoot) {
+        fail(res, 'CONFIG_UNAVAILABLE', 'configRoot unavailable')
+        return
+      }
+      const registry = resolveWidgetRegistry(configRoot)
+      const reg = registry.find(r => r.pluginId === pluginId && r.widgetType === widgetType)
+      if (!reg) {
+        fail(res, 'CONFLICT', `unknown_widget_type: ${pluginId}/${widgetType}`)
+        return
+      }
+
+      if (!ctx.docStore.getAllSpaces().some(s => s.id === spaceId)) {
+        fail(res, 'NOT_FOUND', `unknown_space: ${spaceId}`)
+        return
+      }
+
+      if (data !== undefined) {
+        let serialized: string
+        try { serialized = JSON.stringify(data) }
+        catch { fail(res, 'BAD_REQUEST', 'bad_data: not JSON-serializable'); return }
+        if (serialized.length > 65536) {
+          fail(res, 'BAD_REQUEST', 'data_too_large: serialized data exceeds 64KB', { status: 413 })
+          return
+        }
+      }
+
+      if (reg.singleton) {
+        const existing = ctx.docStore.getAllPluginWidgets().find(
+          p => p.pluginId === pluginId && p.widgetType === widgetType && p.spaceId === spaceId,
+        )
+        if (existing) {
+          fail(res, 'CONFLICT', `singleton_violation: existing instance id=${existing.id}`)
+          return
+        }
+      }
+
+      const now = new Date().toISOString()
+      const instance: PluginWidgetInstance = {
+        id: shortId('pw'),
+        pluginId,
+        widgetType,
+        spaceId,
+        position,
+        size,
+        data: data ?? null,
+        createdAt: now,
+        updatedAt: now,
+      }
+      ctx.docStore.upsertPluginWidget(instance.id, instance)
+      ok(res, instance)
+    })
+    return true
+  }
+
+  // PATCH /api/plugin-widgets/:id
+  if (method === 'PATCH' && url.startsWith('/api/plugin-widgets/')) {
+    const id = url.slice('/api/plugin-widgets/'.length)
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getAllPluginWidgets().find(p => p.id === id)
+      if (!existing) {
+        fail(res, 'NOT_FOUND', `PluginWidget ${id} not found`)
+        return
+      }
+      const patch = JSON.parse(body) as {
+        position?: { x: number; y: number };
+        size?: { width: number; height: number };
+        data?: unknown;
+        attention?: { level: string; reason: string } | null;
+      }
+
+      // Size cap on the proposed data
+      if ('data' in patch) {
+        let serialized: string
+        try { serialized = JSON.stringify(patch.data) }
+        catch { fail(res, 'BAD_REQUEST', 'bad_data: not JSON-serializable'); return }
+        if (serialized.length > 65536) {
+          fail(res, 'BAD_REQUEST', 'data_too_large: serialized data exceeds 64KB', { status: 413 })
+          return
+        }
+      }
+
+      // Attention handling — validate and apply, then strip from the path the data-update takes.
+      let attentionApplied = false
+      if ('attention' in patch) {
+        const attn = patch.attention
+        if (attn === null) {
+          ctx.docStore.setPluginWidgetAttention(id, null)
+          attentionApplied = true
+        } else if (
+          attn && typeof attn === 'object'
+          && (attn.level === 'urgent' || attn.level === 'attention' || attn.level === 'info')
+          && typeof attn.reason === 'string'
+        ) {
+          ctx.docStore.setPluginWidgetAttention(id, {
+            level: attn.level,
+            reason: attn.reason.slice(0, 200),
+            setAt: new Date().toISOString(),
+          })
+          attentionApplied = true
+        } else {
+          fail(res, 'BAD_REQUEST', 'invalid_attention: shape must be { level: urgent|attention|info, reason: string } or null')
+          return
+        }
+      }
+
+      const baseline = attentionApplied
+        ? ctx.docStore.getAllPluginWidgets().find(p => p.id === id)!
+        : existing
+
+      const updated: PluginWidgetInstance = {
+        ...baseline,
+        ...(patch.position ? { position: patch.position } : {}),
+        ...(patch.size ? { size: patch.size } : {}),
+        ...('data' in patch ? { data: patch.data } : {}),
+        updatedAt: new Date().toISOString(),
+      }
+      ctx.docStore.upsertPluginWidget(id, updated)
+      ok(res, updated)
+    })
+    return true
+  }
+
+  // DELETE /api/plugin-widgets/:id
+  if (method === 'DELETE' && url.startsWith('/api/plugin-widgets/')) {
+    const id = url.slice('/api/plugin-widgets/'.length)
+    const existing = ctx.docStore.getAllPluginWidgets().find(p => p.id === id)
+    if (!existing) {
+      fail(res, 'NOT_FOUND', `PluginWidget ${id} not found`)
+      return true
+    }
+    ctx.docStore.deletePluginWidget(id)
+    ok(res, null)
+    return true
+  }
+
+  // GET /api/plugin-widgets/registry — palette UI lists available widget types
+  if (method === 'GET' && url === '/api/plugin-widgets/registry') {
+    const configRoot = ctx.sessionConfig?.dirs.root
+    if (!configRoot) {
+      ok(res, [])
+      return true
+    }
+    ok(res, resolveWidgetRegistry(configRoot))
+    return true
+  }
+
+  // GET /api/plugin-widgets and /api/plugin-widgets?spaceId=...
+  if (method === 'GET' && (url === '/api/plugin-widgets' || url.startsWith('/api/plugin-widgets?'))) {
+    const parsedUrl = new URL(url, 'http://placeholder')
+    const spaceId = parsedUrl.searchParams.get('spaceId')
+    const all = ctx.docStore.getAllPluginWidgets()
+    const filtered = spaceId ? all.filter(p => p.spaceId === spaceId) : all
+    ok(res, filtered)
     return true
   }
 

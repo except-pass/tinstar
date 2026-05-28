@@ -133,6 +133,18 @@ export interface OtelMetricRecordedPayload {
   metric: Metric
 }
 
+export interface PluginWidgetUpdatedPayload {
+  id: string
+  pluginId: string
+  widgetType: string
+  spaceId: string
+  position: { x: number; y: number }
+  size: { width: number; height: number }
+  data: unknown
+  createdAt: string
+  updatedAt: string
+}
+
 // --- Discriminated union ---
 //
 // Adding a new event:
@@ -164,6 +176,7 @@ export type BusEvent =
   | { type: 'managed_session.deleted'; timestamp: string; payload: ManagedSessionDeletedPayload }
   | { type: 'managed_session.nats_orphaned'; timestamp: string; payload: ManagedSessionNatsOrphanedPayload }
   | { type: 'ready_queue.update'; timestamp: string; payload: { queue: string[] } }
+  | { type: 'pluginWidget.updated'; timestamp: string; payload: PluginWidgetUpdatedPayload }
 
 export type BusEventType = BusEvent['type']
 

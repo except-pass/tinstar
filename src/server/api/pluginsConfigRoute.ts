@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readPluginsConfig } from '../../core/pluginHost/pluginsConfig'
 import { writePluginsConfig } from '../../core/pluginHost/writePluginsConfig'
+import { invalidateWidgetRegistryCache } from './pluginWidgetRegistry'
 
 export interface PluginsConfigRouteOptions { configRoot: string }
 
@@ -58,6 +59,7 @@ export async function handlePluginsConfig(
       : []
     try {
       writePluginsConfig(opts.configRoot, { disabled, external })
+      invalidateWidgetRegistryCache()
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[plugin-host] /api/plugins-config PUT write failed', e)

@@ -1,0 +1,21 @@
+{
+  "name": "plugin-widget-fixture",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/tinstar-plugin.js",
+  "tinstar": {
+    "apiVersion": "5",
+    "displayName": "Fixture",
+    "description": "E2E fixture plugin for the WIDGETS palette + plugin-widget persistence.",
+    "contributes": {
+      "widgets": [
+        { "type": "fixture-widget", "label": "Fixture widget", "defaultSize": { "width": 320, "height": 200 } },
+        { "type": "fixture-singleton-widget", "label": "Fixture singleton", "defaultSize": { "width": 320, "height": 200 }, "singleton": true }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/index.tsx --bundle --format=esm --platform=browser --external:@tinstar/plugin-api --external:react --external:react-dom --jsx-factory=React.createElement --jsx-fragment=React.Fragment --outfile=dist/tinstar-plugin.js"
+  }
+}

@@ -96,7 +96,17 @@ Or use the Settings → Plugins UI to toggle, then drop the entry by hand. (V5.0
 
 ## 6. Reload Tinstar
 
-Restart the Tinstar app. You should see `[my-plugin] my-plugin activating` in the browser console. Drop a `my-widget` on the canvas — the type appears in `Settings → Plugins`.
+Restart the Tinstar app. You should see `[my-plugin] my-plugin activating` in the browser console.
+
+Open the canvas. The left sidebar now has a `WIDGETS` section (below `WORK SPACE`) listing every widget type your plugin contributes. Drag `my-widget` onto the canvas to instantiate it — a ghost outline follows your cursor; release where you want the widget to land.
+
+The instance is persisted server-side under `pluginWidgets` in the docstore. It survives page reloads automatically. To inspect:
+
+```bash
+curl http://localhost:5273/api/plugin-widgets
+```
+
+Delete via the widget's frame `X` button, or programmatically with `api.widget.useDelete()` from inside the widget.
 
 ## Reading data flowing through Tinstar
 

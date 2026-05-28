@@ -2,7 +2,7 @@
 declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
 import { useSyncExternalStore, useCallback } from 'react'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata } from '../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance } from '../domain/types'
 import { isSystemSession, extractMarshal } from '../domain/system-sessions'
 import { apiUrl } from '../apiClient'
 import { dispatchWindowEvent } from '../lib/windowEvents'
@@ -24,6 +24,7 @@ interface ServerState {
   natsTrafficWidgets: NatsTrafficWidget[]
   topicMetadata: TopicMetadata[]
   readyQueue: string[]
+  pluginWidgets: PluginWidgetInstance[]
 }
 
 const EMPTY_STATE: ServerState = {
@@ -41,6 +42,7 @@ const EMPTY_STATE: ServerState = {
   natsTrafficWidgets: [],
   topicMetadata: [],
   readyQueue: [],
+  pluginWidgets: [],
 }
 
 // ─── Singleton SSE store ───────────────────────────────────────────────
@@ -195,6 +197,7 @@ function startSSE() {
       ...snapshot,
       readyQueue: snapshot.ready_queue ?? [],
       topicMetadata: snapshot.topicMetadata ?? [],
+      pluginWidgets: snapshot.pluginWidgets ?? [],
       // System sessions (e.g. marshal) have dedicated UI — never enter the
       // run set that feeds the canvas/hierarchy/sessions list. They live on
       // `marshal` instead.
@@ -370,6 +373,14 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
     return { ...prev, topicMetadata: idx >= 0 ? tms.map((x, i) => (i === idx ? m : x)) : [...tms, m] }
   }
 
+  if (delta.entity === 'pluginWidget') {
+    const pws = prev.pluginWidgets
+    if (delta.data === null) return { ...prev, pluginWidgets: pws.filter(w => w.id !== delta.id) }
+    const w = delta.data as PluginWidgetInstance
+    const idx = pws.findIndex(x => x.id === w.id)
+    return { ...prev, pluginWidgets: idx >= 0 ? pws.map((x, i) => (i === idx ? w : x)) : [...pws, w] }
+  }
+
   if (delta.entity === 'commit') {
     dispatchWindowEvent('tinstar:commit-delta', undefined)
     return prev
@@ -409,6 +420,10 @@ export function applyOptimistic(entity: string, data: unknown): void {
     const w = data as NatsTrafficWidget
     const exists = prev.natsTrafficWidgets.some(x => x.id === w.id)
     currentState = { ...prev, natsTrafficWidgets: exists ? prev.natsTrafficWidgets.map(x => x.id === w.id ? w : x) : [...prev.natsTrafficWidgets, w] }
+  } else if (entity === 'pluginWidget') {
+    const w = data as PluginWidgetInstance
+    const exists = prev.pluginWidgets.some(x => x.id === w.id)
+    currentState = { ...prev, pluginWidgets: exists ? prev.pluginWidgets.map(x => x.id === w.id ? w : x) : [...prev.pluginWidgets, w] }
   } else {
     return
   }

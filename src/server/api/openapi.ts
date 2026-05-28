@@ -595,6 +595,67 @@ export const spec = {
         responses: { 200: { description: 'Deleted' } },
       },
     },
+    '/api/plugin-widgets': {
+      post: {
+        tags: ['Widgets'],
+        summary: 'Create a plugin widget instance',
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['pluginId', 'widgetType', 'spaceId', 'position', 'size'],
+          properties: {
+            pluginId: { type: 'string', description: 'Plugin identifier' },
+            widgetType: { type: 'string', description: 'Widget type within the plugin' },
+            spaceId: { type: 'string', description: 'Space ID where the widget exists' },
+            position: {
+              type: 'object',
+              required: ['x', 'y'],
+              properties: { x: { type: 'number' }, y: { type: 'number' } },
+            },
+            size: {
+              type: 'object',
+              required: ['width', 'height'],
+              properties: { width: { type: 'number' }, height: { type: 'number' } },
+            },
+            data: { type: 'object', description: 'Plugin-specific state (must be JSON-serializable, max 64KB)' },
+          },
+        } } } },
+        responses: { 200: { description: 'Created instance', content: { 'application/json': { schema: { $ref: '#/components/schemas/PluginWidgetInstance' } } } } },
+      },
+      get: {
+        tags: ['Widgets'],
+        summary: 'List plugin widget instances',
+        parameters: [{ name: 'spaceId', in: 'query', required: false, schema: { type: 'string' }, description: 'Filter by space (omit to list all)' }],
+        responses: { 200: { description: 'Instance list', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, data: { type: 'array', items: { $ref: '#/components/schemas/PluginWidgetInstance' } } } } } } } },
+      },
+    },
+    '/api/plugin-widgets/{id}': {
+      patch: {
+        tags: ['Widgets'],
+        summary: 'Update a plugin widget instance',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          properties: {
+            position: {
+              type: 'object',
+              properties: { x: { type: 'number' }, y: { type: 'number' } },
+            },
+            size: {
+              type: 'object',
+              properties: { width: { type: 'number' }, height: { type: 'number' } },
+            },
+            data: { type: 'object', description: 'Replace widget data entirely (no deep merge)' },
+          },
+        } } } },
+        responses: { 200: { description: 'Updated instance', content: { 'application/json': { schema: { $ref: '#/components/schemas/PluginWidgetInstance' } } } } },
+      },
+      delete: {
+        tags: ['Widgets'],
+        summary: 'Delete a plugin widget instance',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' } },
+      },
+    },
 
     // ── Simulator ────────────────────────────────────────
     '/api/simulator/start': {
@@ -736,6 +797,27 @@ export const spec = {
           title: { type: 'string' },
           color: { type: 'string' },
           headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Custom HTTP headers injected on proxied requests' },
+        },
+      },
+      PluginWidgetInstance: {
+        type: 'object',
+        required: ['id', 'pluginId', 'widgetType', 'spaceId', 'position', 'size', 'createdAt', 'updatedAt'],
+        properties: {
+          id: { type: 'string', description: 'Instance ID (pw-{shortId})' },
+          pluginId: { type: 'string', description: 'Plugin identifier' },
+          widgetType: { type: 'string', description: 'Widget type within the plugin' },
+          spaceId: { type: 'string', description: 'Space ID where the widget exists' },
+          position: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
+          },
+          size: {
+            type: 'object',
+            properties: { width: { type: 'number' }, height: { type: 'number' } },
+          },
+          data: { type: ['object', 'null'], description: 'Plugin-specific state' },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
         },
       },
       // ── Response envelope (ADR 0001) ──────────────────

@@ -206,6 +206,50 @@ export interface PluginConstellationsApi {
   useLeave(): () => void
 }
 
+/** Urgency of a widget's "needs attention" signal. */
+export type AttentionLevel = 'urgent' | 'attention' | 'info'
+
+/** A widget's current attention state as exposed to plugins. The host
+ *  server-stamps `setAt` when the PATCH lands; plugins read this but
+ *  don't construct it themselves. */
+export interface AttentionState {
+  level: AttentionLevel
+  reason: string
+  setAt: string
+}
+
+/** What plugins pass to setAttention — no setAt; the host stamps it. */
+export interface AttentionInput {
+  level: AttentionLevel
+  reason: string
+}
+
+/** Per-widget host services available inside a plugin widget's React
+ *  component. All hooks must be called at the top of the component
+ *  (standard React rules). They read the host's per-widget context, so
+ *  they only work inside a widget the host has mounted via the widget
+ *  shell — calling them outside that shell throws. */
+export interface PluginWidgetApi {
+  /** React hook: returns `[data, setData]` for this widget's
+   *  per-instance `data` blob. The setter PATCHes the host with a 250ms
+   *  debounce; remote updates (e.g., another tab) re-render the caller
+   *  via the host's SSE delta stream. */
+  useData<T>(): [T | null, (next: T) => void]
+  /** React hook: returns a stable callback that DELETEs this widget
+   *  instance from the host. */
+  useDelete(): () => Promise<void>
+  /** React hook: returns the initial-context blob the spawn drag
+   *  carried, or null. In V5.1 always null — reserved for the eventual
+   *  `spawn: 'palette+context'` migration. */
+  useInitialContext<T>(): T | null
+  /** React hook: returns `[attention, setAttention]` for this widget's
+   *  current attention signal. Call `setAttention({ level, reason })` to
+   *  surface the widget in the Inbox view; pass `null` to clear. Identical
+   *  re-sets (same level + reason) are no-ops and do not bump the row to
+   *  "unread" again. Auto-purges when the widget instance is deleted. */
+  useAttention(): [AttentionState | null, (next: AttentionInput | null) => void]
+}
+
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */
 export interface TinstarPluginAPI {
   readonly pluginId: string
@@ -222,6 +266,7 @@ export interface TinstarPluginAPI {
   watch: PluginWatchApi
   theme: PluginThemeApi
   logger: PluginLogger
+  widget: PluginWidgetApi
 }
 
 /** The shape of a plugin module's default export (or named `activate` export).
@@ -245,6 +290,16 @@ export interface PluginManifest {
       type: string
       label: string
       defaultSize?: { width: number; height: number }
+      /** Free-form description shown in the WIDGETS palette. */
+      description?: string
+      /** Path to an SVG icon, relative to the plugin's package.json. */
+      icon?: string
+      /** If true, host rejects spawning a second instance per space. */
+      singleton?: boolean
+      /** 'palette' (default) — draggable in the WIDGETS sidebar.
+       *  'palette+context' — reserved for entity-drag shortcuts; in V5.1
+       *  the palette entry renders greyed and non-draggable. */
+      spawn?: 'palette' | 'palette+context'
     }>
   }
   permissions?: string[]

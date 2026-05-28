@@ -70,3 +70,100 @@ describe('parseManifest', () => {
     expect(r.manifest.permissions).toEqual(['tasks:read'])
   })
 })
+
+describe('parseManifest contributes.widgets new fields', () => {
+  it('accepts the new optional fields', () => {
+    const parsed = parseManifest({
+      name: 'fixture-plugin',
+      version: '0.1.0',
+      tinstar: {
+        apiVersion: '5',
+        displayName: 'Fixture',
+        contributes: {
+          widgets: [{
+            type: 'fixture-widget',
+            label: 'Fixture',
+            defaultSize: { width: 300, height: 200 },
+            description: 'A test widget.',
+            icon: './icon.svg',
+            singleton: true,
+            spawn: 'palette',
+          }],
+        },
+      },
+    })
+    const w = parsed.manifest.contributes?.widgets?.[0]
+    expect(w?.description).toBe('A test widget.')
+    expect(w?.singleton).toBe(true)
+    expect(w?.spawn).toBe('palette')
+  })
+
+  it('rejects unknown spawn values', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: {
+        apiVersion: '5', displayName: 'P',
+        contributes: { widgets: [{ type: 't', label: 'T', spawn: 'invalid-mode' }] },
+      },
+    })).toThrow(/spawn/)
+  })
+
+  it('rejects non-boolean singleton', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: {
+        apiVersion: '5', displayName: 'P',
+        contributes: { widgets: [{ type: 't', label: 'T', singleton: 'true' }] },
+      },
+    })).toThrow(/singleton/)
+  })
+
+  it('rejects non-string description', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: {
+        apiVersion: '5', displayName: 'P',
+        contributes: { widgets: [{ type: 't', label: 'T', description: 42 }] },
+      },
+    })).toThrow(/description/)
+  })
+
+  it('rejects non-string icon', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: {
+        apiVersion: '5', displayName: 'P',
+        contributes: { widgets: [{ type: 't', label: 'T', icon: 123 }] },
+      },
+    })).toThrow(/icon/)
+  })
+
+  it('rejects missing widget type', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: {
+        apiVersion: '5', displayName: 'P',
+        contributes: { widgets: [{ label: 'T' }] },
+      },
+    })).toThrow(/type/)
+  })
+
+  it('rejects missing widget label', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: {
+        apiVersion: '5', displayName: 'P',
+        contributes: { widgets: [{ type: 't' }] },
+      },
+    })).toThrow(/label/)
+  })
+
+  it('rejects malformed defaultSize', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: {
+        apiVersion: '5', displayName: 'P',
+        contributes: { widgets: [{ type: 't', label: 'T', defaultSize: { width: 100 } }] },
+      },
+    })).toThrow(/defaultSize/)
+  })
+
+  it('accepts a manifest with no widgets contribution', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: { apiVersion: '5', displayName: 'P' },
+    })).not.toThrow()
+  })
+})

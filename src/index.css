@@ -193,3 +193,13 @@
     cursor: se-resize;
   }
 }
+
+/* Inbox flash-focus: brief ring around a widget when navigated to from the inbox. */
+@keyframes widget-flash {
+  0%   { box-shadow: 0 0 0 0 rgba(0, 240, 255, 0); }
+  20%  { box-shadow: 0 0 0 4px rgba(0, 240, 255, 0.6); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 240, 255, 0); }
+}
+.widget-flash {
+  animation: widget-flash 700ms ease-out;
+}

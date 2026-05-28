@@ -27,6 +27,8 @@ export interface UiPrefs {
   canvasSidebarCollapsed?: boolean
   marshalVisible?: boolean
   noTasksNudgeDismissed?: boolean
+  sidebarViewBySpace?: Record<string, 'hierarchy' | 'inbox'>
+  inboxReadKeys?: string[]
 }
 
 function readAll(): UiPrefs {
@@ -142,4 +144,38 @@ export function migrateLegacyPrefs(): void {
     localStorage.removeItem(legacyKey)
   }
   if (touched) writeAll(current)
+}
+
+// --- Inbox view prefs ---
+
+const INBOX_READ_KEYS_CAP = 5000
+
+export function getSidebarView(spaceId: string): 'hierarchy' | 'inbox' {
+  const map = getPref('sidebarViewBySpace') ?? {}
+  return map[spaceId] ?? 'hierarchy'
+}
+
+export function setSidebarView(spaceId: string, view: 'hierarchy' | 'inbox'): void {
+  const map = getPref('sidebarViewBySpace') ?? {}
+  setPref('sidebarViewBySpace', { ...map, [spaceId]: view })
+}
+
+export function getInboxReadKeys(): Set<string> {
+  return new Set(getPref('inboxReadKeys') ?? [])
+}
+
+export function markInboxRead(key: string): void {
+  const list = getPref('inboxReadKeys') ?? []
+  // Move-to-end semantics: if already present, dedupe first
+  const filtered = list.filter(k => k !== key)
+  filtered.push(key)
+  const trimmed = filtered.length > INBOX_READ_KEYS_CAP
+    ? filtered.slice(filtered.length - INBOX_READ_KEYS_CAP)
+    : filtered
+  setPref('inboxReadKeys', trimmed)
+}
+
+export function markInboxUnread(key: string): void {
+  const list = getPref('inboxReadKeys') ?? []
+  setPref('inboxReadKeys', list.filter(k => k !== key))
 }

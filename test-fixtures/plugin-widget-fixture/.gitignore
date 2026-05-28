@@ -1,0 +1,3 @@
+# Un-ignore the built bundle so CI can run e2e without a build step.
+!dist/
+!dist/**

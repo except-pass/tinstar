@@ -106,8 +106,20 @@ Lives in the plugin's `package.json` under a `tinstar` field. The host reads it 
 | `displayName` | yes | Non-empty string. Shown in Settings → Plugins. |
 | `description` | no | Free-form text shown in settings UI. |
 | `icon` | no | Relative path to an SVG. Falls back to first letter of displayName. |
-| `contributes.widgets` | no | Array of `{ type, label, defaultSize? }`. Declarative — runtime registration in `activate()` is what actually works; this is for settings UI. |
+| `contributes.widgets` | no | Array of widget entries. Declarative — runtime registration in `activate()` is what actually works; this is for settings UI. |
 | `permissions` | no | Free-form string array; not currently enforced (trusted model). Declared so settings UI can surface intent ("plugin will subscribe to NATS"). |
+
+Each `widgets[]` entry accepts:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | string | yes | Unique widget type identifier — passed to `api.widgets.register({ type, ... })` from your plugin's `activate(api)`. |
+| `label` | string | yes | Display label shown in the WIDGETS palette. |
+| `defaultSize` | `{ width, height }` | no | Initial canvas size. Defaults to `360 × 280`. |
+| `description` | string | no | Short description shown in the palette under the label. |
+| `icon` | string | no | Path to an SVG icon, relative to your plugin's `package.json`. |
+| `singleton` | boolean | no | If `true`, the host rejects spawning a second instance per space. |
+| `spawn` | `'palette' \| 'palette+context'` | no | Default `'palette'`. `'palette+context'` is reserved for entity-drag shortcuts in V5.2+; entries currently render greyed and non-draggable in the palette. |
 
 If `activate()` registers a widget type not in the manifest, the host logs a warning and accepts it. If the manifest declares one not actually registered at runtime, the host quietly drops the stale entry.
 
@@ -230,6 +242,20 @@ Beyond `widgets`, `http`, `events`, and `logger`, these surfaces are live and us
 - `api.theme.accent.{resolve,hexToRgba}` — accent-color utilities matching host chrome.
 - `api.watch.file(sessionId, filePath)` — React hook: live file content over the host's SSE file-watcher.
 - `api.watch.image(sessionId, filePath)` — React hook: image-change notifications.
+- `api.widget.useData<T>()` — React hook returning `[data, setData]` for this widget instance's persistent state. The setter debounces 250ms and PATCHes the host; SSE deltas keep the value fresh across tabs.
+- `api.widget.useDelete()` — returns a stable callback that DELETEs this widget's instance.
+- `api.widget.useInitialContext<T>()` — returns the spawn-drag context blob, or `null` for palette spawns. Reserved for `spawn: 'palette+context'` in V5.2+; always `null` in V5.1.
+- `api.widget.useAttention()` — React hook returning `[attention, setAttention]` for this widget's current attention signal. Plugins call `setAttention({ level, reason })` to surface the widget in the workspace **Inbox** view; pass `null` to clear. `level` is `'urgent' | 'attention' | 'info'`. `reason` is a short headline (≈80 chars; longer is truncated by the UI). The host server-stamps `setAt`. Identical re-sets (same level + reason) are no-ops and do not bump the row back to "unread". Attention is auto-purged when the widget instance is deleted.
+
+  ```tsx
+  function MyWidget() {
+    const [, setAttention] = api.widget.useAttention()
+    // when something needs the user's eyes:
+    setAttention({ level: 'urgent', reason: 'Build failed: 3 tests red' })
+    // when resolved:
+    setAttention(null)
+  }
+  ```
 - `api.constellations` — peer discovery, capability publish/invoke, slot membership, and arrange actions. See [Constellations & capabilities](#constellations--capabilities) below.
 
 ### Still future (V5.1)

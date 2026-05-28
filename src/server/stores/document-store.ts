@@ -20,9 +20,27 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
+
+/** Translate a run's status into a default attention signal.
+ *  Returns null when the inbox shouldn't surface the run. */
+function attentionForRunStatus(status: SessionStatus): AttentionState | null {
+  const now = new Date().toISOString()
+  switch (status) {
+    case 'needs_attention':
+      return { level: 'urgent', reason: 'Needs your attention', setAt: now }
+    case 'stopped':
+      return { level: 'info', reason: 'Run stopped', setAt: now }
+    case 'creating':
+    case 'running':
+    case 'idle':
+      return null
+  }
+}
+
+export { attentionForRunStatus }
 
 function runShallowEqual(a: Run, b: Run): boolean {
   if (a === b) return true
@@ -87,6 +105,7 @@ export class DocumentStore {
   private imageWidgets = new Map<string, ImageWidget>()
   private natsTrafficWidgets = new Map<string, NatsTrafficWidget>()
   private topicMetadata = new Map<string, TopicMetadata>()
+  private pluginWidgets = new Map<string, PluginWidgetInstance>()
 
   activeSpaceId: string = ''
 
@@ -124,6 +143,7 @@ export class DocumentStore {
       if (data.browserWidgets) for (const w of data.browserWidgets) this.browserWidgets.set(w.id, w)
       if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
       if (data.natsTrafficWidgets) for (const w of data.natsTrafficWidgets) this.natsTrafficWidgets.set(w.id, w)
+      if (data.pluginWidgets) for (const w of data.pluginWidgets) this.pluginWidgets.set(w.id, w)
       if (data.topicMetadata) for (const m of data.topicMetadata) this.topicMetadata.set(m.subject, m)
     } catch {
       // No file or corrupt — start fresh
@@ -352,6 +372,14 @@ export class DocumentStore {
     if (run.status === status) return
     run.status = status
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
+    // Derive attention from the new status. Skip the setRunAttention call
+    // when both prior attention and mapped attention are absent — otherwise
+    // setRunAttention would emit a redundant change event (its dedupe guard
+    // only fires when both sides are non-null).
+    const mapped = attentionForRunStatus(status)
+    if (mapped !== null || run.attention !== undefined) {
+      this.setRunAttention(runId, mapped)
+    }
   }
 
 
@@ -410,6 +438,52 @@ export class DocumentStore {
 
   getAllBrowserWidgets(): BrowserWidget[] {
     return [...this.browserWidgets.values()]
+  }
+
+  // --- PluginWidgets ---
+
+  upsertPluginWidget(id: string, data: PluginWidgetInstance): void {
+    this.pluginWidgets.set(id, data)
+    this.changes.emit('change', { entity: 'pluginWidget', id, data })
+  }
+
+  setPluginWidgetAttention(id: string, state: AttentionState | null): void {
+    const existing = this.pluginWidgets.get(id)
+    if (!existing) return
+    if (state && existing.attention
+        && existing.attention.level === state.level
+        && existing.attention.reason === state.reason) {
+      return
+    }
+    const next = state === null
+      ? { ...existing, attention: undefined }
+      : { ...existing, attention: state, updatedAt: state.setAt }
+    this.pluginWidgets.set(id, next)
+    this.changes.emit('change', { entity: 'pluginWidget', id, data: next })
+  }
+
+  setRunAttention(runId: string, state: AttentionState | null): void {
+    const existing = this.runs.get(runId)
+    if (!existing) return
+    if (state && existing.attention
+        && existing.attention.level === state.level
+        && existing.attention.reason === state.reason) {
+      return
+    }
+    const next: typeof existing = state === null
+      ? { ...existing, attention: undefined }
+      : { ...existing, attention: state }
+    this.runs.set(runId, next)
+    this.changes.emit('change', { entity: 'run', id: runId, data: next })
+  }
+
+  deletePluginWidget(id: string): void {
+    this.pluginWidgets.delete(id)
+    this.changes.emit('change', { entity: 'pluginWidget', id, data: null })
+  }
+
+  getAllPluginWidgets(): PluginWidgetInstance[] {
+    return [...this.pluginWidgets.values()]
   }
 
   // --- Image Widgets ---
@@ -483,6 +557,7 @@ export class DocumentStore {
       browserWidgets: this.getAllBrowserWidgets().filter(inSpace),
       imageWidgets: this.getAllImageWidgets().filter(inSpace),
       natsTrafficWidgets: this.getAllNatsTrafficWidgets().filter(inSpace),
+      pluginWidgets: this.getAllPluginWidgets().filter(inSpace),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -502,6 +577,7 @@ export class DocumentStore {
       browserWidgets: this.getAllBrowserWidgets(),
       imageWidgets: this.getAllImageWidgets(),
       natsTrafficWidgets: this.getAllNatsTrafficWidgets(),
+      pluginWidgets: this.getAllPluginWidgets(),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -519,6 +595,7 @@ export class DocumentStore {
     for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) this.browserWidgets.delete(id)
     for (const [id, e] of this.imageWidgets) if (e.spaceId === spaceId) this.imageWidgets.delete(id)
     for (const [id, e] of this.natsTrafficWidgets) if (e.spaceId === spaceId) this.natsTrafficWidgets.delete(id)
+    for (const [id, e] of this.pluginWidgets) if (e.spaceId === spaceId) this.pluginWidgets.delete(id)
     this.changes.emit('change', { entity: 'all', id: '*', data: null })
   }
 

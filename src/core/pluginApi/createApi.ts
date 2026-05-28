@@ -1,5 +1,9 @@
 import { useSyncExternalStore, useCallback, useRef } from 'react'
-import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer } from '@tinstar/plugin-api'
+import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi } from '@tinstar/plugin-api'
+import { usePluginWidgetData } from './usePluginWidgetData'
+import { useDeletePluginWidget } from './useDeletePluginWidget'
+import { useInitialContext } from './useInitialContext'
+import { useAttention } from './useAttention'
 import type { PluginRecord } from '../pluginHost/registry'
 import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
 import { apiFetch } from '../../apiClient'
@@ -226,6 +230,21 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     },
   }
 
+  const widget: PluginWidgetApi = {
+    useData: function useWidgetDataBound<T>(): [T | null, (next: T) => void] {
+      return usePluginWidgetData<T>()
+    },
+    useDelete: function useWidgetDeleteBound(): () => Promise<void> {
+      return useDeletePluginWidget()
+    },
+    useInitialContext: function useWidgetInitialContextBound<T>(): T | null {
+      return useInitialContext<T>()
+    },
+    useAttention: function useWidgetAttentionBound() {
+      return useAttention()
+    },
+  }
+
   return {
     pluginId: record.name,
     version: record.version,
@@ -238,5 +257,6 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     watch,
     theme,
     logger,
+    widget,
   }
 }

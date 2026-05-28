@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import Fuse from 'fuse.js'
-import { getPref, setPref } from '../lib/uiPrefs'
+import { getPref, setPref, getSidebarView, setSidebarView } from '../lib/uiPrefs'
+import { useInbox } from '../hooks/useInbox'
+import { InboxList } from './InboxList'
 import type { TreeNode, GroupingDimension, Space } from '../domain/types'
 import { getDimensionIcon } from '../domain/dimension-meta'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
@@ -666,6 +668,15 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
   const { isExpanded, expandAll, select } = useSelection()
   const showEmpty = showEmptyEntities ?? true
 
+  // --- View toggle (hierarchy | inbox) ---
+  const [view, setViewState] = useState<'hierarchy' | 'inbox'>(() => getSidebarView(activeSpaceId))
+  useEffect(() => { setViewState(getSidebarView(activeSpaceId)) }, [activeSpaceId])
+  const setView = useCallback((v: 'hierarchy' | 'inbox') => {
+    setViewState(v)
+    setSidebarView(activeSpaceId, v)
+  }, [activeSpaceId])
+  const { unreadCount } = useInbox(activeSpaceId)
+
   // --- Fuzzy search ---
   const [query, setQuery] = useState('')
   const [cursorIdx, setCursorIdx] = useState(0)
@@ -873,6 +884,29 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
           </button>
         )}
       </div>
+      <div className="flex border-b border-white/10" role="tablist" data-testid="sidebar-tabs">
+        <button
+          role="tab"
+          data-testid="sidebar-tab-hierarchy"
+          aria-selected={view === 'hierarchy'}
+          className={`flex-1 px-3 py-1.5 text-2xs font-mono uppercase tracking-widest ${view === 'hierarchy' ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-slate-300'}`}
+          onClick={() => setView('hierarchy')}
+        >
+          Hierarchy
+        </button>
+        <button
+          role="tab"
+          data-testid="sidebar-tab-inbox"
+          aria-selected={view === 'inbox'}
+          className={`flex-1 px-3 py-1.5 text-2xs font-mono uppercase tracking-widest ${view === 'inbox' ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-slate-300'}`}
+          onClick={() => setView('inbox')}
+        >
+          Inbox
+          {unreadCount > 0 && (
+            <span data-testid="sidebar-tab-inbox-badge" className="ml-1 px-1.5 py-0.5 bg-primary/30 rounded-full text-primary">{unreadCount}</span>
+          )}
+        </button>
+      </div>
       <div className="flex items-center px-3 py-1 border-b border-white/5">
         <div className="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
           {dimensions.map((dim, i) => (
@@ -939,7 +973,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
           value={query}
           onChange={e => setQuery(e.target.value)}
           onKeyDown={handleSearchKeyDown}
-          placeholder="Search… (press /)"
+          placeholder={view === 'inbox' ? 'Search inbox… (press /)' : 'Search… (press /)'}
           className="flex-1 min-w-0 bg-transparent text-xs text-slate-200 placeholder:text-slate-600 outline-none px-1 py-0.5"
           data-testid="hierarchy-search-input"
           aria-label="Search workspace"
@@ -958,41 +992,45 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
         )}
       </div>
 
-      {/* Tree */}
-      <div
-        ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto scrollbar-thin py-1"
-        style={{ cursor: dragState ? 'grabbing' : undefined }}
-      >
-        {displayedTree.length === 0 ? (
-          <div className="px-3 py-4 text-xs text-slate-500 text-center" data-testid="hierarchy-empty">
-            {trimmedQuery
-              ? `No matches for "${trimmedQuery}"`
-              : (unfilteredTree ?? tree).length === 0 ? 'No items. Click + to create.' : 'All entities empty. Click filter to show.'}
-          </div>
-        ) : (
-          <TreeWithOrphanSeparators
-            nodes={displayedTree}
-            depth={0}
-            dimensions={dimensions}
-            dimensionIconMap={dimensionIconMap}
-            onAdd={onAdd}
-            onRename={onRename}
-            onDelete={onDelete}
-            onFocusRun={onFocusRun}
-            onMenuOpen={onMenuOpen}
-            dragNodeId={dragState?.nodeId ?? null}
-            dropTarget={dropTarget}
-            onDragStart={handleDragStart}
-            renamingNodeId={renamingNodeId}
-            onRenameComplete={onRenameComplete}
-            hiddenRunIds={hiddenRunIds}
-            onToggleRunHidden={onToggleRunHidden}
-            matchIds={matchIds}
-            cursorId={cursorId}
-          />
-        )}
-      </div>
+      {/* Tree / Inbox */}
+      {view === 'hierarchy' ? (
+        <div
+          ref={scrollContainerRef}
+          className="flex-1 overflow-y-auto scrollbar-thin py-1"
+          style={{ cursor: dragState ? 'grabbing' : undefined }}
+        >
+          {displayedTree.length === 0 ? (
+            <div className="px-3 py-4 text-xs text-slate-500 text-center" data-testid="hierarchy-empty">
+              {trimmedQuery
+                ? `No matches for "${trimmedQuery}"`
+                : (unfilteredTree ?? tree).length === 0 ? 'No items. Click + to create.' : 'All entities empty. Click filter to show.'}
+            </div>
+          ) : (
+            <TreeWithOrphanSeparators
+              nodes={displayedTree}
+              depth={0}
+              dimensions={dimensions}
+              dimensionIconMap={dimensionIconMap}
+              onAdd={onAdd}
+              onRename={onRename}
+              onDelete={onDelete}
+              onFocusRun={onFocusRun}
+              onMenuOpen={onMenuOpen}
+              dragNodeId={dragState?.nodeId ?? null}
+              dropTarget={dropTarget}
+              onDragStart={handleDragStart}
+              renamingNodeId={renamingNodeId}
+              onRenameComplete={onRenameComplete}
+              hiddenRunIds={hiddenRunIds}
+              onToggleRunHidden={onToggleRunHidden}
+              matchIds={matchIds}
+              cursorId={cursorId}
+            />
+          )}
+        </div>
+      ) : (
+        <InboxList activeSpaceId={activeSpaceId} searchQuery={query} />
+      )}
 
       {/* Drag divider between tree and hotkeys */}
       <div
