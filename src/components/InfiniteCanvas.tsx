@@ -23,7 +23,7 @@ import { applyGroupDrag, boundingBoxOf, fitToRect } from '../canvas/constellatio
 import { tidyGrid } from '../canvas/tidyArrange'
 import type { DragMember } from '../canvas/constellationCohesion'
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
-import { resolveSnapTarget, revalidateSnapTarget, snapMembership } from '../canvas/snapZoneResolver'
+import { resolveSnapTarget, revalidateSnapTarget, resolveSnapCommit, snapMembership } from '../canvas/snapZoneResolver'
 import type { SnapWidget, SnapTarget } from '../canvas/snapZoneResolver'
 
 interface Props {
@@ -705,15 +705,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             SNAP_DISTANCE,
           )
         : null
-      const membership = validatedPreview
-        ? snapMembership(validatedPreview.targetId, slotByNode, occupiedSlots)
-        : { kind: 'none' as const }
-      if (membership.kind === 'join') {
-        constellations.assign(membership.slot, nodeId)
-      } else if (membership.kind === 'form') {
-        constellations.assign(membership.slot, nodeId)
-        constellations.assign(membership.slot, membership.withId)
-      } else if (!validatedPreview) {
+      const commit = resolveSnapCommit(validatedPreview, slotByNode, occupiedSlots)
+      if (commit.kind === 'join') {
+        constellations.assign(commit.slot, nodeId)
+      } else if (commit.kind === 'form') {
+        constellations.assign(commit.slot, nodeId)
+        constellations.assign(commit.slot, commit.withId)
+      } else {
         const unsnapped = lastUnsnappedDragPositionRef.current
         if (unsnapped) updateRunPosition(nodeId, unsnapped.x, unsnapped.y)
       }

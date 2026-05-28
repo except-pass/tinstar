@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveSnapTarget, revalidateSnapTarget, snapMembership } from '../snapZoneResolver'
+import { resolveSnapTarget, revalidateSnapTarget, resolveSnapCommit, snapMembership } from '../snapZoneResolver'
 
 const W = (id: string, x: number, y: number, w = 100, h = 100) =>
   ({ id, x, y, width: w, height: h })
@@ -55,6 +55,32 @@ describe('snapMembership', () => {
   it('reports full-slots when all 9 slots are taken and the target is ungrouped', () => {
     expect(snapMembership('u', new Map(), new Set(['1','2','3','4','5','6','7','8','9'])))
       .toEqual({ kind: 'full-slots' })
+  })
+})
+
+describe('resolveSnapCommit', () => {
+  it('commits a join when the revalidated preview still targets an occupied slot', () => {
+    expect(
+      resolveSnapCommit(
+        { targetId: 'm', edge: 'right', x: 100, y: 0 },
+        new Map([['m', '3']]),
+        new Set(['3']),
+      ),
+    ).toEqual({ kind: 'join', slot: '3' })
+  })
+
+  it('rolls back when the preview disappears before drop', () => {
+    expect(resolveSnapCommit(null, new Map(), new Set())).toEqual({ kind: 'rollback' })
+  })
+
+  it('rolls back when slot availability changes to full before drop', () => {
+    expect(
+      resolveSnapCommit(
+        { targetId: 'u', edge: 'right', x: 100, y: 0 },
+        new Map(),
+        new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9']),
+      ),
+    ).toEqual({ kind: 'rollback' })
   })
 })
 

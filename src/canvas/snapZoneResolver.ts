@@ -22,6 +22,11 @@ export type SnapDropResult =
   | { kind: 'full-slots' }
   | { kind: 'none' }
 
+export type SnapCommitResult =
+  | { kind: 'join'; slot: ConstellationSlot }
+  | { kind: 'form'; slot: ConstellationSlot; withId: string }
+  | { kind: 'rollback' }
+
 const ALL_SLOTS: ConstellationSlot[] = ['1','2','3','4','5','6','7','8','9']
 
 // Flush by default — widgets touch when joined. Bump for a gutter between snapped widgets.
@@ -107,4 +112,19 @@ export function snapMembership(
   const freeSlot = ALL_SLOTS.find(s => !occupiedSlots.has(s))
   if (!freeSlot) return { kind: 'full-slots' }
   return { kind: 'form', slot: freeSlot, withId: targetId }
+}
+
+/**
+ * Decide whether a revalidated snap preview should commit into a constellation
+ * or restore the widget to its last unsnapped drag position.
+ */
+export function resolveSnapCommit(
+  preview: SnapTarget | null,
+  slotByNode: Map<string, ConstellationSlot>,
+  occupiedSlots: Set<ConstellationSlot>,
+): SnapCommitResult {
+  if (!preview) return { kind: 'rollback' }
+  const membership = snapMembership(preview.targetId, slotByNode, occupiedSlots)
+  if (membership.kind === 'join' || membership.kind === 'form') return membership
+  return { kind: 'rollback' }
 }
