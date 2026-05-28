@@ -422,7 +422,7 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
   const buttonRef = useRef<HTMLButtonElement>(null)
   const composerRootRef = useRef<HTMLDivElement>(null)
 
-  const { tiles, pendingCount, startUpload, removeTile } = useScreenshotUpload()
+  const { tiles, pendingCount, startUpload, removeTile, clearAll } = useScreenshotUpload()
 
   const onPaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = Array.from(e.clipboardData?.items ?? [])
@@ -546,6 +546,7 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
       if (data.ok) {
         pushHistory(text)
         setText('')
+        clearAll()
         // Trigger success flash
         setJustSent(true)
         setTimeout(() => setJustSent(false), 400)
@@ -557,7 +558,7 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
     } finally {
       setSending(false)
     }
-  }, [sessionId, text, canSend, sending, status, pushHistory])
+  }, [sessionId, text, canSend, sending, status, pushHistory, clearAll])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== 'Tab' && cycleState) setCycleState(null)

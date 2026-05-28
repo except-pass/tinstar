@@ -82,6 +82,20 @@ describe('useScreenshotUpload', () => {
     expect(result.current.tiles[0].clientId).not.toBe(result.current.tiles[1].clientId)
   })
 
+  it('clearAll empties tiles and revokes blob URLs', async () => {
+    const revoke = vi.fn()
+    global.URL.revokeObjectURL = revoke
+    const { result } = renderHook(() => useScreenshotUpload())
+    await act(async () => {
+      await result.current.startUpload(fakeBlob())
+      await result.current.startUpload(fakeBlob())
+    })
+    expect(result.current.tiles).toHaveLength(2)
+    act(() => { result.current.clearAll() })
+    expect(result.current.tiles).toHaveLength(0)
+    expect(revoke).toHaveBeenCalledTimes(2)
+  })
+
   it('pendingCount counts only pending tiles', async () => {
     const deferred: Array<(v: Response) => void> = []
     global.fetch = vi.fn(() => new Promise<Response>((resolve) => { deferred.push(resolve) }))

@@ -127,6 +127,31 @@ describe('PromptComposer — image paste', () => {
     })
   })
 
+  it('clears thumbnail strip after a successful submit', async () => {
+    const { container } = renderComposer()
+    const ta = container.querySelector('textarea') as HTMLTextAreaElement
+    const file = new File([new Uint8Array([0x89])], 'p.png', { type: 'image/png' })
+    fireEvent(ta, makeImagePasteEvent(file))
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="thumbnail-strip"]')).not.toBeNull()
+    })
+
+    // Upload finishes and path is inserted — wait for submit to become enabled
+    const submit = container.querySelector('[data-testid="composer-submit"]') as HTMLButtonElement
+    await waitFor(() => expect(submit.disabled).toBe(false))
+
+    // apiFetch is already mocked to return { ok: true } for any call (see top of file)
+    // Ensure there is text so canSend is true (path token was inserted by paste handler)
+    expect(ta.value).toContain('@/abs/shot.png')
+
+    fireEvent.click(submit)
+
+    // After successful submit the strip must be gone
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="thumbnail-strip"]')).toBeNull()
+    })
+  })
+
   it('removing a tile also removes the @token from the textarea', async () => {
     const { container } = renderComposer()
     const ta = container.querySelector('textarea') as HTMLTextAreaElement

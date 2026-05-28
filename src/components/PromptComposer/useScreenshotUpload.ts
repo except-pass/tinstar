@@ -31,6 +31,8 @@ export interface UseScreenshotUploadReturn {
   startUpload(file: File): Promise<string>
   /** Remove a tile from the gallery (does not delete the file on disk). */
   removeTile(clientId: string): void
+  /** Revoke all blob URLs and clear the tile list (call after successful submit). */
+  clearAll(): void
 }
 
 export function useScreenshotUpload(): UseScreenshotUploadReturn {
@@ -93,7 +95,15 @@ export function useScreenshotUpload(): UseScreenshotUploadReturn {
     setTiles(prev => prev.filter(t => t.clientId !== clientId))
   }, [])
 
+  const clearAll = useCallback(() => {
+    for (const url of blobUrlsRef.current.values()) {
+      URL.revokeObjectURL(url)
+    }
+    blobUrlsRef.current.clear()
+    setTiles([])
+  }, [])
+
   const pendingCount = tiles.filter(t => t.status === 'pending').length
 
-  return { tiles, pendingCount, startUpload, removeTile }
+  return { tiles, pendingCount, startUpload, removeTile, clearAll }
 }
