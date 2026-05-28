@@ -7,7 +7,13 @@ export interface Tile {
   previewUrl: string // blob URL for client-side preview
   status: TileStatus
   path?: string // absolute path on disk, populated on 'ready'
+  ocrText?: string // tesseract transcript, populated on 'ready' if available
   errorMessage?: string
+}
+
+export interface UploadResult {
+  path: string
+  ocrText?: string
 }
 
 interface Envelope<T> {
@@ -25,10 +31,11 @@ export interface UseScreenshotUploadReturn {
   tiles: Tile[]
   pendingCount: number
   /**
-   * Upload a blob. Returns a promise that resolves to the absolute server path
-   * on success, or rejects on failure (tile is marked 'error' either way).
+   * Upload a blob. Resolves to { path, ocrText? } on success; rejects on
+   * failure (tile is marked 'error' either way). ocrText is populated when
+   * tesseract is available server-side and produced non-empty output.
    */
-  startUpload(file: File): Promise<string>
+  startUpload(file: File): Promise<UploadResult>
   /** Remove a tile from the gallery (does not delete the file on disk). */
   removeTile(clientId: string): void
   /** Revoke all blob URLs and clear the tile list (call after successful submit). */
@@ -51,7 +58,7 @@ export function useScreenshotUpload(): UseScreenshotUploadReturn {
     }
   }, [])
 
-  const startUpload = useCallback(async (file: File): Promise<string> => {
+  const startUpload = useCallback(async (file: File): Promise<UploadResult> => {
     const clientId = nextClientId()
     const previewUrl = URL.createObjectURL(file)
     blobUrlsRef.current.set(clientId, previewUrl)
@@ -62,7 +69,7 @@ export function useScreenshotUpload(): UseScreenshotUploadReturn {
 
     try {
       const res = await fetch('/api/screenshots', { method: 'POST', body: form })
-      const body = (await res.json()) as Envelope<{ path: string }>
+      const body = (await res.json()) as Envelope<{ path: string; ocrText?: string }>
       if (!res.ok || body.error) {
         const message = body.error?.message ?? `HTTP ${res.status}`
         setTiles(prev => prev.map(t =>
@@ -70,11 +77,11 @@ export function useScreenshotUpload(): UseScreenshotUploadReturn {
         ))
         throw new Error(message)
       }
-      const path = body.data!.path
+      const { path, ocrText } = body.data!
       setTiles(prev => prev.map(t =>
-        t.clientId === clientId ? { ...t, status: 'ready', path } : t,
+        t.clientId === clientId ? { ...t, status: 'ready', path, ocrText } : t,
       ))
-      return path
+      return { path, ocrText }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       setTiles(prev => prev.map(t =>

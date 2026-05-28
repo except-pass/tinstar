@@ -434,12 +434,18 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
       .filter((f): f is File => f !== null)
     for (const blob of blobs) {
       startUpload(blob)
-        .then(path => {
+        .then(({ path, ocrText }) => {
           const ta = textareaRef.current
           if (!ta) return
           const before = ta.value.slice(0, ta.selectionStart)
           const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
-          const insert = `${needsLeadingSpace ? ' ' : ''}@${path} `
+          // Insert @path, plus an OCR transcript fenced block when available.
+          // Sentinels wrap the transcript so handleRemoveTile can strip it
+          // cleanly if the user removes the tile.
+          const ocrBlock = ocrText
+            ? `\n<!-- ocr:${path} -->\n\`\`\`text\n${ocrText}\n\`\`\`\n<!-- /ocr:${path} -->\n`
+            : ''
+          const insert = `${needsLeadingSpace ? ' ' : ''}@${path}${ocrBlock} `
           ta.focus({ preventScroll: true })
           ta.setRangeText(insert, ta.selectionStart, ta.selectionEnd, 'end')
           // Force the React onChange to fire so controlled state stays in sync
@@ -453,10 +459,16 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
     const tile = tiles.find(t => t.clientId === clientId)
     removeTile(clientId)
     if (!tile?.path) return
-    // Remove "@<path>" plus any one adjacent whitespace on either side
     const escaped = tile.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const pattern = new RegExp(`\\s?@${escaped}\\s?`, 'g')
-    setText(prev => prev.replace(pattern, ' ').replace(/\s+/g, ' ').trimEnd())
+    // Strip the sentinel-wrapped OCR block first (if present), then the @path
+    // reference plus one adjacent whitespace. Trailing whitespace cleanup only;
+    // don't collapse internal newlines (user-authored layout must survive).
+    const ocrBlock = new RegExp(
+      `\\n?<!-- ocr:${escaped} -->[\\s\\S]*?<!-- /ocr:${escaped} -->\\n?`,
+      'g',
+    )
+    const refPattern = new RegExp(`\\s?@${escaped}\\s?`, 'g')
+    setText(prev => prev.replace(ocrBlock, '').replace(refPattern, ' ').trimEnd())
   }, [tiles, removeTile])
   const { history, push: pushHistory } = usePromptHistory(sessionId)
   const { slots: stashSlots, setSlot: setStashSlot } = usePromptStash(sessionId)

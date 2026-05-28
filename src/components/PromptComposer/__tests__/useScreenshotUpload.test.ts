@@ -32,16 +32,30 @@ describe('useScreenshotUpload', () => {
 
   it('adds a pending tile on startUpload and resolves to ready on success', async () => {
     const { result } = renderHook(() => useScreenshotUpload())
-    let returnedPath: string | null = null
+    let returned: { path: string; ocrText?: string } | null = null
     await act(async () => {
       const p = result.current.startUpload(fakeBlob())
-      returnedPath = await p
+      returned = await p
     })
-    expect(returnedPath).toBe('/abs/path/to/file.png')
+    expect(returned).toEqual({ path: '/abs/path/to/file.png', ocrText: undefined })
     expect(result.current.tiles).toHaveLength(1)
     expect(result.current.tiles[0].status).toBe('ready')
     expect(result.current.tiles[0].path).toBe('/abs/path/to/file.png')
     expect(result.current.pendingCount).toBe(0)
+  })
+
+  it('threads ocrText through to the tile and the resolved result', async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true, status: 200,
+      json: async () => ({ data: { path: '/abs/shot.png', ocrText: 'hello world' } }),
+    }) as Response)
+    const { result } = renderHook(() => useScreenshotUpload())
+    let returned: { path: string; ocrText?: string } | null = null
+    await act(async () => {
+      returned = await result.current.startUpload(fakeBlob())
+    })
+    expect(returned).toEqual({ path: '/abs/shot.png', ocrText: 'hello world' })
+    expect(result.current.tiles[0].ocrText).toBe('hello world')
   })
 
   it('marks the tile as error if fetch returns non-200', async () => {

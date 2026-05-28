@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import Busboy from 'busboy'
 import { ok, fail } from './envelope'
+import { runOcr, writeOcrSidecar } from './screenshotOcr'
 
 interface Ctx { configRoot: string }
 
@@ -103,7 +104,7 @@ export async function handleScreenshotUpload(
         cleanup()
         sendFail('INTERNAL', `Write failed: ${err.message}`)
       })
-      ws.on('close', () => {
+      ws.on('close', async () => {
         if (responded) return
         if (aborted) {
           cleanup()
@@ -111,11 +112,15 @@ export async function handleScreenshotUpload(
         }
         try {
           renameSync(tempPath!, finalPath!)
-          sendOk({ path: finalPath })
         } catch (err) {
           cleanup()
           sendFail('INTERNAL', `Rename failed: ${(err as Error).message}`)
+          return
         }
+        // OCR pre-pass: bounded, non-throwing. Image upload succeeds either way.
+        const ocrText = await runOcr(finalPath!)
+        if (ocrText) void writeOcrSidecar(finalPath!, ocrText)
+        sendOk({ path: finalPath, ocrText: ocrText ?? undefined })
       })
     })
 
