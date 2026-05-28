@@ -198,6 +198,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // Mirrored into a ref so drag-end (a stable callback) reads the latest without re-subscribing.
   const [snapPreview, setSnapPreview] = useState<SnapTarget | null>(null)
   const snapPreviewRef = useRef<SnapTarget | null>(null)
+  const draggedSnapRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
+  const lastUnsnappedDragPositionRef = useRef<{ x: number; y: number } | null>(null)
 
   // File-drag overlay: shows a full-canvas drop target when a tinstar-editor drag enters,
   // so the terminal iframe doesn't swallow the drop
@@ -632,6 +634,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
     // Reset any prior snap preview; it's recomputed live as the drag moves.
     snapPreviewRef.current = null
+    draggedSnapRectRef.current = null
+    lastUnsnappedDragPositionRef.current = null
     setSnapPreview(null)
 
     // Snapshot alt-key state at drag-start for pop-out decision at drag-end
@@ -683,8 +687,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     // target's constellation — or form a new one with it. Only when alt wasn't held and the
     // dragged widget isn't already grouped.
     const preview = snapPreviewRef.current
-    if (!altHeldAtDragStart.current && preview && constellations.slotsForNode(nodeId).length === 0) {
-      const draggedLayout = layouts.get(nodeId)
+    const isUngrouped = constellations.slotsForNode(nodeId).length === 0
+    if (!altHeldAtDragStart.current && preview && isUngrouped) {
+      let draggedLayout = draggedSnapRectRef.current
+      if (!draggedLayout) {
+        const layout = getLayout(nodeId)
+        draggedLayout = layout
+          ? { x: layout.x, y: layout.y, width: layout.width, height: layout.height }
+          : null
+      }
       const validatedPreview = draggedLayout
         ? revalidateSnapTarget(
             nodeId,
@@ -702,9 +713,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       } else if (membership.kind === 'form') {
         constellations.assign(membership.slot, nodeId)
         constellations.assign(membership.slot, membership.withId)
+      } else if (!validatedPreview) {
+        const unsnapped = lastUnsnappedDragPositionRef.current
+        if (unsnapped) updateRunPosition(nodeId, unsnapped.x, unsnapped.y)
       }
     }
     snapPreviewRef.current = null
+    draggedSnapRectRef.current = null
+    lastUnsnappedDragPositionRef.current = null
     setSnapPreview(null)
 
     draggingRunRef.current = null
@@ -713,7 +729,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     constellationDragSnapshot.current = null
     constellationDragSlot.current = null
     altHeldAtDragStart.current = false
-  }, [collectSnapNeighbors, constellations, layouts, slotByNode, occupiedSlots])
+  }, [collectSnapNeighbors, constellations, getLayout, slotByNode, occupiedSlots, updateRunPosition])
 
   // Multi-drag + constellation-aware move:
   // - If dragging a widget that's in a constellation (and alt was NOT held), move all members together.
@@ -741,10 +757,16 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     // Magnetic snap: when dragging a single ungrouped widget (no alt, no multi-select), pull it
     // flush against the nearest neighbor in range. The widget itself moves to the snapped spot.
     const layout = layouts.get(nodeId)
+    const isUngrouped = constellations.slotsForNode(nodeId).length === 0
     const snapEligible = !altKeyRef.current
       && !multiDragSnapshot.current
       && !!layout
-      && constellations.slotsForNode(nodeId).length === 0
+      && isUngrouped
+    if (!multiDragSnapshot.current && layout && isUngrouped) {
+      lastUnsnappedDragPositionRef.current = { x: newX, y: newY }
+    } else {
+      lastUnsnappedDragPositionRef.current = null
+    }
     let finalX = newX
     let finalY = newY
     let preview: SnapTarget | null = null
@@ -758,6 +780,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       }
     }
     snapPreviewRef.current = preview
+    draggedSnapRectRef.current = layout
+      ? { x: finalX, y: finalY, width: layout.width, height: layout.height }
+      : null
     setSnapPreview(preview)
 
     // Existing single / multi-selection drag path
