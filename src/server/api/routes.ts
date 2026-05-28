@@ -48,7 +48,7 @@ import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
-import { computeNatsSubscriptions, diffSubscriptions } from '../sessions/nats-subscriptions'
+import { computeNatsSubscriptions, diffSubscriptions, sanitizeSubjectToken } from '../sessions/nats-subscriptions'
 import { natsControlSocketPath } from '../sessions/backends/tmux'
 import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
@@ -72,7 +72,7 @@ function buildNatsSubject(
   initiativeId?: string,
 ): string {
   const BLANK = '_'
-  const sanitize = (s: string) => s.replace(/\s+/g, '-').replace(/[.>*]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase()
+  const sanitize = sanitizeSubjectToken
 
   // Resolve hierarchy
   let initId = initiativeId
