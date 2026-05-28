@@ -36,6 +36,16 @@ const runRow: InboxRowData = {
   worktree: 'wt',
 }
 
+const runAttentionRow: InboxRowData = {
+  ...runRow,
+  widgetId: 'tailscale-ready',
+  sourceLabel: 'tailscale-ready',
+  attention: { level: 'attention', reason: 'Ready for input', setAt: new Date(Date.now() - 60_000).toISOString() },
+  readKey: 'tailscale-ready:setAt',
+  unread: true,
+  sessionName: 'tailscale-ready',
+}
+
 describe('InboxRow', () => {
   it('shows the name as the headline, plus task path / worktree', () => {
     render(<InboxRow row={baseRow} onClick={() => {}} onClear={() => {}} />)
@@ -58,6 +68,12 @@ describe('InboxRow', () => {
     expect(dot).toHaveAttribute('aria-label', 'Idle')
     expect(dot.className).toMatch(/bg-accent-amber/)
     expect(screen.queryByText('Idle')).not.toBeInTheDocument()
+  })
+
+  it('surfaces run attention text when a run is waiting on the user', () => {
+    render(<InboxRow row={runAttentionRow} onClick={() => {}} onClear={() => {}} />)
+    expect(screen.getByText('Ready for input')).toBeInTheDocument()
+    expect(screen.getByTestId('inbox-row-dot-tailscale-ready')).toHaveAttribute('aria-label', 'Ready for input')
   })
 
   it('uses the attention level for the dot when there is no session status', () => {

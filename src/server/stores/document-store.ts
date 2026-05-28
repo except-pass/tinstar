@@ -45,6 +45,12 @@ function attentionForRunStatus(status: SessionStatus): AttentionState | null {
 
 export { attentionForRunStatus }
 
+function attentionShallowEqual(a?: AttentionState, b?: AttentionState): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.level === b.level && a.reason === b.reason && a.setAt === b.setAt
+}
+
 function runShallowEqual(a: Run, b: Run): boolean {
   if (a === b) return true
   // RunData fields
@@ -71,6 +77,7 @@ function runShallowEqual(a: Run, b: Run): boolean {
   if (a.natsControlOrphanedAt !== b.natsControlOrphanedAt) return false
   if (a.parentId !== b.parentId) return false
   if (a.breakoutRooms !== b.breakoutRooms) return false
+  if (!attentionShallowEqual(a.attention, b.attention)) return false
   // Run-only fields
   if (a.worktreeId !== b.worktreeId) return false
   if (a.createdAt !== b.createdAt) return false

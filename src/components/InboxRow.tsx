@@ -46,11 +46,9 @@ export function InboxRow({
   const accent = resolveRunAccent(row.color ?? undefined)
   const statusUi = row.status ? STATUS_DOT[row.status] : null
   const dotClass = statusUi?.dot ?? (row.attention ? LEVEL_DOT[row.attention.level] : 'bg-slate-600')
-  const statusLabel = statusUi?.label ?? row.attention?.reason ?? 'Session'
+  const statusLabel = row.attention?.reason ?? statusUi?.label ?? 'Session'
   const time = row.attention?.setAt ?? row.createdAt
-  // For plugin rows the headline is the widget type, so surface the attention reason
-  // (e.g. "Build failed") in the subline. For runs the status dot already says it.
-  const pluginReason = !isRun ? row.attention?.reason ?? null : null
+  const attentionReason = row.attention?.reason ?? null
 
   return (
     <div
@@ -77,7 +75,7 @@ export function InboxRow({
           {row.sourceLabel}
         </div>
         <div className="flex items-center gap-1.5 text-2xs text-slate-500">
-          {pluginReason && <span className="truncate text-slate-400">{pluginReason}</span>}
+          {attentionReason && <span className="truncate text-slate-400">{attentionReason}</span>}
           {row.taskPath.length > 0 && <span className="truncate">{row.taskPath.join(' › ')}</span>}
           {row.worktree && (<>
             <span className="text-slate-700">·</span>

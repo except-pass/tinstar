@@ -84,4 +84,15 @@ describe('DocumentStore equality short-circuits', () => {
     store.upsertRun('r1', { ...run, status: 'idle' })
     expect(changes).toHaveLength(1)
   })
+
+  it('upsertRun: DOES emit when only attention changes', () => {
+    const run = makeRun()
+    store.upsertRun('r1', run)
+    changes.length = 0
+    store.upsertRun('r1', {
+      ...run,
+      attention: { level: 'attention', reason: 'Ready for input', setAt: '2026-05-28T00:00:00Z' },
+    })
+    expect(changes).toHaveLength(1)
+  })
 })

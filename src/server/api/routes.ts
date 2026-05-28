@@ -2123,10 +2123,39 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(async body => {
       const existing = ctx.docStore.getRun(id)
       if (!existing) return fail(res, 'NOT_FOUND', 'not found')
-      const patch = JSON.parse(body)
+      const patch = JSON.parse(body) as {
+        taskId?: string
+        attention?: { level: string; reason: string } | null
+        [key: string]: unknown
+      }
+      const { attention: attentionPatch, ...patchWithoutAttention } = patch
+
+      // Attention handling mirrors plugin widgets so clearing a run does not
+      // leave a lingering null payload in the stored run state.
+      let attentionApplied = false
+      if ('attention' in patch) {
+        const attn = attentionPatch
+        if (attn === null) {
+          ctx.docStore.setRunAttention(id, null)
+          attentionApplied = true
+        } else if (
+          attn && typeof attn === 'object'
+          && (attn.level === 'urgent' || attn.level === 'attention' || attn.level === 'info')
+          && typeof attn.reason === 'string'
+        ) {
+          ctx.docStore.setRunAttention(id, {
+            level: attn.level,
+            reason: attn.reason.slice(0, 200),
+            setAt: new Date().toISOString(),
+          })
+          attentionApplied = true
+        } else {
+          return fail(res, 'BAD_REQUEST', 'invalid_attention: shape must be { level: urgent|attention|info, reason: string } or null')
+        }
+      }
 
       // Check if taskId changed and NATS is enabled — need to update subscriptions
-      const taskIdChanged = patch.taskId !== undefined && patch.taskId !== existing.taskId
+      const taskIdChanged = patchWithoutAttention.taskId !== undefined && patchWithoutAttention.taskId !== existing.taskId
       const sessDir = ctx.sessionConfig?.dirs.sessions
       if (taskIdChanged && existing.natsEnabled && sessDir) {
         const session = getSession(sessDir, existing.sessionId)
@@ -2136,7 +2165,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const newSubs = computeNatsSubscriptions({
             sessionName: existing.sessionId,
             spaceId: existing.spaceId,
-            taskId: patch.taskId,
+            taskId: patchWithoutAttention.taskId,
           }, ctx.docStore)
 
           const { add, remove } = diffSubscriptions(oldSubs, newSubs)
@@ -2160,22 +2189,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           updateSession(sessDir, existing.sessionId, { nats: { ...session.nats, subscriptions: newSubs } })
 
           // Update run's natsSubject and full subscription list
-          patch.natsSubject = newSubs[1] ?? newSubs[0]
-          patch.natsSubscriptions = newSubs
-          log.info('nats', `${existing.sessionId}: subscriptions updated for new task ${patch.taskId}`)
+          patchWithoutAttention.natsSubject = newSubs[1] ?? newSubs[0]
+          patchWithoutAttention.natsSubscriptions = newSubs
+          log.info('nats', `${existing.sessionId}: subscriptions updated for new task ${patchWithoutAttention.taskId}`)
 
           // Mirror the new subscription list into the traffic bridge so the
           // Saloon window-event stream stays aligned.
           registerSaloonSubs(ctx.natsTraffic, existing.sessionId, newSubs)
 
           if (natsWarnings.length > 0) {
-            ctx.docStore.upsertRun(id, { ...existing, ...patch })
+            const baseline = attentionApplied ? ctx.docStore.getRun(id)! : existing
+            ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention })
             return ok(res, ctx.docStore.getRun(id), { warnings: { nats: natsWarnings } })
           }
         }
       }
 
-      ctx.docStore.upsertRun(id, { ...existing, ...patch })
+      const baseline = attentionApplied ? ctx.docStore.getRun(id)! : existing
+      ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention })
       ok(res, ctx.docStore.getRun(id))
     })
     return true
