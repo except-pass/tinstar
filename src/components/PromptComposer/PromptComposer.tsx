@@ -20,6 +20,8 @@ import { findSlashToken, rankCommands, type SlashCommand } from '../../lib/slash
 import { useSlashCommands } from '../../hooks/useSlashCommands'
 import { SlashChips } from '../RunWorkspaceWidget/SlashChips'
 import { apiFetch } from '../../apiClient'
+import { useScreenshotUpload } from './useScreenshotUpload'
+import { ThumbnailStrip } from './ThumbnailStrip'
 
 type QuickKey = '1' | '2' | '3' | '4' | '5' | 'y' | 'n' | 'up' | 'down' | 'left' | 'right' | 'enter'
 const QUICK_KEYS: readonly QuickKey[] = ['1', '2', '3', '4', '5', 'y', 'n']
@@ -419,6 +421,43 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const composerRootRef = useRef<HTMLDivElement>(null)
+
+  const { tiles, pendingCount, startUpload, removeTile } = useScreenshotUpload()
+
+  const onPaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData?.items ?? [])
+    const imageItems = items.filter(it => it.type.startsWith('image/'))
+    if (imageItems.length === 0) return // let default text-paste proceed
+    e.preventDefault()
+    const blobs = imageItems
+      .map(it => it.getAsFile())
+      .filter((f): f is File => f !== null)
+    for (const blob of blobs) {
+      startUpload(blob)
+        .then(path => {
+          const ta = textareaRef.current
+          if (!ta) return
+          const before = ta.value.slice(0, ta.selectionStart)
+          const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
+          const insert = `${needsLeadingSpace ? ' ' : ''}@${path} `
+          ta.focus({ preventScroll: true })
+          ta.setRangeText(insert, ta.selectionStart, ta.selectionEnd, 'end')
+          // Force the React onChange to fire so controlled state stays in sync
+          ta.dispatchEvent(new Event('input', { bubbles: true }))
+        })
+        .catch(() => { /* tile already marked error in the hook */ })
+    }
+  }, [startUpload])
+
+  const handleRemoveTile = useCallback((clientId: string) => {
+    const tile = tiles.find(t => t.clientId === clientId)
+    removeTile(clientId)
+    if (!tile?.path) return
+    // Remove "@<path>" plus any one adjacent whitespace on either side
+    const escaped = tile.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const pattern = new RegExp(`\\s?@${escaped}\\s?`, 'g')
+    setText(prev => prev.replace(pattern, ' ').replace(/\s+/g, ' ').trimEnd())
+  }, [tiles, removeTile])
   const { history, push: pushHistory } = usePromptHistory(sessionId)
   const { slots: stashSlots, setSlot: setStashSlot } = usePromptStash(sessionId)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -631,32 +670,36 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
               onClose={() => setHistoryOpen(false)}
             />
           )}
-          <div className="relative bg-surface-base rounded">
-            <textarea
-              ref={textareaRef}
-              value={text}
-              onChange={e => {
-                setText(e.target.value)
-                setSlashCursor(e.target.selectionStart ?? e.target.value.length)
-                setCycleState(null)
-              }}
-              onSelect={e => setSlashCursor((e.target as HTMLTextAreaElement).selectionStart)}
-              onKeyDown={handleKeyDown}
-              onFocus={onTextareaFocus}
-              onBlur={onTextareaBlur}
-              placeholder="Enter prompt text... (Ctrl+Enter to send)"
-              className="w-full h-24 px-2 py-1.5 bg-surface-base border rounded text-xs font-mono text-slate-200 placeholder:text-slate-600 resize-y outline-none focus:border-primary/50 relative z-10"
-              style={{ borderColor: hexToRgba(accent, 0.2), background: 'transparent' }}
-            />
-            {slashToken && candidates[0] && !cycleState && candidates[0].name.startsWith(slashToken.partial) && candidates[0].name !== slashToken.partial && (
-              <div
-                aria-hidden
-                className="absolute inset-0 px-2 py-1.5 text-xs font-mono whitespace-pre-wrap break-words text-slate-600 pointer-events-none overflow-hidden"
-              >
-                <span className="invisible">{text.slice(0, slashCursor)}</span>
-                <span>{candidates[0].name.slice(slashToken.partial.length)}</span>
-              </div>
-            )}
+          <div className="flex flex-row gap-2 items-start">
+            <div className="relative bg-surface-base rounded flex-1">
+              <textarea
+                ref={textareaRef}
+                value={text}
+                onChange={e => {
+                  setText(e.target.value)
+                  setSlashCursor(e.target.selectionStart ?? e.target.value.length)
+                  setCycleState(null)
+                }}
+                onSelect={e => setSlashCursor((e.target as HTMLTextAreaElement).selectionStart)}
+                onKeyDown={handleKeyDown}
+                onFocus={onTextareaFocus}
+                onBlur={onTextareaBlur}
+                onPaste={onPaste}
+                placeholder="Enter prompt text... (Ctrl+Enter to send)"
+                className="w-full h-24 px-2 py-1.5 bg-surface-base border rounded text-xs font-mono text-slate-200 placeholder:text-slate-600 resize-y outline-none focus:border-primary/50 relative z-10"
+                style={{ borderColor: hexToRgba(accent, 0.2), background: 'transparent' }}
+              />
+              {slashToken && candidates[0] && !cycleState && candidates[0].name.startsWith(slashToken.partial) && candidates[0].name !== slashToken.partial && (
+                <div
+                  aria-hidden
+                  className="absolute inset-0 px-2 py-1.5 text-xs font-mono whitespace-pre-wrap break-words text-slate-600 pointer-events-none overflow-hidden"
+                >
+                  <span className="invisible">{text.slice(0, slashCursor)}</span>
+                  <span>{candidates[0].name.slice(slashToken.partial.length)}</span>
+                </div>
+              )}
+            </div>
+            <ThumbnailStrip tiles={tiles} onRemove={handleRemoveTile} />
           </div>
           {error && (
             <p className="text-2xs font-mono text-accent-red">{error}</p>
@@ -733,8 +776,10 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
               </button>
               <button
                 ref={buttonRef}
+                data-testid="composer-submit"
                 onClick={handleSend}
-                disabled={!canSend || sending}
+                disabled={!canSend || sending || pendingCount > 0}
+                title={pendingCount > 0 ? `Waiting for ${pendingCount} screenshot upload(s)` : undefined}
                 className={`
                   group relative flex items-center gap-1.5 px-3 py-1.5 text-2xs font-mono uppercase tracking-wider rounded
                   transition-all duration-150 ease-out
