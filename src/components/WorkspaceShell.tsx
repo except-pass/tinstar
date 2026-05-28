@@ -248,6 +248,10 @@ function WorkspaceShellInner() {
     return map
   }, [pluginWidgets])
 
+  // Set of plugin widget entityIds — passed to HierarchySidebar so it can
+  // render them as work widgets (closeable ×, no entity-style kebab menu).
+  const pluginWidgetIdSet = useMemo(() => new Set(pluginWidgets.map(w => w.id)), [pluginWidgets])
+
   const canvasTree = useMemo(() => {
     const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticNatsTrafficNodes, ...syntheticPluginWidgetNodes]
     if (allSynthetic.length === 0) return sidebarTree
@@ -914,6 +918,7 @@ function WorkspaceShellInner() {
                         onRenameComplete={() => setRenamingNodeId(null)}
                         hiddenRunIds={hiddenRunIds}
                         onToggleRunHidden={toggleRunHidden}
+                        pluginWidgetIds={pluginWidgetIdSet}
                       />
                       <WidgetsPalette />
                     </div>

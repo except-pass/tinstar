@@ -136,6 +136,10 @@ interface HierarchySidebarProps {
   onRenameComplete?: () => void
   hiddenRunIds?: Set<string>
   onToggleRunHidden?: (runId: string) => void
+  /** Entity ids of plugin widget instances. Used to render them as work
+   *  widgets (closeable × button, no entity-style kebab menu) regardless of
+   *  the plugin's chosen widget type string. */
+  pluginWidgetIds?: Set<string>
 }
 
 /** Metadata for all Work Widget types — drives sidebar icons, badge, close button, and focus behavior */
@@ -179,6 +183,7 @@ function SidebarNode({
   onToggleRunHidden,
   matchIds,
   cursorId,
+  pluginWidgetIds,
 }: {
   node: TreeNode
   depth: number
@@ -198,6 +203,7 @@ function SidebarNode({
   onToggleRunHidden?: (runId: string) => void
   matchIds?: Set<string> | null
   cursorId?: string | null
+  pluginWidgetIds?: Set<string>
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
   const { slotsForNode, remove } = useConstellationContext()
@@ -228,7 +234,12 @@ function SidebarNode({
   const hovered = isHovered(node.id)
   const hasChildren = node.children.length > 0
   const isRun = node.type === 'run'
-  const isWorkWidget = node.type in WORK_WIDGET_META
+  // Plugin widget instances aren't covered by the hardcoded WORK_WIDGET_META
+  // (their type strings come from plugins), so identify them by entityId
+  // membership and treat them as work widgets too — gets them the × button
+  // and skips the entity-style kebab menu (Start Session / Add Child / etc.).
+  const isPluginWidget = pluginWidgetIds?.has(node.entityId) === true
+  const isWorkWidget = (node.type in WORK_WIDGET_META) || isPluginWidget
   const runHidden = isRun && hiddenRunIds?.has(node.entityId) === true
   const isDragging = dragNodeId === node.id
   const isMatch = matchIds?.has(node.id) === true
@@ -432,8 +443,9 @@ function SidebarNode({
           </span>
         )}
 
-        {/* Close button for closeable work widgets */}
-        {WORK_WIDGET_META[node.type]?.closeable && !editing && (
+        {/* Close button for closeable work widgets. Plugin widgets are
+            always closeable; built-in work widgets opt in via WORK_WIDGET_META. */}
+        {(WORK_WIDGET_META[node.type]?.closeable || isPluginWidget) && !editing && (
           <button
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-accent-red opacity-0 group-hover:opacity-100"
             onClick={(e) => {
@@ -542,6 +554,7 @@ function SidebarNode({
               onToggleRunHidden={onToggleRunHidden}
               matchIds={matchIds}
               cursorId={cursorId}
+              pluginWidgetIds={pluginWidgetIds}
             />
           ))}
         </div>
@@ -588,6 +601,7 @@ function TreeWithOrphanSeparators({
   onToggleRunHidden,
   matchIds,
   cursorId,
+  pluginWidgetIds,
 }: {
   nodes: TreeNode[]
   depth: number
@@ -607,6 +621,7 @@ function TreeWithOrphanSeparators({
   onToggleRunHidden?: (runId: string) => void
   matchIds?: Set<string> | null
   cursorId?: string | null
+  pluginWidgetIds?: Set<string>
 }) {
   const normal = nodes.filter(n => !n.orphan)
   const orphans = nodes.filter(n => n.orphan)
@@ -634,6 +649,7 @@ function TreeWithOrphanSeparators({
           onToggleRunHidden={onToggleRunHidden}
           matchIds={matchIds}
           cursorId={cursorId}
+          pluginWidgetIds={pluginWidgetIds}
         />
       ))}
       {orphans.length > 0 && <OrphanSeparator />}
@@ -658,13 +674,14 @@ function TreeWithOrphanSeparators({
           onToggleRunHidden={onToggleRunHidden}
           matchIds={matchIds}
           cursorId={cursorId}
+          pluginWidgetIds={pluginWidgetIds}
         />
       ))}
     </>
   )
 }
 
-export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
+export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden, pluginWidgetIds }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
   const { isExpanded, expandAll, select } = useSelection()
   const showEmpty = showEmptyEntities ?? true
 
@@ -1025,6 +1042,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
               onToggleRunHidden={onToggleRunHidden}
               matchIds={matchIds}
               cursorId={cursorId}
+              pluginWidgetIds={pluginWidgetIds}
             />
           )}
         </div>

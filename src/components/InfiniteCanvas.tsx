@@ -13,6 +13,7 @@ import type { ConstellationSlot } from '../hooks/useConstellations'
 import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
 import { PluginWidgetDisabledPlaceholder } from './PluginWidgetDisabledPlaceholder'
+import { getOrCreatePluginChromeWrapper } from './PluginWidgetChrome'
 import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
 import { EV } from '../lib/windowEvents'
@@ -1426,10 +1427,24 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const moveHandler = reg.isContainer ? moveNode : handleMultiMove
     const resizeHandler = reg.isContainer ? resizeNode : updateRunSize
 
+    // Plugin widgets get a host-owned chrome (header + close + drag handle)
+    // so they're consistent with built-in widgets even when the plugin author
+    // doesn't ship their own header. Per-type wrapper cache preserves
+    // component identity so the inner plugin doesn't remount on parent renders.
+    const isPluginWidget = pluginWidgetMap.has(node.entityId)
+    const effectiveReg = isPluginWidget
+      ? { ...reg, component: getOrCreatePluginChromeWrapper(reg.type, reg.component) }
+      : reg
+
+    // Any non-container leaf widget participates in constellation snap, not
+    // just runs. Runs, plugin widgets, editors, browsers, images, nats-traffic
+    // all behave the same in the snap pipeline.
+    const isSnapLeaf = !reg.isContainer
+
     return (
       <CanvasWidgetShell
         key={node.id}
-        registration={reg}
+        registration={effectiveReg}
         nodeId={node.id}
         widgetId={node.entityId}
         data={data}
@@ -1442,11 +1457,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}
-        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' || node.type === 'nats-traffic' || pluginWidgetMap.has(node.entityId) ? handleDoubleClickZoom : undefined)}
+        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (isSnapLeaf ? handleDoubleClickZoom : undefined)}
         onMove={moveHandler}
         onResize={resizeHandler}
-        onDragStart={node.type === 'run' ? handleWidgetDragStart : undefined}
-        onDragEnd={node.type === 'run' ? handleWidgetDragEnd : undefined}
+        onDragStart={isSnapLeaf ? handleWidgetDragStart : undefined}
+        onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
       />
     )
   }
