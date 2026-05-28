@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { InboxList } from '../InboxList'
+import { apiFetch } from '../../apiClient'
 
 const fixtures: any[] = []
 
@@ -30,6 +31,7 @@ vi.mock('../../canvas/flashAndFocus', () => ({
 beforeEach(() => {
   fixtures.length = 0
   selectedId = null
+  vi.clearAllMocks()
 })
 
 function row(overrides: Partial<any> = {}) {
@@ -111,5 +113,17 @@ describe('InboxList', () => {
     render(<InboxList activeSpaceId="spc-1" />)
     fireEvent.click(screen.getByTestId('inbox-row-pw-1'))
     expect(dispatchFlashFocus).toHaveBeenCalledWith({ widgetId: 'pw-1', source: 'plugin' })
+  })
+
+  it('logs a clear failure when the server responds with a non-2xx status', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(apiFetch).mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+    fixtures.push(row({ widgetId: 'pw-1', source: 'plugin' }))
+    render(<InboxList activeSpaceId="spc-1" />)
+
+    fireEvent.click(screen.getByTestId('inbox-row-clear-pw-1'))
+    await Promise.resolve()
+
+    expect(errorSpy).toHaveBeenCalledWith('[inbox] clear failed: HTTP 404')
   })
 })

@@ -64,6 +64,11 @@ export function InboxList({ activeSpaceId, searchQuery = '' }: Props) {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ attention: null }),
+    }).then((res) => {
+      if (!res.ok) {
+        // eslint-disable-next-line no-console
+        console.error(`[inbox] clear failed: HTTP ${res.status}`)
+      }
     }).catch((err: unknown) => {
       // eslint-disable-next-line no-console
       console.error('[inbox] clear failed:', err)
