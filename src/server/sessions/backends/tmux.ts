@@ -444,6 +444,15 @@ export async function startTmuxSession(
   parts.push(agentCmd)
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
 
+  // Same dev-channel auto-accept as createTmuxSession — restarting an exited
+  // agent re-shows Claude's NATS warning prompt and must also be accepted.
+  if (natsOpts?.enabled) {
+    log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured (restart)`)
+    autoAcceptDevChannelWarning(tmuxName).catch(() => {
+      // Session may have been killed or prompt not shown, ignore
+    })
+  }
+
   // Restart ttyd
   const ttydPid = await startTtyd({ tmuxName, port: opts.port, sessionName: opts.session.name })
   return { port: opts.port, ttydPid }
