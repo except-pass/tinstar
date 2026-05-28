@@ -70,8 +70,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [entities, setEntities] = useState<{ initiatives: EntityOption[]; epics: EntityOption[]; tasks: EntityOption[] }>({ initiatives: [], epics: [], tasks: [] })
   const [addingProject, setAddingProject] = useState(false)
   const [newProjectPath, setNewProjectPath] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const nameRef = useRef<HTMLInputElement>(null)
   const sources = prefill?.sources ?? {}
 
@@ -138,11 +136,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
 
   const effectiveName = name || placeholder
 
-  const handleSubmit = useCallback(async () => {
-    if (submitting) return
-    setSubmitting(true)
-    setError(null)
-
+  const handleSubmit = useCallback(() => {
     const body: Record<string, unknown> = {
       name: effectiveName,
       skipPermissions,
@@ -157,24 +151,26 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
     if (prefill?.epicId) body.epicId = prefill.epicId
     if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
 
-    try {
-      const res = await apiFetch('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+    // Close optimistically — the SSE event stream will surface the new session.
+    onClose()
+
+    apiFetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (!data.ok) {
+          console.error('Failed to create session:', data.error?.message ?? data)
+          window.alert(`Failed to create session: ${data.error?.message ?? 'unknown error'}`)
+        }
       })
-      const data = await res.json()
-      if (!data.ok) {
-        setError(data.error?.message ?? 'Failed to create session')
-        setSubmitting(false)
-        return
-      }
-      onClose()
-    } catch (err) {
-      setError((err as Error).message)
-      setSubmitting(false)
-    }
-  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
+      .catch(err => {
+        console.error('Failed to create session:', err)
+        window.alert(`Failed to create session: ${(err as Error).message}`)
+      })
+  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, onClose])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -439,13 +435,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
           />
         </div>
 
-        {/* Error */}
-        {error && (
-          <div className="mb-3 text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded px-3 py-2">
-            {error}
-          </div>
-        )}
-
         {/* Footer */}
         <div className="flex justify-between items-center">
           <span className="text-2xs text-slate-500">Ctrl+Enter to create</span>
@@ -457,12 +446,11 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
               Cancel
             </button>
             <button
-              className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30 disabled:opacity-50"
+              className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30"
               onClick={handleSubmit}
-              disabled={submitting}
               data-testid="create-session-submit"
             >
-              {submitting ? 'Creating...' : 'Create'}
+              Create
             </button>
           </div>
         </div>
