@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch } from '../../apiClient'
 import { useServerEvents } from '../../hooks/useServerEvents'
-import { RecapSessionPanel } from '../RecapSessionPanel'
+import { PromptComposer } from '../PromptComposer/PromptComposer'
 import { hexToRgba } from '../runAccent'
 import { getPref, setPref } from '../../lib/uiPrefs'
 
@@ -12,7 +12,7 @@ type MarshalState =
   | { phase: 'error'; message: string }
 
 /** Self-contained marshal panel for the canvas sidebar. Owns the marshal
- *  session lifecycle (ensure/restart) and renders the shared RecapSessionPanel
+ *  session lifecycle (ensure/restart) and renders the shared PromptComposer
  *  with Recap as the default tab. */
 export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
   const [state, setState] = useState<MarshalState>({ phase: 'idle' })
@@ -163,7 +163,7 @@ export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
           >retry</button>
         </div>
       ) : (
-        <RecapSessionPanel
+        <PromptComposer
           sessionId={sessionId}
           status={status}
           port={port}
