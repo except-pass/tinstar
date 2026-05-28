@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveSnapTarget, snapMembership } from '../snapZoneResolver'
+import { resolveSnapTarget, revalidateSnapTarget, snapMembership } from '../snapZoneResolver'
 
 const W = (id: string, x: number, y: number, w = 100, h = 100) =>
   ({ id, x, y, width: w, height: h })
@@ -55,5 +55,31 @@ describe('snapMembership', () => {
   it('reports full-slots when all 9 slots are taken and the target is ungrouped', () => {
     expect(snapMembership('u', new Map(), new Set(['1','2','3','4','5','6','7','8','9'])))
       .toEqual({ kind: 'full-slots' })
+  })
+})
+
+describe('revalidateSnapTarget', () => {
+  it('keeps a preview when the same target is still the active snap target', () => {
+    const preview = { targetId: 't', edge: 'right' as const, x: 100, y: 0 }
+
+    expect(
+      revalidateSnapTarget('d', preview, { x: 100, y: 0, width: 100, height: 100 }, [W('t', 0, 0)], SNAP_DISTANCE),
+    ).toEqual(preview)
+  })
+
+  it('drops a preview when the snapped-against widget no longer exists', () => {
+    const preview = { targetId: 't', edge: 'right' as const, x: 100, y: 0 }
+
+    expect(
+      revalidateSnapTarget('d', preview, { x: 100, y: 0, width: 100, height: 100 }, [], SNAP_DISTANCE),
+    ).toBeNull()
+  })
+
+  it('drops a preview when the target is no longer within snap range', () => {
+    const preview = { targetId: 't', edge: 'right' as const, x: 100, y: 0 }
+
+    expect(
+      revalidateSnapTarget('d', preview, { x: 100, y: 0, width: 100, height: 100 }, [W('t', 500, 0)], SNAP_DISTANCE),
+    ).toBeNull()
   })
 })

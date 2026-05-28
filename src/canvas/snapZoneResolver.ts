@@ -76,6 +76,24 @@ export function resolveSnapTarget(
 }
 
 /**
+ * Re-resolve a preview target against the current layout state. Returns null when the original
+ * preview target no longer exists, is no longer within snap range, or is no longer the active
+ * snap target for the dragged widget.
+ */
+export function revalidateSnapTarget(
+  draggedId: string,
+  preview: SnapTarget | null,
+  draggedRect: Rect,
+  allWidgets: SnapWidget[],
+  snapDistance: number,
+): SnapTarget | null {
+  if (!preview) return null
+  const current = resolveSnapTarget(draggedId, draggedRect, allWidgets, snapDistance)
+  if (!current || current.targetId !== preview.targetId) return null
+  return current
+}
+
+/**
  * Decide the constellation action for a known snap target: join its slot if it has one,
  * otherwise form a new constellation with it in the next free slot (or report full).
  */

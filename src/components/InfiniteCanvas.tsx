@@ -23,7 +23,7 @@ import { applyGroupDrag, boundingBoxOf, fitToRect } from '../canvas/constellatio
 import { tidyGrid } from '../canvas/tidyArrange'
 import type { DragMember } from '../canvas/constellationCohesion'
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
-import { resolveSnapTarget, snapMembership } from '../canvas/snapZoneResolver'
+import { resolveSnapTarget, revalidateSnapTarget, snapMembership } from '../canvas/snapZoneResolver'
 import type { SnapWidget, SnapTarget } from '../canvas/snapZoneResolver'
 
 interface Props {
@@ -616,6 +616,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return set
   }, [constellations.store])
 
+  const collectSnapNeighbors = useCallback((nodeId: string): SnapWidget[] => {
+    const neighbors: SnapWidget[] = []
+    for (const [id, l] of layouts) {
+      if (id === nodeId) continue
+      neighbors.push({ id, x: l.x, y: l.y, width: l.width, height: l.height })
+    }
+    return neighbors
+  }, [layouts])
+
   // Widget drag callbacks
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
@@ -675,7 +684,19 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     // dragged widget isn't already grouped.
     const preview = snapPreviewRef.current
     if (!altHeldAtDragStart.current && preview && constellations.slotsForNode(nodeId).length === 0) {
-      const membership = snapMembership(preview.targetId, slotByNode, occupiedSlots)
+      const draggedLayout = layouts.get(nodeId)
+      const validatedPreview = draggedLayout
+        ? revalidateSnapTarget(
+            nodeId,
+            preview,
+            { x: draggedLayout.x, y: draggedLayout.y, width: draggedLayout.width, height: draggedLayout.height },
+            collectSnapNeighbors(nodeId),
+            SNAP_DISTANCE,
+          )
+        : null
+      const membership = validatedPreview
+        ? snapMembership(validatedPreview.targetId, slotByNode, occupiedSlots)
+        : { kind: 'none' as const }
       if (membership.kind === 'join') {
         constellations.assign(membership.slot, nodeId)
       } else if (membership.kind === 'form') {
@@ -692,7 +713,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     constellationDragSnapshot.current = null
     constellationDragSlot.current = null
     altHeldAtDragStart.current = false
-  }, [constellations, layouts, slotByNode, occupiedSlots])
+  }, [collectSnapNeighbors, constellations, layouts, slotByNode, occupiedSlots])
 
   // Multi-drag + constellation-aware move:
   // - If dragging a widget that's in a constellation (and alt was NOT held), move all members together.
@@ -728,13 +749,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     let finalY = newY
     let preview: SnapTarget | null = null
     if (snapEligible && layout) {
-      const neighbors: SnapWidget[] = []
-      for (const [id, l] of layouts) {
-        if (id === nodeId) continue
-        neighbors.push({ id, x: l.x, y: l.y, width: l.width, height: l.height })
-      }
+      const neighbors = collectSnapNeighbors(nodeId)
       preview = resolveSnapTarget(nodeId, { x: newX, y: newY, width: layout.width, height: layout.height }, neighbors, SNAP_DISTANCE)
-      if (preview) {
+      const membership = preview ? snapMembership(preview.targetId, slotByNode, occupiedSlots) : null
+      if (preview && membership?.kind !== 'full-slots') {
         finalX = preview.x
         finalY = preview.y
       }
@@ -754,7 +772,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       if (peerNodeId === '__origin__') continue
       updateRunPosition(peerNodeId, pos.x + dx, pos.y + dy)
     }
-  }, [updateRunPosition, layouts, constellations])
+  }, [collectSnapNeighbors, updateRunPosition, layouts, constellations, slotByNode, occupiedSlots])
 
   // Grid arrange: treemap-style nested layout filling the viewport
   const arrangeGrid = useCallback(() => {
