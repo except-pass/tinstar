@@ -13,3 +13,5 @@ screenshots/
 docs/superpowers/
 data-alloy/
 todos.txt
+# roborev snapshots
+/.roborev/
