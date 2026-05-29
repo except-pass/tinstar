@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, createContext, useContext } from 'react'
 import Fuse from 'fuse.js'
 import { getPref, setPref, getSidebarView, setSidebarView } from '../lib/uiPrefs'
 import { useInbox } from '../hooks/useInbox'
@@ -18,6 +18,10 @@ import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 import { BindingRow, GLOBAL_KEYS, CANVAS_KEYS, QUICKDRAW_KEYS } from './HotkeyBindingRow'
 import { AgentIcon, isIconUrl } from './agentIcon'
 import { apiFetch } from '../apiClient'
+import { usePluginWidgetRegistry } from '../hooks/usePluginWidgetRegistry'
+
+/** widgetType → resolved icon, so plugin-widget hierarchy rows show the plugin's own icon. */
+const PluginIconContext = createContext<Map<string, string>>(new Map())
 
 interface FlatNode {
   id: string
@@ -207,6 +211,7 @@ function SidebarNode({
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
   const { slotsForNode, remove } = useConstellationContext()
+  const pluginIconByType = useContext(PluginIconContext)
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -360,7 +365,9 @@ function SidebarNode({
             ? (isIconUrl(node.agentIcon)
                 ? <AgentIcon icon={node.agentIcon} />
                 : (node.agentIcon ?? '▶'))
-            : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
+            : isPluginWidget && isIconUrl(pluginIconByType.get(node.type))
+              ? <AgentIcon icon={pluginIconByType.get(node.type)} className="w-4 h-4" />
+              : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
         </span>
 
         {/* Color dot */}
@@ -871,7 +878,10 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
     dividerDragRef.current = null
   }, [handleDragEnd])
 
+  const { iconByType: pluginIconByType } = usePluginWidgetRegistry()
+
   return (
+    <PluginIconContext.Provider value={pluginIconByType}>
     <div
       className="flex flex-col h-full"
       data-testid="hierarchy-sidebar"
@@ -1117,5 +1127,6 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
         </div>
       )}
     </div>
+    </PluginIconContext.Provider>
   )
 }

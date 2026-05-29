@@ -1,7 +1,41 @@
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, extname } from 'node:path'
 import { parseManifest, ManifestError } from '../../core/pluginHost/manifest'
 import { readPluginsConfig } from '../../core/pluginHost/pluginsConfig'
+
+const ICON_MIME: Record<string, string> = {
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+}
+const MAX_INLINE_ICON_BYTES = 256 * 1024
+
+/**
+ * Resolve a plugin widget's declared icon into something the browser can render.
+ * Absolute URLs, data: URIs, and web-root paths (`/foo.svg`) pass through unchanged.
+ * A path relative to the plugin's package.json is read off disk and inlined as a data: URI
+ * so external (filesystem) plugins don't have to publish their icon under the host's web root.
+ * Returns undefined when the file is missing, unreadable, an unknown type, or too large
+ * (the palette then falls back to the label's first letter).
+ */
+export function resolvePluginIcon(pluginDir: string, icon: string | undefined): string | undefined {
+  if (!icon) return undefined
+  if (icon.startsWith('http://') || icon.startsWith('https://') || icon.startsWith('data:') || icon.startsWith('/')) {
+    return icon
+  }
+  const mime = ICON_MIME[extname(icon).toLowerCase()]
+  if (!mime) return undefined
+  try {
+    const buf = readFileSync(join(pluginDir, icon))
+    if (buf.byteLength > MAX_INLINE_ICON_BYTES) return undefined
+    return `data:${mime};base64,${buf.toString('base64')}`
+  } catch {
+    return undefined
+  }
+}
 
 export interface ResolvedWidgetType {
   pluginId: string
@@ -53,7 +87,7 @@ export function resolveWidgetRegistry(configRoot: string): ResolvedWidgetType[] 
         widgetType: w.type,
         label: w.label,
         description: w.description,
-        icon: w.icon,
+        icon: resolvePluginIcon(entry.path, w.icon),
         defaultSize: w.defaultSize,
         singleton: w.singleton === true,
         spawn: w.spawn ?? 'palette',

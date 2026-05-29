@@ -1,32 +1,10 @@
-import { useEffect, useState } from 'react'
-import { apiFetch } from '../../apiClient'
-
-interface PaletteWidgetEntry {
-  pluginId: string
-  pluginDisplayName: string
-  widgetType: string
-  label: string
-  description?: string
-  icon?: string
-  defaultSize?: { width: number; height: number }
-  singleton: boolean
-  spawn: 'palette' | 'palette+context'
-}
+import { useState } from 'react'
+import { usePluginWidgetRegistry, type PaletteWidgetEntry } from '../../hooks/usePluginWidgetRegistry'
+import { isIconUrl } from '../agentIcon'
 
 export function WidgetsPalette() {
-  const [entries, setEntries] = useState<PaletteWidgetEntry[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { entries, error } = usePluginWidgetRegistry()
   const [expanded, setExpanded] = useState(true)
-
-  useEffect(() => {
-    apiFetch('/api/plugin-widgets/registry')
-      .then(r => r.json())
-      .then((j: { ok: boolean; data?: PaletteWidgetEntry[]; error?: { message: string } }) => {
-        if (j.ok && j.data) setEntries(j.data)
-        else setError(j.error?.message ?? 'unknown error')
-      })
-      .catch(e => setError(e.message))
-  }, [])
 
   // Group by pluginId, preserving plugin order from the registry response
   const groups: Array<{ pluginId: string; pluginDisplayName: string; widgets: PaletteWidgetEntry[] }> = []
@@ -40,9 +18,9 @@ export function WidgetsPalette() {
   }
 
   return (
-    <div className="border-t border-white/5 pt-2 pb-3" data-testid="widgets-palette">
+    <div className="border-t border-white/5 pt-2 pb-2 flex-shrink-0 flex flex-col min-h-0" data-testid="widgets-palette">
       <button
-        className="w-full flex items-center gap-1 px-3 py-1 text-2xs font-mono uppercase tracking-wider text-slate-500 hover:text-primary"
+        className="w-full flex items-center gap-1 px-3 py-1 text-2xs font-mono uppercase tracking-wider text-slate-500 hover:text-primary flex-shrink-0"
         onClick={() => setExpanded(v => !v)}
         data-testid="widgets-palette-toggle"
       >
@@ -50,6 +28,8 @@ export function WidgetsPalette() {
         WIDGETS
       </button>
 
+      {/* Bounded so a long widget list scrolls within the palette instead of pushing it off-screen. */}
+      <div className="overflow-y-auto scrollbar-thin min-h-0" style={{ maxHeight: '40vh' }}>
       {expanded && error && (
         <div className="px-3 py-2 text-xs text-red-300" data-testid="widgets-palette-error">
           Failed to load widgets: {error}
@@ -79,6 +59,7 @@ export function WidgetsPalette() {
           {g.widgets.map(w => <PaletteEntry key={`${g.pluginId}/${w.widgetType}`} entry={w} />)}
         </div>
       ))}
+      </div>
     </div>
   )
 }
@@ -111,7 +92,7 @@ function PaletteEntry({ entry }: { entry: PaletteWidgetEntry }) {
       }
       title={isContextOnly ? 'Available from a Run (V5.2+)' : entry.description}
     >
-      {entry.icon
+      {entry.icon && isIconUrl(entry.icon)
         ? <img src={entry.icon} className="w-4 h-4 mt-0.5" alt="" />
         : <span className="w-4 h-4 mt-0.5 inline-flex items-center justify-center text-2xs font-mono text-slate-400">{entry.label[0]}</span>}
       <div className="min-w-0 flex-1">

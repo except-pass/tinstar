@@ -885,7 +885,11 @@ function WorkspaceShellInner() {
                     <img src="/logo.png" alt="Tinstar" className="h-5 pointer-events-none select-none opacity-80 flex-shrink-0" />
                   </div>
 
-                  <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
+                  {/* Sidebar body: hierarchy scrolls within its own region; the widgets palette
+                      stays pinned + visible below it (previously both shared one scroll container,
+                      so the palette was pushed off the bottom). */}
+                  <div className="flex-1 flex flex-col min-h-0">
+                    <div className="flex-1 min-h-0 overflow-hidden">
                     <HierarchySidebar
                         tree={canvasTree}
                         unfilteredTree={rawSidebarTree}
@@ -920,8 +924,9 @@ function WorkspaceShellInner() {
                         onToggleRunHidden={toggleRunHidden}
                         pluginWidgetIds={pluginWidgetIdSet}
                       />
-                      <WidgetsPalette />
                     </div>
+                    <WidgetsPalette />
+                  </div>
                     <div
                       className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
                       onPointerDown={onSidebarResizePointerDown}
