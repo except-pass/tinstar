@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { apiFetch } from '../apiClient'
+import { useWindowEvent } from '../lib/windowEvents'
 
 interface ImageWatchState {
   connected: boolean
@@ -24,10 +25,10 @@ export function useImageWatch(sessionId: string, filePath: string): ImageWatchSt
       body: JSON.stringify({ sessionId, filePath, subscriberId, mode: 'notify' }),
     })
       .then(r => r.json())
-      .then((data: { ok?: boolean; absolutePath?: string }) => {
+      .then((body: { ok?: boolean; data?: { absolutePath?: string } }) => {
         if (cancelled) return
-        if (data.ok && data.absolutePath) {
-          absolutePathRef.current = data.absolutePath
+        if (body.ok && body.data?.absolutePath) {
+          absolutePathRef.current = body.data.absolutePath
           setConnected(true)
         }
       })
@@ -35,17 +36,8 @@ export function useImageWatch(sessionId: string, filePath: string): ImageWatchSt
         if (!cancelled) setConnected(false)
       })
 
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { path: string; type: string; timestamp?: number }
-      if (detail.path === absolutePathRef.current && detail.type === 'updated' && detail.timestamp) {
-        setLastUpdatedAt(new Date(detail.timestamp))
-      }
-    }
-    window.addEventListener('tinstar:file_watch', handler)
-
     return () => {
       cancelled = true
-      window.removeEventListener('tinstar:file_watch', handler)
       setConnected(false)
       const absPath = absolutePathRef.current
       if (absPath) {
@@ -57,6 +49,14 @@ export function useImageWatch(sessionId: string, filePath: string): ImageWatchSt
       }
     }
   }, [sessionId, filePath])
+
+  useWindowEvent('tinstar:file_watch', (detail) => {
+    const d = detail as { path: string; type: string; timestamp?: number } | undefined
+    if (!d) return
+    if (d.path === absolutePathRef.current && d.type === 'updated' && d.timestamp) {
+      setLastUpdatedAt(new Date(d.timestamp))
+    }
+  })
 
   return { connected, lastUpdatedAt }
 }

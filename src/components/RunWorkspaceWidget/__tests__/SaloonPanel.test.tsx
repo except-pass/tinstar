@@ -1,6 +1,17 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/react'
+
+// SaloonPanel transitively renders StreamView, which calls useBackendState
+// (the shared SSE singleton). jsdom doesn't ship EventSource, so the
+// singleton would crash on subscribe. Mock useBackendState here so the
+// component tree renders without a backend.
+vi.mock('../../../hooks/useBackendState', () => ({
+  useBackendState: () => ({
+    topicMetadata: [],
+  }),
+}))
+
 import { SaloonPanel } from '../SaloonPanel'
 
 describe('<SaloonPanel>', () => {

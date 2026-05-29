@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { apiFetch } from '../../apiClient'
 import { useServerEvents } from '../../hooks/useServerEvents'
-import { RecapSessionPanel } from '../RecapSessionPanel'
+import { PromptComposer } from '../PromptComposer/PromptComposer'
 import { hexToRgba } from '../runAccent'
+import { getPref, setPref } from '../../lib/uiPrefs'
 
 type MarshalState =
   | { phase: 'idle' }
@@ -10,21 +11,19 @@ type MarshalState =
   | { phase: 'ready'; port: number; sessionName: string }
   | { phase: 'error'; message: string }
 
-const VISIBLE_STORAGE_KEY = 'tinstar-marshal-visible'
-
 /** Self-contained marshal panel for the canvas sidebar. Owns the marshal
- *  session lifecycle (ensure/restart) and renders the shared RecapSessionPanel
+ *  session lifecycle (ensure/restart) and renders the shared PromptComposer
  *  with Recap as the default tab. */
 export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
   const [state, setState] = useState<MarshalState>({ phase: 'idle' })
   const [tick, setTick] = useState(0)
   const [tab, setTab] = useState<'recap' | 'terminal'>('recap')
-  const [visible, setVisible] = useState(() => localStorage.getItem(VISIBLE_STORAGE_KEY) !== 'false')
+  const [visible, setVisible] = useState(() => getPref('marshalVisible') ?? true)
   const ensuringRef = useRef(false)
   const { state: serverState } = useServerEvents()
   const marshal = serverState.marshal
 
-  useEffect(() => { localStorage.setItem(VISIBLE_STORAGE_KEY, String(visible)) }, [visible])
+  useEffect(() => { setPref('marshalVisible', visible) }, [visible])
   const toggleVisible = useCallback(() => setVisible(v => !v), [])
 
   const ensure = useCallback(async () => {
@@ -164,7 +163,7 @@ export function MarshalTerminal({ accent = '#00f0ff' }: { accent?: string }) {
           >retry</button>
         </div>
       ) : (
-        <RecapSessionPanel
+        <PromptComposer
           sessionId={sessionId}
           status={status}
           port={port}

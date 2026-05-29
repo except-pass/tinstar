@@ -148,6 +148,55 @@ curl -s -X DELETE "$TINSTAR_URL/api/image-widgets/{id}"
 
 The widget is sized to the image's natural dimensions (capped at 1200×900). Live file-watch is built in — if the file changes on disk, the widget updates automatically.
 
+## Workspace Files
+
+### List a directory in a session's workspace
+
+```bash
+curl -s "$TINSTAR_URL/api/sessions/{name}/files?path=relative/dir"
+```
+
+Returns `{ok, data: [{name, path, isDir}, ...]}`. `path` defaults to `.` (workspace root). Paths that escape the workspace return `400 INVALID_PATH`.
+
+### Upload a file into a session's workspace
+
+```bash
+curl -s -X POST "$TINSTAR_URL/api/sessions/{name}/files/upload" \
+  -F "path=relative/target/path.txt" \
+  -F "file=@/local/source/file.txt"
+```
+
+Multipart fields:
+- `path` — workspace-relative destination (must precede `file` in the multipart body)
+- `file` — the file content
+
+Response: `{ok: true, data: {path, bytes}}` on success.
+
+Errors:
+- `404 SESSION_NOT_FOUND` — no such session
+- `400 INVALID_PATH` — destination escapes the workspace
+- `413 FILE_TOO_LARGE` — exceeds the configured cap (see `/api/server-prefs`)
+- `400 PARSE_FAILED` / `INVALID_MULTIPART` — bad multipart envelope
+- `500 WRITE_FAILED` — disk error during write
+
+Writes are atomic: the file streams to `.tinstar-upload.<rand>` in the destination directory, then `rename`s into place only on success. Partial uploads (aborted, oversized, or write-errored) leave no temp file. Intermediate directories are created with `mkdir -p` semantics. The session's recorded `workspace.path` is used as the root, so worktree-based sessions upload into their worktree, not the main repo.
+
+## Server Preferences
+
+```bash
+# Read
+curl -s "$TINSTAR_URL/api/server-prefs"
+# → {"ok": true, "data": {"uploadMaxBytes": 104857600}}
+
+# Update
+curl -s -X PUT "$TINSTAR_URL/api/server-prefs" \
+  -H "Content-Type: application/json" \
+  -d '{"uploadMaxBytes": 52428800}'
+```
+
+Persisted to `~/.config/tinstar/server-prefs.json` (or `$TINSTAR_CONFIG_HOME/server-prefs.json`). Currently exposes:
+- `uploadMaxBytes` — per-file upload cap in bytes. Minimum 1 MB; default 100 MB. Enforced server-side on both `Content-Length` (early reject) and streamed bytes (busboy limit).
+
 ## SSE Event Stream (monitoring)
 
 ```bash

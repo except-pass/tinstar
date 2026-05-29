@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, PluginWidgetInstance, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView, findNodeLabel } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
@@ -16,7 +16,7 @@ import { SelectionProvider, useSelection } from './SelectionProvider'
 import { TaxonomyProvider } from './TaxonomyContext'
 import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
-import { HotgroupProvider } from '../hotkeys/HotgroupContext'
+import { ConstellationProvider } from '../hotkeys/ConstellationContext'
 import { FocusPathProvider, useFocusPath } from '../hotkeys/FocusPathContext'
 import { useContextRouter } from '../hotkeys/contextRouter'
 import { triggerWidgetFlourish, registerActionHandler, deregisterActionHandler } from '../hotkeys/actionHandlerRegistry'
@@ -26,6 +26,11 @@ import { HotkeyPalette } from './HotkeyPalette'
 import { OnboardingCanvas } from './OnboardingCanvas'
 import { apiFetch } from '../apiClient'
 import { useOnboardingState } from '../hooks/useOnboardingState'
+import { PluginFailedBanner } from './PluginFailedBanner'
+import { WidgetsPalette } from './WidgetsPalette/WidgetsPalette'
+import { PaletteDragGhost } from './WidgetsPalette/PaletteDragGhost'
+import { useConfig, useConfigPatch } from '../context/ConfigContext'
+import { pluginsReady } from '../widgets'
 
 
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
@@ -45,7 +50,17 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
 
 
 function WorkspaceShellInner() {
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, connected } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, pluginWidgets, connected } = useBackendState()
+
+  // Force a re-render once the plugin boot pipeline completes so that any
+  // plugin widgets already in the SSE snapshot (e.g. on page reload) switch
+  // from their PluginWidgetDisabledPlaceholder to the real component.
+  const [, setPluginsBooted] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    pluginsReady.then(() => { if (!cancelled) setPluginsBooted(true) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
 
   const onboarding = useOnboardingState()
   const forceMarshalOpen = onboarding.active !== null && onboarding.active !== 'connect'
@@ -104,7 +119,13 @@ function WorkspaceShellInner() {
     }, [])
   }, [])
 
-  const [showEmptyEntities, setShowEmptyEntities] = useState(() => localStorage.getItem('tinstar-show-empty-entities') !== 'false')
+  const config = useConfig()
+  const patchConfig = useConfigPatch()
+  const [showEmptyEntities, setShowEmptyEntities] = useState(() => config?.ui.showEmptyEntities ?? true)
+
+  useEffect(() => {
+    if (config) setShowEmptyEntities(config.ui.showEmptyEntities)
+  }, [config?.ui.showEmptyEntities])
 
   // Figma-style per-run visibility — hidden runs stay in the sidebar (dimmed) but
   // are pruned from the canvas and skipped by Ctrl+[ / Ctrl+] cycling.
@@ -207,8 +228,32 @@ function WorkspaceShellInner() {
     return map
   }, [natsTrafficWidgets])
 
+  const syntheticPluginWidgetNodes: TreeNode[] = useMemo(
+    () =>
+      pluginWidgets.map(w => ({
+        id: w.id,
+        label: w.widgetType,   // palette has the proper label; using type is fine for V5.1
+        type: w.widgetType,    // matches what the plugin registered via api.widgets.register({ type })
+        entityId: w.id,
+        children: [],
+        runCount: 0,
+        activeCount: 0,
+      })),
+    [pluginWidgets],
+  )
+
+  const pluginWidgetMap = useMemo(() => {
+    const map = new Map<string, PluginWidgetInstance>()
+    for (const w of pluginWidgets) map.set(w.id, w)
+    return map
+  }, [pluginWidgets])
+
+  // Set of plugin widget entityIds — passed to HierarchySidebar so it can
+  // render them as work widgets (closeable ×, no entity-style kebab menu).
+  const pluginWidgetIdSet = useMemo(() => new Set(pluginWidgets.map(w => w.id)), [pluginWidgets])
+
   const canvasTree = useMemo(() => {
-    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticNatsTrafficNodes]
+    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticNatsTrafficNodes, ...syntheticPluginWidgetNodes]
     if (allSynthetic.length === 0) return sidebarTree
 
     // Map taskNodeId → synthetic nodes to nest inside it
@@ -258,6 +303,11 @@ function WorkspaceShellInner() {
       orphans.push(node)
     }
 
+    // Add plugin widgets as orphans (top-level, no entity anchor)
+    for (const node of syntheticPluginWidgetNodes) {
+      orphans.push(node)
+    }
+
     if (byTaskNode.size === 0) return [...sidebarTree, ...orphans]
 
     function inject(nodes: TreeNode[]): TreeNode[] {
@@ -270,7 +320,7 @@ function WorkspaceShellInner() {
     }
 
     return [...inject(sidebarTree), ...orphans]
-  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticNatsTrafficNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
+  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticNatsTrafficNodes, syntheticPluginWidgetNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
 
   // Canvas view: drop run nodes the user has hidden via the eyeball. The sidebar
   // still shows them (dimmed) so the user can re-show them.
@@ -322,8 +372,6 @@ function WorkspaceShellInner() {
   const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(240)
   // Feature-flagged: commit activity buttons disabled for now
-  // const [commitViewMode, setCommitViewMode] = useState<'task' | 'unassigned' | 'standup' | null>(null)
-  // const [selectedTaskTag, setSelectedTaskTag] = useState('')
   const sidebarResizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
 
   const onSidebarResizePointerDown = useCallback((e: React.PointerEvent) => {
@@ -415,6 +463,12 @@ function WorkspaceShellInner() {
   }, [])
 
   const handleDelete = useCallback((entityId: string, type: GroupingDimension | string) => {
+    if (pluginWidgetMap.has(entityId)) {
+      apiFetch(`/api/plugin-widgets/${entityId}`, { method: 'DELETE' }).catch(err => {
+        console.error('[plugin-widget] delete failed:', err)
+      })
+      return
+    }
     if (type === 'run') {
       apiFetch(`/api/sessions/${entityId}`, { method: 'DELETE' })
       return
@@ -444,13 +498,15 @@ function WorkspaceShellInner() {
     const endpoint = endpointMap[type]
     if (!endpoint) return
     fetch(`${endpoint}/${entityId}`, { method: 'DELETE' })
-  }, [])
+  }, [pluginWidgetMap])
 
   const handleAdd = useCallback((parentId: string | null, type: GroupingDimension | 'run') => {
     if (type === 'run') return
     if (!showEmptyEntities) {
       setShowEmptyEntities(true)
-      localStorage.setItem('tinstar-show-empty-entities', 'true')
+      patchConfig({ ui: { showEmptyEntities: true } as never }).catch(err => {
+        console.warn('[workspace] showEmptyEntities patch failed:', err)
+      })
     }
     const typeIdx = dimensions.indexOf(type as 'task' | 'epic' | 'initiative')
     const parentType = typeIdx > 0 ? (dimensions[typeIdx - 1] ?? null) : null
@@ -615,6 +671,15 @@ function WorkspaceShellInner() {
     return () => { deregisterActionHandler(id) }
   }, [selectedFocusNode])
 
+  // Open settings dialog when the WidgetsPalette "Open Settings → Plugins" link fires
+  useEffect(() => {
+    function onOpenSettings() {
+      setShowSettings(true)
+    }
+    window.addEventListener('tinstar:open-settings', onOpenSettings)
+    return () => window.removeEventListener('tinstar:open-settings', onOpenSettings)
+  }, [])
+
   useContextRouter({
     path,
     chordState,
@@ -698,14 +763,18 @@ function WorkspaceShellInner() {
       if (!childType) return
       if (!showEmptyEntities) {
         setShowEmptyEntities(true)
-        localStorage.setItem('tinstar-show-empty-entities', 'true')
+        patchConfig({ ui: { showEmptyEntities: true } as never }).catch(err => {
+          console.warn('[workspace] showEmptyEntities patch failed:', err)
+        })
       }
       setCreateDialog({ parentId: rawId, parentType: selectedType as GroupingDimension, childType })
     }, [selectionState, dimensions, showEmptyEntities]),
     onToggleEmptyEntities: useCallback(() => {
       const next = !showEmptyEntities
       setShowEmptyEntities(next)
-      localStorage.setItem('tinstar-show-empty-entities', String(next))
+      patchConfig({ ui: { showEmptyEntities: next } as never }).catch(err => {
+        console.warn('[workspace] showEmptyEntities patch failed:', err)
+      })
     }, [showEmptyEntities]),
     onEntitySettings: useCallback(() => {
       const { selectedType, selectedIds } = selectionState
@@ -762,8 +831,9 @@ function WorkspaceShellInner() {
 
   return (
     <>
+      <PluginFailedBanner />
       {activeSpaceId ? (
-        <HotgroupProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
+        <ConstellationProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
           <TaxonomyProvider taxRepo={taxRepo}>
             <div className="flex h-screen w-screen bg-surface-base text-slate-200 font-mono">
               {/* Left column: top bar + sidebar stacked — canvas gets full height */}
@@ -815,7 +885,11 @@ function WorkspaceShellInner() {
                     <img src="/logo.png" alt="Tinstar" className="h-5 pointer-events-none select-none opacity-80 flex-shrink-0" />
                   </div>
 
-                  <div className="flex-1 overflow-y-auto scrollbar-thin min-h-0">
+                  {/* Sidebar body: hierarchy scrolls within its own region; the widgets palette
+                      stays pinned + visible below it (previously both shared one scroll container,
+                      so the palette was pushed off the bottom). */}
+                  <div className="flex-1 flex flex-col min-h-0">
+                    <div className="flex-1 min-h-0 overflow-hidden">
                     <HierarchySidebar
                         tree={canvasTree}
                         unfilteredTree={rawSidebarTree}
@@ -826,7 +900,9 @@ function WorkspaceShellInner() {
                         onToggleShowEmpty={() => {
                           const next = !showEmptyEntities
                           setShowEmptyEntities(next)
-                          localStorage.setItem('tinstar-show-empty-entities', String(next))
+                          patchConfig({ ui: { showEmptyEntities: next } as never }).catch(err => {
+                            console.warn('[workspace] showEmptyEntities patch failed:', err)
+                          })
                         }}
                         onActivateSpace={handleActivateSpace}
                         onCreateSpace={handleCreateSpace}
@@ -846,8 +922,11 @@ function WorkspaceShellInner() {
                         onRenameComplete={() => setRenamingNodeId(null)}
                         hiddenRunIds={hiddenRunIds}
                         onToggleRunHidden={toggleRunHidden}
+                        pluginWidgetIds={pluginWidgetIdSet}
                       />
                     </div>
+                    <WidgetsPalette />
+                  </div>
                     <div
                       className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-10"
                       onPointerDown={onSidebarResizePointerDown}
@@ -866,6 +945,7 @@ function WorkspaceShellInner() {
                     browserWidgetMap={browserWidgetMap}
                     imageWidgetMap={imageWidgetMap}
                     natsTrafficWidgetMap={natsTrafficWidgetMap}
+                    pluginWidgetMap={pluginWidgetMap}
                     runMap={runMap}
                     focusRunId={focusRunId}
                     activeSpaceId={activeSpaceId}
@@ -879,22 +959,14 @@ function WorkspaceShellInner() {
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
                     onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
                     onNatsWidgetCreated={(widget) => addOptimistic('natsTrafficWidget', widget)}
+                    onPluginWidgetCreated={(instance) => addOptimistic('pluginWidget', instance)}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
                     arrangeSwimlanesRef={arrangeSwimlanesRef}
                     forceMarshalOpen={forceMarshalOpen}
                   />
+                  <PaletteDragGhost />
                 </div>
-
-              {/* Feature-flagged: commit activity panel disabled for now
-              {commitViewMode && (
-                <CommitActivityPanel
-                  mode={commitViewMode}
-                  selectedTaskTag={selectedTaskTag}
-                  onTaskTagChange={setSelectedTaskTag}
-                />
-              )}
-              */}
 
               {createDialog && (
                 <CreateEntityDialog
@@ -962,7 +1034,7 @@ function WorkspaceShellInner() {
               )}
             </div>
           </TaxonomyProvider>
-        </HotgroupProvider>
+        </ConstellationProvider>
       ) : (
         <TaxonomyProvider taxRepo={taxRepo}>
           <div className="flex flex-col h-screen w-screen bg-surface-base text-slate-200 font-mono">

@@ -1,0 +1,17 @@
+{
+  "name": "nats-traffic",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.tsx",
+  "tinstar": {
+    "apiVersion": "5",
+    "displayName": "NATS traffic",
+    "description": "Inspect agent messages flowing through the broker",
+    "contributes": {
+      "widgets": [
+        { "type": "nats-traffic", "label": "NATS traffic", "defaultSize": { "width": 1200, "height": 600 } }
+      ]
+    },
+    "permissions": ["nats:subscribe"]
+  }
+}

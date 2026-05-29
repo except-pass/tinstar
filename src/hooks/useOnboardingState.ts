@@ -3,6 +3,7 @@ import { useBackendState } from './useBackendState'
 import { useBackendReachable } from './useBackendReachable'
 import { apiUrl } from '../apiClient'
 import type { Space } from '../domain/types'
+import { useWindowEvent } from '../lib/windowEvents'
 
 export type OnboardingStep = 'connect' | 'workspace' | 'project' | 'first_session'
 export type StepStatus = 'pending' | 'active' | 'completed'
@@ -45,11 +46,9 @@ export function useOnboardingState() {
   const [projectsVersion, setProjectsVersion] = useState(0)
 
   // Refresh when spaces change OR when the server notifies us of a project change
-  useEffect(() => {
-    const onChanged = () => setProjectsVersion(v => v + 1)
-    window.addEventListener('tinstar:projects_changed', onChanged)
-    return () => window.removeEventListener('tinstar:projects_changed', onChanged)
-  }, [])
+  useWindowEvent('tinstar:projects_changed', () => {
+    setProjectsVersion(v => v + 1)
+  })
 
   useEffect(() => {
     if (!reachable) return

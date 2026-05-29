@@ -61,6 +61,8 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>(prefill?.worktreeMode ?? 'none')
   const [worktreePath, setWorktreePath] = useState('')
   const [availableWorktrees, setAvailableWorktrees] = useState<Array<{ path: string; branch?: string }>>([])
+  const [worktreeSearch, setWorktreeSearch] = useState('')
+  const worktreeSearchRef = useRef<HTMLInputElement>(null)
   const [skipPermissions, _setSkipPermissions] = useState(prefill?.skipPermissions ?? true)
   const [prompt, setPrompt] = useState('')
   const [runColor, setRunColor] = useState(() => prefill?.runColor ?? pickRandomPaletteColor())
@@ -68,8 +70,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
   const [entities, setEntities] = useState<{ initiatives: EntityOption[]; epics: EntityOption[]; tasks: EntityOption[] }>({ initiatives: [], epics: [], tasks: [] })
   const [addingProject, setAddingProject] = useState(false)
   const [newProjectPath, setNewProjectPath] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const nameRef = useRef<HTMLInputElement>(null)
   const sources = prefill?.sources ?? {}
 
@@ -136,11 +136,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
 
   const effectiveName = name || placeholder
 
-  const handleSubmit = useCallback(async () => {
-    if (submitting) return
-    setSubmitting(true)
-    setError(null)
-
+  const handleSubmit = useCallback(() => {
     const body: Record<string, unknown> = {
       name: effectiveName,
       skipPermissions,
@@ -155,24 +151,26 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
     if (prefill?.epicId) body.epicId = prefill.epicId
     if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
 
-    try {
-      const res = await apiFetch('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+    // Close optimistically — the SSE event stream will surface the new session.
+    onClose()
+
+    apiFetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (!data.ok) {
+          console.error('Failed to create session:', data.error?.message ?? data)
+          window.alert(`Failed to create session: ${data.error?.message ?? 'unknown error'}`)
+        }
       })
-      const data = await res.json()
-      if (!data.ok) {
-        setError(data.error?.message ?? 'Failed to create session')
-        setSubmitting(false)
-        return
-      }
-      onClose()
-    } catch (err) {
-      setError((err as Error).message)
-      setSubmitting(false)
-    }
-  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, submitting, onClose])
+      .catch(err => {
+        console.error('Failed to create session:', err)
+        window.alert(`Failed to create session: ${(err as Error).message}`)
+      })
+  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, onClose])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -325,17 +323,69 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
             {availableWorktrees.length === 0 ? (
               <div className="text-xs text-slate-500 italic px-1">No existing worktrees found for this project</div>
             ) : (
-              <select
-                value={worktreePath}
-                onChange={e => setWorktreePath(e.target.value)}
-                className="w-full px-3 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
-              >
-                {availableWorktrees.map(wt => (
-                  <option key={wt.path} value={wt.path}>
-                    {wt.branch ?? wt.path.split('/').pop() ?? wt.path}
-                  </option>
-                ))}
-              </select>
+              <div className="border border-white/10 rounded overflow-hidden">
+                <div className="flex items-center gap-1 px-2 py-1 border-b border-white/5 bg-surface-base">
+                  <span className="material-symbols-outlined text-sm text-slate-500" aria-hidden>search</span>
+                  <input
+                    ref={worktreeSearchRef}
+                    type="text"
+                    value={worktreeSearch}
+                    onChange={e => setWorktreeSearch(e.target.value)}
+                    placeholder="Search worktrees…"
+                    className="flex-1 min-w-0 bg-transparent text-xs text-slate-200 placeholder:text-slate-600 outline-none px-1 py-0.5"
+                    data-testid="worktree-search-input"
+                    aria-label="Search worktrees"
+                    spellCheck={false}
+                    autoComplete="off"
+                  />
+                  {worktreeSearch && (
+                    <button
+                      className="text-slate-500 hover:text-primary text-xs leading-none w-4 h-4 flex items-center justify-center flex-shrink-0"
+                      onClick={() => { setWorktreeSearch(''); worktreeSearchRef.current?.focus() }}
+                      aria-label="Clear search"
+                      data-testid="worktree-search-clear"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+                <div className="max-h-40 overflow-y-auto bg-surface-base" data-testid="worktree-list">
+                  {(() => {
+                    const q = worktreeSearch.trim().toLowerCase()
+                    const filtered = q
+                      ? availableWorktrees.filter(wt => {
+                          const label = wt.branch ?? wt.path.split('/').pop() ?? wt.path
+                          return label.toLowerCase().includes(q) || wt.path.toLowerCase().includes(q)
+                        })
+                      : availableWorktrees
+                    if (filtered.length === 0) {
+                      return <div className="text-xs text-slate-500 italic px-3 py-2">No matches</div>
+                    }
+                    return filtered.map(wt => {
+                      const label = wt.branch ?? wt.path.split('/').pop() ?? wt.path
+                      const selected = wt.path === worktreePath
+                      return (
+                        <button
+                          key={wt.path}
+                          onClick={() => setWorktreePath(wt.path)}
+                          className={[
+                            'w-full text-left px-3 py-1.5 text-xs transition-colors flex flex-col gap-0.5',
+                            selected
+                              ? 'bg-primary/20 text-primary'
+                              : 'text-slate-300 hover:bg-white/5',
+                          ].join(' ')}
+                          data-testid={`worktree-option-${wt.path}`}
+                        >
+                          <span className="truncate">{label}</span>
+                          {label !== wt.path && (
+                            <span className="text-2xs text-slate-500 truncate font-mono">{wt.path}</span>
+                          )}
+                        </button>
+                      )
+                    })
+                  })()}
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -385,13 +435,6 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
           />
         </div>
 
-        {/* Error */}
-        {error && (
-          <div className="mb-3 text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded px-3 py-2">
-            {error}
-          </div>
-        )}
-
         {/* Footer */}
         <div className="flex justify-between items-center">
           <span className="text-2xs text-slate-500">Ctrl+Enter to create</span>
@@ -403,12 +446,11 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
               Cancel
             </button>
             <button
-              className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30 disabled:opacity-50"
+              className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30"
               onClick={handleSubmit}
-              disabled={submitting}
               data-testid="create-session-submit"
             >
-              {submitting ? 'Creating...' : 'Create'}
+              Create
             </button>
           </div>
         </div>

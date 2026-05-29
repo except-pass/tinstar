@@ -5,11 +5,11 @@ import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import type { TreeNode, Run, BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget } from '../domain/types'
 import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
 import { resolveRunAccent, hexToRgba } from './runAccent'
+import { getPref, setPref } from '../lib/uiPrefs'
 
 const MINIMAP_W = 200
 const MINIMAP_H = 140
 const MINIMAP_PAD = 0.1 // 10% padding around world bounds
-const STORAGE_KEY = 'tinstar-minimap-visible'
 
 interface MinimapProps {
   camera: Camera
@@ -70,14 +70,11 @@ export function CanvasMinimap({
   toggleRef, embedded = false,
 }: MinimapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [visible, setVisible] = useState(() => {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    return stored !== 'false' // default to visible
-  })
+  const [visible, setVisible] = useState(() => getPref('minimapVisible') ?? true)
 
   // Persist visibility
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, String(visible))
+    setPref('minimapVisible', visible)
   }, [visible])
 
   const toggle = useCallback(() => setVisible(v => !v), [])

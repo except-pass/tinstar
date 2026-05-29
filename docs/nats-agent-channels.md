@@ -7,7 +7,7 @@ Multi-agent communication via NATS pub/sub.
 ```
 tinstar.<space>.<init>.<epic>.<task>           ← task broadcast (like a Slack channel)
 tinstar.<space>.<init>.<epic>.<task>.<agent>   ← direct DM to specific agent
-tinstar.breakout.<room-name>                    ← ad-hoc rooms
+tinstar.room.<room-id>                          ← ad-hoc breakout rooms
 ```
 
 **Each agent auto-subscribes to (two-tier model):**
@@ -21,7 +21,7 @@ tinstar.work-space.init-001.epic-xyz.task-abc.a1    ← my DM inbox (only I see)
 |--------|------------|
 | One agent (DM) | `tinstar.<space>.<init>.<epic>.<task>.<agent>` |
 | All on task (broadcast) | `tinstar.<space>.<init>.<epic>.<task>` |
-| Breakout room | `tinstar.breakout.<room-name>` |
+| Breakout room | `tinstar.room.<room-id>` |
 
 ---
 
@@ -132,7 +132,7 @@ Entity types (initiative, epic, task) are **not hardcoded** — they're configur
 
 ```
 tinstar.<level3-id>.<level2-id>.<level1-id>.<agent-name>   ← entity hierarchy
-tinstar.breakout.<room-name>                                ← breakout rooms
+tinstar.room.<room-id>                                      ← breakout rooms
 ```
 
 These two spaces are siblings under `tinstar.` — structured hierarchy on the left, ad hoc cross-entity rooms on the right.
@@ -249,7 +249,7 @@ nats sub "tinstar.init-001.>"      # Everything under init-001 (epics, tasks, ag
 ```bash
 nats sub "tinstar.>"               # everything in the workspace
 nats sub "tinstar.init-001.>"      # all agents in an initiative
-nats sub "tinstar.breakout.>"      # all breakout rooms
+nats sub "tinstar.room.>"          # all breakout rooms
 ```
 
 ### Ad Hoc Operational Subjects
@@ -296,7 +296,7 @@ The bridge must walk the hierarchy downward from the moved entity to find all af
 
 ### Breakout Room Subscriptions Are Unaffected
 
-Breakout room subscriptions (`tinstar.breakout.*`) are ad hoc and not tied to the entity hierarchy. Entity moves don't touch them.
+Breakout room subscriptions (`tinstar.room.*`) are ad hoc and not tied to the entity hierarchy. Entity moves don't touch them.
 
 ---
 

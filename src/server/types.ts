@@ -66,6 +66,13 @@ export interface ManagedSessionDeletedPayload {
   name: string
 }
 
+export interface ManagedSessionNatsOrphanedPayload {
+  name: string
+  orphanedAt: string
+  reason: string
+  restartRecommended: boolean
+}
+
 export interface SessionDeletedPayload {
   sessionId: string
 }
@@ -126,7 +133,30 @@ export interface OtelMetricRecordedPayload {
   metric: Metric
 }
 
+export interface PluginWidgetUpdatedPayload {
+  id: string
+  pluginId: string
+  widgetType: string
+  spaceId: string
+  position: { x: number; y: number }
+  size: { width: number; height: number }
+  data: unknown
+  createdAt: string
+  updatedAt: string
+}
+
 // --- Discriminated union ---
+//
+// Adding a new event:
+//   1. Declare a `<Name>Payload` interface above.
+//   2. Add a `| { type: '<name>'; timestamp: string; payload: <Name>Payload }` variant below.
+//   3. Call sites use `emitSessionEvent('<name>', payload)` — the helper is
+//      typed `<T extends BusEventType>(type: T, payload: PayloadFor<T>)`, so
+//      step 3 fails to compile if you skip 1 or 2.
+//
+// Don't add an emit site that casts via `as unknown as Parameters<...>[0]` —
+// the cast was historical rot and hid two live mismatches before the V5.0
+// audit. See docs/conventions.md → "Adding a new BusEvent".
 
 export type BusEvent =
   | { type: 'session.created'; timestamp: string; payload: SessionCreatedPayload }
@@ -144,7 +174,9 @@ export type BusEvent =
   | { type: 'managed_session.created'; timestamp: string; payload: ManagedSessionCreatedPayload }
   | { type: 'managed_session.state_changed'; timestamp: string; payload: ManagedSessionStateChangedPayload }
   | { type: 'managed_session.deleted'; timestamp: string; payload: ManagedSessionDeletedPayload }
+  | { type: 'managed_session.nats_orphaned'; timestamp: string; payload: ManagedSessionNatsOrphanedPayload }
   | { type: 'ready_queue.update'; timestamp: string; payload: { queue: string[] } }
+  | { type: 'pluginWidget.updated'; timestamp: string; payload: PluginWidgetUpdatedPayload }
 
 export type BusEventType = BusEvent['type']
 

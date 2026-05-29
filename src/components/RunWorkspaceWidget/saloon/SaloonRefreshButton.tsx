@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { apiFetch } from '../../../apiClient'
 
 interface Props {
   sessionName: string
@@ -81,7 +82,7 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
     setMode('inFlight')
     setErrorTitle(null)
     try {
-      const res = await fetch('/api/nats-traffic/bounce', { method: 'POST' })
+      const res = await apiFetch('/api/nats-traffic/bounce', { method: 'POST' })
       if (res.status === 503) {
         const body = await res.json().catch(() => ({}))
         setErrorTitle(body?.error?.message ?? 'NATS bridge is disabled in tinstar config')
@@ -128,7 +129,7 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
     setRestartError(null)
     try {
       const encoded = encodeURIComponent(sessionName)
-      const stopRes = await fetch(`/api/sessions/${encoded}/stop`, { method: 'POST' })
+      const stopRes = await apiFetch(`/api/sessions/${encoded}/stop`, { method: 'POST' })
       if (!stopRes.ok) {
         const body = await stopRes.json().catch(() => ({}))
         const msg = body?.error?.message ?? 'unknown error'
@@ -136,7 +137,7 @@ export function SaloonRefreshButton({ sessionName, natsControlOrphanedAt }: Prop
         setRestartInFlight(false)
         return
       }
-      const startRes = await fetch(`/api/sessions/${encoded}/start`, { method: 'POST' })
+      const startRes = await apiFetch(`/api/sessions/${encoded}/start`, { method: 'POST' })
       if (!startRes.ok) {
         const body = await startRes.json().catch(() => ({}))
         const msg = body?.error?.message ?? 'unknown error'

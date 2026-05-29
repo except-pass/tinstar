@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useEffect, type RefObject, type PointerEvent as ReactPointerEvent } from 'react'
 import type { WidgetRegistration } from './widgetComponentRegistry'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
+import { WidgetIdProvider } from '../core/pluginApi/widgetIdContext'
 
 const DRAG_THRESHOLD = 5
 
@@ -29,10 +30,15 @@ function spawnGlowVars(color: string): React.CSSProperties {
 interface CanvasWidgetShellProps {
   registration: WidgetRegistration
   nodeId: string
+  /** Bare entity id (run id sans `run-` prefix, or plugin widget id). Used as
+   *  the value of `data-widget-id` so window-event handlers (e.g. the inbox
+   *  flash-focus dispatcher) can locate the widget's DOM element. */
+  widgetId?: string
   data: unknown
   layout: WidgetLayout
   zoom: number
   isSelected: boolean
+  isFocused?: boolean
   isDimmed?: boolean
   isDropTarget?: boolean
   isSpawning?: boolean
@@ -50,10 +56,12 @@ interface CanvasWidgetShellProps {
 export function CanvasWidgetShell({
   registration,
   nodeId,
+  widgetId,
   data,
   layout,
   zoom,
   isSelected,
+  isFocused = false,
   isDimmed = false,
   isDropTarget = false,
   isSpawning = false,
@@ -221,9 +229,11 @@ export function CanvasWidgetShell({
     <div
       ref={containerRef}
       data-testid={`canvas-widget-${nodeId}`}
+      data-widget-id={widgetId}
       data-selected={isSelected ? 'true' : undefined}
+      data-focused={isFocused ? 'true' : undefined}
       data-widget-type={registration.type}
-      className={`absolute ${frameClass} ${isSpawning ? 'widget-spawning' : 'transition-opacity duration-150'} ${isDimmed ? 'opacity-40' : 'opacity-100'}`}
+      className={`absolute ${frameClass} ${isSpawning ? 'widget-spawning' : 'transition-opacity duration-150'} ${isDimmed ? 'opacity-40' : 'opacity-100'} ${isFocused ? 'ring-2 ring-primary' : ''}`}
       style={{
         left: Math.round(layout.x),
         top: Math.round(layout.y),
@@ -241,14 +251,16 @@ export function CanvasWidgetShell({
       onPointerEnter={() => setIsHovered(true)}
       onPointerLeave={() => setIsHovered(false)}
     >
-      <WidgetComponent
-        data={data}
-        zoom={zoom}
-        isSelected={isSelected}
-        isDragging={isDragging}
-        isHovered={isHovered}
-        isDropTarget={isDropTarget}
-      />
+      <WidgetIdProvider id={nodeId}>
+        <WidgetComponent
+          data={data}
+          zoom={zoom}
+          isSelected={isSelected}
+          isDragging={isDragging}
+          isHovered={isHovered}
+          isDropTarget={isDropTarget}
+        />
+      </WidgetIdProvider>
 
       {/* Resize handle — bottom-right corner */}
       <div

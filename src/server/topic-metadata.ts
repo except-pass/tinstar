@@ -2,6 +2,7 @@ import type { TopicMetadata } from '../domain/types'
 import type { Session } from './sessions/session'
 import type { DocumentStore } from './stores/document-store'
 import { sanitizeSubjectToken } from './sessions/nats-subscriptions'
+import { parseSubject } from './nats/subjects'
 
 export function topicParticipants(subject: string, sessions: Session[]): string[] {
   return sessions
@@ -26,20 +27,14 @@ export function deriveHierarchicalName(
   docStore: DocumentStore,
   kind: 'broadcast' | 'dm',
 ): string | null {
-  if (!subject.startsWith('tinstar.')) return null
-  const parts = subject.split('.')
-  const lastSegment = parts[parts.length - 1]
-  if (lastSegment === '>' || lastSegment === '*') return null
+  const parsed = parseSubject(subject)
+  if (!parsed || parsed.kind === 'breakout') return null
   if (kind === 'dm') {
-    // DM: tinstar.<space>.<init>.<epic>.<task>.<session> = 6 parts
-    if (parts.length !== 6) return null
-    const session = parts[parts.length - 1]
-    return session ? `DM → ${session}` : null
+    if (parsed.kind !== 'dm') return null
+    return parsed.session ? `DM → ${parsed.session}` : null
   }
-  // broadcast: tinstar.<space>.<init>.<epic>.<task> = 5 parts
-  if (parts.length !== 5) return null
-  const taskToken = parts[parts.length - 1]
-  if (!taskToken) return null
+  if (parsed.kind !== 'broadcast') return null
+  const taskToken = parsed.task
   const tasks = docStore.getAllTasks().filter(t => sanitizeSubjectToken(t.name) === taskToken)
   const task = tasks[0]
   if (!task) return `Task: ${taskToken}` // fallback if no entity match

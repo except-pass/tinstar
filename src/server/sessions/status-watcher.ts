@@ -13,8 +13,17 @@ export interface StatusWatcherOpts {
   onStatusChanged: (name: string, state: SessionState) => void
   /** Called with new recap entries parsed from the transcript */
   onRecapEntries?: (name: string, entries: RecapEntry[]) => void
+  /** Called once per tick with the set of session names currently on disk */
+  onSessionsListed?: (names: Set<string>) => void
   /** Poll interval in ms (default 3000) */
   intervalMs?: number
+  /**
+   * Resolve a session name to its tmux target. Injected so callers can route
+   * through the configured `sessions.prefix` (see backends/tmux.ts
+   * `tmuxSessionName`). Defaults to `tinstar-${name}` to preserve behavior for
+   * callers that don't supply one.
+   */
+  resolveTmuxName?: (sessionName: string) => string
 }
 
 /**
@@ -62,6 +71,7 @@ export class StatusWatcher {
     try {
       const sessions = await listSessions(this.opts.sessionsDir)
       this.peerSessions = sessions
+      this.opts.onSessionsListed?.(new Set(sessions.map(s => s.name)))
       for (const session of sessions) {
         // Only check sessions that are actually alive (running or idle)
         if (session.state !== 'running' && session.state !== 'idle') continue
@@ -324,7 +334,9 @@ export class StatusWatcher {
   }
 
   private checkProcessTree(session: Session): void {
-    const tmuxTarget = `tinstar-${session.name}`
+    const tmuxTarget = this.opts.resolveTmuxName
+      ? this.opts.resolveTmuxName(session.name)
+      : `tinstar-${session.name}`
 
     // Get the PID of the process running in the tmux pane
     execFile('tmux', ['list-panes', '-t', tmuxTarget, '-F', '#{pane_pid}'], (err, stdout) => {

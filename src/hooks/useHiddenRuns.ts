@@ -1,25 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
+import { familyKeys, readJSON, writeJSON } from '../lib/uiPrefs'
 
-const LS_KEY = 'tinstar-hidden-runs'
+const LS_KEY = familyKeys.hiddenRuns
 
 function readFromStorage(): Set<string> {
-  try {
-    const raw = localStorage.getItem(LS_KEY)
-    if (!raw) return new Set()
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return new Set()
-    return new Set(parsed.filter((v): v is string => typeof v === 'string'))
-  } catch {
-    return new Set()
-  }
+  const arr = readJSON<string[]>(LS_KEY, [])
+  if (!Array.isArray(arr)) return new Set()
+  return new Set(arr.filter((v): v is string => typeof v === 'string'))
 }
 
 function writeToStorage(ids: Set<string>): void {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify([...ids]))
-  } catch {
-    /* quota or serialization — ignore */
-  }
+  writeJSON(LS_KEY, [...ids])
 }
 
 /**

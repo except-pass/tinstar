@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 const execFileAsync = promisify(execFile)
 
 import type { SessionStatus } from '../../types'
+import { flushOnStateChange } from '../observability/turn-length'
 
 // --- Types ---
 
@@ -67,13 +68,45 @@ function sessionFile(sessionsDir: string, name: string): string {
   return join(sessionsDir, name, 'session.json')
 }
 
+// Branch cache keyed by workdir. The branch only changes when .git/HEAD
+// changes, so stat'ing one file lets us skip the git subprocess on the 3s
+// status-watcher tick when nothing has moved. Memory grows with unique
+// workdirs the server has ever seen; bounded by the session count.
+//
+// Invalidation guarantees: `.git/HEAD`'s mtime advances on every `git
+// checkout`, `git switch`, and most ref updates. `git reset` and operations
+// that only mutate packed-refs may not advance HEAD's mtime — those are
+// rare in normal session workflows. If a caller observes stale branch info,
+// touch HEAD or call _resetBranchCacheForTests in test setup.
+const branchCache = new Map<string, { headMtime: number; branch: string | null }>()
+
+export function _resetBranchCacheForTests(): void {
+  branchCache.clear()
+}
+
 export async function detectBranch(path: string): Promise<string | null> {
   if (!path) return null
+  let headMtime: number | null = null
+  try {
+    headMtime = statSync(join(path, '.git/HEAD')).mtimeMs
+  } catch {
+    // No .git/HEAD — not a git repo, or detached worktree pointing elsewhere.
+    // Fall through and let git rev-parse handle it; just don't cache.
+  }
+
+  if (headMtime !== null) {
+    const cached = branchCache.get(path)
+    if (cached && cached.headMtime === headMtime) return cached.branch
+  }
+
   try {
     const { stdout } = await execFileAsync('git', ['-C', path, 'rev-parse', '--abbrev-ref', 'HEAD'])
     const branch = stdout.trim()
-    return branch && branch !== 'HEAD' ? branch : null
+    const result = branch && branch !== 'HEAD' ? branch : null
+    if (headMtime !== null) branchCache.set(path, { headMtime, branch: result })
+    return result
   } catch {
+    if (headMtime !== null) branchCache.set(path, { headMtime, branch: null })
     return null
   }
 }
@@ -205,10 +238,14 @@ export function setConversationId(sessionsDir: string, name: string, conversatio
 }
 
 export function setState(sessionsDir: string, name: string, state: SessionState): Session | null {
-  return updateSession(sessionsDir, name, {
+  const result = updateSession(sessionsDir, name, {
     state,
     lastActive: new Date().toISOString(),
   })
+  if (result && state === 'stopped') {
+    flushOnStateChange(name, state)
+  }
+  return result
 }
 
 export function claudeStateDir(sessionsDir: string, sessionName: string): string {

@@ -15,6 +15,8 @@ import type { FocusZone } from '../../hotkeys/widgetTypes'
 import '../../hotkeys/widgets/runWorkspaceWidget'  // side-effect: registers WidgetDefinition
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 import { apiFetch } from '../../apiClient'
+import { useConfig } from '../../context/ConfigContext'
+import { capabilityRegistry } from '../../core/constellationCapabilities'
 
 interface Props {
   run: RunData
@@ -45,9 +47,17 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const handsResizeDragRef = useRef<{ startY: number; startH: number } | null>(null)
 
   const [termTick, bumpTerm] = useReducer((n: number) => n + 1, 0)
-  const [promptComposerExpanded, setPromptComposerExpanded] = useState(() =>
-    localStorage.getItem('tinstar-prompt-composer-default') === 'true'
-  )
+  const config = useConfig()
+  const composerDefault = config?.ui.promptComposerDefault ?? false
+  const [promptComposerExpanded, setPromptComposerExpanded] = useState(composerDefault)
+  // One-shot init: when config first arrives, seed local state from it (then user controls it).
+  const composerInitedRef = useRef(config != null)
+  useEffect(() => {
+    if (!composerInitedRef.current && config != null) {
+      composerInitedRef.current = true
+      setPromptComposerExpanded(composerDefault)
+    }
+  }, [config, composerDefault])
   const [composerFocusTrigger, bumpComposerFocus] = useReducer((n: number) => n + 1, 0)
 
   const rootRef = useRef<HTMLDivElement>(null)
@@ -175,6 +185,21 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
     registerScanHandler(run.id, triggerScanLine)
     return () => deregisterFlourishHandler(run.id)
   }, [run.id, triggerHollywoodHit, triggerScanLine])
+
+  // Publish the `session.prompt` capability so peers in this widget's
+  // constellation can RPC into us to send text into the underlying tmux session.
+  useEffect(() => {
+    return capabilityRegistry.publish(`run-${run.id}`, 'session.prompt', async (args) => {
+      const { text } = args as { text: string }
+      const res = await apiFetch(`/api/sessions/${run.id}/prompt`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+      if (!res.ok) throw new Error(`session.prompt failed: ${res.status}`)
+      return null
+    })
+  }, [run.id])
 
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()

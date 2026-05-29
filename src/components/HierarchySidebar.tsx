@@ -1,19 +1,27 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, createContext, useContext } from 'react'
 import Fuse from 'fuse.js'
+import { getPref, setPref, getSidebarView, setSidebarView } from '../lib/uiPrefs'
+import { useInbox } from '../hooks/useInbox'
+import { InboxList } from './InboxList'
 import type { TreeNode, GroupingDimension, Space } from '../domain/types'
 import { getDimensionIcon } from '../domain/dimension-meta'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { useSelection } from './SelectionProvider'
 import { useSidebarDrag, type DropTarget } from '../hooks/useSidebarDrag'
 import { SpaceSwitcher } from './SpaceSwitcher'
-import { useHotgroupContext } from '../hotkeys/HotgroupContext'
-import { HotgroupBadge } from './HotgroupBadge'
+import { useConstellationContext } from '../hotkeys/ConstellationContext'
+import type { ConstellationSlot } from '../hooks/useConstellations'
+import { ConstellationBadge } from './ConstellationBadge'
 import { useHotkeyContext } from '../hotkeys/FocusPathContext'
 import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 import { BindingRow, GLOBAL_KEYS, CANVAS_KEYS, QUICKDRAW_KEYS } from './HotkeyBindingRow'
 import { AgentIcon, isIconUrl } from './agentIcon'
 import { apiFetch } from '../apiClient'
+import { usePluginWidgetRegistry } from '../hooks/usePluginWidgetRegistry'
+
+/** widgetType → resolved icon, so plugin-widget hierarchy rows show the plugin's own icon. */
+const PluginIconContext = createContext<Map<string, string>>(new Map())
 
 interface FlatNode {
   id: string
@@ -40,7 +48,6 @@ function pruneTree(nodes: TreeNode[], visible: Set<string>): TreeNode[] {
   return result
 }
 
-const LS_HOTKEYS_HEIGHT = 'tinstar-sidebar-hotkeys-height'
 const DEFAULT_HOTKEYS_HEIGHT = 200
 const MIN_HOTKEYS_HEIGHT = 28
 const MAX_HOTKEYS_HEIGHT = 600
@@ -133,6 +140,10 @@ interface HierarchySidebarProps {
   onRenameComplete?: () => void
   hiddenRunIds?: Set<string>
   onToggleRunHidden?: (runId: string) => void
+  /** Entity ids of plugin widget instances. Used to render them as work
+   *  widgets (closeable × button, no entity-style kebab menu) regardless of
+   *  the plugin's chosen widget type string. */
+  pluginWidgetIds?: Set<string>
 }
 
 /** Metadata for all Work Widget types — drives sidebar icons, badge, close button, and focus behavior */
@@ -176,6 +187,7 @@ function SidebarNode({
   onToggleRunHidden,
   matchIds,
   cursorId,
+  pluginWidgetIds,
 }: {
   node: TreeNode
   depth: number
@@ -195,19 +207,44 @@ function SidebarNode({
   onToggleRunHidden?: (runId: string) => void
   matchIds?: Set<string> | null
   cursorId?: string | null
+  pluginWidgetIds?: Set<string>
 }) {
   const { isSelected, isExpanded, isHovered, select, toggleSelect, hover, toggleExpand } = useSelection()
-  const { slotsForNode } = useHotgroupContext()
+  const { slotsForNode, remove } = useConstellationContext()
+  const pluginIconByType = useContext(PluginIconContext)
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const [isFlourishy, setIsFlourishy] = useState(false)
+
+  // Listen for constellation:flourish events dispatched when a widget is alt-dragged out of a constellation
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    function onFlourish(e: Event) {
+      const { nodeId: targetId } = (e as CustomEvent).detail as { nodeId: string }
+      if (targetId !== node.id) return
+      setIsFlourishy(true)
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => setIsFlourishy(false), 600)
+    }
+    window.addEventListener('constellation:flourish', onFlourish)
+    return () => {
+      window.removeEventListener('constellation:flourish', onFlourish)
+      if (timer) clearTimeout(timer)
+    }
+  }, [node.id])
 
   const selected = isSelected(node.id)
   const expanded = isExpanded(node.id)
   const hovered = isHovered(node.id)
   const hasChildren = node.children.length > 0
   const isRun = node.type === 'run'
-  const isWorkWidget = node.type in WORK_WIDGET_META
+  // Plugin widget instances aren't covered by the hardcoded WORK_WIDGET_META
+  // (their type strings come from plugins), so identify them by entityId
+  // membership and treat them as work widgets too — gets them the × button
+  // and skips the entity-style kebab menu (Start Session / Add Child / etc.).
+  const isPluginWidget = pluginWidgetIds?.has(node.entityId) === true
+  const isWorkWidget = (node.type in WORK_WIDGET_META) || isPluginWidget
   const runHidden = isRun && hiddenRunIds?.has(node.entityId) === true
   const isDragging = dragNodeId === node.id
   const isMatch = matchIds?.has(node.id) === true
@@ -265,6 +302,7 @@ function SidebarNode({
           runHidden ? 'opacity-50' : '',
           isMatch && !selected ? 'text-primary' : '',
           isCursor ? 'ring-1 ring-primary/60 bg-primary/10' : '',
+          isFlourishy ? 'animate-pulse' : '',
         ].join(' ')}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         data-testid={`sidebar-node-${node.id}`}
@@ -327,7 +365,9 @@ function SidebarNode({
             ? (isIconUrl(node.agentIcon)
                 ? <AgentIcon icon={node.agentIcon} />
                 : (node.agentIcon ?? '▶'))
-            : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
+            : isPluginWidget && isIconUrl(pluginIconByType.get(node.type))
+              ? <AgentIcon icon={pluginIconByType.get(node.type)} className="w-4 h-4" />
+              : (WORK_WIDGET_META[node.type]?.icon ?? dimensionIconMap[node.type as GroupingDimension] ?? getDimensionIcon(node.type))}
         </span>
 
         {/* Color dot */}
@@ -367,9 +407,16 @@ function SidebarNode({
           </span>
         )}
 
-        {/* Hotgroup badge for all work widgets */}
+        {/* Constellation badge for all work widgets */}
         {isWorkWidget && !editing && (
-          <HotgroupBadge slots={slotsForNode(node.id)} testId={`sidebar-hotgroup-badge-${node.id}`} />
+          <ConstellationBadge
+            slots={slotsForNode(node.id)}
+            testId={`sidebar-constellation-badge-${node.id}`}
+            onLeave={(slot) => {
+              remove(slot as ConstellationSlot, node.id)
+              window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId: node.id } }))
+            }}
+          />
         )}
 
         {/* Visibility eyeball — runs only.
@@ -403,8 +450,9 @@ function SidebarNode({
           </span>
         )}
 
-        {/* Close button for closeable work widgets */}
-        {WORK_WIDGET_META[node.type]?.closeable && !editing && (
+        {/* Close button for closeable work widgets. Plugin widgets are
+            always closeable; built-in work widgets opt in via WORK_WIDGET_META. */}
+        {(WORK_WIDGET_META[node.type]?.closeable || isPluginWidget) && !editing && (
           <button
             className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-accent-red opacity-0 group-hover:opacity-100"
             onClick={(e) => {
@@ -513,6 +561,7 @@ function SidebarNode({
               onToggleRunHidden={onToggleRunHidden}
               matchIds={matchIds}
               cursorId={cursorId}
+              pluginWidgetIds={pluginWidgetIds}
             />
           ))}
         </div>
@@ -559,6 +608,7 @@ function TreeWithOrphanSeparators({
   onToggleRunHidden,
   matchIds,
   cursorId,
+  pluginWidgetIds,
 }: {
   nodes: TreeNode[]
   depth: number
@@ -578,6 +628,7 @@ function TreeWithOrphanSeparators({
   onToggleRunHidden?: (runId: string) => void
   matchIds?: Set<string> | null
   cursorId?: string | null
+  pluginWidgetIds?: Set<string>
 }) {
   const normal = nodes.filter(n => !n.orphan)
   const orphans = nodes.filter(n => n.orphan)
@@ -605,6 +656,7 @@ function TreeWithOrphanSeparators({
           onToggleRunHidden={onToggleRunHidden}
           matchIds={matchIds}
           cursorId={cursorId}
+          pluginWidgetIds={pluginWidgetIds}
         />
       ))}
       {orphans.length > 0 && <OrphanSeparator />}
@@ -629,15 +681,25 @@ function TreeWithOrphanSeparators({
           onToggleRunHidden={onToggleRunHidden}
           matchIds={matchIds}
           cursorId={cursorId}
+          pluginWidgetIds={pluginWidgetIds}
         />
       ))}
     </>
   )
 }
 
-export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
+export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden, pluginWidgetIds }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
   const { isExpanded, expandAll, select } = useSelection()
   const showEmpty = showEmptyEntities ?? true
+
+  // --- View toggle (hierarchy | inbox) ---
+  const [view, setViewState] = useState<'hierarchy' | 'inbox'>(() => getSidebarView(activeSpaceId))
+  useEffect(() => { setViewState(getSidebarView(activeSpaceId)) }, [activeSpaceId])
+  const setView = useCallback((v: 'hierarchy' | 'inbox') => {
+    setViewState(v)
+    setSidebarView(activeSpaceId, v)
+  }, [activeSpaceId])
+  const { unreadCount } = useInbox(activeSpaceId)
 
   // --- Fuzzy search ---
   const [query, setQuery] = useState('')
@@ -785,8 +847,8 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
 
   // Hotkeys panel height (resizable by dragging the divider)
   const [hotkeysHeight, setHotkeysHeight] = useState(() => {
-    const saved = localStorage.getItem(LS_HOTKEYS_HEIGHT)
-    return saved ? Math.max(MIN_HOTKEYS_HEIGHT, Math.min(MAX_HOTKEYS_HEIGHT, parseInt(saved))) : DEFAULT_HOTKEYS_HEIGHT
+    const saved = getPref('hotkeysHeight')
+    return saved !== undefined ? Math.max(MIN_HOTKEYS_HEIGHT, Math.min(MAX_HOTKEYS_HEIGHT, saved)) : DEFAULT_HOTKEYS_HEIGHT
   })
   const hotkeysHeightRef = useRef(hotkeysHeight)
   hotkeysHeightRef.current = hotkeysHeight
@@ -807,7 +869,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
       const delta = dividerDragRef.current.startY - e.clientY
       const newH = Math.max(MIN_HOTKEYS_HEIGHT, Math.min(MAX_HOTKEYS_HEIGHT, dividerDragRef.current.startH + delta))
       setHotkeysHeight(newH)
-      localStorage.setItem(LS_HOTKEYS_HEIGHT, String(newH))
+      setPref('hotkeysHeight', newH)
     }
   }, [dragState, dragInitiated, handleDragMove])
 
@@ -816,7 +878,10 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
     dividerDragRef.current = null
   }, [handleDragEnd])
 
+  const { iconByType: pluginIconByType } = usePluginWidgetRegistry()
+
   return (
+    <PluginIconContext.Provider value={pluginIconByType}>
     <div
       className="flex flex-col h-full"
       data-testid="hierarchy-sidebar"
@@ -845,6 +910,29 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
             <span className="material-symbols-outlined text-sm">chevron_left</span>
           </button>
         )}
+      </div>
+      <div className="flex border-b border-white/10" role="tablist" data-testid="sidebar-tabs">
+        <button
+          role="tab"
+          data-testid="sidebar-tab-hierarchy"
+          aria-selected={view === 'hierarchy'}
+          className={`flex-1 px-3 py-1.5 text-2xs font-mono uppercase tracking-widest ${view === 'hierarchy' ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-slate-300'}`}
+          onClick={() => setView('hierarchy')}
+        >
+          Hierarchy
+        </button>
+        <button
+          role="tab"
+          data-testid="sidebar-tab-inbox"
+          aria-selected={view === 'inbox'}
+          className={`flex-1 px-3 py-1.5 text-2xs font-mono uppercase tracking-widest ${view === 'inbox' ? 'text-primary border-b-2 border-primary' : 'text-slate-500 hover:text-slate-300'}`}
+          onClick={() => setView('inbox')}
+        >
+          Inbox
+          {unreadCount > 0 && (
+            <span data-testid="sidebar-tab-inbox-badge" className="ml-1 px-1.5 py-0.5 bg-primary/30 rounded-full text-primary">{unreadCount}</span>
+          )}
+        </button>
       </div>
       <div className="flex items-center px-3 py-1 border-b border-white/5">
         <div className="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
@@ -912,7 +1000,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
           value={query}
           onChange={e => setQuery(e.target.value)}
           onKeyDown={handleSearchKeyDown}
-          placeholder="Search… (press /)"
+          placeholder={view === 'inbox' ? 'Search inbox… (press /)' : 'Search… (press /)'}
           className="flex-1 min-w-0 bg-transparent text-xs text-slate-200 placeholder:text-slate-600 outline-none px-1 py-0.5"
           data-testid="hierarchy-search-input"
           aria-label="Search workspace"
@@ -931,41 +1019,46 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
         )}
       </div>
 
-      {/* Tree */}
-      <div
-        ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto scrollbar-thin py-1"
-        style={{ cursor: dragState ? 'grabbing' : undefined }}
-      >
-        {displayedTree.length === 0 ? (
-          <div className="px-3 py-4 text-xs text-slate-500 text-center" data-testid="hierarchy-empty">
-            {trimmedQuery
-              ? `No matches for "${trimmedQuery}"`
-              : (unfilteredTree ?? tree).length === 0 ? 'No items. Click + to create.' : 'All entities empty. Click filter to show.'}
-          </div>
-        ) : (
-          <TreeWithOrphanSeparators
-            nodes={displayedTree}
-            depth={0}
-            dimensions={dimensions}
-            dimensionIconMap={dimensionIconMap}
-            onAdd={onAdd}
-            onRename={onRename}
-            onDelete={onDelete}
-            onFocusRun={onFocusRun}
-            onMenuOpen={onMenuOpen}
-            dragNodeId={dragState?.nodeId ?? null}
-            dropTarget={dropTarget}
-            onDragStart={handleDragStart}
-            renamingNodeId={renamingNodeId}
-            onRenameComplete={onRenameComplete}
-            hiddenRunIds={hiddenRunIds}
-            onToggleRunHidden={onToggleRunHidden}
-            matchIds={matchIds}
-            cursorId={cursorId}
-          />
-        )}
-      </div>
+      {/* Tree / Inbox */}
+      {view === 'hierarchy' ? (
+        <div
+          ref={scrollContainerRef}
+          className="flex-1 overflow-y-auto scrollbar-thin py-1"
+          style={{ cursor: dragState ? 'grabbing' : undefined }}
+        >
+          {displayedTree.length === 0 ? (
+            <div className="px-3 py-4 text-xs text-slate-500 text-center" data-testid="hierarchy-empty">
+              {trimmedQuery
+                ? `No matches for "${trimmedQuery}"`
+                : (unfilteredTree ?? tree).length === 0 ? 'No items. Click + to create.' : 'All entities empty. Click filter to show.'}
+            </div>
+          ) : (
+            <TreeWithOrphanSeparators
+              nodes={displayedTree}
+              depth={0}
+              dimensions={dimensions}
+              dimensionIconMap={dimensionIconMap}
+              onAdd={onAdd}
+              onRename={onRename}
+              onDelete={onDelete}
+              onFocusRun={onFocusRun}
+              onMenuOpen={onMenuOpen}
+              dragNodeId={dragState?.nodeId ?? null}
+              dropTarget={dropTarget}
+              onDragStart={handleDragStart}
+              renamingNodeId={renamingNodeId}
+              onRenameComplete={onRenameComplete}
+              hiddenRunIds={hiddenRunIds}
+              onToggleRunHidden={onToggleRunHidden}
+              matchIds={matchIds}
+              cursorId={cursorId}
+              pluginWidgetIds={pluginWidgetIds}
+            />
+          )}
+        </div>
+      ) : (
+        <InboxList activeSpaceId={activeSpaceId} searchQuery={query} />
+      )}
 
       {/* Drag divider between tree and hotkeys */}
       <div
@@ -1034,5 +1127,6 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
         </div>
       )}
     </div>
+    </PluginIconContext.Provider>
   )
 }

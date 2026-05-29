@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { AgentQuadrant } from './AgentQuadrant'
 import { CcQuotaCard } from './CcQuotaCard'
 import { TelemetryBootstrap } from './TelemetryBootstrap'
+import { TurnLengthFleet } from './TurnLengthFleet'
 import { useTelemetryHud } from '../../hooks/useTelemetryHud'
 import { useCcQuota } from '../../hooks/useCcQuota'
 import { fmtDollar, fmtRate } from './fmt'
@@ -10,8 +11,8 @@ import { apiFetch } from '../../apiClient'
 import { StatSpark } from '../RunWorkspaceWidget/StatSpark'
 import { computeDeltaChip } from '../RunWorkspaceWidget/computeDeltaChip'
 import { useFleetTelemetrySeries } from '../../hooks/useFleetTelemetrySeries'
-
-const STORAGE_KEY = 'tinstar-hud-visible'
+import { useConfig } from '../../context/ConfigContext'
+import { getPref, setPref } from '../../lib/uiPrefs'
 
 interface Props {
   toggleRef?: React.MutableRefObject<(() => void) | null>
@@ -26,13 +27,12 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
   const { snapshot } = useTelemetryHud()
   const fleetSeries = useFleetTelemetrySeries(snapshot)
   const { snapshot: ccQuota } = useCcQuota()
-  const [visible, setVisible] = useState(() => {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    return stored !== 'false'
-  })
+  const config = useConfig()
+  const panels = config?.ui.telemetryPanels ?? { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true }
+  const [visible, setVisible] = useState(() => getPref('hudVisible') ?? true)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, String(visible))
+    setPref('hudVisible', visible)
   }, [visible])
 
   const toggle = useCallback(() => setVisible(v => !v), [])
@@ -125,8 +125,8 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
 
         return (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6 }}>
-            <StatSpark accent="gold"   label="COST"        value={costValueStr}   series={fleetSeries.cost}   delta={costDelta} />
-            {modelChips.length > 0 && (
+            {panels.cost     && <StatSpark accent="gold"   label="COST"        value={costValueStr}   series={fleetSeries.cost}   delta={costDelta} />}
+            {panels.cost && modelChips.length > 0 && (
               <div style={{ display: 'flex', gap: 5 }}>
                 {modelChips.map(([model, cost]) => (
                   <div key={model} style={{ flex: 1, padding: '4px 6px', fontSize: 10,
@@ -138,9 +138,10 @@ export function CanvasHud({ toggleRef, runMap, onFocusRun, selectedRunIds, embed
                 ))}
               </div>
             )}
-            <StatSpark accent="blue"   label="TOKENS"      value={tokensValueStr} series={fleetSeries.tokens} delta={tokensDelta} />
-            <StatSpark accent="green"  label="CACHE HIT"   value={cacheValueStr}  series={fleetSeries.cache}  delta={cacheDelta} />
-            <StatSpark accent="violet" label="DUTY · FLEET" value={dutyValueStr}  series={fleetSeries.duty}   delta={dutyDelta} />
+            {panels.tokens   && <StatSpark accent="blue"   label="TOKENS"      value={tokensValueStr} series={fleetSeries.tokens} delta={tokensDelta} />}
+            {panels.cacheHit && <StatSpark accent="green"  label="CACHE HIT"   value={cacheValueStr}  series={fleetSeries.cache}  delta={cacheDelta} />}
+            {panels.duty     && <StatSpark accent="violet" label="DUTY · FLEET" value={dutyValueStr}  series={fleetSeries.duty}   delta={dutyDelta} />}
+            <TurnLengthFleet />
           </div>
         )
       })()}

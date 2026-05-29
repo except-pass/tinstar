@@ -26,12 +26,13 @@ async function refresh(): Promise<void> {
   try {
     const res = await apiFetch('/api/slash-commands')
     if (!res.ok) return
-    const body = (await res.json()) as { commands: ServerSlashCommand[] }
+    const envelope = (await res.json()) as { ok: boolean; data?: { commands: ServerSlashCommand[] } }
+    const commands = envelope.data?.commands ?? []
     const usage: Record<string, UsageEntry> = {}
-    for (const c of body.commands) {
+    for (const c of commands) {
       if (c.lastUsedAt) usage[c.name] = { count: c.useCount, lastUsedAt: c.lastUsedAt }
     }
-    setState({ commands: body.commands, usage, loaded: true })
+    setState({ commands, usage, loaded: true })
   } catch {
     // Network error — keep previous data.
   } finally {

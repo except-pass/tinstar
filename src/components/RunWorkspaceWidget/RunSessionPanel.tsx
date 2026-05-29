@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import type { RecapEntry, SessionStatus } from '../../types'
 import { resolveRunAccent } from '../runAccent'
 import { apiFetch } from '../../apiClient'
-import { RecapSessionPanel } from '../RecapSessionPanel'
+import { PromptComposer } from '../PromptComposer/PromptComposer'
 
 interface Props {
   recapEntries?: RecapEntry[]
@@ -117,7 +117,7 @@ export function RunSessionPanel({ recapEntries = [], rawLogs = '', port, session
           </div>
         </section>
       ) : (
-        <RecapSessionPanel
+        <PromptComposer
           sessionId={sessionId}
           status={status}
           port={port ?? undefined}

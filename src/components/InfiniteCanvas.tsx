@@ -1,5 +1,5 @@
-import { useRef, useEffect, useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, Run, TreeNode, GroupingDimension } from '../domain/types'
+import { useRef, useEffect, useCallback, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
+import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, PluginWidgetInstance, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { findNodeLabel } from '../domain/view-models'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
@@ -8,11 +8,23 @@ import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
 import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
-import { useHotgroupContext } from '../hotkeys/HotgroupContext'
+import { useConstellationContext } from '../hotkeys/ConstellationContext'
+import type { ConstellationSlot } from '../hooks/useConstellations'
 import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
+import { PluginWidgetDisabledPlaceholder } from './PluginWidgetDisabledPlaceholder'
+import { getOrCreatePluginChromeWrapper } from './PluginWidgetChrome'
 import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
+import { EV } from '../lib/windowEvents'
+import { ConstellationChrome } from '../canvas/ConstellationChrome'
+import type { Rect } from '../canvas/constellationCohesion'
+import { applyGroupDrag, boundingBoxOf, fitToRect, planLinkBreak } from '../canvas/constellationCohesion'
+import { tidyGrid } from '../canvas/tidyArrange'
+import type { DragMember } from '../canvas/constellationCohesion'
+import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
+import { resolveSnapTarget, revalidateSnapTarget, resolveSnapCommit, snapMembership } from '../canvas/snapZoneResolver'
+import type { SnapWidget, SnapTarget } from '../canvas/snapZoneResolver'
 
 interface Props {
   tree: TreeNode[]
@@ -21,6 +33,8 @@ interface Props {
   browserWidgetMap?: Map<string, BrowserWidget>
   imageWidgetMap?: Map<string, ImageWidget>
   natsTrafficWidgetMap?: Map<string, NatsTrafficWidget>
+  pluginWidgetMap?: Map<string, PluginWidgetInstance>
+  onPluginWidgetCreated?: (instance: PluginWidgetInstance) => void
   onImageWidgetCreated?: (widget: ImageWidget) => void
   focusRunId: string | null
   activeSpaceId?: string
@@ -155,8 +169,10 @@ interface MarqueeRect {
 }
 
 const MARQUEE_THRESHOLD = 5
+// Snap-zone snap distance (canvas units)
+const SNAP_DISTANCE = 60
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -172,11 +188,18 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     batchSetLayouts,
   } = useWidgetLayouts(tree, activeSpaceId)
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
-  const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState, expandAll } = useSelection()
+  const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState } = useSelection()
 
   // Drag state
   const draggingRunRef = useRef<string | null>(null)
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null)
+  // Snap-zone drag state: tracks dragged widget's current rect for overlay + drop resolution
+  // Magnetic snap: the widget the current drag would join, with the flush position to land at.
+  // Mirrored into a ref so drag-end (a stable callback) reads the latest without re-subscribing.
+  const [snapPreview, setSnapPreview] = useState<SnapTarget | null>(null)
+  const snapPreviewRef = useRef<SnapTarget | null>(null)
+  const draggedSnapRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
+  const lastUnsnappedDragPositionRef = useRef<{ x: number; y: number } | null>(null)
 
   // File-drag overlay: shows a full-canvas drop target when a tinstar-editor drag enters,
   // so the terminal iframe doesn't swallow the drop
@@ -185,6 +208,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   // Multi-drag: snapshot of other selected widgets' positions at drag start
   const multiDragSnapshot = useRef<Map<string, { x: number; y: number }> | null>(null)
+
+  // Constellation group-drag: snapshot of ALL members' start positions (including dragged widget)
+  const constellationDragSnapshot = useRef<Map<string, { x: number; y: number }> | null>(null)
+  // Which constellation slot the current drag belongs to (null = no constellation drag)
+  const constellationDragSlot = useRef<import('../hooks/useConstellations').ConstellationSlot | null>(null)
+  // Whether alt was held at drag-start (triggers pop-out on drag-end)
+  const altHeldAtDragStart = useRef(false)
 
   // Marquee state
   const [marquee, setMarquee] = useState<MarqueeRect | null>(null)
@@ -307,9 +337,45 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         centerOn(minX, minY, maxX - minX, maxY - minY, rect.width, rect.height, detail.padding ?? 80)
       }
     }
-    window.addEventListener('tinstar:canvas:viewport', onViewport)
-    return () => window.removeEventListener('tinstar:canvas:viewport', onViewport)
+    window.addEventListener(EV.canvasViewport, onViewport)
+    return () => window.removeEventListener(EV.canvasViewport, onViewport)
   }, [setCamera, centerOn, getLayout, layouts, runMap])
+
+  // Listen for widget:flash-focus — pan to, flash, and (for runs) focus a widget by id.
+  // Dispatched by `dispatchFlashFocus` (see src/canvas/flashAndFocus.ts), used by the inbox.
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ widgetId: string; source: 'run' | 'plugin' }>).detail
+      if (!detail) return
+      const { widgetId, source } = detail
+
+      // Build nodeId for layout lookup. Runs are stored with the `run-` prefix in the layouts map;
+      // plugin widgets use their bare id.
+      const nodeId = source === 'run' ? `run-${widgetId}` : widgetId
+      const layout = getLayout(nodeId)
+      if (!layout) return
+
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect) return
+
+      // Pan + light zoom-to-fit at current zoom-ish; use centerOn for consistency.
+      centerOn(layout.x, layout.y, layout.width, layout.height, rect.width, rect.height, 80)
+
+      // Flash: add a CSS class to the widget's DOM element for ~700ms.
+      const el = document.querySelector(`[data-widget-id="${CSS.escape(widgetId)}"]`) as HTMLElement | null
+      if (el) {
+        el.classList.add('widget-flash')
+        window.setTimeout(() => el.classList.remove('widget-flash'), 700)
+      }
+
+      // Focus path — forward to onFocusRun for runs (existing behavior), otherwise nothing extra.
+      if (source === 'run' && onFocusRun) {
+        onFocusRun(widgetId)
+      }
+    }
+    window.addEventListener('widget:flash-focus', handler as EventListener)
+    return () => window.removeEventListener('widget:flash-focus', handler as EventListener)
+  }, [getLayout, centerOn, onFocusRun])
 
   // Attach wheel listener with { passive: false }
   useEffect(() => {
@@ -464,8 +530,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           }
         }
       } else if (!marqueeRef.current.active) {
-        // Plain click on empty canvas = deselect all
+        // Plain click on empty canvas = deselect all and clear active constellation
         deselect()
+        setActiveConstellationSlot(null)
       }
 
       marqueeRef.current = { startX: 0, startY: 0, active: false }
@@ -509,10 +576,92 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [endPan, deselect])
 
+  // Track alt key state globally so drag-start can read it even though onDragStart
+  // receives only nodeId (no pointer event). Use a ref so it doesn't cause re-renders.
+  const altKeyRef = useRef(false)
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyRef.current = true }
+    const onUp = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyRef.current = false }
+    window.addEventListener('keydown', onDown)
+    window.addEventListener('keyup', onUp)
+    return () => {
+      window.removeEventListener('keydown', onDown)
+      window.removeEventListener('keyup', onUp)
+    }
+  }, [])
+
+  // Constellation chrome: active slot driven by digit hotkey
+  const [activeConstellationSlot, setActiveConstellationSlot] = useState<ConstellationSlot | null>(null)
+
+  // Focused widget for digit-hotkey cycle bookkeeping (not wired to rendering in this PR)
+  const [focusedWidgetId, setFocusedWidgetId] = useState<string | null>(null)
+
+  // Constellation context — must be declared before widget drag callbacks that reference it
+  const constellations = useConstellationContext()
+
+  // Memoized inverted index: nodeId → slot (first slot only) and occupied slot set
+  const slotByNode = useMemo(() => {
+    const map = new Map<string, import('../hooks/useConstellations').ConstellationSlot>()
+    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../hooks/useConstellations').ConstellationSlot, string[]][]) {
+      for (const id of nodeIds) {
+        if (!map.has(id)) map.set(id, slot)
+      }
+    }
+    return map
+  }, [constellations.store])
+
+  const occupiedSlots = useMemo(() => {
+    const set = new Set<import('../hooks/useConstellations').ConstellationSlot>()
+    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../hooks/useConstellations').ConstellationSlot, string[]][]) {
+      if (nodeIds.length > 0) set.add(slot)
+    }
+    return set
+  }, [constellations.store])
+
+  const collectSnapNeighbors = useCallback((nodeId: string): SnapWidget[] => {
+    // Magnetic snap only targets work widgets (runs, plugin widgets, editors, browsers, …) —
+    // never grouping containers (Initiative/Epic/Task). runNodeIdsRef holds exactly the
+    // non-container leaf nodes (see collectRunNodeIds), so filter neighbors to that set.
+    const leafIds = new Set(runNodeIdsRef.current)
+    const neighbors: SnapWidget[] = []
+    for (const [id, l] of layouts) {
+      if (id === nodeId || !leafIds.has(id)) continue
+      neighbors.push({ id, x: l.x, y: l.y, width: l.width, height: l.height })
+    }
+    return neighbors
+  }, [layouts])
+
   // Widget drag callbacks
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
     setDraggingNodeId(nodeId)
+
+    // Reset any prior snap preview; it's recomputed live as the drag moves.
+    snapPreviewRef.current = null
+    draggedSnapRectRef.current = null
+    lastUnsnappedDragPositionRef.current = null
+    setSnapPreview(null)
+
+    // Snapshot alt-key state at drag-start for pop-out decision at drag-end
+    altHeldAtDragStart.current = altKeyRef.current
+
+    // Constellation group-drag: if the widget is in a constellation and alt is NOT held,
+    // capture start positions for all members so we can move them as one.
+    const slot = constellations.slotsForNode(nodeId)[0] ?? null
+    if (slot && !altKeyRef.current) {
+      constellationDragSlot.current = slot
+      const memberIds = constellations.nodesInSlot(slot)
+      const snap = new Map<string, { x: number; y: number }>()
+      for (const memberId of memberIds) {
+        const layout = layouts.get(memberId)
+        if (layout) snap.set(memberId, { x: layout.x, y: layout.y })
+      }
+      constellationDragSnapshot.current = snap
+    } else {
+      constellationDragSlot.current = null
+      constellationDragSnapshot.current = null
+    }
+
     if (isSelected(nodeId)) {
       const snap = new Map<string, { x: number; y: number }>()
       for (const leafId of runNodeIdsRef.current) {
@@ -527,17 +676,119 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     } else {
       multiDragSnapshot.current = null
     }
-  }, [isSelected, layouts])
+  }, [isSelected, layouts, constellations])
 
-  const handleWidgetDragEnd = useCallback(() => {
+  const handleWidgetDragEnd = useCallback((nodeId: string) => {
+    // Alt-pop-out: if alt was held at drag-start, remove the widget from its constellation slot
+    const slot = constellationDragSlot.current
+    if (slot && altHeldAtDragStart.current) {
+      constellations.remove(slot, nodeId)
+      // Dispatch flourish event so the sidebar row flashes
+      window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId } }))
+    }
+
+    // Magnetic snap committed: the widget already sits flush (set during move). Now join the
+    // target's constellation — or form a new one with it. Only when alt wasn't held and the
+    // dragged widget isn't already grouped.
+    const preview = snapPreviewRef.current
+    const isUngrouped = constellations.slotsForNode(nodeId).length === 0
+    if (!altHeldAtDragStart.current && preview && isUngrouped) {
+      let draggedLayout = draggedSnapRectRef.current
+      if (!draggedLayout) {
+        const layout = getLayout(nodeId)
+        draggedLayout = layout
+          ? { x: layout.x, y: layout.y, width: layout.width, height: layout.height }
+          : null
+      }
+      const validatedPreview = draggedLayout
+        ? revalidateSnapTarget(
+            nodeId,
+            preview,
+            { x: draggedLayout.x, y: draggedLayout.y, width: draggedLayout.width, height: draggedLayout.height },
+            collectSnapNeighbors(nodeId),
+            SNAP_DISTANCE,
+          )
+        : null
+      const commit = resolveSnapCommit(validatedPreview, slotByNode, occupiedSlots)
+      if (commit.kind === 'join') {
+        constellations.assign(commit.slot, nodeId)
+      } else if (commit.kind === 'form') {
+        constellations.assign(commit.slot, nodeId)
+        constellations.assign(commit.slot, commit.withId)
+      } else {
+        const unsnapped = lastUnsnappedDragPositionRef.current
+        if (unsnapped) updateRunPosition(nodeId, unsnapped.x, unsnapped.y)
+      }
+    }
+    snapPreviewRef.current = null
+    draggedSnapRectRef.current = null
+    lastUnsnappedDragPositionRef.current = null
+    setSnapPreview(null)
+
     draggingRunRef.current = null
     setDraggingNodeId(null)
     multiDragSnapshot.current = null
-  }, [])
+    constellationDragSnapshot.current = null
+    constellationDragSlot.current = null
+    altHeldAtDragStart.current = false
+  }, [collectSnapNeighbors, constellations, getLayout, slotByNode, occupiedSlots, updateRunPosition])
 
-  // Multi-drag aware move: when dragging a selected widget, move all selected peers by the same delta
+  // Multi-drag + constellation-aware move:
+  // - If dragging a widget that's in a constellation (and alt was NOT held), move all members together.
+  // - Otherwise fall through to the existing multi-drag / single-drag path.
   const handleMultiMove = useCallback((nodeId: string, newX: number, newY: number) => {
-    updateRunPosition(nodeId, newX, newY)
+    const cSnap = constellationDragSnapshot.current
+    if (cSnap) {
+      // Group drag: compute delta from this widget's start position, apply to all members
+      const origin = cSnap.get(nodeId)
+      if (origin) {
+        const dx = newX - origin.x
+        const dy = newY - origin.y
+        const members: DragMember[] = []
+        for (const [memberId, pos] of cSnap) {
+          members.push({ id: memberId, x: pos.x, y: pos.y })
+        }
+        const updated = applyGroupDrag(members, { dx, dy })
+        for (const [memberId, pos] of updated) {
+          updateRunPosition(memberId, pos.x, pos.y)
+        }
+        return
+      }
+    }
+
+    // Magnetic snap: when dragging a single ungrouped widget (no alt, no multi-select), pull it
+    // flush against the nearest neighbor in range. The widget itself moves to the snapped spot.
+    const layout = layouts.get(nodeId)
+    const isUngrouped = constellations.slotsForNode(nodeId).length === 0
+    const snapEligible = !altKeyRef.current
+      && !multiDragSnapshot.current
+      && !!layout
+      && isUngrouped
+    if (!multiDragSnapshot.current && layout && isUngrouped) {
+      lastUnsnappedDragPositionRef.current = { x: newX, y: newY }
+    } else {
+      lastUnsnappedDragPositionRef.current = null
+    }
+    let finalX = newX
+    let finalY = newY
+    let preview: SnapTarget | null = null
+    if (snapEligible && layout) {
+      const neighbors = collectSnapNeighbors(nodeId)
+      preview = resolveSnapTarget(nodeId, { x: newX, y: newY, width: layout.width, height: layout.height }, neighbors, SNAP_DISTANCE)
+      const membership = preview ? snapMembership(preview.targetId, slotByNode, occupiedSlots) : null
+      if (preview && membership?.kind !== 'full-slots') {
+        finalX = preview.x
+        finalY = preview.y
+      }
+    }
+    snapPreviewRef.current = preview
+    draggedSnapRectRef.current = layout
+      ? { x: finalX, y: finalY, width: layout.width, height: layout.height }
+      : null
+    setSnapPreview(preview)
+
+    // Existing single / multi-selection drag path
+    updateRunPosition(nodeId, finalX, finalY)
     const snap = multiDragSnapshot.current
     if (!snap) return
     const origin = snap.get('__origin__')
@@ -548,7 +799,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       if (peerNodeId === '__origin__') continue
       updateRunPosition(peerNodeId, pos.x + dx, pos.y + dy)
     }
-  }, [updateRunPosition])
+  }, [collectSnapNeighbors, updateRunPosition, layouts, constellations, slotByNode, occupiedSlots])
 
   // Grid arrange: treemap-style nested layout filling the viewport
   const arrangeGrid = useCallback(() => {
@@ -780,46 +1031,49 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return () => { if (panToRunsRef) panToRunsRef.current = null }
   }, [panToRunsRef, panToRuns])
 
-  // Hotgroup context and canvas hotkeys
-  const hotgroups = useHotgroupContext()
-
   useCanvasHotkeys({
-    onHotgroupNavigate: (slot) => {
-      // hotgroups stores full node IDs (e.g. 'run-R-241', 'editor-abc', 'browser-xyz')
-      const slotNodeIds = hotgroups.nodesInSlot(slot).filter(id => layouts.has(id))
-      if (slotNodeIds.length === 0) return
-      // Determine selection type from first node prefix
-      const first = slotNodeIds[0]!
-      const selType = first.startsWith('run-') ? 'run'
-        : first.startsWith('editor-') ? 'file-editor'
-        : first.startsWith('image-') ? 'image-viewer'
-        : first.startsWith('nats-') ? 'nats-traffic'
-        : 'browser-widget'
-      selectMany(slotNodeIds, selType as import('../domain/types').GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic')
-      // Expand all ancestors in sidebar so the nodes become visible
-      const ancestorIds: string[] = []
-      for (const nodeId of slotNodeIds) {
-        let cur = parentMapRef.current.get(nodeId) ?? null
-        while (cur) {
-          ancestorIds.push(cur)
-          cur = parentMapRef.current.get(cur) ?? null
-        }
+    onConstellationNavigate: (slot: ConstellationSlot) => {
+      if (activeConstellationSlot === slot) {
+        // Repeat press: advance focus through members
+        const memberIds = constellations.nodesInSlot(slot).filter(id => layouts.has(id))
+        if (memberIds.length === 0) return
+        const currentIdx = memberIds.indexOf(focusedWidgetId ?? '')
+        const nextIdx = (currentIdx + 1) % memberIds.length
+        setFocusedWidgetId(memberIds[nextIdx] ?? null)
+      } else {
+        // First press: activate, zoom-to-fit, focus primary member
+        setActiveConstellationSlot(slot)
+        const memberRects = constellations.nodesInSlot(slot)
+          .map(id => {
+            const l = layouts.get(id)
+            if (!l) return null
+            return { x: l.x, y: l.y, width: l.width, height: l.height } as Rect
+          })
+          .filter((r): r is Rect => r !== null)
+        const box = boundingBoxOf(memberRects)
+        if (!box) return
+        const canvasRect = containerRef.current?.getBoundingClientRect()
+        if (!canvasRect) return
+        const newCamera = fitToRect(box, { width: canvasRect.width, height: canvasRect.height }, 40)
+        setCamera(newCamera)
+        // Primary member: most-recently-focused (if it's in this slot), else first
+        const liveMemberIds = constellations.nodesInSlot(slot).filter(id => layouts.has(id))
+        const primary = liveMemberIds.find(id => id === focusedWidgetId) ?? liveMemberIds[0]
+        if (primary) setFocusedWidgetId(primary)
       }
-      if (ancestorIds.length > 0) expandAll(ancestorIds)
-      zoomToFitRuns(slotNodeIds)
     },
-    onHotgroupAssign: (slot) => {
+    onConstellationAssign: (slot) => {
       const { selectedType, selectedIds } = selectionState
       if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
       for (const nodeId of selectedIds) {
-        hotgroups.assign(slot, nodeId)
+        constellations.assign(slot, nodeId)
       }
     },
-    onHotgroupRemove: (slot) => {
+    onConstellationRemove: (slot) => {
       const { selectedType, selectedIds } = selectionState
       if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
       for (const nodeId of selectedIds) {
-        hotgroups.remove(slot, nodeId)
+        constellations.remove(slot, nodeId)
       }
     },
     onArrangeGrid: () => arrangeGridRef?.current?.(),
@@ -827,7 +1081,111 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     onArrangeSwimlanes: () => arrangeSwimlanesRef?.current?.(),
     onToggleMinimap: () => minimapToggleRef.current?.(),
     onToggleHud: () => hudToggleRef.current?.(),
+    onConstellationZoomFit: () => {
+      if (!activeConstellationSlot) return
+      const memberRects = constellations.nodesInSlot(activeConstellationSlot)
+        .map(id => {
+          const l = layouts.get(id)
+          if (!l) return null
+          return { id, x: l.x, y: l.y, width: l.width, height: l.height }
+        })
+        .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
+      if (memberRects.length === 0) return
+      const box = boundingBoxOf(memberRects)
+      if (!box) return
+      const canvasRect = containerRef.current?.getBoundingClientRect()
+      if (!canvasRect) return
+      setCamera(fitToRect(box, { width: canvasRect.width, height: canvasRect.height }, 40))
+    },
+    onConstellationTidy: () => {
+      if (!activeConstellationSlot) return
+      const memberRects = constellations.nodesInSlot(activeConstellationSlot)
+        .map(id => {
+          const l = layouts.get(id)
+          if (!l) return null
+          return { id, x: l.x, y: l.y, width: l.width, height: l.height }
+        })
+        .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
+      if (memberRects.length === 0) return
+      const positions = tidyGrid(memberRects, 40)
+      for (const [id, p] of positions) updateRunPosition(id, p.x, p.y)
+    },
+    onConstellationLeave: () => {
+      if (!activeConstellationSlot || !focusedWidgetId) return
+      constellations.remove(activeConstellationSlot, focusedWidgetId)
+      window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId: focusedWidgetId } }))
+    },
+    onConstellationDissolve: () => {
+      if (!activeConstellationSlot) return
+      const ids = constellations.nodesInSlot(activeConstellationSlot).slice()
+      for (const id of ids) {
+        constellations.remove(activeConstellationSlot, id)
+        window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId: id } }))
+      }
+      setActiveConstellationSlot(null)
+    },
   })
+
+  // Plugin-API constellation actions: widgets call
+  // api.constellations.fitToMine() / tidyMine() / assignToSlot(n) / leave()
+  // which dispatch window CustomEvents. The host fulfills them here using
+  // the same primitives as the digit/Z/Shift+Z hotkey paths above.
+  useEffect(() => {
+    const onFit = (e: Event) => {
+      const detail = (e as CustomEvent<{ widgetId: string }>).detail
+      const slot = constellations.slotsForNode(detail.widgetId)[0] as ConstellationSlot | undefined
+      if (!slot) return
+      setActiveConstellationSlot(slot)
+      const memberRects = constellations.nodesInSlot(slot)
+        .map(memberId => {
+          const l = layouts.get(memberId)
+          if (!l) return null
+          return { id: memberId, x: l.x, y: l.y, width: l.width, height: l.height }
+        })
+        .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
+      const box = boundingBoxOf(memberRects)
+      if (!box) return
+      const canvasRect = containerRef.current?.getBoundingClientRect()
+      if (!canvasRect) return
+      setCamera(fitToRect(box, { width: canvasRect.width, height: canvasRect.height }, 40))
+    }
+    const onTidy = (e: Event) => {
+      const detail = (e as CustomEvent<{ widgetId: string }>).detail
+      const slot = constellations.slotsForNode(detail.widgetId)[0] as ConstellationSlot | undefined
+      if (!slot) return
+      const memberRects = constellations.nodesInSlot(slot)
+        .map(memberId => {
+          const l = layouts.get(memberId)
+          if (!l) return null
+          return { id: memberId, x: l.x, y: l.y, width: l.width, height: l.height }
+        })
+        .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
+      if (memberRects.length === 0) return
+      const positions = tidyGrid(memberRects, 40)
+      for (const [posId, p] of positions) updateRunPosition(posId, p.x, p.y)
+    }
+    const onAssign = (e: Event) => {
+      const detail = (e as CustomEvent<{ widgetId: string; slot: number }>).detail
+      const slotStr = String(detail.slot) as ConstellationSlot
+      constellations.assign(slotStr, detail.widgetId)
+    }
+    const onLeave = (e: Event) => {
+      const detail = (e as CustomEvent<{ widgetId: string }>).detail
+      const slot = constellations.slotsForNode(detail.widgetId)[0] as ConstellationSlot | undefined
+      if (!slot) return
+      constellations.remove(slot, detail.widgetId)
+    }
+    window.addEventListener('constellation:fit-mine', onFit)
+    window.addEventListener('constellation:tidy-mine', onTidy)
+    window.addEventListener('constellation:assign', onAssign)
+    window.addEventListener('constellation:leave', onLeave)
+    return () => {
+      window.removeEventListener('constellation:fit-mine', onFit)
+      window.removeEventListener('constellation:tidy-mine', onTidy)
+      window.removeEventListener('constellation:assign', onAssign)
+      window.removeEventListener('constellation:leave', onLeave)
+    }
+  }, [constellations, layouts, updateRunPosition, setCamera])
 
   // Register the canvas-level fit implementation so widget action handlers
   // can call fitWidgetToViewport(id) in response to the 'fit-viewport'
@@ -951,6 +1309,40 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return
       }
 
+      const rawPluginWidget = e.dataTransfer.getData('application/tinstar-plugin-widget')
+      if (rawPluginWidget) {
+        const { pluginId, widgetType, defaultSize } = JSON.parse(rawPluginWidget) as {
+          pluginId: string
+          widgetType: string
+          defaultSize: { width: number; height: number }
+        }
+        const spawnLayout = { x: dropX, y: dropY, width: defaultSize.width, height: defaultSize.height }
+        const res = await apiFetch('/api/plugin-widgets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pluginId,
+            widgetType,
+            spaceId: activeSpaceId,
+            position: { x: dropX, y: dropY },
+            size: defaultSize,
+            data: null,
+          }),
+        })
+        const resJson = await res.json() as { ok: boolean; data?: PluginWidgetInstance }
+        if (!resJson.ok || !resJson.data) {
+          // Server validation rejected the spawn (unknown widget type, singleton violation, etc.).
+          // The palette UI should reflect this through the SSE delta path for singletons; for
+          // unknown types, the next palette load will exclude the entry. Logging only for now.
+          // eslint-disable-next-line no-console
+          console.warn('[canvas] plugin-widget spawn rejected:', resJson)
+          return
+        }
+        insertLayout(resJson.data.id, spawnLayout)
+        onPluginWidgetCreated?.(resJson.data)
+        return
+      }
+
       const rawBrowser = e.dataTransfer.getData('application/tinstar-browser')
       if (rawBrowser) {
         const { sessionId } = JSON.parse(rawBrowser) as { sessionId: string }
@@ -1020,7 +1412,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return
       }
     },
-    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated],
+    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated],
   )
 
   // Recursive render: groups render behind their children (natural DOM order)
@@ -1028,6 +1420,34 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const widgetType = toWidgetType(node.type)
     const reg = getWidgetComponent(widgetType)
     if (!reg) {
+      // If this is a plugin widget whose type is no longer registered (plugin disabled,
+      // uninstalled, or type renamed), render a host-owned placeholder instead of crashing.
+      if (pluginWidgetMap.has(node.entityId)) {
+        const instance = pluginWidgetMap.get(node.entityId)!
+        const layout = layouts.get(node.id)
+        if (!layout) return null
+        return (
+          <CanvasWidgetShell
+            key={node.id}
+            registration={{ type: node.type, component: () => <PluginWidgetDisabledPlaceholder instance={instance} reason="unknown-type" />, isContainer: false }}
+            nodeId={node.id}
+            widgetId={node.entityId}
+            data={instance}
+            layout={layout}
+            zoom={camera.zoom}
+            isSelected={isSelected(node.id)}
+            isFocused={focusedWidgetId === node.id}
+            isSpawning={spawnedNodeIds.has(node.id)}
+            spawnColor={undefined}
+            isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
+            spaceHeldRef={spaceHeld}
+            onSelect={handleSelect}
+            onDoubleClickZoom={handleDoubleClickZoom}
+            onMove={handleMultiMove}
+            onResize={updateRunSize}
+          />
+        )
+      }
       console.warn(`No widget registered for type: ${node.type}`)
       return null
     }
@@ -1045,7 +1465,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
               ? imageWidgetMap.get(node.entityId)
               : node.type === 'nats-traffic'
                 ? natsTrafficWidgetMap.get(node.entityId)
-                : ({
+                : pluginWidgetMap.has(node.entityId)
+                  // Plugin widget: pass the instance as data. The widget's useData hook
+                  // reads live state from the singleton SSE store; this prop is a
+                  // convenience snapshot the component may optionally reference.
+                  ? pluginWidgetMap.get(node.entityId)
+                  : ({
               node,
               depth: depthMapRef.current.get(node.id) ?? 0,
               onShrinkToFit: shrinkNode,
@@ -1057,25 +1482,41 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const moveHandler = reg.isContainer ? moveNode : handleMultiMove
     const resizeHandler = reg.isContainer ? resizeNode : updateRunSize
 
+    // Plugin widgets get a host-owned chrome (header + close + drag handle)
+    // so they're consistent with built-in widgets even when the plugin author
+    // doesn't ship their own header. Per-type wrapper cache preserves
+    // component identity so the inner plugin doesn't remount on parent renders.
+    const isPluginWidget = pluginWidgetMap.has(node.entityId)
+    const effectiveReg = isPluginWidget
+      ? { ...reg, component: getOrCreatePluginChromeWrapper(reg.type, reg.component) }
+      : reg
+
+    // Any non-container leaf widget participates in constellation snap, not
+    // just runs. Runs, plugin widgets, editors, browsers, images, nats-traffic
+    // all behave the same in the snap pipeline.
+    const isSnapLeaf = !reg.isContainer
+
     return (
       <CanvasWidgetShell
         key={node.id}
-        registration={reg}
+        registration={effectiveReg}
         nodeId={node.id}
+        widgetId={node.entityId}
         data={data}
         layout={layout}
         zoom={camera.zoom}
         isSelected={isSelected(node.id)}
+        isFocused={focusedWidgetId === node.id}
         isSpawning={spawnedNodeIds.has(node.id)}
         spawnColor={node.type === 'run' ? runMap.get(node.entityId)?.color : undefined}
         isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
         spaceHeldRef={spaceHeld}
         onSelect={handleSelect}
-        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' || node.type === 'nats-traffic' ? handleDoubleClickZoom : undefined)}
+        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (isSnapLeaf ? handleDoubleClickZoom : undefined)}
         onMove={moveHandler}
         onResize={resizeHandler}
-        onDragStart={node.type === 'run' ? handleWidgetDragStart : undefined}
-        onDragEnd={node.type === 'run' ? handleWidgetDragEnd : undefined}
+        onDragStart={isSnapLeaf ? handleWidgetDragStart : undefined}
+        onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
       />
     )
   }
@@ -1094,6 +1535,16 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   }
 
   const renderedNodes = collectRenderOrder(tree, 0)
+
+  // Snap overlay: highlight only the single widget the drag would snap to.
+  const snapTargetWidget = useMemo((): SnapWidget | null => {
+    if (!snapPreview) return null
+    const l = layouts.get(snapPreview.targetId)
+    return l ? { id: snapPreview.targetId, x: l.x, y: l.y, width: l.width, height: l.height } : null
+  }, [snapPreview, layouts])
+  const snapCanJoin = snapPreview
+    ? (slotByNode.has(snapPreview.targetId) || occupiedSlots.size < 9)
+    : true
 
   // Compute drag ghost: precise dashed outline at the widget's current drag position.
   // Sits behind the widget (z-index 50 < widget's 100) so the widget floats on top.
@@ -1191,6 +1642,38 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       >
         {renderedNodes}
         {dragGhost && <div style={dragGhost} />}
+        {/* Chrome is inside the camera transform so it scales with canvas zoom — unlike the screen-space marquee. */}
+        {(['1','2','3','4','5','6','7','8','9'] as const).map(slot => {
+          const memberIds = constellations.nodesInSlot(slot)
+          const members = memberIds
+            .map(id => {
+              const l = layouts.get(id)
+              if (!l) return null
+              return { id, x: l.x, y: l.y, width: l.width, height: l.height }
+            })
+            .filter((m): m is { id: string; x: number; y: number; width: number; height: number } => m !== null)
+          // Outline shows when the slot is hotkey-active OR any member is selected (clicked).
+          const active = activeConstellationSlot === slot || memberIds.some(id => isSelected(id))
+          return (
+            <ConstellationChrome
+              key={`constellation-chrome-${slot}`}
+              slot={slot}
+              members={members}
+              active={active}
+              onBreak={(aId, bId) => {
+                // Break only this seam: split the constellation along it. Larger side keeps the
+                // slot; the smaller side becomes its own group (≥2) or is freed (lone widget).
+                const plan = planLinkBreak(members, aId, bId)
+                for (const id of plan.removeFromSlot) constellations.remove(slot, id)
+                if (plan.newGroup.length >= 2) {
+                  const free = (['1','2','3','4','5','6','7','8','9'] as const).find(s => !occupiedSlots.has(s))
+                  if (free) for (const id of plan.newGroup) constellations.assign(free, id)
+                }
+              }}
+            />
+          )
+        })}
+        <SnapZoneOverlay target={snapTargetWidget} canJoin={snapCanJoin} />
       </div>
 
       {/* Empty canvas hint */}

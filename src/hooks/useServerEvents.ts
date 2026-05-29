@@ -2,9 +2,10 @@
 declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
 import { useSyncExternalStore, useCallback } from 'react'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata } from '../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance } from '../domain/types'
 import { isSystemSession, extractMarshal } from '../domain/system-sessions'
 import { apiUrl } from '../apiClient'
+import { dispatchWindowEvent } from '../lib/windowEvents'
 
 interface ServerState {
   activeSpaceId: string
@@ -23,6 +24,7 @@ interface ServerState {
   natsTrafficWidgets: NatsTrafficWidget[]
   topicMetadata: TopicMetadata[]
   readyQueue: string[]
+  pluginWidgets: PluginWidgetInstance[]
 }
 
 const EMPTY_STATE: ServerState = {
@@ -40,6 +42,7 @@ const EMPTY_STATE: ServerState = {
   natsTrafficWidgets: [],
   topicMetadata: [],
   readyQueue: [],
+  pluginWidgets: [],
 }
 
 // ─── Singleton SSE store ───────────────────────────────────────────────
@@ -91,6 +94,91 @@ function subscribe(listener: () => void): () => void {
   }
 }
 
+// ─── Generic channel API for non-React subscribers (plugins) ────────────
+// Plugins used to open their own EventSource, exhausting the HTTP/1.1
+// 6-connection cap (the same bug the singleton was created to fix).
+// subscribeToChannel routes through this module's shared EventSource —
+// one connection for the React app and every plugin combined.
+
+type ChannelHandler = (payload: unknown) => void
+
+interface ChannelBinding {
+  handlers: Set<ChannelHandler>
+  esListener: ((ev: MessageEvent) => void) | null
+}
+
+const channelBindings = new Map<string, ChannelBinding>()
+
+function attachESListener(channel: string, binding: ChannelBinding): void {
+  if (binding.esListener || !es) return
+  const listener = (ev: MessageEvent) => {
+    let payload: unknown
+    try { payload = JSON.parse(ev.data) } catch {
+      // eslint-disable-next-line no-console
+      console.warn(`[sse-channel] dropped malformed frame on '${channel}'`)
+      return
+    }
+    for (const h of binding.handlers) {
+      try { h(payload) } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[sse-channel] handler for '${channel}' threw`, err)
+      }
+    }
+  }
+  binding.esListener = listener
+  es.addEventListener(channel, listener)
+}
+
+function detachESListener(channel: string, binding: ChannelBinding): void {
+  if (binding.esListener && es) {
+    es.removeEventListener(channel, binding.esListener)
+  }
+  binding.esListener = null
+}
+
+/** Reattach all known channel listeners — called from startSSE after the
+ *  EventSource is (re)created so bindings registered while SSE was stopped
+ *  pick up the new connection. */
+function reattachChannelListeners(): void {
+  for (const [channel, binding] of channelBindings) {
+    if (!binding.esListener) attachESListener(channel, binding)
+  }
+}
+
+export function subscribeToChannel(channel: string, handler: ChannelHandler): () => void {
+  let binding = channelBindings.get(channel)
+  if (!binding) {
+    binding = { handlers: new Set(), esListener: null }
+    channelBindings.set(channel, binding)
+  }
+  binding.handlers.add(handler)
+  refCount++
+  if (refCount === 1) startSSE()
+  attachESListener(channel, binding)
+  return () => {
+    binding!.handlers.delete(handler)
+    if (binding!.handlers.size === 0) {
+      detachESListener(channel, binding!)
+      channelBindings.delete(channel)
+    }
+    refCount--
+    if (refCount === 0) stopSSE()
+  }
+}
+
+/** Test-only: clear singleton state between tests. Do not call in production. */
+export function _resetServerEventsForTests(): void {
+  if (es) {
+    try { es.close() } catch {/* mock may not implement close */}
+    es = null
+  }
+  listeners.clear()
+  channelBindings.clear()
+  refCount = 0
+  currentState = EMPTY_STATE
+  uiBundle = { state: EMPTY_STATE, connected: false, loading: true }
+}
+
 function startSSE() {
   if (es) return
 
@@ -109,6 +197,7 @@ function startSSE() {
       ...snapshot,
       readyQueue: snapshot.ready_queue ?? [],
       topicMetadata: snapshot.topicMetadata ?? [],
+      pluginWidgets: snapshot.pluginWidgets ?? [],
       // System sessions (e.g. marshal) have dedicated UI — never enter the
       // run set that feeds the canvas/hierarchy/sessions list. They live on
       // `marshal` instead.
@@ -131,35 +220,23 @@ function startSSE() {
   })
 
   es.addEventListener('file_watch', (e: MessageEvent) => {
-    window.dispatchEvent(new CustomEvent('tinstar:file_watch', { detail: JSON.parse(e.data) }))
+    try { dispatchWindowEvent('tinstar:file_watch', JSON.parse(e.data)) } catch { /* malformed — drop */ }
   })
 
   es.addEventListener('nats_traffic', (e: MessageEvent) => {
-    window.dispatchEvent(new CustomEvent('tinstar:nats_traffic', { detail: JSON.parse(e.data) }))
+    try { dispatchWindowEvent('tinstar:nats_traffic', JSON.parse(e.data)) } catch { /* malformed — drop */ }
   })
 
   es.addEventListener('telemetry:hud', (e: MessageEvent) => {
-    try {
-      window.dispatchEvent(new CustomEvent('tinstar:telemetry:hud', { detail: JSON.parse(e.data) }))
-    } catch {
-      // malformed event — drop silently
-    }
+    try { dispatchWindowEvent('tinstar:telemetry:hud', JSON.parse(e.data)) } catch { /* malformed — drop */ }
   })
 
   es.addEventListener('canvas:viewport', (e: MessageEvent) => {
-    try {
-      window.dispatchEvent(new CustomEvent('tinstar:canvas:viewport', { detail: JSON.parse(e.data) }))
-    } catch {
-      // malformed event — drop silently
-    }
+    try { dispatchWindowEvent('tinstar:canvas:viewport', JSON.parse(e.data)) } catch { /* malformed — drop */ }
   })
 
   es.addEventListener('projects_changed', (e: MessageEvent) => {
-    try {
-      window.dispatchEvent(new CustomEvent('tinstar:projects_changed', { detail: JSON.parse(e.data) }))
-    } catch {
-      // malformed event — drop silently
-    }
+    try { dispatchWindowEvent('tinstar:projects_changed', JSON.parse(e.data)) } catch { /* malformed — drop */ }
   })
 
   es.addEventListener('heartbeat', () => {
@@ -174,6 +251,9 @@ function startSSE() {
 
   es.onopen = () => { setConnected(true) }
   es.onerror = () => { setConnected(false) }
+
+  // Re-attach any plugin-registered channel listeners after the new EventSource is up.
+  reattachChannelListeners()
 
   const onBeforeUnload = () => es?.close()
   window.addEventListener('beforeunload', onBeforeUnload)
@@ -293,8 +373,16 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
     return { ...prev, topicMetadata: idx >= 0 ? tms.map((x, i) => (i === idx ? m : x)) : [...tms, m] }
   }
 
+  if (delta.entity === 'pluginWidget') {
+    const pws = prev.pluginWidgets
+    if (delta.data === null) return { ...prev, pluginWidgets: pws.filter(w => w.id !== delta.id) }
+    const w = delta.data as PluginWidgetInstance
+    const idx = pws.findIndex(x => x.id === w.id)
+    return { ...prev, pluginWidgets: idx >= 0 ? pws.map((x, i) => (i === idx ? w : x)) : [...pws, w] }
+  }
+
   if (delta.entity === 'commit') {
-    window.dispatchEvent(new Event('tinstar:commit-delta'))
+    dispatchWindowEvent('tinstar:commit-delta', undefined)
     return prev
   }
 
@@ -332,6 +420,10 @@ export function applyOptimistic(entity: string, data: unknown): void {
     const w = data as NatsTrafficWidget
     const exists = prev.natsTrafficWidgets.some(x => x.id === w.id)
     currentState = { ...prev, natsTrafficWidgets: exists ? prev.natsTrafficWidgets.map(x => x.id === w.id ? w : x) : [...prev.natsTrafficWidgets, w] }
+  } else if (entity === 'pluginWidget') {
+    const w = data as PluginWidgetInstance
+    const exists = prev.pluginWidgets.some(x => x.id === w.id)
+    currentState = { ...prev, pluginWidgets: exists ? prev.pluginWidgets.map(x => x.id === w.id ? w : x) : [...prev.pluginWidgets, w] }
   } else {
     return
   }

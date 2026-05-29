@@ -1,9 +1,10 @@
 import { useState, useRef, useCallback, useEffect, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { RunData, SessionStatus } from '../../types'
-import { useHotgroupContext } from '../../hotkeys/HotgroupContext'
+import { useConstellationContext } from '../../hotkeys/ConstellationContext'
+import type { ConstellationSlot } from '../../hooks/useConstellations'
 import { useBackendState } from '../../hooks/useBackendState'
-import { HotgroupBadge } from '../HotgroupBadge'
+import { ConstellationBadge } from '../ConstellationBadge'
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 import { ColorPalette } from '../ColorPalette'
 import { AgentIcon } from '../agentIcon'
@@ -47,7 +48,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   const [palettePos, setPalettePos] = useState<{ top: number; right: number } | null>(null)
   const paletteRef = useRef<HTMLDivElement>(null)
   const paletteButtonRef = useRef<HTMLButtonElement>(null)
-  const { slotsForNode } = useHotgroupContext()
+  const { slotsForNode, remove } = useConstellationContext()
   const { taxRepo } = useBackendState()
 
   // Resolve entity hierarchy names from IDs for the breadcrumb
@@ -165,9 +166,16 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       {!compact && (
         <div className="flex items-stretch shrink-0 ml-2 h-full" onPointerDown={e => { if (e.button === 0) e.stopPropagation() }}>
 
-          {/* Hotgroup badge */}
+          {/* Constellation badge */}
           <div className="flex items-center px-2">
-            <HotgroupBadge slots={slotsForNode(`run-${run.id}`)} testId={`hotgroup-badge-${run.id}`} />
+            <ConstellationBadge
+              slots={slotsForNode(`run-${run.id}`)}
+              testId={`constellation-badge-${run.id}`}
+              onLeave={(slot) => {
+                remove(slot as ConstellationSlot, `run-${run.id}`)
+                window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId: `run-${run.id}` } }))
+              }}
+            />
           </div>
 
           {/* Error banner — shown inline before buttons when present */}

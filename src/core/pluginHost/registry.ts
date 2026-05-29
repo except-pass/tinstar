@@ -1,0 +1,81 @@
+import type { Plugin, TinstarPluginAPI, Disposable, PluginManifest } from '@tinstar/plugin-api'
+
+export type PluginState = 'pending' | 'active' | 'failed'
+
+export interface PluginRecord {
+  name: string
+  version: string
+  manifest: PluginManifest
+  state: PluginState
+  error?: string
+  errorStack?: string
+  /** Disposables returned from activate(), plus anything tracked during activate(). */
+  disposables: Disposable[]
+}
+
+export type CreateApiFn = (rec: PluginRecord) => TinstarPluginAPI
+
+export class PluginRegistry {
+  private plugins = new Map<string, PluginRecord>()
+
+  list(): PluginRecord[] {
+    return [...this.plugins.values()]
+  }
+
+  get(name: string): PluginRecord | undefined {
+    return this.plugins.get(name)
+  }
+
+  async activate(record: PluginRecord, plugin: Plugin, createApi: CreateApiFn): Promise<void> {
+    const existing = this.plugins.get(record.name)
+    if (existing && existing.state === 'active') {
+      throw new Error(
+        `[plugin-host] activate() called for already-active plugin "${record.name}". ` +
+        `Deactivate first if you want to re-activate.`,
+      )
+    }
+    record.disposables = []
+    this.plugins.set(record.name, record)
+
+    try {
+      const api = createApi(record)
+      const result = await plugin.activate(api)
+      // activate() may return additional disposables on top of whatever the API
+      // tracked internally (via api.widgets.register etc.). Dedupe via Set so a
+      // disposable returned from activate() AND pushed by the API surface isn't
+      // disposed twice on teardown.
+      if (Array.isArray(result)) {
+        const tracked = new Set(record.disposables)
+        for (const d of result) {
+          if (!tracked.has(d)) {
+            record.disposables.push(d)
+            tracked.add(d)
+          }
+        }
+      }
+      record.state = 'active'   // only set after await resolves
+    } catch (e) {
+      record.state = 'failed'
+      record.error = e instanceof Error ? e.message : String(e)
+      record.errorStack = e instanceof Error ? e.stack : undefined
+      this.disposeAll(record)
+    }
+  }
+
+  deactivate(name: string): void {
+    const rec = this.plugins.get(name)
+    if (!rec) return
+    this.disposeAll(rec)
+    rec.state = 'pending'
+  }
+
+  private disposeAll(rec: PluginRecord): void {
+    for (const d of rec.disposables) {
+      try { d.dispose() } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(`[plugin-host] dispose() threw for ${rec.name}`, e)
+      }
+    }
+    rec.disposables = []
+  }
+}

@@ -1,18 +1,98 @@
-// Re-export base types
-export type {
-  SessionStatus,
-  RunStatus,
-  FileKind,
-  RecapEntryType,
-  DiffLineType,
-  DiffLine,
-  DiffBlock,
-  RecapEntry,
-  TouchedFile,
-  RunData,
-} from '../types'
+// Single source of truth for all shared domain types.
+//
+// Previously these types lived in two places: src/types.ts and this file,
+// with src/types.ts owning the primitives and src/domain/types.ts owning
+// the entity shapes. 37 files imported from src/types.ts directly,
+// duplicating the domain root. This file is now the canonical home;
+// src/types.ts is a thin re-export shim for backwards compatibility.
 
-import type { RunData, SessionStatus as RunStatus } from '../types'
+/** Single source of truth for session/run status — matches Qala's session states */
+export type SessionStatus = 'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped'
+
+/** @deprecated Use SessionStatus instead */
+export type RunStatus = SessionStatus
+export type FileKind = 'code' | 'config' | 'test' | 'script' | 'doc'
+export type RecapEntryType = 'agent' | 'user' | 'status'
+export type DiffLineType = 'context' | 'addition' | 'deletion' | 'header'
+
+export interface DiffLine {
+  type: DiffLineType
+  content: string
+}
+
+export interface DiffBlock {
+  filename: string
+  header: string
+  lines: DiffLine[]
+}
+
+export interface RecapEntry {
+  id: string
+  type: RecapEntryType
+  content: string
+  diff?: DiffBlock
+  timestamp?: string
+}
+
+export interface TouchedFile {
+  id: string
+  name: string
+  path: string
+  additions: number
+  deletions: number
+  kind: FileKind
+  pending?: boolean
+  /** File was read (e.g. by Read tool) but has no uncommitted changes */
+  readOnly?: boolean
+}
+
+export interface RunData {
+  id: string
+  color?: string
+  status: SessionStatus
+  sessionId: string
+  taskId: string
+  initiative: string
+  epic: string
+  task: string
+  repo: string
+  worktree: string
+  touchedFiles: TouchedFile[]
+  recapEntries: RecapEntry[]
+  rawLogs: string
+  port: number | null
+  backend: 'tmux' | null
+  backendInfo?: string
+  agentIcon?: string
+  natsEnabled?: boolean
+  natsSubject?: string
+  natsSubscriptions?: string[]
+  /**
+   * ISO timestamp when the session's NATS control socket was detected
+   * as orphaned. null means healthy or NATS disabled. Mirrors
+   * Session.natsControlOrphanedAt — drives the Saloon broker-health dot.
+   */
+  natsControlOrphanedAt?: string | null
+  parentId?: string  // ID of the run that spawned this one (for hands)
+  breakoutRooms?: string[]  // NATS room subjects for parent-child communication
+  attention?: AttentionState
+}
+
+
+export interface CommitRecord {
+  sha: string
+  subject: string
+  body?: string
+  authorName: string
+  authorEmail: string
+  authorDate: string
+  observedAt: string
+  repo: string
+  branch: string
+  worktreeId?: string
+  taskTags: string[]
+  source: 'hook' | 'reconcile'
+}
 
 // --- Entity settings (closest-ancestor inheritance) ---
 
@@ -148,6 +228,32 @@ export interface NatsTrafficWidget {
   sessionId: string  // Filter to show traffic for a specific session, or empty for all
   subscriptions: string[]  // NATS subjects to subscribe to (e.g., "tinstar.>")
   color?: string
+}
+
+/** Urgency of a widget's current attention request.
+ *  Drives both color and sort order in the Inbox view. */
+export type AttentionLevel = 'urgent' | 'attention' | 'info'
+
+/** A widget's current "needs attention" signal. Replacing, not append:
+ *  each widget has at most one of these at a time. `setAt` is server-stamped
+ *  on the PATCH that actually changed the state (identical re-sets are no-ops). */
+export interface AttentionState {
+  level: AttentionLevel
+  reason: string       // ~80 char budget for display; longer is truncated by the UI
+  setAt: string        // ISO 8601
+}
+
+export interface PluginWidgetInstance {
+  id: string                                                    // host-generated: `pw-${shortId}`
+  pluginId: string                                              // matches manifest.name
+  widgetType: string                                            // matches manifest.contributes.widgets[].type
+  spaceId: string
+  position: { x: number; y: number }
+  size: { width: number; height: number }
+  data: unknown                                                 // plugin-controlled; capped at 64KB serialized
+  createdAt: string                                             // ISO 8601
+  updatedAt: string                                             // ISO 8601
+  attention?: AttentionState
 }
 
 export interface TopicMetadata {

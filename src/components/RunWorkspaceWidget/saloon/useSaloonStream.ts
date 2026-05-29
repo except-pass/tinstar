@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { subjectMatches } from './subjectMatches'
+import { EV } from '../../../lib/windowEvents'
 
 export interface SaloonEvent {
   timestamp: string
@@ -47,9 +48,9 @@ export function useSaloonStream({ subscriptions }: Options): SaloonEvent[] {
       }
     }
 
-    window.addEventListener('tinstar:nats_traffic', handler)
+    window.addEventListener(EV.natsTraffic, handler)
     return () => {
-      window.removeEventListener('tinstar:nats_traffic', handler)
+      window.removeEventListener(EV.natsTraffic, handler)
       if (rafRef.current !== null) {
         if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rafRef.current)
         else clearTimeout(rafRef.current)

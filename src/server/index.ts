@@ -35,11 +35,13 @@ import { NatsHealthMonitor } from './nats-health'
 import { natsControlSocketPath } from './sessions/backends/tmux'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
+import { observeFromRecapEntries, reconcileLiveSessions } from './observability/turn-length'
 import { createTelemetryRoutes } from './api/telemetry.js'
 import { OtlpExporter } from './stores/otlp-exporter'
 import { CcQuotaService } from './cc-quota/service'
 import { SlashCommandRegistry } from './sessions/slashCommandRegistry'
 import { SlashUsage } from './sessions/slashUsage'
+import { resolveSlashUsagePath } from './sessions/slashUsage-path'
 
 // Module-level flag: ensures SIGINT/SIGTERM handlers are registered only once.
 // If initBackend runs twice (Vite HMR), the second invocation skips registration
@@ -58,7 +60,7 @@ export function initBackend(): RouteContext {
   const otlpExporter = new OtlpExporter()
   otlpExporter.start()
   const slashRegistry = new SlashCommandRegistry()
-  const slashUsage = new SlashUsage(join(homedir(), '.config/tinstar/slash-usage.json'))
+  const slashUsage = new SlashUsage(resolveSlashUsagePath())
   // Debounced flush every 5s while dirty
   setInterval(() => { void slashUsage.flush() }, 5_000).unref()
   const ccQuotaService = new CcQuotaService({ sink: otlpExporter })
@@ -397,7 +399,14 @@ export function initBackend(): RouteContext {
             for (const entry of entries) {
               docStore.addRecapEntry(name, entry)
             }
+            // Look up the Session for label data (conversation.id). If the session
+            // record vanished between the watcher reading it and this callback,
+            // skip observation — reconcileLiveSessions will flush on next tick.
+            const session = getSession(cfg.dirs.sessions, name)
+            if (session) observeFromRecapEntries(name, entries, session)
           },
+          onSessionsListed: (names) => reconcileLiveSessions(names),
+          resolveTmuxName: (name) => tmuxBackend.tmuxSessionName(cfg, name),
         })
         watcher.start()
       }).catch(err => log.warn('reconcile', `startup reconciliation failed: ${(err as Error).message}`))

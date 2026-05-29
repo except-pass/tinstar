@@ -19,7 +19,7 @@ The UI must be snappy and responsive. It should feel like playing a video game �
 
 - `npm run dev` — start dev server (clean UI, no mock data)
 - `TINSTAR_FAST_SIM=1 npm run dev` — start with mock data (for testing)
-- `npx tsc --noEmit` — type check
+- Type check + unit tests: see [docs/testing.md](docs/testing.md). The headline trap: `npx tsc --noEmit` against the root tsconfig is a no-op; use `-p tsconfig.app.json`. Vitest needs `--exclude='e2e/**'`.
 - `npx playwright test` — E2E tests (needs `TINSTAR_FAST_SIM=1 BASE_URL=http://localhost:<port>`)
 
 ## Task Activity & Commit Tracking
@@ -37,7 +37,7 @@ Without step 2, commits from agent sessions will not appear in Task Activity unt
 
 ## Multi-Agent / NATS
 
-Agents communicate via NATS pub/sub. Subject scheme: `tinstar.<init>.<epic>.<task>.<agent>`
+Agents communicate via NATS pub/sub. Subject scheme: `tinstar.<space>.<init>.<epic>.<task>.<agent>`
 
 - Each agent auto-subscribes to task broadcast (`*`) and ancestor wildcards (`>`)
 - Use `reply` MCP tool to publish messages
@@ -58,7 +58,13 @@ Edits to files under `agent-skills/` go live immediately for any machine that in
 
 ## Conventions
 
-- All server-side config lives under `~/.config/tinstar/` — no other locations
-- Frontend uses only localStorage for widget layouts (`tinstar-layouts-v3` key)
-- Session state changes emit to the event bus as `managed_session.*` events
-- Simulator only auto-starts when `TINSTAR_FAST_SIM=1` is set
+Cross-cutting rules live in **[docs/conventions.md](docs/conventions.md)** — go there when you're about to touch anything load-bearing (server config paths, NATS subjects, docstore mutators, frontend HTTP, localStorage, plugin boundaries, etc.). It's short and grouped by area.
+
+The four highest-leverage rules, restated here because they're rarely-violated-but-expensive-when-they-are:
+
+- Server-side config paths go through `getConfigRoot()` — not `homedir()`. Honors `TINSTAR_CONFIG_HOME` so a second backend doesn't stomp the primary.
+- Frontend HTTP goes through `apiFetch` / `apiUrl` from `src/apiClient.ts` — bare `fetch` 404s in Tauri.
+- UI prefs go through `src/lib/uiPrefs.ts` — only `tinstar-layouts-v3` (widget layouts cache) is a documented localStorage exception.
+- Simulator only auto-starts when `TINSTAR_FAST_SIM=1` is set.
+
+Session state changes emit to the event bus as `managed_session.*` events (see [docs/conventions.md](docs/conventions.md) for the "adding a BusEvent" recipe).

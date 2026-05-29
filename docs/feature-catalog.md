@@ -121,8 +121,7 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 
 ### Drag-to-Reassign
 - **Drag a widget over a group container**: Container highlights with cyan border (2px), brighter background, and glow box-shadow
-- **Drop**: Opens a `ReassignDialog` confirmation modal showing run ID, target type, and target label
-- **Confirm ("Move")**: PATCHes `run.taskId` via `PATCH /api/runs/:id`, repositions widget inside target container, auto-resizes target container to fit
+- **Drop**: PATCHes `run.taskId` via `PATCH /api/runs/:id`, repositions widget inside target container, auto-resizes target container to fit
 - **Parent filtering**: Drop targets exclude the run's current parent container (no-op reassignment prevented via `buildParentMap()`)
 - **Hit testing**: Canvas-level pointer coords converted via `clientToCanvas()`, tested against all group container bounds, deepest match wins
 - **150ms transitions** on highlight border/background/box-shadow
@@ -165,6 +164,18 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 - **Optimistic updates**: Files appear instantly via PostToolUse hook with shimmer animation on stats
 - **Reconciliation**: Git diff resolves real +/- stats after 2s of hook silence; shimmer stops and stats fade in
 - **Shimmer**: 1.5s ease-in-out pulse animation on pending file stats
+
+### File Tree Panel
+- Lazy-loading tree of the session's workspace (one directory level per fetch)
+- Click a directory row to expand/collapse; click a file row to select
+- **Drag a file row out** to the terminal to insert its path; the editor widget accepts the same drag for opening a file
+- **Drag files in from the OS** to upload them into the workspace
+  - Hovered row determines the target directory: directory row → into that dir; file row → into its parent dir; panel background → workspace root
+  - Confirmation modal opens with one editable workspace-relative path per dropped file
+  - Per-row warnings: amber "will overwrite" when path collides with an existing entry; red "too large" / "invalid" otherwise
+  - Confirm closes the modal; each file appears optimistically in the tree with a left-to-right primary-color background fill driven by `xhr.upload.onprogress`
+  - On success the parent directory re-fetches from the server to reconcile; on failure the row turns red with the server error in `title`
+- **Size cap**: 100 MB per file by default, server-enforced. Override under Settings → File Explorer → Max upload size (MB)
 
 ### Center Panel — Session (Recap / Raw Logs / Terminal)
 - **Terminal**: Embedded ttyd iframe showing the live Claude Code session via Caddy proxy (`/s/{sessionId}/`)
@@ -336,11 +347,6 @@ POST   /api/spaces/:id/activate # Set as active space
 ### CreateEntityDialog
 - Generic modal for creating initiatives, epics, tasks, and worktrees
 - Parent relationship selection based on entity type
-
-### ReassignDialog
-- Confirmation modal for drag-to-reassign operations
-- Shows run ID, target entity type, and target name
-- "Move" to confirm, "Cancel" to abort
 
 ### SettingsDialog
 - Project management: view, add, and remove registered projects

@@ -5,8 +5,8 @@ import type { TreeNode, Run, BrowserWidget, EditorWidget, ImageWidget, NatsTraff
 import { CanvasHud } from '../CanvasHud/CanvasHud'
 import { CanvasMinimap } from '../CanvasMinimap'
 import { MarshalTerminal } from './MarshalTerminal'
+import { getPref, setPref } from '../../lib/uiPrefs'
 
-const STORAGE_KEY = 'tinstar-canvas-sidebar-collapsed'
 const SIDEBAR_WIDTH = 320
 
 interface Props {
@@ -33,11 +33,11 @@ interface Props {
 /** Right-side canvas sidebar: telemetry HUD on top, marshal terminal in the
  * middle, minimap on the bottom. Collapses to a thin button. */
 export function CanvasSidebar(props: Props) {
-  const [storedCollapsed, setStoredCollapsed] = useState(() => localStorage.getItem(STORAGE_KEY) === 'true')
+  const [storedCollapsed, setStoredCollapsed] = useState(() => getPref('canvasSidebarCollapsed') ?? false)
   const collapsed = props.forceExpanded ? false : storedCollapsed
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, String(storedCollapsed))
+    setPref('canvasSidebarCollapsed', storedCollapsed)
   }, [storedCollapsed])
 
   const toggle = useCallback(() => setStoredCollapsed(c => !c), [])

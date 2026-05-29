@@ -320,6 +320,34 @@ export const spec = {
         responses: { 200: { description: 'File listing', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, data: { type: 'array', items: { $ref: '#/components/schemas/FileEntry' } } } } } } } },
       },
     },
+    '/api/sessions/{name}/files/upload': {
+      post: {
+        tags: ['Sessions'],
+        summary: 'Upload a file into the session workspace',
+        parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string', description: 'Workspace-relative target path' },
+                  file: { type: 'string', format: 'binary' },
+                },
+                required: ['path', 'file'],
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Uploaded' },
+          '400': { description: 'Invalid path or multipart' },
+          '404': { description: 'Session not found' },
+          '413': { description: 'File too large' },
+        },
+      },
+    },
     '/api/sessions/{name}/send-keys': {
       post: {
         tags: ['Sessions'],
@@ -404,7 +432,6 @@ export const spec = {
         responses: { 200: { description: 'Merged config' } },
       },
     },
-
     // ── Editor ───────────────────────────────────────────
     '/api/editor/open': {
       post: {
@@ -430,6 +457,44 @@ export const spec = {
         summary: 'Query OpenTelemetry metrics',
         parameters: [{ name: 'name', in: 'query', schema: { type: 'string' }, description: 'Filter by metric name' }],
         responses: { 200: { description: 'Metric list' } },
+      },
+    },
+    '/api/telemetry/turn-length': {
+      get: {
+        tags: ['Observability'],
+        summary: 'Recent turn-length observations for heatmap rendering',
+        parameters: [
+          { name: 'windowSec', in: 'query', schema: { type: 'integer', minimum: 60, maximum: 3600 }, description: 'Time window in seconds (default 3600; clamped)' },
+          { name: 'session', in: 'query', schema: { type: 'string' }, description: 'Tinstar session name (omit for fleet)' },
+        ],
+        responses: {
+          200: {
+            description: 'Turn-length observations',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    observations: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          tsSec: { type: 'integer' },
+                          sec: { type: 'number' },
+                          session: { type: 'string' },
+                          ccConvId: { type: 'string' },
+                        },
+                      },
+                    },
+                    lastUpdated: { type: 'integer' },
+                  },
+                },
+              },
+            },
+          },
+          400: { description: 'invalid windowSec' },
+        },
       },
     },
 
@@ -530,6 +595,67 @@ export const spec = {
         responses: { 200: { description: 'Deleted' } },
       },
     },
+    '/api/plugin-widgets': {
+      post: {
+        tags: ['Widgets'],
+        summary: 'Create a plugin widget instance',
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['pluginId', 'widgetType', 'spaceId', 'position', 'size'],
+          properties: {
+            pluginId: { type: 'string', description: 'Plugin identifier' },
+            widgetType: { type: 'string', description: 'Widget type within the plugin' },
+            spaceId: { type: 'string', description: 'Space ID where the widget exists' },
+            position: {
+              type: 'object',
+              required: ['x', 'y'],
+              properties: { x: { type: 'number' }, y: { type: 'number' } },
+            },
+            size: {
+              type: 'object',
+              required: ['width', 'height'],
+              properties: { width: { type: 'number' }, height: { type: 'number' } },
+            },
+            data: { type: 'object', description: 'Plugin-specific state (must be JSON-serializable, max 64KB)' },
+          },
+        } } } },
+        responses: { 200: { description: 'Created instance', content: { 'application/json': { schema: { $ref: '#/components/schemas/PluginWidgetInstance' } } } } },
+      },
+      get: {
+        tags: ['Widgets'],
+        summary: 'List plugin widget instances',
+        parameters: [{ name: 'spaceId', in: 'query', required: false, schema: { type: 'string' }, description: 'Filter by space (omit to list all)' }],
+        responses: { 200: { description: 'Instance list', content: { 'application/json': { schema: { type: 'object', properties: { ok: { type: 'boolean' }, data: { type: 'array', items: { $ref: '#/components/schemas/PluginWidgetInstance' } } } } } } } },
+      },
+    },
+    '/api/plugin-widgets/{id}': {
+      patch: {
+        tags: ['Widgets'],
+        summary: 'Update a plugin widget instance',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          properties: {
+            position: {
+              type: 'object',
+              properties: { x: { type: 'number' }, y: { type: 'number' } },
+            },
+            size: {
+              type: 'object',
+              properties: { width: { type: 'number' }, height: { type: 'number' } },
+            },
+            data: { type: 'object', description: 'Replace widget data entirely (no deep merge)' },
+          },
+        } } } },
+        responses: { 200: { description: 'Updated instance', content: { 'application/json': { schema: { $ref: '#/components/schemas/PluginWidgetInstance' } } } } },
+      },
+      delete: {
+        tags: ['Widgets'],
+        summary: 'Delete a plugin widget instance',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Deleted' } },
+      },
+    },
 
     // ── Simulator ────────────────────────────────────────
     '/api/simulator/start': {
@@ -600,7 +726,7 @@ export const spec = {
         properties: {
           name: { type: 'string' },
           backend: { type: 'string', enum: ['tmux'] },
-          state: { type: 'string', enum: ['running', 'idle', 'stopped', 'needs_attention'] },
+          state: { type: 'string', enum: ['creating', 'running', 'idle', 'needs_attention', 'stopped'] },
           project: { type: 'string' },
           workspace: {
             type: 'object',
@@ -673,15 +799,67 @@ export const spec = {
           headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Custom HTTP headers injected on proxied requests' },
         },
       },
+      PluginWidgetInstance: {
+        type: 'object',
+        required: ['id', 'pluginId', 'widgetType', 'spaceId', 'position', 'size', 'createdAt', 'updatedAt'],
+        properties: {
+          id: { type: 'string', description: 'Instance ID (pw-{shortId})' },
+          pluginId: { type: 'string', description: 'Plugin identifier' },
+          widgetType: { type: 'string', description: 'Widget type within the plugin' },
+          spaceId: { type: 'string', description: 'Space ID where the widget exists' },
+          position: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
+          },
+          size: {
+            type: 'object',
+            properties: { width: { type: 'number' }, height: { type: 'number' } },
+          },
+          data: { type: ['object', 'null'], description: 'Plugin-specific state' },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      // ── Response envelope (ADR 0001) ──────────────────
+      //
+      // Every application API endpoint returns one of two shapes. Wire-protocol
+      // endpoints (this spec, OTLP/Prom exports, /api/state SSE snapshot,
+      // cc-quota snapshot) are documented exceptions and return raw payloads.
+      ErrorCode: {
+        type: 'string',
+        enum: [
+          'BAD_REQUEST', 'INVALID_PARAMS', 'NOT_FOUND', 'SESSION_NOT_FOUND',
+          'CONFLICT', 'PATH_OUTSIDE_WORKSPACE', 'FORBIDDEN',
+          'INTERNAL', 'BACKEND_UNAVAILABLE', 'BRIDGE_UNAVAILABLE',
+          'CONFIG_UNAVAILABLE', 'LIST_FAILED',
+        ],
+        description: 'Closed taxonomy of error categories. Adding a new code requires an ADR amendment.',
+      },
+      Ok: {
+        type: 'object',
+        required: ['ok', 'data'],
+        properties: {
+          ok: { const: true },
+          data: { description: 'Success payload — type depends on the endpoint.' },
+          warnings: {
+            type: 'object',
+            additionalProperties: { type: 'array', items: {} },
+            description: 'Optional soft-failure carrier. Keys are warning categories (e.g. "nats"); values are arrays of category-specific entries.',
+          },
+        },
+      },
       Error: {
         type: 'object',
+        required: ['ok', 'error'],
         properties: {
           ok: { const: false },
           error: {
             type: 'object',
+            required: ['code', 'message'],
             properties: {
-              code: { type: 'string' },
+              code: { $ref: '#/components/schemas/ErrorCode' },
               message: { type: 'string' },
+              details: { description: 'Structured context for specific handlers (e.g. field validation maps). Opaque to generic readers.' },
             },
           },
         },

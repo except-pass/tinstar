@@ -111,12 +111,16 @@ export function computeNatsSubscriptions(
  * NATS subjects use '.' as separator and don't allow spaces or special chars.
  */
 export function sanitizeSubjectToken(token: string): string {
+  // Reduce to [a-z0-9_-]. Anything else — whitespace, NATS specials (`. > *`),
+  // ASCII punctuation, non-ASCII chars like em-dash — becomes a hyphen, then
+  // hyphens are collapsed and trimmed. Keeps subjects byte-identical between
+  // publishers and subscribers regardless of where the source text came from
+  // (Jira titles, free-text task names, etc.).
   return token
-    .replace(/\s+/g, '-')      // spaces to hyphens
-    .replace(/[.>*]/g, '-')    // NATS special chars to hyphens
-    .replace(/-+/g, '-')       // collapse multiple hyphens
-    .replace(/^-|-$/g, '')     // trim leading/trailing hyphens
     .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
 }
 
 /**

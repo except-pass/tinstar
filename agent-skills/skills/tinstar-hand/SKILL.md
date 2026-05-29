@@ -22,6 +22,8 @@ Don't spawn a hand for a one-shot lookup. Subagents are lighter.
 
 Rule of thumb: if the interaction is one round-trip, use a subagent. If you'll come back to them, use a hand.
 
+**Corollary — don't spawn-and-immediately-dismiss.** Spawning has fixed setup cost (NATS wiring, task association, session record) that only pays off across multiple round-trips. If you'd kill the hand right after its first reply, a subagent was the right call.
+
 ## 1 — Confirm you can spawn
 
 ```bash
@@ -156,7 +158,9 @@ reply(to="tinstar.<space>.<init>.<epic>.<task>.*", text="Status check")
 
 ## 6 — Tear down cleanly
 
-When the hand's work is done:
+**Keep the hand alive until the *related work* is done — not just its first reply.** A live hand retains context (what it checked, what it ruled out, what surprised it) you'll want for follow-ups and "while you're in there…" asks. Batch dismissals at the end of the work, not after each message.
+
+When the work — not just the message — is actually done:
 
 1. **Tell them you're wrapping up.** No surprise kills.
    ```

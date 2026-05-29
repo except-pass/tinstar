@@ -125,6 +125,8 @@ Full endpoint reference with schemas and examples: **[`/api/docs`](http://localh
 
 Key endpoint groups: Entity CRUD, Sessions, Hooks, Settings, Spaces, OTel, Simulator.
 
+**Response envelope:** `{ ok: true, data, warnings? }` on success, `{ ok: false, error: { code, message, details? } }` on failure. Use the `ok()` and `fail()` helpers in `src/server/api/envelope.ts`. Wire-protocol endpoints (`openapi.json`, OTLP/Prom exports, `/api/state` SSE snapshot) are documented exceptions and return raw JSON. See [ADR 0001](./adrs/0001-response-envelope.md).
+
 ---
 
 ## Session Backend
@@ -218,9 +220,7 @@ WorkspaceShell
 ├── CreateEntityDialog
 ├── CreateSessionDialog
 ├── EntityMenu (right-click context menu)
-├── EntitySettingsDialog (inheritance-based settings)
-├── ReassignDialog (drag-to-reassign run to different task)
-└── SessionsList
+└── EntitySettingsDialog (inheritance-based settings)
 ```
 
 ### Layout engine (`useWidgetLayouts` hook)
@@ -263,6 +263,80 @@ Supports move, resize, shrink-to-fit, and auto-expansion (parents grow when chil
 
 ---
 
+## Plugin System
+
+Since V5, the canvas widgets and a subset of chrome are extended via a **trusted, in-process plugin system**. Built-in widgets (browser, nats-traffic, file-editor, image-viewer) ship as bundled plugins. Saloon, minimap, run-workspace, and hierarchy sidebar remain core.
+
+**Built-in vs external plugins — the boundary is enforced by ESLint.** Built-in plugins under `src/plugins/<name>/` and external plugins (npm/path-loaded via `externalLoader`) both consume `@tinstar/plugin-api` only. The lone allowed host import is `import type` from `src/domain/types.ts` (built-in plugins use it to type their widget data; external plugins declare their own data types). All runtime imports from host modules (`src/components/*`, `src/hooks/*`, `src/hotkeys/*`, `src/widgets/*`, `src/apiClient`) are blocked by ESLint. `src/lib/windowEvents` (typed registry of `tinstar:*` DOM events) is shared schema and allowed for plugins that bridge to those events; `src/lib/uiPrefs` is host-only and blocked.
+
+The path forward for new plugin needs: extend `TinstarPluginAPI` in `packages/plugin-api/src/index.ts` with the host facility, expose it through `createApi.ts`, add tests under `src/core/pluginApi/__tests__/`. See [ADR 0002](./adrs/0002-plugin-api-boundary.md).
+
+### Key components
+
+| Component | File | Responsibility |
+|---|---|---|
+| Public types | `packages/plugin-api/src/index.ts` | `TinstarPluginAPI`, `WidgetRegistration`, `Plugin`, `PluginManifest`, `Disposable` |
+| Registry | `src/core/pluginHost/registry.ts` | `PluginRegistry` — tracks plugin records, lifecycle, disposables; awaits `activate()`; captures error + stack on failure |
+| Manifest parser | `src/core/pluginHost/manifest.ts` | Validates `package.json` `tinstar` block; hard-rejects `apiVersion` mismatch |
+| Boot loader | `src/core/pluginHost/loader.ts` | `bootAllPlugins` — iterates bundled then external, honors `disabled[]` |
+| Bundled index | `src/core/pluginHost/bundled.ts` | Static `BUNDLED_PLUGINS` record — one entry per `src/plugins/<name>/` |
+| External loader | `src/core/pluginHost/externalLoader.ts` | Dynamic-import path; 10s fetch timeout; injectable `importFn` for testability |
+| Per-plugin API factory | `src/core/pluginApi/createApi.ts` | Builds the `TinstarPluginAPI` instance handed to `activate(api)` |
+| SSE event bridge | `src/core/pluginApi/eventBridge.ts` | One `EventSource` shared by all plugin subscribers; routes by exact channel name |
+| `plugins.json` | `src/core/pluginHost/{pluginsConfig,writePluginsConfig}.ts` | Tolerant read; atomic write via `.tmp + rename` |
+| Server route | `src/server/api/pluginsConfigRoute.ts` | `GET/PUT /api/plugins-config`; 5s body-read timeout, 1MB cap |
+| Plugin-runtime route | `src/server/api/pluginRuntime.ts` | Serves `api.js` + `react.js` passthroughs; serves local-folder externals with traversal + symlink-escape protection |
+| Settings UI | `src/components/Settings/PluginsTab.tsx` | Toggle enable/disable; refuses to save before successful initial fetch |
+| Failed banner | `src/components/PluginFailedBanner.tsx` | Top-right toast for `state: 'failed'` plugins, dismissible per-name |
+| Bundled plugin packages | `src/plugins/<name>/` | Manifest + `activate(api)` entry, one folder per plugin |
+
+### Activation flow
+
+```
+┌── App boot (src/widgets/index.ts) ───────────────────────────────┐
+│                                                                  │
+│  fetchPluginsConfig() ──► GET /api/plugins-config                │
+│         │                                                        │
+│         ▼                                                        │
+│  bootAllPlugins(BUNDLED_PLUGINS, config, registry, importFn)     │
+│         │                                                        │
+│         ├─► for each bundled plugin in BUNDLED_PLUGINS:          │
+│         │     parseManifest(pkg) → ManifestError ⇒ skip + log    │
+│         │     if disabled.has(name)            ⇒ skip            │
+│         │     registry.activate(record, module, createPluginApi) │
+│         │       → state: pending → active (or failed)            │
+│         │                                                        │
+│         └─► for each external entry in config.external:          │
+│               importFn(entry) → fetch pkg.json → import(main)    │
+│               parseManifest, registry.activate                    │
+│                                                                  │
+│  pluginsReady (Promise) resolves                                 │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### External plugin runtime
+
+External plugins ship as pre-built ESM bundles in their own repos. The host:
+1. Injects an `<script type="importmap">` into `index.html` mapping `@tinstar/plugin-api` → `/api/plugin-runtime/api.js` and `react` → `/api/plugin-runtime/react.js`.
+2. `src/main.tsx` mounts React on `window.__tinstar_react` before any render.
+3. The runtime route serves a thin passthrough so external plugins share the host's React instance (cross-realm React would break hooks).
+4. For local-folder externals (`{ "path": "/abs/path" }`), `/api/plugin-runtime/local/<name>/*` serves the plugin's built JS with path-traversal + symlink-escape guards.
+
+### Where plugin state lives
+
+- `~/.config/tinstar/plugins.json` — single file. `disabled: string[]` and `external: Array<{ name, path?, npm? }>`.
+- Plugin-scoped persistent state (the eventual `api.storage` surface) is deferred to V5.1.
+
+### Reference
+
+Full design + author guides under [`docs/plugins/`](plugins/):
+- [`docs/plugins/README.md`](plugins/README.md) — canonical reference, design decisions
+- [`docs/plugins/bundled-howto.md`](plugins/bundled-howto.md) — author guide for in-repo plugins
+- [`docs/plugins/external-quickstart.md`](plugins/external-quickstart.md) — author guide for plugins in their own repo
+- [`packages/plugin-api/README.md`](../packages/plugin-api/README.md) — npm-consumer-facing reference
+
+---
+
 ## What's Stored Where
 
 ### Backend (server-side, `~/.config/tinstar/`)
@@ -272,6 +346,7 @@ Supports move, resize, shrink-to-fit, and auto-expansion (parents grow when chil
 ├── config.json              # User config overrides (optional)
 ├── projects.json            # Registered project directories
 ├── docstore.json            # Persisted document store (entities + runs)
+├── plugins.json             # Plugin enable/disable + external entries (V5+)
 ├── caddy.json               # Caddy reverse proxy config
 ├── server.log               # Structured log output
 ├── .secrets/                # Environment secrets (injected into sessions)
@@ -357,4 +432,4 @@ Playwright config auto-starts the dev server with `TINSTAR_FAST_SIM=1`. Tests co
 - Sidebar drag-to-reparent
 - Data persistence across restarts
 
-Type checking: `npx tsc --noEmit`
+Type checking and unit-test invocation: see [docs/testing.md](./testing.md#type-checking).

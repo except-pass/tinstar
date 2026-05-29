@@ -31,11 +31,13 @@ function makePostReq(url: string, body: string): IncomingMessage {
 
 function makeRes(): CapturedRes {
   const captured: CapturedRes = { status: 0, body: '', res: null as unknown as ServerResponse }
+  const state = { headersSent: false, writableEnded: false }
   const res = {
-    headersSent: false, writableEnded: false,
-    writeHead(status: number) { captured.status = status; return this },
-    end(chunk?: string) { captured.body += chunk ?? ''; this.writableEnded = true; return this },
-    on() { return this },
+    get headersSent() { return state.headersSent },
+    get writableEnded() { return state.writableEnded },
+    writeHead(status: number) { captured.status = status; return res },
+    end(chunk?: string) { captured.body += chunk ?? ''; state.writableEnded = true; return res },
+    on() { return res },
   } as unknown as ServerResponse
   captured.res = res
   return captured
@@ -77,6 +79,8 @@ describe('POST /api/cc-quota/ingest', () => {
     expect(body.data.five_hour.utilization).toBe(33)
     expect(body.data.seven_day.utilization).toBe(77)
     expect(body.error).toBeNull()
+    // Raw cc-quota snapshot — not enveloped per ADR 0001 (snapshot has its
+    // own .data field; ingest body is only consumed by tests).
   })
 
   it('returns 400 on malformed JSON', async () => {
@@ -85,7 +89,7 @@ describe('POST /api/cc-quota/ingest', () => {
     const r = makeRes()
     await handleRequest(ctx, makePostReq('/api/cc-quota/ingest', 'not json'), r.res)
     expect(r.status).toBe(400)
-    expect(JSON.parse(r.body).error).toBe('malformed_json')
+    expect(JSON.parse(r.body)).toEqual({ ok: false, error: { code: 'BAD_REQUEST', message: 'malformed_json' } })
   })
 
   it('POST followed by GET returns the ingested data', async () => {

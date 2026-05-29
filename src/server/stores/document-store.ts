@@ -1,9 +1,106 @@
+// Mutator contract:
+//   Every mutator that emits `change` must equality-short-circuit on no-op
+//   writes. Status-watcher (3s), reconcile (30s), and the git-diff loop
+//   (10s) all re-assert state every tick — without the short-circuit they
+//   broadcast SSE deltas and reschedule persist writes for nothing.
+//
+//   When you add a mutator, follow the existing pattern:
+//     - read prev state from the relevant Map
+//     - compare; return if equal
+//     - mutate + emit
+//
+// Caller contract for upsertRun:
+//   Use { ...existing, foo: x } — never { ...makeFreshRun() }. The shallow
+//   equality check uses reference identity for touchedFiles / recapEntries
+//   arrays. Spread preserves the refs; a fresh-from-factory rebuild defeats
+//   the check and reintroduces the SSE/persist storm.
+//
+// See docs/conventions.md → "Docstore mutators".
+
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
+
+/** Translate a run's status into a default attention signal.
+ *  Returns null when the inbox shouldn't surface the run. */
+function attentionForRunStatus(status: SessionStatus): AttentionState | null {
+  const now = new Date().toISOString()
+  switch (status) {
+    case 'needs_attention':
+      return { level: 'urgent', reason: 'Needs your attention', setAt: now }
+    case 'idle':
+      // Quiet + ready: the agent finished its turn and is waiting for you.
+      // Surfaces in the inbox as a fresh "your turn" item each time it lands here.
+      return { level: 'attention', reason: 'Ready for input', setAt: now }
+    case 'stopped':
+      return { level: 'info', reason: 'Run stopped', setAt: now }
+    case 'creating':
+    case 'running':
+      return null
+  }
+}
+
+export { attentionForRunStatus }
+
+function attentionShallowEqual(a?: AttentionState, b?: AttentionState): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.level === b.level && a.reason === b.reason && a.setAt === b.setAt
+}
+
+function runShallowEqual(a: Run, b: Run): boolean {
+  if (a === b) return true
+  // RunData fields
+  if (a.id !== b.id) return false
+  if (a.color !== b.color) return false
+  if (a.status !== b.status) return false
+  if (a.sessionId !== b.sessionId) return false
+  if (a.taskId !== b.taskId) return false
+  if (a.initiative !== b.initiative) return false
+  if (a.epic !== b.epic) return false
+  if (a.task !== b.task) return false
+  if (a.repo !== b.repo) return false
+  if (a.worktree !== b.worktree) return false
+  if (a.touchedFiles !== b.touchedFiles) return false
+  if (a.recapEntries !== b.recapEntries) return false
+  if (a.rawLogs !== b.rawLogs) return false
+  if (a.port !== b.port) return false
+  if (a.backend !== b.backend) return false
+  if (a.backendInfo !== b.backendInfo) return false
+  if (a.agentIcon !== b.agentIcon) return false
+  if (a.natsEnabled !== b.natsEnabled) return false
+  if (a.natsSubject !== b.natsSubject) return false
+  if (a.natsSubscriptions !== b.natsSubscriptions) return false
+  if (a.natsControlOrphanedAt !== b.natsControlOrphanedAt) return false
+  if (a.parentId !== b.parentId) return false
+  if (a.breakoutRooms !== b.breakoutRooms) return false
+  if (!attentionShallowEqual(a.attention, b.attention)) return false
+  // Run-only fields
+  if (a.worktreeId !== b.worktreeId) return false
+  if (a.createdAt !== b.createdAt) return false
+  if (a.spaceId !== b.spaceId) return false
+  return true
+}
+
+function touchedFilesEqual(a: TouchedFile[], b: TouchedFile[]): boolean {
+  if (a.length !== b.length) return false
+  const sortBy = (arr: TouchedFile[]) => [...arr].sort((x, y) => x.path.localeCompare(y.path))
+  const aa = sortBy(a)
+  const bb = sortBy(b)
+  for (let i = 0; i < aa.length; i++) {
+    const x = aa[i]!
+    const y = bb[i]!
+    if (x.path !== y.path) return false
+    if (x.additions !== y.additions) return false
+    if (x.deletions !== y.deletions) return false
+    if ((x.readOnly ?? false) !== (y.readOnly ?? false)) return false
+    if ((x.pending ?? false) !== (y.pending ?? false)) return false
+  }
+  return true
+}
 
 export class DocumentStore {
   private initiatives = new Map<string, Initiative>()
@@ -18,6 +115,7 @@ export class DocumentStore {
   private imageWidgets = new Map<string, ImageWidget>()
   private natsTrafficWidgets = new Map<string, NatsTrafficWidget>()
   private topicMetadata = new Map<string, TopicMetadata>()
+  private pluginWidgets = new Map<string, PluginWidgetInstance>()
 
   activeSpaceId: string = ''
 
@@ -55,6 +153,7 @@ export class DocumentStore {
       if (data.browserWidgets) for (const w of data.browserWidgets) this.browserWidgets.set(w.id, w)
       if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
       if (data.natsTrafficWidgets) for (const w of data.natsTrafficWidgets) this.natsTrafficWidgets.set(w.id, w)
+      if (data.pluginWidgets) for (const w of data.pluginWidgets) this.pluginWidgets.set(w.id, w)
       if (data.topicMetadata) for (const m of data.topicMetadata) this.topicMetadata.set(m.subject, m)
     } catch {
       // No file or corrupt — start fresh
@@ -194,6 +293,8 @@ export class DocumentStore {
   // --- Runs ---
 
   upsertRun(id: string, data: Run): void {
+    const prev = this.runs.get(id)
+    if (prev && runShallowEqual(prev, data)) return
     this.runs.set(id, data)
     this.changes.emit('change', { entity: 'run', id, data })
   }
@@ -262,15 +363,33 @@ export class DocumentStore {
       ? []
       : run.touchedFiles.filter(f => f.readOnly && !gitPaths.has(f.path))
 
-    run.touchedFiles = [...gitFiles, ...readOnlyCarry]
+    const next = [...gitFiles, ...readOnlyCarry]
+    if (touchedFilesEqual(run.touchedFiles, next)) return
+
+    run.touchedFiles = next
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
   }
 
+  /**
+   * Mutates the stored run in place — callers holding a Run reference will
+   * see `.status` change under them. The mutation is intentional (the same
+   * object reference flows out via SSE deltas) but easy to miss from the
+   * signature.
+   */
   updateRunStatus(runId: string, status: RunStatus): void {
     const run = this.runs.get(runId)
     if (!run) return
+    if (run.status === status) return
     run.status = status
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
+    // Derive attention from the new status. Skip the setRunAttention call
+    // when both prior attention and mapped attention are absent — otherwise
+    // setRunAttention would emit a redundant change event (its dedupe guard
+    // only fires when both sides are non-null).
+    const mapped = attentionForRunStatus(status)
+    if (mapped !== null || run.attention !== undefined) {
+      this.setRunAttention(runId, mapped)
+    }
   }
 
 
@@ -329,6 +448,52 @@ export class DocumentStore {
 
   getAllBrowserWidgets(): BrowserWidget[] {
     return [...this.browserWidgets.values()]
+  }
+
+  // --- PluginWidgets ---
+
+  upsertPluginWidget(id: string, data: PluginWidgetInstance): void {
+    this.pluginWidgets.set(id, data)
+    this.changes.emit('change', { entity: 'pluginWidget', id, data })
+  }
+
+  setPluginWidgetAttention(id: string, state: AttentionState | null): void {
+    const existing = this.pluginWidgets.get(id)
+    if (!existing) return
+    if (state && existing.attention
+        && existing.attention.level === state.level
+        && existing.attention.reason === state.reason) {
+      return
+    }
+    const next = state === null
+      ? { ...existing, attention: undefined }
+      : { ...existing, attention: state, updatedAt: state.setAt }
+    this.pluginWidgets.set(id, next)
+    this.changes.emit('change', { entity: 'pluginWidget', id, data: next })
+  }
+
+  setRunAttention(runId: string, state: AttentionState | null): void {
+    const existing = this.runs.get(runId)
+    if (!existing) return
+    if (state && existing.attention
+        && existing.attention.level === state.level
+        && existing.attention.reason === state.reason) {
+      return
+    }
+    const next: typeof existing = state === null
+      ? { ...existing, attention: undefined }
+      : { ...existing, attention: state }
+    this.runs.set(runId, next)
+    this.changes.emit('change', { entity: 'run', id: runId, data: next })
+  }
+
+  deletePluginWidget(id: string): void {
+    this.pluginWidgets.delete(id)
+    this.changes.emit('change', { entity: 'pluginWidget', id, data: null })
+  }
+
+  getAllPluginWidgets(): PluginWidgetInstance[] {
+    return [...this.pluginWidgets.values()]
   }
 
   // --- Image Widgets ---
@@ -402,6 +567,7 @@ export class DocumentStore {
       browserWidgets: this.getAllBrowserWidgets().filter(inSpace),
       imageWidgets: this.getAllImageWidgets().filter(inSpace),
       natsTrafficWidgets: this.getAllNatsTrafficWidgets().filter(inSpace),
+      pluginWidgets: this.getAllPluginWidgets().filter(inSpace),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -421,6 +587,7 @@ export class DocumentStore {
       browserWidgets: this.getAllBrowserWidgets(),
       imageWidgets: this.getAllImageWidgets(),
       natsTrafficWidgets: this.getAllNatsTrafficWidgets(),
+      pluginWidgets: this.getAllPluginWidgets(),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -438,6 +605,7 @@ export class DocumentStore {
     for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) this.browserWidgets.delete(id)
     for (const [id, e] of this.imageWidgets) if (e.spaceId === spaceId) this.imageWidgets.delete(id)
     for (const [id, e] of this.natsTrafficWidgets) if (e.spaceId === spaceId) this.natsTrafficWidgets.delete(id)
+    for (const [id, e] of this.pluginWidgets) if (e.spaceId === spaceId) this.pluginWidgets.delete(id)
     this.changes.emit('change', { entity: 'all', id: '*', data: null })
   }
 
