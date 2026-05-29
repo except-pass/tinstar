@@ -354,6 +354,11 @@ interface CreateSessionParams {
    * via {agentName}/{agentJson}/{agentPrompt}/{agentDescription} placeholders.
    * Used by the marshal so its persona survives `/clear`. */
   agent?: { name: string; description: string; prompt: string }
+  /** Extra text appended to the agent's system prompt via the CLI's
+   * --append-system-prompt. Used to inject a resolved hand's prompt. The
+   * caller resolves the hand (POST /api/sessions owns the not-found response);
+   * this is the already-resolved text. */
+  appendSystemPrompt?: string | null
 }
 
 interface CreateSessionContext {
@@ -376,7 +381,7 @@ async function createSessionInternal(
   const {
     name, project, worktree = false, worktreePath,
     prompt, skipPermissions = true, cliTemplate: cliTemplateName,
-    taskId, epicId, initiativeId, color: colorParam, nats, agent
+    taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt
   } = params
 
   const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl, natsTraffic, natsHealth } = ctx
@@ -472,7 +477,7 @@ async function createSessionInternal(
   const port = await tmuxBackend.findPort(cfg.ports.hostStart)
   if (prompt) enriched.initialPrompt = prompt
 
-  const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, agent: agent ?? null })
+  const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, agent: agent ?? null, appendSystemPrompt: appendSystemPrompt ?? null })
   const sessionPort = result.port
   updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
   tmuxBackend.onTtydRestart(name, (newPid) => {
@@ -2342,171 +2347,36 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
-        if (!name) return fail(res, 'BAD_REQUEST', 'Session name is required')
-
-        if (getSession(sessDir, name)) {
-          return fail(res, 'CONFLICT', `Session '${name}' already exists`)
+        // Resolve a named hand here so the HTTP layer keeps ownership of the
+        // not-found response. The resolved CLI template + persona prompt are
+        // handed to the shared createSessionInternal, which does the rest of
+        // the work (worktree, color, NATS subscriptions, run projection, …).
+        let resolvedHand: ReturnType<typeof getHandByName> = null
+        if (handName) {
+          resolvedHand = getHandByName(handName)
+          if (!resolvedHand) return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
         }
 
+        const createCtx = buildCreateSessionContext(ctx)
+        if (!createCtx) return fail(res, 'INTERNAL', 'sessionConfig unavailable')
+
         try {
-          // Resolve project
-          let projectPath: string | null = null
-          if (project) {
-            projectPath = getProject(cfg.files.projects, project)
-            if (!projectPath) return fail(res, 'NOT_FOUND', `Project '${project}' not found`)
-          }
-
-          // Create worktree or use existing
-          let workspacePath = projectPath
-          let branch: string | null = null
-          if (worktreePath && projectPath) {
-            workspacePath = worktreePath
-            branch = await detectBranch(worktreePath)
-          } else if (worktree && projectPath) {
-            workspacePath = await createWorktree(projectPath, name)
-            branch = name
-          }
-
-          const isWorktree = !!(worktreePath || worktree)
-
-          // Register a Worktree entity so it appears in hierarchy/grouping
-          let worktreeEntityId = ''
-          if (isWorktree && workspacePath) {
-            worktreeEntityId = name
-            ctx.docStore.upsertWorktree(worktreeEntityId, {
-              id: worktreeEntityId,
-              name,
-              branch: branch ?? name,
-              repo: project ?? '',
-              worktreePath: workspacePath,
-              spaceId: ctx.docStore.activeSpaceId,
-            })
-          }
-
-          // Resolve run color: explicit param > task > epic > initiative > undefined
-          const color = colorParam
-            ?? (taskId ? ctx.docStore.getTask(taskId)?.settings?.defaultRunColor : undefined)
-            ?? (epicId ? ctx.docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
-            ?? (initiativeId ? ctx.docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
-
-          // Resolve hand if specified
-          let resolvedHand: ReturnType<typeof getHandByName> = null
-          if (handName) {
-            resolvedHand = getHandByName(handName)
-            if (!resolvedHand) {
-              return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
-            }
-          }
-
-          // Resolve CLI template (hand's template as fallback if no explicit template)
-          const templateName = cliTemplateName ?? resolvedHand?.cliTemplate ?? null
-          const resolvedTemplate = templateName
-            ? cfg.cliTemplates.find(t => t.name === templateName) ?? null
-            : null
-
-          // Compute NATS subscriptions from entity hierarchy if not explicitly provided
-          let resolvedNats = nats ?? null
-          if (!nats && (taskId || epicId || initiativeId)) {
-            const natsCtx = {
-              sessionName: name,
-              spaceId: ctx.docStore.activeSpaceId || null,
-              taskId: taskId || null,
-              epicId: epicId || null,
-              initiativeId: initiativeId || null,
-            }
-            const subscriptions = computeNatsSubscriptions(natsCtx, ctx.docStore)
-            resolvedNats = { enabled: true, subscriptions }
-          }
-
-          const session = createSession(sessDir, {
-            name,
-            backend: 'tmux',
-            project,
-            workspace: {
-              path: workspacePath,
-              worktree: isWorktree,
-              branch,
-              basePath: isWorktree ? projectPath : null,
-            },
-            profile: null,
-            oneshot: false,
-            skipPermissions,
-            cliTemplate: cliTemplateName ?? null,
-            adapter: resolvedTemplate?.adapter ?? null,
-            nats: resolvedNats,
-          })
-
-          const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
-          enriched._stateDir = claudeStateDir(sessDir, name)
-
-          const sec = secrets()
-          const port = await tmuxBackend.findPort(cfg.ports.hostStart)
-          if (prompt) enriched.initialPrompt = prompt
-
-          const result = await tmuxBackend.createTmuxSession(cfg, {
-            session: enriched,
-            secrets: sec,
-            port,
-            template: resolvedTemplate,
+          const result = await createSessionInternal({
+            name, project, worktree, worktreePath, prompt, skipPermissions,
+            cliTemplate: cliTemplateName ?? resolvedHand?.cliTemplate,
+            taskId, epicId, initiativeId, color: colorParam, nats,
             appendSystemPrompt: resolvedHand?.prompt ?? null,
-          })
-          const sessionPort = result.port
-          updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
-          tmuxBackend.onTtydRestart(name, (newPid) => {
-            updateSession(sessDir, name, { ttydPid: newPid })
-          })
+          }, createCtx)
 
-          const updated = getSession(sessDir, name)
-
-          // Create a Run in the document store so it appears on the canvas
-          // If a prompt was given, Claude is immediately executing — 'running'.
-          // If not, Claude opens at the REPL waiting for input — 'idle'.
-          const runId = name
-          const initialStatus = prompt ? 'running' : 'idle'
-          const backendInfo = `tmux session: ${name}`
-
-          // Build NATS subject for this session
-          const natsSubject = resolvedNats?.enabled
-            ? buildNatsSubject(name, ctx.docStore, taskId, epicId, initiativeId)
-            : undefined
-
-          ctx.docStore.upsertRun(runId, {
-            id: runId,
-            color,
-            status: initialStatus,
-            sessionId: name,
-            initiative: initiativeId ?? '',
-            epic: epicId ?? '',
-            task: taskId ?? '',
-            repo: project ?? '',
-            worktree: isWorktree ? (branch ?? name) : '',
-            touchedFiles: [],
-            recapEntries: [],
-            rawLogs: '',
-            port: sessionPort ?? null,
-            backend: 'tmux',
-            backendInfo,
-            agentIcon: resolvedTemplate?.icon ?? undefined,
-            natsEnabled: resolvedNats?.enabled ?? false,
-            natsSubject,
-            natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
-            taskId: taskId ?? '',
-            worktreeId: worktreeEntityId,
-            createdAt: new Date().toISOString(),
-            spaceId: ctx.docStore.activeSpaceId,
-          })
-
-          registerSaloonSubs(ctx.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
-          bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, ctx.docStore)
-          if (resolvedNats?.enabled) ctx.natsHealth?.trackSession(name)
-
-          ctx.readyQueue.onStatusChange(name, initialStatus)
-          ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
-          ctx.sse.broadcastReadyQueueUpdate()
-          emitSessionEvent('managed_session.created', { name, state: 'running' })
-          log.info('sessions', `session created: ${name}`, { port: sessionPort, state: 'running' })
-
-          ok(res, updated, { status: 201 })
+          if (!result.ok) {
+            switch (result.error.code) {
+              case 'MISSING_NAME': return fail(res, 'BAD_REQUEST', result.error.message)
+              case 'SESSION_EXISTS': return fail(res, 'CONFLICT', result.error.message)
+              case 'PROJECT_NOT_FOUND': return fail(res, 'NOT_FOUND', result.error.message)
+              default: return fail(res, 'INTERNAL', result.error.message)
+            }
+          }
+          ok(res, result.session, { status: 201 })
         } catch (err) {
           log.error('sessions', `session creation failed: ${name}`, { error: (err as Error).message })
           fail(res, 'INTERNAL', (err as Error).message)
