@@ -5,8 +5,10 @@ import { useBackendState } from '../hooks/useBackendState'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { DEFAULT_LEVELS } from '../domain/dimension-meta'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
-import { cycleNext, cyclePrev } from '../hooks/useReadyQueue'
+import { cycleNext, cyclePrev, orderByHierarchy } from '../hooks/useReadyQueue'
 import { useHiddenRuns } from '../hooks/useHiddenRuns'
+import { useInbox } from '../hooks/useInbox'
+import { getSidebarView } from '../lib/uiPrefs'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
 import { SettingsDialog } from './SettingsDialog'
@@ -699,24 +701,60 @@ function WorkspaceShellInner() {
     return out
   }, [allRuns, isRunHidden])
 
+  // sessionIds of run windows in their top-to-bottom hierarchy order, so
+  // bracket-cycling walks the sidebar/canvas the way you read it rather than in
+  // the order sessions happened to become ready.
+  const hierarchyOrderedSessionIds = useMemo(() => {
+    const out: string[] = []
+    const walk = (nodes: TreeNode[]) => {
+      for (const n of nodes) {
+        if (n.type === 'run') {
+          const run = runMap.get(n.entityId)
+          if (run?.sessionId) out.push(run.sessionId)
+        }
+        if (n.children.length > 0) walk(n.children)
+      }
+    }
+    walk(canvasTree)
+    return out
+  }, [canvasTree, runMap])
+
+  // Same idea, but matching the Inbox's top-to-bottom order (attention first,
+  // then recency) so cycling follows whatever the sidebar is currently showing.
+  const { rows: inboxRows } = useInbox(activeSpaceId)
+  const inboxOrderedSessionIds = useMemo(
+    () => inboxRows.filter(r => r.source === 'run' && r.sessionName).map(r => r.sessionName as string),
+    [inboxRows],
+  )
+
+  // Pick the cycle order from whichever sidebar view is open for this space,
+  // read live at keypress time (the pref is the source of truth and updates
+  // synchronously when the user toggles views).
+  const cycleOrder = () =>
+    activeSpaceId && getSidebarView(activeSpaceId) === 'inbox'
+      ? inboxOrderedSessionIds
+      : hierarchyOrderedSessionIds
+
   useGlobalHotkeys({
     onCycleReadyNext: () => {
-      const queue = readyQueue.filter(name => !hiddenSessionIds.has(name))
+      const queue = orderByHierarchy(readyQueue.filter(name => !hiddenSessionIds.has(name)), cycleOrder())
       const run = cycleNext(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleReadyPrev: () => {
-      const queue = readyQueue.filter(name => !hiddenSessionIds.has(name))
+      const queue = orderByHierarchy(readyQueue.filter(name => !hiddenSessionIds.has(name)), cycleOrder())
       const run = cyclePrev(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllNext: () => {
-      const activeNames = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const activeNames = orderByHierarchy(active, cycleOrder())
       const run = cycleNext(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllPrev: () => {
-      const activeNames = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const activeNames = orderByHierarchy(active, cycleOrder())
       const run = cyclePrev(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
