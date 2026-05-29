@@ -35,6 +35,46 @@ async function ask(question) {
   })
 }
 
+// Every top-level subcommand the CLI dispatches. Anything else in the command
+// position is a typo — we refuse it rather than silently starting the server.
+const KNOWN_COMMANDS = [
+  'doctor', 'install-skills', 'status',
+  'install-service', 'uninstall-service', 'start', 'stop', 'restart', 'logs',
+  'workspaces', 'projects', 'sessions', 'tasks', 'templates', 'help',
+]
+
+// Levenshtein edit distance — for "did you mean" suggestions on typos.
+function editDistance(a, b) {
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0))
+  for (let i = 0; i <= a.length; i++) dp[i][0] = i
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      )
+    }
+  }
+  return dp[a.length][b.length]
+}
+
+// Closest known command within a typo-sized distance, else null.
+function suggestCommand(input) {
+  let best = null
+  let bestDistance = Infinity
+  for (const cmd of KNOWN_COMMANDS) {
+    const d = editDistance(input, cmd)
+    if (d < bestDistance) {
+      bestDistance = d
+      best = cmd
+    }
+  }
+  const threshold = Math.max(2, Math.floor(input.length / 3))
+  return bestDistance <= threshold ? best : null
+}
+
 async function main() {
   // Subcommand: doctor
   if (process.argv[2] === 'doctor') {
@@ -92,6 +132,20 @@ async function main() {
   if (process.argv[2] === 'help' && process.argv[3] !== 'api') {
     const { run } = await import('./tinstar/help.js')
     return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+
+  // Reject typos. Starting the server takes only flags (e.g. `tinstar --port 5273`)
+  // or no args at all — never a positional. So a bare token in the command slot
+  // that matched no subcommand above is a mistake, not a request to start.
+  const command = process.argv[2]
+  if (command !== undefined && !command.startsWith('-')) {
+    console.error(`\n${RED}✗${RESET} Unknown command: ${BOLD}${command}${RESET}`)
+    const guess = suggestCommand(command)
+    if (guess) {
+      console.error(`  ${DIM}Did you mean${RESET} ${BOLD}tinstar ${guess}${RESET}${DIM}?${RESET}`)
+    }
+    console.error(`\n  ${DIM}Run${RESET} tinstar help ${DIM}for available commands, or${RESET} tinstar ${DIM}(no args) to start the server.${RESET}\n`)
+    process.exit(1)
   }
 
   console.log(`\n${BOLD}Tinstar${RESET} — Agent Orchestrator\n`)
