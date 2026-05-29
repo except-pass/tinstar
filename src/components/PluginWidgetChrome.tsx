@@ -54,6 +54,10 @@ export function withPluginChrome(InnerComponent: ComponentType<CanvasWidgetProps
           </span>
           <button
             className="w-5 h-5 flex items-center justify-center text-slate-500 hover:text-red-400 rounded hover:bg-white/5 transition-colors"
+            // Stop pointerdown from reaching CanvasWidgetShell's drag handler — the
+            // button sits inside .widget-drag-handle, and the shell captures the
+            // pointer on pointerdown, which would otherwise swallow this click.
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); onClose() }}
             title="Remove widget"
             data-testid={`plugin-widget-close-${instance.id}`}
