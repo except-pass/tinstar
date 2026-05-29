@@ -1,9 +1,73 @@
 import { describe, it, expect } from 'vitest'
-import { centroidOf, boundingBoxOf, applyGroupDrag, fitToRect } from '../constellationCohesion'
-import type { Rect } from '../constellationCohesion'
+import { centroidOf, boundingBoxOf, applyGroupDrag, fitToRect, computeBreakLinks, planLinkBreak } from '../constellationCohesion'
+import type { Rect, IdRect } from '../constellationCohesion'
 
 const R = (x: number, y: number, w = 100, h = 100): Rect =>
   ({ x, y, width: w, height: h })
+
+const IR = (id: string, x: number, y: number, w = 100, h = 100): IdRect =>
+  ({ id, x, y, width: w, height: h })
+
+describe('computeBreakLinks', () => {
+  it('returns no links for a single widget', () => {
+    expect(computeBreakLinks([IR('a', 0, 0)])).toEqual([])
+  })
+
+  it('places a link carrying the pair ids at the vertical seam of two flush widgets', () => {
+    expect(computeBreakLinks([IR('a', 0, 0), IR('b', 100, 0)]))
+      .toEqual([{ x: 100, y: 50, aId: 'a', bId: 'b' }])
+  })
+
+  it('places a link at the horizontal seam between two flush stacked widgets', () => {
+    expect(computeBreakLinks([IR('a', 0, 0), IR('b', 0, 100)]))
+      .toEqual([{ x: 50, y: 100, aId: 'a', bId: 'b' }])
+  })
+
+  it('finds a seam for each adjacent pair in a row of three', () => {
+    const links = computeBreakLinks([IR('a', 0, 0), IR('b', 100, 0), IR('c', 200, 0)])
+    expect(links).toEqual([
+      { x: 100, y: 50, aId: 'a', bId: 'b' },
+      { x: 200, y: 50, aId: 'b', bId: 'c' },
+    ])
+  })
+
+  it('ignores widgets that are far apart (not stuck)', () => {
+    expect(computeBreakLinks([IR('a', 0, 0), IR('b', 500, 0)])).toEqual([])
+  })
+})
+
+describe('planLinkBreak', () => {
+  it('frees both widgets when breaking the only link of a pair', () => {
+    const plan = planLinkBreak([IR('a', 0, 0), IR('b', 100, 0)], 'a', 'b')
+    expect(plan.removeFromSlot.sort()).toEqual(['a', 'b'])
+    expect(plan.newGroup).toEqual([])
+  })
+
+  it('frees the lone widget and keeps the rest grouped in a 3-chain', () => {
+    // a-b-c; break a-b → {a} freed, {b,c} keep the slot
+    const plan = planLinkBreak([IR('a', 0, 0), IR('b', 100, 0), IR('c', 200, 0)], 'a', 'b')
+    expect(plan.removeFromSlot).toEqual(['a'])
+    expect(plan.newGroup).toEqual([])
+  })
+
+  it('splits a 4-chain into two grouped halves', () => {
+    // a-b-c-d; break b-c → {a,b} keep slot, {c,d} move to a new group
+    const plan = planLinkBreak(
+      [IR('a', 0, 0), IR('b', 100, 0), IR('c', 200, 0), IR('d', 300, 0)], 'b', 'c',
+    )
+    expect(plan.removeFromSlot.sort()).toEqual(['c', 'd'])
+    expect(plan.newGroup.sort()).toEqual(['c', 'd'])
+  })
+
+  it('does nothing when the cut leaves the widgets still connected via other seams', () => {
+    // 2x2 grid: a(top-left) b(top-right) / c(bottom-left) d(bottom-right). Break a-b → still joined a-c-d-b.
+    const plan = planLinkBreak([
+      IR('a', 0, 0), IR('b', 100, 0), IR('c', 0, 100), IR('d', 100, 100),
+    ], 'a', 'b')
+    expect(plan.removeFromSlot).toEqual([])
+    expect(plan.newGroup).toEqual([])
+  })
+})
 
 describe('centroidOf', () => {
   it('returns null for empty input', () => {

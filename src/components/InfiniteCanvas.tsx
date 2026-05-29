@@ -19,7 +19,7 @@ import { apiFetch } from '../apiClient'
 import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
 import type { Rect } from '../canvas/constellationCohesion'
-import { applyGroupDrag, boundingBoxOf, fitToRect } from '../canvas/constellationCohesion'
+import { applyGroupDrag, boundingBoxOf, fitToRect, planLinkBreak } from '../canvas/constellationCohesion'
 import { tidyGrid } from '../canvas/tidyArrange'
 import type { DragMember } from '../canvas/constellationCohesion'
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
@@ -619,9 +619,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   }, [constellations.store])
 
   const collectSnapNeighbors = useCallback((nodeId: string): SnapWidget[] => {
+    // Magnetic snap only targets work widgets (runs, plugin widgets, editors, browsers, …) —
+    // never grouping containers (Initiative/Epic/Task). runNodeIdsRef holds exactly the
+    // non-container leaf nodes (see collectRunNodeIds), so filter neighbors to that set.
+    const leafIds = new Set(runNodeIdsRef.current)
     const neighbors: SnapWidget[] = []
     for (const [id, l] of layouts) {
-      if (id === nodeId) continue
+      if (id === nodeId || !leafIds.has(id)) continue
       neighbors.push({ id, x: l.x, y: l.y, width: l.width, height: l.height })
     }
     return neighbors
@@ -1641,20 +1645,31 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         {/* Chrome is inside the camera transform so it scales with canvas zoom — unlike the screen-space marquee. */}
         {(['1','2','3','4','5','6','7','8','9'] as const).map(slot => {
           const memberIds = constellations.nodesInSlot(slot)
-          const memberRects = memberIds
+          const members = memberIds
             .map(id => {
               const l = layouts.get(id)
               if (!l) return null
-              return { x: l.x, y: l.y, width: l.width, height: l.height } as Rect
+              return { id, x: l.x, y: l.y, width: l.width, height: l.height }
             })
-            .filter((r): r is Rect => r !== null)
-          const active = activeConstellationSlot === slot
+            .filter((m): m is { id: string; x: number; y: number; width: number; height: number } => m !== null)
+          // Outline shows when the slot is hotkey-active OR any member is selected (clicked).
+          const active = activeConstellationSlot === slot || memberIds.some(id => isSelected(id))
           return (
             <ConstellationChrome
               key={`constellation-chrome-${slot}`}
               slot={slot}
-              rects={memberRects}
+              members={members}
               active={active}
+              onBreak={(aId, bId) => {
+                // Break only this seam: split the constellation along it. Larger side keeps the
+                // slot; the smaller side becomes its own group (≥2) or is freed (lone widget).
+                const plan = planLinkBreak(members, aId, bId)
+                for (const id of plan.removeFromSlot) constellations.remove(slot, id)
+                if (plan.newGroup.length >= 2) {
+                  const free = (['1','2','3','4','5','6','7','8','9'] as const).find(s => !occupiedSlots.has(s))
+                  if (free) for (const id of plan.newGroup) constellations.assign(free, id)
+                }
+              }}
             />
           )
         })}

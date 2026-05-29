@@ -1,17 +1,23 @@
-import { boundingBoxOf, type Rect } from './constellationCohesion'
+import { boundingBoxOf, computeBreakLinks, type IdRect } from './constellationCohesion'
 import type { ConstellationSlot } from '../hooks/useConstellations'
 
 interface Props {
   slot: ConstellationSlot
-  rects: Rect[]
+  members: IdRect[]
   active: boolean
+  /** Break the seam between two stuck widgets — splits the constellation at that link only. */
+  onBreak?: (aId: string, bId: string) => void
 }
 
-export function ConstellationChrome({ slot, rects, active }: Props) {
-  if (rects.length === 0) return null
+export function ConstellationChrome({ slot, members, active, onBreak }: Props) {
+  if (members.length === 0) return null
 
-  const box = boundingBoxOf(rects)
+  const box = boundingBoxOf(members)
   if (!box) return null
+
+  // A link-break chip sits at each seam between two stuck widgets — only while the
+  // constellation is active (revealed by clicking a member), to avoid canvas clutter.
+  const links = active && onBreak && members.length >= 2 ? computeBreakLinks(members) : []
 
   return (
     <>
@@ -36,6 +42,20 @@ export function ConstellationChrome({ slot, rects, active }: Props) {
           {slot}
         </div>
       )}
+      {links.map((link, i) => (
+        <button
+          key={`break-${slot}-${link.aId}-${link.bId}`}
+          data-testid={`constellation-break-${slot}-${i}`}
+          className="pointer-events-auto absolute flex items-center justify-center w-6 h-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-surface-panel border border-primary/70 text-primary shadow hover:bg-primary hover:text-white transition-colors"
+          style={{ left: link.x, top: link.y }}
+          title="Break this link — separate these widgets"
+          aria-label="Break constellation link"
+          onPointerDown={(e) => { e.stopPropagation() }}
+          onClick={(e) => { e.stopPropagation(); onBreak?.(link.aId, link.bId) }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>link_off</span>
+        </button>
+      ))}
     </>
   )
 }
