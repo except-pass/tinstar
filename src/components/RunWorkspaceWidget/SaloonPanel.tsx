@@ -3,6 +3,7 @@ import { SaloonRefreshButton } from './saloon/SaloonRefreshButton'
 import { SubscriptionsList } from './saloon/SubscriptionsList'
 import { StreamView } from './saloon/StreamView'
 import { useSaloonStream } from './saloon/useSaloonStream'
+import { useNatsStatus } from './saloon/useNatsStatus'
 
 interface Props {
   sessionName: string
@@ -15,12 +16,23 @@ interface Props {
 export function SaloonPanel({
   sessionName,
   subscriptions,
-  natsEnabled,
   natsControlOrphanedAt,
   onCollapse,
 }: Props) {
-  const healthy = natsEnabled && !natsControlOrphanedAt
-  const events = useSaloonStream({ subscriptions })
+  // SSOT: the dot + topic list reflect the channel-server's observed state,
+  // probed live — never session.nats config / CLI flags / .mcp.json. The
+  // `subscriptions` prop is only a pre-probe placeholder so the panel isn't
+  // blank for the moment before the first probe lands.
+  const { status, loading, refresh } = useNatsStatus(sessionName)
+  const effectiveSubs = status?.subscriptions ?? subscriptions
+  const conn = status?.connection ?? 'probing'
+  const dot = ({
+    open: { cls: 'bg-emerald-400 shadow-[0_0_6px_#34d399]', title: `NATS connected — ${effectiveSubs.length} subject${effectiveSubs.length === 1 ? '' : 's'}` },
+    degraded: { cls: 'bg-amber-400 shadow-[0_0_6px_#fbbf24]', title: `NATS degraded${status?.natsState ? ` (${status.natsState})` : ''} — click to re-probe` },
+    down: { cls: 'bg-slate-600', title: 'No live NATS connection — click to re-probe' },
+    probing: { cls: 'bg-slate-500 animate-pulse', title: 'Checking NATS…' },
+  } as const)[conn]
+  const events = useSaloonStream({ subscriptions: effectiveSubs })
   const [mutedSet, setMutedSet] = useState<Set<string>>(new Set())
   const [splitPercent, setSplitPercent] = useState(40)
 
@@ -57,11 +69,13 @@ export function SaloonPanel({
   return (
     <section className="flex flex-col flex-1 min-h-0 bg-surface-panel">
       <div className="panel-header flex items-center gap-2">
-        <span
+        <button
+          type="button"
           data-testid="saloon-dot"
-          data-status={healthy ? 'ok' : 'bad'}
-          title={healthy ? 'Connected to NATS' : (natsEnabled ? 'Control socket orphaned — restart session to recover' : 'NATS not enabled for this session')}
-          className={`inline-block w-2 h-2 rounded-full shrink-0 ${healthy ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-rose-500 shadow-[0_0_6px_#f43f5e]'}`}
+          data-status={conn}
+          onClick={() => refresh()}
+          title={dot.title}
+          className={`inline-block w-2 h-2 p-0 border-0 rounded-full shrink-0 cursor-pointer ${dot.cls} ${loading ? 'animate-pulse' : ''}`}
         />
         <SaloonRefreshButton
           sessionName={sessionName}
@@ -69,7 +83,7 @@ export function SaloonPanel({
         />
         <h3 className="panel-label">Saloon</h3>
         <span className="text-2xs font-mono text-slate-600 ml-auto">
-          {subscriptions.length} subs
+          {effectiveSubs.length} subs
         </span>
         {onCollapse && (
           <button onClick={onCollapse} className="text-slate-500 hover:text-primary">
@@ -81,7 +95,7 @@ export function SaloonPanel({
       <div style={{ height: `${splitPercent}%` }} className="min-h-[60px] overflow-y-auto scrollbar-thin">
         <SubscriptionsList
           sessionName={sessionName}
-          subscriptions={subscriptions}
+          subscriptions={effectiveSubs}
           mutedSet={mutedSet}
           onToggleMute={toggleMute}
         />

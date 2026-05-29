@@ -50,6 +50,7 @@ import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
 import { computeNatsSubscriptions, diffSubscriptions, sanitizeSubjectToken } from '../sessions/nats-subscriptions'
 import { natsControlSocketPath } from '../sessions/backends/tmux'
+import { probeNatsLiveStatus } from '../nats-health'
 import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
@@ -2249,7 +2250,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
 
     // GET /api/sessions/:name (exact match, no trailing path)
-    if (method === 'GET' && url.startsWith('/api/sessions/') && !url.includes('/start') && !url.includes('/stop') && !url.includes('/files') && !url.includes('/context')) {
+    if (method === 'GET' && url.startsWith('/api/sessions/') && !url.includes('/start') && !url.includes('/stop') && !url.includes('/files') && !url.includes('/context') && !url.includes('/nats-status')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)
@@ -3059,6 +3060,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         } catch (err) {
           fail(res, 'INTERNAL', (err as Error).message)
         }
+        return true
+      }
+    }
+
+    // GET /api/sessions/:name/nats-status — observed NATS truth, probed live
+    // from the channel-server control socket: the actual connection state plus
+    // the subjects it's actually subscribed to. This is the SSOT the Saloon
+    // dot/topics read — independent of session.nats config, CLI flags, or which
+    // .mcp.json is on disk. Cheap (one socket round-trip); safe to call on
+    // panel-open and on dot-click. A session with no live channel-server
+    // resolves to { connection: 'down' } — that's the truth, not an error.
+    if (method === 'GET' && url.endsWith('/nats-status') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const status = await probeNatsLiveStatus(natsControlSocketPath(name))
+        ok(res, status)
         return true
       }
     }

@@ -207,46 +207,82 @@ export class NatsHealthMonitor {
   }
 }
 
-/** Real probe. Opens the Unix socket, sends `status`, parses the first reply. */
-function defaultProbe(socketPath: string): Promise<ProbeOutcome> {
-  return new Promise<ProbeOutcome>(resolve => {
+/**
+ * Observed NATS state, straight from the channel-server's control socket.
+ *
+ * This is the single source of truth for "does this session have NATS": it
+ * reflects the live connection and the subjects the server is *actually*
+ * subscribed to — independent of session.nats config, CLI flags, or which
+ * .mcp.json happens to be on disk.
+ *
+ *   open      socket answered, natsState in {'OPEN','connected'}
+ *   degraded  socket answered but connection isn't up (DRAINING/CLOSED/garbage)
+ *   down      no socket / refused / timed out — i.e. no channel-server here
+ */
+export interface NatsLiveStatus {
+  connection: 'open' | 'degraded' | 'down'
+  subscriptions: string[]
+  natsState?: string
+  reason?: string
+}
+
+/** Pure mapping of a single status-reply line → NatsLiveStatus. Exposed for tests. */
+export function mapStatusReply(line: string): NatsLiveStatus {
+  try {
+    const reply = JSON.parse(line) as { natsState?: string; subscriptions?: unknown }
+    const subscriptions = Array.isArray(reply.subscriptions)
+      ? reply.subscriptions.filter((s): s is string => typeof s === 'string')
+      : []
+    // channel-server emits 'OPEN' | 'DRAINING' | 'CLOSED'; older builds used
+    // 'connected'. Both mean the NATS connection is up.
+    const open = reply.natsState === 'OPEN' || reply.natsState === 'connected'
+    return { connection: open ? 'open' : 'degraded', subscriptions, natsState: reply.natsState }
+  } catch (err) {
+    return { connection: 'degraded', subscriptions: [], reason: `bad JSON: ${(err as Error).message}` }
+  }
+}
+
+/** One-shot probe of the channel-server control socket. Opens it, sends
+ * `status`, and maps the first reply. Never rejects — failures resolve to
+ * `down`, since "no answer" is itself the truth (no NATS here). */
+export function probeNatsLiveStatus(socketPath: string): Promise<NatsLiveStatus> {
+  return new Promise<NatsLiveStatus>(resolve => {
     if (!existsSync(socketPath)) {
-      resolve({ kind: 'orphaned', reason: 'socket file missing' })
+      resolve({ connection: 'down', subscriptions: [], reason: 'socket file missing' })
       return
     }
     const sock = netConnect(socketPath)
     let buf = ''
     let done = false
-    const finish = (out: ProbeOutcome) => {
+    const finish = (out: NatsLiveStatus) => {
       if (done) return
       done = true
       try { sock.destroy() } catch { /* ignore */ }
       resolve(out)
     }
-    const timer = setTimeout(() => finish({ kind: 'orphaned', reason: 'timeout' }), PROBE_TIMEOUT_MS)
+    const timer = setTimeout(() => finish({ connection: 'down', subscriptions: [], reason: 'timeout' }), PROBE_TIMEOUT_MS)
     sock.once('connect', () => sock.write('{"action":"status"}\n'))
     sock.on('data', chunk => {
       buf += chunk.toString('utf-8')
       const nl = buf.indexOf('\n')
       if (nl === -1) return
-      const line = buf.slice(0, nl).trim()
       clearTimeout(timer)
-      try {
-        const reply = JSON.parse(line) as { natsState?: string }
-        // channel-server emits 'OPEN' | 'DRAINING' | 'CLOSED'; older builds
-        // used 'connected'. Both mean the NATS connection is up.
-        const healthy = reply.natsState === 'OPEN' || reply.natsState === 'connected'
-        finish(healthy
-          ? { kind: 'healthy', natsState: reply.natsState }
-          : { kind: 'degraded', natsState: reply.natsState })
-      } catch (err) {
-        finish({ kind: 'degraded', reason: `bad JSON: ${(err as Error).message}` })
-      }
+      finish(mapStatusReply(buf.slice(0, nl).trim()))
     })
     sock.once('error', () => {
       clearTimeout(timer)
-      finish({ kind: 'orphaned', reason: 'connect refused' })
+      finish({ connection: 'down', subscriptions: [], reason: 'connect refused' })
     })
+  })
+}
+
+/** Real probe for the health monitor — derives the orphan-tracking ProbeOutcome
+ * from the same observed status used everywhere else. */
+function defaultProbe(socketPath: string): Promise<ProbeOutcome> {
+  return probeNatsLiveStatus(socketPath).then(s => {
+    if (s.connection === 'open') return { kind: 'healthy', natsState: s.natsState }
+    if (s.connection === 'degraded') return { kind: 'degraded', natsState: s.natsState, reason: s.reason }
+    return { kind: 'orphaned', reason: s.reason }
   })
 }
 
