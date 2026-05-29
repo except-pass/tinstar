@@ -351,8 +351,14 @@ function WorkspaceShellInner() {
     for (const w of browserWidgets) ids.push(w.id)
     for (const w of imageWidgets) ids.push(w.id)
     for (const w of natsTrafficWidgets) ids.push(w.id)
+    // Plugin widgets must be included too: useConstellations prunes any slot
+    // member missing from this list (and persists the prune). Omitting them
+    // evicted plugin widgets (e.g. stretchplan) from their constellation slot
+    // on every fresh load, silently breaking their peer/capability link until
+    // the user manually re-snapped the widget.
+    for (const w of pluginWidgets) ids.push(w.id)
     return ids
-  }, [runMap, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets])
+  }, [runMap, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, pluginWidgets])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
