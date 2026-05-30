@@ -8,6 +8,11 @@ describe('useConstellationGraph reducers', () => {
     g = applyAssign(g, '1', 'a')
     expect(nextFreeSlot(g)).toBe('2')
   })
+  it('nextFreeSlot returns null when all nine slots are occupied', () => {
+    let g = emptyGraph('s')
+    for (const s of ['1','2','3','4','5','6','7','8','9'] as const) g = applyAssign(g, s, `w-${s}`)
+    expect(nextFreeSlot(g)).toBeNull()
+  })
   it('applyAssign adds a member edge', () => {
     const g = applyAssign(emptyGraph('s'), '3', 'pw-x')
     expect(slotsForNode(g, 'pw-x')).toEqual(['3'])

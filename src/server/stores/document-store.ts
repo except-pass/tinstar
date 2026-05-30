@@ -502,6 +502,10 @@ export class DocumentStore {
   // --- ConstellationGraph (per-space membership graph) ---
 
   upsertConstellationGraph(spaceId: string, data: ConstellationGraph): void {
+    // No-op short-circuit (docstore mutator contract): avoid redundant SSE
+    // deltas + disk persists when the client PUTs an unchanged graph.
+    const existing = this.constellationGraphs.get(spaceId)
+    if (existing && JSON.stringify(existing) === JSON.stringify(data)) return
     this.constellationGraphs.set(spaceId, data)
     this.changes.emit('change', { entity: 'constellationGraph', id: spaceId, data })
   }

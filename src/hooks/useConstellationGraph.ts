@@ -38,7 +38,7 @@ export function useConstellationGraph(spaceId: string) {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(next),
-    }).catch(() => {})
+    }).catch(err => console.warn('[constellation] persist failed:', err))
   }, [spaceId])
 
   const assign = useCallback((slot: ConstellationSlot, nodeId: string) => persist(applyAssign(graph, slot, nodeId)), [graph, persist])
