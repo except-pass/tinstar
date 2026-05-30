@@ -285,39 +285,6 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
             <span className="text-[8px] font-bold tracking-wide leading-none">BROWSER</span>
           </div>
 
-          {/* NATS drag chip — grayed out when not NATS enabled */}
-          <div
-            draggable={!!run.natsEnabled}
-            onMouseEnter={() => setHoveredBtn('nats')}
-            onMouseLeave={() => setHoveredBtn(null)}
-            onDragStart={e => {
-              if (!run.natsEnabled) {
-                e.preventDefault()
-                return
-              }
-              e.stopPropagation()
-              e.dataTransfer.setData('application/tinstar-nats', JSON.stringify({
-                sessionId: run.sessionId,
-                natsSubject: run.natsSubject,
-                color: run.color,
-              }))
-              e.dataTransfer.effectAllowed = 'copy'
-            }}
-            className={`flex flex-col items-center justify-center gap-0.5 h-full px-3 transition-colors ${run.natsEnabled ? 'cursor-grab active:cursor-grabbing' : 'cursor-not-allowed'}`}
-            style={{
-              color: !run.natsEnabled
-                ? 'rgb(100 116 139 / 0.35)'  // slate-500 at 35% — grayed out
-                : hoveredBtn === 'nats' ? runAccent : hexToRgba(runAccent, 0.55),
-              background: run.natsEnabled && hoveredBtn === 'nats' ? hexToRgba(runAccent, 0.06) : undefined,
-            }}
-            title={run.natsEnabled
-              ? `NATS subscriptions:\n${(run.natsSubscriptions ?? [run.natsSubject]).filter(Boolean).join('\n')}\n\nDrag to canvas to monitor traffic`
-              : 'NATS not enabled for this session'}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: '16px', fontVariationSettings: "'FILL' 1" }}>cell_tower</span>
-            <span className="text-[8px] font-bold tracking-wide leading-none">NATS</span>
-          </div>
-
           {isLive && run.port && (
             <>
               {/* Separator before Refresh */}

@@ -1365,31 +1365,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return
       }
 
-      const rawNats = e.dataTransfer.getData('application/tinstar-nats')
-      if (rawNats) {
-        const { sessionId, natsSubject, color } = JSON.parse(rawNats) as { sessionId: string; natsSubject?: string; color?: string }
-        const spawnLayout = { x: dropX, y: dropY, width: 500, height: 400 }
-        // Build subscription filter: two-tier model (direct DM + task broadcast)
-        // natsSubject is the direct address (e.g., tinstar.space.init.epic.task.session)
-        // Broadcast = strip session name (no wildcard needed)
-        const subscriptions = natsSubject
-          ? [
-              natsSubject,  // direct DM inbox for this session
-              natsSubject.replace(/\.[^.]+$/, ''),  // task broadcast channel (no wildcard)
-            ]
-          : [`tinstar.>`]  // fallback to all tinstar traffic
-        const res = await apiFetch('/api/nats-traffic-widgets', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, subscriptions, color }),
-        })
-        const resJson = await res.json() as { ok: boolean; data?: NatsTrafficWidget }
-        if (!resJson.ok || !resJson.data) return
-        insertLayout(resJson.data.id, spawnLayout)
-        onNatsWidgetCreated?.(resJson.data)
-        return
-      }
-
       // Hand spawn drop
       const handData = e.dataTransfer.getData('application/tinstar-hand')
       if (handData) {
@@ -1613,7 +1588,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       onDragOver={(e) => { e.preventDefault() }}
       onDrop={handleDrop}
       onDragEnter={(e) => {
-        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-browser') || e.dataTransfer.types.includes('application/tinstar-nats') || e.dataTransfer.types.includes('application/tinstar-hand')) {
+        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-browser') || e.dataTransfer.types.includes('application/tinstar-hand')) {
           dragEnterCountRef.current++
           setEditorDragActive(true)
         }
