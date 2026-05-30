@@ -3,6 +3,7 @@ declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
 import { useSyncExternalStore, useCallback } from 'react'
 import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance } from '../domain/types'
+import type { ConstellationGraph } from '../domain/constellationGraph'
 import { isSystemSession, extractMarshal } from '../domain/system-sessions'
 import { apiUrl } from '../apiClient'
 import { dispatchWindowEvent } from '../lib/windowEvents'
@@ -25,6 +26,7 @@ interface ServerState {
   topicMetadata: TopicMetadata[]
   readyQueue: string[]
   pluginWidgets: PluginWidgetInstance[]
+  constellationGraphs: ConstellationGraph[]
 }
 
 const EMPTY_STATE: ServerState = {
@@ -43,6 +45,7 @@ const EMPTY_STATE: ServerState = {
   topicMetadata: [],
   readyQueue: [],
   pluginWidgets: [],
+  constellationGraphs: [],
 }
 
 // ─── Singleton SSE store ───────────────────────────────────────────────
@@ -198,6 +201,7 @@ function startSSE() {
       readyQueue: snapshot.ready_queue ?? [],
       topicMetadata: snapshot.topicMetadata ?? [],
       pluginWidgets: snapshot.pluginWidgets ?? [],
+      constellationGraphs: snapshot.constellationGraphs ?? [],
       // System sessions (e.g. marshal) have dedicated UI — never enter the
       // run set that feeds the canvas/hierarchy/sessions list. They live on
       // `marshal` instead.
@@ -266,7 +270,7 @@ function stopSSE() {
   }
 }
 
-function applyDelta(prev: ServerState, delta: { entity: string; id: string; data: unknown }): ServerState {
+export function applyDelta(prev: ServerState, delta: { entity: string; id: string; data: unknown }): ServerState {
   if (delta.entity === 'all' && delta.data === null) {
     return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [], marshal: null, editorWidgets: [], browserWidgets: [], imageWidgets: [] }
   }
@@ -379,6 +383,15 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
     const w = delta.data as PluginWidgetInstance
     const idx = pws.findIndex(x => x.id === w.id)
     return { ...prev, pluginWidgets: idx >= 0 ? pws.map((x, i) => (i === idx ? w : x)) : [...pws, w] }
+  }
+
+  if (delta.entity === 'constellationGraph') {
+    const graphs = prev.constellationGraphs
+    const id = delta.id // spaceId
+    if (delta.data === null) return { ...prev, constellationGraphs: graphs.filter(g => g.spaceId !== id) }
+    const g = delta.data as ConstellationGraph
+    const idx = graphs.findIndex(x => x.spaceId === g.spaceId)
+    return { ...prev, constellationGraphs: idx >= 0 ? graphs.map((x, i) => (i === idx ? g : x)) : [...graphs, g] }
   }
 
   if (delta.entity === 'commit') {
