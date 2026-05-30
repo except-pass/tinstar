@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { StreamView } from './StreamView'
 import type { TrafficEvent } from './types'
 
@@ -9,11 +9,15 @@ const ev = (subject: string, data: string): TrafficEvent => ({
 })
 
 describe('StreamView', () => {
-  it('renders rows and opens the detail modal on row click', () => {
+  it('shows truncated raw data inline and opens the detail modal on row click', () => {
     render(<StreamView events={[ev('tinstar.a.b', '{"hello":1}')]} filter="" />)
     expect(screen.getByText('tinstar.a.b')).toBeInTheDocument()
+    // Raw data is visible inline (scannable), not hidden behind a click.
+    expect(screen.getByText('{"hello":1}')).toBeInTheDocument()
     fireEvent.click(screen.getByText('tinstar.a.b'))
-    expect(screen.getByText(/hello/)).toBeInTheDocument()
+    // Modal shows the pretty-printed payload.
+    const modal = screen.getByTestId('saloon-msg-modal')
+    expect(within(modal).getByText(/"hello": 1/)).toBeInTheDocument()
   })
 
   it('applies the subject/content filter', () => {

@@ -13,22 +13,10 @@ function formatTime(iso: string): string {
 }
 
 function truncate(s: string, len: number): string {
-  return s.length > len ? s.slice(0, len) + '...' : s
+  return s.length > len ? s.slice(0, len) + '…' : s
 }
 
-/**
- * Returns a shape-preview string for the data column.
- * JSON objects → `{…}`, arrays → `[…]`, other → first 60 chars.
- * This keeps the modal as the single source of actual content.
- */
-function dataPreview(s: string): string {
-  const trimmed = s.trim()
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) return '{…}'
-  if (trimmed.startsWith('[') && trimmed.endsWith(']')) return '[…]'
-  return truncate(s, 60)
-}
-
-export function StreamView({ events, filter }: Props): JSX.Element {
+export function StreamView({ events, filter }: Props) {
   const [selected, setSelected] = useState<TrafficEvent | null>(null)
   const needle = filter.trim().toLowerCase()
 
@@ -67,7 +55,7 @@ export function StreamView({ events, filter }: Props): JSX.Element {
                 const isOutbound = e.direction === 'outbound'
                 return (
                   <tr
-                    key={i}
+                    key={`${e.timestamp}|${e.subject}|${i}`}
                     onClick={() => setSelected(e)}
                     className="border-b border-white/5 cursor-pointer hover:bg-white/5"
                   >
@@ -95,7 +83,7 @@ export function StreamView({ events, filter }: Props): JSX.Element {
                       className="px-2 py-1 text-slate-400 max-w-[350px] overflow-hidden"
                       title={e.data}
                     >
-                      <span className="block truncate">{dataPreview(e.data)}</span>
+                      <span className="block truncate">{truncate(e.data.replace(/\s+/g, ' ').trim(), 120)}</span>
                     </td>
                   </tr>
                 )
