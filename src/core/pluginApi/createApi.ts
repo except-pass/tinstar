@@ -37,7 +37,6 @@ function kindOfWidgetId(id: string): string {
   if (id.startsWith('editor-')) return 'file-editor'
   if (id.startsWith('browser-')) return 'browser'
   if (id.startsWith('image-')) return 'image'
-  if (id.startsWith('nats-')) return 'nats-traffic'
   const dash = id.indexOf('-')
   return dash > 0 ? id.slice(0, dash) : id
 }

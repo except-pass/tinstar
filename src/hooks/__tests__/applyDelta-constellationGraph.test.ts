@@ -22,7 +22,6 @@ const baseState = (() => {
     editorWidgets: [],
     browserWidgets: [],
     imageWidgets: [],
-    natsTrafficWidgets: [],
     topicMetadata: [],
     readyQueue: [],
     pluginWidgets: [],

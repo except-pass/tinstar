@@ -222,14 +222,6 @@ export interface ImageWidget {
   naturalHeight: number
 }
 
-export interface NatsTrafficWidget {
-  id: string
-  spaceId?: string
-  sessionId: string  // Filter to show traffic for a specific session, or empty for all
-  subscriptions: string[]  // NATS subjects to subscribe to (e.g., "tinstar.>")
-  color?: string
-}
-
 /** Urgency of a widget's current attention request.
  *  Drives both color and sort order in the Inbox view. */
 export type AttentionLevel = 'urgent' | 'attention' | 'info'

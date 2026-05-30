@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, PluginWidgetInstance, Run, TreeNode, GroupingDimension } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, PluginWidgetInstance, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { findNodeLabel } from '../domain/view-models'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
@@ -34,7 +34,6 @@ interface Props {
   editorWidgetMap?: Map<string, EditorWidget>
   browserWidgetMap?: Map<string, BrowserWidget>
   imageWidgetMap?: Map<string, ImageWidget>
-  natsTrafficWidgetMap?: Map<string, NatsTrafficWidget>
   pluginWidgetMap?: Map<string, PluginWidgetInstance>
   onPluginWidgetCreated?: (instance: PluginWidgetInstance) => void
   onImageWidgetCreated?: (widget: ImageWidget) => void
@@ -48,7 +47,6 @@ interface Props {
   onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
   onEditorWidgetCreated?: (widget: EditorWidget) => void
   onBrowserWidgetCreated?: (widget: BrowserWidget) => void
-  onNatsWidgetCreated?: (widget: NatsTrafficWidget) => void
   arrangeGridRef?: React.MutableRefObject<(() => void) | null>
   arrangeResetRef?: React.MutableRefObject<(() => void) | null>
   arrangeSwimlanesRef?: React.MutableRefObject<(() => void) | null>
@@ -174,7 +172,7 @@ const MARQUEE_THRESHOLD = 5
 // Snap-zone snap distance (canvas units)
 const SNAP_DISTANCE = 60
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const {
     layouts,
@@ -1070,14 +1068,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     },
     onConstellationAssign: (slot) => {
       const { selectedType, selectedIds } = selectionState
-      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer')) return
       for (const nodeId of selectedIds) {
         constellations.assign(slot, nodeId)
       }
     },
     onConstellationRemove: (slot) => {
       const { selectedType, selectedIds } = selectionState
-      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer')) return
       for (const nodeId of selectedIds) {
         constellations.remove(slot, nodeId)
       }
@@ -1393,7 +1391,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return
       }
     },
-    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated],
+    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated],
   )
 
   // Recursive render: groups render behind their children (natural DOM order)
@@ -1444,13 +1442,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             ? browserWidgetMap.get(node.entityId)
             : node.type === 'image-viewer'
               ? imageWidgetMap.get(node.entityId)
-              : node.type === 'nats-traffic'
-                ? natsTrafficWidgetMap.get(node.entityId)
-                : pluginWidgetMap.has(node.entityId)
-                  // Plugin widget: pass the instance as data. The widget's useData hook
-                  // reads live state from the singleton SSE store; this prop is a
-                  // convenience snapshot the component may optionally reference.
-                  ? pluginWidgetMap.get(node.entityId)
+              : pluginWidgetMap.has(node.entityId)
+                // Plugin widget: pass the instance as data. The widget's useData hook
+                // reads live state from the singleton SSE store; this prop is a
+                // convenience snapshot the component may optionally reference.
+                ? pluginWidgetMap.get(node.entityId)
                   : ({
               node,
               depth: depthMapRef.current.get(node.id) ?? 0,
@@ -1473,7 +1469,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       : reg
 
     // Any non-container leaf widget participates in constellation snap, not
-    // just runs. Runs, plugin widgets, editors, browsers, images, nats-traffic
+    // just runs. Runs, plugin widgets, editors, browsers, images
     // all behave the same in the snap pipeline.
     const isSnapLeaf = !reg.isContainer
 
@@ -1675,7 +1671,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         editorWidgetMap={editorWidgetMap}
         browserWidgetMap={browserWidgetMap}
         imageWidgetMap={imageWidgetMap}
-        natsTrafficWidgetMap={natsTrafficWidgetMap}
         onFocusRun={onFocusRun}
         selectedRunIds={selectionState.selectedType === 'run' ? selectionState.selectedIds : undefined}
         hudToggleRef={hudToggleRef}

@@ -153,16 +153,8 @@ export function initBackend(): RouteContext {
     natsTraffic = new NatsTrafficBridge(sse, natsManager!.url)
     natsTraffic.start()
 
-    // Sync existing widget subscriptions now that the bridge is live
-    for (const widget of docStore.getAllNatsTrafficWidgets()) {
-      if (widget.subscriptions?.length) {
-        natsTraffic.updateWidgetSubscriptions(widget.id, widget.subscriptions)
-      }
-    }
-
     // Re-register every persisted session's subs with the bridge. Saloon entries
-    // are synthetic (keyed `saloon:<name>`) and not persisted as widget docs, so
-    // the widget hydration loop above doesn't cover them.
+    // are synthetic (keyed `saloon:<name>`) and not persisted as widget docs.
     if (sessionConfig) {
       const sessEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
       for (const entry of sessEntries) {

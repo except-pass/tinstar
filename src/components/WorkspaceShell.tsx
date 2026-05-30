@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, PluginWidgetInstance, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, PluginWidgetInstance, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView, findNodeLabel } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
@@ -52,7 +52,7 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
 
 
 function WorkspaceShellInner() {
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, pluginWidgets, connected } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, pluginWidgets, connected } = useBackendState()
 
   // Force a re-render once the plugin boot pipeline completes so that any
   // plugin widgets already in the SSE snapshot (e.g. on page reload) switch
@@ -109,7 +109,7 @@ function WorkspaceShellInner() {
   // Filter out empty entity containers when showEmptyEntities is false
   const filterEmptyNodes = useCallback((nodes: TreeNode[]): TreeNode[] => {
     return nodes.reduce<TreeNode[]>((acc, node) => {
-      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' || node.type === 'nats-traffic') {
+      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer') {
         acc.push(node)
         return acc
       }
@@ -209,27 +209,6 @@ function WorkspaceShellInner() {
     return map
   }, [imageWidgets])
 
-  const syntheticNatsTrafficNodes: TreeNode[] = useMemo(
-    () =>
-      natsTrafficWidgets.map(w => ({
-        id: w.id,
-        label: w.sessionId ? `NATS (${w.sessionId})` : 'NATS Traffic',
-        type: 'nats-traffic' as const,
-        entityId: w.id,
-        children: [],
-        runCount: 0,
-        activeCount: 0,
-        color: w.color,
-      })),
-    [natsTrafficWidgets],
-  )
-
-  const natsTrafficWidgetMap = useMemo(() => {
-    const map = new Map<string, NatsTrafficWidget>()
-    for (const w of natsTrafficWidgets) map.set(w.id, w)
-    return map
-  }, [natsTrafficWidgets])
-
   const syntheticPluginWidgetNodes: TreeNode[] = useMemo(
     () =>
       pluginWidgets.map(w => ({
@@ -255,7 +234,7 @@ function WorkspaceShellInner() {
   const pluginWidgetIdSet = useMemo(() => new Set(pluginWidgets.map(w => w.id)), [pluginWidgets])
 
   const canvasTree = useMemo(() => {
-    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticNatsTrafficNodes, ...syntheticPluginWidgetNodes]
+    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticPluginWidgetNodes]
     if (allSynthetic.length === 0) return sidebarTree
 
     // Map taskNodeId → synthetic nodes to nest inside it
@@ -300,11 +279,6 @@ function WorkspaceShellInner() {
       }
     }
 
-    // Add NATS traffic widgets as orphans (top-level, not associated with tasks)
-    for (const node of syntheticNatsTrafficNodes) {
-      orphans.push(node)
-    }
-
     // Add plugin widgets as orphans (top-level, no entity anchor)
     for (const node of syntheticPluginWidgetNodes) {
       orphans.push(node)
@@ -322,7 +296,7 @@ function WorkspaceShellInner() {
     }
 
     return [...inject(sidebarTree), ...orphans]
-  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticNatsTrafficNodes, syntheticPluginWidgetNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
+  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticPluginWidgetNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
 
   // Canvas view: drop run nodes the user has hidden via the eyeball. The sidebar
   // still shows them (dimmed) so the user can re-show them.
@@ -350,7 +324,6 @@ function WorkspaceShellInner() {
     for (const w of editorWidgets) ids.push(w.id)
     for (const w of browserWidgets) ids.push(w.id)
     for (const w of imageWidgets) ids.push(w.id)
-    for (const w of natsTrafficWidgets) ids.push(w.id)
     // Plugin widgets must be included too: useConstellations prunes any slot
     // member missing from this list (and persists the prune). Omitting them
     // evicted plugin widgets (e.g. stretchplan) from their constellation slot
@@ -358,7 +331,7 @@ function WorkspaceShellInner() {
     // the user manually re-snapped the widget.
     for (const w of pluginWidgets) ids.push(w.id)
     return ids
-  }, [runMap, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, pluginWidgets])
+  }, [runMap, editorWidgets, browserWidgets, imageWidgets, pluginWidgets])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
@@ -491,10 +464,6 @@ function WorkspaceShellInner() {
     }
     if (type === 'image-viewer') {
       apiFetch(`/api/image-widgets/${entityId}`, { method: 'DELETE' })
-      return
-    }
-    if (type === 'nats-traffic') {
-      apiFetch(`/api/nats-traffic-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
     const endpointMap: Record<string, string> = {
@@ -632,11 +601,6 @@ function WorkspaceShellInner() {
     if (selectedType === 'file-editor') {
       const label = findNodeLabel(canvasTree, firstNodeId) ?? 'File'
       return { id: firstNodeId, type: 'file-editor', label }
-    }
-
-    if (selectedType === 'nats-traffic') {
-      const label = findNodeLabel(canvasTree, firstNodeId) ?? 'NATS Traffic'
-      return { id: firstNodeId, type: 'nats-traffic' as any, label }
     }
 
     if (selectedType === 'browser-widget') {
@@ -988,7 +952,6 @@ function WorkspaceShellInner() {
                     editorWidgetMap={editorWidgetMap}
                     browserWidgetMap={browserWidgetMap}
                     imageWidgetMap={imageWidgetMap}
-                    natsTrafficWidgetMap={natsTrafficWidgetMap}
                     pluginWidgetMap={pluginWidgetMap}
                     runMap={runMap}
                     focusRunId={focusRunId}
@@ -1002,7 +965,6 @@ function WorkspaceShellInner() {
                     onImageWidgetCreated={(widget) => addOptimistic('imageWidget', widget)}
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
                     onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
-                    onNatsWidgetCreated={(widget) => addOptimistic('natsTrafficWidget', widget)}
                     onPluginWidgetCreated={(instance) => addOptimistic('pluginWidget', instance)}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}

@@ -17,7 +17,6 @@ import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 import { BindingRow, GLOBAL_KEYS, CANVAS_KEYS, QUICKDRAW_KEYS } from './HotkeyBindingRow'
 import { AgentIcon, isIconUrl } from './agentIcon'
-import { apiFetch } from '../apiClient'
 import { usePluginWidgetRegistry } from '../hooks/usePluginWidgetRegistry'
 
 /** widgetType → resolved icon, so plugin-widget hierarchy rows show the plugin's own icon. */
@@ -152,7 +151,6 @@ const WORK_WIDGET_META: Record<string, { icon: string; closeable: boolean }> = {
   'file-editor':    { icon: '📄', closeable: true  },
   'browser-widget': { icon: '🌐', closeable: true  },
   'image-viewer':   { icon: '🖼️', closeable: true  },
-  'nats-traffic':   { icon: '📡', closeable: true  },
 }
 
 /** Return inline style for a colored status dot on run nodes */
@@ -764,7 +762,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
   )
 
   const commitSelection = useCallback((node: FlatNode) => {
-    select(node.id, node.type as GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic')
+    select(node.id, node.type as GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer')
     if (node.type === 'run' && onFocusRun) onFocusRun(node.id)
     // Scroll the row into view after React commits
     requestAnimationFrame(() => {
@@ -1072,13 +1070,6 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
       {/* Tools section */}
       <div className="border-t border-white/10 px-3 py-2 flex items-center gap-2">
         <span className="text-2xs text-slate-500 uppercase tracking-wider">Tools</span>
-        <button
-          className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-          onClick={() => apiFetch('/api/nats-traffic-widgets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })}
-          title="Open NATS Traffic Monitor"
-        >
-          <span className="material-symbols-outlined text-base">cell_tower</span>
-        </button>
         {(onArrangeGrid || onArrangeSwimlanes || onArrangeReset) && (
           <div className="w-px h-4 bg-white/10 mx-1" />
         )}
