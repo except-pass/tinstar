@@ -23,6 +23,12 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
       () => resolveBinding({ inConstellation: slots.length > 0, peers }),
       [slots.length, peers],
     )
+    // Primitive identity for the current binding. `binding` (and `peers`) get a
+    // fresh object identity every render, so effects must key off this string —
+    // not the object — to fire only when the binding actually changes.
+    const bindingKey = binding.mode === 'runs'
+      ? `runs:${[...binding.runIds].sort().join(',')}`
+      : binding.mode
 
     // Resolve subjects (+ accent) for bound runs via the session.nats capability.
     const [subjects, setSubjects] = useState<string[]>([])
@@ -43,7 +49,7 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
         if (JSON.stringify(prevIds) !== JSON.stringify(runIds)) setData({ boundRunIds: runIds })
       })()
       return () => { cancelled = true }
-    }, [binding, invoke])
+    }, [bindingKey, invoke])
 
     // Collect nats_traffic, filter by mode.
     const [events, setEvents] = useState<TrafficEvent[]>([])
@@ -52,6 +58,15 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
     const rafRef = useRef<number | null>(null)
     const subjectsRef = useRef(subjects); subjectsRef.current = subjects
     const modeRef = useRef(binding.mode); modeRef.current = binding.mode
+
+    // Re-binding to a different session (or mode) must drop the previous
+    // binding's accumulated traffic — otherwise stale cross-session rows linger
+    // until they age past MAX_EVENTS. Also discard any in-flight batch.
+    useEffect(() => {
+      setEvents([])
+      batchRef.current = []
+    }, [bindingKey])
+
     useEffect(() => {
       const flush = () => {
         rafRef.current = null
