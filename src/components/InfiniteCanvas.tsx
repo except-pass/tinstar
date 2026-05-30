@@ -10,8 +10,8 @@ import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useConstellationContext } from '../hotkeys/ConstellationContext'
 import type { ConstellationSlot } from '../hooks/useConstellations'
-import { applyAssign } from '../hooks/useConstellationGraph'
-import { addSnap } from '../domain/constellationGraph'
+import { applyAssign, nextFreeSlot } from '../hooks/useConstellationGraph'
+import { addSnap, planBreak, addMember, removeMember, removeSnap } from '../domain/constellationGraph'
 import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
 import { PluginWidgetDisabledPlaceholder } from './PluginWidgetDisabledPlaceholder'
@@ -21,7 +21,7 @@ import { apiFetch } from '../apiClient'
 import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
 import type { Rect } from '../canvas/constellationCohesion'
-import { applyGroupDrag, boundingBoxOf, fitToRect, planLinkBreak } from '../canvas/constellationCohesion'
+import { applyGroupDrag, boundingBoxOf, fitToRect } from '../canvas/constellationCohesion'
 import { tidyGrid } from '../canvas/tidyArrange'
 import type { DragMember } from '../canvas/constellationCohesion'
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
@@ -1669,12 +1669,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
               onBreak={(aId, bId) => {
                 // Break only this seam: split the constellation along it. Larger side keeps the
                 // slot; the smaller side becomes its own group (≥2) or is freed (lone widget).
-                const plan = planLinkBreak(members, aId, bId)
-                for (const id of plan.removeFromSlot) constellations.remove(slot, id)
-                if (plan.newGroup.length >= 2) {
-                  const free = (['1','2','3','4','5','6','7','8','9'] as const).find(s => !occupiedSlots.has(s))
-                  if (free) for (const id of plan.newGroup) constellations.assign(free, id)
+                const plan = planBreak(constellations.graph, aId, bId, slot)
+                let next = removeSnap(constellations.graph, aId, bId)
+                for (const id of plan.removeFromSlot) next = removeMember(next, id, slot)
+                if (plan.newGroup.length > 0) {
+                  const free = nextFreeSlot(next)
+                  if (free) for (const id of plan.newGroup) next = addMember(next, id, free)
                 }
+                constellations.applyGraph(next)
               }}
             />
           )
