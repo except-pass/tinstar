@@ -201,6 +201,16 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
     })
   }, [run.id])
 
+  // Publish the `session.nats` capability so constellation peers (e.g. Saloon)
+  // can retrieve the run's NATS subscriptions, session id, and accent color.
+  useEffect(() => {
+    return capabilityRegistry.publish(`run-${run.id}`, 'session.nats', async () => ({
+      sessionId: run.sessionId,
+      subscriptions: run.natsSubscriptions ?? (run.natsSubject ? [run.natsSubject] : []),
+      color: run.color,
+    }))
+  }, [run.id, run.sessionId, run.natsSubscriptions, run.natsSubject, run.color])
+
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
     e.stopPropagation()
