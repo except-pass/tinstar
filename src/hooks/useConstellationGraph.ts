@@ -56,6 +56,13 @@ export function useConstellationGraph(spaceId: string) {
   const apply = useCallback((compute: (g: ConstellationGraph) => ConstellationGraph) => {
     const base = optimisticRef.current ?? serverGraphRef.current
     const next = compute(base)
+    // No-op vs the server's current doc: skip the PUT (the docstore would
+    // short-circuit it and emit no echo, which would leave the overlay stuck)
+    // and drop any overlay so reads fall back to serverGraph.
+    if (JSON.stringify(next) === JSON.stringify(serverGraphRef.current)) {
+      if (optimisticRef.current) { optimisticRef.current = null; bump() }
+      return
+    }
     optimisticRef.current = next
     bump()
     apiFetch(`/api/constellation-graph/${encodeURIComponent(spaceId)}`, {
