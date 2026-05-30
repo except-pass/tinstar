@@ -23,6 +23,7 @@ import { dirname } from 'node:path'
 import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
+import type { ConstellationGraph } from '../../domain/constellationGraph'
 
 /** Translate a run's status into a default attention signal.
  *  Returns null when the inbox shouldn't surface the run. */
@@ -116,6 +117,7 @@ export class DocumentStore {
   private natsTrafficWidgets = new Map<string, NatsTrafficWidget>()
   private topicMetadata = new Map<string, TopicMetadata>()
   private pluginWidgets = new Map<string, PluginWidgetInstance>()
+  private constellationGraphs = new Map<string, ConstellationGraph>()
 
   activeSpaceId: string = ''
 
@@ -154,6 +156,7 @@ export class DocumentStore {
       if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
       if (data.natsTrafficWidgets) for (const w of data.natsTrafficWidgets) this.natsTrafficWidgets.set(w.id, w)
       if (data.pluginWidgets) for (const w of data.pluginWidgets) this.pluginWidgets.set(w.id, w)
+      if (data.constellationGraphs) for (const g of data.constellationGraphs) this.constellationGraphs.set(g.spaceId, g)
       if (data.topicMetadata) for (const m of data.topicMetadata) this.topicMetadata.set(m.subject, m)
     } catch {
       // No file or corrupt — start fresh
@@ -496,6 +499,21 @@ export class DocumentStore {
     return [...this.pluginWidgets.values()]
   }
 
+  // --- ConstellationGraph (per-space membership graph) ---
+
+  upsertConstellationGraph(spaceId: string, data: ConstellationGraph): void {
+    this.constellationGraphs.set(spaceId, data)
+    this.changes.emit('change', { entity: 'constellationGraph', id: spaceId, data })
+  }
+
+  getConstellationGraph(spaceId: string): ConstellationGraph | undefined {
+    return this.constellationGraphs.get(spaceId)
+  }
+
+  getAllConstellationGraphs(): ConstellationGraph[] {
+    return [...this.constellationGraphs.values()]
+  }
+
   // --- Image Widgets ---
 
   upsertImageWidget(id: string, data: ImageWidget): void {
@@ -568,6 +586,7 @@ export class DocumentStore {
       imageWidgets: this.getAllImageWidgets().filter(inSpace),
       natsTrafficWidgets: this.getAllNatsTrafficWidgets().filter(inSpace),
       pluginWidgets: this.getAllPluginWidgets().filter(inSpace),
+      constellationGraphs: this.getAllConstellationGraphs().filter(inSpace),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -588,6 +607,7 @@ export class DocumentStore {
       imageWidgets: this.getAllImageWidgets(),
       natsTrafficWidgets: this.getAllNatsTrafficWidgets(),
       pluginWidgets: this.getAllPluginWidgets(),
+      constellationGraphs: this.getAllConstellationGraphs(),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
