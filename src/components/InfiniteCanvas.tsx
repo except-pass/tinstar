@@ -10,6 +10,8 @@ import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useConstellationContext } from '../hotkeys/ConstellationContext'
 import type { ConstellationSlot } from '../hooks/useConstellations'
+import { applyAssign } from '../hooks/useConstellationGraph'
+import { addSnap } from '../domain/constellationGraph'
 import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
 import { PluginWidgetDisabledPlaceholder } from './PluginWidgetDisabledPlaceholder'
@@ -710,11 +712,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           )
         : null
       const commit = resolveSnapCommit(validatedPreview, slotByNode, occupiedSlots)
-      if (commit.kind === 'join') {
-        constellations.assign(commit.slot, nodeId)
+      if (commit.kind === 'join' && validatedPreview) {
+        let next = applyAssign(constellations.graph, commit.slot, nodeId)
+        next = addSnap(next, nodeId, validatedPreview.targetId)
+        constellations.applyGraph(next)
       } else if (commit.kind === 'form') {
-        constellations.assign(commit.slot, nodeId)
-        constellations.assign(commit.slot, commit.withId)
+        let next = applyAssign(constellations.graph, commit.slot, nodeId)
+        next = applyAssign(next, commit.slot, commit.withId)
+        next = addSnap(next, nodeId, commit.withId)
+        constellations.applyGraph(next)
       } else {
         const unsnapped = lastUnsnappedDragPositionRef.current
         if (unsnapped) updateRunPosition(nodeId, unsnapped.x, unsnapped.y)
