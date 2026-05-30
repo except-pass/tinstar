@@ -44,6 +44,7 @@ describe('constellationGraph', () => {
   it('planBreak: cut that does not disconnect changes nothing', () => {
     let g = emptyGraph('s')
     g = addSnap(g, 'a', 'b'); g = addSnap(g, 'b', 'c'); g = addSnap(g, 'a', 'c')
+    for (const id of ['a', 'b', 'c']) g = addMember(g, id, '1')
     expect(planBreak(g, 'a', 'b', '1')).toEqual({ removeFromSlot: [], newGroup: [] })
   })
 
@@ -51,6 +52,7 @@ describe('constellationGraph', () => {
     let g = emptyGraph('s')
     g = addSnap(g, 'a', 'b'); g = addSnap(g, 'b', 'c')
     g = addSnap(g, 'c', 'd'); g = addSnap(g, 'd', 'e')
+    for (const id of ['a', 'b', 'c', 'd', 'e']) g = addMember(g, id, '1')
     const plan = planBreak(g, 'c', 'd', '1')
     expect(plan.removeFromSlot.sort()).toEqual(['d', 'e'])
     expect(plan.newGroup.sort()).toEqual(['d', 'e'])
@@ -58,6 +60,7 @@ describe('constellationGraph', () => {
 
   it('planBreak: stranded singleton leaves with no new group', () => {
     let g = addSnap(emptyGraph('s'), 'a', 'b')
+    g = addMember(g, 'a', '1'); g = addMember(g, 'b', '1')
     const plan = planBreak(g, 'a', 'b', '1')
     expect(plan.removeFromSlot.sort()).toEqual(['a', 'b'])
     expect(plan.newGroup).toEqual([])

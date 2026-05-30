@@ -68,10 +68,8 @@ export function nodesInSlot(g: ConstellationGraph, slot: string): string[] {
 export interface BreakPlan { removeFromSlot: string[]; newGroup: string[] }
 
 export function planBreak(g: ConstellationGraph, aId: string, bId: string, slot: ConstellationSlot): BreakPlan {
-  // Node set: the slot's members, or (when the slot has no member edges, e.g. in
-  // unit tests) all nodes referenced by snap edges.
-  const members = nodesInSlot(g, slot)
-  const ids = new Set<string>(members.length > 0 ? members : g.snapped.flat())
+  // Connectivity is computed over the snap edges among this slot's members.
+  const ids = new Set<string>(nodesInSlot(g, slot))
   const adj = new Map<string, Set<string>>()
   for (const id of ids) adj.set(id, new Set())
   for (const [p, q] of g.snapped) {
@@ -89,6 +87,9 @@ export function planBreak(g: ConstellationGraph, aId: string, bId: string, slot:
   if (compA.has(bId)) return { removeFromSlot: [], newGroup: [] } // still connected
   const sideA = [...ids].filter(id => compA.has(id))
   const sideB = [...ids].filter(id => !compA.has(id))
+  // `other` is the smaller side by construction, so it always leaves the slot.
+  // `keep` only leaves too when it's been reduced to a lone widget (no 1-member
+  // constellations). `other` forms its own group only if it still has ≥2 members.
   const [keep, other] = sideA.length >= sideB.length ? [sideA, sideB] : [sideB, sideA]
   const removeFromSlot = [...other]
   if (keep.length < 2) removeFromSlot.push(...keep)
