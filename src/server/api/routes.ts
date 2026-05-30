@@ -2106,7 +2106,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const graph = JSON.parse(body) as import('../../domain/constellationGraph').ConstellationGraph
       ctx.docStore.upsertConstellationGraph(spaceId, { ...graph, spaceId })
       ok(res, { ok: true })
-    })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
     return true
   }
 

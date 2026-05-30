@@ -133,6 +133,16 @@ describe('PUT /api/constellation-graph/:spaceId', () => {
     expect(stored!.spaceId).toBe(SPACE_ID)
   })
 
+  it('returns 400 on a malformed JSON body instead of hanging', async () => {
+    const res = await testCtx.fetch(`/api/constellation-graph/${SPACE_ID}`, {
+      method: 'PUT',
+      body: '{ not json',
+    })
+
+    expect(res.status).toBe(400)
+    expect(testCtx.docStore.getConstellationGraph(SPACE_ID)).toBeUndefined()
+  })
+
   it('handles URL-encoded spaceId', async () => {
     const encodedSpaceId = 'space%2F1'
     const decodedSpaceId = 'space/1'
