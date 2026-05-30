@@ -1,5 +1,5 @@
 import { boundingBoxOf, computeBreakLinks, type IdRect } from './constellationCohesion'
-import type { ConstellationSlot } from '../hooks/useConstellations'
+import type { ConstellationSlot } from '../domain/constellationGraph'
 
 interface Props {
   slot: ConstellationSlot

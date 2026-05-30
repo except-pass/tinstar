@@ -20,6 +20,20 @@ describe('DocumentStore constellationGraph', () => {
     expect((last.data as { spaceId: string }).spaceId).toBe('space-1')
   })
 
+  it('prunes graph edges referencing a deleted plugin widget', () => {
+    const store = new DocumentStore()
+    let g = addSnap(emptyGraph('space-1'), 'pw-a', 'run-R1')
+    g = { ...g, members: [{ widget: 'pw-a', slot: '1' }, { widget: 'run-R1', slot: '1' }] }
+    store.upsertConstellationGraph('space-1', g)
+    store.upsertPluginWidget('pw-a', { id: 'pw-a', pluginId: 'p', widgetType: 'saloon', spaceId: 'space-1', position: { x: 0, y: 0 }, size: { width: 1, height: 1 }, data: {}, createdAt: '', updatedAt: '' })
+
+    store.deletePluginWidget('pw-a')
+
+    const after = store.getConstellationGraph('space-1')!
+    expect(after.snapped).toEqual([])                      // snap edge gone
+    expect(after.members.map(m => m.widget)).toEqual([])   // run-R1 freed (was left a singleton)
+  })
+
   it('includes constellationGraphs in the snapshot, filtered by active space', () => {
     const store = new DocumentStore()
     store.upsertConstellationGraph('space-1', emptyGraph('space-1'))

@@ -315,6 +315,7 @@ export class DocumentStore {
     if (this.runs.has(id)) {
       this.runs.delete(id)
       this.changes.emit('change', { entity: 'run', id, data: null })
+      this.pruneWidgetFromGraphs(`run-${id}`)
       return
     }
     // Simulator runs are keyed by run id (R-xxx) but deleted by session name (CLD-xxx)
@@ -322,6 +323,7 @@ export class DocumentStore {
       if (run.sessionId === id) {
         this.runs.delete(key)
         this.changes.emit('change', { entity: 'run', id: key, data: null })
+        this.pruneWidgetFromGraphs(`run-${key}`)
         return
       }
     }
@@ -431,6 +433,7 @@ export class DocumentStore {
   deleteEditorWidget(id: string): void {
     this.editorWidgets.delete(id)
     this.changes.emit('change', { entity: 'editorWidget', id, data: null })
+    this.pruneWidgetFromGraphs(id)
   }
 
   getAllEditorWidgets(): EditorWidget[] {
@@ -447,6 +450,7 @@ export class DocumentStore {
   deleteBrowserWidget(id: string): void {
     this.browserWidgets.delete(id)
     this.changes.emit('change', { entity: 'browserWidget', id, data: null })
+    this.pruneWidgetFromGraphs(id)
   }
 
   getAllBrowserWidgets(): BrowserWidget[] {
@@ -493,6 +497,7 @@ export class DocumentStore {
   deletePluginWidget(id: string): void {
     this.pluginWidgets.delete(id)
     this.changes.emit('change', { entity: 'pluginWidget', id, data: null })
+    this.pruneWidgetFromGraphs(id)
   }
 
   getAllPluginWidgets(): PluginWidgetInstance[] {
@@ -500,6 +505,20 @@ export class DocumentStore {
   }
 
   // --- ConstellationGraph (per-space membership graph) ---
+
+  private pruneWidgetFromGraphs(widgetId: string): void {
+    for (const [spaceId, g] of this.constellationGraphs) {
+      const snapped = g.snapped.filter(([a, b]) => a !== widgetId && b !== widgetId)
+      let members = g.members.filter(m => m.widget !== widgetId)
+      // Free any slot left with a single member (no 1-member constellations).
+      const countBySlot = new Map<string, number>()
+      for (const m of members) countBySlot.set(m.slot, (countBySlot.get(m.slot) ?? 0) + 1)
+      members = members.filter(m => (countBySlot.get(m.slot) ?? 0) >= 2)
+      if (snapped.length !== g.snapped.length || members.length !== g.members.length) {
+        this.upsertConstellationGraph(spaceId, { ...g, snapped, members })
+      }
+    }
+  }
 
   upsertConstellationGraph(spaceId: string, data: ConstellationGraph): void {
     // No-op short-circuit (docstore mutator contract): avoid redundant SSE
@@ -528,6 +547,7 @@ export class DocumentStore {
   deleteImageWidget(id: string): void {
     this.imageWidgets.delete(id)
     this.changes.emit('change', { entity: 'imageWidget', id, data: null })
+    this.pruneWidgetFromGraphs(id)
   }
 
   getAllImageWidgets(): ImageWidget[] {

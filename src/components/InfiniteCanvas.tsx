@@ -9,7 +9,7 @@ import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegi
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useConstellationContext } from '../hotkeys/ConstellationContext'
-import type { ConstellationSlot } from '../hooks/useConstellations'
+import type { ConstellationSlot } from '../domain/constellationGraph'
 import { applyAssign, nextFreeSlot } from '../hooks/useConstellationGraph'
 import { addSnap, planBreak, addMember, removeMember, removeSnap } from '../domain/constellationGraph'
 import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
@@ -214,7 +214,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // Constellation group-drag: snapshot of ALL members' start positions (including dragged widget)
   const constellationDragSnapshot = useRef<Map<string, { x: number; y: number }> | null>(null)
   // Which constellation slot the current drag belongs to (null = no constellation drag)
-  const constellationDragSlot = useRef<import('../hooks/useConstellations').ConstellationSlot | null>(null)
+  const constellationDragSlot = useRef<import('../domain/constellationGraph').ConstellationSlot | null>(null)
   // Whether alt was held at drag-start (triggers pop-out on drag-end)
   const altHeldAtDragStart = useRef(false)
 
@@ -603,8 +603,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   // Memoized inverted index: nodeId → slot (first slot only) and occupied slot set
   const slotByNode = useMemo(() => {
-    const map = new Map<string, import('../hooks/useConstellations').ConstellationSlot>()
-    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../hooks/useConstellations').ConstellationSlot, string[]][]) {
+    const map = new Map<string, import('../domain/constellationGraph').ConstellationSlot>()
+    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../domain/constellationGraph').ConstellationSlot, string[]][]) {
       for (const id of nodeIds) {
         if (!map.has(id)) map.set(id, slot)
       }
@@ -613,8 +613,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   }, [constellations.store])
 
   const occupiedSlots = useMemo(() => {
-    const set = new Set<import('../hooks/useConstellations').ConstellationSlot>()
-    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../hooks/useConstellations').ConstellationSlot, string[]][]) {
+    const set = new Set<import('../domain/constellationGraph').ConstellationSlot>()
+    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../domain/constellationGraph').ConstellationSlot, string[]][]) {
       if (nodeIds.length > 0) set.add(slot)
     }
     return set

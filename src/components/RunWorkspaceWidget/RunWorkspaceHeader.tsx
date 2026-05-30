@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo, type PointerEvent as
 import { createPortal } from 'react-dom'
 import type { RunData, SessionStatus } from '../../types'
 import { useConstellationContext } from '../../hotkeys/ConstellationContext'
-import type { ConstellationSlot } from '../../hooks/useConstellations'
+import type { ConstellationSlot } from '../../domain/constellationGraph'
 import { useBackendState } from '../../hooks/useBackendState'
 import { ConstellationBadge } from '../ConstellationBadge'
 import { hexToRgba, resolveRunAccent } from '../runAccent'

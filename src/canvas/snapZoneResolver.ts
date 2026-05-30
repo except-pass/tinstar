@@ -1,4 +1,4 @@
-import type { ConstellationSlot } from '../hooks/useConstellations'
+import type { ConstellationSlot } from '../domain/constellationGraph'
 import type { Rect } from './constellationCohesion'
 
 export interface SnapWidget extends Rect {

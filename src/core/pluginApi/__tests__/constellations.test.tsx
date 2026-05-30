@@ -6,7 +6,7 @@ import type { PluginRecord } from '../../pluginHost/registry'
 import type { PluginManifest } from '@tinstar/plugin-api'
 import { createPluginApi } from '../createApi'
 import { ConstellationProvider, useConstellationContext } from '../../../hotkeys/ConstellationContext'
-import type { ConstellationSlot } from '../../../hooks/useConstellations'
+import type { ConstellationSlot } from '../../../domain/constellationGraph'
 import { capabilityRegistry } from '../../constellationCapabilities'
 import { WidgetIdProvider } from '../widgetIdContext'
 
