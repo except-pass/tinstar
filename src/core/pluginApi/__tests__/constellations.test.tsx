@@ -104,7 +104,7 @@ describe('api.constellations.usePeers + publishCapability', () => {
     // re-observes peers after the seed + capability publish settle.
     await act(async () => { await new Promise(r => setTimeout(r, 0)) })
     expect(observed).toEqual([
-      { id: 'editor-peer', kind: 'file-editor', capabilities: ['echo'] },
+      { id: 'editor-peer', kind: 'file-editor', capabilities: ['echo'], snapped: false },
     ])
   })
 

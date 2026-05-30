@@ -128,6 +128,8 @@ export interface ConstellationPeer {
   kind: string
   /** Names of capabilities the peer has currently published. */
   capabilities: string[]
+  /** True when this peer shares a `snapped` edge with the calling widget. */
+  snapped: boolean
 }
 
 /** Constellation (keyboard slot) integration: read which slots a widget belongs to,

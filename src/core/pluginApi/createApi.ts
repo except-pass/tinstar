@@ -18,6 +18,17 @@ import { EventBridge } from './eventBridge'
 import { useWidgetId } from './widgetIdContext'
 import { capabilityRegistry } from '../constellationCapabilities'
 
+/** Pure helper: annotate each peer with `snapped: true` if it shares a
+ *  direct snap edge with `myId`, according to `snapNeighborsOf`. */
+export function markSnapped(
+  myId: string,
+  peers: Array<{ id: string; kind: string; capabilities: string[] }>,
+  snapNeighborsOf: (id: string) => string[],
+): Array<{ id: string; kind: string; capabilities: string[]; snapped: boolean }> {
+  const mine = new Set(snapNeighborsOf(myId))
+  return peers.map(p => ({ ...p, snapped: mine.has(p.id) }))
+}
+
 /** Derive a coarse widget "kind" from its full node id. Mirrors the
  *  prefix convention the host uses when constructing TreeNode ids
  *  (see src/domain/grouping.ts and the widget render path). */
@@ -154,11 +165,12 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
       if (slots.length === 0) return []
       const slot = slots[0]!
       const peerIds = ctx.nodesInSlot(slot).filter((id) => id !== widgetId)
-      return peerIds.map((id) => ({
+      const raw = peerIds.map((id) => ({
         id,
         kind: kindOfWidgetId(id),
         capabilities: capabilityRegistry.capabilitiesOf(id),
       }))
+      return markSnapped(widgetId, raw, (id) => ctx.snapNeighbors(id))
     },
 
     usePublishCapability(): (
