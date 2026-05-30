@@ -184,6 +184,9 @@ export function _resetServerEventsForTests(): void {
 
 function startSSE() {
   if (es) return
+  // No EventSource in non-browser environments (SSR, jsdom tests) — stay
+  // disconnected rather than throwing on mount.
+  if (typeof EventSource === 'undefined') return
 
   const devBase =
     import.meta.env.DEV && typeof __TINSTAR_BACKEND_PORT__ !== 'undefined'

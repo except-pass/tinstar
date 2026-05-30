@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import { useServerEvents } from './useServerEvents'
 import { apiFetch } from '../apiClient'
 import {
@@ -28,12 +28,36 @@ export function applyRemove(g: ConstellationGraph, slot: ConstellationSlot, node
 
 export function useConstellationGraph(spaceId: string) {
   const { state } = useServerEvents()
-  const graph = useMemo<ConstellationGraph>(
+  const serverGraph = useMemo<ConstellationGraph>(
     () => state.constellationGraphs.find(g => g.spaceId === spaceId) ?? emptyGraph(spaceId),
     [state.constellationGraphs, spaceId],
   )
 
-  const persist = useCallback((next: ConstellationGraph) => {
+  // Optimistic working copy held in a ref so back-to-back mutations in the same
+  // tick compose off the latest value (not a stale render snapshot), then fire a
+  // single PUT each. The overlay is dropped once the server echoes the matching
+  // graph back via SSE; until then the UI reflects the local edits immediately
+  // (snappy). The server stores the doc verbatim, so the echo equals what we
+  // set — clearing only on an exact match avoids reverting newer in-flight edits.
+  const optimisticRef = useRef<ConstellationGraph | null>(null)
+  const serverGraphRef = useRef(serverGraph)
+  serverGraphRef.current = serverGraph
+  const [, bump] = useReducer((n: number) => n + 1, 0)
+
+  useEffect(() => {
+    if (optimisticRef.current && JSON.stringify(optimisticRef.current) === JSON.stringify(serverGraph)) {
+      optimisticRef.current = null
+      bump()
+    }
+  }, [serverGraph])
+
+  const graph = optimisticRef.current ?? serverGraph
+
+  const apply = useCallback((compute: (g: ConstellationGraph) => ConstellationGraph) => {
+    const base = optimisticRef.current ?? serverGraphRef.current
+    const next = compute(base)
+    optimisticRef.current = next
+    bump()
     apiFetch(`/api/constellation-graph/${encodeURIComponent(spaceId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -41,11 +65,11 @@ export function useConstellationGraph(spaceId: string) {
     }).catch(err => console.warn('[constellation] persist failed:', err))
   }, [spaceId])
 
-  const assign = useCallback((slot: ConstellationSlot, nodeId: string) => persist(applyAssign(graph, slot, nodeId)), [graph, persist])
-  const remove = useCallback((slot: ConstellationSlot, nodeId: string) => persist(applyRemove(graph, slot, nodeId)), [graph, persist])
-  const addSnapEdge = useCallback((a: string, b: string) => persist(addSnap(graph, a, b)), [graph, persist])
-  const removeSnapEdge = useCallback((a: string, b: string) => persist(removeSnap(graph, a, b)), [graph, persist])
-  const applyGraph = useCallback((next: ConstellationGraph) => persist(next), [persist])
+  const assign = useCallback((slot: ConstellationSlot, nodeId: string) => apply(g => applyAssign(g, slot, nodeId)), [apply])
+  const remove = useCallback((slot: ConstellationSlot, nodeId: string) => apply(g => applyRemove(g, slot, nodeId)), [apply])
+  const addSnapEdge = useCallback((a: string, b: string) => apply(g => addSnap(g, a, b)), [apply])
+  const removeSnapEdge = useCallback((a: string, b: string) => apply(g => removeSnap(g, a, b)), [apply])
+  const applyGraph = useCallback((next: ConstellationGraph) => apply(() => next), [apply])
 
   const store = useMemo<Record<string, string[]>>(() => {
     const out: Record<string, string[]> = {}
