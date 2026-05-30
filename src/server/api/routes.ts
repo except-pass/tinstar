@@ -2099,6 +2099,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // PUT /api/constellation-graph/:spaceId — replace a space's membership graph (whole-doc, atomic)
+  if (method === 'PUT' && url.startsWith('/api/constellation-graph/')) {
+    const spaceId = decodeURIComponent(url.slice('/api/constellation-graph/'.length))
+    readBody(req).then(body => {
+      const graph = JSON.parse(body) as import('../../domain/constellationGraph').ConstellationGraph
+      ctx.docStore.upsertConstellationGraph(spaceId, { ...graph, spaceId })
+      ok(res, { ok: true })
+    })
+    return true
+  }
+
   // GET /api/plugin-widgets/registry — palette UI lists available widget types
   if (method === 'GET' && url === '/api/plugin-widgets/registry') {
     const configRoot = ctx.sessionConfig?.dirs.root
