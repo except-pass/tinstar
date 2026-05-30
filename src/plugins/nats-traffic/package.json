@@ -5,11 +5,11 @@
   "main": "src/index.tsx",
   "tinstar": {
     "apiVersion": "5",
-    "displayName": "NATS traffic",
-    "description": "Inspect agent messages flowing through the broker",
+    "displayName": "Saloon",
+    "description": "Watch a session's NATS traffic",
     "contributes": {
       "widgets": [
-        { "type": "nats-traffic", "label": "NATS traffic", "defaultSize": { "width": 1200, "height": 600 } }
+        { "type": "saloon", "label": "Saloon", "defaultSize": { "width": 1200, "height": 600 } }
       ]
     },
     "permissions": ["nats:subscribe"]
