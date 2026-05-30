@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   emptyGraph, addSnap, removeSnap, snapNeighbors,
   addMember, removeMember, slotsForNode, nodesInSlot,
-  planBreak, type ConstellationGraph,
+  planBreak,
 } from './constellationGraph'
 
 describe('constellationGraph', () => {
