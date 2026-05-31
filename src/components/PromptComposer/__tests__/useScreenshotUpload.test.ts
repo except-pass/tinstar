@@ -39,8 +39,8 @@ describe('useScreenshotUpload', () => {
     })
     expect(returned).toEqual({ path: '/abs/path/to/file.png', ocrText: undefined })
     expect(result.current.tiles).toHaveLength(1)
-    expect(result.current.tiles[0].status).toBe('ready')
-    expect(result.current.tiles[0].path).toBe('/abs/path/to/file.png')
+    expect(result.current.tiles[0]!.status).toBe('ready')
+    expect(result.current.tiles[0]!.path).toBe('/abs/path/to/file.png')
     expect(result.current.pendingCount).toBe(0)
   })
 
@@ -55,7 +55,7 @@ describe('useScreenshotUpload', () => {
       returned = await result.current.startUpload(fakeBlob())
     })
     expect(returned).toEqual({ path: '/abs/shot.png', ocrText: 'hello world' })
-    expect(result.current.tiles[0].ocrText).toBe('hello world')
+    expect(result.current.tiles[0]!.ocrText).toBe('hello world')
   })
 
   it('marks the tile as error if fetch returns non-200', async () => {
@@ -69,8 +69,8 @@ describe('useScreenshotUpload', () => {
       try { await result.current.startUpload(fakeBlob()) } catch { /* swallow */ }
     })
     expect(result.current.tiles).toHaveLength(1)
-    expect(result.current.tiles[0].status).toBe('error')
-    expect(result.current.tiles[0].errorMessage).toBe('bad mime')
+    expect(result.current.tiles[0]!.status).toBe('error')
+    expect(result.current.tiles[0]!.errorMessage).toBe('bad mime')
   })
 
   it('removeTile drops a tile by clientId', async () => {
@@ -79,7 +79,7 @@ describe('useScreenshotUpload', () => {
       await result.current.startUpload(fakeBlob())
     })
     expect(result.current.tiles).toHaveLength(1)
-    const clientId = result.current.tiles[0].clientId
+    const clientId = result.current.tiles[0]!.clientId
     act(() => { result.current.removeTile(clientId) })
     expect(result.current.tiles).toHaveLength(0)
   })
@@ -93,7 +93,7 @@ describe('useScreenshotUpload', () => {
       ])
     })
     expect(result.current.tiles).toHaveLength(2)
-    expect(result.current.tiles[0].clientId).not.toBe(result.current.tiles[1].clientId)
+    expect(result.current.tiles[0]!.clientId).not.toBe(result.current.tiles[1]!.clientId)
   })
 
   it('clearAll empties tiles and revokes blob URLs', async () => {
@@ -117,7 +117,7 @@ describe('useScreenshotUpload', () => {
     act(() => { void result.current.startUpload(fakeBlob()) })
     await waitFor(() => expect(result.current.pendingCount).toBe(1))
     await act(async () => {
-      deferred[0]({
+      deferred[0]!({
         ok: true, status: 200,
         json: async () => ({ data: { path: '/done.png' } }),
       } as Response)

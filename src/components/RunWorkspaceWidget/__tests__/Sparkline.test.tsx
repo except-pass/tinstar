@@ -27,7 +27,7 @@ describe('<Sparkline>', () => {
 
   it('uses the provided accent color on the stroke', () => {
     const { container } = render(<Sparkline data={[1, 2]} accent="#f6c155" />)
-    const stroke = container.querySelectorAll('path')[1]   // second path is the stroke
+    const stroke = container.querySelectorAll('path')[1]!   // second path is the stroke
     expect(stroke.getAttribute('stroke')).toBe('#f6c155')
   })
 

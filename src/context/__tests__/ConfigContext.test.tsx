@@ -107,7 +107,7 @@ describe('ConfigContext', () => {
     // After timer, exactly one PATCH
     await waitFor(() => expect(apiFetchMock.mock.calls.length).toBe(initialCallCount + 1))
 
-    const patchCall = apiFetchMock.mock.calls[initialCallCount]
+    const patchCall = apiFetchMock.mock.calls[initialCallCount]!
     expect(patchCall[1]?.method).toBe('PATCH')
   })
 

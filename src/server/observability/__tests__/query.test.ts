@@ -87,7 +87,7 @@ describe('TelemetryQuery.todayHud', () => {
 
 describe('queryRange', () => {
   it('hits /api/v1/query_range and normalizes [ts, "1.5"] pairs to [ts, 1.5]', async () => {
-    const fetchMock = vi.fn(async () => ({
+    const fetchMock = vi.fn(async (_url: string) => ({
       ok: true,
       json: async () => ({
         status: 'success',
@@ -103,7 +103,7 @@ describe('queryRange', () => {
     const out = await q.queryRange('sum(foo)', 100, 110, 5)
 
     expect(fetchMock).toHaveBeenCalledOnce()
-    const url = fetchMock.mock.calls[0][0] as string
+    const url = fetchMock.mock.calls[0]![0]
     expect(url).toContain('/api/v1/query_range')
     expect(url).toContain('query=sum%28foo%29')
     expect(url).toContain('start=100')
@@ -132,7 +132,7 @@ describe('sessionSeries', () => {
   it('returns 4 series with cost/tokens/cache/duty for a session', async () => {
     // Each call returns 3 identical samples so we don't need to fake distinct payloads.
     const sampleValues: [number, string][] = [[100, '1'], [105, '2'], [110, '3']]
-    const fetchMock = vi.fn(async () => ({
+    const fetchMock = vi.fn(async (_url: string) => ({
       ok: true,
       json: async () => ({
         status: 'success',

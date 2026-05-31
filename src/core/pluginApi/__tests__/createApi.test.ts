@@ -96,7 +96,7 @@ describe('createPluginApi', () => {
       minSize: { width: 100, height: 100 },
     })
     expect(warn).toHaveBeenCalled()
-    const firstCall = warn.mock.calls[0]
+    const firstCall = warn.mock.calls[0]!
     expect(firstCall.join(' ')).toContain('zeta-shared')
     expect(recB.disposables.length).toBe(0)
     d.dispose()  // should be safe no-op
@@ -148,7 +148,7 @@ describe('createPluginApi — api.http', () => {
     await api.http.fetch('/api/foo', { method: 'GET' })
 
     expect(mockApiFetch).toHaveBeenCalledTimes(1)
-    const [path, init] = mockApiFetch.mock.calls[0]
+    const [path, init] = mockApiFetch.mock.calls[0]!
     expect(path).toBe('/api/foo')
     expect(init.method).toBe('GET')
     const headers = new Headers(init.headers)
@@ -164,7 +164,7 @@ describe('createPluginApi — api.http', () => {
     const api = createPluginApi(rec)
     await api.http.fetch('/x', { headers: { 'X-Custom': 'v' } })
 
-    const init = mockApiFetch.mock.calls[0][1]
+    const init = mockApiFetch.mock.calls[0]![1]
     const headers = new Headers(init.headers)
     expect(headers.get('X-Custom')).toBe('v')
     expect(headers.get('X-Tinstar-Plugin')).toBe('hdr-test')

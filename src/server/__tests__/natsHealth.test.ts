@@ -14,6 +14,8 @@ function makeRun(sessionId: string): Run {
     status: 'idle',
     sessionId,
     taskId: 't1',
+    worktreeId: 'wt1',
+    createdAt: '2026-01-01T00:00:00.000Z',
     initiative: '',
     epic: '',
     task: '',
@@ -224,7 +226,7 @@ describe('NatsHealthMonitor', () => {
     expect(probeCalls).toBe(1)
 
     // Resolve the first probe
-    resolvers[0]({ kind: 'healthy' })
+    resolvers[0]!({ kind: 'healthy' })
     await new Promise(resolve => setImmediate(resolve))
     expect(m.__inFlightSize()).toBe(0)
 
@@ -233,7 +235,7 @@ describe('NatsHealthMonitor', () => {
     m.__getState('sess-slow')!.nextProbeAt = 0
     await m.__tickNow()
     expect(probeCalls).toBe(2)
-    resolvers[1]({ kind: 'healthy' })
+    resolvers[1]!({ kind: 'healthy' })
     await new Promise(resolve => setImmediate(resolve))
   })
 

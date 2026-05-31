@@ -71,6 +71,6 @@ describe('emitIngestCounter', () => {
   it('pushes result=error', () => {
     const exp = new StubExporter()
     emitIngestCounter(exp, 'error', fixedNow)
-    expect(exp.pushed[0].labels.result).toBe('error')
+    expect(exp.pushed[0]!.labels.result).toBe('error')
   })
 })

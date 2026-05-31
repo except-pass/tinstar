@@ -66,7 +66,7 @@ describe('parseManifest', () => {
         permissions: ['tasks:read'],
       },
     })
-    expect(r.manifest.contributes?.widgets?.[0].type).toBe('board')
+    expect(r.manifest.contributes?.widgets?.[0]?.type).toBe('board')
     expect(r.manifest.permissions).toEqual(['tasks:read'])
   })
 })

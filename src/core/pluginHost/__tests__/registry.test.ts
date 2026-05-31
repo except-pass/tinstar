@@ -13,12 +13,14 @@ function makeRecord(name = 'test'): PluginRecord {
 }
 
 function makeApi(rec: PluginRecord): TinstarPluginAPI {
+  // Stub: only the surface the registry touches (widgets/logger). The unused
+  // host capabilities (http/events/hotkeys/canvas/…) are intentionally omitted.
   return {
     pluginId: rec.name,
     version: rec.version,
     widgets: { register: () => ({ dispose: () => {} }) },
     logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-  }
+  } as unknown as TinstarPluginAPI
 }
 
 describe('PluginRegistry', () => {
@@ -75,7 +77,7 @@ describe('PluginRegistry', () => {
         },
       },
       logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-    })
+    } as unknown as TinstarPluginAPI)
 
     await reg.activate(record, plugin, trackingApi)
 

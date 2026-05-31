@@ -328,7 +328,7 @@ describe('GET /api/telemetry/session/:name/series', () => {
     const query = {
       todayHud: vi.fn(),
       burningSessions: async () => [],
-      sessionSeries: vi.fn(async () => fakeSeries),
+      sessionSeries: vi.fn(async (_opts: { sessionId: string; windowSec: number; stepSec: number }) => fakeSeries),
     }
     const deps = makeDeps('ready', query as unknown as TelemetryApiDeps['query'], sse)
     deps.getSessionConversationId = () => 'conv-uuid-123'
@@ -343,7 +343,7 @@ describe('GET /api/telemetry/session/:name/series', () => {
     expect((res as unknown as FakeRes).statusCode).toBe(200)
     expect((res as unknown as FakeRes).parsedBody).toEqual(fakeSeries)
     expect(query.sessionSeries).toHaveBeenCalledOnce()
-    const args = query.sessionSeries.mock.calls[0][0]
+    const args = query.sessionSeries.mock.calls[0]![0]
     expect(args.sessionId).toBe('conv-uuid-123')
     expect(args.windowSec).toBe(300)
     expect(args.stepSec).toBe(5)
@@ -417,7 +417,7 @@ describe('startPolling — change detection', () => {
     // Tick 1: first snapshot — broadcasts (lastSent was null)
     await vi.advanceTimersByTimeAsync(1500)
     expect(sse.events).toHaveLength(1)
-    expect((sse.events[0].data as HudSnapshot).cost.total).toBe(1.0)
+    expect((sse.events[0]!.data as HudSnapshot).cost.total).toBe(1.0)
 
     // Tick 2: same snapshot — no broadcast
     await vi.advanceTimersByTimeAsync(1500)
@@ -426,7 +426,7 @@ describe('startPolling — change detection', () => {
     // Tick 3: different snapshot — broadcasts
     await vi.advanceTimersByTimeAsync(1500)
     expect(sse.events).toHaveLength(2)
-    expect((sse.events[1].data as HudSnapshot).cost.total).toBe(2.0)
+    expect((sse.events[1]!.data as HudSnapshot).cost.total).toBe(2.0)
 
     routes.stopPolling()
   })
@@ -445,7 +445,7 @@ describe('startPolling — change detection', () => {
     // Advance timer — polling should have started and broadcast
     await vi.advanceTimersByTimeAsync(1500)
     expect(sse.events.length).toBeGreaterThanOrEqual(1)
-    expect(sse.events[0].type).toBe('telemetry:hud')
+    expect(sse.events[0]!.type).toBe('telemetry:hud')
 
     routes.stopPolling()
   })
@@ -479,7 +479,7 @@ async function callTelemetry(path: string): Promise<{ status: number; body: any 
   const sse = makeFakeSSE()
   const deps = makeDeps('ready', null, sse)
   const routes = createTelemetryRoutes(deps)
-  const pathname = path.split('?')[0]
+  const pathname = path.split('?')[0] ?? path
   const req = makeReq('GET', path)
   const res = makeRes()
   await routes.handle(req, res as unknown as ServerResponse, pathname)

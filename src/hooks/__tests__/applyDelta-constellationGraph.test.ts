@@ -44,7 +44,7 @@ describe('applyDelta — constellationGraph arm', () => {
     const updated: ConstellationGraph = { ...graph1, snapped: [['c', 'd']] }
     const next = applyDelta(stateWithOne, { entity: 'constellationGraph', id: 'space-1', data: updated })
     expect(next.constellationGraphs).toHaveLength(1)
-    expect(next.constellationGraphs[0].snapped).toEqual([['c', 'd']])
+    expect(next.constellationGraphs[0]!.snapped).toEqual([['c', 'd']])
   })
 
   it('appends without touching other graphs', () => {
@@ -58,7 +58,7 @@ describe('applyDelta — constellationGraph arm', () => {
     const stateWithTwo = { ...baseState, constellationGraphs: [graph1, graph2] }
     const next = applyDelta(stateWithTwo, { entity: 'constellationGraph', id: 'space-1', data: null })
     expect(next.constellationGraphs).toHaveLength(1)
-    expect(next.constellationGraphs[0].spaceId).toBe('space-2')
+    expect(next.constellationGraphs[0]!.spaceId).toBe('space-2')
   })
 
   it('no-ops on null data when graph is not present', () => {

@@ -9,8 +9,8 @@ describe('makeFakeSeries', () => {
     expect(out.series.tokens).toHaveLength(13)
     expect(out.series.cache).toHaveLength(13)
     expect(out.series.duty).toHaveLength(13)
-    expect(out.series.cost[0][0]).toBe(940)
-    expect(out.series.cost[12][0]).toBe(1000)
+    expect(out.series.cost[0]![0]).toBe(940)
+    expect(out.series.cost[12]![0]).toBe(1000)
     expect(out.stepSec).toBe(5)
   })
 
@@ -18,7 +18,7 @@ describe('makeFakeSeries', () => {
     const out = makeFakeSeries({ endSec: 1000, windowSec: 300, stepSec: 5 })
     const values = out.series.cost.map(p => p[1] as number)
     for (let i = 1; i < values.length; i++) {
-      expect(values[i]).toBeGreaterThanOrEqual(values[i-1])
+      expect(values[i]).toBeGreaterThanOrEqual(values[i-1]!)
     }
   })
 

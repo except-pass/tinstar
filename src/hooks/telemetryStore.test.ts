@@ -105,7 +105,7 @@ describe('telemetryStore', () => {
   })
 
   it('does not duplicate an in-flight request when tick() is called again', async () => {
-    let resolveFetch: ((v: Response) => void) | null = null
+    let resolveFetch!: (v: Response) => void   // assigned synchronously in the executor below
     const pending = new Promise<Response>((res) => { resolveFetch = res })
     fetchMock.mockReturnValue(pending)
 
@@ -120,7 +120,7 @@ describe('telemetryStore', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
     // Resolve and let everything settle.
-    resolveFetch?.(makeFetchResponse({ alpha: makeSnap('alpha', 1) }))
+    resolveFetch(makeFetchResponse({ alpha: makeSnap('alpha', 1) }))
     await Promise.all([t1, t2, t3])
 
     // After settling, in-flight cleared; a fresh tick should fire a new fetch.

@@ -39,7 +39,7 @@ describe('<AgentQuadrant>', () => {
     )
     const avatars = container.querySelectorAll('[data-testid="agent-avatar"]')
     expect(avatars.length).toBe(1)
-    expect(avatars[0].getAttribute('data-run-id')).toBe('r2')
+    expect(avatars[0]!.getAttribute('data-run-id')).toBe('r2')
   })
 
   it('places a BUSY + LLM run in the WORKING cell', () => {
