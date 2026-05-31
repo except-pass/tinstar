@@ -386,7 +386,7 @@ async function createSessionInternal(
     taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt
   } = params
 
-  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl, natsTraffic, natsHealth } = ctx
+  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, natsTraffic, natsHealth } = ctx
 
   if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
 

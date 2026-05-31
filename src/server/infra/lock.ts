@@ -1,4 +1,4 @@
-import { mkdirSync, rmdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 export type ReleaseFn = () => Promise<void>
