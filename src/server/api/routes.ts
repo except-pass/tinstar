@@ -41,6 +41,7 @@ import {
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
+import { emptyGraph, addMember, type ConstellationSlot } from '../../domain/constellationGraph'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
 import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
@@ -583,6 +584,72 @@ function deepMergeEntity<T extends Record<string, unknown>>(existing: T, patch: 
     ;(result as Record<string, unknown>).settings = Object.keys(mergedSettings).length > 0 ? mergedSettings : undefined
   }
   return result
+}
+
+// --- Canvas widget placement (host placement API) ---
+
+/** Gap (canvas units) placed between a widget and its `nearNodeId` reference.
+ *  Mirrors RUN_GAP in useWidgetLayouts.ts. */
+const PLACEMENT_GAP = 20
+const DEFAULT_BROWSER_SIZE = { width: 800, height: 600 }
+
+interface PlacementInput {
+  position?: { x: number; y: number }
+  size?: { width: number; height: number }
+  nearNodeId?: string
+}
+
+interface LayoutEntry { x: number; y: number; width: number; height: number }
+
+/** Look up a node's persisted layout (x/y/width/height) from
+ *  `config.ui.layouts['tinstar-layouts-v3-<spaceId>']`. This is the SSOT the
+ *  frontend hydrates from, so it's the right place to resolve `nearNodeId`. */
+function lookupNodeLayout(ctx: RouteContext, spaceId: string, nodeId: string): LayoutEntry | null {
+  try {
+    const cfg = loadConfigMerged(ctx.sessionConfig?.dirs.root) as { ui?: { layouts?: Record<string, Record<string, LayoutEntry>> } }
+    const byKey = cfg.ui?.layouts ?? {}
+    const entry = byKey[`tinstar-layouts-v3-${spaceId}`]?.[nodeId]
+    if (entry && typeof entry.x === 'number' && typeof entry.y === 'number') return entry
+  } catch { /* fall through */ }
+  return null
+}
+
+/** Resolve a placement request to a concrete `{ position, size }` seed, or null
+ *  when no placement was requested / couldn't be resolved. Explicit `position`
+ *  wins; otherwise `nearNodeId` places the new widget just to the right of the
+ *  referenced node (same top edge). */
+function resolvePlacement(
+  ctx: RouteContext,
+  spaceId: string,
+  input: PlacementInput,
+): { position: { x: number; y: number }; size: { width: number; height: number } } | null {
+  const size = (input.size && Number.isFinite(input.size.width) && Number.isFinite(input.size.height))
+    ? { width: input.size.width, height: input.size.height }
+    : DEFAULT_BROWSER_SIZE
+  if (input.position && Number.isFinite(input.position.x) && Number.isFinite(input.position.y)) {
+    return { position: { x: input.position.x, y: input.position.y }, size }
+  }
+  if (input.nearNodeId) {
+    const ref = lookupNodeLayout(ctx, spaceId, input.nearNodeId)
+    if (ref) {
+      return { position: { x: ref.x + ref.width + PLACEMENT_GAP, y: ref.y }, size }
+    }
+  }
+  return null
+}
+
+/** Coerce a slot value (1..9, number or string) to a ConstellationSlot, or null. */
+function toSlot(value: unknown): ConstellationSlot | null {
+  const n = typeof value === 'string' ? Number(value) : value
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > 9) return null
+  return String(n) as ConstellationSlot
+}
+
+/** Add a widget to a space's constellation slot, server-side (reactive via SSE).
+ *  Idempotent: addMember is a no-op if the membership already exists. */
+function assignWidgetToSlot(ctx: RouteContext, spaceId: string, widgetId: string, slot: ConstellationSlot): void {
+  const graph = ctx.docStore.getConstellationGraph(spaceId) ?? emptyGraph(spaceId)
+  ctx.docStore.upsertConstellationGraph(spaceId, addMember(graph, widgetId, slot))
 }
 
 /** Synchronously enumerate every persisted session on disk. Mirrors the
@@ -1777,7 +1844,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/browser-widgets
   if (method === 'POST' && url === '/api/browser-widgets') {
     readBody(req).then(body => {
-      const { sessionId, url: widgetUrl = '', headers: widgetHeaders } = JSON.parse(body) as { sessionId?: string; url?: string; headers?: Record<string, string> }
+      const parsed = JSON.parse(body) as {
+        sessionId?: string; url?: string; headers?: Record<string, string>; spaceId?: string;
+        position?: { x: number; y: number }; size?: { width: number; height: number };
+        nearNodeId?: string; slot?: number | string;
+      }
+      const { sessionId, url: widgetUrl = '', headers: widgetHeaders } = parsed
       if (!sessionId) {
         fail(res, 'INVALID_PARAMS', 'sessionId required')
         return
@@ -1787,15 +1859,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'SESSION_NOT_FOUND', `No run with sessionId ${sessionId}`)
         return
       }
+      const spaceId = parsed.spaceId || ctx.docStore.activeSpaceId || ''
+      const placement = resolvePlacement(ctx, spaceId, parsed)
       const widget: import('../../domain/types').BrowserWidget = {
         id: shortId('browser'),
-        spaceId: ctx.docStore.activeSpaceId || undefined,
+        spaceId: spaceId || undefined,
         sessionId,
         url: widgetUrl,
         color: run.color,
         ...(widgetHeaders && Object.keys(widgetHeaders).length > 0 ? { headers: widgetHeaders } : {}),
+        ...(placement ? { position: placement.position, size: placement.size } : {}),
       }
       ctx.docStore.upsertBrowserWidget(widget.id, widget)
+      const slot = toSlot(parsed.slot)
+      if (slot && spaceId) assignWidgetToSlot(ctx, spaceId, widget.id, slot)
       ok(res, widget)
     })
     return true
@@ -1810,9 +1887,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'NOT_FOUND', `BrowserWidget ${id} not found`)
         return
       }
-      const patch = JSON.parse(body) as { url?: string; title?: string; headers?: Record<string, string> }
-      const updated = { ...existing, ...patch }
+      const patch = JSON.parse(body) as {
+        url?: string; title?: string; headers?: Record<string, string>;
+        position?: { x: number; y: number }; size?: { width: number; height: number };
+        nearNodeId?: string; slot?: number | string;
+      }
+      const spaceId = existing.spaceId || ctx.docStore.activeSpaceId || ''
+      const placement = resolvePlacement(ctx, spaceId, patch)
+      const { position: _p, size: _s, nearNodeId: _n, slot: _sl, ...rest } = patch
+      const updated = {
+        ...existing,
+        ...rest,
+        ...(placement ? { position: placement.position, size: placement.size } : {}),
+      }
       ctx.docStore.upsertBrowserWidget(id, updated)
+      const slot = toSlot(patch.slot)
+      if (slot && spaceId) assignWidgetToSlot(ctx, spaceId, id, slot)
       ok(res, updated)
     })
     return true

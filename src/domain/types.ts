@@ -205,6 +205,16 @@ export interface BrowserWidget {
   title?: string
   color?: string
   headers?: Record<string, string>
+  /** Optional initial canvas placement seed. Honored by the layout system only
+   *  when the widget's node has no layout yet (first appearance / fresh hydration);
+   *  once placed it flows into `config.ui.layouts` like every other widget, and
+   *  subsequent user drags update that — this value is not re-read. Set by the
+   *  host placement API (POST/PATCH /api/browser-widgets) so a plugin can open a
+   *  browser widget at a chosen spot. */
+  position?: { x: number; y: number }
+  /** Optional initial size paired with `position`. Defaults to 800×600 when a
+   *  position is given without a size. */
+  size?: { width: number; height: number }
 }
 
 export interface ImageWidget {

@@ -255,6 +255,7 @@ function collectTreeIds(tree: TreeNode[]): Set<string> {
 function hydrateLayouts(
   tree: TreeNode[],
   persisted: Record<string, WidgetLayout> | null | undefined,
+  seed?: Map<string, WidgetLayout>,
 ): Map<string, WidgetLayout> {
   const allIds = collectTreeIds(tree)
   if (!persisted) return generateDefaultLayouts(tree)
@@ -273,17 +274,19 @@ function hydrateLayouts(
     }
     // If >20% missing, regenerate from scratch
     if (map.size < allIds.size * 0.8) return generateDefaultLayouts(tree)
-    // Fill any remaining missing with smart placement (near siblings) or defaults
+    // Fill any remaining missing with the host-provided placement seed (e.g. a
+    // browser widget opened at a chosen spot), then smart placement (near
+    // siblings), then defaults.
     if (map.size < allIds.size) {
       const missing = new Set([...allIds].filter(id => !map.has(id)))
       const treeMaps = buildTreeMaps(tree)
       const smart = placeNewRuns(missing, tree, map, treeMaps)
       const defaults = generateDefaultLayouts(tree)
       for (const id of missing) {
-        map.set(id, smart.get(id) ?? defaults.get(id)!)
+        map.set(id, seed?.get(id) ?? smart.get(id) ?? defaults.get(id)!)
       }
-      for (const id of smart.keys()) {
-        cascadeExpansion(map, id, treeMaps)
+      for (const id of missing) {
+        if (seed?.has(id) || smart.has(id)) cascadeExpansion(map, id, treeMaps)
       }
     }
     return map
@@ -403,9 +406,17 @@ function computeTightBounds(
 
 // --- The hook ---
 
-export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
+/**
+ * @param seedLayouts Optional id→layout seed for nodes that have no persisted
+ *   layout yet — used by the host placement API to open a widget (e.g. a browser
+ *   widget) at a chosen canvas spot. Consulted only on a node's first appearance;
+ *   once placed it flows into config.ui.layouts and user drags take over.
+ */
+export function useWidgetLayouts(tree: TreeNode[], spaceId?: string, seedLayouts?: Map<string, WidgetLayout>) {
   const storageKey = spaceId ? `${LAYOUTS_KEY_PREFIX}-${spaceId}` : LAYOUTS_KEY_PREFIX
   const storageKeyRef = useRef(storageKey)
+  const seedRef = useRef(seedLayouts)
+  seedRef.current = seedLayouts
 
   const config = useConfig()
   const patchConfig = useDebouncedConfigPatch(500)
@@ -418,7 +429,7 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
   const hydratedRef = useRef<boolean>(initialPersistedRef.current !== null)
 
   const [layouts, setLayouts] = useState<Map<string, WidgetLayout>>(() =>
-    hydrateLayouts(tree, initialPersistedRef.current),
+    hydrateLayouts(tree, initialPersistedRef.current, seedRef.current),
   )
   const layoutsRef = useRef(layouts)
   layoutsRef.current = layouts
@@ -434,7 +445,7 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     const persisted = all?.[storageKeyRef.current] ?? null
     if (!hydratedRef.current && persisted) {
       hydratedRef.current = true
-      const fresh = hydrateLayouts(tree, persisted)
+      const fresh = hydrateLayouts(tree, persisted, seedRef.current)
       layoutsRef.current = fresh
       // Hydration arrives from server — don't echo it back as a PATCH.
       skipNextPersistRef.current = true
@@ -465,17 +476,20 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
         layoutsRef.current = fresh
         queueMicrotask(() => setLayouts(fresh))
       } else {
-        // Fill in missing nodes: place runs near siblings/parent, fall back to defaults for containers
+        // Fill in missing nodes: prefer a host-provided placement seed (e.g. a
+        // browser widget opened at a chosen spot), then place runs near
+        // siblings/parent, then fall back to defaults for containers.
         const missing = new Set([...newIds].filter(id => !layoutsRef.current.has(id)))
         const smart = placeNewRuns(missing, tree, layoutsRef.current, treeMapsRef.current)
         const defaults = generateDefaultLayouts(tree)
+        const seed = seedRef.current
         const patched = new Map(layoutsRef.current)
         for (const id of missing) {
-          patched.set(id, smart.get(id) ?? defaults.get(id)!)
+          patched.set(id, seed?.get(id) ?? smart.get(id) ?? defaults.get(id)!)
         }
-        // Expand parent containers to contain any newly placed runs
-        for (const id of smart.keys()) {
-          cascadeExpansion(patched, id, treeMapsRef.current)
+        // Expand parent containers to contain any newly placed/seeded runs
+        for (const id of missing) {
+          if (seed?.has(id) || smart.has(id)) cascadeExpansion(patched, id, treeMapsRef.current)
         }
         layoutsRef.current = patched
         queueMicrotask(() => setLayouts(patched))
@@ -490,7 +504,7 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     const all = config?.ui.layouts as Record<string, Record<string, WidgetLayout>> | undefined
     const persisted = all?.[storageKey] ?? null
     if (persisted) hydratedRef.current = true
-    const fresh = hydrateLayouts(tree, persisted)
+    const fresh = hydrateLayouts(tree, persisted, seedRef.current)
     layoutsRef.current = fresh
     // Space switch is a hydration from persisted state — don't echo back.
     if (persisted) skipNextPersistRef.current = true

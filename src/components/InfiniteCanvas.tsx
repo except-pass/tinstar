@@ -174,6 +174,23 @@ const SNAP_DISTANCE = 60
 
 export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  // Seed initial placement for browser widgets opened via the host placement API
+  // (POST/PATCH /api/browser-widgets with position/nearNodeId). Consulted by the
+  // layout hook only for nodes that don't have a layout yet.
+  const placementSeed = useMemo(() => {
+    const seed = new Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>()
+    for (const w of browserWidgetMap.values()) {
+      if (w.position) {
+        seed.set(w.id, {
+          x: w.position.x,
+          y: w.position.y,
+          width: w.size?.width ?? 800,
+          height: w.size?.height ?? 600,
+        })
+      }
+    }
+    return seed
+  }, [browserWidgetMap])
   const {
     layouts,
     treeMaps,
@@ -186,7 +203,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     arrangeWorkspace,
     insertLayout,
     batchSetLayouts,
-  } = useWidgetLayouts(tree, activeSpaceId)
+  } = useWidgetLayouts(tree, activeSpaceId, placementSeed)
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
   const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState } = useSelection()
 
