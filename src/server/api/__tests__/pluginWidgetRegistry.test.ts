@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { resolvePluginIcon } from '../pluginWidgetRegistry'
+import { resolvePluginIcon, resolveWidgetRegistry, invalidateWidgetRegistryCache } from '../pluginWidgetRegistry'
 
 let dir: string
 beforeAll(() => {
@@ -35,5 +35,32 @@ describe('resolvePluginIcon', () => {
 
   it('returns undefined for an unknown extension', () => {
     expect(resolvePluginIcon(dir, 'icon.bmp')).toBeUndefined()
+  })
+})
+
+describe('resolveWidgetRegistry built-ins', () => {
+  it('lists the bundled Saloon (palette opt-in) but not the context-only built-ins', () => {
+    invalidateWidgetRegistryCache()
+    // An empty configRoot (no plugins.json) → only the bundled built-ins surface.
+    const reg = resolveWidgetRegistry(mkdtempSync(join(tmpdir(), 'no-plugins-')))
+    const saloon = reg.find(w => w.widgetType === 'saloon')
+    expect(saloon).toBeDefined()
+    expect(saloon!.pluginId).toBe('nats-traffic')
+    expect(saloon!.pluginDisplayName).toBe('Saloon')
+    expect(saloon!.label).toBe('Saloon')
+    expect(saloon!.spawn).toBe('palette')
+    // file-editor / browser / image-viewer omit `spawn`, so they stay out of the palette.
+    expect(reg.find(w => w.widgetType === 'file-editor')).toBeUndefined()
+    expect(reg.find(w => w.widgetType === 'browser-widget')).toBeUndefined()
+    expect(reg.find(w => w.widgetType === 'image-viewer')).toBeUndefined()
+  })
+
+  it('omits the Saloon when its plugin is disabled', () => {
+    invalidateWidgetRegistryCache()
+    const d = mkdtempSync(join(tmpdir(), 'disabled-plugins-'))
+    writeFileSync(join(d, 'plugins.json'), JSON.stringify({ disabled: ['nats-traffic'], external: [] }))
+    const reg = resolveWidgetRegistry(d)
+    expect(reg.find(w => w.widgetType === 'saloon')).toBeUndefined()
+    invalidateWidgetRegistryCache()
   })
 })
