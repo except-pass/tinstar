@@ -76,7 +76,7 @@ export function parseManifest(pkgJson: unknown): ParsedManifest {
       if (!w || typeof w !== 'object') {
         throw new ManifestError(`${pkg.name}: contributes.widgets[${i}] must be an object`)
       }
-      validateWidgetContribution(w as Record<string, unknown>, pkg.name, i)
+      validateWidgetContribution(w as Record<string, unknown>, String(pkg.name), i)
     })
   }
 

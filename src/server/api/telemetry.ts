@@ -144,7 +144,7 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
         res.end(JSON.stringify({ ...empty, state }))
         return true
       }
-      const conversationId = deps.getSessionConversationId(seriesMatch[1])
+      const conversationId = deps.getSessionConversationId(seriesMatch[1] ?? '')
       if (!conversationId) {
         res.writeHead(200, json)
         res.end(JSON.stringify(empty))

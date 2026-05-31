@@ -1425,7 +1425,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return (
           <CanvasWidgetShell
             key={node.id}
-            registration={{ type: node.type, component: () => <PluginWidgetDisabledPlaceholder instance={instance} reason="unknown-type" />, isContainer: false }}
+            registration={{ type: node.type, component: () => <PluginWidgetDisabledPlaceholder instance={instance} reason="unknown-type" />, isContainer: false, minSize: { width: 200, height: 150 } }}
             nodeId={node.id}
             widgetId={node.entityId}
             data={instance}

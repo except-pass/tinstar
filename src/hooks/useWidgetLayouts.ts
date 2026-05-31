@@ -538,7 +538,7 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string, seedLayouts
       ...configLayoutsRef.current,
       [storageKeyRef.current]: layoutsToRecord(layouts),
     }
-    patchConfig({ ui: { layouts: merged as never } })
+    patchConfig({ ui: { layouts: merged } })
   }, [layouts, patchConfig])
 
   // Move a run (leaf), auto-expand ancestor chain

@@ -18,7 +18,7 @@ function getSessionWorkspace(sessDir: string, name: string): string | null {
 export async function handleFileUpload(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Promise<boolean> {
   if (!req.url || req.method !== 'POST') return false
   const m = req.url.match(URL_RE)
-  if (!m) return false
+  if (!m || m[1] === undefined) return false
 
   const sessionName = decodeURIComponent(m[1])
   const wsRoot = getSessionWorkspace(ctx.sessDir, sessionName)

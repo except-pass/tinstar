@@ -19,7 +19,10 @@ export interface TinstarConfigClient {
   [k: string]: unknown
 }
 
-type PatchInput = Partial<TinstarConfigClient> & { ui?: Partial<TinstarConfigClient['ui']> }
+// Omit `ui` from the base Partial before re-adding it: a plain intersection would
+// collapse `ui` back to its full required shape (Full & Partial<Ui> = Full),
+// which is what forced callers into `as never` casts for partial ui patches.
+type PatchInput = Omit<Partial<TinstarConfigClient>, 'ui'> & { ui?: Partial<TinstarConfigClient['ui']> }
 
 interface Ctx {
   config: TinstarConfigClient | null

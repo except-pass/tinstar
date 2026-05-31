@@ -34,7 +34,7 @@ const ringBuffer: Observation[] = []
 function recordObservation(o: Observation): void {
   ringBuffer.push(o)
   const cutoff = Math.floor(Date.now() / 1000) - RETENTION_SEC
-  while (ringBuffer.length && ringBuffer[0].tsSec < cutoff) ringBuffer.shift()
+  while (ringBuffer[0] && ringBuffer[0].tsSec < cutoff) ringBuffer.shift()
 }
 
 export function getRecentObservations(opts: { windowSec: number; session?: string }): Observation[] {

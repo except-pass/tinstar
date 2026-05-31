@@ -807,7 +807,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // Telemetry routes — delegated to createTelemetryRoutes
   if (ctx.telemetryRoutes && url.startsWith('/api/telemetry/')) {
     // Normalize pathname (strip query string)
-    const pathname = url.split('?')[0]
+    const pathname = url.split('?')[0] ?? url
     if (await ctx.telemetryRoutes.handle(req, res, pathname, corsHeaders)) return true
   }
 

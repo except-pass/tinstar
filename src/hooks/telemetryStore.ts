@@ -66,7 +66,7 @@ function tick(): Promise<void> {
       if (!r.ok) return
       const data = (await r.json()) as Record<string, HudSnapshot | null>
       for (const name of names) {
-        const next = name in data ? data[name] : null
+        const next = data[name] ?? null
         const prev = state.snapshots.get(name)
         // Cheap change detection — skip listener notifications when the
         // serialized payload is identical, matching the SSE-side optimization.

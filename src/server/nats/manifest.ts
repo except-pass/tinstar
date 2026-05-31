@@ -2,7 +2,7 @@ import type { BinaryTarget } from '../infra/types.js'
 
 const VERSION = '2.10.24'
 
-const CHECKSUMS: Record<string, string> = {
+const CHECKSUMS: Record<PlatformKey, string> = {
   'darwin-arm64': 'e7cba91a2388ac60b487d225908dd42a4490df5cf6def929bc813dbd83dccf11',
   'darwin-x64':   'bf2503540b12a2550b36323918d00d0a8578c40781609000ce219d0ea3710ea2',
   'linux-arm64':  'a4ae6c46ef545a13a3214bc35696b2806e05b60742f7ed5b2082d3c2f5af854f',

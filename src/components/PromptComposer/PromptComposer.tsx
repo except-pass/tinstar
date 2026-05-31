@@ -602,9 +602,10 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
     }
     if (e.altKey && !e.ctrlKey && !e.metaKey) {
       const match = e.code.match(/^Digit([1-5])$/) ?? e.code.match(/^Key([YN])$/)
-      if (match) {
+      const key = match?.[1]
+      if (key) {
         e.preventDefault()
-        fireQuickKey(match[1].toLowerCase() as QuickKey)
+        fireQuickKey(key.toLowerCase() as QuickKey)
         return
       }
     }
