@@ -11,6 +11,19 @@ import type { TrafficEvent, SaloonData } from './types'
 
 const MAX_EVENTS = 200
 
+/** Shape returned by a run's `session.nats` capability. */
+interface SessionNats { sessionId: string; status?: string; subscriptions: string[]; color?: string }
+/** Per-bound-session info kept for the header. */
+interface BoundSession { sessionId: string; status?: string; subscriptions: string[] }
+
+const STATUS_META: Record<string, { color: string; label: string }> = {
+  running: { color: '#22c55e', label: 'running' },
+  idle: { color: '#38bdf8', label: 'idle' },
+  needs_attention: { color: '#f59e0b', label: 'needs attention' },
+  creating: { color: '#94a3b8', label: 'creating' },
+  stopped: { color: '#64748b', label: 'stopped' },
+}
+
 export function makeSaloonWidget(api: TinstarPluginAPI) {
   return function Saloon(_props: WidgetProps<SaloonData>) {
     const slots = api.constellations.useMySlots()
@@ -30,26 +43,38 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
       ? `runs:${[...binding.runIds].sort().join(',')}`
       : binding.mode
 
-    // Resolve subjects (+ accent) for bound runs via the session.nats capability.
-    const [subjects, setSubjects] = useState<string[]>([])
+    // Resolve session info (name, status, subjects, accent) for bound runs via
+    // the session.nats capability.
+    const [bound, setBound] = useState<BoundSession[]>([])
     const [accent, setAccent] = useState<string | undefined>(undefined)
+    // Re-poll the bound run(s) so the header status + subscriptions stay live
+    // (the capability payload changes as the session's status changes).
+    const [tick, setTick] = useState(0)
+    useEffect(() => {
+      if (binding.mode !== 'runs') return
+      const t = setInterval(() => setTick(n => n + 1), 2000)
+      return () => clearInterval(t)
+    }, [bindingKey])
     useEffect(() => {
       let cancelled = false
       ;(async () => {
-        if (binding.mode !== 'runs') { setSubjects([]); setAccent(undefined); return }
+        if (binding.mode !== 'runs') { setBound([]); setAccent(undefined); return }
         const runIds = binding.runIds
         const results = await Promise.all(runIds.map(id =>
-          (invoke(id, 'session.nats', {}) as Promise<{ subscriptions: string[]; color?: string } | null>).catch(() => null)
+          (invoke(id, 'session.nats', {}) as Promise<SessionNats | null>).catch(() => null)
         ))
         if (cancelled) return
-        const subs = results.flatMap(r => r?.subscriptions ?? [])
-        setSubjects(subs)
+        const sessions: BoundSession[] = results
+          .filter((r): r is SessionNats => r != null)
+          .map(r => ({ sessionId: r.sessionId, status: r.status, subscriptions: r.subscriptions ?? [] }))
+        setBound(sessions)
         setAccent(runIds.length === 1 ? api.theme.accent.resolve(results[0]?.color) : undefined)
         const prevIds = data?.boundRunIds ?? []
         if (JSON.stringify(prevIds) !== JSON.stringify(runIds)) setData({ boundRunIds: runIds })
       })()
       return () => { cancelled = true }
-    }, [bindingKey, invoke])
+    }, [bindingKey, invoke, tick])
+    const subjects = useMemo(() => bound.flatMap(b => b.subscriptions), [bound])
 
     // Collect nats_traffic, filter by mode.
     const [events, setEvents] = useState<TrafficEvent[]>([])
@@ -89,17 +114,29 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
       return () => { window.removeEventListener(EV.natsTraffic, handler); if (rafRef.current !== null) cancelAnimationFrame(rafRef.current) }
     }, [])
 
-    const subtitle = binding.mode === 'all'
-      ? 'all traffic'
-      : binding.mode === 'empty'
-        ? 'no sessions in this group'
-        : `${binding.runIds.length} session${binding.runIds.length === 1 ? '' : 's'}`
+    // Single bound session → show its name + live status in the header.
+    const single = binding.mode === 'runs' && bound.length === 1 ? bound[0]! : null
+    const status = single?.status ? STATUS_META[single.status] : undefined
 
     return (
       <div className="flex flex-col h-full bg-surface-base text-slate-300 overflow-hidden" style={accent ? { boxShadow: `inset 0 2px 0 ${accent}` } : undefined}>
         <div className="widget-drag-handle flex items-center gap-2 px-3 py-1.5 bg-surface-panel border-b border-white/10 flex-shrink-0 cursor-grab">
-          <span className="text-primary text-xs">SALOON</span>
-          <span className="text-2xs font-mono text-slate-400 flex-1 truncate">{subtitle}</span>
+          <span className="text-primary text-xs flex-shrink-0">SALOON</span>
+          {single ? (
+            <span className="flex items-center gap-1.5 flex-1 min-w-0">
+              {status && <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: status.color }} title={status.label} />}
+              <span className="text-xs text-slate-200 truncate">{single.sessionId}</span>
+              {status && <span className="text-2xs text-slate-500 flex-shrink-0">{status.label}</span>}
+            </span>
+          ) : (
+            <span className="text-2xs font-mono text-slate-400 flex-1 truncate">
+              {binding.mode === 'all'
+                ? 'all traffic'
+                : bound.length > 1
+                  ? bound.map(b => b.sessionId).join(', ')
+                  : '…'}
+            </span>
+          )}
           {binding.mode !== 'empty' && (
             <input
               value={filter}
@@ -113,6 +150,17 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
             <span className="material-symbols-outlined text-sm">close</span>
           </button>
         </div>
+        {binding.mode !== 'empty' && (
+          <div
+            className="px-3 py-0.5 bg-surface-panel/60 border-b border-white/5 text-2xs font-mono text-slate-500 truncate flex-shrink-0"
+            title={binding.mode === 'all' ? 'all subjects (every session’s traffic)' : subjects.join('\n')}
+          >
+            <span className="text-slate-600">subscribed: </span>
+            {binding.mode === 'all'
+              ? 'tinstar.> (all sessions)'
+              : subjects.length ? subjects.join('  ·  ') : 'resolving…'}
+          </div>
+        )}
         {binding.mode === 'empty'
           ? <div className="flex-1 flex items-center justify-center text-slate-500 text-xs px-4 text-center">📡 Snap onto a session to monitor its traffic</div>
           : <StreamView events={events} filter={filter} />}

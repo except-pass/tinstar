@@ -185,10 +185,11 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   useEffect(() => {
     return capabilityRegistry.publish(`run-${run.id}`, 'session.nats', async () => ({
       sessionId: run.sessionId,
+      status: run.status,
       subscriptions: run.natsSubscriptions ?? (run.natsSubject ? [run.natsSubject] : []),
       color: run.color,
     }))
-  }, [run.id, run.sessionId, run.natsSubscriptions, run.natsSubject, run.color])
+  }, [run.id, run.sessionId, run.status, run.natsSubscriptions, run.natsSubject, run.color])
 
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
