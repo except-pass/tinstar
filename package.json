@@ -34,6 +34,8 @@
     "build:all": "vite build --outDir dist/client && npm run build:server",
     "preview": "vite preview",
     "stable": "npm run build:all && node bin/tinstar.js --no-open",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.e2e.json",
+    "test:unit": "vitest run --exclude='e2e/**'",
     "test:e2e": "playwright test",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

@@ -124,9 +124,12 @@ When you need to fake browser APIs that jsdom doesn't ship:
 ## Type checking
 
 ```bash
-npx tsc -p tsconfig.app.json --noEmit
+npm run typecheck                       # app + e2e projects, must report ZERO errors
+npx tsc -p tsconfig.app.json --noEmit   # app project only
 ```
 
-**Use the `-p tsconfig.app.json` flag.** The root `tsconfig.json` is a solution file with only `references` — `npx tsc --noEmit` against the root config compiles nothing and returns 0 even when the project has type errors. This silently masks regressions.
+**Use the `-p tsconfig.app.json` flag** (not the root config). The root `tsconfig.json` is a solution file with only `references` — `npx tsc --noEmit` against the root config compiles nothing and returns 0 even when the project has type errors. This silently masks regressions.
 
-The codebase has a known baseline of pre-existing tsc errors (~119 as of V5.0); to tell which errors a change introduces, compare counts before and after, or use `git stash && tsc && git stash pop && tsc`.
+**The baseline is now zero (was ~119 at V5.0, 140 by V5.1-dev).** The `.github/workflows/ci.yml` gate runs `npm run typecheck` on every push/PR and fails on *any* type error, so the baseline can't regrow. Don't add a type error — fix it. If you genuinely need to suppress one, justify it inline (`// reason` next to a `!`/cast) rather than widening the ratchet.
+
+Note: the `node` project (`tsconfig.node.json`, which only covers `vite.config.ts` + `tailwind.config.ts`) carries one known wart — `vite.config.ts` trips TS2769 on the `test` key because vitest nests its own copy of `vite`, producing a dual-vite type clash. It's a tooling-version issue, not product code, so `npm run typecheck` covers `app` + `e2e` (both genuinely zero) and skips `node`.
