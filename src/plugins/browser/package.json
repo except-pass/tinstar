@@ -12,7 +12,10 @@
         {
           "type": "browser-widget",
           "label": "Browser",
-          "defaultSize": { "width": 800, "height": 600 }
+          "defaultSize": { "width": 800, "height": 600 },
+          "spawn": "palette",
+          "capabilities": ["spawnable", "web-view"],
+          "creator": "standalone"
         }
       ]
     },

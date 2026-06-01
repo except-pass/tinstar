@@ -9,7 +9,7 @@
     "description": "View images on the canvas",
     "contributes": {
       "widgets": [
-        { "type": "image-viewer", "label": "Image viewer", "defaultSize": { "width": 640, "height": 480 } }
+        { "type": "image-viewer", "label": "Image viewer", "defaultSize": { "width": 640, "height": 480 }, "capabilities": ["spawnable"], "creator": "standalone" }
       ]
     },
     "permissions": []
