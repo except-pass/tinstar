@@ -51,6 +51,8 @@ interface CanvasWidgetShellProps {
   onDragStart?: (id: string) => void
   onDragMove?: (id: string, clientX: number, clientY: number) => void
   onDragEnd?: (id: string) => void
+  /** Open the add-widget picker for an edge of this widget. `anchor` is screen-space. */
+  onAddWidget?: (nodeId: string, edge: 'left' | 'right' | 'top' | 'bottom', anchor: { x: number; y: number }) => void
 }
 
 export function CanvasWidgetShell({
@@ -74,6 +76,7 @@ export function CanvasWidgetShell({
   onDragStart,
   onDragMove,
   onDragEnd,
+  onAddWidget,
 }: CanvasWidgetShellProps) {
   const {
     component: WidgetComponent,
@@ -261,6 +264,35 @@ export function CanvasWidgetShell({
           isDropTarget={isDropTarget}
         />
       </WidgetIdProvider>
+
+      {onAddWidget && !registration.isContainer && (isHovered || isSelected) && (
+        <div className="pointer-events-none absolute inset-0">
+          {(['left','right','top','bottom'] as const).map(edge => {
+            const posStyle: React.CSSProperties =
+              edge === 'left'   ? { left: 0,  top: '50%', transform: `translate(-50%,-50%) scale(${1/zoom})` }
+            : edge === 'right'  ? { right: 0, top: '50%', transform: `translate(50%,-50%) scale(${1/zoom})` }
+            : edge === 'top'    ? { top: 0,  left: '50%', transform: `translate(-50%,-50%) scale(${1/zoom})` }
+            :                     { bottom: 0, left: '50%', transform: `translate(-50%,50%) scale(${1/zoom})` }
+            return (
+              <button
+                key={edge}
+                data-testid={`add-widget-btn-${edge}`}
+                className="pointer-events-auto absolute flex h-5 w-5 items-center justify-center rounded-full border border-primary/40 bg-slate-900/90 text-primary opacity-70 transition-opacity hover:opacity-100"
+                style={posStyle}
+                onPointerDown={e => e.stopPropagation()}
+                onClick={e => {
+                  e.stopPropagation()
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                  onAddWidget(nodeId, edge, { x: r.right + 4, y: r.top })
+                }}
+                title="Add widget"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* Resize handle — bottom-right corner */}
       <div
