@@ -1,5 +1,5 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
-import { join, extname, dirname, resolve } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createReadStream, existsSync, statSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
 import httpProxy from 'http-proxy'
@@ -22,23 +22,9 @@ import { handleFileUpload } from './api/fileUploadRoute'
 import { handleScreenshotUpload } from './api/screenshotsRoute'
 import { log } from './logger'
 import { getConfigRoot } from './configRoot'
+import { decideStaticServe } from './staticServe'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-
-const MIME_TYPES: Record<string, string> = {
-  '.html': 'text/html',
-  '.js': 'application/javascript',
-  '.css': 'text/css',
-  '.json': 'application/json',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf',
-  '.map': 'application/json',
-}
 
 interface ServerOptions {
   port: number
@@ -148,42 +134,42 @@ export function startServer(opts: ServerOptions) {
       return
     }
 
-    // 3. Static file serving with SPA fallback
+    // 3. Static file serving with SPA fallback. A request that looks like a file
+    //    (has an extension) and doesn't exist 404s — it must NOT fall back to
+    //    index.html, or a missing/stale hashed chunk would be served as text/html
+    //    and break dynamic import() (the mermaid "Rendering diagram…" hang).
     const pathname = url.split('?')[0]!
-    const ext = extname(pathname)
-    const filePath = resolve(join(opts.clientDir, pathname))
+    const decision = decideStaticServe(pathname, opts.clientDir, existsSync)
 
-    // Prevent path traversal outside clientDir
-    if (!filePath.startsWith(opts.clientDir)) {
+    if (decision.kind === 'forbidden') {
       if (safeWriteHead(res, 403, { 'Content-Type': 'text/plain' })) res.end('Forbidden')
       return
     }
 
-    // Try to serve the exact file if it has an extension and exists
-    if (ext && existsSync(filePath)) {
+    if (decision.kind === 'file') {
       try {
-        const stat = statSync(filePath)
-        if (stat.isFile()) {
-          const mime = MIME_TYPES[ext] ?? 'application/octet-stream'
-          if (safeWriteHead(res, 200, { 'Content-Type': mime })) {
-            createReadStream(filePath).pipe(res)
+        if (statSync(decision.filePath).isFile()) {
+          if (safeWriteHead(res, 200, { 'Content-Type': decision.mime })) {
+            createReadStream(decision.filePath).pipe(res)
           }
           return
         }
       } catch {
-        // fall through to SPA fallback
+        // fall through to 404 (path is a directory, or vanished mid-request)
       }
+      if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) res.end('Not found')
+      return
     }
 
-    // SPA fallback — serve index.html for non-file routes
-    const indexPath = join(opts.clientDir, 'index.html')
-    if (existsSync(indexPath)) {
+    if (decision.kind === 'spa') {
       if (safeWriteHead(res, 200, { 'Content-Type': 'text/html' })) {
-        createReadStream(indexPath).pipe(res)
+        createReadStream(decision.indexPath).pipe(res)
       }
-    } else {
-      if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) res.end('Not found')
+      return
     }
+
+    // decision.kind === 'not-found'
+    if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) res.end('Not found')
   }
 
   const upgradeHandler = (req: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) => {

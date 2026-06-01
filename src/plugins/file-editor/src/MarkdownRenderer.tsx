@@ -61,6 +61,14 @@ function MermaidBlock({ source }: { source: string }) {
         setErrorMsg(err instanceof Error ? err.message : 'Invalid mermaid syntax')
         setState('error')
       }
+    }).catch((err) => {
+      // The mermaid module chunk itself failed to load (e.g. a stale/missing
+      // /assets/*.js after a rebuild). Without this catch the block would hang on
+      // "Rendering diagram…" forever. Surface an error with a reload hint instead.
+      if (cancelled) return
+      const detail = err instanceof Error ? err.message : 'unknown error'
+      setErrorMsg(`Couldn't load the diagram renderer (${detail}). Try reloading the page.`)
+      setState('error')
     })
 
     return () => { cancelled = true }
