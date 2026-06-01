@@ -48,6 +48,10 @@ interface CanvasWidgetShellProps {
   onDoubleClickZoom?: (id: string) => void
   onMove: (id: string, x: number, y: number) => void
   onResize: (id: string, w: number, h: number) => void
+  /** Resize gesture started (pointer down on the resize handle) — snapshot state for re-snap. */
+  onResizeStart?: (id: string) => void
+  /** Resize gesture finished (after an actual resize) — re-snap the constellation. */
+  onResizeEnd?: (id: string) => void
   onDragStart?: (id: string) => void
   onDragMove?: (id: string, clientX: number, clientY: number) => void
   onDragEnd?: (id: string) => void
@@ -76,6 +80,8 @@ export function CanvasWidgetShell({
   onDoubleClickZoom,
   onMove,
   onResize,
+  onResizeStart,
+  onResizeEnd,
   onDragStart,
   onDragMove,
   onDragEnd,
@@ -178,8 +184,9 @@ export function CanvasWidgetShell({
         originW: layout.width,
         originH: layout.height,
       }
+      onResizeStart?.(nodeId)
     },
-    [layout.width, layout.height],
+    [layout.width, layout.height, nodeId, onResizeStart],
   )
 
   const handleResizeMove = useCallback(
@@ -207,7 +214,8 @@ export function CanvasWidgetShell({
 
   const handleResizeUp = useCallback(() => {
     resizing.current = false
-  }, [])
+    if (resizeMoved.current) onResizeEnd?.(nodeId)
+  }, [nodeId, onResizeEnd])
 
   const handleDoubleClick = useCallback(() => {
     onDoubleClickZoom?.(nodeId)

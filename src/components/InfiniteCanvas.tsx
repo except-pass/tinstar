@@ -24,6 +24,7 @@ import type { Rect, IdRect } from '../canvas/constellationCohesion'
 import { applyGroupDrag, boundingBoxOf, fitToRect, occupiedEdgesOf } from '../canvas/constellationCohesion'
 import { tidyGrid } from '../canvas/tidyArrange'
 import type { DragMember } from '../canvas/constellationCohesion'
+import { reflowOnResize, type ReflowRect, type ReflowMember } from '../canvas/resizeReflow'
 
 /** Shared empty set so unsnapped widgets reuse one reference (all four [+] edges shown). */
 const EMPTY_EDGES: ReadonlySet<SnapEdge> = new Set()
@@ -742,6 +743,34 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   }, [layouts])
 
   // Widget drag callbacks
+  // Resize re-snap: snapshot the resized widget + its constellation co-members at resize-start,
+  // then on resize-end shift members flush against the new size (push when grown, pull when
+  // shrunk). Overlap/gaps during the drag are intentional — only the end state re-snaps.
+  const resizeReflowSnapshot = useRef<{ nodeId: string; start: ReflowRect; members: ReflowMember[] } | null>(null)
+
+  const handleResizeStart = useCallback((nodeId: string) => {
+    const slot = constellations.slotsForNode(nodeId)[0]
+    const l = getLayout(nodeId)
+    if (!slot || !l) { resizeReflowSnapshot.current = null; return }
+    const members: ReflowMember[] = []
+    for (const id of constellations.nodesInSlot(slot)) {
+      if (id === nodeId) continue
+      const ml = getLayout(id)
+      if (ml) members.push({ id, x: ml.x, y: ml.y })
+    }
+    resizeReflowSnapshot.current = { nodeId, start: { x: l.x, y: l.y, width: l.width, height: l.height }, members }
+  }, [constellations, getLayout])
+
+  const handleResizeEnd = useCallback((nodeId: string) => {
+    const snap = resizeReflowSnapshot.current
+    resizeReflowSnapshot.current = null
+    if (!snap || snap.nodeId !== nodeId) return
+    const finalL = getLayout(nodeId)
+    if (!finalL) return
+    const moves = reflowOnResize({ start: snap.start, final: { width: finalL.width, height: finalL.height }, members: snap.members })
+    for (const [id, pos] of moves) updateRunPosition(id, pos.x, pos.y)
+  }, [getLayout, updateRunPosition])
+
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
     setDraggingNodeId(nodeId)
@@ -1534,6 +1563,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             onDoubleClickZoom={handleDoubleClickZoom}
             onMove={handleMultiMove}
             onResize={updateRunSize}
+            onResizeStart={handleResizeStart}
+            onResizeEnd={handleResizeEnd}
             onAddWidget={(nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor })}
             occupiedEdges={occupiedEdgesFor(node.id)}
           />
@@ -1604,6 +1635,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (isSnapLeaf ? handleDoubleClickZoom : undefined)}
         onMove={moveHandler}
         onResize={resizeHandler}
+        onResizeStart={isSnapLeaf ? handleResizeStart : undefined}
+        onResizeEnd={isSnapLeaf ? handleResizeEnd : undefined}
         onDragStart={isSnapLeaf ? handleWidgetDragStart : undefined}
         onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
         onAddWidget={isSnapLeaf ? (nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor }) : undefined}
