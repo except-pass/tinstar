@@ -196,7 +196,7 @@ describe('POST /api/browser-widgets — placement', () => {
     expect(body.data.id).toMatch(/^browser-/)
     expect(body.data.sessionId).toBeUndefined()
     expect(body.data.position).toEqual({ x: 100, y: 200 })
-    expect(typeof body.data.color === 'string' || body.data.color === undefined).toBe(true)
+    expect(body.data.color).toBe('#5b6b7a') // neutral default when unattached
   })
 })
 
