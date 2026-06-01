@@ -77,6 +77,19 @@ function killStalePidSync(pidFilePath: string): void {
 export function startServer(opts: ServerOptions) {
   opts.clientDir = resolve(opts.clientDir)
 
+  // Last-resort safety net. The orchestrator runs many subsystems (fs watchers,
+  // child processes, NATS, SSE) and a single stray error — e.g. an FSWatcher
+  // emitting 'error' on ENOSPC as new dirs appear during a session spawn — must
+  // not be allowed to take the whole server down. Log the cause and keep
+  // running; systemd-style hard restarts on these are worse than degrading.
+  process.on('uncaughtException', (err) => {
+    log.error('server', 'uncaught exception (kept alive)', { error: err.message, stack: err.stack })
+  })
+  process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : null
+    log.error('server', 'unhandled rejection (kept alive)', { reason: err?.message ?? String(reason), stack: err?.stack })
+  })
+
   // Kill any stale server BEFORE starting the backend — the old server's shutdown
   // handler will clean up its observability supervisors. If we init first, we risk
   // adopting pids that are about to die.
