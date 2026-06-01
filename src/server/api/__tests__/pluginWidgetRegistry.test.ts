@@ -39,7 +39,7 @@ describe('resolvePluginIcon', () => {
 })
 
 describe('resolveWidgetRegistry built-ins', () => {
-  it('lists the bundled Saloon (palette opt-in) but not the context-only built-ins', () => {
+  it('lists the palette-opt-in built-ins (Saloon, Browser) but not the context-only ones', () => {
     invalidateWidgetRegistryCache()
     // An empty configRoot (no plugins.json) → only the bundled built-ins surface.
     const reg = resolveWidgetRegistry(mkdtempSync(join(tmpdir(), 'no-plugins-')))
@@ -49,9 +49,14 @@ describe('resolveWidgetRegistry built-ins', () => {
     expect(saloon!.pluginDisplayName).toBe('Saloon')
     expect(saloon!.label).toBe('Saloon')
     expect(saloon!.spawn).toBe('palette')
-    // file-editor / browser / image-viewer omit `spawn`, so they stay out of the palette.
+    // Browser is now a standalone palette widget (decoupled from sessions) and declares
+    // the 'spawnable' capability so it appears in the add-widget [+] picker.
+    const browser = reg.find(w => w.widgetType === 'browser-widget')
+    expect(browser).toBeDefined()
+    expect(browser!.spawn).toBe('palette')
+    expect(browser!.capabilities).toContain('spawnable')
+    // file-editor / image-viewer omit `spawn` (context-only), so they stay out of the palette.
     expect(reg.find(w => w.widgetType === 'file-editor')).toBeUndefined()
-    expect(reg.find(w => w.widgetType === 'browser-widget')).toBeUndefined()
     expect(reg.find(w => w.widgetType === 'image-viewer')).toBeUndefined()
   })
 
