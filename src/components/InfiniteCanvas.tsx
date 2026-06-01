@@ -26,7 +26,12 @@ import { tidyGrid } from '../canvas/tidyArrange'
 import type { DragMember } from '../canvas/constellationCohesion'
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
 import { resolveSnapTarget, revalidateSnapTarget, resolveSnapCommit, snapMembership } from '../canvas/snapZoneResolver'
-import type { SnapWidget, SnapTarget } from '../canvas/snapZoneResolver'
+import type { SnapWidget, SnapTarget, SnapEdge } from '../canvas/snapZoneResolver'
+import { AddWidgetPicker } from './AddWidgetPicker'
+import { useWidgetCatalog } from '../hooks/useWidgetCatalog'
+import { useAddWidget } from '../hooks/useAddWidget'
+import { addWidgetMembership } from '../canvas/addWidgetMembership'
+import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 
 interface Props {
   tree: TreeNode[]
@@ -44,6 +49,8 @@ interface Props {
   onFocusRun?: (runId: string) => void
   onDeleteEntity?: (entityId: string, type: string) => void
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
+  /** Open the session create dialog for a session-backed add-widget; calls back with the created sessionId. */
+  onRequestCreateSession?: (prefill: { taskId?: string }, onCreated: (sessionId: string) => void) => void
   onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
   onEditorWidgetCreated?: (widget: EditorWidget) => void
   onBrowserWidgetCreated?: (widget: BrowserWidget) => void
@@ -172,7 +179,7 @@ const MARQUEE_THRESHOLD = 5
 // Snap-zone snap distance (canvas units)
 const SNAP_DISTANCE = 60
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onRequestCreateSession, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // Seed initial placement for browser widgets opened via the host placement API
   // (POST/PATCH /api/browser-widgets with position/nearNodeId). Consulted by the
@@ -615,6 +622,70 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   // Constellation context — must be declared before widget drag callbacks that reference it
   const constellations = useConstellationContext()
+
+  // ── Add-widget picker + orchestrator ──────────────────────────────────────
+  const { entries: catalog } = useWidgetCatalog()
+  const [addPicker, setAddPicker] = useState<{ sourceNodeId: string; edge: SnapEdge; anchor: { x: number; y: number } } | null>(null)
+  // Smart default: from a saloon you most likely add a run; from a run you most
+  // likely add a browser. Falls back to GLOBAL_DEFAULT for everything else.
+  const DEFAULT_FOR: Record<string, string> = { 'saloon': 'run-workspace', 'run-workspace': 'browser-widget' }
+  const GLOBAL_DEFAULT = 'run-workspace'
+
+  // nodeId → widget type, used to resolve the picker's smart default.
+  const nodeTypeById = useMemo(() => {
+    const map = new Map<string, string>()
+    const walk = (nodes: TreeNode[]) => {
+      for (const n of nodes) { map.set(n.id, n.type); walk(n.children) }
+    }
+    walk(tree)
+    return map
+  }, [tree])
+
+  // Pending run placements, keyed by sessionId. When a session-backed widget is
+  // added we open the create dialog; once the resulting run appears via SSE we
+  // flush its layout + snap it to the source. Node id for a run is `run-<run.id>`.
+  const pendingRunPlacement = useRef<Map<string, { layout: WidgetLayout; sourceNodeId: string }>>(new Map())
+  const registerPendingRunPlacement = useCallback((sessionId: string, layout: WidgetLayout, sourceNodeId: string) => {
+    pendingRunPlacement.current.set(sessionId, { layout, sourceNodeId })
+  }, [])
+  useEffect(() => {
+    if (pendingRunPlacement.current.size === 0) return
+    for (const run of runMap.values()) {
+      const pend = pendingRunPlacement.current.get(run.sessionId)
+      if (!pend) continue
+      const nodeId = `run-${run.id}`
+      insertLayout(nodeId, { ...pend.layout })
+      const sourceSlot = (constellations.slotsForNode(pend.sourceNodeId)[0] ?? null) as Parameters<typeof addWidgetMembership>[0]['sourceSlot']
+      const freeSlot = nextFreeSlot(constellations.graph)
+      const plan = addWidgetMembership({ sourceSlot, freeSlot, sourceId: pend.sourceNodeId, newId: nodeId })
+      for (const a of plan.assigns) constellations.assign(a.slot, a.nodeId)
+      constellations.addSnapEdge(plan.snap.a, plan.snap.b)
+      pendingRunPlacement.current.delete(run.sessionId)
+    }
+  }, [runMap, insertLayout, constellations])
+
+  // Promise wrapper around the host's session create dialog. Resolves with the
+  // created sessionId; if the dialog is cancelled `onCreated` never fires and the
+  // promise simply never resolves — acceptable here since the only deferred side
+  // effect is registering a pending placement (nothing leaks). No timers.
+  const openCreateSession = useCallback((_prefill: { spaceId: string }) => {
+    return new Promise<string | null>((resolve) => {
+      if (!onRequestCreateSession) { resolve(null); return }
+      onRequestCreateSession({}, (sessionId) => resolve(sessionId))
+    })
+  }, [onRequestCreateSession])
+
+  const addWidget = useAddWidget({
+    spaceId: activeSpaceId ?? '',
+    getLayout,
+    insertLayout,
+    graph: constellations.graph,
+    slotsForNode: constellations.slotsForNode,
+    assignSlot: (slot, nodeId) => constellations.assign(slot as ConstellationSlot, nodeId),
+    addSnapEdge: constellations.addSnapEdge,
+    openCreateSession,
+    registerPendingRunPlacement,
+  })
 
   // Memoized inverted index: nodeId → slot (first slot only) and occupied slot set
   const slotByNode = useMemo(() => {
@@ -1441,6 +1512,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             onDoubleClickZoom={handleDoubleClickZoom}
             onMove={handleMultiMove}
             onResize={updateRunSize}
+            onAddWidget={(nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor })}
           />
         )
       }
@@ -1511,6 +1583,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         onResize={resizeHandler}
         onDragStart={isSnapLeaf ? handleWidgetDragStart : undefined}
         onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
+        onAddWidget={isSnapLeaf ? (nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor }) : undefined}
       />
     )
   }
@@ -1704,6 +1777,22 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           {Math.round(camera.zoom * 100)}%
         </div>
       </div>
+
+      {/* Add-widget picker — screen-space (anchored to the clicked ghost button) */}
+      {addPicker && catalog.length > 0 && (() => {
+        const sourceType = toWidgetType(nodeTypeById.get(addPicker.sourceNodeId) ?? '')
+        const wanted = DEFAULT_FOR[sourceType] ?? GLOBAL_DEFAULT
+        const defaultType = catalog.some(e => e.type === wanted) ? wanted : catalog[0]!.type
+        return (
+          <AddWidgetPicker
+            entries={catalog}
+            defaultType={defaultType}
+            anchor={addPicker.anchor}
+            onPick={(entry) => { void addWidget(entry, addPicker.sourceNodeId, addPicker.edge); setAddPicker(null) }}
+            onClose={() => setAddPicker(null)}
+          />
+        )
+      })()}
 
     </div>
   )

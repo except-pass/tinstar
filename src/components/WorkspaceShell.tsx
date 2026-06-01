@@ -344,6 +344,9 @@ function WorkspaceShellInner() {
     entityId: string; entityType: GroupingDimension; entityName: string
   } | null>(null)
   const [sessionPrefill, setSessionPrefill] = useState<{ taskId?: string } | null>(null)
+  // When an add-widget flow opens the session dialog, this holds the callback to
+  // run with the created sessionId so the canvas can place the resulting run.
+  const [pendingSessionOnCreated, setPendingSessionOnCreated] = useState<((sessionId: string) => void) | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const { select, toggleSelect, expandAll, selectedCount: _selectedCount, state: selectionState } = useSelection()
   const arrangeGridRef = useRef<(() => void) | null>(null)
@@ -562,6 +565,14 @@ function WorkspaceShellInner() {
     } catch { /* ignore */ }
     setShowSessionDialog(true)
   }, [entityMenu])
+
+  // Open the session create dialog on behalf of the add-widget flow, capturing a
+  // callback to fire with the created sessionId once the POST succeeds.
+  const handleRequestCreateSession = useCallback((prefill: { taskId?: string }, onCreated: (sessionId: string) => void) => {
+    setSessionPrefill(prefill)
+    setPendingSessionOnCreated(() => onCreated)
+    setShowSessionDialog(true)
+  }, [])
 
   const handleMenuRename = useCallback(() => {
     if (entityMenu) {
@@ -961,6 +972,7 @@ function WorkspaceShellInner() {
                     onFocusRun={handleCanvasFocusRun}
                     onDeleteEntity={handleDelete}
                     onMenuOpen={handleMenuOpen}
+                    onRequestCreateSession={handleRequestCreateSession}
                     onTaskUpdate={handleTaskUpdate}
                     onImageWidgetCreated={(widget) => addOptimistic('imageWidget', widget)}
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
@@ -987,8 +999,9 @@ function WorkspaceShellInner() {
 
               {showSessionDialog && (
                 <CreateSessionDialog
-                  onClose={() => { setShowSessionDialog(false); setSessionPrefill(null) }}
+                  onClose={() => { setShowSessionDialog(false); setSessionPrefill(null); setPendingSessionOnCreated(null) }}
                   prefill={sessionPrefill ?? undefined}
+                  onCreated={(sessionId) => { pendingSessionOnCreated?.(sessionId) }}
                 />
               )}
 
