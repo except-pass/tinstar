@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { centroidOf, boundingBoxOf, applyGroupDrag, fitToRect, computeBreakLinks, planLinkBreak } from '../constellationCohesion'
+import { centroidOf, boundingBoxOf, applyGroupDrag, fitToRect, computeBreakLinks, planLinkBreak, occupiedEdgesOf } from '../constellationCohesion'
 import type { Rect, IdRect } from '../constellationCohesion'
 
 const R = (x: number, y: number, w = 100, h = 100): Rect =>
@@ -66,6 +66,31 @@ describe('planLinkBreak', () => {
     ], 'a', 'b')
     expect(plan.removeFromSlot).toEqual([])
     expect(plan.newGroup).toEqual([])
+  })
+})
+
+describe('occupiedEdgesOf', () => {
+  const target = IR('T', 100, 100) // 100×100; right edge x=200, bottom y=200
+
+  it('returns no edges when there are no neighbors', () => {
+    expect([...occupiedEdgesOf(target, [])]).toEqual([])
+  })
+
+  it('detects a flush right neighbor', () => {
+    expect([...occupiedEdgesOf(target, [IR('R', 200, 100)])]).toEqual(['right'])
+  })
+
+  it('detects flush left and bottom neighbors', () => {
+    const edges = occupiedEdgesOf(target, [IR('L', 0, 100), IR('B', 100, 200)])
+    expect([...edges].sort()).toEqual(['bottom', 'left'])
+  })
+
+  it('ignores gapped (non-adjacent) neighbors', () => {
+    expect([...occupiedEdgesOf(target, [IR('G', 400, 100)])]).toEqual([])
+  })
+
+  it('skips itself', () => {
+    expect([...occupiedEdgesOf(target, [target])]).toEqual([])
   })
 })
 

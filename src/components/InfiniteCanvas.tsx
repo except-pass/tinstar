@@ -20,10 +20,13 @@ import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
 import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
-import type { Rect } from '../canvas/constellationCohesion'
-import { applyGroupDrag, boundingBoxOf, fitToRect } from '../canvas/constellationCohesion'
+import type { Rect, IdRect } from '../canvas/constellationCohesion'
+import { applyGroupDrag, boundingBoxOf, fitToRect, occupiedEdgesOf } from '../canvas/constellationCohesion'
 import { tidyGrid } from '../canvas/tidyArrange'
 import type { DragMember } from '../canvas/constellationCohesion'
+
+/** Shared empty set so unsnapped widgets reuse one reference (all four [+] edges shown). */
+const EMPTY_EDGES: ReadonlySet<SnapEdge> = new Set()
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
 import { resolveSnapTarget, revalidateSnapTarget, resolveSnapCommit, snapMembership } from '../canvas/snapZoneResolver'
 import type { SnapWidget, SnapTarget, SnapEdge } from '../canvas/snapZoneResolver'
@@ -686,6 +689,25 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     openCreateSession,
     registerPendingRunPlacement,
   })
+
+  // Edges of a node that already abut a snapped constellation neighbor (where a break-link
+  // chip sits) — the add-widget [+] is suppressed there so it only shows on exposed edges.
+  const occupiedEdgesFor = useCallback((nodeId: string): ReadonlySet<SnapEdge> => {
+    const slots = constellations.slotsForNode(nodeId)
+    if (slots.length === 0) return EMPTY_EDGES
+    const target = getLayout(nodeId)
+    if (!target) return EMPTY_EDGES
+    const memberIds = new Set<string>()
+    for (const s of slots) for (const m of constellations.nodesInSlot(s)) memberIds.add(m)
+    const others: IdRect[] = []
+    for (const id of memberIds) {
+      if (id === nodeId) continue
+      const l = getLayout(id)
+      if (l) others.push({ id, x: l.x, y: l.y, width: l.width, height: l.height })
+    }
+    if (others.length === 0) return EMPTY_EDGES
+    return occupiedEdgesOf({ id: nodeId, x: target.x, y: target.y, width: target.width, height: target.height }, others)
+  }, [constellations, getLayout])
 
   // Memoized inverted index: nodeId → slot (first slot only) and occupied slot set
   const slotByNode = useMemo(() => {
@@ -1513,6 +1535,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             onMove={handleMultiMove}
             onResize={updateRunSize}
             onAddWidget={(nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor })}
+            occupiedEdges={occupiedEdgesFor(node.id)}
           />
         )
       }
@@ -1584,6 +1607,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         onDragStart={isSnapLeaf ? handleWidgetDragStart : undefined}
         onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
         onAddWidget={isSnapLeaf ? (nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor }) : undefined}
+        occupiedEdges={occupiedEdgesFor(node.id)}
       />
     )
   }

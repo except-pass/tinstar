@@ -53,6 +53,9 @@ interface CanvasWidgetShellProps {
   onDragEnd?: (id: string) => void
   /** Open the add-widget picker for an edge of this widget. `anchor` is screen-space. */
   onAddWidget?: (nodeId: string, edge: 'left' | 'right' | 'top' | 'bottom', anchor: { x: number; y: number }) => void
+  /** Edges that already have a snapped neighbor (a break-link sits there) — the add-widget
+   *  [+] is suppressed on these so it only shows on exposed edges. */
+  occupiedEdges?: ReadonlySet<'left' | 'right' | 'top' | 'bottom'>
 }
 
 export function CanvasWidgetShell({
@@ -77,6 +80,7 @@ export function CanvasWidgetShell({
   onDragMove,
   onDragEnd,
   onAddWidget,
+  occupiedEdges,
 }: CanvasWidgetShellProps) {
   const {
     component: WidgetComponent,
@@ -267,7 +271,7 @@ export function CanvasWidgetShell({
 
       {onAddWidget && !registration.isContainer && (isHovered || isSelected) && (
         <div className="pointer-events-none absolute inset-0">
-          {(['left','right','top','bottom'] as const).map(edge => {
+          {(['left','right','top','bottom'] as const).filter(edge => !occupiedEdges?.has(edge)).map(edge => {
             const posStyle: React.CSSProperties =
               edge === 'left'   ? { left: 0,  top: '50%', transform: `translate(-50%,-50%) scale(${1/zoom})` }
             : edge === 'right'  ? { right: 0, top: '50%', transform: `translate(50%,-50%) scale(${1/zoom})` }

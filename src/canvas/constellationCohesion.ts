@@ -82,6 +82,28 @@ export function computeBreakLinks(items: IdRect[], tolerance = 20): BreakLink[] 
   return links
 }
 
+export type CohesionEdge = 'left' | 'right' | 'top' | 'bottom'
+
+/**
+ * Which edges of `target` have a flush/touching neighbor among `others` — i.e. the edges
+ * that are NOT exposed. Uses the same adjacency test as the break-link seams, so callers
+ * (e.g. the add-widget [+] affordance) can avoid the edges where a break-link chip already sits.
+ * Side is the dominant axis of the center offset, matching resolveSnapTarget's placement.
+ */
+export function occupiedEdgesOf(target: IdRect, others: IdRect[], tolerance = 20): Set<CohesionEdge> {
+  const edges = new Set<CohesionEdge>()
+  const tcx = target.x + target.width / 2, tcy = target.y + target.height / 2
+  for (const o of others) {
+    if (o.id === target.id) continue
+    if (!seamPoint(target, o, tolerance)) continue
+    const dx = (o.x + o.width / 2) - tcx
+    const dy = (o.y + o.height / 2) - tcy
+    if (Math.abs(dx) >= Math.abs(dy)) edges.add(dx >= 0 ? 'right' : 'left')
+    else edges.add(dy >= 0 ? 'bottom' : 'top')
+  }
+  return edges
+}
+
 export interface LinkBreakPlan {
   /** ids to remove from the original constellation slot (freed, or moved into newGroup) */
   removeFromSlot: string[]
