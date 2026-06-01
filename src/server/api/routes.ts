@@ -1846,27 +1846,25 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       const parsed = JSON.parse(body) as {
         sessionId?: string; url?: string; headers?: Record<string, string>; spaceId?: string;
+        color?: string;
         position?: { x: number; y: number }; size?: { width: number; height: number };
         nearNodeId?: string; slot?: number | string;
       }
-      const { sessionId, url: widgetUrl = '', headers: widgetHeaders } = parsed
-      if (!sessionId) {
-        fail(res, 'INVALID_PARAMS', 'sessionId required')
-        return
-      }
-      const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
-      if (!run) {
+      const { sessionId, url: widgetUrl = '', headers: widgetHeaders, color: colorOverride } = parsed
+      const run = sessionId ? ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId) : undefined
+      if (sessionId && !run) {
         fail(res, 'SESSION_NOT_FOUND', `No run with sessionId ${sessionId}`)
         return
       }
+      const widgetColor = colorOverride ?? run?.color ?? '#5b6b7a'
       const spaceId = parsed.spaceId || ctx.docStore.activeSpaceId || ''
       const placement = resolvePlacement(ctx, spaceId, parsed)
       const widget: import('../../domain/types').BrowserWidget = {
         id: shortId('browser'),
         spaceId: spaceId || undefined,
-        sessionId,
+        ...(sessionId ? { sessionId } : {}),
         url: widgetUrl,
-        color: run.color,
+        color: widgetColor,
         ...(widgetHeaders && Object.keys(widgetHeaders).length > 0 ? { headers: widgetHeaders } : {}),
         ...(placement ? { position: placement.position, size: placement.size } : {}),
       }

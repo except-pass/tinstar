@@ -181,6 +181,23 @@ describe('POST /api/browser-widgets — placement', () => {
     expect(data.size).toBeUndefined()
     expect(data.url).toBe('http://plain')
   })
+
+  it('creates a browser widget with no sessionId (standalone)', async () => {
+    const res = await testCtx.fetch('/api/browser-widgets', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: 'http://example.com',
+        position: { x: 100, y: 200 },
+        size: { width: 640, height: 480 },
+      }),
+    })
+    const body = await res.json() as { ok: boolean; data: BrowserWidget }
+    expect(res.ok).toBe(true)
+    expect(body.data.id).toMatch(/^browser-/)
+    expect(body.data.sessionId).toBeUndefined()
+    expect(body.data.position).toEqual({ x: 100, y: 200 })
+    expect(typeof body.data.color === 'string' || body.data.color === undefined).toBe(true)
+  })
 })
 
 describe('PATCH /api/browser-widgets/:id — placement', () => {
