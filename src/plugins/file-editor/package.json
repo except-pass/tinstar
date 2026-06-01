@@ -9,7 +9,7 @@
     "description": "Edit text files on the canvas",
     "contributes": {
       "widgets": [
-        { "type": "file-editor", "label": "File editor", "defaultSize": { "width": 640, "height": 480 }, "capabilities": ["spawnable"], "creator": "standalone" }
+        { "type": "file-editor", "label": "File editor", "defaultSize": { "width": 640, "height": 480 } }
       ]
     },
     "permissions": []
