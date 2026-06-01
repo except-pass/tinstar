@@ -200,7 +200,7 @@ export interface EditorWidget {
 export interface BrowserWidget {
   id: string
   spaceId?: string
-  sessionId: string
+  sessionId?: string          // optional — browser widgets can be standalone (no session)
   url: string
   title?: string
   color?: string
