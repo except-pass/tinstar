@@ -20,6 +20,15 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // Backend tests are pure Node (filesystem, child_process, NATS) and have no
+    // business booting jsdom. Running them under the `node` environment is both
+    // faster and avoids jsdom's dependency chain (html-encoding-sniffer →
+    // @exodus/bytes), which is ESM-only and unrequireable on Node < 22.12.
+    // Anything that genuinely needs the DOM stays on the default jsdom env.
+    environmentMatchGlobs: [
+      ['src/server/**', 'node'],
+      ['tests/server/**', 'node'],
+    ],
     setupFiles: ['./tests/setup.ts'],
   },
   plugins: [react(), devTitle()],

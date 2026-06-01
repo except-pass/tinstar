@@ -24,6 +24,9 @@
     "tmux"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev:backend": "tsx watch src/server/standalone.ts --port 5281 --no-open",
     "dev:frontend": "vite",
