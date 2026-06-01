@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, waitFor } from '@testing-library/react'
 import { AgentIcon } from '../agentIcon'
 import { __resetAvatarCacheForTests } from '../agentAvatarCache'
 
@@ -30,12 +30,15 @@ describe('<AgentIcon>', () => {
   })
 
   it('renders DiceBear <img> after the library resolves', async () => {
-    const { container, rerender } = render(<AgentIcon seed="run-distinct" color="#123456" />)
-    await new Promise(r => setTimeout(r, 200))
-    rerender(<AgentIcon seed="run-distinct" color="#123456" />)
-    const img = container.querySelector('img')
-    expect(img).not.toBeNull()
-    expect(img!.getAttribute('src')).toMatch(/^data:image\/svg\+xml/)
+    const { container } = render(<AgentIcon seed="run-distinct" color="#123456" />)
+    // Poll for the avatar instead of a fixed sleep: the component self-rerenders when the
+    // DiceBear dynamic import resolves, and the cache is reset per-test so every run pays the
+    // cold-import cost — a hard 200ms wait is flaky on slow/cold CI runners.
+    await waitFor(() => {
+      expect(container.querySelector('img')).not.toBeNull()
+    }, { timeout: 4000 })
+    const img = container.querySelector('img')!
+    expect(img.getAttribute('src')).toMatch(/^data:image\/svg\+xml/)
   })
 
   it('falls back to the fallback prop when given neither icon nor seed', () => {
