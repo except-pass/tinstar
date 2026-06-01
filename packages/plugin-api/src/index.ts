@@ -40,6 +40,14 @@ export interface WidgetRegistration {
   /** Optional function returning CSS class names for the widget's outer frame, given the current chrome state. */
   getFrameClass?: (state: WidgetFrameState) => string
   supportsMinimize?: boolean
+  /** Declarative capabilities, e.g. 'spawnable' (appears in the add-widget picker),
+   *  'web-view', 'session-host'. Drives the grow-constellation affordance. */
+  capabilities?: string[]
+  /** How an instance is created. 'standalone' → one-shot create endpoint;
+   *  'session-backed' → opens the session create flow. Defaults to 'standalone'. */
+  creator?: 'standalone' | 'session-backed'
+  /** Free-form descriptive tags, reserved for future ordering/grouping. */
+  tags?: string[]
 }
 
 export interface PluginLogger {
@@ -302,6 +310,9 @@ export interface PluginManifest {
        *  'palette+context' — reserved for entity-drag shortcuts; in V5.1
        *  the palette entry renders greyed and non-draggable. */
       spawn?: 'palette' | 'palette+context'
+      capabilities?: string[]
+      creator?: 'standalone' | 'session-backed'
+      tags?: string[]
     }>
   }
   permissions?: string[]
