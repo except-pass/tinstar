@@ -48,6 +48,9 @@ export interface ResolvedWidgetType {
   defaultSize?: { width: number; height: number }
   singleton: boolean
   spawn: 'palette' | 'palette+context'
+  capabilities?: string[]
+  creator?: 'standalone' | 'session-backed'
+  tags?: string[]
 }
 
 let cachedRegistry: ResolvedWidgetType[] | null = null
@@ -88,6 +91,9 @@ export function resolveWidgetRegistry(configRoot: string): ResolvedWidgetType[] 
         defaultSize: w.defaultSize,
         singleton: w.singleton === true,
         spawn: w.spawn,
+        capabilities: w.capabilities,
+        creator: w.creator,
+        tags: w.tags,
       })
     }
   }
@@ -123,6 +129,9 @@ export function resolveWidgetRegistry(configRoot: string): ResolvedWidgetType[] 
         defaultSize: w.defaultSize,
         singleton: w.singleton === true,
         spawn: w.spawn ?? 'palette',
+        capabilities: w.capabilities,
+        creator: w.creator,
+        tags: w.tags,
       })
     }
   }
