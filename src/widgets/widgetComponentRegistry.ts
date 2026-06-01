@@ -54,6 +54,13 @@ export function getWidgetComponent(type: string): WidgetRegistration | undefined
   return registry.get(type)
 }
 
+/** All currently-registered host widget registrations (snapshot). Used by the
+ *  unified widget catalog to surface host widgets (e.g. run-workspace) that are
+ *  not part of the plugin registry. */
+export function listWidgetRegistrations(): WidgetRegistration[] {
+  return [...registry.values()]
+}
+
 /**
  * Maps TreeNode.type values to widget registry type strings.
  * 'run' → 'run-workspace'; all group dimension types map to themselves.
