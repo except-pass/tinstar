@@ -13,13 +13,30 @@ describe('mergeCatalog', () => {
       creator: 'standalone' as const, icon: '/x.svg' },
     { pluginId: 'nats-traffic', widgetType: 'saloon', label: 'Saloon',
       capabilities: ['spawnable'], creator: 'standalone' as const },
-    { pluginId: 'misc', widgetType: 'no-cap', label: 'NoCap' }, // no capabilities → excluded
+    // Installed external plugin: palette-draggable, no capabilities → spawnable by default.
+    { pluginId: 'stretchplan', widgetType: 'stretchplan-task', label: 'Stretchplan', spawn: 'palette' },
+    // palette+context widget (e.g. file-editor) → excluded.
+    { pluginId: 'fe', widgetType: 'file-editor', label: 'File editor', spawn: 'palette+context' },
+    { pluginId: 'misc', widgetType: 'no-cap', label: 'NoCap' }, // no spawn, no capabilities → excluded
   ]
 
-  it('includes only spawnable widgets from both registries', () => {
+  it('includes spawnable widgets: capability-declared OR palette-installable', () => {
     const out = mergeCatalog(host as any, plugin as any)
     const types = out.map((e: CatalogEntry) => e.type).sort()
-    expect(types).toEqual(['browser-widget', 'run-workspace', 'saloon'])
+    expect(types).toEqual(['browser-widget', 'run-workspace', 'saloon', 'stretchplan-task'])
+  })
+
+  it('includes a palette plugin with no declared capabilities (stretchplan)', () => {
+    const out = mergeCatalog(host as any, plugin as any)
+    const sp = out.find(e => e.type === 'stretchplan-task')!
+    expect(sp).toBeTruthy()
+    expect(sp.pluginId).toBe('stretchplan')
+    expect(sp.creator).toBe('standalone') // default
+  })
+
+  it('excludes palette+context plugin widgets', () => {
+    const out = mergeCatalog(host as any, plugin as any)
+    expect(out.find(e => e.type === 'file-editor')).toBeUndefined()
   })
 
   it('labels host widgets and carries creator/pluginId', () => {

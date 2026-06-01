@@ -41,7 +41,12 @@ export function mergeCatalog(
     })
   }
   for (const p of plugin) {
-    if (!isSpawnable(p.capabilities)) continue
+    // A palette-installable plugin widget (spawn: 'palette') is a standalone
+    // widget by nature, so it's [+]-spawnable by default — installed plugins
+    // (e.g. stretchplan) need not adopt the capability field. An explicit
+    // 'spawnable' capability can still opt in a non-palette widget.
+    // 'palette+context' widgets (file-editor/image-viewer) stay excluded.
+    if (p.spawn !== 'palette' && !isSpawnable(p.capabilities)) continue
     out.push({
       type: p.widgetType,
       pluginId: p.pluginId,
