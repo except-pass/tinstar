@@ -1,0 +1,67 @@
+import { useMemo } from 'react'
+import { usePluginWidgetRegistry, type PaletteWidgetEntry } from './usePluginWidgetRegistry'
+import { listWidgetRegistrations, type WidgetRegistration } from '../widgets/widgetComponentRegistry'
+
+export interface CatalogEntry {
+  /** Widget type string used by the renderer + create endpoints. */
+  type: string
+  /** Plugin id when this is a plugin widget; undefined for host widgets. */
+  pluginId?: string
+  label: string
+  icon?: string
+  defaultSize: { width: number; height: number }
+  capabilities: string[]
+  creator: 'standalone' | 'session-backed'
+}
+
+/** Human labels for host widgets that have no manifest label. */
+const HOST_LABELS: Record<string, string> = {
+  'run-workspace': 'Run workspace',
+}
+
+const DEFAULT_SIZE = { width: 640, height: 480 }
+
+function isSpawnable(caps?: string[]): boolean {
+  return Array.isArray(caps) && caps.includes('spawnable')
+}
+
+export function mergeCatalog(
+  host: WidgetRegistration[],
+  plugin: PaletteWidgetEntry[],
+): CatalogEntry[] {
+  const out: CatalogEntry[] = []
+  for (const r of host) {
+    if (r.isContainer || !isSpawnable(r.capabilities)) continue
+    out.push({
+      type: r.type,
+      label: HOST_LABELS[r.type] ?? r.type,
+      defaultSize: r.defaultSize ?? DEFAULT_SIZE,
+      capabilities: r.capabilities ?? [],
+      creator: r.creator ?? 'standalone',
+    })
+  }
+  for (const p of plugin) {
+    if (!isSpawnable(p.capabilities)) continue
+    out.push({
+      type: p.widgetType,
+      pluginId: p.pluginId,
+      label: p.label,
+      icon: p.icon,
+      defaultSize: p.defaultSize ?? DEFAULT_SIZE,
+      capabilities: p.capabilities ?? [],
+      creator: p.creator ?? 'standalone',
+    })
+  }
+  return out
+}
+
+export function useWidgetCatalog(): { entries: CatalogEntry[]; loading: boolean } {
+  const { entries: pluginEntries } = usePluginWidgetRegistry()
+  return useMemo(() => {
+    if (pluginEntries === null) {
+      // Host widgets are available synchronously; plugin list still loading.
+      return { entries: mergeCatalog(listWidgetRegistrations(), []), loading: true }
+    }
+    return { entries: mergeCatalog(listWidgetRegistrations(), pluginEntries), loading: false }
+  }, [pluginEntries])
+}
