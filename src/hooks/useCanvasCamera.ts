@@ -87,8 +87,31 @@ export function useCanvasCamera() {
   }, [])
 
   const handleWheel = useCallback((e: WheelEvent) => {
-    // Let scrollable children handle their own scroll — but only if they can actually scroll
     const target = e.target as HTMLElement | null
+    const isZoomGesture = e.ctrlKey || e.metaKey
+
+    // Embedded browser iframes scroll their own (same-origin, proxied) document, but because
+    // they sit inside the canvas's CSS transform the wheel can be delivered to the canvas
+    // instead of the iframe. When the target IS the iframe, forward the scroll into it and
+    // don't pan. If the wheel never reaches here (iframe scrolling natively), this is a no-op;
+    // a cross-origin iframe throws on contentWindow access → falls through to canvas pan/zoom.
+    if (!isZoomGesture) {
+      const iframe = (target?.tagName === 'IFRAME' ? target : target?.closest('iframe')) as HTMLIFrameElement | null
+      if (iframe) {
+        try {
+          if (iframe.contentWindow) {
+            iframe.contentWindow.scrollBy({ left: e.deltaX, top: e.deltaY })
+            e.preventDefault()
+            return
+          }
+        } catch { /* cross-origin — let the canvas handle it */ }
+      }
+    }
+
+    // Monaco code editor (file widget) manages its own wheel scroll; don't let the canvas hijack it.
+    if (!isZoomGesture && target?.closest('.monaco-editor')) return
+
+    // Let scrollable children handle their own scroll — but only if they can actually scroll
     const scrollable = target?.closest('[data-scrollable]') as HTMLElement | null
     if (scrollable && scrollable.scrollHeight > scrollable.clientHeight) {
       const atTop = scrollable.scrollTop <= 0 && e.deltaY < 0
