@@ -37,15 +37,37 @@ export function useConstellationGraph(spaceId: string) {
   // tick compose off the latest value (not a stale render snapshot), then fire a
   // single PUT each. The overlay is dropped once the server echoes the matching
   // graph back via SSE; until then the UI reflects the local edits immediately
-  // (snappy). The server stores the doc verbatim, so the echo equals what we
-  // set — clearing only on an exact match avoids reverting newer in-flight edits.
+  // (snappy). The server stores the doc verbatim, so the echo equals what we set.
   const optimisticRef = useRef<ConstellationGraph | null>(null)
   const serverGraphRef = useRef(serverGraph)
   serverGraphRef.current = serverGraph
+  // Count of PUTs we still expect an echo for. While zero, any server graph that
+  // diverges from our overlay came from elsewhere (another tab/client, server
+  // normalization) and means our overlay is stale — drop it rather than pin it.
+  const pendingWrites = useRef(0)
   const [, bump] = useReducer((n: number) => n + 1, 0)
 
+  // The provider is reused across space switches, so clear the overlay the moment
+  // spaceId changes — synchronously during render — to avoid leaking one space's
+  // optimistic graph into another (which the next mutation would PUT cross-space).
+  const lastSpaceIdRef = useRef(spaceId)
+  if (lastSpaceIdRef.current !== spaceId) {
+    lastSpaceIdRef.current = spaceId
+    optimisticRef.current = null
+    pendingWrites.current = 0
+  }
+
   useEffect(() => {
-    if (optimisticRef.current && JSON.stringify(optimisticRef.current) === JSON.stringify(serverGraph)) {
+    if (!optimisticRef.current) return
+    // Server echoed our optimistic write — confirmed, drop the overlay.
+    if (JSON.stringify(optimisticRef.current) === JSON.stringify(serverGraph)) {
+      optimisticRef.current = null
+      bump()
+      return
+    }
+    // Divergent server graph with no write in flight: the overlay is stale, so
+    // surface the authoritative server state instead of pinning the overlay.
+    if (pendingWrites.current === 0) {
       optimisticRef.current = null
       bump()
     }
@@ -72,6 +94,7 @@ export function useConstellationGraph(spaceId: string) {
     const rollback = () => {
       if (optimisticRef.current === next) { optimisticRef.current = null; bump() }
     }
+    pendingWrites.current++
     apiFetch(`/api/constellation-graph/${encodeURIComponent(spaceId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -85,6 +108,8 @@ export function useConstellationGraph(spaceId: string) {
     }).catch(err => {
       console.warn('[constellation] persist failed:', err)
       rollback()
+    }).finally(() => {
+      pendingWrites.current = Math.max(0, pendingWrites.current - 1)
     })
   }, [spaceId])
 

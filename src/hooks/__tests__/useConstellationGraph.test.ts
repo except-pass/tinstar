@@ -129,3 +129,56 @@ describe('useConstellationGraph failed persist', () => {
     expect(result.current.nodesInSlot('1')).toEqual([])
   })
 })
+
+// Regression: the provider is reused across space switches, so a pending
+// optimistic overlay from one space must not leak into another.
+describe('useConstellationGraph space switching', () => {
+  beforeEach(() => {
+    h.serverState = { constellationGraphs: [] }
+    h.puts.length = 0
+    h.nextResponse = () => Promise.resolve({ ok: true } as Response)
+  })
+
+  it('drops the optimistic overlay when spaceId changes mid-flight', () => {
+    const { result, rerender } = renderHook(({ id }) => useConstellationGraph(id), {
+      initialProps: { id: 's' },
+    })
+    act(() => { result.current.assign('1', 'a') })
+    expect(result.current.nodesInSlot('1')).toEqual(['a'])
+
+    rerender({ id: 't' })
+    expect(result.current.nodesInSlot('1')).toEqual([])
+
+    // A mutation in the new space must not carry the old space's member.
+    act(() => { result.current.assign('2', 'b') })
+    expect(h.puts.at(-1)!.members.map(m => m.widget)).toEqual(['b'])
+    expect(h.puts.at(-1)!.spaceId).toBe('t')
+  })
+})
+
+// Regression: a divergent server graph with no write in flight (another tab,
+// server normalization) must clear the overlay rather than pin it indefinitely.
+describe('useConstellationGraph divergent server delta', () => {
+  beforeEach(() => {
+    h.serverState = { constellationGraphs: [] }
+    h.puts.length = 0
+    h.nextResponse = () => Promise.resolve({ ok: true } as Response)
+  })
+
+  it('clears a stale overlay when the server graph diverges after writes settle', async () => {
+    const { result, rerender } = renderHook(() => useConstellationGraph('s'))
+    await act(async () => {
+      result.current.assign('1', 'a')
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    expect(result.current.nodesInSlot('1')).toEqual(['a'])
+
+    // Server pushes a different graph (e.g. edited from another tab).
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'z', slot: '3' }] }],
+    }
+    rerender()
+    expect(result.current.nodesInSlot('1')).toEqual([])
+    expect(result.current.nodesInSlot('3')).toEqual(['z'])
+  })
+})
