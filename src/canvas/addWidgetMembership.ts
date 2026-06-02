@@ -1,4 +1,7 @@
-import type { ConstellationSlot } from '../domain/constellationGraph'
+import {
+  addMember, addSnap, nextFreeSlot, slotsForNode as graphSlotsForNode,
+  type ConstellationGraph, type ConstellationSlot,
+} from '../domain/constellationGraph'
 
 export interface MembershipPlan {
   assigns: Array<{ slot: ConstellationSlot; nodeId: string }>
@@ -27,4 +30,23 @@ export function addWidgetMembership(input: {
     return { assigns: [{ slot: freeSlot, nodeId: sourceId }, { slot: freeSlot, nodeId: newId }], snap }
   }
   return { assigns: [] }
+}
+
+/** Compute AND apply the membership plan against `g` in one shot, returning the
+ *  next graph. Computing sourceSlot/freeSlot from the passed-in graph (rather
+ *  than a snapshot captured before an async widget-create) keeps the plan
+ *  consistent with current state, and folding every assign + snap into a single
+ *  returned graph lets callers persist the whole change as one atomic write
+ *  instead of racing separate assign/snap PUTs. */
+export function composeAddWidgetMembership(
+  g: ConstellationGraph,
+  sourceNodeId: string,
+  newNodeId: string,
+): ConstellationGraph {
+  const sourceSlot = (graphSlotsForNode(g, sourceNodeId)[0] ?? null) as ConstellationSlot | null
+  const plan = addWidgetMembership({ sourceSlot, freeSlot: nextFreeSlot(g), sourceId: sourceNodeId, newId: newNodeId })
+  let next = g
+  for (const a of plan.assigns) next = addMember(next, a.nodeId, a.slot)
+  if (plan.snap) next = addSnap(next, plan.snap.a, plan.snap.b)
+  return next
 }

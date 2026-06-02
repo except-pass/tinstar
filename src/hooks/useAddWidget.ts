@@ -2,9 +2,8 @@ import { useCallback } from 'react'
 import { apiFetch } from '../apiClient'
 import { flushPosition } from '../canvas/snapZoneResolver'
 import type { SnapEdge } from '../canvas/snapZoneResolver'
-import { addWidgetMembership } from '../canvas/addWidgetMembership'
-import { nextFreeSlot } from './useConstellationGraph'
-import type { ConstellationGraph, ConstellationSlot } from '../domain/constellationGraph'
+import { composeAddWidgetMembership } from '../canvas/addWidgetMembership'
+import type { ConstellationGraph } from '../domain/constellationGraph'
 import type { CatalogEntry } from './useWidgetCatalog'
 import type { WidgetLayout } from './useWidgetLayouts'
 
@@ -12,10 +11,10 @@ export interface AddWidgetDeps {
   spaceId: string
   getLayout: (nodeId: string) => WidgetLayout | undefined
   insertLayout: (nodeId: string, layout: WidgetLayout) => void
-  graph: ConstellationGraph
-  slotsForNode: (nodeId: string) => string[]
-  assignSlot: (slot: string, nodeId: string) => void
-  addSnapEdge: (a: string, b: string) => void
+  /** Atomically update the constellation graph. The compute callback receives the
+   *  latest graph (post-async), so membership is planned from current state and
+   *  the whole assign+snap change persists as a single revision-gated write. */
+  updateConstellation: (compute: (g: ConstellationGraph) => ConstellationGraph) => void
   /** Open the session create flow; resolves with the created sessionId (or null if cancelled). */
   openCreateSession: (prefill: { spaceId: string }) => Promise<string | null>
   /** Register a placement to apply once a run with `sessionId` appears via SSE. */
@@ -24,7 +23,7 @@ export interface AddWidgetDeps {
 
 export function useAddWidget(deps: AddWidgetDeps) {
   const {
-    spaceId, getLayout, insertLayout, graph, slotsForNode, assignSlot, addSnapEdge,
+    spaceId, getLayout, insertLayout, updateConstellation,
     openCreateSession, registerPendingRunPlacement,
   } = deps
 
@@ -35,13 +34,10 @@ export function useAddWidget(deps: AddWidgetDeps) {
     const pos = flushPosition(sourceLayout, edge, size)
     const flushLayout: WidgetLayout = { x: pos.x, y: pos.y, width: size.width, height: size.height }
 
-    const applyMembership = (newNodeId: string) => {
-      const sourceSlot = (slotsForNode(sourceNodeId)[0] ?? null) as ConstellationSlot | null
-      const freeSlot = nextFreeSlot(graph)
-      const plan = addWidgetMembership({ sourceSlot, freeSlot, sourceId: sourceNodeId, newId: newNodeId })
-      for (const a of plan.assigns) assignSlot(a.slot, a.nodeId)
-      if (plan.snap) addSnapEdge(plan.snap.a, plan.snap.b)
-    }
+    // Plan membership from the latest graph at apply time (not a render-time
+    // snapshot captured before the create POST), and persist it atomically.
+    const applyMembership = (newNodeId: string) =>
+      updateConstellation(g => composeAddWidgetMembership(g, sourceNodeId, newNodeId))
 
     if (entry.creator === 'session-backed') {
       const sessionId = await openCreateSession({ spaceId })
@@ -73,5 +69,5 @@ export function useAddWidget(deps: AddWidgetDeps) {
     if (!j.ok || !j.data) return
     insertLayout(j.data.id, flushLayout)
     applyMembership(j.data.id)
-  }, [spaceId, getLayout, insertLayout, graph, slotsForNode, assignSlot, addSnapEdge, openCreateSession, registerPendingRunPlacement])
+  }, [spaceId, getLayout, insertLayout, updateConstellation, openCreateSession, registerPendingRunPlacement])
 }

@@ -34,7 +34,7 @@ import type { SnapWidget, SnapTarget, SnapEdge } from '../canvas/snapZoneResolve
 import { AddWidgetPicker } from './AddWidgetPicker'
 import { useWidgetCatalog } from '../hooks/useWidgetCatalog'
 import { useAddWidget } from '../hooks/useAddWidget'
-import { addWidgetMembership } from '../canvas/addWidgetMembership'
+import { composeAddWidgetMembership } from '../canvas/addWidgetMembership'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 
 interface Props {
@@ -659,11 +659,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       if (!pend) continue
       const nodeId = `run-${run.id}`
       insertLayout(nodeId, { ...pend.layout })
-      const sourceSlot = (constellations.slotsForNode(pend.sourceNodeId)[0] ?? null) as Parameters<typeof addWidgetMembership>[0]['sourceSlot']
-      const freeSlot = nextFreeSlot(constellations.graph)
-      const plan = addWidgetMembership({ sourceSlot, freeSlot, sourceId: pend.sourceNodeId, newId: nodeId })
-      for (const a of plan.assigns) constellations.assign(a.slot, a.nodeId)
-      if (plan.snap) constellations.addSnapEdge(plan.snap.a, plan.snap.b)
+      // Plan from the live graph and persist as one atomic write (see useAddWidget).
+      constellations.update(g => composeAddWidgetMembership(g, pend.sourceNodeId, nodeId))
       pendingRunPlacement.current.delete(run.sessionId)
     }
   }, [runMap, insertLayout, constellations])
@@ -683,10 +680,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     spaceId: activeSpaceId ?? '',
     getLayout,
     insertLayout,
-    graph: constellations.graph,
-    slotsForNode: constellations.slotsForNode,
-    assignSlot: (slot, nodeId) => constellations.assign(slot as ConstellationSlot, nodeId),
-    addSnapEdge: constellations.addSnapEdge,
+    updateConstellation: constellations.update,
     openCreateSession,
     registerPendingRunPlacement,
   })

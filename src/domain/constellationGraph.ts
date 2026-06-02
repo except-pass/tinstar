@@ -70,6 +70,14 @@ export function nodesInSlot(g: ConstellationGraph, slot: string): string[] {
   return g.members.filter(m => m.slot === slot).map(m => m.widget)
 }
 
+const ALL_SLOTS: ConstellationSlot[] = ['1','2','3','4','5','6','7','8','9']
+
+/** The lowest-numbered slot with no members, or null when all nine are taken. */
+export function nextFreeSlot(g: ConstellationGraph): ConstellationSlot | null {
+  const occupied = new Set(g.members.map(m => m.slot))
+  return ALL_SLOTS.find(s => !occupied.has(s)) ?? null
+}
+
 export interface BreakPlan { removeFromSlot: string[]; newGroup: string[] }
 
 export function planBreak(g: ConstellationGraph, aId: string, bId: string, slot: ConstellationSlot, liveIds?: ReadonlySet<string>): BreakPlan {

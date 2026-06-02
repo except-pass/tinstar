@@ -39,6 +39,8 @@ curl -s -X POST "$TINSTAR_URL/api/sessions/NAME/prompt" -d '{"text":"…"}'   # 
 
 Use this only when the session is genuinely standalone — a new line of work, not a helper for your current task. **If it's a helper, use the `tinstar-hand` skill** (spawns under `/api/sessions/<parent>/spawn`).
 
+**Send the kickoff prompt IN the creation request** via the `prompt` field — do NOT create the session and then `POST .../prompt` as a second step. The CLI re-initializes during boot (the conversation id changes), so a separate prompt fired right after creation hits a race and is silently dropped. The `prompt` field is stored as the session's `initialPrompt` and delivered once the agent is actually ready.
+
 ```bash
 curl -s -X POST "$TINSTAR_URL/api/sessions" \
   -H "Content-Type: application/json" \
@@ -47,11 +49,12 @@ curl -s -X POST "$TINSTAR_URL/api/sessions" \
     "backend": "tmux",
     "cliTemplate": "Claude (multi-agent)",
     "project": "myproject",
-    "worktree": true
+    "worktree": true,
+    "prompt": "Read context/entrypoint.md, then continue the work: <clear first task>."
   }'
 ```
 
-`cliTemplate: "Claude (multi-agent)"` enables NATS. Omit only for plain non-collaborative sessions.
+`cliTemplate: "Claude (multi-agent)"` enables NATS. Omit only for plain non-collaborative sessions. `prompt` is the kickoff message (preferred). The separate `POST /api/sessions/<name>/prompt` endpoint is for **steering an already-running** session, not for the initial kickoff.
 
 ## Editor widgets (file on canvas)
 

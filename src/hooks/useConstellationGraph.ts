@@ -4,16 +4,13 @@ import { apiFetch } from '../apiClient'
 import {
   emptyGraph, addMember, removeMember, addSnap, removeSnap,
   snapNeighbors as graphSnapNeighbors, slotsForNode as graphSlotsForNode,
-  nodesInSlot as graphNodesInSlot,
+  nodesInSlot as graphNodesInSlot, nextFreeSlot,
   type ConstellationGraph, type ConstellationSlot,
 } from '../domain/constellationGraph'
 
-const ALL_SLOTS: ConstellationSlot[] = ['1','2','3','4','5','6','7','8','9']
-
-export function nextFreeSlot(g: ConstellationGraph): ConstellationSlot | null {
-  const occupied = new Set(g.members.map(m => m.slot))
-  return ALL_SLOTS.find(s => !occupied.has(s)) ?? null
-}
+// Re-exported from the pure domain module; kept here so existing importers
+// (useAddWidget, InfiniteCanvas, tests) continue to resolve it from the hook.
+export { nextFreeSlot }
 
 export function applyAssign(g: ConstellationGraph, slot: ConstellationSlot, nodeId: string): ConstellationGraph {
   return addMember(g, nodeId, slot)
@@ -128,5 +125,5 @@ export function useConstellationGraph(spaceId: string) {
   const nodesInSlot = useCallback((slot: string) => graphNodesInSlot(graph, slot), [graph])
   const snapNeighbors = useCallback((nodeId: string) => graphSnapNeighbors(graph, nodeId), [graph])
 
-  return { store, assign, remove, slotsForNode, nodesInSlot, snapNeighbors, addSnapEdge, removeSnapEdge, graph, applyGraph }
+  return { store, assign, remove, slotsForNode, nodesInSlot, snapNeighbors, addSnapEdge, removeSnapEdge, graph, applyGraph, update: apply }
 }
