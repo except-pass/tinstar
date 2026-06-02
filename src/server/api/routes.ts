@@ -702,20 +702,24 @@ const ARTIFACT_MAX_BYTES = 5 * 1024 * 1024
 /** Read an agent-supplied HTML file path for an artifact. Validates and, on
  *  failure, writes the error response and returns null. Localhost single-user
  *  trust model: arbitrary local reads are acceptable (no privilege boundary). */
-function readArtifactFile(path: unknown, res: ServerResponse): string | null {
+function readArtifactFile(
+  path: unknown,
+  res: ServerResponse,
+  fail: (res: ServerResponse, code: ErrorCode, message: string) => unknown,
+): string | null {
   if (typeof path !== 'string' || !path.trim()) {
-    failEnvelope(res, 'INVALID_PARAMS', 'path is required (absolute path to an HTML file)')
+    fail(res, 'INVALID_PARAMS', 'path is required (absolute path to an HTML file)')
     return null
   }
   let stat: import('node:fs').Stats
   try { stat = statSync(path) } catch {
-    failEnvelope(res, 'NOT_FOUND', `File not found: ${path}`)
+    fail(res, 'NOT_FOUND', `File not found: ${path}`)
     return null
   }
-  if (!stat.isFile()) { failEnvelope(res, 'INVALID_PARAMS', `Not a regular file: ${path}`); return null }
-  if (stat.size > ARTIFACT_MAX_BYTES) { failEnvelope(res, 'INVALID_PARAMS', `Artifact too large (max 5 MB): ${path}`); return null }
+  if (!stat.isFile()) { fail(res, 'INVALID_PARAMS', `Not a regular file: ${path}`); return null }
+  if (stat.size > ARTIFACT_MAX_BYTES) { fail(res, 'INVALID_PARAMS', `Artifact too large (max 5 MB): ${path}`); return null }
   try { return readFileSync(path, 'utf-8') } catch {
-    failEnvelope(res, 'NOT_FOUND', `Cannot read file: ${path}`)
+    fail(res, 'NOT_FOUND', `Cannot read file: ${path}`)
     return null
   }
 }
@@ -1994,7 +1998,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         nearNodeId?: string; slot?: number | string }
       try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'invalid JSON body'); return }
 
-      const html = readArtifactFile(parsed.path, res)
+      const html = readArtifactFile(parsed.path, res, fail)
       if (html === null) return
 
       const artifactId = shortId('eph')
