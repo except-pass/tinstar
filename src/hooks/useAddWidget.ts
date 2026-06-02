@@ -17,8 +17,11 @@ export interface AddWidgetDeps {
   updateConstellation: (compute: (g: ConstellationGraph) => ConstellationGraph) => void
   /** Open the session create flow; resolves with the created sessionId (or null if cancelled). */
   openCreateSession: (prefill: { spaceId: string }) => Promise<string | null>
-  /** Register a placement to apply once a run with `sessionId` appears via SSE. */
-  registerPendingRunPlacement: (sessionId: string, layout: WidgetLayout, sourceNodeId: string) => void
+  /** Register a placement to apply once a run with `sessionId` appears via SSE.
+   *  `spaceId` is the space active when the add was initiated, so the placement
+   *  only applies to that space even if the user navigates away before the run
+   *  arrives. */
+  registerPendingRunPlacement: (sessionId: string, layout: WidgetLayout, sourceNodeId: string, spaceId: string) => void
 }
 
 export function useAddWidget(deps: AddWidgetDeps) {
@@ -42,7 +45,7 @@ export function useAddWidget(deps: AddWidgetDeps) {
     if (entry.creator === 'session-backed') {
       const sessionId = await openCreateSession({ spaceId })
       if (!sessionId) return
-      registerPendingRunPlacement(sessionId, flushLayout, sourceNodeId)
+      registerPendingRunPlacement(sessionId, flushLayout, sourceNodeId, spaceId)
       return
     }
 

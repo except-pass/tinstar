@@ -648,22 +648,27 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // Pending run placements, keyed by sessionId. When a session-backed widget is
   // added we open the create dialog; once the resulting run appears via SSE we
   // flush its layout + snap it to the source. Node id for a run is `run-<run.id>`.
-  const pendingRunPlacement = useRef<Map<string, { layout: WidgetLayout; sourceNodeId: string }>>(new Map())
-  const registerPendingRunPlacement = useCallback((sessionId: string, layout: WidgetLayout, sourceNodeId: string) => {
-    pendingRunPlacement.current.set(sessionId, { layout, sourceNodeId })
+  const pendingRunPlacement = useRef<Map<string, { layout: WidgetLayout; sourceNodeId: string; spaceId: string }>>(new Map())
+  const registerPendingRunPlacement = useCallback((sessionId: string, layout: WidgetLayout, sourceNodeId: string, spaceId: string) => {
+    pendingRunPlacement.current.set(sessionId, { layout, sourceNodeId, spaceId })
   }, [])
   useEffect(() => {
     if (pendingRunPlacement.current.size === 0) return
     for (const run of runMap.values()) {
       const pend = pendingRunPlacement.current.get(run.sessionId)
       if (!pend) continue
+      // Only apply in the space the add was initiated from. insertLayout and
+      // constellations are bound to activeSpaceId, so applying here while the
+      // user has navigated away would write the layout + membership (and a stale
+      // sourceNodeId) into the wrong space. Leave it pending until they return.
+      if (pend.spaceId !== activeSpaceId) continue
       const nodeId = `run-${run.id}`
       insertLayout(nodeId, { ...pend.layout })
       // Plan from the live graph and persist as one atomic write (see useAddWidget).
       constellations.update(g => composeAddWidgetMembership(g, pend.sourceNodeId, nodeId))
       pendingRunPlacement.current.delete(run.sessionId)
     }
-  }, [runMap, insertLayout, constellations])
+  }, [runMap, insertLayout, constellations, activeSpaceId])
 
   // Promise wrapper around the host's session create dialog. Resolves with the
   // created sessionId; if the dialog is cancelled `onCreated` never fires and the
