@@ -141,7 +141,7 @@ curl -s -X PUT "$TINSTAR_URL/api/artifacts/eph-ab12" \
 - The HTML is copied into Tinstar at POST/PUT time; the source file can be deleted after.
 - Optional placement: `position`, `size`, `nearNodeId`, `slot`, `color` — same as `POST /api/browser-widgets`. Pass `sessionId` to color/associate the widget with a session.
 - Spawned widgets snap to the session's constellation by default (so they raft with the session and tile in a row to its right); pass `"snapToSession": false` to spawn free-floating.
-- The artifact is deleted when its browser widget is closed/removed (the widget's close button deletes the widget, which deletes the artifact). To remove a single artifact without closing its widget, use `DELETE /api/artifacts/<id>`. `DELETE /api/artifacts` clears all.
+- An artifact and its browser widget share a lifecycle: closing/removing the widget deletes the artifact, and deleting the artifact removes the widget. `DELETE /api/artifacts/<id>` removes one artifact and closes its widget; `DELETE /api/artifacts` clears every artifact and closes their widgets.
 - Max 5 MB. `console.log` from the page shows in the widget's console panel.
 
 ## See also
