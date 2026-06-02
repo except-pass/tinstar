@@ -72,4 +72,10 @@ describe('applyDelta — constellationGraph arm', () => {
     const next = applyDelta(stateWithOne, { entity: 'commit', id: '', data: null })
     expect(next.constellationGraphs).toBe(stateWithOne.constellationGraphs) // same reference
   })
+
+  it('clears constellationGraphs on an "all" reset delta', () => {
+    const stateWithTwo = { ...baseState, constellationGraphs: [graph1, graph2] }
+    const next = applyDelta(stateWithTwo, { entity: 'all', id: '*', data: null })
+    expect(next.constellationGraphs).toEqual([])
+  })
 })

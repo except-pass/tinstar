@@ -273,7 +273,7 @@ function stopSSE() {
 
 export function applyDelta(prev: ServerState, delta: { entity: string; id: string; data: unknown }): ServerState {
   if (delta.entity === 'all' && delta.data === null) {
-    return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [], marshal: null, editorWidgets: [], browserWidgets: [], imageWidgets: [] }
+    return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [], marshal: null, editorWidgets: [], browserWidgets: [], imageWidgets: [], constellationGraphs: [] }
   }
 
   if (delta.entity === 'space') {
