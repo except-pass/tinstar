@@ -266,3 +266,25 @@ describe('POST /api/browser-widgets — spaceId validation', () => {
     expect(body.error?.code).toBe('NOT_FOUND')
   })
 })
+
+describe('POST /api/browser-widgets — sessionId validation', () => {
+  it('rejects a present-but-empty sessionId instead of silently creating a standalone widget', async () => {
+    const res = await testCtx.fetch('/api/browser-widgets', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: '   ', url: 'http://x' }),
+    })
+    expect(res.status).not.toBe(200)
+    const body = await res.json() as { error?: { code?: string } }
+    expect(body.error?.code).toBe('INVALID_PARAMS')
+  })
+
+  it('allows a truly-omitted sessionId (standalone widget)', async () => {
+    const res = await testCtx.fetch('/api/browser-widgets', {
+      method: 'POST',
+      body: JSON.stringify({ url: 'http://x', position: { x: 1, y: 2 } }),
+    })
+    expect(res.status).toBe(200)
+    const { data } = await res.json() as { data: BrowserWidget }
+    expect(data.sessionId).toBeUndefined()
+  })
+})

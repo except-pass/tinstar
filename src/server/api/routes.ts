@@ -742,6 +742,12 @@ type CreateBrowserWidgetResult =
  *  logic lives in one place. */
 function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParams): CreateBrowserWidgetResult {
   const { sessionId, url: widgetUrl = '', headers: widgetHeaders, color: colorOverride, title } = parsed
+  // Distinguish "omitted" (standalone widget — allowed) from "present but
+  // empty/whitespace" (a malformed payload that should fail, not silently
+  // create a standalone widget).
+  if (sessionId !== undefined && !sessionId.trim()) {
+    return { error: { code: 'INVALID_PARAMS', message: 'sessionId must be a non-empty session name when provided' } }
+  }
   const run = sessionId ? ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId) : undefined
   if (sessionId && !run) {
     return { error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }

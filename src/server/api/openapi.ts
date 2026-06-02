@@ -505,10 +505,10 @@ export const spec = {
         summary: 'Create a browser widget on the canvas',
         requestBody: { content: { 'application/json': { schema: {
           type: 'object',
-          required: ['sessionId'],
           properties: {
-            sessionId: { type: 'string', description: 'Session name (must have a running run)' },
+            sessionId: { type: 'string', description: 'Optional session name (must have a running run when given). Omit to create a standalone browser widget.' },
             url: { type: 'string', description: 'Initial URL to load' },
+            color: { type: 'string', description: 'Accent color override (hex). Defaults to the bound run color, or a neutral standalone color.' },
             headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Custom HTTP headers injected via server-side proxy (like ModHeader)' },
             spaceId: { type: 'string', description: 'Target space (defaults to the active space). Scopes both placement and slot.' },
             position: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, description: 'Initial canvas position seed. Wins over nearNodeId.' },
