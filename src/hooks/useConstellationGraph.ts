@@ -41,11 +41,20 @@ export function useConstellationGraph(spaceId: string) {
   const optimisticRef = useRef<ConstellationGraph | null>(null)
   const serverGraphRef = useRef(serverGraph)
   serverGraphRef.current = serverGraph
-  // Count of PUTs we still expect an echo for. While zero, any server graph that
-  // diverges from our overlay came from elsewhere (another tab/client, server
-  // normalization) and means our overlay is stale — drop it rather than pin it.
+  // The server graph the active overlay was built from. While serverGraph still
+  // equals this baseline we're simply awaiting our own echo (don't disturb the
+  // overlay); once it moves to a value that is neither the baseline nor our echo,
+  // some other writer changed it and our overlay is stale.
+  const overlayBaseRef = useRef<ConstellationGraph | null>(null)
+  // Count of PUTs we still expect an echo for. While >0 a divergent server graph
+  // may just be an intermediate echo from one of several pipelined writes, so we
+  // hold the overlay until the writes drain before treating divergence as stale.
   const pendingWrites = useRef(0)
-  const [, bump] = useReducer((n: number) => n + 1, 0)
+  // Generation token bumped on every space switch. Each PUT captures the gen it
+  // started in; a `finally` from a previous space must not touch the new space's
+  // pending counter (it was already reset to 0 on the switch).
+  const writeGen = useRef(0)
+  const [tick, bump] = useReducer((n: number) => n + 1, 0)
 
   // The provider is reused across space switches, so clear the overlay the moment
   // spaceId changes — synchronously during render — to avoid leaking one space's
@@ -54,24 +63,35 @@ export function useConstellationGraph(spaceId: string) {
   if (lastSpaceIdRef.current !== spaceId) {
     lastSpaceIdRef.current = spaceId
     optimisticRef.current = null
+    overlayBaseRef.current = null
     pendingWrites.current = 0
+    writeGen.current++
   }
 
+  // Re-runs on serverGraph changes and on `tick` (bumped when writes settle), so
+  // a divergent server graph that arrived while a PUT was in flight is re-checked
+  // once `pendingWrites` drains — otherwise the overlay could stay pinned forever.
   useEffect(() => {
     if (!optimisticRef.current) return
     // Server echoed our optimistic write — confirmed, drop the overlay.
     if (JSON.stringify(optimisticRef.current) === JSON.stringify(serverGraph)) {
       optimisticRef.current = null
+      overlayBaseRef.current = null
       bump()
       return
     }
-    // Divergent server graph with no write in flight: the overlay is stale, so
-    // surface the authoritative server state instead of pinning the overlay.
+    // Still at the baseline we built on — our echo just hasn't landed yet; keep
+    // the optimistic overlay so the edit doesn't visibly revert before the echo.
+    if (overlayBaseRef.current && JSON.stringify(serverGraph) === JSON.stringify(overlayBaseRef.current)) return
+    // Server moved to a value that is neither our echo nor the baseline, and no
+    // write is in flight: another writer won, so the overlay is stale — surface
+    // the authoritative server state instead of pinning the overlay.
     if (pendingWrites.current === 0) {
       optimisticRef.current = null
+      overlayBaseRef.current = null
       bump()
     }
-  }, [serverGraph])
+  }, [serverGraph, tick])
 
   const graph = optimisticRef.current ?? serverGraph
 
@@ -82,9 +102,12 @@ export function useConstellationGraph(spaceId: string) {
     // short-circuit it and emit no echo, which would leave the overlay stuck)
     // and drop any overlay so reads fall back to serverGraph.
     if (JSON.stringify(next) === JSON.stringify(serverGraphRef.current)) {
-      if (optimisticRef.current) { optimisticRef.current = null; bump() }
+      if (optimisticRef.current) { optimisticRef.current = null; overlayBaseRef.current = null; bump() }
       return
     }
+    // Capture the server graph this overlay session is built from when opening a
+    // fresh overlay; composed writes keep the original baseline.
+    if (!optimisticRef.current) overlayBaseRef.current = serverGraphRef.current
     optimisticRef.current = next
     bump()
     // On a failed persist, roll back the overlay so reads fall back to
@@ -92,9 +115,10 @@ export function useConstellationGraph(spaceId: string) {
     // Only roll back if `next` is still the active overlay — a newer in-flight
     // edit may have replaced it, and that one owns its own persist/rollback.
     const rollback = () => {
-      if (optimisticRef.current === next) { optimisticRef.current = null; bump() }
+      if (optimisticRef.current === next) { optimisticRef.current = null; overlayBaseRef.current = null; bump() }
     }
     pendingWrites.current++
+    const gen = writeGen.current
     apiFetch(`/api/constellation-graph/${encodeURIComponent(spaceId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -109,7 +133,12 @@ export function useConstellationGraph(spaceId: string) {
       console.warn('[constellation] persist failed:', err)
       rollback()
     }).finally(() => {
+      // Ignore completions from a previous space — its counter was already reset.
+      if (gen !== writeGen.current) return
       pendingWrites.current = Math.max(0, pendingWrites.current - 1)
+      // Writes drained: re-check whether a divergent server graph arrived while
+      // this PUT was in flight (the cleanup effect skipped it back then).
+      if (pendingWrites.current === 0) bump()
     })
   }, [spaceId])
 

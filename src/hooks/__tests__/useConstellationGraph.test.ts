@@ -181,4 +181,79 @@ describe('useConstellationGraph divergent server delta', () => {
     expect(result.current.nodesInSlot('1')).toEqual([])
     expect(result.current.nodesInSlot('3')).toEqual(['z'])
   })
+
+  it('clears a stale overlay when divergence arrives before the PUT settles', async () => {
+    // Hold the PUT open so the divergent server graph lands while it's in flight.
+    let release!: () => void
+    h.nextResponse = () => new Promise<Response>(resolve => {
+      release = () => resolve({ ok: true } as Response)
+    })
+    const { result, rerender } = renderHook(() => useConstellationGraph('s'))
+    act(() => { result.current.assign('1', 'a') })
+    expect(result.current.nodesInSlot('1')).toEqual(['a'])
+
+    // Divergent server graph arrives while the PUT is still pending — the overlay
+    // must stay pinned for now (we may still be racing our own echo).
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'z', slot: '3' }] }],
+    }
+    rerender()
+    expect(result.current.nodesInSlot('1')).toEqual(['a'])
+
+    // Once the PUT settles, the drained counter re-triggers the stale check.
+    await act(async () => {
+      release()
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    expect(result.current.nodesInSlot('1')).toEqual([])
+    expect(result.current.nodesInSlot('3')).toEqual(['z'])
+  })
+})
+
+// Regression: pending-write tracking is generation-scoped, so a late `finally`
+// from a previous space must not clear the new space's overlay early.
+describe('useConstellationGraph cross-space write settling', () => {
+  beforeEach(() => {
+    h.serverState = { constellationGraphs: [] }
+    h.puts.length = 0
+    h.nextResponse = () => Promise.resolve({ ok: true } as Response)
+  })
+
+  it('does not drop the new space overlay when the old space PUT settles late', async () => {
+    let releaseOld!: () => void
+    h.nextResponse = () => new Promise<Response>(resolve => {
+      releaseOld = () => resolve({ ok: true } as Response)
+    })
+    const { result, rerender } = renderHook(({ id }) => useConstellationGraph(id), {
+      initialProps: { id: 's' },
+    })
+    act(() => { result.current.assign('1', 'a') }) // write in old space 's', held open
+
+    // Switch to a new space and start a write there (own pending PUT, held open).
+    let releaseNew!: () => void
+    h.nextResponse = () => new Promise<Response>(resolve => {
+      releaseNew = () => resolve({ ok: true } as Response)
+    })
+    rerender({ id: 't' })
+    act(() => { result.current.assign('2', 'b') })
+    expect(result.current.nodesInSlot('2')).toEqual(['b'])
+
+    // The old space's PUT settles first. A divergent graph for 't' is present, so
+    // if the stale old `finally` wrongly zeroed the counter the overlay would be
+    // dropped. It must survive because the new write is still in flight.
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 't', snapped: [], members: [{ widget: 'z', slot: '3' }] }],
+    }
+    await act(async () => {
+      releaseOld()
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    rerender({ id: 't' })
+    expect(result.current.nodesInSlot('2')).toEqual(['b'])
+
+    await act(async () => {
+      releaseNew()
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+  })
 })
