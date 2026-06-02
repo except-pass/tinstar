@@ -20,7 +20,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
@@ -113,6 +113,7 @@ export class DocumentStore {
   private commits = new Map<string, CommitRecord>()
   private editorWidgets = new Map<string, EditorWidget>()
   private browserWidgets = new Map<string, BrowserWidget>()
+  private artifacts = new Map<string, Artifact>()
   private imageWidgets = new Map<string, ImageWidget>()
   private topicMetadata = new Map<string, TopicMetadata>()
   private pluginWidgets = new Map<string, PluginWidgetInstance>()
@@ -152,6 +153,7 @@ export class DocumentStore {
       if (data.commits) for (const c of data.commits) this.commits.set(c.sha, c)
       if (data.editorWidgets) for (const w of data.editorWidgets) this.editorWidgets.set(w.id, w)
       if (data.browserWidgets) for (const w of data.browserWidgets) this.browserWidgets.set(w.id, w)
+      if (data.artifacts) for (const a of data.artifacts) this.artifacts.set(a.id, a)
       if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
       if (data.pluginWidgets) for (const w of data.pluginWidgets) this.pluginWidgets.set(w.id, w)
       if (data.constellationGraphs) for (const g of data.constellationGraphs) this.constellationGraphs.set(g.spaceId, g)
@@ -449,10 +451,48 @@ export class DocumentStore {
     this.browserWidgets.delete(id)
     this.changes.emit('change', { entity: 'browserWidget', id, data: null })
     this.pruneWidgetFromGraphs(id)
+    // Cascade: an ephemeral artifact's lifecycle is tied to its browser widget.
+    for (const [aid, a] of this.artifacts) {
+      if (a.widgetId === id) this.deleteArtifact(aid)
+    }
   }
 
   getAllBrowserWidgets(): BrowserWidget[] {
     return [...this.browserWidgets.values()]
+  }
+
+  // --- Artifacts (ephemeral HTML) ---
+
+  upsertArtifact(id: string, data: Artifact): void {
+    this.artifacts.set(id, data)
+    // Metadata-only delta: artifacts can be multi-MB and the frontend has no
+    // artifact reducer, so broadcasting the html over SSE on every update is
+    // pure waste. Persistence reads the full record from snapshotAll(), not here.
+    this.changes.emit('change', {
+      entity: 'artifact',
+      id,
+      data: { id, spaceId: data.spaceId, widgetId: data.widgetId, rev: data.rev },
+    })
+  }
+
+  getArtifact(id: string): Artifact | undefined {
+    return this.artifacts.get(id)
+  }
+
+  getAllArtifacts(): Artifact[] {
+    return [...this.artifacts.values()]
+  }
+
+  deleteArtifact(id: string): void {
+    if (!this.artifacts.delete(id)) return
+    this.changes.emit('change', { entity: 'artifact', id, data: null })
+  }
+
+  deleteAllArtifacts(): number {
+    const count = this.artifacts.size
+    this.artifacts.clear()
+    if (count > 0) this.changes.emit('change', { entity: 'artifact', id: '*', data: null })
+    return count
   }
 
   // --- PluginWidgets ---
@@ -609,6 +649,7 @@ export class DocumentStore {
       commits: this.getAllCommits(),
       editorWidgets: this.getAllEditorWidgets(),
       browserWidgets: this.getAllBrowserWidgets(),
+      artifacts: this.getAllArtifacts(),
       imageWidgets: this.getAllImageWidgets(),
       pluginWidgets: this.getAllPluginWidgets(),
       constellationGraphs: this.getAllConstellationGraphs(),
@@ -627,6 +668,7 @@ export class DocumentStore {
     for (const [id, e] of this.runs) if (e.spaceId === spaceId) this.runs.delete(id)
     for (const [id, e] of this.editorWidgets) if (e.spaceId === spaceId) this.editorWidgets.delete(id)
     for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) this.browserWidgets.delete(id)
+    for (const [id, e] of this.artifacts) if (e.spaceId === spaceId) this.artifacts.delete(id)
     for (const [id, e] of this.imageWidgets) if (e.spaceId === spaceId) this.imageWidgets.delete(id)
     for (const [id, e] of this.pluginWidgets) if (e.spaceId === spaceId) this.pluginWidgets.delete(id)
     this.changes.emit('change', { entity: 'all', id: '*', data: null })

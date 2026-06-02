@@ -217,6 +217,23 @@ export interface BrowserWidget {
   size?: { width: number; height: number }
 }
 
+/** An ephemeral HTML artifact an agent asked Tinstar to serve. Stored content
+ *  (not a file reference) so it survives the source file being deleted and is
+ *  served verbatim from GET /api/artifacts/:id. Owned by `widgetId`: deleting
+ *  that browser widget deletes the artifact. */
+export interface Artifact {
+  id: string
+  html: string
+  name?: string
+  /** Bumped on every update; drives the widget URL cache-buster that triggers reload. */
+  rev: number
+  /** Owning browser widget — lifecycle anchor for cleanup. */
+  widgetId?: string
+  spaceId?: string
+  createdAt: number
+  updatedAt: number
+}
+
 export interface ImageWidget {
   id: string
   spaceId?: string
