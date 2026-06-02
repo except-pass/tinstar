@@ -746,6 +746,12 @@ function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParam
   if (sessionId && !run) {
     return { error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }
   }
+  // Reject an explicit spaceId that doesn't exist, so a typo/stale value can't
+  // persist an orphaned widget (and constellation membership) under no real
+  // space — matching the guard the plugin-widget create path already uses.
+  if (parsed.spaceId && !ctx.docStore.getSpace(parsed.spaceId)) {
+    return { error: { code: 'NOT_FOUND', message: `No space ${parsed.spaceId}` } }
+  }
   const widgetColor = colorOverride ?? run?.color ?? '#5b6b7a'
   const spaceId = parsed.spaceId || ctx.docStore.activeSpaceId || ''
   const explicitSlot = toSlot(parsed.slot)
@@ -2100,7 +2106,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const updated = {
         ...existing,
         ...rest,
-        ...(placement ? { position: placement.position, size: placement.size } : {}),
+        // PATCH semantics: a position-only update must not reset size. Keep the
+        // existing size unless the caller explicitly sends a new one.
+        ...(placement ? { position: placement.position, size: patch.size ? placement.size : existing.size } : {}),
       }
       ctx.docStore.upsertBrowserWidget(id, updated)
       const slot = toSlot(patch.slot)

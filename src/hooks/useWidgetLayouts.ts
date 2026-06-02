@@ -252,13 +252,24 @@ function collectTreeIds(tree: TreeNode[]): Set<string> {
  * policy matches the previous loader (regenerate from scratch if >20% missing,
  * otherwise fill missing nodes via smart placement or defaults).
  */
-function hydrateLayouts(
+// Exported for unit tests. Pure: derives the initial layout Map for a tree from
+// persisted state, the host-provided placement seed, smart placement, and
+// defaults — in that precedence.
+export function hydrateLayouts(
   tree: TreeNode[],
   persisted: Record<string, WidgetLayout> | null | undefined,
   seed?: Map<string, WidgetLayout>,
 ): Map<string, WidgetLayout> {
   const allIds = collectTreeIds(tree)
-  if (!persisted) return generateDefaultLayouts(tree)
+  // Overlay the host-provided placement seed onto a from-scratch layout so a
+  // seeded widget (e.g. a browser widget opened at a chosen spot / nearNodeId)
+  // lands where requested even when we fall back to default generation — a
+  // fresh space with no persisted layouts, or a >20%-missing regeneration.
+  const withSeed = (base: Map<string, WidgetLayout>): Map<string, WidgetLayout> => {
+    if (seed) for (const [id, layout] of seed) if (allIds.has(id)) base.set(id, layout)
+    return base
+  }
+  if (!persisted) return withSeed(generateDefaultLayouts(tree))
   try {
     const map = new Map<string, WidgetLayout>()
     for (const id of allIds) {
@@ -273,7 +284,7 @@ function hydrateLayouts(
       }
     }
     // If >20% missing, regenerate from scratch
-    if (map.size < allIds.size * 0.8) return generateDefaultLayouts(tree)
+    if (map.size < allIds.size * 0.8) return withSeed(generateDefaultLayouts(tree))
     // Fill any remaining missing with the host-provided placement seed (e.g. a
     // browser widget opened at a chosen spot), then smart placement (near
     // siblings), then defaults.
@@ -291,7 +302,7 @@ function hydrateLayouts(
     }
     return map
   } catch {
-    return generateDefaultLayouts(tree)
+    return withSeed(generateDefaultLayouts(tree))
   }
 }
 
