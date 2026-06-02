@@ -186,7 +186,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
     return capabilityRegistry.publish(`run-${run.id}`, 'session.nats', async () => ({
       sessionId: run.sessionId,
       status: run.status,
-      subscriptions: run.natsSubscriptions ?? (run.natsSubject ? [run.natsSubject] : []),
+      subscriptions: run.natsSubscriptions ?? (run.natsSubject ? [run.natsSubject.replace(/\.[^.]+$/, ''), run.natsSubject] : []),
       color: run.color,
     }))
   }, [run.id, run.sessionId, run.status, run.natsSubscriptions, run.natsSubject, run.color])
