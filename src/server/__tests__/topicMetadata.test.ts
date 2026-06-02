@@ -10,7 +10,7 @@ const sess = (name: string, subs: string[] | null): Session => ({
   conversation: { id: null }, profile: null, oneshot: false,
   skipPermissions: false, cliTemplate: null, adapter: null,
   nats: subs ? { enabled: true, subscriptions: subs } : null,
-  port: null, ttydPid: null, natsControlOrphanedAt: null, appendSystemPrompt: null,
+  port: null, ttydPid: null, natsControlOrphanedAt: null, appendSystemPrompt: null, agent: null,
   created: '2026-04-27T00:00:00Z', lastActive: '2026-04-27T00:00:00Z',
 })
 
