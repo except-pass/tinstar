@@ -16,8 +16,10 @@
   "keywords": ["tinstar", "plugin", "widgets", "canvas"],
   "license": "MIT",
   "publishConfig": {
-    "access": "public",
-    "tag": "dev"
+    "access": "public"
+  },
+  "scripts": {
+    "publish:auto": "npm publish --tag \"$(node -p \"require('./package.json').version.includes('-') ? 'dev' : 'latest'\")\""
   },
   "files": [
     "src/index.ts",
