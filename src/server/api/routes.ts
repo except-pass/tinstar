@@ -879,10 +879,18 @@ export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalRe
   if (!hand) return { ok: false, error: { code: 'HAND_NOT_FOUND', message: 'marshal hand definition is missing' } }
 
   const { initialPrompt, systemPrompt } = resolveHandPrompts(hand)
+  const persona = systemPrompt ?? MARSHAL_AGENT_PROMPT
   // Pass the persona as structured `agent` metadata so it interpolates into the
   // Marshal template's persona placeholders ({agentPrompt}/{agentJson}/etc).
   // createSessionInternal persists it on the session, and `/start` re-supplies
   // it on restart, so the persona survives both `/clear` and a generic restart.
+  // A user-overridden Marshal template may omit those placeholders, though — in
+  // that case fall back to appendSystemPrompt so the persona still reaches the
+  // process (and is likewise persisted for `/start`).
+  const tmpl = createCtx.cfg.cliTemplates.find(t => t.name === hand.cliTemplate) ?? null
+  const referencesPersona = tmpl
+    ? /\{agent(Name|Description|Prompt|Json)\}/.test(`${tmpl.startCmd} ${tmpl.resumeCmd}`)
+    : false
   const result = await createSessionInternal({
     name: MARSHAL_NAME,
     skipPermissions: true,
@@ -891,8 +899,9 @@ export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalRe
     agent: {
       name: MARSHAL_AGENT_NAME,
       description: MARSHAL_AGENT_DESCRIPTION,
-      prompt: systemPrompt ?? MARSHAL_AGENT_PROMPT,
+      prompt: persona,
     },
+    appendSystemPrompt: referencesPersona ? null : persona,
   }, createCtx)
   if (!result.ok) return { ok: false, error: result.error }
 
