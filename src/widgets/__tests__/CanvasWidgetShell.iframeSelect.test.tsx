@@ -1,9 +1,16 @@
 import { render, cleanup } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CanvasWidgetShell } from '../CanvasWidgetShell'
 import type { WidgetRegistration } from '../widgetComponentRegistry'
 
-afterEach(cleanup)
+beforeEach(() => {
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+})
+
+afterEach(() => {
+  cleanup()
+  Object.defineProperty(document, 'activeElement', { value: document.body, configurable: true })
+})
 
 // A widget whose body is an iframe — mirrors the browser/terminal case.
 const IframeWidget = () => <iframe title="body" data-testid="inner-frame" />
@@ -62,5 +69,14 @@ describe('CanvasWidgetShell iframe focus → select', () => {
     window.dispatchEvent(new Event('blur'))
     expect(onSelect).not.toHaveBeenCalled()
     stray.remove()
+  })
+
+  it('does not fire onSelect on OS-level window blur (document.hasFocus() false)', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    const { onSelect } = renderShell()
+    const frame = document.querySelector('[data-testid="inner-frame"]') as HTMLIFrameElement
+    Object.defineProperty(document, 'activeElement', { value: frame, configurable: true })
+    window.dispatchEvent(new Event('blur'))
+    expect(onSelect).not.toHaveBeenCalled()
   })
 })

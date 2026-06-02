@@ -247,6 +247,7 @@ export function CanvasWidgetShell({
   useEffect(() => {
     function onWindowBlur() {
       if (isSelected) return
+      if (!document.hasFocus()) return // OS-level blur (tab/app switch), not an in-page iframe focus grab
       const active = document.activeElement
       if (
         active &&
