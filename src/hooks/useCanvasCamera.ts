@@ -10,6 +10,41 @@ const MIN_ZOOM = 0.1
 const MAX_ZOOM = 4.0
 const ZOOM_SENSITIVITY = 0.003
 
+export interface ScrollMetrics {
+  scrollTop: number
+  scrollHeight: number
+  clientHeight: number
+  scrollLeft: number
+  scrollWidth: number
+  clientWidth: number
+}
+
+/**
+ * Can a native-scroll element actually consume this wheel delta — i.e. does it overflow
+ * in the requested direction and isn't already pinned at that edge? Used to decide whether
+ * to hand the wheel to a scroll container (an iframe's inner element, a data-scrollable
+ * panel) or let the canvas pan instead. Pure so it's unit-testable.
+ */
+export function canConsumeWheel(m: ScrollMetrics, deltaX: number, deltaY: number): boolean {
+  const vMax = m.scrollHeight - m.clientHeight
+  const canV = vMax > 1 && deltaY !== 0 &&
+    !(deltaY < 0 && m.scrollTop <= 0) && !(deltaY > 0 && m.scrollTop >= vMax - 1)
+  const hMax = m.scrollWidth - m.clientWidth
+  const canH = hMax > 1 && deltaX !== 0 &&
+    !(deltaX < 0 && m.scrollLeft <= 0) && !(deltaX > 0 && m.scrollLeft >= hMax - 1)
+  return canV || canH
+}
+
+/** Walk up from `el` to find the nearest ancestor that can consume the wheel delta, or null. */
+function findScrollableAncestor(el: Element | null, deltaX: number, deltaY: number): HTMLElement | null {
+  let cur: Element | null = el
+  while (cur && cur instanceof HTMLElement) {
+    if (canConsumeWheel(cur, deltaX, deltaY)) return cur
+    cur = cur.parentElement
+  }
+  return null
+}
+
 export function useCanvasCamera() {
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, zoom: 1 })
   const cameraRef = useRef(camera)
@@ -92,17 +127,28 @@ export function useCanvasCamera() {
 
     // Embedded browser iframes scroll their own (same-origin, proxied) document, but because
     // they sit inside the canvas's CSS transform the wheel can be delivered to the canvas
-    // instead of the iframe. When the target IS the iframe, forward the scroll into it and
-    // don't pan. If the wheel never reaches here (iframe scrolling natively), this is a no-op;
-    // a cross-origin iframe throws on contentWindow access → falls through to canvas pan/zoom.
+    // instead of the iframe. When the target IS the iframe, forward the scroll to the element
+    // actually under the pointer inside it — not just the root window, which leaves SPAs/docs
+    // viewers that keep their scroll in an inner container unscrolled. If nothing inside can
+    // consume the wheel (or it's cross-origin), DON'T preventDefault — fall through to canvas
+    // pan, so the iframe is never a dead zone.
     if (!isZoomGesture) {
       const iframe = (target?.tagName === 'IFRAME' ? target : target?.closest('iframe')) as HTMLIFrameElement | null
       if (iframe) {
         try {
-          if (iframe.contentWindow) {
-            iframe.contentWindow.scrollBy({ left: e.deltaX, top: e.deltaY })
-            e.preventDefault()
-            return
+          const doc = iframe.contentDocument
+          if (doc) {
+            const rect = iframe.getBoundingClientRect()
+            const inner = doc.elementFromPoint(e.clientX - rect.left, e.clientY - rect.top)
+            const root = doc.scrollingElement as HTMLElement | null
+            const scrollable = findScrollableAncestor(inner, e.deltaX, e.deltaY)
+              ?? (root && canConsumeWheel(root, e.deltaX, e.deltaY) ? root : null)
+            if (scrollable) {
+              scrollable.scrollBy({ left: e.deltaX, top: e.deltaY })
+              e.preventDefault()
+              return
+            }
+            // Nothing inside can scroll further → let the canvas pan.
           }
         } catch { /* cross-origin — let the canvas handle it */ }
       }
