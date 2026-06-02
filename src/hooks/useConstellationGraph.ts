@@ -65,6 +65,13 @@ export function useConstellationGraph(spaceId: string) {
     }
     optimisticRef.current = next
     bump()
+    // On a failed persist, roll back the overlay so reads fall back to
+    // serverGraph instead of compounding edits on state the backend rejected.
+    // Only roll back if `next` is still the active overlay — a newer in-flight
+    // edit may have replaced it, and that one owns its own persist/rollback.
+    const rollback = () => {
+      if (optimisticRef.current === next) { optimisticRef.current = null; bump() }
+    }
     apiFetch(`/api/constellation-graph/${encodeURIComponent(spaceId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -73,8 +80,12 @@ export function useConstellationGraph(spaceId: string) {
       if (!res.ok) {
         const body = await res.text().catch(() => '')
         console.warn(`[constellation] persist failed: HTTP ${res.status}`, body)
+        rollback()
       }
-    }).catch(err => console.warn('[constellation] persist failed:', err))
+    }).catch(err => {
+      console.warn('[constellation] persist failed:', err)
+      rollback()
+    })
   }, [spaceId])
 
   const assign = useCallback((slot: ConstellationSlot, nodeId: string) => apply(g => applyAssign(g, slot, nodeId)), [apply])

@@ -9,6 +9,7 @@ import {
 const h = vi.hoisted(() => ({
   serverState: { constellationGraphs: [] as ConstellationGraph[] },
   puts: [] as ConstellationGraph[],
+  nextResponse: () => Promise.resolve({ ok: true } as Response),
 }))
 
 vi.mock('../useServerEvents', () => ({
@@ -18,7 +19,7 @@ vi.mock('../useServerEvents', () => ({
 vi.mock('../../apiClient', () => ({
   apiFetch: (_path: string, init: RequestInit) => {
     h.puts.push(JSON.parse(init.body as string))
-    return Promise.resolve({ ok: true } as Response)
+    return h.nextResponse()
   },
 }))
 
@@ -52,6 +53,7 @@ describe('useConstellationGraph composition', () => {
   beforeEach(() => {
     h.serverState = { constellationGraphs: [] }
     h.puts.length = 0
+    h.nextResponse = () => Promise.resolve({ ok: true } as Response)
   })
 
   it('double-assign (form flow) persists both members, not just the last', () => {
@@ -105,5 +107,25 @@ describe('useConstellationGraph composition', () => {
     act(() => { result.current.remove('1', 'a') })
     expect(result.current.nodesInSlot('1')).toEqual([])
     expect(h.puts.at(-1)!.members.map(m => m.widget).sort()).toEqual(['c', 'd'])
+  })
+})
+
+// Regression: a rejected PUT must roll back the optimistic overlay so the UI
+// falls back to server state instead of compounding edits the backend refused.
+describe('useConstellationGraph failed persist', () => {
+  beforeEach(() => {
+    h.serverState = { constellationGraphs: [] }
+    h.puts.length = 0
+    h.nextResponse = () => Promise.resolve({ ok: true } as Response)
+  })
+
+  it('rolls back the overlay when the server responds non-OK', async () => {
+    h.nextResponse = () => Promise.resolve({ ok: false, status: 400, text: () => Promise.resolve('bad') } as Response)
+    const { result } = renderHook(() => useConstellationGraph('s'))
+    await act(async () => {
+      result.current.assign('1', 'a')
+      await Promise.resolve()
+    })
+    expect(result.current.nodesInSlot('1')).toEqual([])
   })
 })
