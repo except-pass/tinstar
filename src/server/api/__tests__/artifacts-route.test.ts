@@ -206,25 +206,32 @@ describe('PUT /api/artifacts/:id', () => {
 })
 
 describe('DELETE artifacts', () => {
-  it('DELETE /api/artifacts/:id removes one (widget remains)', async () => {
+  it('DELETE /api/artifacts/:id removes the artifact AND its owning widget (with a browserWidget delta)', async () => {
     const p = writeHtml(t.tmpRoot, 'd.html', '<body>d</body>')
     const created = (await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: p }) })).json()).data
+    // Capture the SSE delta the client reacts to.
+    const deltas: Array<{ entity: string; id: string; data: unknown }> = []
+    t.docStore.changes.on('change', e => { if (e.entity === 'browserWidget') deltas.push(e) })
     const res = await t.fetch(`/api/artifacts/${created.artifactId}`, { method: 'DELETE' })
     expect(res.status).toBe(200)
     expect(t.docStore.getArtifact(created.artifactId)).toBeUndefined()
-    // widget is intentionally left in place
-    expect(t.docStore.getAllBrowserWidgets().find(w => w.id === created.widgetId)).toBeDefined()
+    // widget is removed so live canvases stop showing the stale HTML
+    expect(t.docStore.getAllBrowserWidgets().find(w => w.id === created.widgetId)).toBeUndefined()
+    expect(deltas).toContainEqual({ entity: 'browserWidget', id: created.widgetId, data: null })
   })
 
-  it('DELETE /api/artifacts clears all', async () => {
+  it('DELETE /api/artifacts clears all artifacts and their owning widgets', async () => {
     const a = writeHtml(t.tmpRoot, 'a.html', '<body>a</body>')
     const b = writeHtml(t.tmpRoot, 'b.html', '<body>b</body>')
-    await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: a }) })
-    await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: b }) })
+    const ca = (await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: a }) })).json()).data
+    const cb = (await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: b }) })).json()).data
     const res = await t.fetch('/api/artifacts', { method: 'DELETE' })
     expect(res.status).toBe(200)
     expect((await res.json()).data.deleted).toBe(2)
     expect(t.docStore.getAllArtifacts()).toHaveLength(0)
+    // both owning widgets removed too
+    expect(t.docStore.getAllBrowserWidgets().find(w => w.id === ca.widgetId)).toBeUndefined()
+    expect(t.docStore.getAllBrowserWidgets().find(w => w.id === cb.widgetId)).toBeUndefined()
   })
 
   it('deleting the widget cascades to its artifact (via DELETE /api/browser-widgets/:id)', async () => {

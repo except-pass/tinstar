@@ -2214,18 +2214,34 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // DELETE /api/artifacts — clear all (escape hatch)
+  // DELETE /api/artifacts — clear all (escape hatch). Also removes the owning
+  // browser widgets so live canvases (which only react to browserWidget SSE deltas,
+  // never artifact ones) see the widgets disappear instead of keeping stale HTML.
   if (method === 'DELETE' && url === '/api/artifacts') {
-    const deleted = ctx.docStore.deleteAllArtifacts()
-    ok(res, { deleted })
+    const artifacts = ctx.docStore.getAllArtifacts()
+    const total = artifacts.length
+    const existing = new Set(ctx.docStore.getAllBrowserWidgets().map(w => w.id))
+    const owningWidgetIds = new Set(
+      artifacts.map(a => a.widgetId).filter((w): w is string => !!w && existing.has(w)),
+    )
+    for (const wid of owningWidgetIds) ctx.docStore.deleteBrowserWidget(wid) // cascades the artifact + emits a widget delta
+    ctx.docStore.deleteAllArtifacts() // sweep any artifacts with no (live) owning widget
+    ok(res, { deleted: total })
     return true
   }
 
-  // DELETE /api/artifacts/:id — remove one (leaves the widget in place)
+  // DELETE /api/artifacts/:id — remove one, and the browser widget that surfaces it
+  // (the client has no artifact reducer, so it only un-renders on a browserWidget delta).
   if (method === 'DELETE' && url.startsWith('/api/artifacts/')) {
     const id = url.slice('/api/artifacts/'.length).split('?')[0]!
-    if (!ctx.docStore.getArtifact(id)) { fail(res, 'NOT_FOUND', `Artifact ${id} not found`); return true }
-    ctx.docStore.deleteArtifact(id)
+    const artifact = ctx.docStore.getArtifact(id)
+    if (!artifact) { fail(res, 'NOT_FOUND', `Artifact ${id} not found`); return true }
+    const widgetId = artifact.widgetId
+    if (widgetId && ctx.docStore.getAllBrowserWidgets().some(w => w.id === widgetId)) {
+      ctx.docStore.deleteBrowserWidget(widgetId) // cascades: removes this artifact + emits the widget delta
+    } else {
+      ctx.docStore.deleteArtifact(id)
+    }
     ok(res, { deleted: true })
     return true
   }
