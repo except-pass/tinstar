@@ -69,6 +69,11 @@ export function useConstellationGraph(spaceId: string) {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(next),
+    }).then(async res => {
+      if (!res.ok) {
+        const body = await res.text().catch(() => '')
+        console.warn(`[constellation] persist failed: HTTP ${res.status}`, body)
+      }
     }).catch(err => console.warn('[constellation] persist failed:', err))
   }, [spaceId])
 
