@@ -240,6 +240,26 @@ export function CanvasWidgetShell({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // Clicking inside an iframe body (browser/terminal primitives) does not bubble
+  // a pointer event to the shell, so the widget would never select. Detect focus
+  // moving into an inner iframe (window blur + activeElement is our iframe) and
+  // fire the normal selection. Generic across all iframe-backed widgets.
+  useEffect(() => {
+    function onWindowBlur() {
+      if (isSelected) return
+      const active = document.activeElement
+      if (
+        active &&
+        active.tagName === 'IFRAME' &&
+        containerRef.current?.contains(active)
+      ) {
+        onSelect(nodeId, false)
+      }
+    }
+    window.addEventListener('blur', onWindowBlur)
+    return () => window.removeEventListener('blur', onWindowBlur)
+  }, [isSelected, nodeId, onSelect])
+
   return (
     <div
       ref={containerRef}
