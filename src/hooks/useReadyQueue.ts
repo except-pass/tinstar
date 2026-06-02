@@ -32,6 +32,19 @@ export function orderByHierarchy(names: string[], hierarchyOrder: string[]): str
   return [...names].sort((a, b) => rankOf(a) - rankOf(b))
 }
 
+/**
+ * Restrict a cycle candidate set (ready/active sessions) to the sessions actually
+ * visible in the sidebar, preserving the sidebar's order. Candidates absent from
+ * `visibleOrder` are dropped entirely — not pushed to the end — so collapsed,
+ * search-pruned, or inbox-filtered sessions can't be cycled to. Falls back to the
+ * candidates only before the sidebar has reported any order yet.
+ */
+export function visibleCycleQueue(candidates: string[], visibleOrder: string[]): string[] {
+  if (visibleOrder.length === 0) return candidates
+  const set = new Set(candidates)
+  return visibleOrder.filter(name => set.has(name))
+}
+
 export function cycleNext(
   runs: Run[],
   names: string[],

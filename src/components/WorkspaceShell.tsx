@@ -5,7 +5,7 @@ import { useBackendState } from '../hooks/useBackendState'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { DEFAULT_LEVELS } from '../domain/dimension-meta'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
-import { cycleNext, cyclePrev, orderByHierarchy } from '../hooks/useReadyQueue'
+import { cycleNext, cyclePrev, visibleCycleQueue } from '../hooks/useReadyQueue'
 import { useHiddenRuns } from '../hooks/useHiddenRuns'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
@@ -693,26 +693,32 @@ function WorkspaceShellInner() {
       .map(id => runMap.get(id)?.sessionId)
       .filter(Boolean) as string[]
 
+  // Restrict cycling to sessions actually visible in the sidebar, preserving its
+  // order. Collapsed, search-pruned, or inbox-filtered sessions are dropped from
+  // the queue entirely — not just reordered — so `[` / `]` can't reach them. Fall
+  // back to the candidates only before the sidebar has reported any order yet.
+  const visibleQueue = (candidates: string[]) => visibleCycleQueue(candidates, cycleOrder())
+
   useGlobalHotkeys({
     onCycleReadyNext: () => {
-      const queue = orderByHierarchy(readyQueue.filter(name => !hiddenSessionIds.has(name)), cycleOrder())
+      const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name)))
       const run = cycleNext(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleReadyPrev: () => {
-      const queue = orderByHierarchy(readyQueue.filter(name => !hiddenSessionIds.has(name)), cycleOrder())
+      const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name)))
       const run = cyclePrev(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllNext: () => {
       const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
-      const activeNames = orderByHierarchy(active, cycleOrder())
+      const activeNames = visibleQueue(active)
       const run = cycleNext(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllPrev: () => {
       const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
-      const activeNames = orderByHierarchy(active, cycleOrder())
+      const activeNames = visibleQueue(active)
       const run = cyclePrev(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },

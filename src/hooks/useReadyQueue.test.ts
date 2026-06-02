@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { orderByHierarchy, orderedVisibleRunIds } from './useReadyQueue'
-import type { TreeNode } from '../domain/types'
+import { orderByHierarchy, orderedVisibleRunIds, visibleCycleQueue, cycleNext, cyclePrev } from './useReadyQueue'
+import type { Run, TreeNode } from '../domain/types'
 
 function node(id: string, type: string, children: TreeNode[] = []): TreeNode {
   return { id, label: id, type, entityId: id, children, runCount: 0, activeCount: 0 }
@@ -64,5 +64,28 @@ describe('orderedVisibleRunIds', () => {
   it('includes top-level run nodes regardless of expand state', () => {
     const flat: TreeNode[] = [node('run-x', 'run'), node('run-y', 'run')]
     expect(orderedVisibleRunIds(flat, () => false)).toEqual(['run-x', 'run-y'])
+  })
+})
+
+describe('visibleCycleQueue', () => {
+  it('drops candidates that are not in the visible order (membership, not just order)', () => {
+    // 'hidden' is ready but not visible in the sidebar → must be excluded.
+    expect(visibleCycleQueue(['alpha', 'bravo', 'hidden'], ['bravo', 'alpha'])).toEqual(['bravo', 'alpha'])
+  })
+
+  it('falls back to candidates only when no visible order has been reported', () => {
+    expect(visibleCycleQueue(['alpha', 'bravo'], [])).toEqual(['alpha', 'bravo'])
+  })
+
+  it('cannot cycle to a filtered-out session', () => {
+    const run = (id: string): Run => ({ id, sessionId: id } as Run)
+    const runs = [run('alpha'), run('bravo'), run('hidden')]
+    // 'hidden' is a ready session that the sidebar has filtered out.
+    const queue = visibleCycleQueue(['alpha', 'bravo', 'hidden'], ['alpha', 'bravo'])
+    // Cycling forward from the last visible session wraps back to the first
+    // visible one, never landing on 'hidden'.
+    expect(cycleNext(runs, queue, 'bravo')?.id).toBe('alpha')
+    expect(cyclePrev(runs, queue, 'alpha')?.id).toBe('bravo')
+    expect(queue).not.toContain('hidden')
   })
 })
