@@ -41,11 +41,13 @@ export function useConstellationGraph(spaceId: string) {
   const optimisticRef = useRef<ConstellationGraph | null>(null)
   const serverGraphRef = useRef(serverGraph)
   serverGraphRef.current = serverGraph
-  // The exact serverGraph reference the active overlay was built from. While the
-  // current serverGraph is still this same reference, the server hasn't pushed
-  // anything since our edit — we're simply awaiting our own echo, so don't disturb
-  // the overlay. A *new* push (different reference) means the server moved, even
-  // if it happens to deep-equal the baseline (e.g. another client reverted).
+  // The server graph the active overlay was built from. While the current
+  // serverGraph still equals this baseline *by content* we're simply awaiting our
+  // own echo (don't disturb the overlay); once it moves to a value that is neither
+  // the baseline nor our echo, some other writer changed it and our overlay is
+  // stale. Compare by content, not reference: an SSE reconnect/snapshot rebuilds
+  // equal graphs as fresh objects, so reference identity would spuriously read an
+  // unchanged baseline as a divergent push.
   const overlayBaseRef = useRef<ConstellationGraph | null>(null)
   // Count of PUTs we still expect an echo for, keyed by spaceId. While a space's
   // count is >0 a divergent server graph may just be an intermediate echo from one
@@ -78,12 +80,12 @@ export function useConstellationGraph(spaceId: string) {
       bump()
       return
     }
-    // serverGraph is still the exact reference we built on — the server hasn't
-    // pushed anything since our edit, so our echo just hasn't landed yet; keep the
-    // overlay so the edit doesn't visibly revert. A new push that merely deep-
-    // equals the baseline (e.g. another client reverted) is a different reference
-    // and falls through to the stale check below rather than pinning forever.
-    if (serverGraph === overlayBaseRef.current) return
+    // serverGraph still matches the graph we built on by content — the server
+    // hasn't changed anything since our edit, so our echo just hasn't landed yet;
+    // keep the overlay so the edit doesn't visibly revert. Content equality (not
+    // reference) is what matters here: a reconnect/snapshot can rebuild the same
+    // baseline as a fresh object, and that must not be treated as a server move.
+    if (overlayBaseRef.current && JSON.stringify(serverGraph) === JSON.stringify(overlayBaseRef.current)) return
     // Server moved to a value that is neither our echo nor the original baseline,
     // and this space has no write in flight: another writer won, so the overlay is
     // stale — surface the authoritative server state instead of pinning it.
