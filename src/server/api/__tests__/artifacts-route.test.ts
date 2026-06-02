@@ -158,6 +158,25 @@ describe('GET /api/artifacts/:id', () => {
     const res = await t.fetch('/api/artifacts/eph-nope')
     expect(res.status).toBe(404)
   })
+
+  it('honors the CORS allowlist instead of serving HTML to any origin', async () => {
+    // Stored artifact HTML comes from arbitrary local files, so the served response
+    // must respect TINSTAR_CORS_ORIGINS rather than hardcoding '*'. With an allowlist
+    // set, a matching Origin is echoed; a non-listed Origin gets no ACAO header.
+    const prev = process.env.TINSTAR_CORS_ORIGINS
+    process.env.TINSTAR_CORS_ORIGINS = 'https://app.example.com'
+    try {
+      const p = writeHtml(t.tmpRoot, 'cors.html', '<body>secret</body>')
+      const created = await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: p }) })).json()
+      const allowed = await t.fetch(`/api/artifacts/${created.data.artifactId}`, { headers: { Origin: 'https://app.example.com' } })
+      expect(allowed.headers.get('access-control-allow-origin')).toBe('https://app.example.com')
+      const denied = await t.fetch(`/api/artifacts/${created.data.artifactId}`, { headers: { Origin: 'https://evil.example.com' } })
+      expect(denied.headers.get('access-control-allow-origin')).toBeNull()
+    } finally {
+      if (prev === undefined) delete process.env.TINSTAR_CORS_ORIGINS
+      else process.env.TINSTAR_CORS_ORIGINS = prev
+    }
+  })
 })
 
 describe('PUT /api/artifacts/:id', () => {
