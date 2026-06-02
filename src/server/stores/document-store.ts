@@ -688,6 +688,7 @@ export class DocumentStore {
       this.runs.clear()
       this.editorWidgets.clear()
       this.browserWidgets.clear()
+      this.artifacts.clear()
       this.imageWidgets.clear()
       // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
