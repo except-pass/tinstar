@@ -299,7 +299,16 @@ export function startServer(opts: ServerOptions) {
     }
   }
 
-  void listenAll(opts.port)
+  // Startup must fail fast: listenAll() handles EADDRINUSE internally (retry /
+  // port-bump / explicit exit), but any other bind error rethrows. Without this
+  // catch that rejection would be swallowed by the process-wide handler above,
+  // leaving a live process with no HTTP listener. The keep-alive net is for
+  // *runtime* stray errors, not a failed boot.
+  listenAll(opts.port).catch((err) => {
+    const e = err as NodeJS.ErrnoException
+    log.error('server', 'fatal startup error — exiting', { error: e?.message, code: e?.code, stack: e?.stack })
+    process.exit(1)
+  })
 }
 
 // Auto-start when run directly (not when imported by CLI)

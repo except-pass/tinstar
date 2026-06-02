@@ -92,7 +92,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
   const widgets = {
     register(reg: WidgetRegistration): Disposable {
       try {
-        const d = registerWidgetComponent(reg)
+        const d = registerWidgetComponent(reg, 'plugin')
         record.disposables.push(d)
         return d
       } catch (e) {

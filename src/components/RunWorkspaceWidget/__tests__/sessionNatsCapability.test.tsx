@@ -51,10 +51,19 @@ describe('session.nats constellation capability', () => {
       status: 'idle',
       subscriptions: ['a.broadcast', 'a.broadcast.sess'],
       color: '#ff7700',
+      orphanedAt: null,
     })
 
     unmount()
     expect(capabilityRegistry.capabilitiesOf('run-r1')).not.toContain('session.nats')
+  })
+
+  it('surfaces natsControlOrphanedAt so the Saloon can show a reconnect affordance', async () => {
+    const run = makeRun({ natsControlOrphanedAt: '2026-06-02T00:00:00Z' })
+    render(<RunWorkspaceWidget run={run} />)
+
+    const payload = await capabilityRegistry.invoke('run-r1', 'session.nats', undefined) as { orphanedAt: string | null }
+    expect(payload.orphanedAt).toBe('2026-06-02T00:00:00Z')
   })
 
   it('derives both broadcast and direct subjects when only natsSubject is present', async () => {

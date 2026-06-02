@@ -34,7 +34,7 @@ describe('FirstSessionStep', () => {
     fireEvent.change(screen.getByTestId('session-name-input'), { target: { value: 'first' } })
     fireEvent.click(screen.getByTestId('session-start'))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
-    const body = JSON.parse(fetchMock.mock.calls[1][1].body)
+    const body = JSON.parse(fetchMock.mock.calls[1]![1].body)
     expect(body).toMatchObject({ name: 'first', project: 'tinstar', cliTemplate: 'claude', backend: 'tmux' })
   })
 })

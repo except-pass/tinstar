@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { PluginRecord } from '../../pluginHost/registry'
 import type { PluginManifest } from '@tinstar/plugin-api'
 import { createPluginApi } from '../createApi'
-import { getWidgetComponent } from '../../../widgets/widgetComponentRegistry'
+import { getWidgetComponent, listWidgetRegistrations, registerWidgetComponent } from '../../../widgets/widgetComponentRegistry'
 
 function makeRecord(name = 'browser'): PluginRecord {
   return {
@@ -64,6 +64,35 @@ describe('createPluginApi', () => {
     expect(getWidgetComponent('delta-widget')).toBeDefined()
     d.dispose()
     expect(getWidgetComponent('delta-widget')).toBeUndefined()
+  })
+
+  it('plugin-registered widgets are excluded from the host-only catalog accessor', () => {
+    const rec = makeRecord('zeta')
+    const api = createPluginApi(rec)
+    api.widgets.register({
+      type: 'zeta-widget',
+      component: FakeWidget,
+      isContainer: false,
+      minSize: { width: 100, height: 100 },
+      capabilities: ['spawnable'],
+    })
+    // Registered for rendering...
+    expect(getWidgetComponent('zeta-widget')).toBeDefined()
+    // ...but absent from the host-only list (it comes via the plugin registry),
+    // so it can't double-count even when it declares 'spawnable'.
+    const hostTypes = listWidgetRegistrations().map((r) => r.type)
+    expect(hostTypes).not.toContain('zeta-widget')
+
+    // A host registration with the same shape IS included.
+    const d = registerWidgetComponent({
+      type: 'zeta-host-widget',
+      component: FakeWidget,
+      isContainer: false,
+      minSize: { width: 100, height: 100 },
+      capabilities: ['spawnable'],
+    })
+    expect(listWidgetRegistrations().map((r) => r.type)).toContain('zeta-host-widget')
+    d.dispose()
   })
 
   it('logger prefixes messages with [pluginId]', () => {

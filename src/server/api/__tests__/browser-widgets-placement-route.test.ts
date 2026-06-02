@@ -237,4 +237,54 @@ describe('PATCH /api/browser-widgets/:id — placement', () => {
     expect((stored as unknown as Record<string, unknown>).nearNodeId).toBeUndefined()
     expect((stored as unknown as Record<string, unknown>).slot).toBeUndefined()
   })
+
+  it('preserves the existing size when a PATCH updates only position', async () => {
+    const created = await (await testCtx.fetch('/api/browser-widgets', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: SESSION_ID, position: { x: 1, y: 2 }, size: { width: 400, height: 300 } }),
+    })).json() as { data: BrowserWidget }
+
+    const res = await testCtx.fetch(`/api/browser-widgets/${created.data.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ position: { x: 50, y: 60 } }),
+    })
+    const { data } = await res.json() as { data: BrowserWidget }
+    expect(data.position).toEqual({ x: 50, y: 60 })
+    // Must NOT reset to DEFAULT_BROWSER_SIZE (800x600).
+    expect(data.size).toEqual({ width: 400, height: 300 })
+  })
+})
+
+describe('POST /api/browser-widgets — spaceId validation', () => {
+  it('rejects an explicit spaceId that does not exist', async () => {
+    const res = await testCtx.fetch('/api/browser-widgets', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: SESSION_ID, spaceId: 'no-such-space', url: 'http://x' }),
+    })
+    expect(res.status).not.toBe(200)
+    const body = await res.json() as { error?: { code?: string } }
+    expect(body.error?.code).toBe('NOT_FOUND')
+  })
+})
+
+describe('POST /api/browser-widgets — sessionId validation', () => {
+  it('rejects a present-but-empty sessionId instead of silently creating a standalone widget', async () => {
+    const res = await testCtx.fetch('/api/browser-widgets', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: '   ', url: 'http://x' }),
+    })
+    expect(res.status).not.toBe(200)
+    const body = await res.json() as { error?: { code?: string } }
+    expect(body.error?.code).toBe('INVALID_PARAMS')
+  })
+
+  it('allows a truly-omitted sessionId (standalone widget)', async () => {
+    const res = await testCtx.fetch('/api/browser-widgets', {
+      method: 'POST',
+      body: JSON.stringify({ url: 'http://x', position: { x: 1, y: 2 } }),
+    })
+    expect(res.status).toBe(200)
+    const { data } = await res.json() as { data: BrowserWidget }
+    expect(data.sessionId).toBeUndefined()
+  })
 })

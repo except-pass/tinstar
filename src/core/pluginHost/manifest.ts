@@ -39,6 +39,19 @@ function validateWidgetContribution(w: Record<string, unknown>, pluginName: stri
       throw new ManifestError(`${where}: defaultSize must be { width: number, height: number }`)
     }
   }
+  if (w.creator !== undefined && w.creator !== 'standalone' && w.creator !== 'session-backed') {
+    throw new ManifestError(`${where}: creator must be 'standalone' or 'session-backed' if present`)
+  }
+  if (w.capabilities !== undefined && !isStringArray(w.capabilities)) {
+    throw new ManifestError(`${where}: capabilities must be an array of strings if present`)
+  }
+  if (w.tags !== undefined && !isStringArray(w.tags)) {
+    throw new ManifestError(`${where}: tags must be an array of strings if present`)
+  }
+}
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === 'string')
 }
 
 export function parseManifest(pkgJson: unknown): ParsedManifest {

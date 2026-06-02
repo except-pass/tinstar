@@ -45,7 +45,7 @@ import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, type Constel
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
 import { resolveProxyTarget } from './proxyResolve'
-import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
+import { registerSaloonSubs, unregisterSaloonSubs, registerFirehose, unregisterFirehose } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
@@ -743,9 +743,21 @@ type CreateBrowserWidgetResult =
  *  logic lives in one place. */
 function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParams): CreateBrowserWidgetResult {
   const { sessionId, url: widgetUrl = '', headers: widgetHeaders, color: colorOverride, title } = parsed
+  // Distinguish "omitted" (standalone widget — allowed) from "present but
+  // empty/whitespace" (a malformed payload that should fail, not silently
+  // create a standalone widget).
+  if (sessionId !== undefined && !sessionId.trim()) {
+    return { error: { code: 'INVALID_PARAMS', message: 'sessionId must be a non-empty session name when provided' } }
+  }
   const run = sessionId ? ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId) : undefined
   if (sessionId && !run) {
     return { error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }
+  }
+  // Reject an explicit spaceId that doesn't exist, so a typo/stale value can't
+  // persist an orphaned widget (and constellation membership) under no real
+  // space — matching the guard the plugin-widget create path already uses.
+  if (parsed.spaceId && !ctx.docStore.getSpace(parsed.spaceId)) {
+    return { error: { code: 'NOT_FOUND', message: `No space ${parsed.spaceId}` } }
   }
   const widgetColor = colorOverride ?? run?.color ?? '#5b6b7a'
   const spaceId = parsed.spaceId || ctx.docStore.activeSpaceId || ''
@@ -1823,6 +1835,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST /api/nats-traffic/firehose — an unsnapped Saloon in 'all' mode toggles a
+  // full-bus (tinstar.>) subscription so it actually shows all traffic instead of
+  // only whatever subjects bound sessions happen to register. Body:
+  // { widgetId: string, on: boolean }. Idempotent; the bridge unions+dedupes, so
+  // multiple firehose widgets share one upstream subscription.
+  if (method === 'POST' && url === '/api/nats-traffic/firehose') {
+    readBody(req).then(body => {
+      let parsed: { widgetId?: unknown; on?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
+      if (typeof parsed.widgetId !== 'string' || !parsed.widgetId) { fail(res, 'BAD_REQUEST', 'widgetId required'); return }
+      if (parsed.on) registerFirehose(ctx.natsTraffic, parsed.widgetId)
+      else unregisterFirehose(ctx.natsTraffic, parsed.widgetId)
+      ok(res, null)
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
+    return true
+  }
+
   // POST /api/file-content/git-base — return the HEAD-committed version of a file
   if (method === 'POST' && url === '/api/file-content/git-base') {
     const execFileAsync = promisify(execFile)
@@ -2088,7 +2117,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const updated = {
         ...existing,
         ...rest,
-        ...(placement ? { position: placement.position, size: placement.size } : {}),
+        // PATCH semantics: a position-only update must not reset size. Keep the
+        // existing size unless the caller explicitly sends a new one.
+        ...(placement ? { position: placement.position, size: patch.size ? placement.size : existing.size } : {}),
       }
       ctx.docStore.upsertBrowserWidget(id, updated)
       const slot = toSlot(patch.slot)

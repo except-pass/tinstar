@@ -32,18 +32,33 @@ export interface WidgetRegistration extends PluginApiWidgetRegistration {
   // V5.0: no internal-only fields.
 }
 
-const registry = new Map<string, WidgetRegistration>()
+/** Where a registration came from. Plugin widgets register their render
+ *  component here too (via createPluginApi().widgets.register), but they are
+ *  already surfaced through the manifest-driven plugin registry, so the
+ *  host-only catalog accessor must exclude them to avoid double-counting. */
+type RegistrationSource = 'host' | 'plugin'
 
-export function registerWidgetComponent(reg: WidgetRegistration): Disposable {
+interface StoredRegistration {
+  reg: WidgetRegistration
+  source: RegistrationSource
+}
+
+const registry = new Map<string, StoredRegistration>()
+
+export function registerWidgetComponent(
+  reg: WidgetRegistration,
+  source: RegistrationSource = 'host',
+): Disposable {
   if (registry.has(reg.type)) {
     throw new Error(`Widget type already registered: ${reg.type}`)
   }
-  registry.set(reg.type, reg)
+  const stored: StoredRegistration = { reg, source }
+  registry.set(reg.type, stored)
   return {
     dispose: () => {
       // Only delete if we're still the registered entry — avoid clobbering a
       // re-registration that happened in between.
-      if (registry.get(reg.type) === reg) {
+      if (registry.get(reg.type) === stored) {
         registry.delete(reg.type)
       }
     },
@@ -51,14 +66,16 @@ export function registerWidgetComponent(reg: WidgetRegistration): Disposable {
 }
 
 export function getWidgetComponent(type: string): WidgetRegistration | undefined {
-  return registry.get(type)
+  return registry.get(type)?.reg
 }
 
 /** All currently-registered host widget registrations (snapshot). Used by the
  *  unified widget catalog to surface host widgets (e.g. run-workspace) that are
- *  not part of the plugin registry. */
+ *  not part of the plugin registry. Plugin-registered components are excluded —
+ *  they are surfaced through the manifest-driven plugin registry instead, so
+ *  including them here would double-count spawnable plugin widgets. */
 export function listWidgetRegistrations(): WidgetRegistration[] {
-  return [...registry.values()]
+  return [...registry.values()].filter((s) => s.source === 'host').map((s) => s.reg)
 }
 
 /**
