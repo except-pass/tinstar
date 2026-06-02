@@ -1,8 +1,9 @@
 import { useSyncExternalStore, useCallback, useRef, useMemo, useState } from 'react'
-import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi, PluginPrimitivesApi, PrimitiveAccessory, RegisterBrowserWidgetOptions, BrowserHandle, WidgetProps } from '@tinstar/plugin-api'
+import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi, PluginPrimitivesApi, PrimitiveAccessory, RegisterBrowserWidgetOptions, RegisterTerminalWidgetOptions, BrowserHandle, TerminalHandle, WidgetProps } from '@tinstar/plugin-api'
 import { usePluginWidgetData } from './usePluginWidgetData'
 import { makeBrowserPrimitive } from '../../plugins/browser/src/BrowserPrimitive'
-import { BrowserHandleContext, useBrowserHandle, useTerminalHandle } from './browserPrimitiveContext'
+import { TerminalPrimitive } from '../../widgets/primitives/TerminalPrimitive'
+import { BrowserHandleContext, TerminalHandleContext, useBrowserHandle, useTerminalHandle } from './browserPrimitiveContext'
 import { useDeletePluginWidget } from './useDeletePluginWidget'
 import { useInitialContext } from './useInitialContext'
 import { useAttention } from './useAttention'
@@ -347,9 +348,37 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
       })
     }
 
+    function registerTerminalWidget(opts: RegisterTerminalWidgetOptions): Disposable {
+      function TerminalBackedWidget(_props: WidgetProps) {
+        const [data] = api.widget.useData<{ sessionId?: string }>()
+        const sessionId = data?.sessionId ?? ''
+        const frameRef = useRef<HTMLIFrameElement>(null)
+        const handle: TerminalHandle = useMemo(() => ({
+          sessionId,
+          focus: () => frameRef.current?.contentWindow?.focus(),
+        }), [sessionId])
+        return (
+          <TerminalHandleContext.Provider value={handle}>
+            <AccessoryLayout accessory={opts.accessory}>
+              <TerminalPrimitive ref={frameRef} sessionId={sessionId} />
+            </AccessoryLayout>
+          </TerminalHandleContext.Provider>
+        )
+      }
+      return widgets.register({
+        type: opts.type,
+        component: TerminalBackedWidget as never,
+        isContainer: false,
+        defaultSize: opts.defaultSize ?? { width: 720, height: 480 },
+        minSize: opts.minSize ?? { width: 360, height: 240 },
+        dragHandleSelector: '.widget-drag-handle',
+        capabilities: ['session-host'],
+      })
+    }
+
     return {
       registerBrowserWidget,
-      registerTerminalWidget: () => { throw new Error('terminal primitive: implemented in Task 7') },
+      registerTerminalWidget,
       useBrowser: () => useBrowserHandle(),
       useTerminal: () => useTerminalHandle(),
     }
