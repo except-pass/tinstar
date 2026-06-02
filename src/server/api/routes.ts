@@ -123,7 +123,7 @@ function buildNatsSubject(
     session: sanitize(sessionName),
   })
 }
-import { discoverHands, getHandByName } from '../hands'
+import { discoverHands, getHandByName, type Hand } from '../hands'
 import { MARSHAL_AGENT_NAME, MARSHAL_AGENT_DESCRIPTION, MARSHAL_AGENT_PROMPT } from '../hands/builtins/index'
 
 // ─── NATS socket communication ─────────────────────────────────────────
@@ -837,6 +837,27 @@ function buildCreateSessionContext(ctx: RouteContext): CreateSessionContext | nu
   }
 }
 
+/** Derive a hand-backed session's one-shot initial prompt and persistent
+ * system prompt from `hand.systemPrompt`/`hand.prompt`. A hand with a dedicated
+ * `systemPrompt` keeps that as the persisted persona (re-injected on /start so
+ * it survives restart and `/clear`) while its `prompt` is a one-shot intro
+ * fired as the first user message. A hand without `systemPrompt` carries its
+ * persona in `prompt`, so that becomes the persisted system prompt. A
+ * caller-supplied `prompt` always takes precedence as the initial message.
+ * Keying on the field (not the hand name) lets a user-defined `marshal.md`
+ * override supply its own system prompt. Shared by every creation path so
+ * direct create, marshal boot, and spawn all honor the same semantics. */
+function resolveHandPrompts(
+  hand: Hand,
+  callerPrompt?: string,
+): { initialPrompt: string | undefined; systemPrompt: string | null } {
+  const intro = hand.systemPrompt ? hand.prompt : undefined
+  return {
+    initialPrompt: callerPrompt ?? intro,
+    systemPrompt: hand.systemPrompt ?? hand.prompt ?? null,
+  }
+}
+
 type MarshalResult =
   | { ok: true; data: { name: string; port: number | null; state: string } }
   | { ok: false; error: { code: string; message: string } }
@@ -856,15 +877,16 @@ export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalRe
   const hand = getHandByName('marshal')
   if (!hand) return { ok: false, error: { code: 'HAND_NOT_FOUND', message: 'marshal hand definition is missing' } }
 
+  const { initialPrompt, systemPrompt } = resolveHandPrompts(hand)
   const result = await createSessionInternal({
     name: MARSHAL_NAME,
     skipPermissions: true,
     cliTemplate: hand.cliTemplate,
-    prompt: hand.prompt,
+    prompt: initialPrompt,
     agent: {
       name: MARSHAL_AGENT_NAME,
       description: MARSHAL_AGENT_DESCRIPTION,
-      prompt: MARSHAL_AGENT_PROMPT,
+      prompt: systemPrompt ?? MARSHAL_AGENT_PROMPT,
     },
   }, createCtx)
   if (!result.ok) return { ok: false, error: result.error }
@@ -2569,17 +2591,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!resolvedHand) return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
         }
 
-        // A hand with a dedicated `systemPrompt` keeps that persona as the
-        // persisted appendSystemPrompt — re-injected on /start so it survives
-        // restart and `/clear` — while its `prompt` is a one-shot intro fired
-        // as the first user message. Hands without `systemPrompt` carry their
-        // persona in `prompt`. Keying on the field (not the hand name) lets a
-        // user-defined `marshal.md` override supply its own system prompt. A
-        // caller-supplied `prompt` always takes precedence as the initial user
-        // message so marshal sessions can still be created with requested work.
-        const handIntro = resolvedHand?.systemPrompt ? resolvedHand.prompt : undefined
-        const handInitialPrompt = prompt ?? handIntro
-        const handSystemPrompt = resolvedHand?.systemPrompt ?? resolvedHand?.prompt ?? null
+        const { initialPrompt: handInitialPrompt, systemPrompt: handSystemPrompt } =
+          resolvedHand ? resolveHandPrompts(resolvedHand, prompt) : { initialPrompt: prompt, systemPrompt: null }
 
         const createCtx = buildCreateSessionContext(ctx)
         if (!createCtx) return fail(res, 'INTERNAL', 'sessionConfig unavailable')
@@ -2972,10 +2985,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // Generate unique session name
       const spawnedName = `${parentName}-${handName}-${randomUUID().slice(0, 8)}`
 
-      // Build the prompt: hand base + optional override
-      let fullPrompt = hand.prompt
+      // Resolve the persisted persona (system prompt) and one-shot intro from
+      // the hand. For a hand with a dedicated `systemPrompt`, the persona is
+      // that field and `prompt` is the intro fired as the first message; for a
+      // hand without one, `prompt` serves as both.
+      const { initialPrompt: handIntro, systemPrompt: handPersona } = resolveHandPrompts(hand)
+
+      // Build the prompt: hand intro + optional override
+      const introMessage = handIntro ?? hand.prompt
+      let fullPrompt = introMessage
       if (promptOverride) {
-        fullPrompt = `${hand.prompt}\n\n---\n\n${promptOverride}`
+        fullPrompt = `${introMessage}\n\n---\n\n${promptOverride}`
       }
 
       // Resolve the parent's run to get taskId for NATS subject computation
@@ -3108,10 +3128,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // room. When fallback kicked in (parent's control socket was orphan/
         // unreachable), effectiveRoom is the parent's persistent direct
         // subject rather than the fresh breakout room.
-        const handSystemPrompt = hand.prompt
+        const handSystemPrompt = handPersona
           ? effectiveRoom
-            ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${effectiveRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${effectiveRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
-            : `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
+            ? `${handPersona}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${effectiveRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${effectiveRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
+            : `${handPersona}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
           : null
 
         const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, appendSystemPrompt: handSystemPrompt })
