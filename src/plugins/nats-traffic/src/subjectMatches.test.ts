@@ -18,6 +18,11 @@ describe('subjectMatches (NATS token semantics)', () => {
   it('length mismatch without > fails', () => {
     expect(subjectMatches('tinstar.a.b', 'tinstar.a')).toBe(false)
   })
+  it('> is rejected unless it is the final token', () => {
+    expect(subjectMatches('tinstar.a.b', 'tinstar.>.b')).toBe(false)
+    expect(subjectMatches('tinstar.a.b', 'a.>.b')).toBe(false)
+    expect(subjectMatches('tinstar.anything', 'tinstar.>.foo')).toBe(false)
+  })
 })
 
 describe('subjectMatchesAny', () => {

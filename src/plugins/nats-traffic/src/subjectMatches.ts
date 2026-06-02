@@ -5,7 +5,11 @@ export function subjectMatches(subject: string, pattern: string): boolean {
   const p = pattern.split('.')
   for (let i = 0; i < p.length; i++) {
     const tok = p[i]
-    if (tok === '>') return s.length > i // ≥1 token remaining
+    if (tok === '>') {
+      // '>' is only a valid wildcard as the final token; elsewhere it's malformed.
+      if (i !== p.length - 1) return false
+      return s.length > i // ≥1 token remaining
+    }
     if (i >= s.length) return false
     if (tok === '*') continue
     if (tok !== s[i]) return false
