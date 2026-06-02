@@ -684,7 +684,7 @@ function snapWidgetToSession(
       next = addMember(addMember(next, sessionNodeId, free), widgetId, free)
     }
   }
-  next = addSnap(next, sessionNodeId, widgetId)
+  if (targetSlot) next = addSnap(next, sessionNodeId, widgetId)
   ctx.docStore.upsertConstellationGraph(spaceId, next)
 
   const sessionLayout = lookupNodeLayout(ctx, spaceId, sessionNodeId)

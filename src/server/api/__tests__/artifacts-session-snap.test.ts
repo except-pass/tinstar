@@ -21,7 +21,7 @@ vi.mock('../../sessions', async (importActual) => {
 import { handleRequest, type RouteContext } from '../routes'
 import { DocumentStore } from '../../stores/document-store'
 import type { Run } from '../../../domain/types'
-import { slotsForNode, nodesInSlot, snapNeighbors } from '../../../domain/constellationGraph'
+import { slotsForNode, nodesInSlot, snapNeighbors, emptyGraph, addMember } from '../../../domain/constellationGraph'
 
 const SPACE_ID = 'space-1'
 const SESSION_ID = 'sess-1'
@@ -146,5 +146,19 @@ describe('spawned widget snaps to session', () => {
     const created = (await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: p }) })).json()).data
     const graph = t.docStore.getConstellationGraph(SPACE_ID)
     if (graph) expect(slotsForNode(graph, created.widgetId).length).toBe(0)
+  })
+
+  it('all 9 slots full → no membership and no dangling snap edge', async () => {
+    // Fill every slot with a placeholder so no free slot remains, and leave the
+    // session node unslotted (forces the new-group branch).
+    let g = emptyGraph(SPACE_ID)
+    for (const s of ['1','2','3','4','5','6','7','8','9'] as const) g = addMember(g, `filler-${s}`, s)
+    t.docStore.upsertConstellationGraph(SPACE_ID, g)
+
+    const p = writeHtml(t.tmpRoot, 'full.html', '<body>full</body>')
+    const created = (await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: p, sessionId: SESSION_ID }) })).json()).data
+    const graph = t.docStore.getConstellationGraph(SPACE_ID)!
+    expect(slotsForNode(graph, created.widgetId).length).toBe(0)
+    expect(snapNeighbors(graph, created.widgetId)).not.toContain('run-run-R1')
   })
 })

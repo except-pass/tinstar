@@ -1493,7 +1493,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         const res = await apiFetch('/api/browser-widgets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId }),
+          body: JSON.stringify({ sessionId, snapToSession: false }),
         })
         const resJson = await res.json() as { ok: boolean; data?: BrowserWidget }
         if (!resJson.ok || !resJson.data) return
