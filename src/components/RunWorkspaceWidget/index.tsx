@@ -34,6 +34,20 @@ interface Props {
 
 type FilePanelMode = 'touched' | 'tree'
 
+// Legacy runs predate `natsSubscriptions` and only stored a single
+// `natsSubject`. A 6-part subject (`tinstar.<space>.<init>.<epic>.<task>.<agent>`)
+// is a direct agent subject, so the run also listens on its task-level
+// broadcast. Anything else (e.g. a wildcard `tinstar.<space>.<init>.>` for an
+// initiative/epic scope) is already the subscription and must be used verbatim.
+function deriveLegacySubscriptions(natsSubject: string | undefined): string[] {
+  if (!natsSubject) return []
+  const parts = natsSubject.split('.')
+  if (parts.length === 6 && !natsSubject.includes('*') && !natsSubject.includes('>')) {
+    return [parts.slice(0, 5).join('.'), natsSubject]
+  }
+  return [natsSubject]
+}
+
 export function RunWorkspaceWidget({ run, className = '', compact = false, zoom = 1, isSelected = false, isDragging = false, headless = false, onHeaderPointerDown: _onHeaderPointerDown, onHeaderPointerMove: _onHeaderPointerMove, onHeaderPointerUp: _onHeaderPointerUp }: Props) {
 
   const [filesCollapsed, setFilesCollapsed] = useState(compact)
@@ -186,7 +200,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
     return capabilityRegistry.publish(`run-${run.id}`, 'session.nats', async () => ({
       sessionId: run.sessionId,
       status: run.status,
-      subscriptions: run.natsSubscriptions ?? (run.natsSubject ? [run.natsSubject.replace(/\.[^.]+$/, ''), run.natsSubject] : []),
+      subscriptions: run.natsSubscriptions ?? deriveLegacySubscriptions(run.natsSubject),
       color: run.color,
     }))
   }, [run.id, run.sessionId, run.status, run.natsSubscriptions, run.natsSubject, run.color])

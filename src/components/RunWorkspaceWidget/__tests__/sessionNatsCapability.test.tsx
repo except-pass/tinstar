@@ -67,4 +67,12 @@ describe('session.nats constellation capability', () => {
       'tinstar.space.init.epic.task.agent',
     ])
   })
+
+  it('uses a legacy wildcard natsSubject verbatim instead of trimming it', async () => {
+    const run = makeRun({ natsSubject: 'tinstar.space.init.>', natsSubscriptions: undefined })
+    render(<RunWorkspaceWidget run={run} />)
+
+    const payload = await capabilityRegistry.invoke('run-r1', 'session.nats', undefined) as { subscriptions: string[] }
+    expect(payload.subscriptions).toEqual(['tinstar.space.init.>'])
+  })
 })
