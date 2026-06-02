@@ -92,6 +92,20 @@ describe('occupiedEdgesOf', () => {
   it('skips itself', () => {
     expect([...occupiedEdgesOf(target, [target])]).toEqual([])
   })
+
+  it('uses seam orientation, not center delta, for asymmetric widgets', () => {
+    // A wide neighbor flush on the BOTTOM, offset to the right: its center is
+    // farther in x than in y from the target center (|dx|=200 >= |dy|=100), so a
+    // center-delta heuristic would wrongly call it a 'right' neighbor. The seam is
+    // horizontal, so the occupied edge must be 'bottom'.
+    const wideBottom = IR('WB', 150, 200, 400, 100) // flush at target bottom (y=200), spans x 150..550
+    expect([...occupiedEdgesOf(target, [wideBottom])]).toEqual(['bottom'])
+
+    // Symmetric check: a tall neighbor flush on the RIGHT, offset far down, where
+    // |dy| >= |dx| — must still be classified 'right' from the vertical seam.
+    const tallRight = IR('TR', 200, 150, 100, 400) // flush at target right (x=200), spans y 150..550
+    expect([...occupiedEdgesOf(target, [tallRight])]).toEqual(['right'])
+  })
 })
 
 describe('centroidOf', () => {
