@@ -666,6 +666,91 @@ export const spec = {
       },
     },
 
+    // ── Artifacts ─────────────────────────────────────────
+    '/api/artifacts': {
+      post: {
+        tags: ['Widgets'],
+        summary: 'Store an HTML file as an ephemeral artifact and open a browser widget',
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['path'],
+          properties: {
+            path: { type: 'string', description: 'Absolute path to an HTML file to read and store' },
+            name: { type: 'string', description: 'Display name for the artifact widget' },
+            sessionId: { type: 'string', description: 'Session to associate with the browser widget' },
+            color: { type: 'string', description: 'Widget accent color' },
+            spaceId: { type: 'string', description: 'Target space (defaults to active space)' },
+            position: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, description: 'Initial canvas position seed. Wins over nearNodeId.' },
+            size: { type: 'object', properties: { width: { type: 'number' }, height: { type: 'number' } }, description: 'Initial size. Defaults to 800×600.' },
+            nearNodeId: { type: 'string', description: 'Place just to the right of this node id. Ignored if position is given.' },
+            slot: { description: 'Constellation slot (1–9) to join.', oneOf: [{ type: 'integer', minimum: 1, maximum: 9 }, { type: 'string' }] },
+          },
+        } } } },
+        responses: { 200: { description: 'Artifact created', content: { 'application/json': { schema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' }, data: { type: 'object', properties: {
+            artifactId: { type: 'string' },
+            url: { type: 'string' },
+            widgetId: { type: 'string' },
+          } } },
+        } } } } },
+      },
+      delete: {
+        tags: ['Widgets'],
+        summary: 'Clear all artifacts',
+        responses: { 200: { description: 'All artifacts deleted', content: { 'application/json': { schema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' }, data: { type: 'object', properties: { deleted: { type: 'integer' } } } },
+        } } } } },
+      },
+    },
+    '/api/artifacts/{id}': {
+      get: {
+        tags: ['Widgets'],
+        summary: 'Serve the raw HTML for a stored artifact',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'HTML content', content: { 'text/html': { schema: { type: 'string' } } } },
+          404: { description: 'Unknown artifact' },
+        },
+      },
+      put: {
+        tags: ['Widgets'],
+        summary: 'Re-read the file and update the artifact in place (reloads the open widget)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['path'],
+          properties: {
+            path: { type: 'string', description: 'Absolute path to the updated HTML file' },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Artifact updated', content: { 'application/json': { schema: {
+            type: 'object',
+            properties: { ok: { type: 'boolean' }, data: { type: 'object', properties: {
+              artifactId: { type: 'string' },
+              url: { type: 'string' },
+              rev: { type: 'integer' },
+            } } },
+          } } } },
+          404: { description: 'Unknown artifact' },
+        },
+      },
+      delete: {
+        tags: ['Widgets'],
+        summary: 'Delete a single artifact',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Artifact deleted', content: { 'application/json': { schema: {
+            type: 'object',
+            properties: { ok: { type: 'boolean' }, data: { type: 'object', properties: { deleted: { type: 'boolean' } } } },
+          } } } },
+          404: { description: 'Unknown artifact' },
+        },
+      },
+    },
+
     // ── Simulator ────────────────────────────────────────
     '/api/simulator/start': {
       post: {

@@ -2040,7 +2040,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
-      'Access-Control-Allow-Origin': '*',
+      ...corsHeaders,
     })
     res.end(artifact.html)
     return true
