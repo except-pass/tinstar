@@ -116,10 +116,16 @@ export function useConstellationGraph(spaceId: string) {
   const apply = useCallback((compute: (g: ConstellationGraph) => ConstellationGraph) => {
     const base = optimisticRef.current ?? serverGraphRef.current
     const next = compute(base)
-    // No-op vs the server's current doc: skip the PUT (the docstore would
-    // short-circuit it and emit no echo, which would leave the overlay stuck)
-    // and drop any overlay so reads fall back to serverGraph.
-    if (JSON.stringify(next) === JSON.stringify(serverGraphRef.current)) {
+    // No-op vs the server's current doc with no write in flight: skip the PUT
+    // (the docstore would short-circuit it and emit no echo, which would leave
+    // the overlay stuck) and drop any overlay so reads fall back to serverGraph.
+    // But if a write IS in flight, the server's current doc is about to be
+    // overwritten by that pending PUT, so a revert back to it must still be sent
+    // as a compensating PUT — otherwise the earlier write persists (the docstore
+    // sees a real change against the by-then-mutated doc and echoes our revert)
+    // and the user's undo is silently lost.
+    if (JSON.stringify(next) === JSON.stringify(serverGraphRef.current) &&
+        (pendingWrites.current.get(spaceId) ?? 0) === 0) {
       if (optimisticRef.current) { optimisticRef.current = null; overlayBaseRef.current = null; bump() }
       return
     }

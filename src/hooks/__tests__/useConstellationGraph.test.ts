@@ -130,6 +130,45 @@ describe('useConstellationGraph failed persist', () => {
   })
 })
 
+// Regression: an edit followed by an immediate revert (back to the last server
+// state) before the first PUT's echo lands must still send a compensating PUT,
+// or the in-flight earlier write persists and the revert is silently lost.
+describe('useConstellationGraph revert before echo', () => {
+  beforeEach(() => {
+    h.serverState = { constellationGraphs: [] }
+    h.puts.length = 0
+    h.nextResponse = () => Promise.resolve({ ok: true } as Response)
+  })
+
+  it('sends a compensating PUT when a revert races an in-flight write', async () => {
+    // Server already has 'a' in slot 1 — this is the state to revert back to.
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'a', slot: '1' }] }],
+    }
+    // Hold the first PUT open so its echo hasn't landed when the revert fires.
+    let release!: () => void
+    h.nextResponse = () => new Promise<Response>(resolve => {
+      release = () => resolve({ ok: true } as Response)
+    })
+    const { result } = renderHook(() => useConstellationGraph('s'))
+
+    // Edit A (add 'b'), PUT in flight. Then revert B (remove 'b') back to the
+    // server's current state before A's echo lands.
+    act(() => { result.current.assign('2', 'b') })
+    expect(h.puts.length).toBe(1)
+    act(() => { result.current.remove('2', 'b') })
+
+    // The revert must be persisted as its own PUT, not dropped as a no-op.
+    expect(h.puts.length).toBe(2)
+    expect(h.puts.at(-1)!.members.map(m => m.widget)).toEqual(['a'])
+
+    await act(async () => {
+      release()
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+  })
+})
+
 // Regression: the provider is reused across space switches, so a pending
 // optimistic overlay from one space must not leak into another.
 describe('useConstellationGraph space switching', () => {
