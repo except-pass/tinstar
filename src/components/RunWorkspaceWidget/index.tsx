@@ -202,8 +202,11 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
       status: run.status,
       subscriptions: run.natsSubscriptions ?? deriveLegacySubscriptions(run.natsSubject),
       color: run.color,
+      // Broker-health signal: non-null when the session's NATS control socket
+      // was orphaned. Drives the Saloon header's reconnect affordance.
+      orphanedAt: run.natsControlOrphanedAt ?? null,
     }))
-  }, [run.id, run.sessionId, run.status, run.natsSubscriptions, run.natsSubject, run.color])
+  }, [run.id, run.sessionId, run.status, run.natsSubscriptions, run.natsSubject, run.color, run.natsControlOrphanedAt])
 
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()

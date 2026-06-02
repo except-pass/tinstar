@@ -12,9 +12,9 @@ import type { TrafficEvent } from './types'
 const MAX_EVENTS = 200
 
 /** Shape returned by a run's `session.nats` capability. */
-interface SessionNats { sessionId: string; status?: string; subscriptions: string[]; color?: string }
+interface SessionNats { sessionId: string; status?: string; subscriptions: string[]; color?: string; orphanedAt?: string | null }
 /** Per-bound-session info kept for the header. */
-interface BoundSession { sessionId: string; status?: string; subscriptions: string[] }
+interface BoundSession { sessionId: string; status?: string; subscriptions: string[]; orphanedAt?: string | null }
 
 const STATUS_META: Record<string, { color: string; label: string }> = {
   running: { color: '#22c55e', label: 'running' },
@@ -81,7 +81,7 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
         if (cancelled) return
         const sessions: BoundSession[] = results
           .filter((r): r is SessionNats => r != null)
-          .map(r => ({ sessionId: r.sessionId, status: r.status, subscriptions: r.subscriptions ?? [] }))
+          .map(r => ({ sessionId: r.sessionId, status: r.status, subscriptions: r.subscriptions ?? [], orphanedAt: r.orphanedAt ?? null }))
         setBound(sessions)
         setAccent(runIds.length === 1 ? api.theme.accent.resolve(results[0]?.color) : undefined)
       })()
@@ -131,6 +131,19 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
     const single = binding.mode === 'runs' && bound.length === 1 ? bound[0]! : null
     const status = single?.status ? STATUS_META[single.status] : undefined
 
+    // Broker health: any bound session whose NATS control socket was orphaned.
+    // The reconnect button bounces the host's NATS observer (re-establishes all
+    // subscriptions) — global, so it's offered whenever we're showing traffic.
+    const orphaned = bound.some(b => b.orphanedAt)
+    const [reconnecting, setReconnecting] = useState(false)
+    const reconnect = () => {
+      if (reconnecting) return
+      setReconnecting(true)
+      api.http.fetch('/api/nats-traffic/bounce', { method: 'POST' })
+        .catch(() => { /* best-effort; the orphan dot reflects real state on next poll */ })
+        .finally(() => setReconnecting(false))
+    }
+
     return (
       <div className="flex flex-col h-full bg-surface-base text-slate-300 overflow-hidden" style={accent ? { boxShadow: `inset 0 2px 0 ${accent}` } : undefined}>
         <div className="widget-drag-handle flex items-center gap-2 px-3 py-1.5 bg-surface-panel border-b border-white/10 flex-shrink-0 cursor-grab">
@@ -158,6 +171,17 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
               placeholder="Filter…"
               className="w-32 bg-surface-base text-2xs font-mono px-2 py-0.5 rounded border border-white/10 focus:border-primary/50 focus:outline-none"
             />
+          )}
+          {binding.mode !== 'empty' && (
+            <button
+              onPointerDown={e => e.stopPropagation()}
+              onClick={reconnect}
+              disabled={reconnecting}
+              className={`flex-shrink-0 ${orphaned ? 'text-amber-400 hover:text-amber-300' : 'text-slate-500 hover:text-slate-300'}`}
+              title={orphaned ? 'NATS observer orphaned — click to reconnect' : 'Reconnect NATS observer'}
+            >
+              <span className={`material-symbols-outlined text-sm${reconnecting ? ' animate-spin' : ''}`}>sync</span>
+            </button>
           )}
           <button onPointerDown={e => e.stopPropagation()} onClick={() => del()} className="text-slate-500 hover:text-slate-300 flex-shrink-0" title="Close">
             <span className="material-symbols-outlined text-sm">close</span>
