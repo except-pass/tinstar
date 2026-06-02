@@ -88,6 +88,9 @@ describe('parseManifest contributes.widgets new fields', () => {
             icon: './icon.svg',
             singleton: true,
             spawn: 'palette',
+            creator: 'session-backed',
+            capabilities: ['browser'],
+            tags: ['dev', 'web'],
           }],
         },
       },
@@ -96,6 +99,36 @@ describe('parseManifest contributes.widgets new fields', () => {
     expect(w?.description).toBe('A test widget.')
     expect(w?.singleton).toBe(true)
     expect(w?.spawn).toBe('palette')
+    expect(w?.creator).toBe('session-backed')
+    expect(w?.capabilities).toEqual(['browser'])
+    expect(w?.tags).toEqual(['dev', 'web'])
+  })
+
+  it('rejects unknown creator values', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: {
+        apiVersion: '5', displayName: 'P',
+        contributes: { widgets: [{ type: 't', label: 'T', creator: 'foo' }] },
+      },
+    })).toThrow(/creator/)
+  })
+
+  it('rejects non-string-array capabilities', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: {
+        apiVersion: '5', displayName: 'P',
+        contributes: { widgets: [{ type: 't', label: 'T', capabilities: [123] }] },
+      },
+    })).toThrow(/capabilities/)
+  })
+
+  it('rejects non-array tags', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: {
+        apiVersion: '5', displayName: 'P',
+        contributes: { widgets: [{ type: 't', label: 'T', tags: 'dev' }] },
+      },
+    })).toThrow(/tags/)
   })
 
   it('rejects unknown spawn values', () => {
