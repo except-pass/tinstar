@@ -73,10 +73,11 @@ function isConstellationGraph(v: unknown): v is ConstellationGraph {
   if (!Array.isArray(g.snapped) || !Array.isArray(g.members)) return false
   const snappedOk = g.snapped.every(e =>
     Array.isArray(e) && e.length === 2 && typeof e[0] === 'string' && typeof e[1] === 'string')
+  const validSlots = new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9'])
   const membersOk = g.members.every(m =>
     !!m && typeof m === 'object' &&
     typeof (m as Record<string, unknown>).widget === 'string' &&
-    typeof (m as Record<string, unknown>).slot === 'string')
+    validSlots.has((m as Record<string, unknown>).slot as string))
   return snappedOk && membersOk
 }
 

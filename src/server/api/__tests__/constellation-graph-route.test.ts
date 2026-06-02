@@ -182,4 +182,14 @@ describe('PUT /api/constellation-graph/:spaceId', () => {
     expect(res.status).toBe(400)
     expect(testCtx.docStore.getConstellationGraph(SPACE_ID)).toBeUndefined()
   })
+
+  it('returns 400 for an invalid member slot', async () => {
+    const res = await testCtx.fetch(`/api/constellation-graph/${SPACE_ID}`, {
+      method: 'PUT',
+      body: JSON.stringify({ spaceId: SPACE_ID, snapped: [], members: [{ widget: 'w1', slot: 'bogus' }] }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(testCtx.docStore.getConstellationGraph(SPACE_ID)).toBeUndefined()
+  })
 })
