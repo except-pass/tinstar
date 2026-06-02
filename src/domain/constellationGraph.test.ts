@@ -65,4 +65,16 @@ describe('constellationGraph', () => {
     expect(plan.removeFromSlot.sort()).toEqual(['a', 'b'])
     expect(plan.newGroup).toEqual([])
   })
+
+  it('planBreak: liveIds excludes stale membership of a deleted widget', () => {
+    // 'c' was deleted but its membership/snap edges were never pruned from the graph.
+    let g = emptyGraph('s')
+    g = addSnap(g, 'a', 'b'); g = addSnap(g, 'b', 'c')
+    for (const id of ['a', 'b', 'c']) g = addMember(g, id, '1')
+    // Without liveIds the stale 'c' inflates the keep side; with liveIds only the
+    // two visible widgets are considered, so breaking a–b frees both.
+    const plan = planBreak(g, 'a', 'b', '1', new Set(['a', 'b']))
+    expect(plan.removeFromSlot.sort()).toEqual(['a', 'b'])
+    expect(plan.newGroup).toEqual([])
+  })
 })

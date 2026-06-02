@@ -1787,7 +1787,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
               onBreak={(aId, bId) => {
                 // Break only this seam: split the constellation along it. Larger side keeps the
                 // slot; the smaller side becomes its own group (≥2) or is freed (lone widget).
-                const plan = planBreak(constellations.graph, aId, bId, slot)
+                const liveIds = new Set(members.map(m => m.id))
+                const plan = planBreak(constellations.graph, aId, bId, slot, liveIds)
                 let next = removeSnap(constellations.graph, aId, bId)
                 for (const id of plan.removeFromSlot) next = removeMember(next, id, slot)
                 if (plan.newGroup.length > 0) {

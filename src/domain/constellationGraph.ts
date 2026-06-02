@@ -67,9 +67,12 @@ export function nodesInSlot(g: ConstellationGraph, slot: string): string[] {
 
 export interface BreakPlan { removeFromSlot: string[]; newGroup: string[] }
 
-export function planBreak(g: ConstellationGraph, aId: string, bId: string, slot: ConstellationSlot): BreakPlan {
+export function planBreak(g: ConstellationGraph, aId: string, bId: string, slot: ConstellationSlot, liveIds?: ReadonlySet<string>): BreakPlan {
   // Connectivity is computed over the snap edges among this slot's members.
-  const ids = new Set<string>(nodesInSlot(g, slot))
+  // `liveIds`, when given, restricts planning to currently-rendered widgets so
+  // stale membership (e.g. deleted widgets not yet pruned from the graph) isn't
+  // miscounted when choosing the larger side.
+  const ids = new Set<string>(nodesInSlot(g, slot).filter(id => !liveIds || liveIds.has(id)))
   const adj = new Map<string, Set<string>>()
   for (const id of ids) adj.set(id, new Set())
   for (const [p, q] of g.snapped) {
