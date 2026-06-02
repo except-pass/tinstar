@@ -41,7 +41,7 @@ import {
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
-import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, type ConstellationSlot } from '../../domain/constellationGraph'
+import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
 import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
@@ -65,6 +65,19 @@ import type { PluginWidgetInstance } from '../../domain/types'
 
 function currentCorsAllowlist(): string[] {
   return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
+}
+
+function isConstellationGraph(v: unknown): v is ConstellationGraph {
+  if (!v || typeof v !== 'object') return false
+  const g = v as Record<string, unknown>
+  if (!Array.isArray(g.snapped) || !Array.isArray(g.members)) return false
+  const snappedOk = g.snapped.every(e =>
+    Array.isArray(e) && e.length === 2 && typeof e[0] === 'string' && typeof e[1] === 'string')
+  const membersOk = g.members.every(m =>
+    !!m && typeof m === 'object' &&
+    typeof (m as Record<string, unknown>).widget === 'string' &&
+    typeof (m as Record<string, unknown>).slot === 'string')
+  return snappedOk && membersOk
 }
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
@@ -2338,11 +2351,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // PUT /api/constellation-graph/:spaceId — replace a space's membership graph (whole-doc, atomic)
   if (method === 'PUT' && url.startsWith('/api/constellation-graph/')) {
     const spaceId = decodeURIComponent(url.slice('/api/constellation-graph/'.length))
+    if (!ctx.docStore.getSpace(spaceId)) { fail(res, 'NOT_FOUND', 'space not found'); return true }
     readBody(req).then(body => {
-      const graph = JSON.parse(body) as import('../../domain/constellationGraph').ConstellationGraph
-      ctx.docStore.upsertConstellationGraph(spaceId, { ...graph, spaceId })
-      ok(res, { ok: true })
-    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
+      let parsed: unknown
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
+      if (!isConstellationGraph(parsed)) { fail(res, 'BAD_REQUEST', 'invalid constellation graph'); return }
+      ctx.docStore.upsertConstellationGraph(spaceId, { ...parsed, spaceId })
+      ok(res, null)
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
     return true
   }
 

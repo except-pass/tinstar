@@ -101,7 +101,7 @@ afterEach(async () => {
 })
 
 describe('PUT /api/constellation-graph/:spaceId', () => {
-  it('stores the graph and returns { ok: true }', async () => {
+  it('stores the graph and acknowledges with { ok: true, data: null }', async () => {
     const graph = addSnap(emptyGraph(SPACE_ID), 'pw-a', 'run-R1')
 
     const res = await testCtx.fetch(`/api/constellation-graph/${SPACE_ID}`, {
@@ -111,7 +111,7 @@ describe('PUT /api/constellation-graph/:spaceId', () => {
 
     expect(res.status).toBe(200)
     const body = await res.json() as unknown
-    expect(body).toMatchObject({ ok: true })
+    expect(body).toEqual({ ok: true, data: null })
 
     const stored = testCtx.docStore.getConstellationGraph(SPACE_ID)
     expect(stored).toBeDefined()
@@ -146,6 +146,7 @@ describe('PUT /api/constellation-graph/:spaceId', () => {
   it('handles URL-encoded spaceId', async () => {
     const encodedSpaceId = 'space%2F1'
     const decodedSpaceId = 'space/1'
+    testCtx.docStore.upsertSpace(decodedSpaceId, { id: decodedSpaceId, name: 'Slashy', createdAt: new Date().toISOString() })
     const graph = emptyGraph(decodedSpaceId)
 
     const res = await testCtx.fetch(`/api/constellation-graph/${encodedSpaceId}`, {
@@ -158,5 +159,27 @@ describe('PUT /api/constellation-graph/:spaceId', () => {
     const stored = testCtx.docStore.getConstellationGraph(decodedSpaceId)
     expect(stored).toBeDefined()
     expect(stored!.spaceId).toBe(decodedSpaceId)
+  })
+
+  it('returns 404 for an unknown space', async () => {
+    const graph = emptyGraph('nope')
+
+    const res = await testCtx.fetch('/api/constellation-graph/nope', {
+      method: 'PUT',
+      body: JSON.stringify(graph),
+    })
+
+    expect(res.status).toBe(404)
+    expect(testCtx.docStore.getConstellationGraph('nope')).toBeUndefined()
+  })
+
+  it('returns 400 for a structurally invalid graph', async () => {
+    const res = await testCtx.fetch(`/api/constellation-graph/${SPACE_ID}`, {
+      method: 'PUT',
+      body: JSON.stringify({ spaceId: SPACE_ID, snapped: 'not-an-array', members: [] }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(testCtx.docStore.getConstellationGraph(SPACE_ID)).toBeUndefined()
   })
 })
