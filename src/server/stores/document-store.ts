@@ -671,6 +671,7 @@ export class DocumentStore {
     for (const [id, e] of this.artifacts) if (e.spaceId === spaceId) this.artifacts.delete(id)
     for (const [id, e] of this.imageWidgets) if (e.spaceId === spaceId) this.imageWidgets.delete(id)
     for (const [id, e] of this.pluginWidgets) if (e.spaceId === spaceId) this.pluginWidgets.delete(id)
+    this.constellationGraphs.delete(spaceId)
     this.changes.emit('change', { entity: 'all', id: '*', data: null })
   }
 
@@ -690,6 +691,7 @@ export class DocumentStore {
       this.browserWidgets.clear()
       this.artifacts.clear()
       this.imageWidgets.clear()
+      this.constellationGraphs.clear()
       // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
     }

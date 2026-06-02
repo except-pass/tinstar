@@ -84,6 +84,34 @@ describe('DocumentStore constellationGraph', () => {
     }
   })
 
+  it('does not emit a change on a repeated identical upsert', () => {
+    const store = new DocumentStore()
+    const g = addSnap(emptyGraph('space-1'), 'pw-a', 'run-R1')
+    store.upsertConstellationGraph('space-1', g)
+    const events: Array<unknown> = []
+    store.changes.on('change', e => events.push(e))
+    store.upsertConstellationGraph('space-1', { ...g }) // structurally identical
+    expect(events).toEqual([])
+  })
+
+  it('removes a space graph on clearSpace, leaving other spaces intact', () => {
+    const store = new DocumentStore()
+    store.upsertConstellationGraph('space-1', emptyGraph('space-1'))
+    store.upsertConstellationGraph('space-2', emptyGraph('space-2'))
+    store.clearSpace('space-1')
+    expect(store.getConstellationGraph('space-1')).toBeUndefined()
+    expect(store.getConstellationGraph('space-2')).toBeDefined()
+  })
+
+  it('clears all graphs on a global reset with no active space', () => {
+    const store = new DocumentStore()
+    store.upsertConstellationGraph('space-1', emptyGraph('space-1'))
+    store.upsertConstellationGraph('space-2', emptyGraph('space-2'))
+    store.activeSpaceId = ''
+    store.clear()
+    expect(store.getAllConstellationGraphs()).toEqual([])
+  })
+
   it('includes constellationGraphs in the snapshot, filtered by active space', () => {
     const store = new DocumentStore()
     store.upsertConstellationGraph('space-1', emptyGraph('space-1'))
