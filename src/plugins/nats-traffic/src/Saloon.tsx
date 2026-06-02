@@ -26,6 +26,7 @@ const STATUS_META: Record<string, { color: string; label: string }> = {
 
 export function makeSaloonWidget(api: TinstarPluginAPI) {
   return function Saloon(_props: WidgetProps) {
+    const myNodeId = api.constellations.useMyNodeId()
     const slots = api.constellations.useMySlots()
     const peers = api.constellations.usePeers()
     const invoke = api.constellations.useInvokePeerCapability()
@@ -41,6 +42,21 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
     const bindingKey = binding.mode === 'runs'
       ? `runs:${[...binding.runIds].sort().join(',')}`
       : binding.mode
+
+    // 'all' mode (unsnapped) claims to show all traffic, but the bridge only
+    // subscribes to subjects bound sessions registered. Ask the server for a
+    // real tinstar.> firehose while unbound, and release it on bind/unmount so
+    // we don't hold a full-bus subscription longer than the widget shows it.
+    useEffect(() => {
+      if (binding.mode !== 'all') return
+      const toggle = (on: boolean) => api.http.fetch('/api/nats-traffic/firehose', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ widgetId: myNodeId, on }),
+      }).catch(() => { /* best-effort; bridge bounce/restart reconciles */ })
+      toggle(true)
+      return () => { toggle(false) }
+    }, [binding.mode, myNodeId])
 
     // Resolve session info (name, status, subjects, accent) for bound runs via
     // the session.nats capability.

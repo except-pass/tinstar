@@ -44,7 +44,7 @@ import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/conf
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
-import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
+import { registerSaloonSubs, unregisterSaloonSubs, registerFirehose, unregisterFirehose } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
@@ -1819,6 +1819,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
       }
     })
+    return true
+  }
+
+  // POST /api/nats-traffic/firehose — an unsnapped Saloon in 'all' mode toggles a
+  // full-bus (tinstar.>) subscription so it actually shows all traffic instead of
+  // only whatever subjects bound sessions happen to register. Body:
+  // { widgetId: string, on: boolean }. Idempotent; the bridge unions+dedupes, so
+  // multiple firehose widgets share one upstream subscription.
+  if (method === 'POST' && url === '/api/nats-traffic/firehose') {
+    readBody(req).then(body => {
+      let parsed: { widgetId?: unknown; on?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
+      if (typeof parsed.widgetId !== 'string' || !parsed.widgetId) { fail(res, 'BAD_REQUEST', 'widgetId required'); return }
+      if (parsed.on) registerFirehose(ctx.natsTraffic, parsed.widgetId)
+      else unregisterFirehose(ctx.natsTraffic, parsed.widgetId)
+      ok(res, null)
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
     return true
   }
 
