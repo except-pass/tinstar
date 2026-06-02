@@ -19,7 +19,8 @@
     "access": "public"
   },
   "scripts": {
-    "publish:auto": "npm publish --tag \"$(node -p \"require('./package.json').version.includes('-') ? 'dev' : 'latest'\")\""
+    "prepublishOnly": "node scripts/prepublish-guard.mjs",
+    "publish:auto": "node scripts/publish.mjs"
   },
   "files": [
     "src/index.ts",
