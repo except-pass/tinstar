@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState, type ComponentPropsWithoutRef } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState, type ComponentPropsWithoutRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -22,6 +22,10 @@ function resolveRelativePath(base: string, relative: string): string {
   }
   return parts.join('/')
 }
+
+// Module-scoped so its identity is stable — a fresh array each render would make
+// react-markdown rebuild its processor and reparse on every re-render.
+const REMARK_PLUGINS = [remarkGfm]
 
 let mermaidIdCounter = 0
 
@@ -119,7 +123,12 @@ export function MarkdownRenderer({ content, filePath, sessionId, widgetId }: Pro
     [filePath, sessionId, widgetId, scrollId],
   )
 
-  const components: ComponentPropsWithoutRef<typeof ReactMarkdown>['components'] = {
+  // Memoize so the renderer identities (esp. `code`) stay stable across re-renders.
+  // react-markdown keys components by element type — a fresh `code` function each
+  // render makes React remount MermaidBlock, wiping its rendered-SVG state back to
+  // "Rendering diagram…" on every parent re-render (the widget re-renders on a timer
+  // and on file-watch ticks). Stable identities keep the diagram mounted.
+  const components = useMemo<ComponentPropsWithoutRef<typeof ReactMarkdown>['components']>(() => ({
     h1: ({ children }) => (
       <h1 id={`${scrollId}-${slugify(String(children))}`} className="text-lg font-display font-semibold text-slate-100 mt-6 mb-2 pb-1 border-b border-primary/30">
         {children}
@@ -188,11 +197,11 @@ export function MarkdownRenderer({ content, filePath, sessionId, widgetId }: Pro
         className="mr-1.5 accent-primary"
       />
     ),
-  }
+  }), [handleLinkClick, scrollId])
 
   return (
     <div data-scrollable className="h-full overflow-y-auto px-4 py-3 font-mono">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components}>
         {content}
       </ReactMarkdown>
     </div>
