@@ -115,6 +115,31 @@ Each session auto-subscribes to its task broadcast (`*` at the task level) and a
 
 Full scheme lives in `docs/nats-agent-channels.md` in the Tinstar repo.
 
+## Show the user an HTML artifact
+
+When you want to show the user a chart, table, diagram, or any rendered output — **don't** ask them to open a file or browser tab. Write the HTML and POST its path; Tinstar reads the file, stores it, and auto-opens a browser widget on the canvas.
+
+```bash
+# 1. Write the HTML with your normal file tool, e.g. /tmp/energy-chart.html
+# 2. Hand Tinstar the path:
+curl -s -X POST "$TINSTAR_URL/api/artifacts" \
+  -H "Content-Type: application/json" \
+  -d '{ "path": "/tmp/energy-chart.html", "name": "energy-chart" }'
+# → { "ok": true, "data": { "artifactId": "eph-ab12", "url": ".../api/artifacts/eph-ab12", "widgetId": "browser-7" } }
+```
+
+```bash
+# Iterate: rewrite the same file, then PUT the path to refresh the open widget in place
+curl -s -X PUT "$TINSTAR_URL/api/artifacts/eph-ab12" \
+  -H "Content-Type: application/json" \
+  -d '{ "path": "/tmp/energy-chart.html" }'
+```
+
+- The HTML is copied into Tinstar at POST/PUT time; the source file can be deleted after.
+- Optional placement: `position`, `size`, `nearNodeId`, `slot`, `color` — same as `POST /api/browser-widgets`. Pass `sessionId` to color/associate the widget with a session.
+- The artifact is deleted when its browser widget is closed. `DELETE /api/artifacts` clears all.
+- Max 5 MB. `console.log` from the page shows in the widget's console panel.
+
 ## See also
 
 - `tinstar-hand` skill — spawn / steer / teardown (the 80% flow)

@@ -110,6 +110,22 @@ curl -s -X POST "$TINSTAR_URL/api/canvas/viewport" \\
 
 The user sees the camera move via SSE. Confirm in plain language ("Centered on \\\`pr-review-1512\\\`.").
 
+## Show the user an HTML artifact (chart, table, diagram)
+
+Write the HTML, then POST its path — Tinstar reads the file and opens a browser widget automatically:
+
+\`\`\`bash
+curl -s -X POST "$TINSTAR_URL/api/artifacts" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "path": "/tmp/viz.html", "name": "viz", "sessionId": "<session-id>" }'
+# → { "ok": true, "data": { "artifactId": "eph-ab12", "widgetId": "browser-7", ... } }
+
+# Iterate: rewrite the file, then PUT to refresh the open widget in place
+curl -s -X PUT "$TINSTAR_URL/api/artifacts/eph-ab12" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "path": "/tmp/viz.html" }'
+\`\`\`
+
 ## Spawning helper hands
 
 When the user wants a reviewer/tester/skeptic/etc. to assist an existing session, use \`tinstar-hand\` skill knowledge — those hands inherit the parent session's task context.
