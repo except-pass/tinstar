@@ -192,4 +192,36 @@ describe('PUT /api/constellation-graph/:spaceId', () => {
     expect(res.status).toBe(400)
     expect(testCtx.docStore.getConstellationGraph(SPACE_ID)).toBeUndefined()
   })
+
+  it.each([
+    ['a string rev', '1'],
+    ['a float rev', 1.5],
+    ['a negative rev', -1],
+    ['a null rev', null],
+  ])('returns 400 for %s', async (_label, rev) => {
+    const res = await testCtx.fetch(`/api/constellation-graph/${SPACE_ID}`, {
+      method: 'PUT',
+      body: JSON.stringify({ spaceId: SPACE_ID, snapped: [], members: [], rev }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(testCtx.docStore.getConstellationGraph(SPACE_ID)).toBeUndefined()
+  })
+
+  it('returns 409 for a stale/equal revision rather than a false success', async () => {
+    const first = await testCtx.fetch(`/api/constellation-graph/${SPACE_ID}`, {
+      method: 'PUT',
+      body: JSON.stringify({ spaceId: SPACE_ID, snapped: [], members: [], rev: 2 }),
+    })
+    expect(first.status).toBe(200)
+
+    // A later write that omits rev (treated as 0) would silently drop — surface
+    // the conflict instead, and leave the stored graph untouched.
+    const stale = await testCtx.fetch(`/api/constellation-graph/${SPACE_ID}`, {
+      method: 'PUT',
+      body: JSON.stringify({ spaceId: SPACE_ID, snapped: [], members: [{ widget: 'w1', slot: '1' }] }),
+    })
+    expect(stale.status).toBe(409)
+    expect(testCtx.docStore.getConstellationGraph(SPACE_ID)!.members).toEqual([])
+  })
 })

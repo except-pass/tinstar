@@ -560,16 +560,19 @@ export class DocumentStore {
     }
   }
 
-  upsertConstellationGraph(spaceId: string, data: ConstellationGraph): void {
+  /** Returns whether the write was applied. A stale/equal revision is rejected
+   *  (returns false) so callers can surface a conflict instead of a false success. */
+  upsertConstellationGraph(spaceId: string, data: ConstellationGraph): boolean {
     // Revision gate (docstore mutator contract): reject writes whose revision is
     // not newer than the stored one. An older write arriving after a newer one
     // (e.g. an undo PUT racing the edit it reverts, reordered by the network) is
     // a stale intent — dropping it keeps the latest intent authoritative
     // regardless of arrival order, and also short-circuits redundant re-PUTs.
     const existing = this.constellationGraphs.get(spaceId)
-    if (existing && (data.rev ?? 0) <= (existing.rev ?? 0)) return
+    if (existing && (data.rev ?? 0) <= (existing.rev ?? 0)) return false
     this.constellationGraphs.set(spaceId, data)
     this.changes.emit('change', { entity: 'constellationGraph', id: spaceId, data })
+    return true
   }
 
   getConstellationGraph(spaceId: string): ConstellationGraph | undefined {

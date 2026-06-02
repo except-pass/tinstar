@@ -78,7 +78,11 @@ function isConstellationGraph(v: unknown): v is ConstellationGraph {
     !!m && typeof m === 'object' &&
     typeof (m as Record<string, unknown>).widget === 'string' &&
     validSlots.has((m as Record<string, unknown>).slot as string))
-  return snappedOk && membersOk
+  // rev is optional, but when present it feeds arithmetic/comparisons in the
+  // revision gate, so it must be a finite non-negative integer.
+  const revOk = g.rev === undefined ||
+    (typeof g.rev === 'number' && Number.isInteger(g.rev) && g.rev >= 0)
+  return snappedOk && membersOk && revOk
 }
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
@@ -2362,7 +2366,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       let parsed: unknown
       try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
       if (!isConstellationGraph(parsed)) { fail(res, 'BAD_REQUEST', 'invalid constellation graph'); return }
-      ctx.docStore.upsertConstellationGraph(spaceId, { ...parsed, spaceId })
+      // Reject stale/equal-revision writes with a conflict rather than a false
+      // success — the revision gate drops them, so the doc is not stored.
+      if (!ctx.docStore.upsertConstellationGraph(spaceId, { ...parsed, spaceId })) {
+        fail(res, 'CONFLICT', 'stale constellation graph revision'); return
+      }
       ok(res, null)
     }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
     return true
