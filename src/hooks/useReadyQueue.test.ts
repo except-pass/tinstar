@@ -70,18 +70,24 @@ describe('orderedVisibleRunIds', () => {
 describe('visibleCycleQueue', () => {
   it('drops candidates that are not in the visible order (membership, not just order)', () => {
     // 'hidden' is ready but not visible in the sidebar → must be excluded.
-    expect(visibleCycleQueue(['alpha', 'bravo', 'hidden'], ['bravo', 'alpha'])).toEqual(['bravo', 'alpha'])
+    expect(visibleCycleQueue(['alpha', 'bravo', 'hidden'], ['bravo', 'alpha'], true)).toEqual(['bravo', 'alpha'])
   })
 
   it('falls back to candidates only when no visible order has been reported', () => {
-    expect(visibleCycleQueue(['alpha', 'bravo'], [])).toEqual(['alpha', 'bravo'])
+    expect(visibleCycleQueue(['alpha', 'bravo'], [], false)).toEqual(['alpha', 'bravo'])
+  })
+
+  it('yields an empty queue when the sidebar has reported an empty visible view', () => {
+    // The active view filtered everything out and actively reported []. The
+    // candidates must NOT be resurrected, or `[` / `]` could reach hidden runs.
+    expect(visibleCycleQueue(['alpha', 'bravo'], [], true)).toEqual([])
   })
 
   it('cannot cycle to a filtered-out session', () => {
     const run = (id: string): Run => ({ id, sessionId: id } as Run)
     const runs = [run('alpha'), run('bravo'), run('hidden')]
     // 'hidden' is a ready session that the sidebar has filtered out.
-    const queue = visibleCycleQueue(['alpha', 'bravo', 'hidden'], ['alpha', 'bravo'])
+    const queue = visibleCycleQueue(['alpha', 'bravo', 'hidden'], ['alpha', 'bravo'], true)
     // Cycling forward from the last visible session wraps back to the first
     // visible one, never landing on 'hidden'.
     expect(cycleNext(runs, queue, 'bravo')?.id).toBe('alpha')

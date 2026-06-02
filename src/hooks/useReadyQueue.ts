@@ -37,10 +37,12 @@ export function orderByHierarchy(names: string[], hierarchyOrder: string[]): str
  * visible in the sidebar, preserving the sidebar's order. Candidates absent from
  * `visibleOrder` are dropped entirely — not pushed to the end — so collapsed,
  * search-pruned, or inbox-filtered sessions can't be cycled to. Falls back to the
- * candidates only before the sidebar has reported any order yet.
+ * candidates only before the sidebar has reported any order yet (`hasReported`
+ * false); once it has reported, an empty order yields an empty queue rather than
+ * resurrecting the filtered-out sessions.
  */
-export function visibleCycleQueue(candidates: string[], visibleOrder: string[]): string[] {
-  if (visibleOrder.length === 0) return candidates
+export function visibleCycleQueue(candidates: string[], visibleOrder: string[], hasReported: boolean): string[] {
+  if (!hasReported) return candidates
   const set = new Set(candidates)
   return visibleOrder.filter(name => set.has(name))
 }

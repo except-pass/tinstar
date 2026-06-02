@@ -685,8 +685,10 @@ function WorkspaceShellInner() {
   // filters. Cycling reads this so `[` / `]` walk exactly what the operator
   // sees rather than the order sessions happened to become ready.
   const visibleRunOrderRef = useRef<string[]>([])
+  const visibleRunOrderReportedRef = useRef(false)
   const handleVisibleRunOrder = useCallback((runIds: string[]) => {
     visibleRunOrderRef.current = runIds
+    visibleRunOrderReportedRef.current = true
   }, [])
   const cycleOrder = () =>
     visibleRunOrderRef.current
@@ -696,8 +698,10 @@ function WorkspaceShellInner() {
   // Restrict cycling to sessions actually visible in the sidebar, preserving its
   // order. Collapsed, search-pruned, or inbox-filtered sessions are dropped from
   // the queue entirely — not just reordered — so `[` / `]` can't reach them. Fall
-  // back to the candidates only before the sidebar has reported any order yet.
-  const visibleQueue = (candidates: string[]) => visibleCycleQueue(candidates, cycleOrder())
+  // back to the candidates only before the sidebar has reported any order yet; once
+  // it has, an empty visible view means an empty cycle queue.
+  const visibleQueue = (candidates: string[]) =>
+    visibleCycleQueue(candidates, cycleOrder(), visibleRunOrderReportedRef.current)
 
   useGlobalHotkeys({
     onCycleReadyNext: () => {
