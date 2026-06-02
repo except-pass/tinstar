@@ -160,7 +160,10 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
         )}
         {binding.mode === 'empty'
           ? <div className="flex-1 flex items-center justify-center text-slate-500 text-xs px-4 text-center">📡 Snap onto a session to monitor its traffic</div>
-          : <StreamView events={events} filter={filter} />}
+          /* key on bindingKey so a rebind remounts StreamView, dropping any open
+             detail modal / selected row — otherwise the previous session's
+             payload stays readable after switching sessions. */
+          : <StreamView key={bindingKey} events={events} filter={filter} />}
       </div>
     )
   }
