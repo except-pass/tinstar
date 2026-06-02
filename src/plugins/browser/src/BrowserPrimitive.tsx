@@ -27,6 +27,8 @@ export interface BrowserPrimitiveProps {
   isSelected?: boolean
   isDragging?: boolean
   isHovered?: boolean
+  /** Bump this number to force an iframe reload from the host/accessory. */
+  reloadSignal?: number
 }
 
 interface ConsoleEntry {
@@ -64,6 +66,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
       isSelected,
       isDragging,
       isHovered,
+      reloadSignal,
     } = props
 
     const hasHeaders = headers && Object.keys(headers).length > 0
@@ -141,6 +144,13 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
 
     const reloadRef = useRef(reload)
     reloadRef.current = reload
+
+    // Force a reload when the host/accessory bumps reloadSignal (skip initial mount).
+    const firstReloadRef = useRef(true)
+    useEffect(() => {
+      if (firstReloadRef.current) { firstReloadRef.current = false; return }
+      reloadRef.current()
+    }, [reloadSignal])
 
     // Always proxy so the iframe works when Tinstar is accessed via a remote hostname
     // (e.g. Tailscale) — without proxying, localhost URLs would resolve on the user's

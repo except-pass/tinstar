@@ -1,4 +1,4 @@
-import { useSyncExternalStore, useCallback, useRef, useMemo } from 'react'
+import { useSyncExternalStore, useCallback, useRef, useMemo, useState } from 'react'
 import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi, PluginPrimitivesApi, PrimitiveAccessory, RegisterBrowserWidgetOptions, BrowserHandle, WidgetProps } from '@tinstar/plugin-api'
 import { usePluginWidgetData } from './usePluginWidgetData'
 import { makeBrowserPrimitive } from '../../plugins/browser/src/BrowserPrimitive'
@@ -78,7 +78,6 @@ function AccessoryLayout({ accessory, children }: { accessory?: PrimitiveAccesso
       <div
         className="min-h-0 min-w-0 overflow-auto"
         style={isRow ? { width: size, flex: `0 0 ${size}px` } : { height: size, flex: `0 0 ${size}px` }}
-        onPointerDown={e => e.stopPropagation()}
       >
         <Accessory />
       </div>
@@ -295,24 +294,28 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
         const slots = api.constellations.useContext().slotsForNode(nodeId)
 
         const listenersRef = useRef(new Set<(u: string) => void>())
+        const [reloadTick, setReloadTick] = useState(0)
+
+        // Read the latest data via a ref so the persist callbacks (and the handle
+        // derived from them) keep a stable identity across edits.
+        const dataRef = useRef(data)
+        dataRef.current = data
 
         const persistUrl = useCallback((next: string) => {
-          setData({ ...(data ?? {}), _browser: { url: next, headers } })
+          const cur = dataRef.current?._browser
+          setData({ ...(dataRef.current ?? {}), _browser: { url: next, headers: cur?.headers } })
           for (const cb of listenersRef.current) cb(next)
-          // setData/headers are intentionally captured fresh per render; persisting
-          // the latest snapshot is correct.
-          // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [data, headers, setData])
+        }, [setData])
 
         const persistHeaders = useCallback((next: Record<string, string>) => {
-          setData({ ...(data ?? {}), _browser: { url, headers: next } })
-          // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [data, url, setData])
+          const cur = dataRef.current?._browser
+          setData({ ...(dataRef.current ?? {}), _browser: { url: cur?.url ?? '', headers: next } })
+        }, [setData])
 
         const handle: BrowserHandle = useMemo(() => ({
           url,
           navigate: persistUrl,
-          reload: () => persistUrl(url),
+          reload: () => setReloadTick(t => t + 1),
           onUrlChange: (cb: (u: string) => void) => {
             listenersRef.current.add(cb)
             return { dispose: () => { listenersRef.current.delete(cb) } }
@@ -326,7 +329,8 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
             <AccessoryLayout accessory={opts.accessory}>
               <Primitive nodeId={nodeId} hotkeyId={nodeId} url={url} headers={headers} accent={accent}
                 slots={slots} title={undefined} isSelected={props.isSelected} isDragging={props.isDragging}
-                isHovered={props.isHovered} onNavigate={persistUrl} onHeadersChange={persistHeaders} />
+                isHovered={props.isHovered} onNavigate={persistUrl} onHeadersChange={persistHeaders}
+                reloadSignal={reloadTick} />
             </AccessoryLayout>
           </BrowserHandleContext.Provider>
         )
