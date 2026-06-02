@@ -41,13 +41,13 @@ export function useConstellationGraph(spaceId: string) {
   const optimisticRef = useRef<ConstellationGraph | null>(null)
   const serverGraphRef = useRef(serverGraph)
   serverGraphRef.current = serverGraph
-  // The server graph the active overlay was built from. While the current
-  // serverGraph still equals this baseline *by content* we're simply awaiting our
-  // own echo (don't disturb the overlay); once it moves to a value that is neither
-  // the baseline nor our echo, some other writer changed it and our overlay is
-  // stale. Compare by content, not reference: an SSE reconnect/snapshot rebuilds
-  // equal graphs as fresh objects, so reference identity would spuriously read an
-  // unchanged baseline as a divergent push.
+  // The server graph the active overlay was built from. While a write is still in
+  // flight, a serverGraph that equals this baseline *by content* is just our own
+  // echo not having landed yet, so we keep the overlay. Compare by content, not
+  // reference: an SSE reconnect/snapshot rebuilds equal graphs as fresh objects, so
+  // reference identity would spuriously read an unchanged baseline as a divergent
+  // push. Once writes drain this no longer holds — a baseline-equal graph that is
+  // not our echo means another writer reverted the doc, so the overlay is stale.
   const overlayBaseRef = useRef<ConstellationGraph | null>(null)
   // Count of PUTs we still expect an echo for, keyed by spaceId. While a space's
   // count is >0 a divergent server graph may just be an intermediate echo from one
@@ -80,12 +80,17 @@ export function useConstellationGraph(spaceId: string) {
       bump()
       return
     }
-    // serverGraph still matches the graph we built on by content — the server
-    // hasn't changed anything since our edit, so our echo just hasn't landed yet;
-    // keep the overlay so the edit doesn't visibly revert. Content equality (not
-    // reference) is what matters here: a reconnect/snapshot can rebuild the same
-    // baseline as a fresh object, and that must not be treated as a server move.
-    if (overlayBaseRef.current && JSON.stringify(serverGraph) === JSON.stringify(overlayBaseRef.current)) return
+    // A write is in flight and serverGraph still matches the graph we built on by
+    // content — our echo just hasn't landed yet; keep the overlay so the edit
+    // doesn't visibly revert. Content equality (not reference) matters here: a
+    // reconnect/snapshot can rebuild the same baseline as a fresh object, and that
+    // must not be treated as a server move. We require a pending write because once
+    // writes drain a baseline-equal graph that isn't our echo means another writer
+    // reverted the doc — then we fall through to the stale check rather than pin
+    // the overlay forever.
+    if ((pendingWrites.current.get(spaceId) ?? 0) > 0
+      && overlayBaseRef.current
+      && JSON.stringify(serverGraph) === JSON.stringify(overlayBaseRef.current)) return
     // Server moved to a value that is neither our echo nor the original baseline,
     // and this space has no write in flight: another writer won, so the overlay is
     // stale — surface the authoritative server state instead of pinning it.

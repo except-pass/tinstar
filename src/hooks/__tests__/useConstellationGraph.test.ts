@@ -166,17 +166,25 @@ describe('useConstellationGraph divergent server delta', () => {
   })
 
   it('clears a stale overlay when the server graph diverges after writes settle', async () => {
-    const { result, rerender } = renderHook(() => useConstellationGraph('s'))
-    await act(async () => {
-      result.current.assign('1', 'a')
-      await new Promise(resolve => setTimeout(resolve, 0))
+    // Hold the PUT so the overlay is still active when the divergent graph lands.
+    let release!: () => void
+    h.nextResponse = () => new Promise<Response>(resolve => {
+      release = () => resolve({ ok: true } as Response)
     })
+    const { result, rerender } = renderHook(() => useConstellationGraph('s'))
+    act(() => { result.current.assign('1', 'a') })
     expect(result.current.nodesInSlot('1')).toEqual(['a'])
 
-    // Server pushes a different graph (e.g. edited from another tab).
+    // A different graph is present on the server (e.g. edited from another tab).
+    // The PUT settles without our echo landing; with no write left in flight the
+    // overlay is stale and yields to the authoritative server state.
     h.serverState = {
       constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'z', slot: '3' }] }],
     }
+    await act(async () => {
+      release()
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
     rerender()
     expect(result.current.nodesInSlot('1')).toEqual([])
     expect(result.current.nodesInSlot('3')).toEqual(['z'])
@@ -224,30 +232,56 @@ describe('useConstellationGraph divergent server delta', () => {
     act(() => { result.current.assign('2', 'b') })
     expect(result.current.nodesInSlot('2')).toEqual(['b'])
 
-    // An SSE reconnect/snapshot rebuilds the unchanged baseline as a fresh object.
-    // It deep-equals the baseline we built on, so it's our pending echo not landing
-    // yet — not a divergent push. The overlay must survive.
+    // An SSE reconnect/snapshot rebuilds the unchanged baseline as a fresh object
+    // while our write is still in flight. It deep-equals the baseline we built on,
+    // so it's our pending echo not landing yet — not a divergent push. The overlay
+    // must survive (object identity would have wrongly cleared it here).
     h.serverState = {
       constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'a', slot: '1' }] }],
     }
     rerender()
     expect(result.current.nodesInSlot('2')).toEqual(['b'])
 
-    // The PUT settles before the echo arrives; the still-equal baseline must keep
-    // the overlay pinned (object identity would have wrongly cleared it here).
+    // The echo lands (server now carries our write) and the PUT settles; the
+    // overlay is dropped in favor of the matching server state.
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'a', slot: '1' }, { widget: 'b', slot: '2' }] }],
+    }
     await act(async () => {
       release()
       await new Promise(resolve => setTimeout(resolve, 0))
     })
-    expect(result.current.nodesInSlot('2')).toEqual(['b'])
-
-    // Our echo finally lands and the overlay is dropped in favor of server state.
-    h.serverState = {
-      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'a', slot: '1' }, { widget: 'b', slot: '2' }] }],
-    }
     rerender()
     expect(result.current.nodesInSlot('1')).toEqual(['a'])
     expect(result.current.nodesInSlot('2')).toEqual(['b'])
+  })
+
+  it('clears the overlay when the server reverts to the baseline after writes settle', async () => {
+    // Non-empty baseline so a revert *to* it is a real server push, and the overlay
+    // is built on it.
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'a', slot: '1' }] }],
+    }
+    // Hold the PUT open so we control exactly when the write drains.
+    let release!: () => void
+    h.nextResponse = () => new Promise<Response>(resolve => {
+      release = () => resolve({ ok: true } as Response)
+    })
+    const { result, rerender } = renderHook(() => useConstellationGraph('s'))
+    act(() => { result.current.assign('2', 'b') })
+    expect(result.current.nodesInSlot('2')).toEqual(['b'])
+
+    // The PUT settles but the server graph still deep-equals the baseline — our
+    // echo never lands (e.g. another client reverted the doc back). Once writes
+    // drain, a baseline-equal graph that isn't our echo is stale, so the overlay
+    // must clear rather than stay pinned forever.
+    await act(async () => {
+      release()
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    rerender()
+    expect(result.current.nodesInSlot('2')).toEqual([])
+    expect(result.current.nodesInSlot('1')).toEqual(['a'])
   })
 })
 
