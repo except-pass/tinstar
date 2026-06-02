@@ -79,9 +79,10 @@ function isConstellationGraph(v: unknown): v is ConstellationGraph {
     typeof (m as Record<string, unknown>).widget === 'string' &&
     validSlots.has((m as Record<string, unknown>).slot as string))
   // rev is optional, but when present it feeds arithmetic/comparisons in the
-  // revision gate, so it must be a finite non-negative integer.
+  // revision gate, so it must be a non-negative safe integer (an oversized
+  // value would lose precision and break strict monotonicity).
   const revOk = g.rev === undefined ||
-    (typeof g.rev === 'number' && Number.isInteger(g.rev) && g.rev >= 0)
+    (typeof g.rev === 'number' && Number.isSafeInteger(g.rev) && g.rev >= 0)
   return snappedOk && membersOk && revOk
 }
 

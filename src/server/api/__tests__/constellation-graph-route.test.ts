@@ -198,6 +198,7 @@ describe('PUT /api/constellation-graph/:spaceId', () => {
     ['a float rev', 1.5],
     ['a negative rev', -1],
     ['a null rev', null],
+    ['an unsafe-integer rev', 9007199254740993],
   ])('returns 400 for %s', async (_label, rev) => {
     const res = await testCtx.fetch(`/api/constellation-graph/${SPACE_ID}`, {
       method: 'PUT',
