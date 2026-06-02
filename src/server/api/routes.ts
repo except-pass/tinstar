@@ -124,7 +124,7 @@ function buildNatsSubject(
   })
 }
 import { discoverHands, getHandByName, type Hand } from '../hands'
-import { MARSHAL_AGENT_NAME, MARSHAL_AGENT_DESCRIPTION, MARSHAL_AGENT_PROMPT } from '../hands/builtins/index'
+import { MARSHAL_AGENT_PROMPT } from '../hands/builtins/index'
 
 // ─── NATS socket communication ─────────────────────────────────────────
 
@@ -878,16 +878,16 @@ export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalRe
   if (!hand) return { ok: false, error: { code: 'HAND_NOT_FOUND', message: 'marshal hand definition is missing' } }
 
   const { initialPrompt, systemPrompt } = resolveHandPrompts(hand)
+  // Persist the persona as appendSystemPrompt (not via `agent`) so it survives a
+  // generic /start restart, which resumes from `session.appendSystemPrompt`
+  // alone. This also reapplies the persona for a user-defined marshal template
+  // that lacks an `{agentPrompt}` placeholder.
   const result = await createSessionInternal({
     name: MARSHAL_NAME,
     skipPermissions: true,
     cliTemplate: hand.cliTemplate,
     prompt: initialPrompt,
-    agent: {
-      name: MARSHAL_AGENT_NAME,
-      description: MARSHAL_AGENT_DESCRIPTION,
-      prompt: systemPrompt ?? MARSHAL_AGENT_PROMPT,
-    },
+    appendSystemPrompt: systemPrompt ?? MARSHAL_AGENT_PROMPT,
   }, createCtx)
   if (!result.ok) return { ok: false, error: result.error }
 
