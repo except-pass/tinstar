@@ -30,6 +30,7 @@ function fakeSession(name: string, ccConvId: string | null = 'conv-1'): Session 
     port: null,
     ttydPid: null,
     natsControlOrphanedAt: null,
+    appendSystemPrompt: null,
     created: '2026-05-17T00:00:00.000Z',
     lastActive: '2026-05-17T00:00:00.000Z',
   }

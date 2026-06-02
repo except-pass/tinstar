@@ -54,6 +54,13 @@ export interface Session {
    * restart by state transitions in routes.ts.
    */
   natsControlOrphanedAt: string | null
+  /**
+   * Extra text appended to the agent's system prompt via the CLI's
+   * --append-system-prompt. Persisted so a later `/start` (which recreates the
+   * tmux process) re-injects a hand's resolved prompt instead of dropping it.
+   * `null` for plain template sessions.
+   */
+  appendSystemPrompt: string | null
   created: string
   lastActive: string
 }
@@ -124,6 +131,7 @@ export interface CreateSessionOpts {
   cliTemplate?: string | null
   adapter?: string | null
   nats?: SessionNats | null
+  appendSystemPrompt?: string | null
 }
 
 export function createSession(sessionsDir: string, opts: CreateSessionOpts): Session {
@@ -153,6 +161,7 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
     port: null,
     ttydPid: null,
     natsControlOrphanedAt: null,
+    appendSystemPrompt: opts.appendSystemPrompt ?? null,
     created: now,
     lastActive: now,
   }
@@ -167,6 +176,7 @@ export function getSession(sessionsDir: string, name: string): Session | null {
     // Backfill fields added after sessions were persisted so callers can
     // assume the type as declared.
     if (raw.natsControlOrphanedAt === undefined) raw.natsControlOrphanedAt = null
+    if (raw.appendSystemPrompt === undefined) raw.appendSystemPrompt = null
     return raw
   } catch {
     return null

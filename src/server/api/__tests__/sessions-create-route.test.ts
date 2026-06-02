@@ -8,8 +8,9 @@ import type { AddressInfo } from 'node:net'
 // Stub the tmux backend so POST /api/sessions doesn't spawn real tmux/ttyd.
 // Everything else in the '../../sessions' barrel (createWorktree, loadSecrets,
 // getProject, listSessions, …) stays real so the route exercises its true path.
-const { createTmuxSessionMock } = vi.hoisted(() => ({
+const { createTmuxSessionMock, startTmuxSessionMock } = vi.hoisted(() => ({
   createTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({ port: 6123, ttydPid: 4242 })),
+  startTmuxSessionMock: vi.fn(async (_cfg: unknown, _opts: unknown) => ({ port: 6123, ttydPid: 4242 })),
 }))
 vi.mock('../../sessions', async (importActual) => {
   const actual = await importActual<typeof import('../../sessions')>()
@@ -19,6 +20,7 @@ vi.mock('../../sessions', async (importActual) => {
       ...actual.tmuxBackend,
       findPort: vi.fn(async () => 6123),
       createTmuxSession: createTmuxSessionMock,
+      startTmuxSession: startTmuxSessionMock,
       onTtydRestart: vi.fn(),
     },
   }
@@ -103,6 +105,7 @@ let testCtx: TestCtx
 
 beforeEach(() => {
   createTmuxSessionMock.mockClear()
+  startTmuxSessionMock.mockClear()
   tmpRoot = mkdtempSync(join(tmpdir(), 'tinstar-create-route-test-'))
   testCtx = createTestServer(tmpRoot)
 })
@@ -142,6 +145,23 @@ describe('POST /api/sessions', () => {
     expect(res.status).toBe(201)
     expect(createTmuxSessionMock).toHaveBeenCalledTimes(1)
     const opts = createTmuxSessionMock.mock.calls[0]![1] as unknown as { appendSystemPrompt?: string | null }
+    expect(opts.appendSystemPrompt).toBeTruthy()
+    expect(opts.appendSystemPrompt!.toLowerCase()).toContain('marshal')
+  })
+
+  it('re-threads a hand-created session\'s prompt into startTmuxSession on restart', async () => {
+    const created = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'marshal-restart', hand: 'marshal' }),
+    })
+    expect(created.status).toBe(201)
+
+    // A later /start recreates the tmux process. The hand prompt must be
+    // re-injected from persisted session metadata, not silently dropped.
+    const restarted = await testCtx.fetch('/api/sessions/marshal-restart/start', { method: 'POST' })
+    expect(restarted.status).toBe(200)
+    expect(startTmuxSessionMock).toHaveBeenCalledTimes(1)
+    const opts = startTmuxSessionMock.mock.calls[0]![1] as unknown as { appendSystemPrompt?: string | null }
     expect(opts.appendSystemPrompt).toBeTruthy()
     expect(opts.appendSystemPrompt!.toLowerCase()).toContain('marshal')
   })

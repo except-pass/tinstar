@@ -470,6 +470,7 @@ async function createSessionInternal(
     cliTemplate: cliTemplateName ?? null,
     adapter: resolvedTemplate?.adapter ?? null,
     nats: resolvedNats,
+    appendSystemPrompt: appendSystemPrompt ?? null,
   })
 
   const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
@@ -2713,7 +2714,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const resumeTemplate = session.cliTemplate
               ? cfg.cliTemplates.find(t => t.name === session.cliTemplate) ?? null
               : null
-            const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port, template: resumeTemplate })
+            const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port, template: resumeTemplate, appendSystemPrompt: session.appendSystemPrompt })
             updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
             tmuxBackend.onTtydRestart(session.name, (newPid) => {
               updateSession(sessDir, session.name, { ttydPid: newPid })
@@ -3103,7 +3104,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, appendSystemPrompt: handSystemPrompt })
         const sessionPort = result.port
-        updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+        updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running', appendSystemPrompt: handSystemPrompt })
         tmuxBackend.onTtydRestart(spawnedName, (newPid) => {
           updateSession(sessDir, spawnedName, { ttydPid: newPid })
         })
