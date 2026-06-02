@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type ComponentPropsWithoutRef } from 'react'
+import { useCallback, useEffect, useId, useState, type ComponentPropsWithoutRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -26,13 +26,18 @@ function resolveRelativePath(base: string, relative: string): string {
 let mermaidIdCounter = 0
 
 function MermaidBlock({ source }: { source: string }) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [state, setState] = useState<'loading' | 'ok' | 'error'>('loading')
-  const [errorMsg, setErrorMsg] = useState('')
+  // Hold the rendered SVG in state rather than writing it into a ref'd div.
+  // A ref-based approach deadlocks: the target div would only be mounted in the
+  // 'ok' state, so containerRef.current is null while loading — the very moment
+  // render() resolves — and the result gets discarded before state flips to 'ok'.
+  const [svg, setSvg] = useState<string | null>(null)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     const id = `mermaid-${++mermaidIdCounter}`
+    setSvg(null)
+    setErrorMsg(null)
 
     import('mermaid').then(async (mod) => {
       if (cancelled) return
@@ -53,13 +58,11 @@ function MermaidBlock({ source }: { source: string }) {
       })
       try {
         const { svg } = await mermaid.render(id, source)
-        if (cancelled || !containerRef.current) return
-        containerRef.current.innerHTML = svg
-        setState('ok')
+        if (cancelled) return
+        setSvg(svg)
       } catch (err) {
         if (cancelled) return
         setErrorMsg(err instanceof Error ? err.message : 'Invalid mermaid syntax')
-        setState('error')
       }
     }).catch((err) => {
       // The mermaid module chunk itself failed to load (e.g. a stale/missing
@@ -68,23 +71,22 @@ function MermaidBlock({ source }: { source: string }) {
       if (cancelled) return
       const detail = err instanceof Error ? err.message : 'unknown error'
       setErrorMsg(`Couldn't load the diagram renderer (${detail}). Try reloading the page.`)
-      setState('error')
     })
 
     return () => { cancelled = true }
   }, [source])
 
-  if (state === 'loading') {
-    return <div className="text-2xs font-mono text-slate-500 py-2">Rendering diagram...</div>
-  }
-  if (state === 'error') {
+  if (errorMsg !== null) {
     return (
       <pre className="bg-surface-panel border border-accent-red/30 rounded p-3 mb-3 overflow-x-auto">
         <code className="text-2xs font-mono text-accent-red">{errorMsg}</code>
       </pre>
     )
   }
-  return <div ref={containerRef} className="my-3 flex justify-center [&_svg]:max-w-full" />
+  if (svg === null) {
+    return <div className="text-2xs font-mono text-slate-500 py-2">Rendering diagram...</div>
+  }
+  return <div className="my-3 flex justify-center [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
 export function MarkdownRenderer({ content, filePath, sessionId, widgetId }: Props) {
