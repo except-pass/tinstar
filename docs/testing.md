@@ -132,12 +132,15 @@ When you need to fake browser APIs that jsdom doesn't ship:
 ## Type checking
 
 ```bash
-npm run typecheck                       # app + e2e projects, must report ZERO errors
+npm run typecheck                       # app + e2e + test projects, must report ZERO errors
 npx tsc -p tsconfig.app.json --noEmit   # app project only
+npx tsc -p tsconfig.test.json --noEmit  # the root tests/ Vitest suite only
 ```
 
 **Use the `-p tsconfig.app.json` flag** (not the root config). The root `tsconfig.json` is a solution file with only `references` — `npx tsc --noEmit` against the root config compiles nothing and returns 0 even when the project has type errors. This silently masks regressions.
 
 **The baseline is now zero (was ~119 at V5.0, 140 by V5.1-dev).** The `.github/workflows/ci.yml` gate runs `npm run typecheck` on every push/PR and fails on *any* type error, so the baseline can't regrow. Don't add a type error — fix it. If you genuinely need to suppress one, justify it inline (`// reason` next to a `!`/cast) rather than widening the ratchet.
 
-Note: the `node` project (`tsconfig.node.json`, which only covers `vite.config.ts` + `tailwind.config.ts`) carries one known wart — `vite.config.ts` trips TS2769 on the `test` key because vitest nests its own copy of `vite`, producing a dual-vite type clash. It's a tooling-version issue, not product code, so `npm run typecheck` covers `app` + `e2e` (both genuinely zero) and skips `node`.
+`tsconfig.test.json` covers the root `tests/` Vitest suite (extends the app config, adds `allowJs` so tests can import the plain-JS `bin/` CLI modules). Before it existed, `tests/**` ran under Vitest with no `tsc` gate, so type errors there slipped past CI — now they don't.
+
+Note: the `node` project (`tsconfig.node.json`, which only covers `vite.config.ts` + `tailwind.config.ts`) carries one known wart — `vite.config.ts` trips TS2769 on the `test` key because vitest nests its own copy of `vite`, producing a dual-vite type clash. It's a tooling-version issue, not product code, so `npm run typecheck` covers `app` + `e2e` + `test` (all genuinely zero) and skips `node`.

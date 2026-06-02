@@ -32,7 +32,7 @@ describe('ProjectStep', () => {
       'http://test/api/projects',
       expect.objectContaining({ method: 'POST' }),
     ))
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body)
     expect(body).toEqual({ name: 'myapp', path: '/home/u/repo/myapp' })
   })
 
