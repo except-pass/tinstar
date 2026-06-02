@@ -1,5 +1,22 @@
 // src/hooks/useReadyQueue.ts
-import type { Run } from '../domain/types'
+import type { Run, TreeNode } from '../domain/types'
+
+/**
+ * Run ids in the exact top-to-bottom order the hierarchy renders them: a branch
+ * is walked only when it's expanded, so collapsed (and search-pruned, since the
+ * caller passes the already-pruned tree) runs are omitted just as on screen.
+ */
+export function orderedVisibleRunIds(nodes: TreeNode[], isExpanded: (id: string) => boolean): string[] {
+  const out: string[] = []
+  const walk = (ns: TreeNode[]) => {
+    for (const n of ns) {
+      if (n.type === 'run') out.push(n.entityId)
+      if (n.children.length > 0 && isExpanded(n.id)) walk(n.children)
+    }
+  }
+  walk(nodes)
+  return out
+}
 
 /**
  * Reorder session names to match their top-to-bottom position in the hierarchy.

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo, createContext, useCo
 import Fuse from 'fuse.js'
 import { getPref, setPref, getSidebarView, setSidebarView } from '../lib/uiPrefs'
 import { useInbox } from '../hooks/useInbox'
+import { orderedVisibleRunIds } from '../hooks/useReadyQueue'
 import { InboxList } from './InboxList'
 import type { TreeNode, GroupingDimension, Space } from '../domain/types'
 import { getDimensionIcon } from '../domain/dimension-meta'
@@ -143,6 +144,10 @@ interface HierarchySidebarProps {
    *  widgets (closeable × button, no entity-style kebab menu) regardless of
    *  the plugin's chosen widget type string. */
   pluginWidgetIds?: Set<string>
+  /** Reports the run ids currently visible in the sidebar, top-to-bottom, in
+   *  the exact order they're rendered — after collapse, search pruning, and
+   *  inbox filters. Lets bracket-cycling follow what the operator sees. */
+  onVisibleRunOrder?: (runIds: string[]) => void
 }
 
 /** Metadata for all Work Widget types — drives sidebar icons, badge, close button, and focus behavior */
@@ -686,7 +691,7 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden, pluginWidgetIds }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
+export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden, pluginWidgetIds, onVisibleRunOrder }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
   const { isExpanded, expandAll, select } = useSelection()
   const showEmpty = showEmptyEntities ?? true
 
@@ -760,6 +765,18 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
     () => visibleIds ? pruneTree(tree, visibleIds) : tree,
     [tree, visibleIds],
   )
+
+  // Run ids in the exact top-to-bottom order the hierarchy renders them.
+  const hierarchyVisibleRunIds = useMemo(
+    () => orderedVisibleRunIds(displayedTree, isExpanded),
+    [displayedTree, isExpanded],
+  )
+
+  // Report the hierarchy order up whenever it's the active view; InboxList
+  // reports its own filtered order while the inbox view is mounted.
+  useEffect(() => {
+    if (view === 'hierarchy') onVisibleRunOrder?.(hierarchyVisibleRunIds)
+  }, [view, hierarchyVisibleRunIds, onVisibleRunOrder])
 
   const commitSelection = useCallback((node: FlatNode) => {
     select(node.id, node.type as GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer')
@@ -1055,7 +1072,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
           )}
         </div>
       ) : (
-        <InboxList activeSpaceId={activeSpaceId} searchQuery={query} />
+        <InboxList activeSpaceId={activeSpaceId} searchQuery={query} onVisibleRunOrder={onVisibleRunOrder} />
       )}
 
       {/* Drag divider between tree and hotkeys */}

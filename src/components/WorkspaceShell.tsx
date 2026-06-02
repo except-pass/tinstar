@@ -7,8 +7,6 @@ import { DEFAULT_LEVELS } from '../domain/dimension-meta'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
 import { cycleNext, cyclePrev, orderByHierarchy } from '../hooks/useReadyQueue'
 import { useHiddenRuns } from '../hooks/useHiddenRuns'
-import { useInbox } from '../hooks/useInbox'
-import { getSidebarView } from '../lib/uiPrefs'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
 import { SettingsDialog } from './SettingsDialog'
@@ -682,39 +680,18 @@ function WorkspaceShellInner() {
     return out
   }, [allRuns, isRunHidden])
 
-  // sessionIds of run windows in their top-to-bottom hierarchy order, so
-  // bracket-cycling walks the sidebar/canvas the way you read it rather than in
-  // the order sessions happened to become ready.
-  const hierarchyOrderedSessionIds = useMemo(() => {
-    const out: string[] = []
-    const walk = (nodes: TreeNode[]) => {
-      for (const n of nodes) {
-        if (n.type === 'run') {
-          const run = runMap.get(n.entityId)
-          if (run?.sessionId) out.push(run.sessionId)
-        }
-        if (n.children.length > 0) walk(n.children)
-      }
-    }
-    walk(canvasTree)
-    return out
-  }, [canvasTree, runMap])
-
-  // Same idea, but matching the Inbox's top-to-bottom order (attention first,
-  // then recency) so cycling follows whatever the sidebar is currently showing.
-  const { rows: inboxRows } = useInbox(activeSpaceId)
-  const inboxOrderedSessionIds = useMemo(
-    () => inboxRows.filter(r => r.source === 'run' && r.sessionName).map(r => r.sessionName as string),
-    [inboxRows],
-  )
-
-  // Pick the cycle order from whichever sidebar view is open for this space,
-  // read live at keypress time (the pref is the source of truth and updates
-  // synchronously when the user toggles views).
+  // The sidebar reports the run ids it's currently showing, top-to-bottom, in
+  // the exact order it renders them — after collapse, search pruning, and inbox
+  // filters. Cycling reads this so `[` / `]` walk exactly what the operator
+  // sees rather than the order sessions happened to become ready.
+  const visibleRunOrderRef = useRef<string[]>([])
+  const handleVisibleRunOrder = useCallback((runIds: string[]) => {
+    visibleRunOrderRef.current = runIds
+  }, [])
   const cycleOrder = () =>
-    activeSpaceId && getSidebarView(activeSpaceId) === 'inbox'
-      ? inboxOrderedSessionIds
-      : hierarchyOrderedSessionIds
+    visibleRunOrderRef.current
+      .map(id => runMap.get(id)?.sessionId)
+      .filter(Boolean) as string[]
 
   useGlobalHotkeys({
     onCycleReadyNext: () => {
@@ -942,6 +919,7 @@ function WorkspaceShellInner() {
                         hiddenRunIds={hiddenRunIds}
                         onToggleRunHidden={toggleRunHidden}
                         pluginWidgetIds={pluginWidgetIdSet}
+                        onVisibleRunOrder={handleVisibleRunOrder}
                       />
                     </div>
                     <WidgetsPalette />
