@@ -697,6 +697,34 @@ function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParam
   return { widget }
 }
 
+const ARTIFACT_MAX_BYTES = 5 * 1024 * 1024
+
+/** Read an agent-supplied HTML file path for an artifact. Validates and, on
+ *  failure, writes the error response and returns null. Localhost single-user
+ *  trust model: arbitrary local reads are acceptable (no privilege boundary). */
+function readArtifactFile(path: unknown, res: ServerResponse): string | null {
+  if (typeof path !== 'string' || !path.trim()) {
+    failEnvelope(res, 'INVALID_PARAMS', 'path is required (absolute path to an HTML file)')
+    return null
+  }
+  let stat: import('node:fs').Stats
+  try { stat = statSync(path) } catch {
+    failEnvelope(res, 'NOT_FOUND', `File not found: ${path}`)
+    return null
+  }
+  if (!stat.isFile()) { failEnvelope(res, 'INVALID_PARAMS', `Not a regular file: ${path}`); return null }
+  if (stat.size > ARTIFACT_MAX_BYTES) { failEnvelope(res, 'INVALID_PARAMS', `Artifact too large (max 5 MB): ${path}`); return null }
+  try { return readFileSync(path, 'utf-8') } catch {
+    failEnvelope(res, 'NOT_FOUND', `Cannot read file: ${path}`)
+    return null
+  }
+}
+
+/** The server's own origin, for artifact URLs the widget proxy will fetch. */
+function serverBase(): string {
+  return `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`
+}
+
 /** Synchronously enumerate every persisted session on disk. Mirrors the
  * rehydrate loop in index.ts (readdirSync + getSession per entry). Used by
  * topic-metadata routes to derive participants live from `nats.subscriptions`.
@@ -1955,6 +1983,48 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
     ctx.docStore.deleteBrowserWidget(id)
     ok(res, null)
+    return true
+  }
+
+  // POST /api/artifacts — store an HTML file's content and open a browser widget on it
+  if (method === 'POST' && url === '/api/artifacts') {
+    readBody(req).then(body => {
+      let parsed: { path?: unknown; name?: string; sessionId?: string; color?: string; spaceId?: string;
+        position?: { x: number; y: number }; size?: { width: number; height: number };
+        nearNodeId?: string; slot?: number | string }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'invalid JSON body'); return }
+
+      const html = readArtifactFile(parsed.path, res)
+      if (html === null) return
+
+      const artifactId = shortId('eph')
+      const artifactUrl = `${serverBase()}/api/artifacts/${artifactId}`
+      const result = createBrowserWidget(ctx, {
+        url: artifactUrl,
+        title: parsed.name,
+        sessionId: parsed.sessionId,
+        color: parsed.color,
+        spaceId: parsed.spaceId,
+        position: parsed.position,
+        size: parsed.size,
+        nearNodeId: parsed.nearNodeId,
+        slot: parsed.slot,
+      })
+      if ('error' in result) { fail(res, result.error.code, result.error.message); return }
+
+      const now = Date.now()
+      ctx.docStore.upsertArtifact(artifactId, {
+        id: artifactId,
+        html,
+        name: parsed.name,
+        rev: 1,
+        widgetId: result.widget.id,
+        spaceId: result.widget.spaceId,
+        createdAt: now,
+        updatedAt: now,
+      })
+      ok(res, { artifactId, url: artifactUrl, widgetId: result.widget.id })
+    })
     return true
   }
 
