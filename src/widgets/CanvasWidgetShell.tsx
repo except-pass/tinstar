@@ -51,7 +51,7 @@ interface CanvasWidgetShellProps {
   /** Resize gesture started (pointer down on the resize handle) — snapshot state for re-snap. */
   onResizeStart?: (id: string) => void
   /** Resize gesture finished (after an actual resize) — re-snap the constellation. */
-  onResizeEnd?: (id: string) => void
+  onResizeEnd?: (id: string, width: number, height: number) => void
   onDragStart?: (id: string) => void
   onDragMove?: (id: string, clientX: number, clientY: number) => void
   onDragEnd?: (id: string) => void
@@ -103,6 +103,10 @@ export function CanvasWidgetShell({
   const resizing = useRef(false)
   const dragStart = useRef({ x: 0, y: 0, originX: 0, originY: 0 })
   const resizeStart = useRef({ x: 0, y: 0, originW: 0, originH: 0 })
+  // Last size emitted during the active resize. onResize only queues a React state
+  // update, so reading layout state at resize-end can lag a frame; carry the final
+  // dimensions here so onResizeEnd reflows from the actual last size, not stale state.
+  const lastResizeSize = useRef({ width: 0, height: 0 })
   const dragMoved = useRef(false)
   const resizeMoved = useRef(false)
   const dragPointerId = useRef<number | null>(null)
@@ -203,18 +207,17 @@ export function CanvasWidgetShell({
       )
         return
       resizeMoved.current = true
-      onResize(
-        nodeId,
-        Math.round(Math.max(minSize.width, resizeStart.current.originW + dx)),
-        Math.round(Math.max(minSize.height, resizeStart.current.originH + dy)),
-      )
+      const width = Math.round(Math.max(minSize.width, resizeStart.current.originW + dx))
+      const height = Math.round(Math.max(minSize.height, resizeStart.current.originH + dy))
+      lastResizeSize.current = { width, height }
+      onResize(nodeId, width, height)
     },
     [nodeId, zoom, onResize, minSize],
   )
 
   const handleResizeUp = useCallback(() => {
     resizing.current = false
-    if (resizeMoved.current) onResizeEnd?.(nodeId)
+    if (resizeMoved.current) onResizeEnd?.(nodeId, lastResizeSize.current.width, lastResizeSize.current.height)
   }, [nodeId, onResizeEnd])
 
   const handleDoubleClick = useCallback(() => {

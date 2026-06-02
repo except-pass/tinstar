@@ -755,20 +755,21 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     for (const id of constellations.nodesInSlot(slot)) {
       if (id === nodeId) continue
       const ml = getLayout(id)
-      if (ml) members.push({ id, x: ml.x, y: ml.y })
+      if (ml) members.push({ id, x: ml.x, y: ml.y, width: ml.width, height: ml.height })
     }
     resizeReflowSnapshot.current = { nodeId, start: { x: l.x, y: l.y, width: l.width, height: l.height }, members }
   }, [constellations, getLayout])
 
-  const handleResizeEnd = useCallback((nodeId: string) => {
+  // width/height are the final dragged dimensions, passed in from the shell — reading
+  // them from getLayout here would risk a stale (pre-last-frame) size, since onResize
+  // only queues a React state update.
+  const handleResizeEnd = useCallback((nodeId: string, width: number, height: number) => {
     const snap = resizeReflowSnapshot.current
     resizeReflowSnapshot.current = null
     if (!snap || snap.nodeId !== nodeId) return
-    const finalL = getLayout(nodeId)
-    if (!finalL) return
-    const moves = reflowOnResize({ start: snap.start, final: { width: finalL.width, height: finalL.height }, members: snap.members })
+    const moves = reflowOnResize({ start: snap.start, final: { width, height }, members: snap.members })
     for (const [id, pos] of moves) updateRunPosition(id, pos.x, pos.y)
-  }, [getLayout, updateRunPosition])
+  }, [updateRunPosition])
 
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
