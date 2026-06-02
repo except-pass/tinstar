@@ -41,14 +41,21 @@ export function useConstellationGraph(spaceId: string) {
   const optimisticRef = useRef<ConstellationGraph | null>(null)
   const serverGraphRef = useRef(serverGraph)
   serverGraphRef.current = serverGraph
-  // The server graph the active overlay was built from. While the current
-  // serverGraph still equals this baseline *by content* we're simply awaiting our
-  // own echo (don't disturb the overlay); once it moves to a value that is neither
-  // the baseline nor our echo, some other writer changed it and our overlay is
-  // stale. Compare by content, not reference: an SSE reconnect/snapshot rebuilds
-  // equal graphs as fresh objects, so reference identity would spuriously read an
-  // unchanged baseline as a divergent push.
+  // The server graph the active overlay was built from. A serverGraph that equals
+  // this baseline *by content* is our own echo not having landed yet — keep the
+  // overlay — UNLESS it is a fresh server revision delivered after our writes
+  // drained (see drainedServerGraphRef), which means the server itself moved back
+  // to the baseline. Compare to the baseline by content, not reference: an SSE
+  // reconnect/snapshot rebuilds equal graphs as fresh objects, so reference
+  // identity would spuriously read an unchanged baseline as a divergent push.
   const overlayBaseRef = useRef<ConstellationGraph | null>(null)
+  // The serverGraph in effect when this space's writes last drained to zero. Every
+  // server push (delta or snapshot) is a fresh object, so a baseline-equal
+  // serverGraph that is *this same reference* is just the gap between the PUT's
+  // HTTP response and its SSE echo (keep the overlay); a baseline-equal serverGraph
+  // that is a *newer* delivery than this arrived after the drain — the server
+  // authoritatively reverted to the baseline, so the overlay is stale.
+  const drainedServerGraphRef = useRef<ConstellationGraph | null>(null)
   // Count of PUTs we still expect an echo for, keyed by spaceId. While a space's
   // count is >0 a divergent server graph may just be an intermediate echo from one
   // of several pipelined writes, so we hold the overlay until that space's writes
@@ -66,6 +73,7 @@ export function useConstellationGraph(spaceId: string) {
     lastSpaceIdRef.current = spaceId
     optimisticRef.current = null
     overlayBaseRef.current = null
+    drainedServerGraphRef.current = null
   }
 
   // Re-runs on serverGraph changes and on `tick` (bumped when writes settle), so
@@ -80,16 +88,20 @@ export function useConstellationGraph(spaceId: string) {
       bump()
       return
     }
-    // serverGraph still matches the graph we built on by content — the server
-    // hasn't changed anything since our edit, so our echo just hasn't landed yet;
-    // keep the overlay so the edit doesn't visibly revert. This holds even once
-    // our writes drain: the PUT's HTTP response routinely resolves before the SSE
-    // echo arrives, and clearing then would flicker the edit away just before the
-    // confirming echo lands. Content equality (not reference) is what matters here:
-    // a reconnect/snapshot can rebuild the same baseline as a fresh object, and
-    // that must not be treated as a server move.
-    if (overlayBaseRef.current && JSON.stringify(serverGraph) === JSON.stringify(overlayBaseRef.current)) return
-    // Server moved to a value that is neither our echo nor the original baseline,
+    // serverGraph still matches the graph we built on by content. Keep the overlay
+    // while we're merely awaiting our own echo, but yield once the server itself
+    // moves back to the baseline. We're still awaiting the echo when a write is in
+    // flight, or when serverGraph is the same revision that was current at the last
+    // drain (the PUT's HTTP response routinely resolves before its SSE echo, and
+    // clearing in that gap would flicker the edit away just before the confirming
+    // echo lands). A baseline-equal serverGraph that is a *newer* delivery than the
+    // drained one is the server reverting the doc — fall through to clear. Content
+    // equality (not reference) gates the baseline match so a reconnect/snapshot
+    // that rebuilds the same baseline mid-flight isn't read as a divergent push.
+    if (overlayBaseRef.current && JSON.stringify(serverGraph) === JSON.stringify(overlayBaseRef.current)) {
+      if ((pendingWrites.current.get(spaceId) ?? 0) > 0 || serverGraph === drainedServerGraphRef.current) return
+    }
+    // Server moved to a value that is neither our echo nor a still-awaited baseline,
     // and this space has no write in flight: another writer won, so the overlay is
     // stale — surface the authoritative server state instead of pinning it.
     if ((pendingWrites.current.get(spaceId) ?? 0) === 0) {
@@ -145,7 +157,13 @@ export function useConstellationGraph(spaceId: string) {
       // arrived while a PUT was in flight (the cleanup effect skipped it back
       // then). Only nudge if it's still the active space — the effect tracks the
       // current space, so a stale completion elsewhere must not retrigger it.
-      if (remaining === 0 && lastSpaceIdRef.current === sid) bump()
+      if (remaining === 0 && lastSpaceIdRef.current === sid) {
+        // Record the server graph at drain so the cleanup effect can tell a later
+        // fresh baseline-equal push (server reverted) from this unchanged revision
+        // whose echo is simply still in flight.
+        drainedServerGraphRef.current = serverGraphRef.current
+        bump()
+      }
     })
   }, [spaceId])
 

@@ -289,6 +289,34 @@ describe('useConstellationGraph divergent server delta', () => {
     expect(result.current.nodesInSlot('2')).toEqual(['b'])
     expect(result.current.nodesInSlot('1')).toEqual(['a'])
   })
+
+  it('clears the overlay when a fresh server revision reverts to the baseline after writes settle', async () => {
+    // Non-empty baseline the overlay is built on.
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'a', slot: '1' }] }],
+    }
+    const { result, rerender } = renderHook(() => useConstellationGraph('s'))
+
+    // Edit, then let the PUT settle with no new server delivery. The server graph
+    // still deep-equals the baseline (our echo hasn't landed), and it's the same
+    // revision in effect at drain — the overlay must survive the echo gap.
+    await act(async () => {
+      result.current.assign('2', 'b')
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    expect(result.current.nodesInSlot('2')).toEqual(['b'])
+
+    // Now a *fresh* baseline-equal revision arrives (e.g. another client reverted
+    // the doc back). It deep-equals the baseline but is a newer delivery than the
+    // one at drain, so it's the server authoritatively reverting — not our pending
+    // echo. The stale overlay must clear and yield to server state.
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'a', slot: '1' }] }],
+    }
+    rerender()
+    expect(result.current.nodesInSlot('2')).toEqual([])
+    expect(result.current.nodesInSlot('1')).toEqual(['a'])
+  })
 })
 
 // Regression: pending-write tracking is keyed by spaceId, so a late `finally`
