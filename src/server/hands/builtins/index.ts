@@ -177,6 +177,7 @@ const BUILTIN_HANDS: Hand[] = [
     // ~/.config/tinstar/config.json or define your own in user hands dir.
     cliTemplate: 'Marshal',
     prompt: MARSHAL_INTRO_PROMPT,
+    systemPrompt: MARSHAL_AGENT_PROMPT,
   },
 ]
 

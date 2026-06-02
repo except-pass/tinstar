@@ -2569,15 +2569,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!resolvedHand) return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
         }
 
-        // The built-in marshal keeps its persistent persona (MARSHAL_AGENT_PROMPT)
-        // separate from its one-shot intro (hand.prompt). The persona is the
-        // system prompt — persisted as appendSystemPrompt and re-injected on
-        // /start so it survives restart and `/clear` — while the intro fires
-        // once as the first user message. Other hands carry their persona in
-        // `prompt`, so that's what we persist as the system prompt.
-        const isMarshalHand = resolvedHand?.name === MARSHAL_AGENT_NAME
-        const handInitialPrompt = isMarshalHand ? resolvedHand!.prompt : prompt
-        const handSystemPrompt = isMarshalHand ? MARSHAL_AGENT_PROMPT : (resolvedHand?.prompt ?? null)
+        // A hand with a dedicated `systemPrompt` keeps that persona as the
+        // persisted appendSystemPrompt — re-injected on /start so it survives
+        // restart and `/clear` — while its `prompt` is a one-shot intro fired
+        // as the first user message. Hands without `systemPrompt` carry their
+        // persona in `prompt`. Keying on the field (not the hand name) lets a
+        // user-defined `marshal.md` override supply its own system prompt. A
+        // caller-supplied `prompt` always takes precedence as the initial user
+        // message so marshal sessions can still be created with requested work.
+        const handIntro = resolvedHand?.systemPrompt ? resolvedHand.prompt : undefined
+        const handInitialPrompt = prompt ?? handIntro
+        const handSystemPrompt = resolvedHand?.systemPrompt ?? resolvedHand?.prompt ?? null
 
         const createCtx = buildCreateSessionContext(ctx)
         if (!createCtx) return fail(res, 'INTERNAL', 'sessionConfig unavailable')

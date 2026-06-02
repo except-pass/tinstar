@@ -5,6 +5,13 @@ export interface Hand {
   description: string
   cliTemplate: string
   prompt: string
+  /**
+   * Optional persistent persona. When set, this is the system prompt
+   * (re-injected on /start so it survives restart and `/clear`) and `prompt`
+   * becomes a one-shot intro fired as the first user message. When absent,
+   * `prompt` itself is the persona.
+   */
+  systemPrompt?: string
 }
 
 /**
@@ -27,6 +34,7 @@ export function parseHandFile(content: string): Hand | null {
       description: (frontmatter.description as string) ?? '',
       cliTemplate: (frontmatter.cliTemplate as string) ?? 'Claude (multi-agent)',
       prompt,
+      ...(frontmatter.systemPrompt ? { systemPrompt: frontmatter.systemPrompt as string } : {}),
     }
   } catch {
     return null
