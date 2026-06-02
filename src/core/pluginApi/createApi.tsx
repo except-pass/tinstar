@@ -351,7 +351,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     function registerTerminalWidget(opts: RegisterTerminalWidgetOptions): Disposable {
       function TerminalBackedWidget(_props: WidgetProps) {
         const [data] = api.widget.useData<{ sessionId?: string }>()
-        const sessionId = data?.sessionId ?? ''
+        const sessionId = data?.sessionId ?? opts.defaultSessionId ?? ''
         const frameRef = useRef<HTMLIFrameElement>(null)
         const handle: TerminalHandle = useMemo(() => ({
           sessionId,

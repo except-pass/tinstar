@@ -284,7 +284,9 @@ export interface BrowserHandle {
   onUrlChange(cb: (url: string) => void): Disposable
 }
 
-/** Live handle to the embedded terminal, read by the accessory via useTerminal(). */
+/** Live handle to the embedded terminal, read by the accessory via useTerminal().
+ *  Unlike BrowserHandle (whose url changes as the user navigates), `sessionId` is
+ *  fixed for the widget's lifetime, so there is no change subscription. */
 export interface TerminalHandle {
   sessionId: string
   focus(): void
@@ -301,6 +303,9 @@ export interface RegisterBrowserWidgetOptions {
 export interface RegisterTerminalWidgetOptions {
   type: string
   accessory?: PrimitiveAccessory
+  /** Initial session id for the embedded terminal. The plugin may instead (or
+   *  later) persist `sessionId` into the widget's `data` blob; widget data wins. */
+  defaultSessionId?: string
   defaultSize?: { width: number; height: number }
   minSize?: { width: number; height: number }
 }
@@ -310,7 +315,9 @@ export interface RegisterTerminalWidgetOptions {
 export interface PluginPrimitivesApi {
   /** Register a widget whose main content is a browser primitive. */
   registerBrowserWidget(opts: RegisterBrowserWidgetOptions): Disposable
-  /** Register a widget whose main content is a terminal primitive. */
+  /** Register a widget whose main content is a terminal primitive. The session is
+   *  resolved from the widget's `data.sessionId` (or `opts.defaultSessionId`); the
+   *  plugin is responsible for putting a session id there. */
   registerTerminalWidget(opts: RegisterTerminalWidgetOptions): Disposable
   /** React hook (call inside an accessory component): the live browser handle.
    *  Throws if called outside a browser-primitive widget. */
