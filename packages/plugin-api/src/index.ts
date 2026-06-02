@@ -261,6 +261,65 @@ export interface PluginWidgetApi {
   useAttention(): [AttentionState | null, (next: AttentionInput | null) => void]
 }
 
+/** Edge a primitive-widget accessory pane is pinned to. */
+export type AccessoryPlacement = 'left' | 'right' | 'top' | 'bottom'
+
+/** Author-supplied accessory for a primitive-backed widget. */
+export interface PrimitiveAccessory {
+  placement: AccessoryPlacement
+  /** Plugin React component. Mounted inside the widget shell, so it keeps all
+   *  `api.*` hooks AND `api.primitives.useBrowser()` / `useTerminal()`. */
+  component: ComponentType
+  /** Fixed cross-axis size of the pane in px (width for left/right, height for
+   *  top/bottom). Defaults to 220. */
+  size?: number
+}
+
+/** Live handle to the embedded browser, read by the accessory via useBrowser(). */
+export interface BrowserHandle {
+  url: string
+  navigate(url: string): void
+  reload(): void
+  /** Fires whenever the URL changes (user navigation or programmatic). */
+  onUrlChange(cb: (url: string) => void): Disposable
+}
+
+/** Live handle to the embedded terminal, read by the accessory via useTerminal(). */
+export interface TerminalHandle {
+  sessionId: string
+  focus(): void
+}
+
+export interface RegisterBrowserWidgetOptions {
+  type: string
+  accessory?: PrimitiveAccessory
+  defaultUrl?: string
+  defaultSize?: { width: number; height: number }
+  minSize?: { width: number; height: number }
+}
+
+export interface RegisterTerminalWidgetOptions {
+  type: string
+  accessory?: PrimitiveAccessory
+  defaultSize?: { width: number; height: number }
+  minSize?: { width: number; height: number }
+}
+
+/** Embeddable browser/terminal primitives for plugin authors. The host owns the
+ *  primitive (chrome, proxy, tty); the plugin owns the edge-pinned accessory. */
+export interface PluginPrimitivesApi {
+  /** Register a widget whose main content is a browser primitive. */
+  registerBrowserWidget(opts: RegisterBrowserWidgetOptions): Disposable
+  /** Register a widget whose main content is a terminal primitive. */
+  registerTerminalWidget(opts: RegisterTerminalWidgetOptions): Disposable
+  /** React hook (call inside an accessory component): the live browser handle.
+   *  Throws if called outside a browser-primitive widget. */
+  useBrowser(): BrowserHandle
+  /** React hook (call inside an accessory component): the live terminal handle.
+   *  Throws if called outside a terminal-primitive widget. */
+  useTerminal(): TerminalHandle
+}
+
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */
 export interface TinstarPluginAPI {
   readonly pluginId: string
@@ -278,6 +337,7 @@ export interface TinstarPluginAPI {
   theme: PluginThemeApi
   logger: PluginLogger
   widget: PluginWidgetApi
+  primitives: PluginPrimitivesApi
 }
 
 /** The shape of a plugin module's default export (or named `activate` export).
@@ -314,6 +374,9 @@ export interface PluginManifest {
       capabilities?: string[]
       creator?: 'standalone' | 'session-backed'
       tags?: string[]
+      /** When set, this widget is primitive-backed: the plugin registers it via
+       *  api.primitives.register{Browser,Terminal}Widget rather than api.widgets.register. */
+      primitive?: 'browser' | 'terminal'
     }>
   }
   permissions?: string[]
