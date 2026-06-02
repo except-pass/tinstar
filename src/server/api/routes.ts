@@ -652,6 +652,51 @@ function assignWidgetToSlot(ctx: RouteContext, spaceId: string, widgetId: string
   ctx.docStore.upsertConstellationGraph(spaceId, addMember(graph, widgetId, slot))
 }
 
+interface CreateBrowserWidgetParams {
+  sessionId?: string
+  url?: string
+  headers?: Record<string, string>
+  spaceId?: string
+  color?: string
+  title?: string
+  position?: { x: number; y: number }
+  size?: { width: number; height: number }
+  nearNodeId?: string
+  slot?: number | string
+}
+
+type CreateBrowserWidgetResult =
+  | { widget: import('../../domain/types').BrowserWidget }
+  | { error: { code: ErrorCode; message: string } }
+
+/** Create a browser widget from API params (placement, session color, slot).
+ *  Shared by POST /api/browser-widgets and POST /api/artifacts so the placement
+ *  logic lives in one place. */
+function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParams): CreateBrowserWidgetResult {
+  const { sessionId, url: widgetUrl = '', headers: widgetHeaders, color: colorOverride, title } = parsed
+  const run = sessionId ? ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId) : undefined
+  if (sessionId && !run) {
+    return { error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }
+  }
+  const widgetColor = colorOverride ?? run?.color ?? '#5b6b7a'
+  const spaceId = parsed.spaceId || ctx.docStore.activeSpaceId || ''
+  const placement = resolvePlacement(ctx, spaceId, parsed)
+  const widget: import('../../domain/types').BrowserWidget = {
+    id: shortId('browser'),
+    spaceId: spaceId || undefined,
+    ...(sessionId ? { sessionId } : {}),
+    url: widgetUrl,
+    color: widgetColor,
+    ...(title ? { title } : {}),
+    ...(widgetHeaders && Object.keys(widgetHeaders).length > 0 ? { headers: widgetHeaders } : {}),
+    ...(placement ? { position: placement.position, size: placement.size } : {}),
+  }
+  ctx.docStore.upsertBrowserWidget(widget.id, widget)
+  const slot = toSlot(parsed.slot)
+  if (slot && spaceId) assignWidgetToSlot(ctx, spaceId, widget.id, slot)
+  return { widget }
+}
+
 /** Synchronously enumerate every persisted session on disk. Mirrors the
  * rehydrate loop in index.ts (readdirSync + getSession per entry). Used by
  * topic-metadata routes to derive participants live from `nats.subscriptions`.
@@ -1859,34 +1904,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/browser-widgets
   if (method === 'POST' && url === '/api/browser-widgets') {
     readBody(req).then(body => {
-      const parsed = JSON.parse(body) as {
-        sessionId?: string; url?: string; headers?: Record<string, string>; spaceId?: string;
-        color?: string;
-        position?: { x: number; y: number }; size?: { width: number; height: number };
-        nearNodeId?: string; slot?: number | string;
-      }
-      const { sessionId, url: widgetUrl = '', headers: widgetHeaders, color: colorOverride } = parsed
-      const run = sessionId ? ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId) : undefined
-      if (sessionId && !run) {
-        fail(res, 'SESSION_NOT_FOUND', `No run with sessionId ${sessionId}`)
+      const parsed = JSON.parse(body) as CreateBrowserWidgetParams
+      const result = createBrowserWidget(ctx, parsed)
+      if ('error' in result) {
+        fail(res, result.error.code, result.error.message)
         return
       }
-      const widgetColor = colorOverride ?? run?.color ?? '#5b6b7a'
-      const spaceId = parsed.spaceId || ctx.docStore.activeSpaceId || ''
-      const placement = resolvePlacement(ctx, spaceId, parsed)
-      const widget: import('../../domain/types').BrowserWidget = {
-        id: shortId('browser'),
-        spaceId: spaceId || undefined,
-        ...(sessionId ? { sessionId } : {}),
-        url: widgetUrl,
-        color: widgetColor,
-        ...(widgetHeaders && Object.keys(widgetHeaders).length > 0 ? { headers: widgetHeaders } : {}),
-        ...(placement ? { position: placement.position, size: placement.size } : {}),
-      }
-      ctx.docStore.upsertBrowserWidget(widget.id, widget)
-      const slot = toSlot(parsed.slot)
-      if (slot && spaceId) assignWidgetToSlot(ctx, spaceId, widget.id, slot)
-      ok(res, widget)
+      ok(res, result.widget)
     })
     return true
   }
