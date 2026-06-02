@@ -2074,6 +2074,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // DELETE /api/artifacts — clear all (escape hatch)
+  if (method === 'DELETE' && url === '/api/artifacts') {
+    const deleted = ctx.docStore.deleteAllArtifacts()
+    ok(res, { deleted })
+    return true
+  }
+
+  // DELETE /api/artifacts/:id — remove one (leaves the widget in place)
+  if (method === 'DELETE' && url.startsWith('/api/artifacts/')) {
+    const id = url.slice('/api/artifacts/'.length).split('?')[0]!
+    if (!ctx.docStore.getArtifact(id)) { fail(res, 'NOT_FOUND', `Artifact ${id} not found`); return true }
+    ctx.docStore.deleteArtifact(id)
+    ok(res, { deleted: true })
+    return true
+  }
+
   // POST /api/plugin-widgets
   if (method === 'POST' && url === '/api/plugin-widgets') {
     readBody(req).then(body => {

@@ -165,3 +165,38 @@ describe('PUT /api/artifacts/:id', () => {
     expect(res.status).toBe(404)
   })
 })
+
+describe('DELETE artifacts', () => {
+  it('DELETE /api/artifacts/:id removes one (widget remains)', async () => {
+    const p = writeHtml(t.tmpRoot, 'd.html', '<body>d</body>')
+    const created = (await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: p }) })).json()).data
+    const res = await t.fetch(`/api/artifacts/${created.artifactId}`, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(t.docStore.getArtifact(created.artifactId)).toBeUndefined()
+    // widget is intentionally left in place
+    expect(t.docStore.getAllBrowserWidgets().find(w => w.id === created.widgetId)).toBeDefined()
+  })
+
+  it('DELETE /api/artifacts clears all', async () => {
+    const a = writeHtml(t.tmpRoot, 'a.html', '<body>a</body>')
+    const b = writeHtml(t.tmpRoot, 'b.html', '<body>b</body>')
+    await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: a }) })
+    await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: b }) })
+    const res = await t.fetch('/api/artifacts', { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.deleted).toBe(2)
+    expect(t.docStore.getAllArtifacts()).toHaveLength(0)
+  })
+
+  it('deleting the widget cascades to its artifact (via DELETE /api/browser-widgets/:id)', async () => {
+    const p = writeHtml(t.tmpRoot, 'c.html', '<body>c</body>')
+    const created = (await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: p }) })).json()).data
+    await t.fetch(`/api/browser-widgets/${created.widgetId}`, { method: 'DELETE' })
+    expect(t.docStore.getArtifact(created.artifactId)).toBeUndefined()
+  })
+
+  it('404 for unknown id', async () => {
+    const res = await t.fetch('/api/artifacts/eph-nope', { method: 'DELETE' })
+    expect(res.status).toBe(404)
+  })
+})
