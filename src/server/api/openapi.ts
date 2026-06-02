@@ -697,8 +697,8 @@ export const spec = {
       },
       delete: {
         tags: ['Widgets'],
-        summary: 'Clear all artifacts',
-        responses: { 200: { description: 'All artifacts deleted', content: { 'application/json': { schema: {
+        summary: 'Clear all artifacts and close their owning browser widgets',
+        responses: { 200: { description: 'All artifacts deleted and their owning browser widgets removed', content: { 'application/json': { schema: {
           type: 'object',
           properties: { ok: { type: 'boolean' }, data: { type: 'object', properties: { deleted: { type: 'integer' } } } },
         } } } } },
@@ -739,10 +739,10 @@ export const spec = {
       },
       delete: {
         tags: ['Widgets'],
-        summary: 'Delete a single artifact',
+        summary: 'Delete a single artifact and close its owning browser widget',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
-          200: { description: 'Artifact deleted', content: { 'application/json': { schema: {
+          200: { description: 'Artifact deleted and its owning browser widget removed', content: { 'application/json': { schema: {
             type: 'object',
             properties: { ok: { type: 'boolean' }, data: { type: 'object', properties: { deleted: { type: 'boolean' } } } },
           } } } },
