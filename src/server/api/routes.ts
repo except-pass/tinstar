@@ -2569,15 +2569,25 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (!resolvedHand) return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
         }
 
+        // The built-in marshal keeps its persistent persona (MARSHAL_AGENT_PROMPT)
+        // separate from its one-shot intro (hand.prompt). The persona is the
+        // system prompt — persisted as appendSystemPrompt and re-injected on
+        // /start so it survives restart and `/clear` — while the intro fires
+        // once as the first user message. Other hands carry their persona in
+        // `prompt`, so that's what we persist as the system prompt.
+        const isMarshalHand = resolvedHand?.name === MARSHAL_AGENT_NAME
+        const handInitialPrompt = isMarshalHand ? resolvedHand!.prompt : prompt
+        const handSystemPrompt = isMarshalHand ? MARSHAL_AGENT_PROMPT : (resolvedHand?.prompt ?? null)
+
         const createCtx = buildCreateSessionContext(ctx)
         if (!createCtx) return fail(res, 'INTERNAL', 'sessionConfig unavailable')
 
         try {
           const result = await createSessionInternal({
-            name, project, worktree, worktreePath, prompt, skipPermissions,
+            name, project, worktree, worktreePath, prompt: handInitialPrompt, skipPermissions,
             cliTemplate: cliTemplateName ?? resolvedHand?.cliTemplate,
             taskId, epicId, initiativeId, color: colorParam, nats,
-            appendSystemPrompt: resolvedHand?.prompt ?? null,
+            appendSystemPrompt: handSystemPrompt,
           }, createCtx)
 
           if (!result.ok) {

@@ -136,7 +136,7 @@ describe('POST /api/sessions', () => {
     expect(run.natsSubscriptions!.some(s => s.includes('make-widget'))).toBe(true)
   })
 
-  it('forwards a resolved hand\'s prompt to the tmux backend as appendSystemPrompt', async () => {
+  it('uses the marshal hand\'s persona as appendSystemPrompt and its intro as the one-shot prompt', async () => {
     const res = await testCtx.fetch('/api/sessions', {
       method: 'POST',
       body: JSON.stringify({ name: 'marshal-worker', hand: 'marshal' }),
@@ -144,26 +144,34 @@ describe('POST /api/sessions', () => {
 
     expect(res.status).toBe(201)
     expect(createTmuxSessionMock).toHaveBeenCalledTimes(1)
-    const opts = createTmuxSessionMock.mock.calls[0]![1] as unknown as { appendSystemPrompt?: string | null }
+    const opts = createTmuxSessionMock.mock.calls[0]![1] as unknown as {
+      appendSystemPrompt?: string | null
+      session: { initialPrompt?: string }
+    }
+    // System prompt is the persistent persona, NOT the one-shot intro.
     expect(opts.appendSystemPrompt).toBeTruthy()
     expect(opts.appendSystemPrompt!.toLowerCase()).toContain('marshal')
+    expect(opts.appendSystemPrompt).not.toContain('Print a short introduction')
+    // The intro fires once as the first user message.
+    expect(opts.session.initialPrompt).toContain('Print a short introduction')
   })
 
-  it('re-threads a hand-created session\'s prompt into startTmuxSession on restart', async () => {
+  it('re-threads the marshal persona (not the intro) into startTmuxSession on restart', async () => {
     const created = await testCtx.fetch('/api/sessions', {
       method: 'POST',
       body: JSON.stringify({ name: 'marshal-restart', hand: 'marshal' }),
     })
     expect(created.status).toBe(201)
 
-    // A later /start recreates the tmux process. The hand prompt must be
-    // re-injected from persisted session metadata, not silently dropped.
+    // A later /start recreates the tmux process. The persistent persona must be
+    // re-injected from persisted session metadata, not the one-shot intro.
     const restarted = await testCtx.fetch('/api/sessions/marshal-restart/start', { method: 'POST' })
     expect(restarted.status).toBe(200)
     expect(startTmuxSessionMock).toHaveBeenCalledTimes(1)
     const opts = startTmuxSessionMock.mock.calls[0]![1] as unknown as { appendSystemPrompt?: string | null }
     expect(opts.appendSystemPrompt).toBeTruthy()
     expect(opts.appendSystemPrompt!.toLowerCase()).toContain('marshal')
+    expect(opts.appendSystemPrompt).not.toContain('Print a short introduction')
   })
 
   it('returns NOT_FOUND for an unknown hand', async () => {
