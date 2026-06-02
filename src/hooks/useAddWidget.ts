@@ -40,7 +40,7 @@ export function useAddWidget(deps: AddWidgetDeps) {
       const freeSlot = nextFreeSlot(graph)
       const plan = addWidgetMembership({ sourceSlot, freeSlot, sourceId: sourceNodeId, newId: newNodeId })
       for (const a of plan.assigns) assignSlot(a.slot, a.nodeId)
-      addSnapEdge(plan.snap.a, plan.snap.b)
+      if (plan.snap) addSnapEdge(plan.snap.a, plan.snap.b)
     }
 
     if (entry.creator === 'session-backed') {
