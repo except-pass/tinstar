@@ -60,13 +60,16 @@ export function mergeCatalog(
   return out
 }
 
-export function useWidgetCatalog(): { entries: CatalogEntry[]; loading: boolean } {
-  const { entries: pluginEntries } = usePluginWidgetRegistry()
+export function useWidgetCatalog(): { entries: CatalogEntry[]; loading: boolean; error: string | null } {
+  const { entries: pluginEntries, error } = usePluginWidgetRegistry()
   return useMemo(() => {
     if (pluginEntries === null) {
-      // Host widgets are available synchronously; plugin list still loading.
-      return { entries: mergeCatalog(listWidgetRegistrations(), []), loading: true }
+      // Host widgets are available synchronously. While the plugin list is still
+      // in flight (no entries, no error) we're loading; once the fetch fails
+      // (error set, entries still null) we're settled on host-only entries —
+      // otherwise loading would stay true forever on a failed registry fetch.
+      return { entries: mergeCatalog(listWidgetRegistrations(), []), loading: error === null, error }
     }
-    return { entries: mergeCatalog(listWidgetRegistrations(), pluginEntries), loading: false }
-  }, [pluginEntries])
+    return { entries: mergeCatalog(listWidgetRegistrations(), pluginEntries), loading: false, error }
+  }, [pluginEntries, error])
 }
