@@ -136,8 +136,9 @@ export interface ConstellationPeer {
   kind: string
   /** Names of capabilities the peer has currently published. */
   capabilities: string[]
-  /** True when this peer shares a `snapped` edge with the calling widget. */
-  snapped: boolean
+  /** True when this peer shares a `snapped` edge with the calling widget.
+   *  Optional: older V5 hosts predate this field and return `undefined`. */
+  snapped?: boolean
 }
 
 /** Constellation (keyboard slot) integration: read which slots a widget belongs to,

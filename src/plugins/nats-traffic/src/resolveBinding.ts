@@ -1,4 +1,4 @@
-export interface PeerLike { id: string; kind: string; capabilities: string[]; snapped: boolean }
+export interface PeerLike { id: string; kind: string; capabilities: string[]; snapped?: boolean }
 
 export type Binding =
   | { mode: 'all' }                       // not in a constellation → firehose
