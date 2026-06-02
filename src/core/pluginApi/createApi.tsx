@@ -1,6 +1,8 @@
-import { useSyncExternalStore, useCallback, useRef } from 'react'
-import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi } from '@tinstar/plugin-api'
+import { useSyncExternalStore, useCallback, useRef, useMemo } from 'react'
+import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi, PluginPrimitivesApi, PrimitiveAccessory, RegisterBrowserWidgetOptions, BrowserHandle, WidgetProps } from '@tinstar/plugin-api'
 import { usePluginWidgetData } from './usePluginWidgetData'
+import { makeBrowserPrimitive } from '../../plugins/browser/src/BrowserPrimitive'
+import { BrowserHandleContext, useBrowserHandle, useTerminalHandle } from './browserPrimitiveContext'
 import { useDeletePluginWidget } from './useDeletePluginWidget'
 import { useInitialContext } from './useInitialContext'
 import { useAttention } from './useAttention'
@@ -59,6 +61,29 @@ function makeLogger(pluginId: string): PluginLogger {
     error: (...args) => console.error(prefix, ...args),
     /* eslint-enable no-console */
   }
+}
+
+const FLEX_DIR: Record<PrimitiveAccessory['placement'], React.CSSProperties['flexDirection']> = {
+  left: 'row', right: 'row-reverse', top: 'column', bottom: 'column-reverse',
+}
+
+function AccessoryLayout({ accessory, children }: { accessory?: PrimitiveAccessory; children: React.ReactNode }) {
+  if (!accessory) return <div className="h-full w-full">{children}</div>
+  const size = accessory.size ?? 220
+  const isRow = accessory.placement === 'left' || accessory.placement === 'right'
+  const Accessory = accessory.component
+  return (
+    <div className="h-full w-full flex" style={{ flexDirection: FLEX_DIR[accessory.placement] }}>
+      <div className="min-h-0 min-w-0 flex-1">{children}</div>
+      <div
+        className="min-h-0 min-w-0 overflow-auto"
+        style={isRow ? { width: size, flex: `0 0 ${size}px` } : { height: size, flex: `0 0 ${size}px` }}
+        onPointerDown={e => e.stopPropagation()}
+      >
+        <Accessory />
+      </div>
+    </div>
+  )
 }
 
 export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
@@ -256,7 +281,77 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     },
   }
 
-  return {
+  // Build primitives lazily, closing over the fully-assembled `api` object below.
+  // Component bodies only read `api.*` at RENDER time, by which point `api` is
+  // fully populated, so closing over `api` is safe.
+  function buildPrimitives(api: TinstarPluginAPI): PluginPrimitivesApi {
+    function registerBrowserWidget(opts: RegisterBrowserWidgetOptions): Disposable {
+      function BrowserBackedWidget(props: WidgetProps) {
+        const [data, setData] = api.widget.useData<{ _browser?: { url: string; headers?: Record<string, string> } }>()
+        const nodeId = api.constellations.useMyNodeId()
+        const url = data?._browser?.url ?? opts.defaultUrl ?? ''
+        const headers = data?._browser?.headers
+        const accent = api.theme.accent.resolve(undefined)
+        const slots = api.constellations.useContext().slotsForNode(nodeId)
+
+        const listenersRef = useRef(new Set<(u: string) => void>())
+
+        const persistUrl = useCallback((next: string) => {
+          setData({ ...(data ?? {}), _browser: { url: next, headers } })
+          for (const cb of listenersRef.current) cb(next)
+          // setData/headers are intentionally captured fresh per render; persisting
+          // the latest snapshot is correct.
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [data, headers, setData])
+
+        const persistHeaders = useCallback((next: Record<string, string>) => {
+          setData({ ...(data ?? {}), _browser: { url, headers: next } })
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [data, url, setData])
+
+        const handle: BrowserHandle = useMemo(() => ({
+          url,
+          navigate: persistUrl,
+          reload: () => persistUrl(url),
+          onUrlChange: (cb: (u: string) => void) => {
+            listenersRef.current.add(cb)
+            return { dispose: () => { listenersRef.current.delete(cb) } }
+          },
+        }), [url, persistUrl])
+
+        const Primitive = useMemo(() => makeBrowserPrimitive(api), [])
+
+        return (
+          <BrowserHandleContext.Provider value={handle}>
+            <AccessoryLayout accessory={opts.accessory}>
+              <Primitive nodeId={nodeId} hotkeyId={nodeId} url={url} headers={headers} accent={accent}
+                slots={slots} title={undefined} isSelected={props.isSelected} isDragging={props.isDragging}
+                isHovered={props.isHovered} onNavigate={persistUrl} onHeadersChange={persistHeaders} />
+            </AccessoryLayout>
+          </BrowserHandleContext.Provider>
+        )
+      }
+
+      return widgets.register({
+        type: opts.type,
+        component: BrowserBackedWidget as never,
+        isContainer: false,
+        defaultSize: opts.defaultSize ?? { width: 800, height: 600 },
+        minSize: opts.minSize ?? { width: 360, height: 280 },
+        dragHandleSelector: '.widget-drag-handle',
+        capabilities: ['web-view'],
+      })
+    }
+
+    return {
+      registerBrowserWidget,
+      registerTerminalWidget: () => { throw new Error('terminal primitive: implemented in Task 7') },
+      useBrowser: () => useBrowserHandle(),
+      useTerminal: () => useTerminalHandle(),
+    }
+  }
+
+  const api: TinstarPluginAPI = {
     pluginId: record.name,
     version: record.version,
     widgets,
@@ -269,5 +364,8 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     theme,
     logger,
     widget,
+    primitives: undefined as never,
   }
+  api.primitives = buildPrimitives(api)
+  return api
 }
