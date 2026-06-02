@@ -663,7 +663,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const freeSlot = nextFreeSlot(constellations.graph)
       const plan = addWidgetMembership({ sourceSlot, freeSlot, sourceId: pend.sourceNodeId, newId: nodeId })
       for (const a of plan.assigns) constellations.assign(a.slot, a.nodeId)
-      constellations.addSnapEdge(plan.snap.a, plan.snap.b)
+      if (plan.snap) constellations.addSnapEdge(plan.snap.a, plan.snap.b)
       pendingRunPlacement.current.delete(run.sessionId)
     }
   }, [runMap, insertLayout, constellations])

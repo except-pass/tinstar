@@ -13,8 +13,9 @@ describe('addWidgetMembership', () => {
       snap: { a: 'A', b: 'B' },
     })
   })
-  it('snaps visually but assigns no slot when slots are full', () => {
+  it('assigns no slot and emits no snap when slots are full (matches drag rollback-on-full)', () => {
     const r = addWidgetMembership({ sourceSlot: null, freeSlot: null, sourceId: 'A', newId: 'B' })
-    expect(r).toEqual({ assigns: [], snap: { a: 'A', b: 'B' } })
+    expect(r).toEqual({ assigns: [] })
+    expect(r.snap).toBeUndefined()
   })
 })
