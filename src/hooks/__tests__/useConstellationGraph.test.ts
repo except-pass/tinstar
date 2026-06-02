@@ -256,9 +256,8 @@ describe('useConstellationGraph divergent server delta', () => {
     expect(result.current.nodesInSlot('2')).toEqual(['b'])
   })
 
-  it('clears the overlay when the server reverts to the baseline after writes settle', async () => {
-    // Non-empty baseline so a revert *to* it is a real server push, and the overlay
-    // is built on it.
+  it('keeps the overlay when the PUT settles before the echo after a baseline-refresh snapshot', async () => {
+    // Non-empty baseline the overlay is built on.
     h.serverState = {
       constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'a', slot: '1' }] }],
     }
@@ -271,16 +270,23 @@ describe('useConstellationGraph divergent server delta', () => {
     act(() => { result.current.assign('2', 'b') })
     expect(result.current.nodesInSlot('2')).toEqual(['b'])
 
-    // The PUT settles but the server graph still deep-equals the baseline — our
-    // echo never lands (e.g. another client reverted the doc back). Once writes
-    // drain, a baseline-equal graph that isn't our echo is stale, so the overlay
-    // must clear rather than stay pinned forever.
+    // An SSE reconnect/snapshot rebuilds the unchanged baseline as a fresh object
+    // while our write is still in flight — deep-equal to the graph we built on.
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'a', slot: '1' }] }],
+    }
+    rerender()
+    expect(result.current.nodesInSlot('2')).toEqual(['b'])
+
+    // The PUT settles before our echo lands. The server graph still deep-equals the
+    // baseline, so we're simply awaiting our own echo — the overlay must survive the
+    // write draining rather than visibly revert just before the confirming echo.
     await act(async () => {
       release()
       await new Promise(resolve => setTimeout(resolve, 0))
     })
     rerender()
-    expect(result.current.nodesInSlot('2')).toEqual([])
+    expect(result.current.nodesInSlot('2')).toEqual(['b'])
     expect(result.current.nodesInSlot('1')).toEqual(['a'])
   })
 })
