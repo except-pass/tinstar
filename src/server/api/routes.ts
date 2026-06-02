@@ -2046,6 +2046,34 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // PUT /api/artifacts/:id — re-read the file, bump rev, reload the open widget
+  if (method === 'PUT' && url.startsWith('/api/artifacts/')) {
+    const id = url.slice('/api/artifacts/'.length).split('?')[0]!
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getArtifact(id)
+      if (!existing) { fail(res, 'NOT_FOUND', `Artifact ${id} not found`); return }
+      let parsed: { path?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'invalid JSON body'); return }
+
+      const html = readArtifactFile(parsed.path, res, fail)
+      if (html === null) return
+
+      const rev = existing.rev + 1
+      ctx.docStore.upsertArtifact(id, { ...existing, html, rev, updatedAt: Date.now() })
+
+      // Nudge the owning widget's URL with a cache-buster so the browser widget's
+      // existing SSE-driven reload fires (proxyUrl includes the query string).
+      if (existing.widgetId) {
+        const widget = ctx.docStore.getAllBrowserWidgets().find(w => w.id === existing.widgetId)
+        if (widget) {
+          ctx.docStore.upsertBrowserWidget(widget.id, { ...widget, url: `${serverBase()}/api/artifacts/${id}?v=${rev}` })
+        }
+      }
+      ok(res, { artifactId: id, url: `${serverBase()}/api/artifacts/${id}`, rev })
+    })
+    return true
+  }
+
   // POST /api/plugin-widgets
   if (method === 'POST' && url === '/api/plugin-widgets') {
     readBody(req).then(body => {

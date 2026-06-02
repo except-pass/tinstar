@@ -139,3 +139,29 @@ describe('GET /api/artifacts/:id', () => {
     expect(res.status).toBe(404)
   })
 })
+
+describe('PUT /api/artifacts/:id', () => {
+  it('replaces content, bumps rev, and nudges the widget url with ?v=', async () => {
+    const p = writeHtml(t.tmpRoot, 'u.html', '<body>v1</body>')
+    const created = (await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: p }) })).json()).data
+    const widgetBefore = t.docStore.getAllBrowserWidgets().find(w => w.id === created.widgetId)!
+    expect(widgetBefore.url).not.toContain('?v=')
+
+    writeFileSync(p, '<body>v2</body>')
+    const res = await t.fetch(`/api/artifacts/${created.artifactId}`, { method: 'PUT', body: JSON.stringify({ path: p }) })
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    expect(data.rev).toBe(2)
+
+    expect(t.docStore.getArtifact(created.artifactId)?.html).toContain('v2')
+    expect(t.docStore.getArtifact(created.artifactId)?.rev).toBe(2)
+    const widgetAfter = t.docStore.getAllBrowserWidgets().find(w => w.id === created.widgetId)!
+    expect(widgetAfter.url).toContain(`/api/artifacts/${created.artifactId}?v=2`)
+  })
+
+  it('404 for unknown id', async () => {
+    const p = writeHtml(t.tmpRoot, 'u2.html', '<body>x</body>')
+    const res = await t.fetch('/api/artifacts/eph-nope', { method: 'PUT', body: JSON.stringify({ path: p }) })
+    expect(res.status).toBe(404)
+  })
+})
