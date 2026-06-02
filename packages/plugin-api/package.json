@@ -16,7 +16,8 @@
   "keywords": ["tinstar", "plugin", "widgets", "canvas"],
   "license": "MIT",
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "tag": "dev"
   },
   "files": [
     "src/index.ts",
