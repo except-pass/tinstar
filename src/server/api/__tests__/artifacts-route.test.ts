@@ -115,3 +115,27 @@ describe('POST /api/artifacts', () => {
     expect(res.status).toBe(400)
   })
 })
+
+describe('GET /api/artifacts/:id', () => {
+  it('serves stored html as text/html', async () => {
+    const p = writeHtml(t.tmpRoot, 'g.html', '<!doctype html><html><body>served</body></html>')
+    const created = await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: p }) })).json()
+    const res = await t.fetch(`/api/artifacts/${created.data.artifactId}`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('text/html')
+    expect(await res.text()).toContain('served')
+  })
+
+  it('ignores a ?v= cache-buster query when resolving the id', async () => {
+    const p = writeHtml(t.tmpRoot, 'g2.html', '<body>q</body>')
+    const created = await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: p }) })).json()
+    const res = await t.fetch(`/api/artifacts/${created.data.artifactId}?v=7`)
+    expect(res.status).toBe(200)
+    expect(await res.text()).toContain('q')
+  })
+
+  it('404 for unknown id', async () => {
+    const res = await t.fetch('/api/artifacts/eph-nope')
+    expect(res.status).toBe(404)
+  })
+})

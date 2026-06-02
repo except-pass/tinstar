@@ -2032,6 +2032,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // GET /api/artifacts/:id — serve stored HTML (fetched via the widget proxy)
+  if (method === 'GET' && url.startsWith('/api/artifacts/')) {
+    const id = url.slice('/api/artifacts/'.length).split('?')[0]!
+    const artifact = ctx.docStore.getArtifact(id)
+    if (!artifact) { fail(res, 'NOT_FOUND', `Artifact ${id} not found`); return true }
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+    })
+    res.end(artifact.html)
+    return true
+  }
+
   // POST /api/plugin-widgets
   if (method === 'POST' && url === '/api/plugin-widgets') {
     readBody(req).then(body => {
