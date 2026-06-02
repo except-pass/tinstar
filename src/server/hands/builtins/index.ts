@@ -126,6 +126,8 @@ curl -s -X PUT "$TINSTAR_URL/api/artifacts/eph-ab12" \\
   -d '{ "path": "/tmp/viz.html" }'
 \`\`\`
 
+When \`sessionId\` is provided, the widget auto-snaps to that session's constellation (rafts alongside it, tiled to the right). Pass \`"snapToSession": false\` to spawn free-floating instead.
+
 ## Spawning helper hands
 
 When the user wants a reviewer/tester/skeptic/etc. to assist an existing session, use \`tinstar-hand\` skill knowledge — those hands inherit the parent session's task context.

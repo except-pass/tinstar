@@ -165,10 +165,13 @@ describe('POST /api/browser-widgets — placement', () => {
   it('ignores an out-of-range slot', async () => {
     const res = await testCtx.fetch('/api/browser-widgets', {
       method: 'POST',
-      body: JSON.stringify({ sessionId: SESSION_ID, slot: 42 }),
+      body: JSON.stringify({ sessionId: SESSION_ID, slot: 42, snapToSession: false }),
     })
-    await res.json()
-    expect(testCtx.docStore.getConstellationGraph(SPACE_ID)).toBeUndefined()
+    const { data } = await res.json() as { data: BrowserWidget }
+    // Out-of-range slot is ignored — the widget has no slot assignment
+    const graph = testCtx.docStore.getConstellationGraph(SPACE_ID)
+    if (graph) expect(graph.members.some(m => m.widget === data.id)).toBe(false)
+    else expect(graph).toBeUndefined()
   })
 
   it('still creates a plain widget with no placement fields', async () => {

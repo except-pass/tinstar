@@ -41,7 +41,7 @@ import {
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
-import { emptyGraph, addMember, type ConstellationSlot } from '../../domain/constellationGraph'
+import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, type ConstellationSlot } from '../../domain/constellationGraph'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
 import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
@@ -652,6 +652,47 @@ function assignWidgetToSlot(ctx: RouteContext, spaceId: string, widgetId: string
   ctx.docStore.upsertConstellationGraph(spaceId, addMember(graph, widgetId, slot))
 }
 
+/** Snap a freshly-created widget to its spawning session's constellation so it
+ *  rafts with that session. Joins the session's existing slot, or forms a new
+ *  group (session + widget in a free slot) plus a snap edge. Returns a tiled
+ *  position (to the right of the session, offset past existing slot members) or
+ *  null when the session's position can't be resolved. Mutates + persists the graph. */
+function snapWidgetToSession(
+  ctx: RouteContext,
+  spaceId: string,
+  sessionNodeId: string,
+  widgetId: string,
+  size: { width: number; height: number },
+): { position: { x: number; y: number } | null } {
+  const graph = ctx.docStore.getConstellationGraph(spaceId) ?? emptyGraph(spaceId)
+  const sessionSlots = slotsForNode(graph, sessionNodeId)
+  let targetSlot: ConstellationSlot | null = null
+  let priorCount = 0
+  let next = graph
+  if (sessionSlots.length > 0) {
+    targetSlot = sessionSlots[0]!
+    priorCount = nodesInSlot(graph, targetSlot).filter(id => id !== sessionNodeId).length
+    next = addMember(next, widgetId, targetSlot)
+  } else {
+    const used = new Set<string>()
+    for (const s of ['1','2','3','4','5','6','7','8','9'] as ConstellationSlot[]) {
+      if (nodesInSlot(graph, s).length > 0) used.add(s)
+    }
+    const free = (['1','2','3','4','5','6','7','8','9'] as ConstellationSlot[]).find(s => !used.has(s)) ?? null
+    if (free) {
+      targetSlot = free
+      next = addMember(addMember(next, sessionNodeId, free), widgetId, free)
+    }
+  }
+  next = addSnap(next, sessionNodeId, widgetId)
+  ctx.docStore.upsertConstellationGraph(spaceId, next)
+
+  const sessionLayout = lookupNodeLayout(ctx, spaceId, sessionNodeId)
+  if (!sessionLayout) return { position: null }
+  const x = sessionLayout.x + sessionLayout.width + PLACEMENT_GAP + priorCount * (size.width + PLACEMENT_GAP)
+  return { position: { x, y: sessionLayout.y } }
+}
+
 interface CreateBrowserWidgetParams {
   sessionId?: string
   url?: string
@@ -663,6 +704,7 @@ interface CreateBrowserWidgetParams {
   size?: { width: number; height: number }
   nearNodeId?: string
   slot?: number | string
+  snapToSession?: boolean
 }
 
 type CreateBrowserWidgetResult =
@@ -680,20 +722,33 @@ function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParam
   }
   const widgetColor = colorOverride ?? run?.color ?? '#5b6b7a'
   const spaceId = parsed.spaceId || ctx.docStore.activeSpaceId || ''
+  const explicitSlot = toSlot(parsed.slot)
   const placement = resolvePlacement(ctx, spaceId, parsed)
+  const size = placement?.size ?? DEFAULT_BROWSER_SIZE
+  const widgetId = shortId('browser')
+
+  // Auto-snap to the spawning session unless opted out or an explicit slot was given.
+  const wantSnap = parsed.snapToSession !== false && !explicitSlot && !!run && !!spaceId
+  let snapPosition: { x: number; y: number } | null = null
+  if (wantSnap && run) {
+    snapPosition = snapWidgetToSession(ctx, spaceId, `run-${run.id}`, widgetId, size).position
+  }
+
+  // Explicit placement wins; otherwise use the tiled snap position if we got one.
+  const finalPosition = placement?.position ?? snapPosition ?? null
+
   const widget: import('../../domain/types').BrowserWidget = {
-    id: shortId('browser'),
+    id: widgetId,
     spaceId: spaceId || undefined,
     ...(sessionId ? { sessionId } : {}),
     url: widgetUrl,
     color: widgetColor,
     ...(title ? { title } : {}),
     ...(widgetHeaders && Object.keys(widgetHeaders).length > 0 ? { headers: widgetHeaders } : {}),
-    ...(placement ? { position: placement.position, size: placement.size } : {}),
+    ...(finalPosition ? { position: finalPosition, size } : {}),
   }
   ctx.docStore.upsertBrowserWidget(widget.id, widget)
-  const slot = toSlot(parsed.slot)
-  if (slot && spaceId) assignWidgetToSlot(ctx, spaceId, widget.id, slot)
+  if (explicitSlot && spaceId) assignWidgetToSlot(ctx, spaceId, widget.id, explicitSlot)
   return { widget }
 }
 
@@ -1995,7 +2050,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       let parsed: { path?: unknown; name?: string; sessionId?: string; color?: string; spaceId?: string;
         position?: { x: number; y: number }; size?: { width: number; height: number };
-        nearNodeId?: string; slot?: number | string }
+        nearNodeId?: string; slot?: number | string; snapToSession?: boolean }
       try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'invalid JSON body'); return }
 
       const html = readArtifactFile(parsed.path, res, fail)
@@ -2013,6 +2068,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         size: parsed.size,
         nearNodeId: parsed.nearNodeId,
         slot: parsed.slot,
+        snapToSession: parsed.snapToSession,
       })
       if ('error' in result) { fail(res, result.error.code, result.error.message); return }
 
