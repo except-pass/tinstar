@@ -18,6 +18,9 @@ describe('mergeCatalog', () => {
     // palette+context widget (e.g. file-editor) → excluded.
     { pluginId: 'fe', widgetType: 'file-editor', label: 'File editor', spawn: 'palette+context' },
     { pluginId: 'misc', widgetType: 'no-cap', label: 'NoCap' }, // no spawn, no capabilities → excluded
+    // Session-backed plugin widget: palette-draggable but the [+] flow can't spawn it
+    // (it would create a run-workspace instead) → excluded from the catalog.
+    { pluginId: 'sb', widgetType: 'sb-widget', label: 'SessionBacked', spawn: 'palette', creator: 'session-backed' as const },
   ]
 
   it('includes spawnable widgets: capability-declared OR palette-installable', () => {
@@ -32,6 +35,11 @@ describe('mergeCatalog', () => {
     expect(sp).toBeTruthy()
     expect(sp.pluginId).toBe('stretchplan')
     expect(sp.creator).toBe('standalone') // default
+  })
+
+  it('excludes session-backed plugin widgets (the [+] flow cannot spawn them)', () => {
+    const out = mergeCatalog(host as any, plugin as any)
+    expect(out.find(e => e.type === 'sb-widget')).toBeUndefined()
   })
 
   it('excludes palette+context plugin widgets', () => {

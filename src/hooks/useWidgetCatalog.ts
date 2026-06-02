@@ -47,6 +47,12 @@ export function mergeCatalog(
     // 'spawnable' capability can still opt in a non-palette widget.
     // 'palette+context' widgets (file-editor/image-viewer) stay excluded.
     if (p.spawn !== 'palette' && !isSpawnable(p.capabilities)) continue
+    // The [+] add-widget flow can only spawn a session-backed widget by opening
+    // the session-create dialog, which produces a run-workspace — not the plugin
+    // widget. So a session-backed *plugin* entry would surface in the picker yet
+    // spawn the wrong thing (useAddWidget routes purely on creator). Exclude it;
+    // session-backed is only meaningful for the host run-workspace entry.
+    if ((p.creator ?? 'standalone') === 'session-backed') continue
     out.push({
       type: p.widgetType,
       pluginId: p.pluginId,
