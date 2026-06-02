@@ -4,6 +4,7 @@ import {
   addMember, removeMember, slotsForNode, nodesInSlot,
   planBreak,
 } from './constellationGraph'
+import { nextFreeSlot } from '../hooks/useConstellationGraph'
 
 describe('constellationGraph', () => {
   it('emptyGraph carries the spaceId and no edges', () => {
@@ -66,15 +67,22 @@ describe('constellationGraph', () => {
     expect(plan.newGroup).toEqual([])
   })
 
-  it('planBreak: liveIds excludes stale membership of a deleted widget', () => {
+  it('planBreak: liveIds prunes stale membership so the slot is actually freed', () => {
     // 'c' was deleted but its membership/snap edges were never pruned from the graph.
     let g = emptyGraph('s')
     g = addSnap(g, 'a', 'b'); g = addSnap(g, 'b', 'c')
     for (const id of ['a', 'b', 'c']) g = addMember(g, id, '1')
     // Without liveIds the stale 'c' inflates the keep side; with liveIds only the
-    // two visible widgets are considered, so breaking a–b frees both.
+    // two visible widgets are considered, so breaking a–b frees both — and the
+    // stale 'c' is pruned too so slot '1' doesn't stay silently occupied.
     const plan = planBreak(g, 'a', 'b', '1', new Set(['a', 'b']))
-    expect(plan.removeFromSlot.sort()).toEqual(['a', 'b'])
+    expect(plan.removeFromSlot.sort()).toEqual(['a', 'b', 'c'])
     expect(plan.newGroup).toEqual([])
+
+    // Apply the break the way InfiniteCanvas does and assert the slot is freed.
+    let next = removeSnap(g, 'a', 'b')
+    for (const id of plan.removeFromSlot) next = removeMember(next, id, '1')
+    expect(nodesInSlot(next, '1')).toEqual([])
+    expect(nextFreeSlot(next)).toBe('1')
   })
 })

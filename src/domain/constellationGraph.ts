@@ -72,7 +72,11 @@ export function planBreak(g: ConstellationGraph, aId: string, bId: string, slot:
   // `liveIds`, when given, restricts planning to currently-rendered widgets so
   // stale membership (e.g. deleted widgets not yet pruned from the graph) isn't
   // miscounted when choosing the larger side.
-  const ids = new Set<string>(nodesInSlot(g, slot).filter(id => !liveIds || liveIds.has(id)))
+  const slotMembers = nodesInSlot(g, slot)
+  const ids = new Set<string>(slotMembers.filter(id => !liveIds || liveIds.has(id)))
+  // Stale members (in the slot but no longer live) are always pruned so the slot
+  // doesn't stay silently occupied by a deleted widget after the break.
+  const stale = liveIds ? slotMembers.filter(id => !liveIds.has(id)) : []
   const adj = new Map<string, Set<string>>()
   for (const id of ids) adj.set(id, new Set())
   for (const [p, q] of g.snapped) {
@@ -94,7 +98,7 @@ export function planBreak(g: ConstellationGraph, aId: string, bId: string, slot:
   // `keep` only leaves too when it's been reduced to a lone widget (no 1-member
   // constellations). `other` forms its own group only if it still has ≥2 members.
   const [keep, other] = sideA.length >= sideB.length ? [sideA, sideB] : [sideB, sideA]
-  const removeFromSlot = [...other]
+  const removeFromSlot = [...other, ...stale]
   if (keep.length < 2) removeFromSlot.push(...keep)
   const newGroup = other.length >= 2 ? [...other] : []
   return { removeFromSlot, newGroup }
