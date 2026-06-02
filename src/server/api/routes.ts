@@ -44,6 +44,7 @@ import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/conf
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
+import { resolveProxyTarget } from './proxyResolve'
 import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
@@ -1943,15 +1944,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const widgetId = slashIdx === -1 ? afterProxy.split('?')[0]! : afterProxy.slice(0, slashIdx)
     const proxyPath = slashIdx === -1 ? '/' : afterProxy.slice(slashIdx)
 
-    const widget = ctx.docStore.getAllBrowserWidgets().find(w => w.id === widgetId)
-    if (!widget) {
+    const proxyTarget = resolveProxyTarget(
+      widgetId,
+      ctx.docStore.getAllBrowserWidgets(),
+      ctx.docStore.getAllPluginWidgets(),
+    )
+    if (!proxyTarget) {
       res.writeHead(404, { 'Content-Type': 'text/plain' })
-      res.end('Browser widget not found')
+      res.end('Browser target not found')
       return true
     }
 
     let origin: string
-    try { origin = new URL(widget.url).origin } catch {
+    try { origin = new URL(proxyTarget.url).origin } catch {
       res.writeHead(400, { 'Content-Type': 'text/plain' })
       res.end('Invalid widget URL')
       return true
@@ -1962,8 +1967,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // Request uncompressed so we can rewrite text responses
     delete fwdHeaders['accept-encoding']
     // Inject custom headers
-    if (widget.headers) {
-      for (const [k, v] of Object.entries(widget.headers)) fwdHeaders[k.toLowerCase()] = v
+    if (proxyTarget.headers) {
+      for (const [k, v] of Object.entries(proxyTarget.headers)) fwdHeaders[k.toLowerCase()] = v
     }
 
     const proxyBase = `/api/proxy/${widgetId}`
