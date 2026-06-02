@@ -7,7 +7,7 @@ import { EV } from '../../../lib/windowEvents'
 import { StreamView } from './StreamView'
 import { subjectMatchesAny } from './subjectMatches'
 import { resolveBinding } from './resolveBinding'
-import type { TrafficEvent, SaloonData } from './types'
+import type { TrafficEvent } from './types'
 
 const MAX_EVENTS = 200
 
@@ -25,11 +25,10 @@ const STATUS_META: Record<string, { color: string; label: string }> = {
 }
 
 export function makeSaloonWidget(api: TinstarPluginAPI) {
-  return function Saloon(_props: WidgetProps<SaloonData>) {
+  return function Saloon(_props: WidgetProps) {
     const slots = api.constellations.useMySlots()
     const peers = api.constellations.usePeers()
     const invoke = api.constellations.useInvokePeerCapability()
-    const [data, setData] = api.widget.useData<SaloonData>()
     const del = api.widget.useDelete()
 
     const binding = useMemo(
@@ -69,8 +68,6 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
           .map(r => ({ sessionId: r.sessionId, status: r.status, subscriptions: r.subscriptions ?? [] }))
         setBound(sessions)
         setAccent(runIds.length === 1 ? api.theme.accent.resolve(results[0]?.color) : undefined)
-        const prevIds = data?.boundRunIds ?? []
-        if (JSON.stringify(prevIds) !== JSON.stringify(runIds)) setData({ boundRunIds: runIds })
       })()
       return () => { cancelled = true }
     }, [bindingKey, invoke, tick])
