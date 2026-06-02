@@ -39,6 +39,13 @@ describe('decideStaticServe', () => {
     expect(d).toEqual({ kind: 'forbidden' })
   })
 
+  it('forbids a sibling-prefix escape that a bare startsWith check would allow', () => {
+    // Resolves to /client-evil/secret.js — outside /client, but '/client-evil...'
+    // string-starts-with '/client'. A path-boundary check must still reject it.
+    const d = decideStaticServe('/../client-evil/secret.js', CLIENT, existing(['/client-evil/secret.js']))
+    expect(d).toEqual({ kind: 'forbidden' })
+  })
+
   it('falls back to octet-stream for an unknown extension that exists', () => {
     const d = decideStaticServe('/assets/data.bin', CLIENT, existing(['/client/assets/data.bin']))
     expect(d).toEqual({ kind: 'file', filePath: '/client/assets/data.bin', mime: 'application/octet-stream' })

@@ -1,4 +1,4 @@
-import { extname, join, resolve } from 'node:path'
+import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 
 export const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -42,8 +42,13 @@ export function decideStaticServe(
   const ext = extname(pathname)
   const filePath = resolve(join(clientDir, pathname))
 
-  // Prevent path traversal outside clientDir.
-  if (!filePath.startsWith(clientDir)) return { kind: 'forbidden' }
+  // Prevent path traversal outside clientDir. Use a path-segment boundary check
+  // (path.relative) rather than a string prefix: a bare startsWith would also
+  // accept a sibling-prefix escape like `/../client-evil/secret.js` when
+  // clientDir is `/client`. relative() yields '' for clientDir itself, a child
+  // path for contained files, and a '..'-leading or absolute path for escapes.
+  const rel = relative(resolve(clientDir), filePath)
+  if (rel.startsWith('..') || isAbsolute(rel)) return { kind: 'forbidden' }
 
   if (ext) {
     if (fileExists(filePath)) {
