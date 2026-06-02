@@ -208,10 +208,34 @@ describe('useConstellationGraph divergent server delta', () => {
     expect(result.current.nodesInSlot('1')).toEqual([])
     expect(result.current.nodesInSlot('3')).toEqual(['z'])
   })
+
+  it('clears the overlay when the server reverts back to the original baseline', async () => {
+    // Start from a non-empty baseline so a revert *to* it is a real server push.
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'a', slot: '1' }] }],
+    }
+    const { result, rerender } = renderHook(() => useConstellationGraph('s'))
+    await act(async () => {
+      result.current.assign('2', 'b')
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    expect(result.current.nodesInSlot('2')).toEqual(['b'])
+
+    // Another client reverts the doc to the original baseline before our echo
+    // lands. It deep-equals the graph we built on, but it's a fresh server push,
+    // so the overlay must not stay pinned forever.
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'a', slot: '1' }] }],
+    }
+    rerender()
+    expect(result.current.nodesInSlot('2')).toEqual([])
+    expect(result.current.nodesInSlot('1')).toEqual(['a'])
+  })
 })
 
-// Regression: pending-write tracking is generation-scoped, so a late `finally`
-// from a previous space must not clear the new space's overlay early.
+// Regression: pending-write tracking is keyed by spaceId, so a late `finally`
+// from a previous space must not clear the new space's overlay early, and a slow
+// PUT in a space stays counted after switching away from that space and back.
 describe('useConstellationGraph cross-space write settling', () => {
   beforeEach(() => {
     h.serverState = { constellationGraphs: [] }
@@ -255,5 +279,51 @@ describe('useConstellationGraph cross-space write settling', () => {
       releaseNew()
       await new Promise(resolve => setTimeout(resolve, 0))
     })
+  })
+
+  it('keeps the overlay until a slow earlier PUT settles after switching away and back', async () => {
+    // First write in 's', held open across a round trip away to 't' and back.
+    let releaseFirst!: () => void
+    h.nextResponse = () => new Promise<Response>(resolve => {
+      releaseFirst = () => resolve({ ok: true } as Response)
+    })
+    const { result, rerender } = renderHook(({ id }) => useConstellationGraph(id), {
+      initialProps: { id: 's' },
+    })
+    act(() => { result.current.assign('1', 'a') })
+
+    h.nextResponse = () => Promise.resolve({ ok: true } as Response)
+    rerender({ id: 't' })
+    rerender({ id: 's' })
+
+    // Second write in 's', also held open.
+    let releaseSecond!: () => void
+    h.nextResponse = () => new Promise<Response>(resolve => {
+      releaseSecond = () => resolve({ ok: true } as Response)
+    })
+    act(() => { result.current.assign('2', 'b') })
+    expect(result.current.nodesInSlot('2')).toEqual(['b'])
+
+    // A divergent graph for 's' arrives, then the SECOND PUT settles. The first
+    // PUT is still in flight, so the overlay must survive — a single global
+    // counter would have lost the first write and cleared the overlay early.
+    h.serverState = {
+      constellationGraphs: [{ spaceId: 's', snapped: [], members: [{ widget: 'z', slot: '3' }] }],
+    }
+    await act(async () => {
+      releaseSecond()
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    rerender({ id: 's' })
+    expect(result.current.nodesInSlot('2')).toEqual(['b'])
+
+    // Once the first PUT finally settles, the stale overlay is dropped.
+    await act(async () => {
+      releaseFirst()
+      await new Promise(resolve => setTimeout(resolve, 0))
+    })
+    rerender({ id: 's' })
+    expect(result.current.nodesInSlot('2')).toEqual([])
+    expect(result.current.nodesInSlot('3')).toEqual(['z'])
   })
 })

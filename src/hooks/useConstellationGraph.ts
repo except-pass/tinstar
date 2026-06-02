@@ -41,19 +41,19 @@ export function useConstellationGraph(spaceId: string) {
   const optimisticRef = useRef<ConstellationGraph | null>(null)
   const serverGraphRef = useRef(serverGraph)
   serverGraphRef.current = serverGraph
-  // The server graph the active overlay was built from. While serverGraph still
-  // equals this baseline we're simply awaiting our own echo (don't disturb the
-  // overlay); once it moves to a value that is neither the baseline nor our echo,
-  // some other writer changed it and our overlay is stale.
+  // The exact serverGraph reference the active overlay was built from. While the
+  // current serverGraph is still this same reference, the server hasn't pushed
+  // anything since our edit — we're simply awaiting our own echo, so don't disturb
+  // the overlay. A *new* push (different reference) means the server moved, even
+  // if it happens to deep-equal the baseline (e.g. another client reverted).
   const overlayBaseRef = useRef<ConstellationGraph | null>(null)
-  // Count of PUTs we still expect an echo for. While >0 a divergent server graph
-  // may just be an intermediate echo from one of several pipelined writes, so we
-  // hold the overlay until the writes drain before treating divergence as stale.
-  const pendingWrites = useRef(0)
-  // Generation token bumped on every space switch. Each PUT captures the gen it
-  // started in; a `finally` from a previous space must not touch the new space's
-  // pending counter (it was already reset to 0 on the switch).
-  const writeGen = useRef(0)
+  // Count of PUTs we still expect an echo for, keyed by spaceId. While a space's
+  // count is >0 a divergent server graph may just be an intermediate echo from one
+  // of several pipelined writes, so we hold the overlay until that space's writes
+  // drain before treating divergence as stale. Keying by space (rather than a
+  // single counter plus a generation token) keeps a slow PUT in one space counted
+  // correctly after switching away from that space and back to it.
+  const pendingWrites = useRef<Map<string, number>>(new Map())
   const [tick, bump] = useReducer((n: number) => n + 1, 0)
 
   // The provider is reused across space switches, so clear the overlay the moment
@@ -64,8 +64,6 @@ export function useConstellationGraph(spaceId: string) {
     lastSpaceIdRef.current = spaceId
     optimisticRef.current = null
     overlayBaseRef.current = null
-    pendingWrites.current = 0
-    writeGen.current++
   }
 
   // Re-runs on serverGraph changes and on `tick` (bumped when writes settle), so
@@ -80,18 +78,21 @@ export function useConstellationGraph(spaceId: string) {
       bump()
       return
     }
-    // Still at the baseline we built on — our echo just hasn't landed yet; keep
-    // the optimistic overlay so the edit doesn't visibly revert before the echo.
-    if (overlayBaseRef.current && JSON.stringify(serverGraph) === JSON.stringify(overlayBaseRef.current)) return
-    // Server moved to a value that is neither our echo nor the baseline, and no
-    // write is in flight: another writer won, so the overlay is stale — surface
-    // the authoritative server state instead of pinning the overlay.
-    if (pendingWrites.current === 0) {
+    // serverGraph is still the exact reference we built on — the server hasn't
+    // pushed anything since our edit, so our echo just hasn't landed yet; keep the
+    // overlay so the edit doesn't visibly revert. A new push that merely deep-
+    // equals the baseline (e.g. another client reverted) is a different reference
+    // and falls through to the stale check below rather than pinning forever.
+    if (serverGraph === overlayBaseRef.current) return
+    // Server moved to a value that is neither our echo nor the original baseline,
+    // and this space has no write in flight: another writer won, so the overlay is
+    // stale — surface the authoritative server state instead of pinning it.
+    if ((pendingWrites.current.get(spaceId) ?? 0) === 0) {
       optimisticRef.current = null
       overlayBaseRef.current = null
       bump()
     }
-  }, [serverGraph, tick])
+  }, [serverGraph, tick, spaceId])
 
   const graph = optimisticRef.current ?? serverGraph
 
@@ -117,8 +118,8 @@ export function useConstellationGraph(spaceId: string) {
     const rollback = () => {
       if (optimisticRef.current === next) { optimisticRef.current = null; overlayBaseRef.current = null; bump() }
     }
-    pendingWrites.current++
-    const gen = writeGen.current
+    const sid = spaceId
+    pendingWrites.current.set(sid, (pendingWrites.current.get(sid) ?? 0) + 1)
     apiFetch(`/api/constellation-graph/${encodeURIComponent(spaceId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -133,12 +134,13 @@ export function useConstellationGraph(spaceId: string) {
       console.warn('[constellation] persist failed:', err)
       rollback()
     }).finally(() => {
-      // Ignore completions from a previous space — its counter was already reset.
-      if (gen !== writeGen.current) return
-      pendingWrites.current = Math.max(0, pendingWrites.current - 1)
-      // Writes drained: re-check whether a divergent server graph arrived while
-      // this PUT was in flight (the cleanup effect skipped it back then).
-      if (pendingWrites.current === 0) bump()
+      const remaining = Math.max(0, (pendingWrites.current.get(sid) ?? 0) - 1)
+      pendingWrites.current.set(sid, remaining)
+      // This space's writes drained: re-check whether a divergent server graph
+      // arrived while a PUT was in flight (the cleanup effect skipped it back
+      // then). Only nudge if it's still the active space — the effect tracks the
+      // current space, so a stale completion elsewhere must not retrigger it.
+      if (remaining === 0 && lastSpaceIdRef.current === sid) bump()
     })
   }, [spaceId])
 
