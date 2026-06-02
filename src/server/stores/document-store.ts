@@ -675,8 +675,14 @@ export class DocumentStore {
     for (const [id, e] of this.worktrees) if (e.spaceId === spaceId) this.worktrees.delete(id)
     for (const [id, e] of this.runs) if (e.spaceId === spaceId) this.runs.delete(id)
     for (const [id, e] of this.editorWidgets) if (e.spaceId === spaceId) this.editorWidgets.delete(id)
-    for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) this.browserWidgets.delete(id)
-    for (const [id, e] of this.artifacts) if (e.spaceId === spaceId) this.artifacts.delete(id)
+    const clearedBrowserIds = new Set<string>()
+    for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) { this.browserWidgets.delete(id); clearedBrowserIds.add(id) }
+    // Artifact.spaceId is optional, so a widget-owned artifact may have only widgetId.
+    // Delete by spaceId OR by ownership of a browser widget cleared above, else the
+    // persisted HTML orphans and stays servable from /api/artifacts/:id.
+    for (const [id, e] of this.artifacts) {
+      if (e.spaceId === spaceId || (e.widgetId !== undefined && clearedBrowserIds.has(e.widgetId))) this.artifacts.delete(id)
+    }
     for (const [id, e] of this.imageWidgets) if (e.spaceId === spaceId) this.imageWidgets.delete(id)
     for (const [id, e] of this.pluginWidgets) if (e.spaceId === spaceId) this.pluginWidgets.delete(id)
     this.constellationGraphs.delete(spaceId)

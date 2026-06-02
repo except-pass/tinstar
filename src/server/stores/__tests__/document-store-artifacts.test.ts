@@ -46,4 +46,21 @@ describe('DocumentStore artifacts', () => {
     expect(store.getArtifact('eph-1')).toBeUndefined()
     expect(store.getArtifact('eph-2')).toBeDefined()
   })
+
+  it('clearSpace deletes widgetId-only artifacts owned by browser widgets in that space', () => {
+    const store = new DocumentStore()
+    // browser widget lives in spc-1; its artifact has NO spaceId (only widgetId).
+    store.upsertBrowserWidget('browser-9', { id: 'browser-9', spaceId: 'spc-1', url: '/api/artifacts/eph-owned' })
+    store.upsertArtifact('eph-owned', makeArtifact({ id: 'eph-owned', widgetId: 'browser-9' })) // spaceId omitted
+    store.upsertArtifact('eph-spaced', makeArtifact({ id: 'eph-spaced', spaceId: 'spc-1' }))     // by spaceId
+    // a widget + artifact in a DIFFERENT space must survive.
+    store.upsertBrowserWidget('browser-2', { id: 'browser-2', spaceId: 'spc-2', url: '/x' })
+    store.upsertArtifact('eph-other', makeArtifact({ id: 'eph-other', widgetId: 'browser-2' }))
+
+    store.clearSpace('spc-1')
+
+    expect(store.getArtifact('eph-owned')).toBeUndefined()   // was the orphan bug
+    expect(store.getArtifact('eph-spaced')).toBeUndefined()
+    expect(store.getArtifact('eph-other')).toBeDefined()
+  })
 })
