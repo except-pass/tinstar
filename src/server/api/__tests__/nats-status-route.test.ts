@@ -77,4 +77,14 @@ describe('GET /api/sessions/:name/nats-status', () => {
     expect(body.data.connection).toBe('down')
     expect(body.data.subscriptions).toEqual([])
   })
+
+  it('a session literally named nats-status-worker resolves at the generic route, not the nats-status sub-route', async () => {
+    // Regression: the generic GET /api/sessions/:name matcher must key on
+    // "no trailing path segment", not substring exclusions — otherwise a real
+    // session name containing "nats-status" would miss the route and 404 bare.
+    const res = await fetch(`${baseUrl}/api/sessions/nats-status-worker`)
+    expect(res.status).toBe(404)
+    const body = await res.json() as { ok: boolean; error?: { code: string } }
+    expect(body.error?.code).toBe('SESSION_NOT_FOUND')
+  })
 })

@@ -2496,9 +2496,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
-    // GET /api/sessions/:name (exact match, no trailing path)
-    if (method === 'GET' && url.startsWith('/api/sessions/') && !url.includes('/start') && !url.includes('/stop') && !url.includes('/files') && !url.includes('/context') && !url.includes('/nats-status')) {
-      const name = extractSessionName(url, '/api/sessions/')
+    // GET /api/sessions/:name (exact match — no trailing path segment, so
+    // sub-routes like /nats-status or /files aren't shadowed and a session
+    // literally named "nats-status-worker" still resolves here)
+    if (method === 'GET' && url.startsWith('/api/sessions/') && !(url.split('?')[0] ?? url).slice('/api/sessions/'.length).includes('/')) {
+      const name = extractSessionName(url.split('?')[0] ?? url, '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)
         if (!session) {
