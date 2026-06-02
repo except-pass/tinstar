@@ -688,16 +688,17 @@ function snapWidgetToSession(
   spaceId: string,
   sessionNodeId: string,
   widgetId: string,
-  size: { width: number; height: number },
 ): { position: { x: number; y: number } | null } {
   const graph = ctx.docStore.getConstellationGraph(spaceId) ?? emptyGraph(spaceId)
   const sessionSlots = slotsForNode(graph, sessionNodeId)
   let targetSlot: ConstellationSlot | null = null
-  let priorCount = 0
+  // Existing slot members the newcomer tiles after (the session + any prior widgets),
+  // captured from the pre-mutation graph so the new widget isn't counted.
+  let priorMembers: string[] = []
   let next = graph
   if (sessionSlots.length > 0) {
     targetSlot = sessionSlots[0]!
-    priorCount = nodesInSlot(graph, targetSlot).filter(id => id !== sessionNodeId).length
+    priorMembers = nodesInSlot(graph, targetSlot).filter(id => id !== widgetId)
     next = addMember(next, widgetId, targetSlot)
   } else {
     const used = new Set<string>()
@@ -707,6 +708,7 @@ function snapWidgetToSession(
     const free = (['1','2','3','4','5','6','7','8','9'] as ConstellationSlot[]).find(s => !used.has(s)) ?? null
     if (free) {
       targetSlot = free
+      priorMembers = [sessionNodeId]
       next = addMember(addMember(next, sessionNodeId, free), widgetId, free)
     }
   }
@@ -717,8 +719,27 @@ function snapWidgetToSession(
 
   const sessionLayout = lookupNodeLayout(ctx, spaceId, sessionNodeId)
   if (!sessionLayout) return { position: null }
-  const x = sessionLayout.x + sessionLayout.width + PLACEMENT_GAP + priorCount * (size.width + PLACEMENT_GAP)
-  return { position: { x, y: sessionLayout.y } }
+  // Tile after the actual rightmost edge of the existing slot members (which may have
+  // different sizes or have been resized), not a uniform-width offset — otherwise the
+  // newcomer overlaps a wider neighbor or leaves a gap after a narrower one. Each
+  // member's edge comes from the persisted layout (authoritative once the user has
+  // dragged/resized), falling back to the seeded position+size on its widget record
+  // (so back-to-back server-side spawns, not yet flushed to layouts, still tile).
+  const browserById = new Map(ctx.docStore.getAllBrowserWidgets().map(w => [w.id, w]))
+  const rightEdgeOf = (id: string): number | null => {
+    const cfg = lookupNodeLayout(ctx, spaceId, id)
+    if (cfg) return cfg.x + cfg.width
+    const bw = browserById.get(id)
+    if (bw?.position && bw?.size) return bw.position.x + bw.size.width
+    return null
+  }
+  let maxRight = sessionLayout.x + sessionLayout.width
+  for (const id of priorMembers) {
+    if (id === sessionNodeId) continue
+    const edge = rightEdgeOf(id)
+    if (edge !== null) maxRight = Math.max(maxRight, edge)
+  }
+  return { position: { x: maxRight + PLACEMENT_GAP, y: sessionLayout.y } }
 }
 
 interface CreateBrowserWidgetParams {
@@ -763,15 +784,20 @@ function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParam
   const widgetColor = colorOverride ?? run?.color ?? '#5b6b7a'
   const spaceId = parsed.spaceId || ctx.docStore.activeSpaceId || ''
   const explicitSlot = toSlot(parsed.slot)
+  // Any explicit slot input opts out of auto-snap — even an invalid one. toSlot()
+  // returns null for a bad value, so keying off explicitSlot alone would silently
+  // auto-snap when the caller clearly meant to place by slot; track "was slot
+  // provided" separately to preserve the documented "explicit slot → no auto-snap".
+  const slotProvided = parsed.slot !== undefined && parsed.slot !== null && parsed.slot !== ''
   const placement = resolvePlacement(ctx, spaceId, parsed)
   const size = placement?.size ?? DEFAULT_BROWSER_SIZE
   const widgetId = shortId('browser')
 
-  // Auto-snap to the spawning session unless opted out or an explicit slot was given.
-  const wantSnap = parsed.snapToSession !== false && !explicitSlot && !!run && !!spaceId
+  // Auto-snap to the spawning session unless opted out or any slot was given.
+  const wantSnap = parsed.snapToSession !== false && !slotProvided && !!run && !!spaceId
   let snapPosition: { x: number; y: number } | null = null
   if (wantSnap && run) {
-    snapPosition = snapWidgetToSession(ctx, spaceId, `run-${run.id}`, widgetId, size).position
+    snapPosition = snapWidgetToSession(ctx, spaceId, `run-${run.id}`, widgetId).position
   }
 
   // Explicit placement wins; otherwise use the tiled snap position if we got one.

@@ -161,4 +161,41 @@ describe('spawned widget snaps to session', () => {
     expect(slotsForNode(graph, created.widgetId).length).toBe(0)
     expect(snapNeighbors(graph, created.widgetId)).not.toContain('run-run-R1')
   })
+
+  // Seed the on-disk layouts that lookupNodeLayout reads (loadConfigMerged → <root>/config.json).
+  function writeLayouts(entries: Record<string, { x: number; y: number; width: number; height: number }>) {
+    writeFileSync(join(t.tmpRoot, 'config.json'),
+      JSON.stringify({ ui: { layouts: { [`tinstar-layouts-v3-${SPACE_ID}`]: entries } } }))
+  }
+
+  it('tiles after the actual right edge of a resized neighbor (not a uniform-width offset)', async () => {
+    // Session occupies x:0..1000. First spawn tiles right after it.
+    writeLayouts({ [SESSION_NODE_ID]: { x: 0, y: 0, width: 1000, height: 600 } })
+    const a = (await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: writeHtml(t.tmpRoot, 't1.html', '<body>1</body>'), sessionId: SESSION_ID }) })).json()).data
+    const wa = t.docStore.getAllBrowserWidgets().find(w => w.id === a.widgetId)!
+    expect(wa.position!.x).toBe(1020) // 1000 + PLACEMENT_GAP(20)
+
+    // Simulate the user resizing the first widget much wider (x:1020, width:2000 → right 3020).
+    writeLayouts({
+      [SESSION_NODE_ID]: { x: 0, y: 0, width: 1000, height: 600 },
+      [a.widgetId]: { x: 1020, y: 0, width: 2000, height: 600 },
+    })
+    const b = (await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: writeHtml(t.tmpRoot, 't2.html', '<body>2</body>'), sessionId: SESSION_ID }) })).json()).data
+    const wb = t.docStore.getAllBrowserWidgets().find(w => w.id === b.widgetId)!
+    // Must tile after the resized neighbor's real right edge (3020 + gap), NOT the old
+    // uniform offset (1020 + 800 + 20 = 1840) which would overlap the widened widget.
+    expect(wb.position!.x).toBe(3040)
+  })
+
+  it('an explicit but OUT-OF-RANGE slot opts out of auto-snap (no membership)', async () => {
+    const p = writeHtml(t.tmpRoot, 'badslot.html', '<body>x</body>')
+    const created = (await (await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: p, sessionId: SESSION_ID, slot: 99 }) })).json()).data
+    const graph = t.docStore.getConstellationGraph(SPACE_ID)
+    // Invalid slot is not assigned, but providing it still suppresses auto-snap —
+    // the widget joins no slot at all (old behavior auto-snapped to the session).
+    if (graph) {
+      expect(slotsForNode(graph, created.widgetId).length).toBe(0)
+      expect(snapNeighbors(graph, created.widgetId)).not.toContain(SESSION_NODE_ID)
+    }
+  })
 })
