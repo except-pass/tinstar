@@ -84,6 +84,32 @@ describe('DocumentStore constellationGraph', () => {
     }
   })
 
+  // Regression (race #2): an undo PUT can reach the server before the edit it
+  // reverts (network/SSE reordering). The revision gate must keep the newest
+  // intent: the older (lower-rev) write arriving last is rejected, not applied
+  // over the undo.
+  it('rejects a stale lower-revision write arriving after a newer one', () => {
+    const store = new DocumentStore()
+    const base = { ...emptyGraph('space-1'), members: [{ widget: 'a', slot: '1' as const }] }
+    // The newer write (the undo back to {a}) lands first, carrying rev 2.
+    store.upsertConstellationGraph('space-1', { ...base, rev: 2 })
+    // The older edit ({a, b}, rev 1) arrives late — it must be ignored as stale.
+    store.upsertConstellationGraph('space-1', {
+      ...base, members: [...base.members, { widget: 'b', slot: '2' as const }], rev: 1,
+    })
+    expect(store.getConstellationGraph('space-1')!.members.map(m => m.widget)).toEqual(['a'])
+  })
+
+  it('applies a newer-revision write over an older stored one', () => {
+    const store = new DocumentStore()
+    const base = { ...emptyGraph('space-1'), members: [{ widget: 'a', slot: '1' as const }] }
+    store.upsertConstellationGraph('space-1', { ...base, rev: 1 })
+    store.upsertConstellationGraph('space-1', {
+      ...base, members: [...base.members, { widget: 'b', slot: '2' as const }], rev: 2,
+    })
+    expect(store.getConstellationGraph('space-1')!.members.map(m => m.widget).sort()).toEqual(['a', 'b'])
+  })
+
   it('does not emit a change on a repeated identical upsert', () => {
     const store = new DocumentStore()
     const g = addSnap(emptyGraph('space-1'), 'pw-a', 'run-R1')

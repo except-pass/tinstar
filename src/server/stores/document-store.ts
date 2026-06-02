@@ -553,16 +553,21 @@ export class DocumentStore {
       for (const m of members) countBySlot.set(m.slot, (countBySlot.get(m.slot) ?? 0) + 1)
       members = members.filter(m => (countBySlot.get(m.slot) ?? 0) >= 2)
       if (snapped.length !== g.snapped.length || members.length !== g.members.length) {
-        this.upsertConstellationGraph(spaceId, { ...g, snapped, members })
+        // Server-internal mutation: bump the revision so it isn't rejected as
+        // stale and so clients see it supersede any in-flight optimistic overlay.
+        this.upsertConstellationGraph(spaceId, { ...g, snapped, members, rev: (g.rev ?? 0) + 1 })
       }
     }
   }
 
   upsertConstellationGraph(spaceId: string, data: ConstellationGraph): void {
-    // No-op short-circuit (docstore mutator contract): avoid redundant SSE
-    // deltas + disk persists when the client PUTs an unchanged graph.
+    // Revision gate (docstore mutator contract): reject writes whose revision is
+    // not newer than the stored one. An older write arriving after a newer one
+    // (e.g. an undo PUT racing the edit it reverts, reordered by the network) is
+    // a stale intent — dropping it keeps the latest intent authoritative
+    // regardless of arrival order, and also short-circuits redundant re-PUTs.
     const existing = this.constellationGraphs.get(spaceId)
-    if (existing && JSON.stringify(existing) === JSON.stringify(data)) return
+    if (existing && (data.rev ?? 0) <= (existing.rev ?? 0)) return
     this.constellationGraphs.set(spaceId, data)
     this.changes.emit('change', { entity: 'constellationGraph', id: spaceId, data })
   }

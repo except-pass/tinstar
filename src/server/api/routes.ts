@@ -665,7 +665,10 @@ function toSlot(value: unknown): ConstellationSlot | null {
  *  Idempotent: addMember is a no-op if the membership already exists. */
 function assignWidgetToSlot(ctx: RouteContext, spaceId: string, widgetId: string, slot: ConstellationSlot): void {
   const graph = ctx.docStore.getConstellationGraph(spaceId) ?? emptyGraph(spaceId)
-  ctx.docStore.upsertConstellationGraph(spaceId, addMember(graph, widgetId, slot))
+  const next = addMember(graph, widgetId, slot)
+  // Bump the revision on a real change so this server-side write isn't rejected as
+  // stale by the revision gate and supersedes any in-flight client overlay.
+  if (next !== graph) ctx.docStore.upsertConstellationGraph(spaceId, { ...next, rev: (graph.rev ?? 0) + 1 })
 }
 
 /** Snap a freshly-created widget to its spawning session's constellation so it
@@ -701,7 +704,9 @@ function snapWidgetToSession(
     }
   }
   if (targetSlot) next = addSnap(next, sessionNodeId, widgetId)
-  ctx.docStore.upsertConstellationGraph(spaceId, next)
+  // Bump the revision on a real change so this server-side write isn't rejected as
+  // stale by the revision gate and supersedes any in-flight client overlay.
+  if (next !== graph) ctx.docStore.upsertConstellationGraph(spaceId, { ...next, rev: (graph.rev ?? 0) + 1 })
 
   const sessionLayout = lookupNodeLayout(ctx, spaceId, sessionNodeId)
   if (!sessionLayout) return { position: null }

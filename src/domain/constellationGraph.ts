@@ -15,6 +15,11 @@ export interface ConstellationGraph {
   spaceId: string
   snapped: SnapEdge[]
   members: MemberEdge[]
+  // Monotonic write revision. Each persisted write carries a strictly increasing
+  // rev so the server can reject out-of-order/stale writes and the client can tell
+  // its own echo from a coincidentally-equal earlier state. Absent on legacy/empty
+  // graphs and treated as 0.
+  rev?: number
 }
 
 export function emptyGraph(spaceId: string): ConstellationGraph {
