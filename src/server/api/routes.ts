@@ -45,6 +45,7 @@ import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, type Constel
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
 import { resolveProxyTarget } from './proxyResolve'
+import { rewriteProxyBody, proxyRuntimeShim } from './proxyRewrite'
 import { registerSaloonSubs, unregisterSaloonSubs, registerFirehose, unregisterFirehose } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
@@ -2019,29 +2020,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         proxyRes.on('data', (c: Buffer) => chunks.push(c))
         proxyRes.on('end', () => {
           let body = Buffer.concat(chunks).toString('utf-8')
-          // Rewrite quoted root-relative paths: "/foo" → "/api/proxy/{id}/foo"
-          // (skip protocol-relative "//..." URLs). NEVER apply this inside executable
-          // JavaScript: a sequence like /"/g there is a regex literal, not a URL, and
-          // rewriting it produces invalid JS (e.g. SyntaxError: Invalid regular expression
-          // flags). So skip <script> blocks in HTML, and skip JS responses entirely.
-          const rewritePaths = (s: string) => s.replace(/(["'])\/((?!\/)[^"']*)/g, `$1${proxyBase}/$2`)
-          if (ct.includes('javascript')) {
-            // Whole body is executable JS — leave it untouched.
-          } else if (ct.includes('text/html')) {
-            // split() with a capturing group keeps <script>…</script> blocks as odd-index
-            // elements; rewrite only the even-index (non-script) segments.
-            body = body
-              .split(/(<script\b[\s\S]*?<\/script>)/gi)
-              .map((part, i) => (i % 2 === 0 ? rewritePaths(part) : part))
-              .join('')
-          } else {
-            body = rewritePaths(body)
-          }
-          // Rewrite unquoted url() in CSS: url(/foo) → url(/api/proxy/{id}/foo)
-          body = body.replace(/url\(\/((?!\/)[^)]*)\)/g, `url(${proxyBase}/$1)`)
+          // Rewrite root-relative URLs in HTML/CSS/JSON to route back through the proxy.
+          // JS is left byte-exact (regex literals make source rewriting unsound) — the
+          // shim injected below rewrites JS-generated URLs at runtime. See proxyRewrite.ts.
+          body = rewriteProxyBody(body, ct, proxyBase)
 
-          // Inject console-capture script into HTML so the widget can show a dev console
+          // Inject runtime shim + console-capture into HTML. The shim must run before the
+          // page's own scripts so fetch/XHR are patched before any request fires.
           if (ct.includes('text/html')) {
+            const shim = `<script>${proxyRuntimeShim(proxyBase)}</script>`
             const capture = `<script>(function(){` +
               `var W='${widgetId}',O={l:console.log,w:console.warn,e:console.error};` +
               `function s(l,a){try{var r=[];for(var i=0;i<a.length;i++){var v=a[i];` +
@@ -2055,8 +2042,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               `window.addEventListener('unhandledrejection',function(e){s('error',['Unhandled rejection: '+(e.reason&&(e.reason.stack||e.reason))])})` +
               `})()</script>`
             const headMatch = body.match(/<head[^>]*>/i)
-            if (headMatch) body = body.replace(headMatch[0], headMatch[0] + capture)
-            else body = capture + body
+            if (headMatch) body = body.replace(headMatch[0], headMatch[0] + shim + capture)
+            else body = shim + capture + body
           }
 
           const headers: Record<string, string | string[] | undefined> = { ...proxyRes.headers }
