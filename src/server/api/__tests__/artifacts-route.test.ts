@@ -114,6 +114,26 @@ describe('POST /api/artifacts', () => {
     const res = await t.fetch('/api/artifacts', { method: 'POST', body: JSON.stringify({ path: big }) })
     expect(res.status).toBe(400)
   })
+
+  it('error responses carry per-request CORS headers (uses the request-scoped fail helper)', async () => {
+    // Configure an allowlist so the resolved CORS header echoes the specific origin
+    // rather than the wildcard '*' — a fail path that did NOT thread the per-request
+    // CORS headers would return the origin-less header set, failing this assertion.
+    const prev = process.env.TINSTAR_CORS_ORIGINS
+    process.env.TINSTAR_CORS_ORIGINS = 'https://app.example.com'
+    try {
+      const res = await t.fetch('/api/artifacts', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'x' }), // missing path → 400 via fail()
+        headers: { Origin: 'https://app.example.com' },
+      })
+      expect(res.status).toBe(400)
+      expect(res.headers.get('access-control-allow-origin')).toBe('https://app.example.com')
+    } finally {
+      if (prev === undefined) delete process.env.TINSTAR_CORS_ORIGINS
+      else process.env.TINSTAR_CORS_ORIGINS = prev
+    }
+  })
 })
 
 describe('GET /api/artifacts/:id', () => {
