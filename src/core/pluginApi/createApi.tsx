@@ -1,6 +1,9 @@
-import { useSyncExternalStore, useCallback, useRef } from 'react'
-import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi } from '@tinstar/plugin-api'
+import { useSyncExternalStore, useCallback, useRef, useMemo, useState } from 'react'
+import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi, PluginPrimitivesApi, PrimitiveAccessory, RegisterBrowserWidgetOptions, RegisterTerminalWidgetOptions, BrowserHandle, TerminalHandle, WidgetProps } from '@tinstar/plugin-api'
 import { usePluginWidgetData } from './usePluginWidgetData'
+import { makeBrowserPrimitive } from '../../plugins/browser/src/BrowserPrimitive'
+import { TerminalPrimitive } from '../../widgets/primitives/TerminalPrimitive'
+import { BrowserHandleContext, TerminalHandleContext, useBrowserHandle, useTerminalHandle } from './browserPrimitiveContext'
 import { useDeletePluginWidget } from './useDeletePluginWidget'
 import { useInitialContext } from './useInitialContext'
 import { useAttention } from './useAttention'
@@ -59,6 +62,28 @@ function makeLogger(pluginId: string): PluginLogger {
     error: (...args) => console.error(prefix, ...args),
     /* eslint-enable no-console */
   }
+}
+
+const FLEX_DIR: Record<PrimitiveAccessory['placement'], React.CSSProperties['flexDirection']> = {
+  left: 'row', right: 'row-reverse', top: 'column', bottom: 'column-reverse',
+}
+
+function AccessoryLayout({ accessory, children }: { accessory?: PrimitiveAccessory; children: React.ReactNode }) {
+  if (!accessory) return <div className="h-full w-full">{children}</div>
+  const size = accessory.size ?? 220
+  const isRow = accessory.placement === 'left' || accessory.placement === 'right'
+  const Accessory = accessory.component
+  return (
+    <div className="h-full w-full flex" style={{ flexDirection: FLEX_DIR[accessory.placement] }}>
+      <div className="min-h-0 min-w-0 flex-1">{children}</div>
+      <div
+        className="min-h-0 min-w-0 overflow-auto"
+        style={isRow ? { width: size, flex: `0 0 ${size}px` } : { height: size, flex: `0 0 ${size}px` }}
+      >
+        <Accessory />
+      </div>
+    </div>
+  )
 }
 
 export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
@@ -256,7 +281,110 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     },
   }
 
-  return {
+  // Build primitives lazily, closing over the fully-assembled `api` object below.
+  // Component bodies only read `api.*` at RENDER time, by which point `api` is
+  // fully populated, so closing over `api` is safe.
+  function buildPrimitives(api: TinstarPluginAPI): PluginPrimitivesApi {
+    function registerBrowserWidget(opts: RegisterBrowserWidgetOptions): Disposable {
+      function BrowserBackedWidget(props: WidgetProps) {
+        const [data, setData] = api.widget.useData<{ _browser?: { url: string; headers?: Record<string, string> } }>()
+        const nodeId = api.constellations.useMyNodeId()
+        const url = data?._browser?.url ?? opts.defaultUrl ?? ''
+        const headers = data?._browser?.headers
+        const accent = api.theme.accent.resolve(undefined)
+        const slots = api.constellations.useContext().slotsForNode(nodeId)
+
+        const listenersRef = useRef(new Set<(u: string) => void>())
+        const [reloadTick, setReloadTick] = useState(0)
+
+        // Read the latest data via a ref so the persist callbacks (and the handle
+        // derived from them) keep a stable identity across edits.
+        const dataRef = useRef(data)
+        dataRef.current = data
+
+        const persistUrl = useCallback((next: string) => {
+          const cur = dataRef.current?._browser
+          setData({ ...(dataRef.current ?? {}), _browser: { url: next, headers: cur?.headers } })
+          for (const cb of listenersRef.current) cb(next)
+        }, [setData])
+
+        const persistHeaders = useCallback((next: Record<string, string>) => {
+          const cur = dataRef.current?._browser
+          setData({ ...(dataRef.current ?? {}), _browser: { url: cur?.url ?? '', headers: next } })
+        }, [setData])
+
+        const handle: BrowserHandle = useMemo(() => ({
+          url,
+          navigate: persistUrl,
+          reload: () => setReloadTick(t => t + 1),
+          onUrlChange: (cb: (u: string) => void) => {
+            listenersRef.current.add(cb)
+            return { dispose: () => { listenersRef.current.delete(cb) } }
+          },
+        }), [url, persistUrl])
+
+        const Primitive = useMemo(() => makeBrowserPrimitive(api), [])
+
+        return (
+          <BrowserHandleContext.Provider value={handle}>
+            <AccessoryLayout accessory={opts.accessory}>
+              <Primitive nodeId={nodeId} hotkeyId={nodeId} url={url} headers={headers} accent={accent}
+                slots={slots} title={undefined} isSelected={props.isSelected} isDragging={props.isDragging}
+                isHovered={props.isHovered} onNavigate={persistUrl} onHeadersChange={persistHeaders}
+                reloadSignal={reloadTick} />
+            </AccessoryLayout>
+          </BrowserHandleContext.Provider>
+        )
+      }
+
+      return widgets.register({
+        type: opts.type,
+        component: BrowserBackedWidget as never,
+        isContainer: false,
+        defaultSize: opts.defaultSize ?? { width: 800, height: 600 },
+        minSize: opts.minSize ?? { width: 360, height: 280 },
+        dragHandleSelector: '.widget-drag-handle',
+        capabilities: ['web-view'],
+      })
+    }
+
+    function registerTerminalWidget(opts: RegisterTerminalWidgetOptions): Disposable {
+      function TerminalBackedWidget(_props: WidgetProps) {
+        const [data] = api.widget.useData<{ sessionId?: string }>()
+        const sessionId = data?.sessionId ?? opts.defaultSessionId ?? ''
+        const frameRef = useRef<HTMLIFrameElement>(null)
+        const handle: TerminalHandle = useMemo(() => ({
+          sessionId,
+          focus: () => frameRef.current?.contentWindow?.focus(),
+        }), [sessionId])
+        return (
+          <TerminalHandleContext.Provider value={handle}>
+            <AccessoryLayout accessory={opts.accessory}>
+              <TerminalPrimitive ref={frameRef} sessionId={sessionId} />
+            </AccessoryLayout>
+          </TerminalHandleContext.Provider>
+        )
+      }
+      return widgets.register({
+        type: opts.type,
+        component: TerminalBackedWidget as never,
+        isContainer: false,
+        defaultSize: opts.defaultSize ?? { width: 720, height: 480 },
+        minSize: opts.minSize ?? { width: 360, height: 240 },
+        dragHandleSelector: '.widget-drag-handle',
+        capabilities: ['session-host'],
+      })
+    }
+
+    return {
+      registerBrowserWidget,
+      registerTerminalWidget,
+      useBrowser: () => useBrowserHandle(),
+      useTerminal: () => useTerminalHandle(),
+    }
+  }
+
+  const api: TinstarPluginAPI = {
     pluginId: record.name,
     version: record.version,
     widgets,
@@ -269,5 +397,8 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     theme,
     logger,
     widget,
+    primitives: undefined as never,
   }
+  api.primitives = buildPrimitives(api)
+  return api
 }
