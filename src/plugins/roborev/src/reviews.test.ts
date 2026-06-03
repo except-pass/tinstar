@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, type Review } from './reviews'
+import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, type Review } from './reviews'
 
 const row = (o: Partial<Review> & { id: number }): Review => ({ status: 'done', verdict: 'P', closed: false, commit_subject: 's', branch: 'b', ...o })
 
@@ -33,4 +33,19 @@ describe('actionArgv', () => {
   it('close', () => { expect(actionArgv(5, 'close')).toEqual(['roborev', 'close', '5']) })
   it('reopen', () => { expect(actionArgv(5, 'reopen')).toEqual(['roborev', 'close', '5', '--reopen']) })
   it('comment', () => { expect(actionArgv(5, 'comment', 'hi')).toEqual(['roborev', 'comment', '--job', '5', '-m', 'hi']) })
+})
+
+describe('pickBootstrapSource', () => {
+  it('picks the most-recently-active non-cockpit session with project+path', () => {
+    const state = { sessions: [
+      { name: 'old', project: 'p', lastActive: '2026-06-01T00:00:00Z', workspace: { path: '/a' } },
+      { name: 'new', project: 'q', lastActive: '2026-06-03T00:00:00Z', workspace: { path: '/b' } },
+      { name: 'cockpit', project: 'r', cliTemplate: 'shell', lastActive: '2026-06-04T00:00:00Z', workspace: { path: '/c' } },
+    ] } as never
+    expect(pickBootstrapSource(state)).toEqual({ project: 'q', worktreePath: '/b' })
+  })
+  it('returns null when no qualifying session exists', () => {
+    expect(pickBootstrapSource({ sessions: [{ name: 'x', cliTemplate: 'shell', workspace: { path: '/c' }, project: 'r' }] } as never)).toBeNull()
+  })
+  it('returns null on empty state', () => { expect(pickBootstrapSource({} as never)).toBeNull() })
 })

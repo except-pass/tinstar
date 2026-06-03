@@ -53,3 +53,20 @@ export function actionArgv(jobId: number, action: ReviewAction, message?: string
     case 'comment': return ['roborev', 'comment', '--job', String(jobId), '-m', message ?? '']
   }
 }
+
+/** Slices of /api/state pickBootstrapSource reads (real shapes — arrays). */
+interface SessionSlice { name: string; project?: string; cliTemplate?: string; lastActive?: string; workspace?: { path?: string } }
+interface StateSlice { sessions?: SessionSlice[] }
+
+/** Choose which existing session the freshly-dropped cockpit should create its
+ *  shell in: the most-recently-active real session (not another cockpit shell)
+ *  that has a concrete workspace path + project. Returns {project, worktreePath}
+ *  to pass to POST /api/sessions, or null if none qualifies. */
+export function pickBootstrapSource(state: StateSlice): { project: string; worktreePath: string } | null {
+  const candidates = (state.sessions ?? [])
+    .filter((s) => s.cliTemplate !== 'shell' && s.cliTemplate !== 'roborev-tui' && !!s.workspace?.path && !!s.project)
+    .sort((a, b) => (b.lastActive ?? '').localeCompare(a.lastActive ?? ''))
+  const src = candidates[0]
+  if (!src?.project || !src.workspace?.path) return null
+  return { project: src.project, worktreePath: src.workspace.path }
+}
