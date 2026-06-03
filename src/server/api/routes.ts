@@ -1143,6 +1143,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   }
 
   // POST /api/roborev/action  { repo, jobId, action: 'close'|'reopen'|'comment', message? }
+  // NOTE: `repo` is a client-supplied path used as the roborev cwd. Safe from shell
+  // injection (cli.ts uses execFile argv), but unvalidated against known worktrees —
+  // acceptable for a 127.0.0.1-bound dev tool; constrain to session worktrees if exposed.
   if (method === 'POST' && url === '/api/roborev/action') {
     readBody(req).then(async (body) => {
       let parsed: { repo?: string; jobId?: number; action?: string; message?: string }
@@ -1161,7 +1164,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       } catch (err) {
         fail(res, 'INTERNAL', (err as Error).message)
       }
-    })
+    }).catch((err) => fail(res, 'INTERNAL', (err as Error).message))
     return true
   }
 

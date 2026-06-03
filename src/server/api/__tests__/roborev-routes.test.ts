@@ -69,4 +69,10 @@ describe('POST /api/roborev/action', () => {
     expect(status).toBe(400)
     expect(runAction).not.toHaveBeenCalled()
   })
+  it('passes message through for comment', async () => {
+    runAction.mockResolvedValue(undefined)
+    const { status } = await call('POST', '/api/roborev/action', { repo: '/r', jobId: 7, action: 'comment', message: 'looks good' })
+    expect(status).toBe(200)
+    expect(runAction).toHaveBeenCalledWith('/r', { jobId: 7, action: 'comment', message: 'looks good' })
+  })
 })
