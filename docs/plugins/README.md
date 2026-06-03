@@ -257,6 +257,12 @@ Beyond `widgets`, `http`, `events`, and `logger`, these surfaces are live and us
   }
   ```
 - `api.constellations` — peer discovery, capability publish/invoke, slot membership, and arrange actions. See [Constellations & capabilities](#constellations--capabilities) below.
+- `api.primitives.registerTerminalWidget(opts)` / `registerBrowserWidget(opts)` — register a widget whose main content is a host-owned terminal (tmux/ttyd) or browser primitive, with an optional edge-pinned `accessory` React pane.
+- `api.primitives.useTerminal()` — React hook (call inside a terminal-primitive accessory): the live `TerminalHandle` for driving and observing the session. Imperative methods (safe from event handlers):
+  - `sendText(text, { enter? })` — type text into the session; `enter` (default `true`) submits. Backed by `POST /api/sessions/:name/enter-prompt` (or `/send-keys` when `enter: false`).
+  - `sendKeys(keys[])` — send raw/named keys (`['Up']`, `['C-c']`, `['Enter']`) to drive a TUI. Backed by `POST /api/sessions/:name/send-keys`.
+  - `readScreen({ scrollback? })` — snapshot the rendered terminal screen. Backed by `GET /api/sessions/:name/screen`.
+  - `exec(argv[]): Promise<{ stdout, stderr, code }>` — run a one-shot command (argv array, no shell) in the **session's working directory** and get structured output. A non-zero exit resolves with `code` set (callers branch on it); spawn failure/timeout rejects. Backed by `POST /api/sessions/:name/exec`. Because it runs in the session cwd, it is automatically scoped to that worktree's repo/branch — e.g. `exec(['roborev','list','--json'])`. Bundled/trusted-plugin scoped; no broader than the existing send-keys input surface.
 
 ### Still future (V5.1)
 
