@@ -32,7 +32,6 @@ import { NatsTrafficBridge } from './nats-traffic'
 import { registerSaloonSubs } from './api/saloonBridge'
 import { bootstrapHierarchicalTopicMetadata } from './topic-metadata'
 import { NatsHealthMonitor } from './nats-health'
-import { startRoborevStream } from './roborev/stream'
 import { natsControlSocketPath } from './sessions/backends/tmux'
 import { reconnectSessionNats } from './sessions/natsReconnect'
 import { NatsManager } from './nats/nats-manager.js'
@@ -70,7 +69,6 @@ export function initBackend(): RouteContext {
 
   // Wire SSE
   const sse = new SSEBroadcaster(docStore)
-  startRoborevStream(sse)
   const readyQueue = new ReadyQueue()
   sse.setReadyQueue(readyQueue.getQueue())
   bus.on('ready_queue.update', (ev) => sse.setReadyQueue(ev.payload.queue))

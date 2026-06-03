@@ -153,13 +153,6 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     resumeCmd: 'agent resume',
   },
   {
-    name: 'roborev-tui',
-    adapter: 'generic',
-    telemetry: false,
-    startCmd: 'roborev tui --repo --branch --no-quit',
-    resumeCmd: 'roborev tui --repo --branch --no-quit',
-  },
-  {
     name: 'shell',
     adapter: 'generic',
     telemetry: false,

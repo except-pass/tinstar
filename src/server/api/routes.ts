@@ -66,7 +66,6 @@ import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
 import type { PluginWidgetInstance } from '../../domain/types'
-import { listReviews, showReview, runAction, type RoborevActionInput } from '../roborev/cli'
 
 function currentCorsAllowlist(): string[] {
   return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
@@ -1118,54 +1117,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const metrics = name ? ctx.otelStore.getMetricsByName(name) : ctx.otelStore.getAllMetrics()
     // Raw OTLP metric array (ADR 0001 exception).
     json(res, metrics)
-    return true
-  }
-
-  // GET /api/roborev/reviews/:job?repo=<path>   (findings for one job)
-  if (method === 'GET' && /^\/api\/roborev\/reviews\/\d+(\?|$)/.test(url)) {
-    const parsed = new URL(url, 'http://localhost')
-    const repo = parsed.searchParams.get('repo')
-    const jobId = Number(parsed.pathname.split('/').pop())
-    if (!repo) return fail(res, 'BAD_REQUEST', 'repo query param required')
-    showReview(repo, jobId)
-      .then((data) => ok(res, data))
-      .catch((err) => fail(res, 'INTERNAL', (err as Error).message))
-    return true
-  }
-
-  // GET /api/roborev/reviews?repo=<path>   (list scoped to that worktree's branch)
-  if (method === 'GET' && url.startsWith('/api/roborev/reviews')) {
-    const repo = new URL(url, 'http://localhost').searchParams.get('repo')
-    if (!repo) return fail(res, 'BAD_REQUEST', 'repo query param required')
-    listReviews(repo)
-      .then((data) => ok(res, data))
-      .catch((err) => fail(res, 'INTERNAL', (err as Error).message))
-    return true
-  }
-
-  // POST /api/roborev/action  { repo, jobId, action: 'close'|'reopen'|'comment', message? }
-  // NOTE: `repo` is a client-supplied path used as the roborev cwd. Safe from shell
-  // injection (cli.ts uses execFile argv), but unvalidated against known worktrees —
-  // acceptable for a 127.0.0.1-bound dev tool; constrain to session worktrees if exposed.
-  if (method === 'POST' && url === '/api/roborev/action') {
-    readBody(req).then(async (body) => {
-      let parsed: { repo?: string; jobId?: number; action?: string; message?: string }
-      try { parsed = JSON.parse(body) } catch { return fail(res, 'BAD_REQUEST', 'invalid JSON body') }
-      const { repo, jobId, action, message } = parsed
-      if (!repo || typeof jobId !== 'number') return fail(res, 'BAD_REQUEST', 'repo and numeric jobId required')
-      if (action !== 'close' && action !== 'reopen' && action !== 'comment') {
-        return fail(res, 'BAD_REQUEST', `unsupported action: ${action}`)
-      }
-      const input = (action === 'comment'
-        ? { jobId, action, message: message ?? '' }
-        : { jobId, action }) as RoborevActionInput
-      try {
-        await runAction(repo, input)
-        ok(res, { ok: true })
-      } catch (err) {
-        fail(res, 'INTERNAL', (err as Error).message)
-      }
-    }).catch((err) => fail(res, 'INTERNAL', (err as Error).message))
     return true
   }
 
