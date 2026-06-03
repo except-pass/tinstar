@@ -20,21 +20,36 @@ export function sortReviews(reviews: Review[]): Review[] {
   })
 }
 
-/** Minimal slice of host state the resolver needs. */
-interface StateSlice {
-  runs?: Record<string, { id: string; worktree?: string; repo?: string }>
+/** Slices of /api/state this module reads (real shapes, arrays). */
+interface SessionSlice { name: string; project?: string; cliTemplate?: string; lastActive?: string; workspace?: { path?: string } }
+interface WorktreeSlice { id: string; worktreePath?: string }
+interface RunSlice { id: string; sessionId?: string; worktreeId?: string }
+interface StateSlice { sessions?: SessionSlice[]; worktrees?: WorktreeSlice[]; runs?: RunSlice[] }
+
+/** Absolute repo dir the cockpit filters/acts on. Prefer the cockpit session's
+ *  own workspace cwd (the exact dir its `roborev tui` runs in, guaranteeing the
+ *  pane and the TUI agree); fall back to its run→worktree path; then the
+ *  persisted explicit hint; else null. */
+export function resolveRepoPath(state: StateSlice, sessionId: string, explicit?: string): string | null {
+  const sess = state.sessions?.find((s) => s.name === sessionId)
+  if (sess?.workspace?.path) return sess.workspace.path
+  const run = state.runs?.find((r) => r.id === sessionId || r.sessionId === sessionId)
+  const wt = run?.worktreeId ? state.worktrees?.find((w) => w.id === run.worktreeId) : undefined
+  if (wt?.worktreePath) return wt.worktreePath
+  return explicit ?? null
 }
 
-/** Resolve the repo path the cockpit filters/acts on:
- *  explicit widget data > the cockpit session's worktree path > null. */
-export function resolveRepoPath(
-  state: StateSlice,
-  sessionId: string,
-  explicit: string | undefined,
-): string | null {
-  if (explicit) return explicit
-  const run = state.runs?.[sessionId]
-  return run?.worktree || run?.repo || null
+/** Choose which existing session the freshly-dropped cockpit should mirror: the
+ *  most-recently-active real session (not another cockpit) that has a concrete
+ *  workspace path + project. Returns the {project, worktreePath} to create the
+ *  cockpit's own roborev-tui session in, or null if none qualifies. */
+export function pickBootstrapSource(state: StateSlice): { project: string; worktreePath: string } | null {
+  const candidates = (state.sessions ?? [])
+    .filter((s) => s.cliTemplate !== 'roborev-tui' && !!s.workspace?.path && !!s.project)
+    .sort((a, b) => (b.lastActive ?? '').localeCompare(a.lastActive ?? ''))
+  const src = candidates[0]
+  if (!src?.project || !src.workspace?.path) return null
+  return { project: src.project, worktreePath: src.workspace.path }
 }
 
 /** Optimistic local update for an action before the server/stream confirms. */

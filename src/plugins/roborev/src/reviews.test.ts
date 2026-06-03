@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sortReviews, resolveRepoPath, applyOptimisticAction, type Review } from './reviews'
+import { sortReviews, resolveRepoPath, pickBootstrapSource, applyOptimisticAction, type Review } from './reviews'
 
 const base = (over: Partial<Review>): Review => ({
   id: 1, status: 'done', verdict: 'P', closed: false, commit_subject: 's', branch: 'b',
@@ -19,17 +19,42 @@ describe('sortReviews', () => {
 
 describe('resolveRepoPath', () => {
   const state = {
-    runs: { 's1': { id: 's1', worktree: '/work/tree', repo: '/repo' } },
+    sessions: [
+      { name: 'cockpit-1', cliTemplate: 'roborev-tui', workspace: { path: '/repo/cockpit-wt' } },
+      { name: 'work-1', project: 'tinstar', lastActive: '2026-06-03T10:00:00Z', workspace: { path: '/repo/work-wt' } },
+    ],
+    runs: [{ id: 'run-x', sessionId: 'run-x', worktreeId: 'wt-9' }],
+    worktrees: [{ id: 'wt-9', worktreePath: '/repo/from-worktree' }],
   } as never
 
-  it('prefers explicit data.repoPath', () => {
-    expect(resolveRepoPath(state, 's1', '/explicit')).toBe('/explicit')
+  it('prefers the cockpit session own workspace path', () => {
+    expect(resolveRepoPath(state, 'cockpit-1', undefined)).toBe('/repo/cockpit-wt')
   })
-  it('falls back to the run worktree for the session', () => {
-    expect(resolveRepoPath(state, 's1', undefined)).toBe('/work/tree')
+  it('falls back to run→worktree worktreePath when no session match', () => {
+    expect(resolveRepoPath(state, 'run-x', undefined)).toBe('/repo/from-worktree')
   })
-  it('returns null when the session is unknown', () => {
-    expect(resolveRepoPath(state, 'nope', undefined)).toBeNull()
+  it('falls back to the explicit hint when nothing in state matches', () => {
+    expect(resolveRepoPath(state, 'unknown', '/explicit/path')).toBe('/explicit/path')
+  })
+  it('returns null when nothing resolves', () => {
+    expect(resolveRepoPath(state, 'unknown', undefined)).toBeNull()
+  })
+})
+
+describe('pickBootstrapSource', () => {
+  it('picks the most-recently-active non-cockpit session with project+path', () => {
+    const state = { sessions: [
+      { name: 'old', project: 'p', lastActive: '2026-06-01T00:00:00Z', workspace: { path: '/a' } },
+      { name: 'new', project: 'q', lastActive: '2026-06-03T00:00:00Z', workspace: { path: '/b' } },
+      { name: 'cockpit', project: 'r', cliTemplate: 'roborev-tui', lastActive: '2026-06-04T00:00:00Z', workspace: { path: '/c' } },
+    ] } as never
+    expect(pickBootstrapSource(state)).toEqual({ project: 'q', worktreePath: '/b' })
+  })
+  it('returns null when no qualifying session exists', () => {
+    expect(pickBootstrapSource({ sessions: [{ name: 'x', cliTemplate: 'roborev-tui', workspace: { path: '/c' }, project: 'r' }] } as never)).toBeNull()
+  })
+  it('returns null on empty state', () => {
+    expect(pickBootstrapSource({} as never)).toBeNull()
   })
 })
 

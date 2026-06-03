@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
-import { sortReviews, resolveRepoPath, applyOptimisticAction, type Review, type ReviewAction } from './reviews'
+import { sortReviews, resolveRepoPath, pickBootstrapSource, applyOptimisticAction, type Review, type ReviewAction } from './reviews'
 
 interface WidgetData { sessionId?: string; repoPath?: string }
 
@@ -22,17 +22,17 @@ export function makeCockpitAccessory(api: TinstarPluginAPI): ComponentType {
       ;(async () => {
         try {
           const stateRes = await api.http.fetch('/api/state')
-          const state = (await stateRes.json()) as { runs?: Record<string, { id: string; worktree?: string; repo?: string }> }
-          const firstRun = state.runs ? Object.values(state.runs)[0] : undefined
-          const worktreePath = snapshot?.repoPath || firstRun?.worktree || firstRun?.repo
-          if (!worktreePath) { setError('No repo available to launch roborev in'); return }
+          const raw = await stateRes.json()
+          const state = raw?.data ?? raw
+          const src = pickBootstrapSource(state)
+          if (!src) { setError('No active repo session to base the cockpit on'); return }
           const res = await api.http.fetch('/api/sessions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: `roborev-cockpit-${worktreePath.split('/').pop()}`, worktreePath, cliTemplate: 'roborev-tui' }),
+            body: JSON.stringify({ name: `roborev-cockpit-${src.worktreePath.split('/').pop()}`, project: src.project, worktreePath: src.worktreePath, cliTemplate: 'roborev-tui' }),
           })
           const body = await res.json()
-          if (body?.ok && body.data?.id) setData({ ...(snapshot ?? {}), sessionId: body.data.id, repoPath: worktreePath })
+          if (body?.ok && body.data?.id) setData({ ...(snapshot ?? {}), sessionId: body.data.id, repoPath: src.worktreePath })
           else setError(body?.error?.message ?? 'Failed to create roborev session')
         } catch (e) {
           setError((e as Error).message)
@@ -48,7 +48,8 @@ export function makeCockpitAccessory(api: TinstarPluginAPI): ComponentType {
       let cancelled = false
       ;(async () => {
         const res = await api.http.fetch('/api/state')
-        const state = await res.json()
+        const raw = await res.json()
+        const state = raw?.data ?? raw
         if (!cancelled) setRepoPath(resolveRepoPath(state, activeSession, data?.repoPath))
       })()
       return () => { cancelled = true }
