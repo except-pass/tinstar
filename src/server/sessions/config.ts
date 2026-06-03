@@ -159,6 +159,13 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     startCmd: 'roborev tui --repo --branch --no-quit',
     resumeCmd: 'roborev tui --repo --branch --no-quit',
   },
+  {
+    name: 'shell',
+    adapter: 'generic',
+    telemetry: false,
+    startCmd: ':',
+    resumeCmd: ':',
+  },
 ]
 
 // --- Base config (hardcoded defaults) ---
