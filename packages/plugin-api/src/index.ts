@@ -290,6 +290,14 @@ export interface BrowserHandle {
 export interface TerminalHandle {
   sessionId: string
   focus(): void
+  /** Type literal text into the session. `enter` (default true) submits with Enter. */
+  sendText(text: string, opts?: { enter?: boolean }): Promise<void>
+  /** Send raw/named keys (e.g. ['Up'], ['C-c'], ['Enter']) to drive a TUI. */
+  sendKeys(keys: string[]): Promise<void>
+  /** Snapshot the rendered terminal screen (optionally including scrollback lines). */
+  readScreen(opts?: { scrollback?: number }): Promise<string>
+  /** Run a one-shot command (argv, no shell) in the session's working dir. */
+  exec(argv: string[]): Promise<{ stdout: string; stderr: string; code: number }>
 }
 
 export interface RegisterBrowserWidgetOptions {

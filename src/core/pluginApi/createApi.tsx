@@ -10,6 +10,7 @@ import { useAttention } from './useAttention'
 import type { PluginRecord } from '../pluginHost/registry'
 import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
 import { apiFetch } from '../../apiClient'
+import { makeTerminalHandle } from './terminalHandle'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { useConstellationContext } from '../../hotkeys/ConstellationContext'
@@ -353,10 +354,10 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
         const [data] = api.widget.useData<{ sessionId?: string }>()
         const sessionId = data?.sessionId ?? opts.defaultSessionId ?? ''
         const frameRef = useRef<HTMLIFrameElement>(null)
-        const handle: TerminalHandle = useMemo(() => ({
-          sessionId,
-          focus: () => frameRef.current?.contentWindow?.focus(),
-        }), [sessionId])
+        const handle: TerminalHandle = useMemo(
+          () => makeTerminalHandle(sessionId, () => frameRef.current?.contentWindow?.focus()),
+          [sessionId],
+        )
         return (
           <TerminalHandleContext.Provider value={handle}>
             <AccessoryLayout accessory={opts.accessory}>
