@@ -14,6 +14,7 @@ const RESTART_BACKOFF_MS = 3_000
  *  changed — refetch" signal, so we don't depend on the event schema. */
 export function startRoborevStream(sse: Pick<SSEBroadcaster, 'broadcastEvent'>): RoborevStreamHandle {
   let child: ChildProcess | null = null
+  let rl: ReturnType<typeof createInterface> | null = null
   let stopped = false
   let restartTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -29,7 +30,7 @@ export function startRoborevStream(sse: Pick<SSEBroadcaster, 'broadcastEvent'>):
     }
     child = proc
     if (proc.stdout) {
-      const rl = createInterface({ input: proc.stdout })
+      rl = createInterface({ input: proc.stdout })
       rl.on('line', (line) => {
         const trimmed = line.trim()
         if (!trimmed) return
@@ -40,9 +41,15 @@ export function startRoborevStream(sse: Pick<SSEBroadcaster, 'broadcastEvent'>):
         }
       })
     }
-    proc.on('error', (err) => log.warn('roborev', `stream error: ${err.message}`))
+    proc.on('error', (err) => {
+      log.warn('roborev', `stream error: ${err.message}`)
+      scheduleRestart()
+    })
     proc.on('exit', () => {
-      if (child === proc) child = null
+      if (child === proc) {
+        child = null
+        if (rl) { rl.close(); rl = null }
+      }
       scheduleRestart()
     })
   }
@@ -62,6 +69,7 @@ export function startRoborevStream(sse: Pick<SSEBroadcaster, 'broadcastEvent'>):
     stop() {
       stopped = true
       if (restartTimer) { clearTimeout(restartTimer); restartTimer = null }
+      if (rl) { rl.close(); rl = null }
       if (child) { try { child.kill('SIGTERM') } catch { /* gone */ } child = null }
     },
   }
