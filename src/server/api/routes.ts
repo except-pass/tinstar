@@ -54,6 +54,7 @@ import { imageSize } from 'image-size'
 import { computeNatsSubscriptions, diffSubscriptions, sanitizeSubjectToken } from '../sessions/nats-subscriptions'
 import { natsControlSocketPath } from '../sessions/backends/tmux'
 import { probeNatsLiveStatus } from '../nats-health'
+import { reconnectSessionNats } from '../sessions/natsReconnect'
 import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
@@ -64,6 +65,7 @@ import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
 import type { PluginWidgetInstance } from '../../domain/types'
+import { listReviews, showReview, runAction, type RoborevActionInput } from '../roborev/cli'
 
 function currentCorsAllowlist(): string[] {
   return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
@@ -184,12 +186,15 @@ function sendNatsSocketCommand(sessionName: string, cmd: { action: 'subscribe' |
  *
  * - NATS_SOCKET_UNREACHABLE (ENOENT): socket file is gone — session stopped
  *   or never started. Persisted state will apply on next startup. Safe.
- * - NATS_SOCKET_ORPHANED (ECONNREFUSED, file present): a second channel-server
- *   instance unlinked the original listener's socket file (see
- *   except-pass/nats-channel-mcp channel-server.ts unlinkSync+listen on start).
- *   The live channel-server's listener is bound to an orphaned inode. Static
- *   subscriptions from startup still work — dynamic subscribes never will
- *   until the session is restarted.
+ * - NATS_SOCKET_ORPHANED (ECONNREFUSED, file present): the channel-server that
+ *   owns this socket is wedged — typically a prior instance whose MCP stdio
+ *   closed but whose process lingered (it kept the socket, so the replacement
+ *   refused to bind; see nats-channel-mcp channel-server.ts isSocketLive guard).
+ *   Static subscriptions from startup still work — dynamic subscribes never
+ *   will. Recover via POST /api/sessions/:name/nats-reconnect (or a restart),
+ *   which SIGTERMs the channel-server so Claude relaunches it with a fresh
+ *   socket. (The channel-server's exit-on-transport-close fix makes this
+ *   self-heal on the next relaunch instead of persisting.)
  * - NATS_SOCKET_ERROR: other unexpected failure.
  */
 type NatsSocketWarningCode =
@@ -469,7 +474,14 @@ async function createSessionInternal(
     epicId: epicId || null,
     initiativeId: initiativeId || null,
   }
-  if (!nats && (taskId || epicId || initiativeId)) {
+  if (!nats && (taskId || epicId || initiativeId || natsCtx.spaceId)) {
+    // NATS on by default whenever there's *any* hierarchy to root a subject in —
+    // including a bare space. Previously the gate omitted spaceId, so a
+    // standalone session (created with just an active space and no explicit
+    // `nats` arg — e.g. marshal, ad-hoc sessions) silently spawned with NATS
+    // off and never joined the bus. computeNatsSubscriptions already yields a
+    // space-level subject for the space-only case. Passing `nats:{enabled:false}`
+    // explicitly still opts out, since this branch only runs when `nats` is absent.
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
   } else if (nats?.enabled && !nats.subscriptions?.length) {
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
@@ -1105,6 +1117,51 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const metrics = name ? ctx.otelStore.getMetricsByName(name) : ctx.otelStore.getAllMetrics()
     // Raw OTLP metric array (ADR 0001 exception).
     json(res, metrics)
+    return true
+  }
+
+  // GET /api/roborev/reviews/:job?repo=<path>   (findings for one job)
+  if (method === 'GET' && /^\/api\/roborev\/reviews\/\d+(\?|$)/.test(url)) {
+    const parsed = new URL(url, 'http://localhost')
+    const repo = parsed.searchParams.get('repo')
+    const jobId = Number(parsed.pathname.split('/').pop())
+    if (!repo) return fail(res, 'BAD_REQUEST', 'repo query param required')
+    showReview(repo, jobId)
+      .then((data) => ok(res, data))
+      .catch((err) => fail(res, 'INTERNAL', (err as Error).message))
+    return true
+  }
+
+  // GET /api/roborev/reviews?repo=<path>   (list scoped to that worktree's branch)
+  if (method === 'GET' && url.startsWith('/api/roborev/reviews')) {
+    const repo = new URL(url, 'http://localhost').searchParams.get('repo')
+    if (!repo) return fail(res, 'BAD_REQUEST', 'repo query param required')
+    listReviews(repo)
+      .then((data) => ok(res, data))
+      .catch((err) => fail(res, 'INTERNAL', (err as Error).message))
+    return true
+  }
+
+  // POST /api/roborev/action  { repo, jobId, action: 'close'|'reopen'|'comment', message? }
+  if (method === 'POST' && url === '/api/roborev/action') {
+    readBody(req).then(async (body) => {
+      let parsed: { repo?: string; jobId?: number; action?: string; message?: string }
+      try { parsed = JSON.parse(body) } catch { return fail(res, 'BAD_REQUEST', 'invalid JSON body') }
+      const { repo, jobId, action, message } = parsed
+      if (!repo || typeof jobId !== 'number') return fail(res, 'BAD_REQUEST', 'repo and numeric jobId required')
+      if (action !== 'close' && action !== 'reopen' && action !== 'comment') {
+        return fail(res, 'BAD_REQUEST', `unsupported action: ${action}`)
+      }
+      const input = (action === 'comment'
+        ? { jobId, action, message: message ?? '' }
+        : { jobId, action }) as RoborevActionInput
+      try {
+        await runAction(repo, input)
+        ok(res, { ok: true })
+      } catch (err) {
+        fail(res, 'INTERNAL', (err as Error).message)
+      }
+    })
     return true
   }
 
@@ -2877,6 +2934,34 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             }
             emitSessionEvent('managed_session.state_changed', { name: session.name, state: 'running' })
             ok(res, updated)
+          } catch (err) {
+            fail(res, 'INTERNAL', (err as Error).message)
+          }
+        })
+        return true
+      }
+    }
+
+    // POST /api/sessions/:name/nats-reconnect — recover an orphaned control
+    // socket on a *running* session (vs /start, which resumes a stopped one).
+    // SIGTERMs the session's channel-server so it exits cleanly and Claude
+    // relaunches the MCP with a fresh socket. Clears the orphan flag so the
+    // health probe re-evaluates from scratch.
+    if (method === 'POST' && url.endsWith('/nats-reconnect') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        readBody(req).then(async () => {
+          const session = getSession(sessDir, name)
+          if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
+          if (!session.nats?.enabled) return fail(res, 'BRIDGE_UNAVAILABLE', `NATS is not enabled for session '${name}'`)
+          try {
+            const { killed } = await reconnectSessionNats(name, { socketPath: natsControlSocketPath(name) })
+            // Clear the orphan flag; the next health probe re-establishes truth.
+            updateSession(sessDir, name, { natsControlOrphanedAt: null })
+            const run = ctx.docStore.getRun(name)
+            if (run) ctx.docStore.upsertRun(name, { ...run, natsControlOrphanedAt: null })
+            log.info('nats', `${name}: reconnect requested — signalled ${killed.length} channel-server process(es)`)
+            ok(res, { killed })
           } catch (err) {
             fail(res, 'INTERNAL', (err as Error).message)
           }
