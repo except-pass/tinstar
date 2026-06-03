@@ -1,14 +1,11 @@
 import { readdirSync, existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { log } from '../logger'
 import { readTail } from './transcript-parser'
+import { captureScreen } from './backends/tmux'
 import type { RecapEntry } from '../../types'
-
-const execFileAsync = promisify(execFile)
 
 const CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions')
 
@@ -117,8 +114,7 @@ export async function discoverTranscript(
   // Multiple matches — cross-reference with tmux pane
   let tmuxText: string
   try {
-    const { stdout } = await execFileAsync('tmux', ['capture-pane', '-t', tmuxTarget, '-p', '-S', '-200'])
-    tmuxText = stdout
+    tmuxText = await captureScreen(tmuxTarget, 200)
   } catch {
     // Can't capture pane — return most recent match
     return cwdMatches[0]!
