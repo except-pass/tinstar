@@ -5,10 +5,8 @@ vi.mock('node:child_process', () => ({ execFile: execFileMock }))
 
 import { listReviews, showReview, runAction } from './cli'
 
-// execFile real signature: (file, args, opts, cb) where cb(err, stdout, stderr) — positional strings.
-// We grab the last argument as the callback to match the real Node.js signature.
-// Note: Vitest's mock reset logic can invoke the previous implementation with 0 args
-// during cleanup; guarding `if (cb)` prevents those spurious calls from throwing.
+// Vitest's module-mock lifecycle calls execFile() with 0 args during teardown;
+// guard against that to avoid "cb is not a function" noise.
 function resolveWith(stdout: string) {
   execFileMock.mockImplementation((_f: string, _a: string[], _o: unknown, cb: Function) => {
     if (cb) cb(null, stdout, '')
@@ -48,6 +46,11 @@ describe('showReview', () => {
     const out = await showReview('/r', 1)
     expect(execFileMock).toHaveBeenCalledWith('roborev', ['show', '--job', '1', '--json'], expect.objectContaining({ cwd: '/r' }), expect.any(Function))
     expect(out.output).toContain('No issues')
+  })
+
+  it('throws a labeled error on non-zero exit', async () => {
+    rejectWith(new Error('exit 1'))
+    await expect(showReview('/r', 1)).rejects.toThrow(/roborev show failed/)
   })
 })
 

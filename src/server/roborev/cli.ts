@@ -52,7 +52,7 @@ export async function listReviews(repoPath: string): Promise<RoborevReview[]> {
 }
 
 export async function showReview(repoPath: string, jobId: number): Promise<RoborevShow> {
-  const out = await run(repoPath, ['show', '--job', String(jobId), '--json'], 'roborev show')
+  const out = (await run(repoPath, ['show', '--job', String(jobId), '--json'], 'roborev show')).trim()
   return JSON.parse(out) as RoborevShow
 }
 
