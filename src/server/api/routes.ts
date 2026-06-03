@@ -55,6 +55,7 @@ import { computeNatsSubscriptions, diffSubscriptions, sanitizeSubjectToken } fro
 import { natsControlSocketPath, captureScreen, tmuxSessionName } from '../sessions/backends/tmux'
 import { probeNatsLiveStatus } from '../nats-health'
 import { reconnectSessionNats } from '../sessions/natsReconnect'
+import { execCommand } from '../infra/execCommand'
 import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
@@ -3483,6 +3484,30 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         return true
       }
+    }
+
+    // POST /api/sessions/:name/exec  { argv: string[] } → run in session cwd
+    if (method === 'POST' && url.endsWith('/exec') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (!name) return fail(res, 'BAD_REQUEST', 'session name required')
+      const session = getSession(sessDir, name)
+      if (!session) return fail(res, 'NOT_FOUND', 'Session not found')
+      const cwd = session.workspace?.path
+      if (!cwd) return fail(res, 'CONFLICT', 'Session has no workspace path')
+      readBody(req).then(async (raw) => {
+        let argv: unknown
+        try { argv = JSON.parse(raw).argv } catch { return fail(res, 'BAD_REQUEST', 'invalid JSON body') }
+        if (!Array.isArray(argv) || argv.length === 0 || !argv.every((a) => typeof a === 'string')) {
+          return fail(res, 'BAD_REQUEST', 'argv must be a non-empty string array')
+        }
+        try {
+          const result = await execCommand(argv as string[], { cwd })
+          ok(res, result)
+        } catch (err) {
+          fail(res, 'INTERNAL', (err as Error).message)
+        }
+      }).catch((err) => fail(res, 'INTERNAL', (err as Error).message))
+      return true
     }
 
     // GET /api/sessions/:name/screen?scrollback=<n>  → rendered terminal screen
