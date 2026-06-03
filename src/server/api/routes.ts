@@ -52,7 +52,7 @@ import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
 import { computeNatsSubscriptions, diffSubscriptions, sanitizeSubjectToken } from '../sessions/nats-subscriptions'
-import { natsControlSocketPath } from '../sessions/backends/tmux'
+import { natsControlSocketPath, captureScreen, tmuxSessionName } from '../sessions/backends/tmux'
 import { probeNatsLiveStatus } from '../nats-health'
 import { reconnectSessionNats } from '../sessions/natsReconnect'
 import { getDetailedUsage } from '../sessions/context-usage'
@@ -3483,6 +3483,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         return true
       }
+    }
+
+    // GET /api/sessions/:name/screen?scrollback=<n>  → rendered terminal screen
+    if (method === 'GET' && url.startsWith('/api/sessions/') && url.split('?')[0]!.endsWith('/screen')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (!name) return fail(res, 'BAD_REQUEST', 'session name required')
+      const session = getSession(sessDir, name)
+      if (!session) return fail(res, 'NOT_FOUND', 'Session not found')
+      const sb = Number(new URL(url, 'http://localhost').searchParams.get('scrollback'))
+      captureScreen(tmuxSessionName(cfg, name), Number.isFinite(sb) && sb > 0 ? sb : undefined)
+        .then((screen) => ok(res, { screen }))
+        .catch((err) => fail(res, 'INTERNAL', (err as Error).message))
+      return true
     }
 
     // POST /api/sessions/:name/enter-prompt — type text then submit with Enter
