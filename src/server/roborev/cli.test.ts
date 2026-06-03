@@ -5,20 +5,22 @@ vi.mock('node:child_process', () => ({ execFile: execFileMock }))
 
 import { listReviews, showReview, runAction } from './cli'
 
-// Vitest's module-mock lifecycle calls execFile() with 0 args during teardown;
-// guard against that to avoid "cb is not a function" noise.
+// execFile(file, args, opts, cb) — invoke cb(err, stdout, stderr) positional.
 function resolveWith(stdout: string) {
   execFileMock.mockImplementation((_f: string, _a: string[], _o: unknown, cb: Function) => {
-    if (cb) cb(null, stdout, '')
+    cb(null, stdout, '')
   })
 }
 function rejectWith(err: Error) {
   execFileMock.mockImplementation((_f: string, _a: string[], _o: unknown, cb: Function) => {
-    if (cb) cb(err, '', 'boom')
+    cb(err, '', 'boom')
   })
 }
 
-beforeEach(() => execFileMock.mockReset())
+// Brace the body so beforeEach returns undefined. `mockReset()` returns the mock
+// for chaining; returning it would register the mock as a Vitest teardown hook,
+// which then calls execFile with 0 args after each test.
+beforeEach(() => { execFileMock.mockReset() })
 
 describe('listReviews', () => {
   it('runs `roborev list --json` with cwd=repo and parses the array', async () => {
