@@ -215,6 +215,7 @@ api.events.subscribe('nats_traffic', (msg) => {
 | `canvas:viewport` | `{ zoom, pan }` | Canvas pan/zoom events |
 | `projects_changed` | Project list | Project add/remove |
 | `ready_queue_update` | Queue snapshot | When ready queue changes |
+| `roborev_stream` | Raw roborev daemon event (JSON) | Every roborev review state change; consumers typically treat it as a "refetch reviews" signal |
 | `heartbeat` | empty | Periodic, keep-alive |
 
 Subscribe by **exact channel name**. Wildcards (`'nats.*'`) are not supported in V5.0 — see source of truth in `src/server/api/sse.ts`.
