@@ -16,14 +16,15 @@ export function makeCockpitAccessory(api: TinstarPluginAPI): ComponentType {
 
     // --- Session bootstrap: create a roborev-tui session if this widget has none.
     useEffect(() => {
-      if (sessionId || data?.sessionId || creatingRef.current) return
+      const snapshot = data
+      if (sessionId || snapshot?.sessionId || creatingRef.current) return
       creatingRef.current = true
       ;(async () => {
         try {
           const stateRes = await api.http.fetch('/api/state')
           const state = (await stateRes.json()) as { runs?: Record<string, { id: string; worktree?: string; repo?: string }> }
           const firstRun = state.runs ? Object.values(state.runs)[0] : undefined
-          const worktreePath = data?.repoPath || firstRun?.worktree || firstRun?.repo
+          const worktreePath = snapshot?.repoPath || firstRun?.worktree || firstRun?.repo
           if (!worktreePath) { setError('No repo available to launch roborev in'); return }
           const res = await api.http.fetch('/api/sessions', {
             method: 'POST',
@@ -31,7 +32,7 @@ export function makeCockpitAccessory(api: TinstarPluginAPI): ComponentType {
             body: JSON.stringify({ name: `roborev-cockpit-${worktreePath.split('/').pop()}`, worktreePath, cliTemplate: 'roborev-tui' }),
           })
           const body = await res.json()
-          if (body?.ok && body.data?.id) setData({ ...(data ?? {}), sessionId: body.data.id, repoPath: worktreePath })
+          if (body?.ok && body.data?.id) setData({ ...(snapshot ?? {}), sessionId: body.data.id, repoPath: worktreePath })
           else setError(body?.error?.message ?? 'Failed to create roborev session')
         } catch (e) {
           setError((e as Error).message)
@@ -77,10 +78,14 @@ export function makeCockpitAccessory(api: TinstarPluginAPI): ComponentType {
     const act = useCallback(async (jobId: number, action: ReviewAction, message?: string) => {
       setReviews((cur) => applyOptimisticAction(cur, jobId, action))
       try {
-        await api.http.fetch('/api/roborev/action', {
+        const res = await api.http.fetch('/api/roborev/action', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repo: repoPath, jobId, action, message }),
         })
+        const body = await res.json()
+        if (!body?.ok) setError(body?.error?.message ?? 'Action failed')
+      } catch (e) {
+        setError((e as Error).message)
       } finally {
         void refetch()
       }
