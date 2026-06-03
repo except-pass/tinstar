@@ -32,7 +32,9 @@ import { NatsTrafficBridge } from './nats-traffic'
 import { registerSaloonSubs } from './api/saloonBridge'
 import { bootstrapHierarchicalTopicMetadata } from './topic-metadata'
 import { NatsHealthMonitor } from './nats-health'
+import { startRoborevStream } from './roborev/stream'
 import { natsControlSocketPath } from './sessions/backends/tmux'
+import { reconnectSessionNats } from './sessions/natsReconnect'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
 import { observeFromRecapEntries, reconcileLiveSessions } from './observability/turn-length'
@@ -68,6 +70,7 @@ export function initBackend(): RouteContext {
 
   // Wire SSE
   const sse = new SSEBroadcaster(docStore)
+  startRoborevStream(sse)
   const readyQueue = new ReadyQueue()
   sse.setReadyQueue(readyQueue.getQueue())
   bus.on('ready_queue.update', (ev) => sse.setReadyQueue(ev.payload.queue))
@@ -174,6 +177,16 @@ export function initBackend(): RouteContext {
         sessionsDir: sessionConfig.dirs.sessions,
         docStore,
         getSocketPath: (name) => natsControlSocketPath(name),
+        // Auto-recovery is opt-in (config.nats.autoRecoverOrphans) because it
+        // interrupts the agent's MCP. When on, a stuck orphan gets its
+        // channel-server SIGTERMed so Claude relaunches it with a fresh socket.
+        onConfirmedOrphan: sessionConfig.nats.autoRecoverOrphans
+          ? (name) => {
+              void reconnectSessionNats(name, { socketPath: natsControlSocketPath(name) })
+                .then(({ killed }) => log.info('nats-health', `${name}: auto-recover signalled ${killed.length} channel-server process(es)`))
+                .catch(err => log.warn('nats-health', `${name}: auto-recover failed: ${(err as Error).message}`))
+            }
+          : undefined,
       })
       const healthEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
       for (const entry of healthEntries) {
