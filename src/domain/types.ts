@@ -76,6 +76,13 @@ export interface RunData {
   parentId?: string  // ID of the run that spawned this one (for hands)
   breakoutRooms?: string[]  // NATS room subjects for parent-child communication
   attention?: AttentionState
+  /** Widget type that renders this run's canvas node. Absent ⇒ 'run-workspace'
+   *  (the default session-view). Set to a registered session-view plugin widget
+   *  type (e.g. 'roborev-cockpit') to render that plugin as the session's view. */
+  view?: string
+  /** Persistent state for a plugin session-view (its api.widget.useData blob).
+   *  Unused by the default run-workspace view. */
+  viewData?: unknown
 }
 
 
