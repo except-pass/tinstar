@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
-import { parseReviewList, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, type Review, type ReviewAction } from './reviews'
+import { parseReviewList, sortReviews, applyOptimisticAction, actionArgv, type Review, type ReviewAction } from './reviews'
 
-interface WidgetData { sessionId?: string; launched?: boolean }
+interface WidgetData { launched?: boolean }
 const POLL_MS = 4000
 
-// Module-level guards survive StrictMode remounts; keyed by widget nodeId.
-const creatingSessions = new Set<string>()
+// Module-level guard survives StrictMode remounts; keyed by widget nodeId.
 const launchedSessions = new Set<string>()
 
 export function makeCockpitAccessory(api: TinstarPluginAPI): ComponentType {
@@ -16,43 +15,21 @@ export function makeCockpitAccessory(api: TinstarPluginAPI): ComponentType {
     const [data, setData] = api.widget.useData<WidgetData>()
     const [reviews, setReviews] = useState<Review[]>([])
     const [error, setError] = useState<string | null>(null)
-    const sessionId = term.sessionId || data?.sessionId || ''
+    const sessionId = term.sessionId || ''
     const nodeId = api.constellations.useMyNodeId()
     const dataRef = useRef(data)
     dataRef.current = data
 
-    // 1. Bootstrap: create a shell session in an active worktree if we have none.
-    useEffect(() => {
-      if (sessionId || dataRef.current?.sessionId || creatingSessions.has(nodeId)) return
-      creatingSessions.add(nodeId)
-      ;(async () => {
-        try {
-          const raw = await (await api.http.fetch('/api/state')).json()
-          const state = raw?.data ?? raw
-          const src = pickBootstrapSource(state)
-          if (!src) { setError('No active repo session to base the cockpit on'); creatingSessions.delete(nodeId); return }
-          const res = await api.http.fetch('/api/sessions', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: `roborev-cockpit-${src.worktreePath.split('/').pop()}`, project: src.project, worktreePath: src.worktreePath, cliTemplate: 'shell' }),
-          })
-          const body = await res.json()
-          const newSessionId = sessionIdFromCreate(body)
-          if (newSessionId) setData({ ...(dataRef.current ?? {}), sessionId: newSessionId })
-          else { setError(body?.error?.message ?? 'Failed to create session'); creatingSessions.delete(nodeId) }
-        } catch (e) { setError((e as Error).message); creatingSessions.delete(nodeId) }
-      })()
-    }, [sessionId, nodeId, setData])
-
-    // 2. Launch roborev tui into the session once (pty buffers input; no readiness wait).
+    // 1. Launch roborev tui into the session once (pty buffers input; no readiness wait).
     useEffect(() => {
       if (!sessionId || dataRef.current?.launched || launchedSessions.has(nodeId)) return
       launchedSessions.add(nodeId)
       term.sendText('roborev tui --repo --branch --no-quit', { enter: true })
-        .then(() => setData({ ...(dataRef.current ?? {}), sessionId, launched: true }))
+        .then(() => setData({ ...(dataRef.current ?? {}), launched: true }))
         .catch((e) => { setError((e as Error).message); launchedSessions.delete(nodeId) })
     }, [sessionId, nodeId, setData, term])
 
-    // 3. Poll review data via exec (runs in the session's worktree → branch-scoped).
+    // 2. Poll review data via exec (runs in the session's worktree → branch-scoped).
     const refetch = useCallback(async () => {
       if (!sessionId) return
       try {

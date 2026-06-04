@@ -8,6 +8,7 @@ export function activate(api: TinstarPluginAPI) {
   return [
     api.primitives.registerTerminalWidget({
       type: 'roborev-cockpit',
+      creator: 'session-backed',
       defaultSize: { width: 1100, height: 720 },
       minSize: { width: 520, height: 320 },
       accessory: {
