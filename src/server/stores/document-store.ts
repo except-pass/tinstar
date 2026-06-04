@@ -79,6 +79,11 @@ function runShallowEqual(a: Run, b: Run): boolean {
   if (a.parentId !== b.parentId) return false
   if (a.breakoutRooms !== b.breakoutRooms) return false
   if (!attentionShallowEqual(a.attention, b.attention)) return false
+  if (a.view !== b.view) return false
+  // viewData is an opaque (usually object) blob; reference equality is intentional
+  // — each PATCH deserializes a fresh object, so a viewData write is always a real
+  // change. Don't "fix" this to deep-equal: that would defeat the change detection.
+  if (a.viewData !== b.viewData) return false
   // Run-only fields
   if (a.worktreeId !== b.worktreeId) return false
   if (a.createdAt !== b.createdAt) return false

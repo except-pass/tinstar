@@ -387,6 +387,11 @@ interface CreateSessionParams {
    * caller resolves the hand (POST /api/sessions owns the not-found response);
    * this is the already-resolved text. */
   appendSystemPrompt?: string | null
+  /** Widget type to render this session's run node (a registered session-view
+   *  plugin widget type, e.g. 'roborev-cockpit'). Absent ⇒ default run-workspace. */
+  view?: string
+  /** Initial persisted state for a plugin session-view (run.viewData). */
+  viewData?: unknown
 }
 
 interface CreateSessionContext {
@@ -409,7 +414,8 @@ async function createSessionInternal(
   const {
     name, project, worktree = false, worktreePath,
     prompt, skipPermissions = true, cliTemplate: cliTemplateName,
-    taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt
+    taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt,
+    view, viewData
   } = params
 
   const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, natsTraffic, natsHealth } = ctx
@@ -556,6 +562,8 @@ async function createSessionInternal(
     worktreeId: worktreeEntityId,
     createdAt: new Date().toISOString(),
     spaceId: docStore.activeSpaceId,
+    view,
+    viewData,
   })
 
   registerSaloonSubs(natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
@@ -2702,7 +2710,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName } = JSON.parse(body)
+        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         // Resolve a named hand here so the HTTP layer keeps ownership of the
@@ -2727,6 +2735,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             cliTemplate: cliTemplateName ?? resolvedHand?.cliTemplate,
             taskId, epicId, initiativeId, color: colorParam, nats,
             appendSystemPrompt: handSystemPrompt,
+            view, viewData,
           }, createCtx)
 
           if (!result.ok) {
