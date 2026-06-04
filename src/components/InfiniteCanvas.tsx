@@ -6,6 +6,7 @@ import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
 import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
 import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
+import { resolveRunViewType } from '../domain/runView'
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useConstellationContext } from '../hotkeys/ConstellationContext'
@@ -1537,7 +1538,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   // Recursive render: groups render behind their children (natural DOM order)
   function renderNode(node: TreeNode, _depth: number): React.ReactNode {
-    const widgetType = toWidgetType(node.type)
+    const run = node.type === 'run' ? runMap.get(node.entityId) : undefined
+    const widgetType = node.type === 'run'
+      ? resolveRunViewType(run ?? {}, (t) => !!getWidgetComponent(t))
+      : toWidgetType(node.type)
     const reg = getWidgetComponent(widgetType)
     if (!reg) {
       // If this is a plugin widget whose type is no longer registered (plugin disabled,
@@ -1580,7 +1584,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
     const data: unknown =
       node.type === 'run'
-        ? runMap.get(node.entityId)
+        ? (widgetType === 'run-workspace'
+            ? run
+            : { ...(run?.viewData && typeof run.viewData === 'object' ? run.viewData as Record<string, unknown> : {}), sessionId: run?.sessionId })
         : node.type === 'file-editor'
           ? editorWidgetMap.get(node.entityId)
           : node.type === 'browser-widget'
