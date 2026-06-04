@@ -264,6 +264,20 @@ Beyond `widgets`, `http`, `events`, and `logger`, these surfaces are live and us
   - `readScreen({ scrollback? })` — snapshot the rendered terminal screen. Backed by `GET /api/sessions/:name/screen`.
   - `exec(argv[]): Promise<{ stdout, stderr, code }>` — run a one-shot command (argv array, no shell) in the **session's working directory** and get structured output. A non-zero exit resolves with `code` set (callers branch on it); spawn failure/timeout rejects. Backed by `POST /api/sessions/:name/exec`. Because it runs in the session cwd, it is automatically scoped to that worktree's repo/branch — e.g. `exec(['roborev','list','--json'])`. Bundled/trusted-plugin scoped; no broader than the existing send-keys input surface.
 
+### Session-view widgets
+
+A terminal widget registered with `creator: 'session-backed'` is a **session-view**: its canvas node IS the session's run node — there is exactly one node per session, not a separate run-workspace alongside it. The run's `view` field stores the plugin widget type, and `renderNode` uses it to select which component renders the run.
+
+**Spawning:** dragging a session-view widget from the palette opens the normal session-create flow. The created run gets `view = <widget type>`, and the canvas renders that plugin widget at the run node's position. No duplicate run-workspace is created.
+
+**Inside a session-view component:**
+- `api.primitives.useTerminal()` resolves the run's session automatically — the host injects `sessionId` into the component's `data` at render time; the plugin does not manage it.
+- `api.widget.useData<T>()` reads and writes `run.viewData` (via `PATCH /api/runs/:id`, debounced 250 ms) instead of the per-instance plugin-widget store. This means the state persists on the run, survives tab reloads, and round-trips through SSE deltas like any other run field.
+
+**Fallback safety:** `run-workspace` is the default session-view. If `run.view` names a plugin type that is not registered (e.g. the plugin is disabled), `resolveRunViewType` falls back to `run-workspace` so the session is always reachable on the canvas.
+
+**Reference implementation:** `src/plugins/roborev/src/index.tsx` — the roborev cockpit is the first session-view. It registers as `creator: 'session-backed'`, reads its `launched` flag from `run.viewData` via `useData`, and gets its session from `useTerminal()`.
+
 ### Still future (V5.1)
 
 These are deferred. If you need them today, drop a note — they're scoped, not blocked:
