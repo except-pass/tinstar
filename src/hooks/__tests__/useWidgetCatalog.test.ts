@@ -18,15 +18,14 @@ describe('mergeCatalog', () => {
     // palette+context widget (e.g. file-editor) → excluded.
     { pluginId: 'fe', widgetType: 'file-editor', label: 'File editor', spawn: 'palette+context' },
     { pluginId: 'misc', widgetType: 'no-cap', label: 'NoCap' }, // no spawn, no capabilities → excluded
-    // Session-backed plugin widget: palette-draggable but the [+] flow can't spawn it
-    // (it would create a run-workspace instead) → excluded from the catalog.
+    // Session-backed plugin widget: palette-draggable and now included as a session-view.
     { pluginId: 'sb', widgetType: 'sb-widget', label: 'SessionBacked', spawn: 'palette', creator: 'session-backed' as const },
   ]
 
   it('includes spawnable widgets: capability-declared OR palette-installable', () => {
     const out = mergeCatalog(host as any, plugin as any)
     const types = out.map((e: CatalogEntry) => e.type).sort()
-    expect(types).toEqual(['browser-widget', 'run-workspace', 'saloon', 'stretchplan-task'])
+    expect(types).toEqual(['browser-widget', 'run-workspace', 'saloon', 'sb-widget', 'stretchplan-task'])
   })
 
   it('includes a palette plugin with no declared capabilities (stretchplan)', () => {
@@ -37,9 +36,12 @@ describe('mergeCatalog', () => {
     expect(sp.creator).toBe('standalone') // default
   })
 
-  it('excludes session-backed plugin widgets (the [+] flow cannot spawn them)', () => {
+  it('includes session-backed plugin widgets as session-views', () => {
     const out = mergeCatalog(host as any, plugin as any)
-    expect(out.find(e => e.type === 'sb-widget')).toBeUndefined()
+    const sb = out.find(e => e.type === 'sb-widget')
+    expect(sb).toBeTruthy()
+    expect(sb!.creator).toBe('session-backed')
+    expect(sb!.pluginId).toBe('sb')
   })
 
   it('excludes palette+context plugin widgets', () => {
