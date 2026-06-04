@@ -15,7 +15,6 @@ import '../../hotkeys/widgets/runWorkspaceWidget'  // side-effect: registers Wid
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 import { apiFetch } from '../../apiClient'
 import { useConfig } from '../../context/ConfigContext'
-import { capabilityRegistry } from '../../core/constellationCapabilities'
 
 interface Props {
   run: RunData
@@ -33,20 +32,6 @@ interface Props {
 }
 
 type FilePanelMode = 'touched' | 'tree'
-
-// Legacy runs predate `natsSubscriptions` and only stored a single
-// `natsSubject`. A 6-part subject (`tinstar.<space>.<init>.<epic>.<task>.<agent>`)
-// is a direct agent subject, so the run also listens on its task-level
-// broadcast. Anything else (e.g. a wildcard `tinstar.<space>.<init>.>` for an
-// initiative/epic scope) is already the subscription and must be used verbatim.
-function deriveLegacySubscriptions(natsSubject: string | undefined): string[] {
-  if (!natsSubject) return []
-  const parts = natsSubject.split('.')
-  if (parts.length === 6 && !natsSubject.includes('*') && !natsSubject.includes('>')) {
-    return [parts.slice(0, 5).join('.'), natsSubject]
-  }
-  return [natsSubject]
-}
 
 export function RunWorkspaceWidget({ run, className = '', compact = false, zoom = 1, isSelected = false, isDragging = false, headless = false, onHeaderPointerDown: _onHeaderPointerDown, onHeaderPointerMove: _onHeaderPointerMove, onHeaderPointerUp: _onHeaderPointerUp }: Props) {
 
@@ -178,35 +163,6 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
     registerScanHandler(run.id, triggerScanLine)
     return () => deregisterFlourishHandler(run.id)
   }, [run.id, triggerHollywoodHit, triggerScanLine])
-
-  // Publish the `session.prompt` capability so peers in this widget's
-  // constellation can RPC into us to send text into the underlying tmux session.
-  useEffect(() => {
-    return capabilityRegistry.publish(`run-${run.id}`, 'session.prompt', async (args) => {
-      const { text } = args as { text: string }
-      const res = await apiFetch(`/api/sessions/${run.id}/prompt`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text }),
-      })
-      if (!res.ok) throw new Error(`session.prompt failed: ${res.status}`)
-      return null
-    })
-  }, [run.id])
-
-  // Publish the `session.nats` capability so constellation peers (e.g. Saloon)
-  // can retrieve the run's NATS subscriptions, session id, and accent color.
-  useEffect(() => {
-    return capabilityRegistry.publish(`run-${run.id}`, 'session.nats', async () => ({
-      sessionId: run.sessionId,
-      status: run.status,
-      subscriptions: run.natsSubscriptions ?? deriveLegacySubscriptions(run.natsSubject),
-      color: run.color,
-      // Broker-health signal: non-null when the session's NATS control socket
-      // was orphaned. Drives the Saloon header's reconnect affordance.
-      orphanedAt: run.natsControlOrphanedAt ?? null,
-    }))
-  }, [run.id, run.sessionId, run.status, run.natsSubscriptions, run.natsSubject, run.color, run.natsControlOrphanedAt])
 
   const onResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()

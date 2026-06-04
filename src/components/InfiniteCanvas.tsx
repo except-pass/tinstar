@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
+import { useRef, useEffect, useCallback, useState, useMemo, Fragment, type PointerEvent as ReactPointerEvent } from 'react'
 import type { BrowserWidget, EditorWidget, ImageWidget, PluginWidgetInstance, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { findNodeLabel } from '../domain/view-models'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
@@ -37,6 +37,7 @@ import { useWidgetCatalog } from '../hooks/useWidgetCatalog'
 import { useAddWidget } from '../hooks/useAddWidget'
 import { composeAddWidgetMembership } from '../canvas/addWidgetMembership'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
+import { RunNodeCapabilities } from './RunNodeCapabilities'
 
 interface Props {
   tree: TreeNode[]
@@ -1625,31 +1626,33 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const isSnapLeaf = !reg.isContainer
 
     return (
-      <CanvasWidgetShell
-        key={node.id}
-        registration={effectiveReg}
-        nodeId={node.id}
-        widgetId={node.entityId}
-        data={data}
-        layout={layout}
-        zoom={camera.zoom}
-        isSelected={isSelected(node.id)}
-        isFocused={focusedWidgetId === node.id}
-        isSpawning={spawnedNodeIds.has(node.id)}
-        spawnColor={node.type === 'run' ? runMap.get(node.entityId)?.color : undefined}
-        isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
-        spaceHeldRef={spaceHeld}
-        onSelect={handleSelect}
-        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (isSnapLeaf ? handleDoubleClickZoom : undefined)}
-        onMove={moveHandler}
-        onResize={resizeHandler}
-        onResizeStart={isSnapLeaf ? handleResizeStart : undefined}
-        onResizeEnd={isSnapLeaf ? handleResizeEnd : undefined}
-        onDragStart={isSnapLeaf ? handleWidgetDragStart : undefined}
-        onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
-        onAddWidget={isSnapLeaf ? (nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor }) : undefined}
-        occupiedEdges={occupiedEdgesFor(node.id)}
-      />
+      <Fragment key={node.id}>
+        {run && <RunNodeCapabilities run={run} />}
+        <CanvasWidgetShell
+          registration={effectiveReg}
+          nodeId={node.id}
+          widgetId={node.entityId}
+          data={data}
+          layout={layout}
+          zoom={camera.zoom}
+          isSelected={isSelected(node.id)}
+          isFocused={focusedWidgetId === node.id}
+          isSpawning={spawnedNodeIds.has(node.id)}
+          spawnColor={node.type === 'run' ? runMap.get(node.entityId)?.color : undefined}
+          isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
+          spaceHeldRef={spaceHeld}
+          onSelect={handleSelect}
+          onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (isSnapLeaf ? handleDoubleClickZoom : undefined)}
+          onMove={moveHandler}
+          onResize={resizeHandler}
+          onResizeStart={isSnapLeaf ? handleResizeStart : undefined}
+          onResizeEnd={isSnapLeaf ? handleResizeEnd : undefined}
+          onDragStart={isSnapLeaf ? handleWidgetDragStart : undefined}
+          onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
+          onAddWidget={isSnapLeaf ? (nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor }) : undefined}
+          occupiedEdges={occupiedEdgesFor(node.id)}
+        />
+      </Fragment>
     )
   }
 
