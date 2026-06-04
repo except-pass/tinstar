@@ -13,6 +13,9 @@ export interface SessionPrefill {
   taskId?: string
   epicId?: string
   initiativeId?: string
+  /** Session-view widget type for the created run (run.view). Set when spawning
+   *  a session-backed plugin view; absent for a default run-workspace session. */
+  view?: string
   sources?: Record<string, { type: string; name: string }>
 }
 
@@ -152,6 +155,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
     if (runColor) body.color = runColor
     if (prefill?.epicId) body.epicId = prefill.epicId
     if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
+    if (prefill?.view) body.view = prefill.view
 
     // Close optimistically — the SSE event stream will surface the new session.
     onClose()
@@ -178,7 +182,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
         console.error('Failed to create session:', err)
         window.alert(`Failed to create session: ${(err as Error).message}`)
       })
-  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, onClose, onCreated])
+  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, prefill?.view, onClose, onCreated])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()

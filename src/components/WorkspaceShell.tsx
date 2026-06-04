@@ -566,7 +566,7 @@ function WorkspaceShellInner() {
 
   // Open the session create dialog on behalf of the add-widget flow, capturing a
   // callback to fire with the created sessionId once the POST succeeds.
-  const handleRequestCreateSession = useCallback((prefill: { taskId?: string }, onCreated: (sessionId: string) => void) => {
+  const handleRequestCreateSession = useCallback((prefill: { taskId?: string; view?: string }, onCreated: (sessionId: string) => void) => {
     setSessionPrefill(prefill)
     setPendingSessionOnCreated(() => onCreated)
     setShowSessionDialog(true)

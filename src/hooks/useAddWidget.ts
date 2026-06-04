@@ -16,7 +16,7 @@ export interface AddWidgetDeps {
    *  the whole assign+snap change persists as a single revision-gated write. */
   updateConstellation: (compute: (g: ConstellationGraph) => ConstellationGraph) => void
   /** Open the session create flow; resolves with the created sessionId (or null if cancelled). */
-  openCreateSession: (prefill: { spaceId: string }) => Promise<string | null>
+  openCreateSession: (prefill: { spaceId: string; view?: string }) => Promise<string | null>
   /** Register a placement to apply once a run with `sessionId` appears via SSE.
    *  `spaceId` is the space active when the add was initiated, so the placement
    *  only applies to that space even if the user navigates away before the run
@@ -43,7 +43,10 @@ export function useAddWidget(deps: AddWidgetDeps) {
       updateConstellation(g => composeAddWidgetMembership(g, sourceNodeId, newNodeId))
 
     if (entry.creator === 'session-backed') {
-      const sessionId = await openCreateSession({ spaceId })
+      // A session-backed PLUGIN entry is a session-view: the new run renders it
+      // via run.view. The host run-workspace (no pluginId) gets no view (default).
+      const view = entry.pluginId ? entry.type : undefined
+      const sessionId = await openCreateSession({ spaceId, view })
       if (!sessionId) return
       registerPendingRunPlacement(sessionId, flushLayout, sourceNodeId, spaceId)
       return

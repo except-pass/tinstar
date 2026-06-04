@@ -56,7 +56,7 @@ interface Props {
   onDeleteEntity?: (entityId: string, type: string) => void
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
   /** Open the session create dialog for a session-backed add-widget; calls back with the created sessionId. */
-  onRequestCreateSession?: (prefill: { taskId?: string }, onCreated: (sessionId: string) => void) => void
+  onRequestCreateSession?: (prefill: { taskId?: string; view?: string }, onCreated: (sessionId: string) => void) => void
   onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
   onEditorWidgetCreated?: (widget: EditorWidget) => void
   onBrowserWidgetCreated?: (widget: BrowserWidget) => void
@@ -676,10 +676,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // created sessionId; if the dialog is cancelled `onCreated` never fires and the
   // promise simply never resolves — acceptable here since the only deferred side
   // effect is registering a pending placement (nothing leaks). No timers.
-  const openCreateSession = useCallback((_prefill: { spaceId: string }) => {
+  const openCreateSession = useCallback((prefill: { spaceId: string; view?: string }) => {
     return new Promise<string | null>((resolve) => {
       if (!onRequestCreateSession) { resolve(null); return }
-      onRequestCreateSession({}, (sessionId) => resolve(sessionId))
+      onRequestCreateSession(prefill.view ? { view: prefill.view } : {}, (sessionId) => resolve(sessionId))
     })
   }, [onRequestCreateSession])
 
