@@ -1103,9 +1103,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   }, [arrangeGridRef, arrangeGrid])
 
   useEffect(() => {
-    if (arrangeResetRef) arrangeResetRef.current = arrangeWorkspace
+    // Pass constellation slot members so reset keeps snapped groups (e.g. a
+    // session and its attached browser) together instead of scattering them.
+    if (arrangeResetRef) arrangeResetRef.current = () => arrangeWorkspace(Object.values(constellations.store))
     return () => { if (arrangeResetRef) arrangeResetRef.current = null }
-  }, [arrangeResetRef, arrangeWorkspace])
+  }, [arrangeResetRef, arrangeWorkspace, constellations.store])
 
   useEffect(() => {
     if (arrangeSwimlanesRef) arrangeSwimlanesRef.current = arrangeSwimlanes

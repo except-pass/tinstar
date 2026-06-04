@@ -164,6 +164,49 @@ function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
   return layouts
 }
 
+/**
+ * Keep cohesion groups (constellation members) together through a full re-layout.
+ *
+ * A re-layout (`generateDefaultLayouts`) positions every widget independently
+ * from the tree, which scatters the members of a constellation — a session and
+ * its attached browser, say — into separate cells and dissolves the snapped
+ * formation the user built. This re-anchors each group as a rigid block: one
+ * member keeps its fresh position and the others are offset from it by their
+ * pre-arrange relative positions, so snapped adjacency survives the arrange.
+ *
+ * Mutates and returns `fresh`. Members absent from either map are skipped (never
+ * created); a group with fewer than two live members is left untouched.
+ */
+export function preserveCohesion(
+  fresh: Map<string, WidgetLayout>,
+  prev: Map<string, WidgetLayout>,
+  groups: string[][],
+): Map<string, WidgetLayout> {
+  for (const group of groups) {
+    const members = group.filter(id => fresh.has(id) && prev.has(id))
+    if (members.length < 2) continue
+    // Anchor = the member the fresh layout placed top-most-left, so the block
+    // moves to the earliest of its members' arranged slots (least disruptive).
+    const anchor = members.reduce((best, id) => {
+      const a = fresh.get(best)!, b = fresh.get(id)!
+      return b.y < a.y || (b.y === a.y && b.x < a.x) ? id : best
+    })
+    const anchorFresh = fresh.get(anchor)!
+    const anchorPrev = prev.get(anchor)!
+    for (const id of members) {
+      if (id === anchor) continue
+      const p = prev.get(id)!
+      const cur = fresh.get(id)!
+      fresh.set(id, {
+        ...cur,
+        x: anchorFresh.x + (p.x - anchorPrev.x),
+        y: anchorFresh.y + (p.y - anchorPrev.y),
+      })
+    }
+  }
+  return fresh
+}
+
 // --- Smart placement for new nodes ---
 
 /**
@@ -675,9 +718,14 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string, seedLayouts
     [],
   )
 
-  // Full re-layout
-  const arrangeWorkspace = useCallback(() => {
-    setLayouts(generateDefaultLayouts(tree))
+  // Full re-layout. `cohesionGroups` (constellation members, by node id) are kept
+  // together as rigid blocks so a re-layout doesn't scatter snapped widgets —
+  // e.g. a session and its attached browser stay linked.
+  const arrangeWorkspace = useCallback((cohesionGroups?: string[][]) => {
+    setLayouts(prev => {
+      const fresh = generateDefaultLayouts(tree)
+      return cohesionGroups?.length ? preserveCohesion(fresh, prev, cohesionGroups) : fresh
+    })
   }, [tree])
 
   const insertLayout = useCallback((id: string, layout: WidgetLayout) => {
