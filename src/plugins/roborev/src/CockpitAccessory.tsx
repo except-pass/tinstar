@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
-import { parseReviewList, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, type Review, type ReviewAction } from './reviews'
+import { parseReviewList, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, type Review, type ReviewAction } from './reviews'
 
 interface WidgetData { sessionId?: string; launched?: boolean }
 const POLL_MS = 4000
@@ -36,7 +36,8 @@ export function makeCockpitAccessory(api: TinstarPluginAPI): ComponentType {
             body: JSON.stringify({ name: `roborev-cockpit-${src.worktreePath.split('/').pop()}`, project: src.project, worktreePath: src.worktreePath, cliTemplate: 'shell' }),
           })
           const body = await res.json()
-          if (body?.ok && body.data?.id) setData({ ...(dataRef.current ?? {}), sessionId: body.data.id })
+          const newSessionId = sessionIdFromCreate(body)
+          if (newSessionId) setData({ ...(dataRef.current ?? {}), sessionId: newSessionId })
           else { setError(body?.error?.message ?? 'Failed to create session'); creatingSessions.delete(nodeId) }
         } catch (e) { setError((e as Error).message); creatingSessions.delete(nodeId) }
       })()

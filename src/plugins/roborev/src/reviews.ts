@@ -58,6 +58,15 @@ export function actionArgv(jobId: number, action: ReviewAction, message?: string
 interface SessionSlice { name: string; project?: string; cliTemplate?: string; lastActive?: string; workspace?: { path?: string } }
 interface StateSlice { sessions?: SessionSlice[] }
 
+/** Extract the created session's identifier from a POST /api/sessions response.
+ *  A tinstar Session is keyed by `name` (there is no `id` field); we tolerate a
+ *  legacy `id` just in case. Returns null on a failed/!ok response. */
+export function sessionIdFromCreate(body: unknown): string | null {
+  const b = body as { ok?: boolean; data?: { name?: string; id?: string } }
+  if (!b?.ok) return null
+  return b.data?.name ?? b.data?.id ?? null
+}
+
 /** Choose which existing session the freshly-dropped cockpit should create its
  *  shell in: the most-recently-active real session (not another cockpit shell)
  *  that has a concrete workspace path + project. Returns {project, worktreePath}

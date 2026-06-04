@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, type Review } from './reviews'
+import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, type Review } from './reviews'
 
 const row = (o: Partial<Review> & { id: number }): Review => ({ status: 'done', verdict: 'P', closed: false, commit_subject: 's', branch: 'b', ...o })
 
@@ -48,4 +48,19 @@ describe('pickBootstrapSource', () => {
     expect(pickBootstrapSource({ sessions: [{ name: 'x', cliTemplate: 'shell', workspace: { path: '/c' }, project: 'r' }] } as never)).toBeNull()
   })
   it('returns null on empty state', () => { expect(pickBootstrapSource({} as never)).toBeNull() })
+})
+
+describe('sessionIdFromCreate', () => {
+  it('reads data.name (Session is keyed by name, not id)', () => {
+    expect(sessionIdFromCreate({ ok: true, data: { name: 'roborev-cockpit-split-c', workspace: { path: '/x' } } })).toBe('roborev-cockpit-split-c')
+  })
+  it('falls back to data.id if present', () => {
+    expect(sessionIdFromCreate({ ok: true, data: { id: 'legacy' } })).toBe('legacy')
+  })
+  it('returns null on a non-ok response', () => {
+    expect(sessionIdFromCreate({ ok: false, error: { message: 'nope' } })).toBeNull()
+  })
+  it('returns null when no name/id', () => {
+    expect(sessionIdFromCreate({ ok: true, data: {} })).toBeNull()
+  })
 })
