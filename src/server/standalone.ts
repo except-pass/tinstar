@@ -1,7 +1,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createReadStream, existsSync, statSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
+import { createReadStream, existsSync, statSync, writeFileSync, unlinkSync, rmSync } from 'node:fs'
 import httpProxy from 'http-proxy'
 
 // Parse --cors-origins as early as possible so that downstream module imports
@@ -22,6 +22,7 @@ import { handleFileUpload } from './api/fileUploadRoute'
 import { handleScreenshotUpload } from './api/screenshotsRoute'
 import { log } from './logger'
 import { getConfigRoot } from './configRoot'
+import { acquireBackendSingleton } from './infra/lock'
 import { decideStaticServe } from './staticServe'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -39,25 +40,12 @@ interface ServerOptions {
    * compat a single string is still accepted.
    */
   host?: string | string[]
-}
-
-function killStalePidSync(pidFilePath: string): void {
-  try {
-    const raw = readFileSync(pidFilePath, 'utf8').trim()
-    const pid = parseInt(raw, 10)
-    if (isNaN(pid) || pid === process.pid) return
-    try { process.kill(pid, 0) } catch { return }
-    process.kill(pid, 'SIGTERM')
-    log.info('server', `killed stale server process ${pid}`)
-    const deadline = Date.now() + 3_000
-    while (Date.now() < deadline) {
-      try { process.kill(pid, 0) } catch { return }
-      const waitMs = 50
-      const start = Date.now()
-      while (Date.now() - start < waitMs) { /* spin */ }
-    }
-    try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
-  } catch { /* no pid file or process already gone */ }
+  /**
+   * Take over the config dir from a live backend instead of refusing. Without
+   * this, a second backend on the same config dir exits rather than start a
+   * port/ttyd war. Wired from the `--force` CLI flag.
+   */
+  force?: boolean
 }
 
 export function startServer(opts: ServerOptions) {
@@ -76,12 +64,28 @@ export function startServer(opts: ServerOptions) {
     log.error('server', 'unhandled rejection (kept alive)', { reason: err?.message ?? String(reason), stack: err?.stack })
   })
 
-  // Kill any stale server BEFORE starting the backend — the old server's shutdown
-  // handler will clean up its observability supervisors. If we init first, we risk
-  // adopting pids that are about to die.
+  // Enforce one backend per config dir BEFORE starting anything. Two backends
+  // sharing a config dir collide on ttyd ports (separate in-memory port sets)
+  // → restart-wars and proxy mis-binding (a run shows another run's terminal).
+  // Refuse by default; `--force` SIGTERMs the live owner and takes over. A
+  // deliberate second instance uses TINSTAR_CONFIG_HOME (a different dir).
   const configDir = getConfigRoot()
   const pidFile = join(configDir, 'server.pid')
-  killStalePidSync(pidFile)
+  const lockPath = join(configDir, 'server.lock')
+  const lockResult = acquireBackendSingleton(lockPath, { force: opts.force })
+  if (!lockResult.acquired) {
+    const who = lockResult.ownerPid ? ` (pid ${lockResult.ownerPid})` : ''
+    log.error('server', `another tinstar backend is already running on ${configDir}${who}`)
+    console.error(
+      `\n✗ tinstar is already running on ${configDir}${who}.\n` +
+      `  Stop it first, run a second instance under a different TINSTAR_CONFIG_HOME,\n` +
+      `  or pass --force to take over.\n`,
+    )
+    process.exit(1)
+  }
+  // The lock marker outlives only this process; drop it on exit so the next
+  // start sees a clean (or stale-but-stealable) lock.
+  process.on('exit', () => { try { rmSync(`${lockPath}.mark`, { recursive: true, force: true }) } catch { /* gone */ } })
 
   const ctx = initBackend()
   const proxy = httpProxy.createProxyServer({ ws: true })
@@ -269,7 +273,9 @@ export function startServer(opts: ServerOptions) {
           process.exit(1)
         }
         if (!isRetry) {
-          killStalePidSync(pidFile)
+          // The singleton lock already ensured no live tinstar backend owns
+          // this config dir, so this is usually a lingering OS socket from the
+          // instance we just replaced. Wait briefly and retry the same port.
           setTimeout(() => { void listenAll(port, true) }, 500)
         } else {
           log.warn('server', `port ${port} in use, trying ${port + 1}`)
@@ -329,5 +335,5 @@ if (isDirectRun) {
     hosts.push(...process.env.TINSTAR_HOST.split(',').map(s => s.trim()).filter(Boolean))
   }
   const noOpen = args.includes('--no-open')
-  startServer({ port, host: hosts, clientDir: join(__dirname, '../../dist/client'), open: !noOpen })
+  startServer({ port, host: hosts, clientDir: join(__dirname, '../../dist/client'), open: !noOpen, force: args.includes('--force') })
 }

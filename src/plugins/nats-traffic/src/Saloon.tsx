@@ -7,6 +7,8 @@ import { EV } from '../../../lib/windowEvents'
 import { StreamView } from './StreamView'
 import { subjectMatchesAny } from './subjectMatches'
 import { resolveBinding } from './resolveBinding'
+import { subscribedLabel } from './subscribedLabel'
+import { reconnectIntent, reconnectTooltip } from './reconnectIntent'
 import type { TrafficEvent } from './types'
 
 const MAX_EVENTS = 200
@@ -131,15 +133,21 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
     const single = binding.mode === 'runs' && bound.length === 1 ? bound[0]! : null
     const status = single?.status ? STATUS_META[single.status] : undefined
 
-    // Broker health: any bound session whose NATS control socket was orphaned.
-    // The reconnect button bounces the host's NATS observer (re-establishes all
-    // subscriptions) — global, so it's offered whenever we're showing traffic.
+    // Broker health: the reconnect button does the right thing for what's
+    // actually broken. If a bound session is orphaned, it recovers *that
+    // session* (restarts its channel-server). Otherwise it bounces the host's
+    // NATS observer — re-syncing our view of the bus, which is all that ever did.
     const orphaned = bound.some(b => b.orphanedAt)
+    const intent = reconnectIntent(bound)
     const [reconnecting, setReconnecting] = useState(false)
     const reconnect = () => {
       if (reconnecting) return
       setReconnecting(true)
-      api.http.fetch('/api/nats-traffic/bounce', { method: 'POST' })
+      const work = intent.kind === 'recover-sessions'
+        ? Promise.all(intent.sessionIds.map(id =>
+            api.http.fetch(`/api/sessions/${encodeURIComponent(id)}/nats-reconnect`, { method: 'POST' })))
+        : api.http.fetch('/api/nats-traffic/bounce', { method: 'POST' })
+      Promise.resolve(work)
         .catch(() => { /* best-effort; the orphan dot reflects real state on next poll */ })
         .finally(() => setReconnecting(false))
     }
@@ -178,7 +186,7 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
               onClick={reconnect}
               disabled={reconnecting}
               className={`flex-shrink-0 ${orphaned ? 'text-amber-400 hover:text-amber-300' : 'text-slate-500 hover:text-slate-300'}`}
-              title={orphaned ? 'NATS observer orphaned — click to reconnect' : 'Reconnect NATS observer'}
+              title={reconnectTooltip(intent)}
             >
               <span className={`material-symbols-outlined text-sm${reconnecting ? ' animate-spin' : ''}`}>sync</span>
             </button>
@@ -193,9 +201,7 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
             title={binding.mode === 'all' ? 'all subjects (every session’s traffic)' : subjects.join('\n')}
           >
             <span className="text-slate-600">subscribed: </span>
-            {binding.mode === 'all'
-              ? 'tinstar.> (all sessions)'
-              : subjects.length ? subjects.join('  ·  ') : 'resolving…'}
+            {subscribedLabel({ mode: binding.mode, subjects, resolved: bound.length > 0 })}
           </div>
         )}
         {binding.mode === 'empty'

@@ -136,6 +136,34 @@ describe('POST /api/sessions', () => {
     expect(run.natsSubscriptions!.some(s => s.includes('make-widget'))).toBe(true)
   })
 
+  it('enables NATS by default for a standalone session (active space, no task)', async () => {
+    // Regression: standalone sessions (no taskId/epicId/initiativeId, no explicit
+    // `nats` arg) used to spawn with NATS off because the auto-enable gate omitted
+    // spaceId. They now join the bus on the space-level subject.
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'lone-wolf' }),
+    })
+    expect(res.status).toBe(201)
+
+    const run = testCtx.docStore.getRun('lone-wolf') as Run
+    expect(run).toBeTruthy()
+    expect(run.natsEnabled).toBe(true)
+    expect(run.natsSubscriptions!.length).toBeGreaterThan(0)
+    // Rooted at the active space's sanitized name.
+    expect(run.natsSubscriptions!.every(s => s.startsWith('tinstar.create-space'))).toBe(true)
+  })
+
+  it('still honors an explicit nats:{enabled:false} opt-out', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'quiet-one', nats: { enabled: false } }),
+    })
+    expect(res.status).toBe(201)
+    const run = testCtx.docStore.getRun('quiet-one') as Run
+    expect(run.natsEnabled).toBe(false)
+  })
+
   it('uses the marshal hand\'s persona as appendSystemPrompt and its intro as the one-shot prompt', async () => {
     const res = await testCtx.fetch('/api/sessions', {
       method: 'POST',

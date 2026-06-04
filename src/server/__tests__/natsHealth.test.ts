@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { NatsHealthMonitor, backoffMs, type ProbeOutcome } from '../nats-health'
+import { NatsHealthMonitor, backoffMs, ORPHAN_CONFIRM_FAILS, ORPHAN_RECOVER_FAILS, type ProbeOutcome } from '../nats-health'
 import { createSession, setState, updateSession } from '../sessions/session'
 import { DocumentStore } from '../stores/document-store'
 import type { Run } from '../../domain/types'
@@ -92,7 +92,7 @@ describe('NatsHealthMonitor', () => {
     expect(m.__getState('sess-a')!.consecutiveFailures).toBe(0)
   })
 
-  it('healthy → orphaned → cleared transitions toggle the orphan flag', async () => {
+  it('healthy → orphaned (debounced) → cleared transitions toggle the orphan flag', async () => {
     const m = makeMonitor(async () => ({ kind: 'healthy' }))
     makeSession('sess-a')
     m.trackSession('sess-a')
@@ -103,17 +103,77 @@ describe('NatsHealthMonitor', () => {
     expect(docStore.getRun('sess-a')?.natsControlOrphanedAt).toBeNull()
     expect(m.__getState('sess-a')!.consecutiveFailures).toBe(0)
 
-    // Orphaned: flag set, failures bumped.
-    m.applyOutcome('sess-a', { kind: 'orphaned' }, t0 + 1000)
+    // Orphaned, but not yet confirmed: flag stays null until the streak hits
+    // ORPHAN_CONFIRM_FAILS. Failures still count up so we back off.
+    for (let i = 1; i < ORPHAN_CONFIRM_FAILS; i++) {
+      m.applyOutcome('sess-a', { kind: 'orphaned' }, t0 + 1000 * i)
+      expect(docStore.getRun('sess-a')?.natsControlOrphanedAt).toBeNull()
+      expect(m.__getState('sess-a')!.orphanStreak).toBe(i)
+    }
+
+    // The confirming probe flips the flag.
+    m.applyOutcome('sess-a', { kind: 'orphaned' }, t0 + 1000 * ORPHAN_CONFIRM_FAILS)
     const orphaned = docStore.getRun('sess-a')?.natsControlOrphanedAt
     expect(typeof orphaned).toBe('string')
-    expect(m.__getState('sess-a')!.consecutiveFailures).toBe(1)
+    expect(m.__getState('sess-a')!.consecutiveFailures).toBe(ORPHAN_CONFIRM_FAILS)
 
     // Healthy again: flag cleared (passing the observed pre-probe value
-    // — what the probe loop captures before awaiting), counter reset.
-    m.applyOutcome('sess-a', { kind: 'healthy' }, t0 + 2000, orphaned ?? null)
+    // — what the probe loop captures before awaiting), counters reset.
+    m.applyOutcome('sess-a', { kind: 'healthy' }, t0 + 99_000, orphaned ?? null)
     expect(docStore.getRun('sess-a')?.natsControlOrphanedAt).toBeNull()
     expect(m.__getState('sess-a')!.consecutiveFailures).toBe(0)
+    expect(m.__getState('sess-a')!.orphanStreak).toBe(0)
+  })
+
+  it('a single orphan probe does NOT flag — debounce absorbs transient blips', () => {
+    const m = makeMonitor(async () => ({ kind: 'orphaned' }))
+    makeSession('sess-blip')
+    m.trackSession('sess-blip')
+    m.applyOutcome('sess-blip', { kind: 'orphaned', reason: 'connect refused' }, Date.now())
+    expect(docStore.getRun('sess-blip')?.natsControlOrphanedAt).toBeNull()
+    expect(m.__getState('sess-blip')!.orphanStreak).toBe(1)
+  })
+
+  it("'absent' (socket file missing) never flags and resets the orphan streak", () => {
+    const m = makeMonitor(async () => ({ kind: 'absent' }))
+    makeSession('sess-absent')
+    m.trackSession('sess-absent')
+
+    // Two orphan probes build a streak...
+    m.applyOutcome('sess-absent', { kind: 'orphaned' }, Date.now())
+    m.applyOutcome('sess-absent', { kind: 'orphaned' }, Date.now())
+    expect(m.__getState('sess-absent')!.orphanStreak).toBe(2)
+
+    // ...then an 'absent' probe resets it (MCP relaunching ≠ orphan) and never flags.
+    m.applyOutcome('sess-absent', { kind: 'absent', reason: 'socket file missing' }, Date.now())
+    expect(docStore.getRun('sess-absent')?.natsControlOrphanedAt).toBeNull()
+    expect(m.__getState('sess-absent')!.orphanStreak).toBe(0)
+  })
+
+  it('fires the recovery hook once after a sustained, confirmed orphan', () => {
+    const recovered: string[] = []
+    const m = new NatsHealthMonitor({
+      sessionsDir, docStore,
+      getSocketPath: () => '/tmp/fake.sock',
+      probe: async () => ({ kind: 'orphaned' }),
+      onConfirmedOrphan: (name) => recovered.push(name),
+    })
+    makeSession('sess-stuck')
+    m.trackSession('sess-stuck')
+
+    // Below the recover threshold: flag may set (past confirm) but no recovery.
+    for (let i = 1; i < ORPHAN_RECOVER_FAILS; i++) {
+      m.applyOutcome('sess-stuck', { kind: 'orphaned' }, Date.now())
+    }
+    expect(recovered).toEqual([])
+
+    // The threshold-crossing probe fires recovery exactly once...
+    m.applyOutcome('sess-stuck', { kind: 'orphaned' }, Date.now())
+    expect(recovered).toEqual(['sess-stuck'])
+
+    // ...and not again on subsequent stuck probes.
+    m.applyOutcome('sess-stuck', { kind: 'orphaned' }, Date.now())
+    expect(recovered).toEqual(['sess-stuck'])
   })
 
   it('degraded outcome does NOT toggle the orphan flag', () => {

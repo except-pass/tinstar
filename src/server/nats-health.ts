@@ -2,15 +2,27 @@
  * Periodic NATS-control-socket health probe.
  *
  * For each tracked session, opens the MCP's UNIX control socket and runs the
- * existing `status` action. Three outcomes drive Session.natsControlOrphanedAt
+ * existing `status` action. Outcomes drive Session.natsControlOrphanedAt
  * (mirrored to the Run projection):
  *
  *   healthy   socket OK + natsState in {'OPEN','connected'} → clear flag, 30s cadence
  *   degraded  socket OK but natsState is something else → leave flag, slow probes
- *   orphaned  socket connect fails → set flag, slow probes
+ *   absent    socket *file* missing → MCP not running here (starting up, or
+ *             stopped). NOT an orphan — never sets the flag. Slow probes.
+ *   orphaned  socket file present but connect refused/timed out → the control
+ *             listener is wedged. Only flips the flag after ORPHAN_CONFIRM_FAILS
+ *             *consecutive* orphan probes, so a single startup/`/clear`/under-load
+ *             blip can't make a healthy session look broken.
+ *
+ * The debounce matters: an enabled+running session whose channel-server MCP is
+ * mid-relaunch briefly answers ENOENT (absent) or refuses (orphaned). Flagging
+ * on the first failure produced constant false-positive amber dots that cleared
+ * 30s later — the bulk of the "NATS is so flaky" noise. We now require
+ * sustained failure before claiming orphaned, and (when a recover hook is wired)
+ * escalate to recovery only after ORPHAN_RECOVER_FAILS.
  *
  * Backoff: 30s base, doubling per failure, capped at 5min. Healthy resets.
- * Purely observability — failures here must never block real work.
+ * Purely observability + opt-in recovery — failures here must never block work.
  */
 
 import { connect as netConnect } from 'node:net'
@@ -21,11 +33,25 @@ import { log } from './logger'
 
 const BASE_INTERVAL_MS = 30_000
 const MAX_INTERVAL_MS = 5 * 60_000
-const PROBE_TIMEOUT_MS = 2_000
+// 2s was tight enough that a busy host (many sessions + prometheus + nats) could
+// time out a perfectly live socket and report a false orphan. 4s leaves headroom
+// without making a genuinely-wedged probe feel slow — the debounce does the rest.
+const PROBE_TIMEOUT_MS = 4_000
 const TICK_INTERVAL_MS = 5_000
 
+// Consecutive orphan-class probes required before we believe it. ~3 probes
+// across the backoff curve (30s, 60s, 2m) ≈ a few minutes of sustained failure.
+export const ORPHAN_CONFIRM_FAILS = 3
+// Further sustained failure past confirmation before we escalate to the
+// optional recovery hook. Generous on purpose: recovery restarts the session,
+// which interrupts the agent, so we only do it when the orphan is clearly stuck.
+export const ORPHAN_RECOVER_FAILS = 6
+
 export interface ProbeOutcome {
-  kind: 'healthy' | 'degraded' | 'orphaned'
+  // 'absent' = control-socket *file* missing (MCP not running here). Distinct
+  // from 'orphaned' (file present but listener wedged) — only the latter is a
+  // real orphan; absent is the expected shape while an MCP is (re)launching.
+  kind: 'healthy' | 'degraded' | 'orphaned' | 'absent'
   natsState?: string
   reason?: string
 }
@@ -33,6 +59,13 @@ export interface ProbeOutcome {
 interface HealthState {
   nextProbeAt: number
   consecutiveFailures: number
+  // Consecutive 'orphaned'-class probes. Reset by any non-orphan outcome
+  // (healthy/degraded/absent). Drives the confirm + recover thresholds so a
+  // transient blip can't flip the flag.
+  orphanStreak: number
+  // Set once we've fired the recovery hook for the current orphan episode, so a
+  // long-lived orphan doesn't trigger recovery on every probe.
+  recoveryFired: boolean
 }
 
 export type ProbeFn = (socketPath: string) => Promise<ProbeOutcome>
@@ -43,6 +76,14 @@ export interface NatsHealthMonitorOpts {
   getSocketPath: (sessionName: string) => string | null
   /** Override for tests. Defaults to the real Unix-socket probe. */
   probe?: ProbeFn
+  /**
+   * Optional recovery hook, fired once per orphan episode after
+   * ORPHAN_RECOVER_FAILS consecutive orphan probes. Wire this to a real
+   * recovery (e.g. restart the session so Claude relaunches the channel-server
+   * MCP). Off by default — auto-recovery interrupts a live agent, so the host
+   * only supplies it when configured to. Must never throw into the probe loop.
+   */
+  onConfirmedOrphan?: (sessionName: string) => void
 }
 
 /** 1 fail → 30s, 2 → 60s, 3 → 2m, 4 → 4m, 5+ → 5m (cap). */
@@ -61,12 +102,14 @@ export class NatsHealthMonitor {
   private readonly docStore: DocumentStore
   private readonly getSocketPath: (n: string) => string | null
   private readonly probe: ProbeFn
+  private readonly onConfirmedOrphan?: (sessionName: string) => void
 
   constructor(opts: NatsHealthMonitorOpts) {
     this.sessionsDir = opts.sessionsDir
     this.docStore = opts.docStore
     this.getSocketPath = opts.getSocketPath
     this.probe = opts.probe ?? defaultProbe
+    this.onConfirmedOrphan = opts.onConfirmedOrphan
   }
 
   start(): void {
@@ -87,7 +130,7 @@ export class NatsHealthMonitor {
 
   trackSession(name: string): void {
     if (!this.states.has(name)) {
-      this.states.set(name, { nextProbeAt: 0, consecutiveFailures: 0 })
+      this.states.set(name, { nextProbeAt: 0, consecutiveFailures: 0, orphanStreak: 0, recoveryFired: false })
     }
   }
 
@@ -154,19 +197,47 @@ export class NatsHealthMonitor {
     // Session may have been untracked (or the monitor stopped) while a probe
     // was in flight — drop the result silently.
     if (!state) return
+
     if (outcome.kind === 'healthy') {
       state.consecutiveFailures = 0
+      state.orphanStreak = 0
+      state.recoveryFired = false
       state.nextProbeAt = now + BASE_INTERVAL_MS
       this.maybeUpdateOrphanFlag(name, null, observedFlagAtStart)
-    } else if (outcome.kind === 'orphaned') {
-      state.consecutiveFailures += 1
-      state.nextProbeAt = now + backoffMs(state.consecutiveFailures)
+      return
+    }
+
+    // Every non-healthy outcome backs off the same way.
+    state.consecutiveFailures += 1
+    state.nextProbeAt = now + backoffMs(state.consecutiveFailures)
+
+    if (outcome.kind === 'orphaned') {
+      state.orphanStreak += 1
+      // Debounce: only believe an orphan after sustained consecutive failures.
+      // A single startup/`/clear`/under-load blip never flips the flag.
+      if (state.orphanStreak < ORPHAN_CONFIRM_FAILS) {
+        log.info('nats-health', `${name}: orphan probe ${state.orphanStreak}/${ORPHAN_CONFIRM_FAILS} (${outcome.reason ?? 'unreachable'}) — not flagging yet`)
+        return
+      }
       // Setting always wins — pass undefined to skip the freshness check.
       this.maybeUpdateOrphanFlag(name, new Date(now).toISOString(), undefined)
-    } else {
-      // degraded — MCP is alive and healing; back off but don't toggle flag.
-      state.consecutiveFailures += 1
-      state.nextProbeAt = now + backoffMs(state.consecutiveFailures)
+      // Escalate to recovery once, only when the orphan is clearly stuck.
+      if (state.orphanStreak >= ORPHAN_RECOVER_FAILS && !state.recoveryFired && this.onConfirmedOrphan) {
+        state.recoveryFired = true
+        log.warn('nats-health', `${name}: orphan stuck ${state.orphanStreak} probes — firing recovery hook`)
+        try { this.onConfirmedOrphan(name) } catch (err) {
+          log.warn('nats-health', `${name}: recovery hook threw: ${(err as Error).message}`)
+        }
+      }
+      return
+    }
+
+    // 'absent' (socket file missing — MCP not running here) or 'degraded' (MCP
+    // alive but connection not OPEN). Neither is an orphan: reset the streak so
+    // a later genuine orphan starts its debounce fresh, and leave the flag as-is
+    // (an already-set flag clears only on a healthy probe).
+    state.orphanStreak = 0
+    if (outcome.kind === 'degraded') {
       log.info('nats-health', `${name} degraded (natsState=${outcome.natsState ?? 'unknown'})`)
     }
   }
@@ -277,11 +348,17 @@ export function probeNatsLiveStatus(socketPath: string): Promise<NatsLiveStatus>
 }
 
 /** Real probe for the health monitor — derives the orphan-tracking ProbeOutcome
- * from the same observed status used everywhere else. */
+ * from the same observed status used everywhere else.
+ *
+ * The `down` connection splits two ways: a missing socket *file* means the MCP
+ * isn't running here (→ 'absent', benign — it's (re)launching or stopped),
+ * whereas a present-but-unanswering socket (refused/timeout) is the real
+ * wedged-listener orphan (→ 'orphaned', subject to the confirm debounce). */
 function defaultProbe(socketPath: string): Promise<ProbeOutcome> {
   return probeNatsLiveStatus(socketPath).then(s => {
     if (s.connection === 'open') return { kind: 'healthy', natsState: s.natsState }
     if (s.connection === 'degraded') return { kind: 'degraded', natsState: s.natsState, reason: s.reason }
+    if (s.reason === 'socket file missing') return { kind: 'absent', reason: s.reason }
     return { kind: 'orphaned', reason: s.reason }
   })
 }
