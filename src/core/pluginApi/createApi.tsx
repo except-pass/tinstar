@@ -352,6 +352,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     function registerTerminalWidget(opts: RegisterTerminalWidgetOptions): Disposable {
       function TerminalBackedWidget(_props: WidgetProps) {
         const [data] = api.widget.useData<{ sessionId?: string }>()
+        // For a session-view, data.sessionId is injected by renderNode from the run (run.sessionId).
         const sessionId = data?.sessionId ?? opts.defaultSessionId ?? ''
         const frameRef = useRef<HTMLIFrameElement>(null)
         const handle: TerminalHandle = useMemo(
@@ -374,6 +375,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
         minSize: opts.minSize ?? { width: 360, height: 240 },
         dragHandleSelector: '.widget-drag-handle',
         capabilities: ['session-host'],
+        creator: opts.creator,
       })
     }
 

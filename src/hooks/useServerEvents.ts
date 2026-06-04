@@ -426,6 +426,10 @@ export function applyOptimistic(entity: string, data: unknown): void {
     const w = data as PluginWidgetInstance
     const exists = prev.pluginWidgets.some(x => x.id === w.id)
     currentState = { ...prev, pluginWidgets: exists ? prev.pluginWidgets.map(x => x.id === w.id ? w : x) : [...prev.pluginWidgets, w] }
+  } else if (entity === 'run') {
+    const run = data as Run
+    const exists = prev.runs.some(r => r.id === run.id)
+    currentState = { ...prev, runs: exists ? prev.runs.map(r => r.id === run.id ? run : r) : [...prev.runs, run] }
   } else {
     return
   }

@@ -316,6 +316,10 @@ export interface RegisterTerminalWidgetOptions {
   defaultSessionId?: string
   defaultSize?: { width: number; height: number }
   minSize?: { width: number; height: number }
+  /** Mark this terminal widget as a session-view: its canvas node IS a session's
+   *  run node (run.view). 'session-backed' lists it in the palette, routes spawn
+   *  through the session-create flow, and renders it at the run node. Default 'standalone'. */
+  creator?: 'standalone' | 'session-backed'
 }
 
 /** Embeddable browser/terminal primitives for plugin authors. The host owns the
