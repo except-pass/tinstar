@@ -964,17 +964,13 @@ export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalRe
 
   const { initialPrompt, systemPrompt } = resolveHandPrompts(hand)
   const persona = systemPrompt ?? MARSHAL_AGENT_PROMPT
-  // Pass the persona as structured `agent` metadata so it interpolates into the
-  // Marshal template's persona placeholders ({agentPrompt}/{agentJson}/etc).
-  // createSessionInternal persists it on the session, and `/start` re-supplies
-  // it on restart, so the persona survives both `/clear` and a generic restart.
-  // A user-overridden Marshal template may omit those placeholders, though — in
-  // that case fall back to appendSystemPrompt so the persona still reaches the
-  // process (and is likewise persisted for `/start`).
-  const tmpl = createCtx.cfg.cliTemplates.find(t => t.name === hand.cliTemplate) ?? null
-  const referencesPersona = tmpl
-    ? /\{agent(Name|Description|Prompt|Json)\}/.test(`${tmpl.startCmd} ${tmpl.resumeCmd}`)
-    : false
+  // Pass the persona both as structured `agent` metadata (for templates whose
+  // start/resume commands carry persona placeholders {agentPrompt}/{agentJson}/etc)
+  // and as appendSystemPrompt (the fallback for user-overridden templates that
+  // omit them). Both are persisted so the persona survives `/clear` and `/start`.
+  // buildAgentCommand decides per-command at runtime whether the append is still
+  // needed, so a template that interpolates the persona in only one of
+  // startCmd/resumeCmd still gets it exactly once on both create and resume.
   const result = await createSessionInternal({
     name: MARSHAL_NAME,
     skipPermissions: true,
@@ -985,7 +981,7 @@ export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalRe
       description: MARSHAL_AGENT_DESCRIPTION,
       prompt: persona,
     },
-    appendSystemPrompt: referencesPersona ? null : persona,
+    appendSystemPrompt: persona,
   }, createCtx)
   if (!result.ok) return { ok: false, error: result.error }
 

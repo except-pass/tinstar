@@ -262,8 +262,13 @@ export function buildAgentCommand(opts: {
       prompt: opts.resume ? null : opts.initialPrompt,
       agent: opts.agent,
     })
+    // Only append --append-system-prompt when *this* command didn't already
+    // interpolate the persona via an {agent...} placeholder. Decided per-command
+    // so asymmetric templates (placeholder in only one of startCmd/resumeCmd)
+    // still get the persona exactly once on both create and resume.
+    const interpolatedPersona = opts.agent != null && /\{agent(Name|Description|Prompt|Json)\}/.test(tmpl)
     // Insert --append-system-prompt before the -- prompt separator if present
-    if (opts.appendSystemPrompt) {
+    if (opts.appendSystemPrompt && !interpolatedPersona) {
       const promptFlag = ` --append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`
       const dashDashIdx = cmd.indexOf(' -- ')
       if (dashDashIdx !== -1) {
