@@ -120,6 +120,7 @@ Each `widgets[]` entry accepts:
 | `icon` | string | no | Path to an SVG icon, relative to your plugin's `package.json`. |
 | `singleton` | boolean | no | If `true`, the host rejects spawning a second instance per space. |
 | `spawn` | `'palette' \| 'palette+context'` | no | Default `'palette'`. `'palette+context'` is reserved for entity-drag shortcuts in V5.2+; entries currently render greyed and non-draggable in the palette. |
+| `snappable` | boolean | no | Whether the widget participates in canvas snapping (drag-to-snap, the `[+]` grow affordance, snap-on-create). Non-container leaf widgets snap by default; set `false` to opt out. Containers never snap. |
 
 If `activate()` registers a widget type not in the manifest, the host logs a warning and accepts it. If the manifest declares one not actually registered at runtime, the host quietly drops the stale entry.
 
