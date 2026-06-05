@@ -762,6 +762,23 @@ function snapWidgetToSession(
   return { position: { x: maxRight + PLACEMENT_GAP, y: sessionLayout.y } }
 }
 
+/** Snap a newly created widget to its spawning session's constellation slot
+ *  (joining the session's slot + adding a snap edge) when a session context
+ *  exists and snapping wasn't opted out. Returns the tiled position for callers
+ *  that store one (browser/artifact); the constellation membership is the snap
+ *  itself. Shared by the browser, artifact, and editor create paths so
+ *  snap-on-create is decided in ONE place. */
+function maybeSnapOnCreate(
+  ctx: RouteContext,
+  opts: { spaceId: string | undefined; sessionId: string | undefined; widgetId: string; slotProvided: boolean; snapToSession?: boolean },
+): { x: number; y: number } | null {
+  const { spaceId, sessionId, widgetId, slotProvided, snapToSession } = opts
+  if (snapToSession === false || slotProvided || !spaceId || !sessionId) return null
+  const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
+  if (!run) return null
+  return snapWidgetToSession(ctx, spaceId, `run-${run.id}`, widgetId).position
+}
+
 interface CreateBrowserWidgetParams {
   sessionId?: string
   url?: string
@@ -814,11 +831,7 @@ function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParam
   const widgetId = shortId('browser')
 
   // Auto-snap to the spawning session unless opted out or any slot was given.
-  const wantSnap = parsed.snapToSession !== false && !slotProvided && !!run && !!spaceId
-  let snapPosition: { x: number; y: number } | null = null
-  if (wantSnap && run) {
-    snapPosition = snapWidgetToSession(ctx, spaceId, `run-${run.id}`, widgetId).position
-  }
+  const snapPosition = maybeSnapOnCreate(ctx, { spaceId, sessionId, widgetId, slotProvided, snapToSession: parsed.snapToSession })
 
   // Explicit placement wins; otherwise use the tiled snap position if we got one.
   const finalPosition = placement?.position ?? snapPosition ?? null
@@ -1697,8 +1710,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         return workspacePath ? resolve(workspacePath, filePath.replace(/^\/+/, '')) : filePath
       })()
 
+      const widgetId = shortId('editor')
       const widget: EditorWidget = {
-        id: shortId('editor'),
+        id: widgetId,
         spaceId: ctx.docStore.activeSpaceId || undefined,
         sessionId,
         filePath: absoluteFilePath,
@@ -1710,6 +1724,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         color: run.color,
       }
       ctx.docStore.upsertEditorWidget(widget.id, widget)
+      // File-editors snap to their spawning session's constellation like browsers do.
+      // The editor has no stored position field, so we only need the membership side-effect.
+      maybeSnapOnCreate(ctx, {
+        spaceId: widget.spaceId,
+        sessionId,
+        widgetId: widget.id,
+        slotProvided: false,
+        snapToSession: undefined,
+      })
       ok(res, widget)
     })
     return true
