@@ -1,5 +1,6 @@
 import { useRef, useState, useCallback, useEffect, type RefObject, type PointerEvent as ReactPointerEvent } from 'react'
 import type { WidgetRegistration } from './widgetComponentRegistry'
+import { isSnappable } from './widgetComponentRegistry'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import { WidgetIdProvider } from '../core/pluginApi/widgetIdContext'
 
@@ -301,7 +302,7 @@ export function CanvasWidgetShell({
         />
       </WidgetIdProvider>
 
-      {onAddWidget && !registration.isContainer && (isHovered || isSelected) && (
+      {onAddWidget && isSnappable(registration) && (isHovered || isSelected) && (
         <div className="pointer-events-none absolute inset-0">
           {(['left','right','top','bottom'] as const).filter(edge => !occupiedEdges?.has(edge)).map(edge => {
             const posStyle: React.CSSProperties =
