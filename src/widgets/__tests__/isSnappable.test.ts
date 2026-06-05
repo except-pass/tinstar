@@ -13,4 +13,7 @@ describe('isSnappable', () => {
   it('snappable:false opts a non-container out', () => {
     expect(isSnappable({ isContainer: false, snappable: false })).toBe(false)
   })
+  it('an undefined registration is not snappable (defensive — call sites pass registry lookups)', () => {
+    expect(isSnappable(undefined)).toBe(false)
+  })
 })
