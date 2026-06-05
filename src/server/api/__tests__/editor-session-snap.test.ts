@@ -150,4 +150,26 @@ describe('file-editor snaps to session on create', () => {
     expect(slotsForNode(graph, editor.id).length).toBe(0)
     expect(snapNeighbors(graph, editor.id)).not.toContain(SESSION_NODE_ID)
   })
+
+  // Seed the on-disk layouts that lookupNodeLayout reads (loadConfigMerged → <root>/config.json).
+  function writeLayouts(entries: Record<string, { x: number; y: number; width: number; height: number }>) {
+    writeFileSync(join(t.tmpRoot, 'config.json'),
+      JSON.stringify({ ui: { layouts: { [`tinstar-layouts-v3-${SPACE_ID}`]: entries } } }))
+  }
+
+  it('seeds a tiled position after the session right edge (full browser parity)', async () => {
+    // Session occupies x:0..1000. The editor tiles right after it.
+    writeLayouts({ [SESSION_NODE_ID]: { x: 0, y: 0, width: 1000, height: 600 } })
+    const p = writeSource(t.tmpRoot, 'tiled.ts', 'export const tiled = 1')
+    const editor = (await (await t.fetch('/api/editor-widgets', { method: 'POST', body: JSON.stringify({ sessionId: SESSION_ID, filePath: p }) })).json()).data
+    const widget = t.docStore.getAllEditorWidgets().find(w => w.id === editor.id)!
+    expect(widget.position!.x).toBe(1020) // 1000 + PLACEMENT_GAP(20)
+    expect(widget.position!.y).toBe(0)
+    expect(widget.size).toEqual({ width: 640, height: 480 })
+    // Membership still holds — same slot as the session node.
+    const graph = t.docStore.getConstellationGraph(SPACE_ID)!
+    const editorSlots = slotsForNode(graph, editor.id)
+    expect(editorSlots.length).toBe(1)
+    expect(slotsForNode(graph, SESSION_NODE_ID)).toEqual(editorSlots)
+  })
 })

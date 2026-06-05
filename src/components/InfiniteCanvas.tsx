@@ -188,8 +188,9 @@ const SNAP_DISTANCE = 60
 export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onRequestCreateSession, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // Seed initial placement for browser widgets opened via the host placement API
-  // (POST/PATCH /api/browser-widgets with position/nearNodeId). Consulted by the
-  // layout hook only for nodes that don't have a layout yet.
+  // (POST/PATCH /api/browser-widgets with position/nearNodeId), and for file-editor
+  // widgets snapped to their session on create (POST /api/editor-widgets). Consulted
+  // by the layout hook only for nodes that don't have a layout yet.
   const placementSeed = useMemo(() => {
     const seed = new Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>()
     for (const w of browserWidgetMap.values()) {
@@ -202,8 +203,18 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         })
       }
     }
+    for (const w of editorWidgetMap.values()) {
+      if (w.position) {
+        seed.set(w.id, {
+          x: w.position.x,
+          y: w.position.y,
+          width: w.size?.width ?? 640,
+          height: w.size?.height ?? 480,
+        })
+      }
+    }
     return seed
-  }, [browserWidgetMap])
+  }, [browserWidgetMap, editorWidgetMap])
   const {
     layouts,
     treeMaps,

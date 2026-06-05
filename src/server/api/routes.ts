@@ -635,6 +635,7 @@ function deepMergeEntity<T extends Record<string, unknown>>(existing: T, patch: 
  *  Mirrors RUN_GAP in useWidgetLayouts.ts. */
 const PLACEMENT_GAP = 20
 const DEFAULT_BROWSER_SIZE = { width: 800, height: 600 }
+const DEFAULT_EDITOR_SIZE = { width: 640, height: 480 }
 
 interface PlacementInput {
   position?: { x: number; y: number }
@@ -746,11 +747,14 @@ function snapWidgetToSession(
   // dragged/resized), falling back to the seeded position+size on its widget record
   // (so back-to-back server-side spawns, not yet flushed to layouts, still tile).
   const browserById = new Map(ctx.docStore.getAllBrowserWidgets().map(w => [w.id, w]))
+  const editorById = new Map(ctx.docStore.getAllEditorWidgets().map(w => [w.id, w]))
   const rightEdgeOf = (id: string): number | null => {
     const cfg = lookupNodeLayout(ctx, spaceId, id)
     if (cfg) return cfg.x + cfg.width
     const bw = browserById.get(id)
     if (bw?.position && bw?.size) return bw.position.x + bw.size.width
+    const ed = editorById.get(id)
+    if (ed?.position && ed?.size) return ed.position.x + ed.size.width
     return null
   }
   let maxRight = sessionLayout.x + sessionLayout.width
@@ -1711,9 +1715,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       })()
 
       const widgetId = shortId('editor')
+      const editorSpaceId = ctx.docStore.activeSpaceId || undefined
+      // File-editors snap to their spawning session's constellation like browsers do:
+      // join the session's slot (+ snap edge) and seed a tiled position. The position
+      // is honored for a layout-less node (e.g. an API/agent-created editor); an
+      // interactive open that sets its own client layout ignores the seed.
+      const snapPos = maybeSnapOnCreate(ctx, { spaceId: editorSpaceId, sessionId, widgetId, slotProvided: false, snapToSession: undefined })
       const widget: EditorWidget = {
         id: widgetId,
-        spaceId: ctx.docStore.activeSpaceId || undefined,
+        spaceId: editorSpaceId,
         sessionId,
         filePath: absoluteFilePath,
         task: task?.name ?? '',
@@ -1722,17 +1732,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         worktree: worktree?.name ?? '',
         repo: worktree?.repo ?? run.repo ?? '',
         color: run.color,
+        ...(snapPos ? { position: snapPos, size: DEFAULT_EDITOR_SIZE } : {}),
       }
       ctx.docStore.upsertEditorWidget(widget.id, widget)
-      // File-editors snap to their spawning session's constellation like browsers do.
-      // The editor has no stored position field, so we only need the membership side-effect.
-      maybeSnapOnCreate(ctx, {
-        spaceId: widget.spaceId,
-        sessionId,
-        widgetId: widget.id,
-        slotProvided: false,
-        snapToSession: undefined,
-      })
       ok(res, widget)
     })
     return true

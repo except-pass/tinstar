@@ -202,6 +202,12 @@ export interface EditorWidget {
   worktree: string
   repo: string
   color?: string
+  /** Optional initial canvas placement seed, mirroring BrowserWidget. Set by the
+   *  editor create endpoint when the widget snaps to its session. Honored by the
+   *  layout system only for a node with no layout yet (e.g. an API/agent-created
+   *  editor); interactive opens that set their own layout ignore it. */
+  position?: { x: number; y: number }
+  size?: { width: number; height: number }
 }
 
 export interface BrowserWidget {
