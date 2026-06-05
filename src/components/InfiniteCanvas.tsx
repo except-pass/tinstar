@@ -5,7 +5,7 @@ import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
 import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
-import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
+import { getWidgetComponent, toWidgetType, isSnappable } from '../widgets/widgetComponentRegistry'
 import { resolveRunViewType } from '../domain/runView'
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
@@ -89,14 +89,14 @@ function buildParentMap(nodes: TreeNode[], parentId: string | null = null): Map<
   return map
 }
 
-/** Collect all leaf (non-container) node IDs from a tree */
-function collectRunNodeIds(nodes: TreeNode[]): string[] {
+/** Collect all snappable leaf node IDs from a tree (the drag-to-snap set). */
+function collectSnappableLeafIds(nodes: TreeNode[]): string[] {
   const result: string[] = []
   for (const node of nodes) {
-    if (!getWidgetComponent(toWidgetType(node.type))?.isContainer) {
+    if (isSnappable(getWidgetComponent(toWidgetType(node.type)))) {
       result.push(node.id)
     } else {
-      result.push(...collectRunNodeIds(node.children))
+      result.push(...collectSnappableLeafIds(node.children))
     }
   }
   return result
@@ -255,22 +255,22 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const minimapToggleRef = useRef<(() => void) | null>(null)
   const hudToggleRef = useRef<(() => void) | null>(null)
 
-  // All run node IDs for marquee intersection
-  const runNodeIdsRef = useRef<string[]>([])
+  // All snappable leaf node IDs (drag-to-snap + marquee intersection set)
+  const snappableLeafIdsRef = useRef<string[]>([])
 
-  // Spawn animation: track which run node IDs are newly created (not present on initial load)
+  // Spawn animation: track which snappable leaf node IDs are newly created (not present on initial load)
   const seenRunNodeIdsRef = useRef<Set<string> | null>(null)
   const [spawnedNodeIds, setSpawnedNodeIds] = useState<Set<string>>(new Set())
 
-  // Keep parent map, depth map, and run node IDs in sync with tree
+  // Keep parent map, depth map, and snappable leaf node IDs in sync with tree
   const parentMapRef = useRef<Map<string, string | null>>(new Map())
   const depthMapRef = useRef<Map<string, number>>(new Map())
   useEffect(() => {
     parentMapRef.current = buildParentMap(tree)
     depthMapRef.current = treeMaps.depthMap
-    runNodeIdsRef.current = collectRunNodeIds(tree)
+    snappableLeafIdsRef.current = collectSnappableLeafIds(tree)
 
-    const leafIds = runNodeIdsRef.current
+    const leafIds = snappableLeafIdsRef.current
     if (seenRunNodeIdsRef.current === null) {
       // First render — mark all as seen without animating
       seenRunNodeIdsRef.current = new Set(leafIds)
@@ -540,7 +540,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           const y2 = (Math.max(marquee.startY, marquee.endY) - rect.top - camera.y) / camera.zoom
 
           const selected: string[] = []
-          for (const nodeId of runNodeIdsRef.current) {
+          for (const nodeId of snappableLeafIdsRef.current) {
             const layout = layouts.get(nodeId)
             if (!layout) continue
             // Check AABB intersection
@@ -732,9 +732,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   const collectSnapNeighbors = useCallback((nodeId: string): SnapWidget[] => {
     // Magnetic snap only targets work widgets (runs, plugin widgets, editors, browsers, …) —
-    // never grouping containers (Initiative/Epic/Task). runNodeIdsRef holds exactly the
-    // non-container leaf nodes (see collectRunNodeIds), so filter neighbors to that set.
-    const leafIds = new Set(runNodeIdsRef.current)
+    // never grouping containers (Initiative/Epic/Task). snappableLeafIdsRef holds exactly the
+    // snappable leaf nodes (see collectSnappableLeafIds), so filter neighbors to that set.
+    const leafIds = new Set(snappableLeafIdsRef.current)
     const neighbors: SnapWidget[] = []
     for (const [id, l] of layouts) {
       if (id === nodeId || !leafIds.has(id)) continue
@@ -805,7 +805,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
     if (isSelected(nodeId)) {
       const snap = new Map<string, { x: number; y: number }>()
-      for (const leafId of runNodeIdsRef.current) {
+      for (const leafId of snappableLeafIdsRef.current) {
         if (leafId !== nodeId && isSelected(leafId)) {
           const layout = layouts.get(leafId)
           if (layout) snap.set(leafId, { x: layout.x, y: layout.y })
@@ -1620,10 +1620,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       ? { ...reg, component: getOrCreatePluginChromeWrapper(reg.type, reg.component) }
       : reg
 
-    // Any non-container leaf widget participates in constellation snap, not
+    // Any snappable leaf widget participates in constellation snap, not
     // just runs. Runs, plugin widgets, editors, browsers, images
     // all behave the same in the snap pipeline.
-    const isSnapLeaf = !reg.isContainer
+    const isSnapLeaf = isSnappable(reg)
 
     return (
       <Fragment key={node.id}>
