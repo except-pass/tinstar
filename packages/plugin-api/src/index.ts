@@ -46,6 +46,10 @@ export interface WidgetRegistration {
   /** How an instance is created. 'standalone' → one-shot create endpoint;
    *  'session-backed' → opens the session create flow. Defaults to 'standalone'. */
   creator?: 'standalone' | 'session-backed'
+  /** Whether this widget participates in snapping (drag-to-snap, the [+] grow
+   *  affordance, snap-on-create). Non-container leaves snap by DEFAULT; set
+   *  `false` to opt out. Containers never snap regardless. */
+  snappable?: boolean
   /** Free-form descriptive tags, reserved for future ordering/grouping. */
   tags?: string[]
 }
@@ -392,6 +396,9 @@ export interface PluginManifest {
       spawn?: 'palette' | 'palette+context'
       capabilities?: string[]
       creator?: 'standalone' | 'session-backed'
+      /** Whether this widget participates in snapping. Non-container leaves snap
+       *  by DEFAULT; set `false` to opt out. Containers never snap regardless. */
+      snappable?: boolean
       tags?: string[]
       /** When set, this widget is primitive-backed: the plugin registers it via
        *  api.primitives.register{Browser,Terminal}Widget rather than api.widgets.register. */

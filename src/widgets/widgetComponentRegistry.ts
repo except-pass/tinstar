@@ -78,6 +78,14 @@ export function listWidgetRegistrations(): WidgetRegistration[] {
   return [...registry.values()].filter((s) => s.source === 'host').map((s) => s.reg)
 }
 
+/** The single source of truth for whether a widget participates in snapping.
+ *  Non-container leaves snap by default; a widget opts out with `snappable:false`;
+ *  containers never snap. Every snap path (drag-to-snap, the [+] affordance,
+ *  snap-on-create) consults this — do not re-derive snappability elsewhere. */
+export function isSnappable(reg: { isContainer: boolean; snappable?: boolean } | undefined): boolean {
+  return !!reg && !reg.isContainer && reg.snappable !== false
+}
+
 /**
  * Maps TreeNode.type values to widget registry type strings.
  * 'run' → 'run-workspace'; all group dimension types map to themselves.
