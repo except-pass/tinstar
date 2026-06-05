@@ -91,6 +91,7 @@ describe('parseManifest contributes.widgets new fields', () => {
             creator: 'session-backed',
             capabilities: ['browser'],
             tags: ['dev', 'web'],
+            snappable: false,
           }],
         },
       },
@@ -102,6 +103,16 @@ describe('parseManifest contributes.widgets new fields', () => {
     expect(w?.creator).toBe('session-backed')
     expect(w?.capabilities).toEqual(['browser'])
     expect(w?.tags).toEqual(['dev', 'web'])
+    expect(w?.snappable).toBe(false)
+  })
+
+  it('rejects non-boolean snappable', () => {
+    expect(() => parseManifest({
+      name: 'p', version: '1', tinstar: {
+        apiVersion: '5', displayName: 'P',
+        contributes: { widgets: [{ type: 't', label: 'T', snappable: 'yes' }] },
+      },
+    })).toThrow(/snappable/)
   })
 
   it('rejects unknown creator values', () => {

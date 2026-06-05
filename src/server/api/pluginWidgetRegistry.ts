@@ -50,6 +50,7 @@ export interface ResolvedWidgetType {
   spawn: 'palette' | 'palette+context'
   capabilities?: string[]
   creator?: 'standalone' | 'session-backed'
+  snappable?: boolean
   tags?: string[]
 }
 
@@ -93,6 +94,7 @@ export function resolveWidgetRegistry(configRoot: string): ResolvedWidgetType[] 
         spawn: w.spawn,
         capabilities: w.capabilities,
         creator: w.creator,
+        snappable: w.snappable,
         tags: w.tags,
       })
     }
@@ -131,6 +133,7 @@ export function resolveWidgetRegistry(configRoot: string): ResolvedWidgetType[] 
         spawn: w.spawn ?? 'palette',
         capabilities: w.capabilities,
         creator: w.creator,
+        snappable: w.snappable,
         tags: w.tags,
       })
     }

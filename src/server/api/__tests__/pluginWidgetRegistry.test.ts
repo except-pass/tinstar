@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { resolvePluginIcon, resolveWidgetRegistry, invalidateWidgetRegistryCache } from '../pluginWidgetRegistry'
@@ -66,6 +66,40 @@ describe('resolveWidgetRegistry built-ins', () => {
     writeFileSync(join(d, 'plugins.json'), JSON.stringify({ disabled: ['nats-traffic'], external: [] }))
     const reg = resolveWidgetRegistry(d)
     expect(reg.find(w => w.widgetType === 'saloon')).toBeUndefined()
+    invalidateWidgetRegistryCache()
+  })
+
+  it('threads snappable from an external plugin manifest onto the palette entry', () => {
+    invalidateWidgetRegistryCache()
+    const configRoot = mkdtempSync(join(tmpdir(), 'snappable-config-'))
+    const pluginDir = mkdtempSync(join(tmpdir(), 'snappable-plugin-'))
+    mkdirSync(pluginDir, { recursive: true })
+    writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({
+      name: 'snappable-fixture',
+      version: '0.1.0',
+      tinstar: {
+        apiVersion: '5',
+        displayName: 'Snappable Fixture',
+        contributes: {
+          widgets: [
+            { type: 'no-snap', label: 'No Snap', snappable: false },
+            { type: 'default-snap', label: 'Default Snap' },
+          ],
+        },
+      },
+    }))
+    writeFileSync(join(configRoot, 'plugins.json'), JSON.stringify({
+      disabled: [],
+      external: [{ name: 'snappable-fixture', path: pluginDir }],
+    }))
+
+    const reg = resolveWidgetRegistry(configRoot)
+    const noSnap = reg.find(w => w.widgetType === 'no-snap')
+    const defaultSnap = reg.find(w => w.widgetType === 'default-snap')
+    expect(noSnap).toBeDefined()
+    expect(noSnap!.snappable).toBe(false)
+    expect(defaultSnap).toBeDefined()
+    expect(defaultSnap!.snappable).toBeUndefined()
     invalidateWidgetRegistryCache()
   })
 })

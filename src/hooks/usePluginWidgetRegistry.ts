@@ -14,6 +14,7 @@ export interface PaletteWidgetEntry {
   spawn: 'palette' | 'palette+context'
   capabilities?: string[]
   creator?: 'standalone' | 'session-backed'
+  snappable?: boolean
   tags?: string[]
 }
 

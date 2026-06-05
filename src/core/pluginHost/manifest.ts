@@ -48,6 +48,9 @@ function validateWidgetContribution(w: Record<string, unknown>, pluginName: stri
   if (w.tags !== undefined && !isStringArray(w.tags)) {
     throw new ManifestError(`${where}: tags must be an array of strings if present`)
   }
+  if (w.snappable !== undefined && typeof w.snappable !== 'boolean') {
+    throw new ManifestError(`${where}: snappable must be a boolean if present`)
+  }
 }
 
 function isStringArray(v: unknown): v is string[] {
