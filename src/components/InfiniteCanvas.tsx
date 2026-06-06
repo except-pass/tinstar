@@ -669,7 +669,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     // future per-widget menu (do NOT preventDefault before this guard).
     if ((e.target as HTMLElement).closest('[data-widget-id]')) return
     e.preventDefault()
-    // Screen→canvas conversion — verbatim from handleDrop (lines 1428-1430).
+    // Screen→canvas conversion — verbatim from handleDrop's drop-point math.
     const rect = containerRef.current!.getBoundingClientRect()
     const canvasX = Math.round((e.clientX - rect.left - camera.x) / camera.zoom)
     const canvasY = Math.round((e.clientY - rect.top - camera.y) / camera.zoom)
