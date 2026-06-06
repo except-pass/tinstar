@@ -23,27 +23,31 @@ export function CanvasContextMenu({ anchor, targets, onPick, onClose }: Props) {
   }, [onClose])
 
   return (
-    <div ref={ref} style={{ position: 'fixed', left: anchor.x, top: anchor.y, zIndex: 1000, minWidth: 200,
-      background: '#0b1220', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 6, padding: 4,
-      boxShadow: '0 6px 24px rgba(0,0,0,0.4)', fontSize: 12, color: '#e2e8f0' }}>
-      <button onClick={() => setShowList((s) => !s)}
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
-          textAlign: 'left', padding: '6px 8px', background: 'transparent',
-          border: 0, color: 'inherit', cursor: 'pointer', borderRadius: 4 }}>
+    <div
+      ref={ref}
+      className="fixed z-[9999] bg-surface-panel border border-primary/20 rounded-lg shadow-xl p-1 min-w-[200px] text-xs text-slate-200"
+      style={{ left: anchor.x, top: anchor.y }}
+    >
+      <button
+        className="flex items-center justify-between w-full px-2 py-1.5 text-left rounded hover:bg-surface-hover focus:bg-surface-hover focus:outline-none transition-colors"
+        onClick={() => setShowList((s) => !s)}
+      >
         <span>Move widget here</span> <span aria-hidden>▸</span>
       </button>
       {showList && (
-        <div style={{ maxHeight: 280, overflowY: 'auto', borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 4 }}>
-          {targets.length === 0 && <div style={{ padding: '6px 8px', color: '#64748b' }}>No widgets</div>}
+        <div className="max-h-[280px] overflow-y-auto border-t border-white/10 mt-1">
+          {targets.length === 0 && <div className="px-2 py-1.5 text-slate-500">No widgets</div>}
           {targets.map((t) => (
-            <button key={t.id} onClick={() => onPick(t.id)}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, width: '100%',
-                textAlign: 'left', padding: '6px 8px', background: 'transparent', border: 0, color: 'inherit',
-                cursor: 'pointer', borderRadius: 4 }}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.label}</span>
+            <button
+              key={t.id}
+              className="flex items-center justify-between gap-2 w-full px-2 py-1.5 text-left rounded hover:bg-surface-hover focus:bg-surface-hover focus:outline-none transition-colors"
+              onClick={() => onPick(t.id)}
+            >
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap">{t.label}</span>
               {t.slots.length > 0 && (
-                <span style={{ flexShrink: 0, fontSize: 10, color: '#94a3b8', border: '1px solid rgba(255,255,255,0.15)',
-                  borderRadius: 4, padding: '0 4px' }}>{t.slots.join(' ')}</span>
+                <span className="shrink-0 text-[10px] text-slate-400 border border-white/15 rounded px-1">
+                  {t.slots.join(' ')}
+                </span>
               )}
             </button>
           ))}
