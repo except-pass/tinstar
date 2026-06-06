@@ -1,6 +1,9 @@
 import { useRef, useEffect, useCallback, useState, useMemo, Fragment, type PointerEvent as ReactPointerEvent } from 'react'
 import type { BrowserWidget, EditorWidget, ImageWidget, PluginWidgetInstance, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { findNodeLabel } from '../domain/view-models'
+import { CanvasContextMenu } from './CanvasContextMenu'
+import { buildMoveTargets } from '../domain/moveTargets'
+import { relocateWidgetTo } from '../domain/relocateWidget'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
@@ -657,6 +660,40 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     walk(tree)
     return map
   }, [tree])
+
+  // ── Right-click "Move widget here" context menu ───────────────────────────
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; canvasX: number; canvasY: number } | null>(null)
+
+  const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // Empty-space only: right-click on a widget falls through to the native /
+    // future per-widget menu (do NOT preventDefault before this guard).
+    if ((e.target as HTMLElement).closest('[data-widget-id]')) return
+    e.preventDefault()
+    // Screen→canvas conversion — verbatim from handleDrop (lines 1428-1430).
+    const rect = containerRef.current!.getBoundingClientRect()
+    const canvasX = Math.round((e.clientX - rect.left - camera.x) / camera.zoom)
+    const canvasY = Math.round((e.clientY - rect.top - camera.y) / camera.zoom)
+    setCtxMenu({ x: e.clientX, y: e.clientY, canvasX, canvasY })
+  }, [camera.x, camera.y, camera.zoom])
+
+  const moveTargets = useMemo(
+    () => buildMoveTargets(tree, layouts, {
+      isContainer: (id) => !!getWidgetComponent(toWidgetType(nodeTypeById.get(id) ?? ''))?.isContainer,
+      labelOf: (id) => findNodeLabel(tree, id) ?? id,
+      slotsOf: (id) => constellations.slotsForNode(id).map(Number).filter((n) => !Number.isNaN(n)),
+    }),
+    [tree, layouts, nodeTypeById, constellations],
+  )
+
+  const relocateWidget = useCallback((id: string) => {
+    if (!ctxMenu) return
+    relocateWidgetTo(id, { x: ctxMenu.canvasX, y: ctxMenu.canvasY }, {
+      getLayout, insertLayout,
+      slotsForNode: constellations.slotsForNode,
+      removeFromSlot: constellations.remove,
+    })
+    setCtxMenu(null)
+  }, [ctxMenu, getLayout, insertLayout, constellations])
 
   // Pending run placements, keyed by sessionId. When a session-backed widget is
   // added we open the create dialog; once the resulting run appears via SSE we
@@ -1734,6 +1771,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       onPointerUp={onPointerUp}
       onPointerLeave={onPointerLeave}
       onMouseDown={(e) => { if (e.button === 1) e.preventDefault() }}
+      onContextMenu={handleContextMenu}
       onDragOver={(e) => { e.preventDefault() }}
       onDrop={handleDrop}
       onDragEnter={(e) => {
@@ -1857,6 +1895,16 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           />
         )
       })()}
+
+      {/* Right-click "Move widget here" menu — screen-space, empty-space only */}
+      {ctxMenu && (
+        <CanvasContextMenu
+          anchor={{ x: ctxMenu.x, y: ctxMenu.y }}
+          targets={moveTargets}
+          onPick={relocateWidget}
+          onClose={() => setCtxMenu(null)}
+        />
+      )}
 
     </div>
   )
