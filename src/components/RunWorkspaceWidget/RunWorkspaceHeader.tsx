@@ -264,27 +264,6 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
             )}
           </div>
 
-          {/* Browser drag chip */}
-          <div
-            draggable
-            onMouseEnter={() => setHoveredBtn('browser')}
-            onMouseLeave={() => setHoveredBtn(null)}
-            onDragStart={e => {
-              e.stopPropagation()
-              e.dataTransfer.setData('application/tinstar-browser', JSON.stringify({ sessionId: run.sessionId }))
-              e.dataTransfer.effectAllowed = 'copy'
-            }}
-            className="flex flex-col items-center justify-center gap-0.5 h-full px-3 cursor-grab active:cursor-grabbing transition-colors"
-            style={{
-              color: hoveredBtn === 'browser' ? runAccent : hexToRgba(runAccent, 0.55),
-              background: hoveredBtn === 'browser' ? hexToRgba(runAccent, 0.06) : undefined,
-            }}
-            title="Drag to canvas to create a browser widget"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>language</span>
-            <span className="text-[8px] font-bold tracking-wide leading-none">BROWSER</span>
-          </div>
-
           {isLive && run.port && (
             <>
               {/* Separator before Refresh */}

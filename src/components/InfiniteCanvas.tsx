@@ -1501,22 +1501,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return
       }
 
-      const rawBrowser = e.dataTransfer.getData('application/tinstar-browser')
-      if (rawBrowser) {
-        const { sessionId } = JSON.parse(rawBrowser) as { sessionId: string }
-        const spawnLayout = { x: dropX, y: dropY, width: 800, height: 600 }
-        const res = await apiFetch('/api/browser-widgets', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, snapToSession: false }),
-        })
-        const resJson = await res.json() as { ok: boolean; data?: BrowserWidget }
-        if (!resJson.ok || !resJson.data) return
-        insertLayout(resJson.data.id, spawnLayout)
-        onBrowserWidgetCreated?.(resJson.data)
-        return
-      }
-
       // Hand spawn drop
       const handData = e.dataTransfer.getData('application/tinstar-hand')
       if (handData) {
@@ -1753,7 +1737,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       onDragOver={(e) => { e.preventDefault() }}
       onDrop={handleDrop}
       onDragEnter={(e) => {
-        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-browser') || e.dataTransfer.types.includes('application/tinstar-hand')) {
+        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-hand')) {
           dragEnterCountRef.current++
           setEditorDragActive(true)
         }
