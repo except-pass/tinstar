@@ -77,6 +77,16 @@ describe('rewriteUrlForProxy (runtime shim core)', () => {
     expect(rewriteUrlForProxy('rel', BASE)).toBe('rel')
     expect(rewriteUrlForProxy('', BASE)).toBe('')
   })
+  it('is idempotent: a URL already under the proxy base is not prefixed again', () => {
+    // Regression: an app that derives its own base from location.pathname (e.g.
+    // the stretchplan SPA) emits /api/proxy/w1/plans/x itself; the shim must NOT
+    // re-prefix it into /api/proxy/w1/api/proxy/w1/plans/x (a 404).
+    expect(rewriteUrlForProxy('/api/proxy/w1/plans/vpp-dev', BASE)).toBe('/api/proxy/w1/plans/vpp-dev')
+    expect(rewriteUrlForProxy('/api/proxy/w1', BASE)).toBe('/api/proxy/w1')
+  })
+  it('still prefixes a path that only shares a prefix substring, not the path boundary', () => {
+    expect(rewriteUrlForProxy('/api/proxy/w1x/y', BASE)).toBe('/api/proxy/w1/api/proxy/w1x/y')
+  })
 })
 
 describe('proxyRuntimeShim', () => {
@@ -86,6 +96,10 @@ describe('proxyRuntimeShim', () => {
     expect(shim).toContain('window.fetch')
     expect(shim).toContain('XMLHttpRequest.prototype.open')
     expect(shim).toContain('serviceWorker.register')
+  })
+
+  it('rw guard is idempotent — does not re-prefix a URL already under the base', () => {
+    expect(proxyRuntimeShim(BASE)).toContain("u===B||u.indexOf(B+'/')===0")
   })
 
   it('is a self-contained IIFE (safe to drop inside <script>…</script>)', () => {

@@ -1,4 +1,4 @@
-import { useSyncExternalStore, useCallback, useRef, useMemo, useState } from 'react'
+import { useSyncExternalStore, useCallback, useRef, useMemo, useState, useEffect } from 'react'
 import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi, PluginPrimitivesApi, PrimitiveAccessory, RegisterBrowserWidgetOptions, RegisterTerminalWidgetOptions, BrowserHandle, TerminalHandle, WidgetProps } from '@tinstar/plugin-api'
 import { usePluginWidgetData } from './usePluginWidgetData'
 import { makeBrowserPrimitive } from '../../plugins/browser/src/BrowserPrimitive'
@@ -313,6 +313,21 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
           const cur = dataRef.current?._browser
           setData({ ...(dataRef.current ?? {}), _browser: { url: cur?.url ?? '', headers: next } })
         }, [setData])
+
+        // Browser-primitive widgets render through the server-side proxy, which
+        // resolves its target from the PERSISTED data._browser.url (see
+        // proxyResolve.ts). A freshly spawned widget has data:{}, so the proxy
+        // 404s ("Browser target not found") even though the client falls back to
+        // opts.defaultUrl for display. Persist defaultUrl once on mount when no
+        // url is set yet so the proxy can resolve it. useData is synchronous
+        // (useSyncExternalStore), so an existing widget's url is already present
+        // on first render and this won't clobber it.
+        useEffect(() => {
+          if (!dataRef.current?._browser?.url && opts.defaultUrl) {
+            persistUrl(opts.defaultUrl)
+          }
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [persistUrl])
 
         const handle: BrowserHandle = useMemo(() => ({
           url,

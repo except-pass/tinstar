@@ -64,6 +64,11 @@ export function rewriteProxyBody(body: string, contentType: string, proxyBase: s
 export function rewriteUrlForProxy(url: string, proxyBase: string): string {
   if (typeof url !== 'string') return url
   if (url.length < 1 || url[0] !== '/' || url[1] === '/') return url // not root-relative (or protocol-relative)
+  // Idempotent: a URL already under the proxy base must not be prefixed again.
+  // A proxied app can derive its own base from location.pathname (the stretchplan
+  // SPA does: BASE = pathname before '/p/<slug>') and emit /api/proxy/<id>/plans/x
+  // itself; re-prefixing would yield /api/proxy/<id>/api/proxy/<id>/plans/x (404).
+  if (url === proxyBase || url.indexOf(proxyBase + '/') === 0) return url
   return proxyBase + url
 }
 
@@ -77,7 +82,8 @@ export function proxyRuntimeShim(proxyBase: string): string {
   const base = JSON.stringify(proxyBase)
   return (
     `(function(){var B=${base};` +
-    `function rw(u){return (typeof u==='string'&&u.length>0&&u[0]==='/'&&u[1]!=='/')?B+u:u;}` +
+    `function rw(u){if(typeof u!=='string'||u.length<1||u[0]!=='/'||u[1]==='/')return u;` +
+    `if(u===B||u.indexOf(B+'/')===0)return u;return B+u;}` +
     `var of=window.fetch;if(of){window.fetch=function(i,o){` +
     `try{i=(typeof i==='string')?rw(i):(i&&i.url?new Request(rw(i.url),i):i);}catch(e){}` +
     `return of.call(this,i,o);};}` +

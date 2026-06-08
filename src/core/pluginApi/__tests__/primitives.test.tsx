@@ -155,4 +155,69 @@ describe('api.primitives browser round-trip', () => {
 
     disposable.dispose()
   })
+
+  it('persists defaultUrl to _browser on mount so the server proxy can resolve a fresh widget', () => {
+    // A freshly spawned browser-backed widget has data:{}. The server proxy
+    // resolves its target ONLY from the persisted _browser.url (proxyResolve.ts),
+    // so without this the proxy 404s "Browser target not found". The widget must
+    // persist defaultUrl once on mount.
+    const api = createPluginApi(makeRecord())
+    const disposable = api.primitives.registerBrowserWidget({ type: 'test-browser', defaultUrl: DEFAULT_URL })
+
+    const RegisteredWidget = getWidgetComponent('test-browser')!.component
+    const widgetProps: WidgetProps = {
+      data: {}, zoom: 1, isSelected: false, isDragging: false, isHovered: false, isDropTarget: false,
+    }
+
+    act(() => {
+      render(
+        <ConstellationProvider spaceId="space-1" nodeIds={[NODE_ID]}>
+          <WidgetIdProvider id={NODE_ID}>
+            <RegisteredWidget {...widgetProps} />
+          </WidgetIdProvider>
+        </ConstellationProvider>,
+      )
+    })
+
+    expect(addOptimistic).toHaveBeenCalledWith(
+      'pluginWidget',
+      expect.objectContaining({
+        id: NODE_ID,
+        data: expect.objectContaining({ _browser: expect.objectContaining({ url: DEFAULT_URL }) }),
+      }),
+    )
+    const stored = mockState.pluginWidgets.find(p => p.id === NODE_ID)
+    expect((stored?.data as { _browser?: { url: string } } | undefined)?._browser?.url).toBe(DEFAULT_URL)
+
+    disposable.dispose()
+  })
+
+  it('does NOT clobber an already-persisted _browser.url on mount', () => {
+    // An existing widget reloads with its url already in the store; the mount
+    // persist must be a no-op (useData is synchronous, so the url is present on
+    // first render) — otherwise reload would reset the user's navigation.
+    mockState.pluginWidgets[0].data = { _browser: { url: 'http://x/p/keep' } }
+    const api = createPluginApi(makeRecord())
+    const disposable = api.primitives.registerBrowserWidget({ type: 'test-browser', defaultUrl: DEFAULT_URL })
+    const RegisteredWidget = getWidgetComponent('test-browser')!.component
+    const widgetProps: WidgetProps = {
+      data: {}, zoom: 1, isSelected: false, isDragging: false, isHovered: false, isDropTarget: false,
+    }
+
+    act(() => {
+      render(
+        <ConstellationProvider spaceId="space-1" nodeIds={[NODE_ID]}>
+          <WidgetIdProvider id={NODE_ID}>
+            <RegisteredWidget {...widgetProps} />
+          </WidgetIdProvider>
+        </ConstellationProvider>,
+      )
+    })
+
+    expect(addOptimistic).not.toHaveBeenCalled()
+    const stored = mockState.pluginWidgets.find(p => p.id === NODE_ID)
+    expect((stored?.data as { _browser?: { url: string } } | undefined)?._browser?.url).toBe('http://x/p/keep')
+
+    disposable.dispose()
+  })
 })
