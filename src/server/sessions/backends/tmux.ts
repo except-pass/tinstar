@@ -1,5 +1,5 @@
 import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import type { Session, SessionNats } from '../session'
@@ -24,6 +24,17 @@ const execFileAsync = promisify(execFile)
  */
 export function natsControlSocketPath(sessionName: string): string {
   return `/tmp/tinstar-nats-${sessionName}.sock`
+}
+
+/**
+ * Path to the session's NATS topics file (one subject per line). The static
+ * .mcp.json passes this to the channel server via --topics-file, keeping the
+ * variable-length subscription list out of the (otherwise byte-identical)
+ * .mcp.json so that file never churns. Lives in the per-session config dir,
+ * not the git workspace.
+ */
+export function natsTopicsFilePath(sessionsDir: string, sessionName: string): string {
+  return join(sessionsDir, sessionName, 'nats-topics.txt')
 }
 
 // --- Naming ---
@@ -201,9 +212,20 @@ function interpolateTemplate(
 }
 
 /**
- * Write .mcp.json to the workspace CWD so Claude picks it up automatically.
- * Must use CWD placement — --mcp-config flag does NOT wire the channel server correctly.
- * Returns the path written.
+ * Write the NATS channel config Claude needs at launch. Returns the .mcp.json path.
+ *
+ * The channel must live in the workspace CWD .mcp.json: Claude's
+ * --dangerously-load-development-channels server:nats resolver only sees MCP
+ * servers from project/user scope, NOT from --mcp-config (verified — that path
+ * reports "no MCP server configured with that name"). So we can't move the file
+ * out of the repo. Instead we make it STOP CHURNING by making it byte-identical
+ * across every session: the per-session bits (--name, --control-socket, and the
+ * variable-length subscription list) come from env vars Claude expands at launch
+ * (${TINSTAR_SESSION_NAME} etc., injected via tmux set-environment) plus a
+ * --topics-file written to the per-session dir. The .mcp.json then depends only
+ * on per-machine config (bun path, package), so concurrent sessions sharing one
+ * repo all want the same bytes. Both files are written idempotently — unchanged
+ * content means no write, so mtime is stable and there is nothing to churn.
  */
 export function generateNatsMcpConfig(opts: {
   sessionsDir: string
@@ -214,19 +236,22 @@ export function generateNatsMcpConfig(opts: {
   bunPath: string
   jetstream?: boolean
 }): string {
-  // Write to workspace CWD — Claude looks for .mcp.json in the working directory
-  const mcpConfigPath = join(opts.workspacePath, '.mcp.json')
+  // Per-session topics file (one subject per line) — keeps the variable-length
+  // subscription list out of the static .mcp.json. Lives outside the git tree.
+  const topicsPath = natsTopicsFilePath(opts.sessionsDir, opts.sessionName)
+  mkdirSync(join(opts.sessionsDir, opts.sessionName), { recursive: true })
+  writeIfChanged(topicsPath, opts.nats.subscriptions.join('\n') + '\n')
 
-  // Build args: use `bun x <package>` to run from npm/github without local install
-  const args: string[] = ['x', opts.channelServerPackage, '--name', opts.sessionName]
-  for (const subject of opts.nats.subscriptions) {
-    args.push('--subscribe', subject)
-  }
+  // Build args from env tokens so the file is identical for every session.
   // --control-socket wires up the hot subscription management path used by
   // POST/DELETE /api/sessions/:name/subscriptions. Requires nats-channel-mcp
   // >= the commit that introduced the flag (except-pass/nats-channel-mcp#1).
-  args.push('--control-socket', natsControlSocketPath(opts.sessionName))
-
+  const args: string[] = [
+    'x', opts.channelServerPackage,
+    '--name', '${TINSTAR_SESSION_NAME}',
+    '--topics-file', '${TINSTAR_NATS_TOPICS_FILE}',
+    '--control-socket', '${TINSTAR_NATS_CONTROL_SOCKET}',
+  ]
   if (opts.jetstream) args.push('--jetstream')
 
   const mcpConfig = {
@@ -238,8 +263,29 @@ export function generateNatsMcpConfig(opts: {
     },
   }
 
-  writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2))
+  // Claude looks for .mcp.json in the working directory; the channels resolver
+  // requires it there (see header comment). Written idempotently so it churns
+  // only when per-machine config actually changes, never per session.
+  const mcpConfigPath = join(opts.workspacePath, '.mcp.json')
+  writeIfChanged(mcpConfigPath, JSON.stringify(mcpConfig, null, 2))
   return mcpConfigPath
+}
+
+/** Write only when content differs, so a stable config leaves mtime untouched. */
+function writeIfChanged(path: string, content: string): void {
+  if (existsSync(path) && readFileSync(path, 'utf-8') === content) return
+  writeFileSync(path, content)
+}
+
+/**
+ * Inject the per-session NATS env vars the static .mcp.json expands at launch.
+ * TINSTAR_SESSION_NAME is already set by createTmuxSession; these two carry the
+ * paths that vary per session. The launch command's `eval "$(tmux
+ * show-environment -s)"` loads them into the shell before `claude` runs.
+ */
+async function setNatsEnv(tmuxName: string, sessionsDir: string, sessionName: string): Promise<void> {
+  await execFileAsync('tmux', ['set-environment', '-t', tmuxName, 'TINSTAR_NATS_TOPICS_FILE', natsTopicsFilePath(sessionsDir, sessionName)])
+  await execFileAsync('tmux', ['set-environment', '-t', tmuxName, 'TINSTAR_NATS_CONTROL_SOCKET', natsControlSocketPath(sessionName)])
 }
 
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
@@ -357,7 +403,9 @@ export async function createTmuxSession(
   // Build and send agent command
   const parts = ['eval "$(tmux show-environment -s)"']
 
-  // Generate NATS MCP config if enabled — writes .mcp.json to workspace CWD
+  // Generate NATS channel config if enabled — static .mcp.json in the workspace
+  // CWD + per-session topics file. Per-session values come from the env vars set
+  // below, which Claude expands when it reads .mcp.json.
   let natsOpts: { enabled: boolean } | null = null
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0 && opts.session.workspace?.path) {
     generateNatsMcpConfig({
@@ -369,6 +417,7 @@ export async function createTmuxSession(
       bunPath: config.nats.bunPath,
       jetstream: config.nats.jetstream,
     })
+    await setNatsEnv(tmuxName, config.dirs.sessions, opts.session.name)
     natsOpts = { enabled: true }
     log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured`)
   }
@@ -422,7 +471,7 @@ export async function startTmuxSession(
   // Tmux session exists but agent may have exited — re-send the command
   const parts = ['eval "$(tmux show-environment -s)"']
 
-  // Generate NATS MCP config if enabled — writes .mcp.json to workspace CWD
+  // Generate NATS channel config if enabled — see createTmuxSession for details.
   let natsOpts: { enabled: boolean } | null = null
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0 && opts.session.workspace?.path) {
     generateNatsMcpConfig({
@@ -434,6 +483,7 @@ export async function startTmuxSession(
       bunPath: config.nats.bunPath,
       jetstream: config.nats.jetstream,
     })
+    await setNatsEnv(tmuxName, config.dirs.sessions, opts.session.name)
     natsOpts = { enabled: true }
   }
 
