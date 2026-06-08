@@ -76,6 +76,13 @@ export interface RunData {
   parentId?: string  // ID of the run that spawned this one (for hands)
   breakoutRooms?: string[]  // NATS room subjects for parent-child communication
   attention?: AttentionState
+  /** Widget type that renders this run's canvas node. Absent ⇒ 'run-workspace'
+   *  (the default session-view). Set to a registered session-view plugin widget
+   *  type (e.g. 'roborev-cockpit') to render that plugin as the session's view. */
+  view?: string
+  /** Persistent state for a plugin session-view (its api.widget.useData blob).
+   *  Unused by the default run-workspace view. */
+  viewData?: unknown
 }
 
 
@@ -195,16 +202,49 @@ export interface EditorWidget {
   worktree: string
   repo: string
   color?: string
+  /** Optional initial canvas placement seed, mirroring BrowserWidget. Set by the
+   *  editor create endpoint when the widget snaps to its session. Honored by the
+   *  layout system only for a node with no layout yet (e.g. an API/agent-created
+   *  editor); interactive opens that set their own layout ignore it. */
+  position?: { x: number; y: number }
+  size?: { width: number; height: number }
 }
 
 export interface BrowserWidget {
   id: string
   spaceId?: string
-  sessionId: string
+  sessionId?: string          // optional — browser widgets can be standalone (no session)
   url: string
   title?: string
   color?: string
   headers?: Record<string, string>
+  /** Optional initial canvas placement seed. Honored by the layout system only
+   *  when the widget's node has no layout yet (first appearance / fresh hydration);
+   *  once placed it flows into `config.ui.layouts` like every other widget, and
+   *  subsequent user drags update that — this value is not re-read. Set by the
+   *  host placement API (POST/PATCH /api/browser-widgets) so a plugin can open a
+   *  browser widget at a chosen spot. */
+  position?: { x: number; y: number }
+  /** Optional initial size paired with `position`. Defaults to 800×600 when a
+   *  position is given without a size. */
+  size?: { width: number; height: number }
+}
+
+/** An ephemeral HTML artifact an agent asked Tinstar to serve. Stored content
+ *  (not a file reference) so it survives the source file being deleted and is
+ *  served verbatim from GET /api/artifacts/:id. Owned by `widgetId`: deleting
+ *  that browser widget deletes the artifact. */
+export interface Artifact {
+  id: string
+  html: string
+  name?: string
+  /** Bumped on every update; drives the widget URL cache-buster that triggers reload. */
+  rev: number
+  /** Owning browser widget — lifecycle anchor for cleanup. */
+  widgetId?: string
+  spaceId?: string
+  createdAt: number
+  updatedAt: number
 }
 
 export interface ImageWidget {
@@ -220,14 +260,6 @@ export interface ImageWidget {
   color?: string
   naturalWidth: number
   naturalHeight: number
-}
-
-export interface NatsTrafficWidget {
-  id: string
-  spaceId?: string
-  sessionId: string  // Filter to show traffic for a specific session, or empty for all
-  subscriptions: string[]  // NATS subjects to subscribe to (e.g., "tinstar.>")
-  color?: string
 }
 
 /** Urgency of a widget's current attention request.

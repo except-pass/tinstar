@@ -39,11 +39,15 @@ export function Sparkline({ data, accent, width = 200, height = 42 }: Props) {
     const y = height - pad - ((v - min) / span) * (height - pad * 2)
     pts.push([x, y])
   })
-  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')
-  const area = `M${pts[0][0].toFixed(1)},${height} ` +
-    pts.map(p => `L${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ') +
-    ` L${pts[pts.length - 1][0].toFixed(1)},${height} Z`
+  const head = pts[0]
   const tail = pts[pts.length - 1]
+  if (!head || !tail) {
+    return <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" />
+  }
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ')
+  const area = `M${head[0].toFixed(1)},${height} ` +
+    pts.map(p => `L${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ') +
+    ` L${tail[0].toFixed(1)},${height} Z`
 
   return (
     <svg

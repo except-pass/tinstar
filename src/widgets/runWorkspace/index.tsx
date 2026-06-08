@@ -20,4 +20,6 @@ registerWidgetComponent({
     return ''
   },
   supportsMinimize: true,
+  capabilities: ['spawnable', 'session-host'],
+  creator: 'session-backed',
 })

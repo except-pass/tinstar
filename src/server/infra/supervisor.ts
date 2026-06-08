@@ -27,7 +27,6 @@ export class Supervisor {
   state: ServiceState = 'idle'
   pid = 0
   private child: ChildProcess | null = null
-  private adopted = false
   private restartCount = 0
   private restartWindowStart = 0
   private exitHandler: ((code: number | null) => void) | null = null
@@ -44,7 +43,6 @@ export class Supervisor {
     const adopted = this.tryAdopt()
     if (adopted) {
       this.pid = adopted
-      this.adopted = true
       const ok = await this.waitForReady()
       this.setState(ok ? 'ready' : 'degraded')
       this.startHealthLoop()
@@ -205,7 +203,6 @@ export class Supervisor {
     }
     this.pid = 0
     this.child = null
-    this.adopted = false
   }
 
   private tryAdopt(): number | null {

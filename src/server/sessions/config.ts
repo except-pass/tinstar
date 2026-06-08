@@ -39,6 +39,14 @@ export interface TinstarConfig {
      * See nats-channel-mcp's README "JetStream Mode" section.
      */
     jetstream: boolean
+    /**
+     * When true, the health monitor auto-recovers a session whose control
+     * socket stays orphaned past ORPHAN_RECOVER_FAILS consecutive probes — it
+     * SIGTERMs the channel-server so Claude relaunches it. Off by default:
+     * recovery briefly interrupts the agent's MCP, so opt in deliberately. The
+     * manual Saloon reconnect button works regardless of this flag.
+     */
+    autoRecoverOrphans: boolean
   }
   /** Max upload size in bytes for file-upload route. Must be >= 1 MB. */
   uploadMaxBytes: number
@@ -144,6 +152,13 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     startCmd: 'agent --yolo -- {prompt}',
     resumeCmd: 'agent resume',
   },
+  {
+    name: 'shell',
+    adapter: 'generic',
+    telemetry: false,
+    startCmd: ':',
+    resumeCmd: ':',
+  },
 ]
 
 // --- Base config (hardcoded defaults) ---
@@ -168,6 +183,8 @@ export const BASE_CONFIG = {
     bunPath: join(homedir(), '.bun/bin/bun'),
     // Off by default; requires nats-server -js
     jetstream: false,
+    // Off by default; auto-recovery interrupts a live agent's MCP.
+    autoRecoverOrphans: false,
   },
   uploadMaxBytes: 100 * 1024 * 1024,
   ui: {
@@ -248,6 +265,9 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
       jetstream: typeof (userConfig.nats as Record<string, unknown>)?.jetstream === 'boolean'
         ? (userConfig.nats as Record<string, boolean>).jetstream!
         : merged.nats.jetstream,
+      autoRecoverOrphans: typeof (userConfig.nats as Record<string, unknown>)?.autoRecoverOrphans === 'boolean'
+        ? (userConfig.nats as Record<string, boolean>).autoRecoverOrphans!
+        : merged.nats.autoRecoverOrphans,
     },
     uploadMaxBytes: merged.uploadMaxBytes,
     ui: merged.ui,

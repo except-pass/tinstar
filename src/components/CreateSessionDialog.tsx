@@ -13,12 +13,17 @@ export interface SessionPrefill {
   taskId?: string
   epicId?: string
   initiativeId?: string
+  /** Session-view widget type for the created run (run.view). Set when spawning
+   *  a session-backed plugin view; absent for a default run-workspace session. */
+  view?: string
   sources?: Record<string, { type: string; name: string }>
 }
 
 interface Props {
   onClose: () => void
   prefill?: SessionPrefill
+  /** Fired on a successful /api/sessions create with the new session's id (== a run's sessionId). */
+  onCreated?: (sessionId: string) => void
 }
 
 type WorktreeMode = 'none' | 'new' | 'existing'
@@ -51,7 +56,7 @@ function InheritedFrom({ source }: { source?: { type: string; name: string } }) 
   )
 }
 
-export function CreateSessionDialog({ onClose, prefill }: Props) {
+export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
   const [placeholder] = useState(generateName)
   const [name, setName] = useState('')
   const [cliTemplate, setCliTemplate] = useState(prefill?.cliTemplate ?? '')
@@ -150,6 +155,7 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
     if (runColor) body.color = runColor
     if (prefill?.epicId) body.epicId = prefill.epicId
     if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
+    if (prefill?.view) body.view = prefill.view
 
     // Close optimistically — the SSE event stream will surface the new session.
     onClose()
@@ -164,13 +170,19 @@ export function CreateSessionDialog({ onClose, prefill }: Props) {
         if (!data.ok) {
           console.error('Failed to create session:', data.error?.message ?? data)
           window.alert(`Failed to create session: ${data.error?.message ?? 'unknown error'}`)
+          return
         }
+        // The created session's `name` is the identifier that equals a run's
+        // `sessionId`. Fall back to the name we submitted if the server response
+        // omits it for any reason.
+        const createdId = (data.data?.name as string | undefined) ?? effectiveName
+        onCreated?.(createdId)
       })
       .catch(err => {
         console.error('Failed to create session:', err)
         window.alert(`Failed to create session: ${(err as Error).message}`)
       })
-  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, onClose])
+  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, prefill?.view, onClose, onCreated])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()

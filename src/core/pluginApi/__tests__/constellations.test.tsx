@@ -1,12 +1,24 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useEffect } from 'react'
+
+// useConstellationGraph PUTs the graph to /api/constellation-graph and, on a failed
+// persist, rolls back its optimistic overlay (so reads fall back to server state). In
+// jsdom there is no backend, so a real apiFetch would reject and roll back the seeded
+// assigns before usePeers observes them. Mock a successful persist so the optimistic
+// overlay survives — mirroring production where the PUT succeeds.
+vi.mock('../../../apiClient', () => ({
+  apiFetch: () => Promise.resolve({ ok: true, status: 200, text: async () => '', json: async () => ({}) } as Response),
+  apiUrl: (p: string) => p,
+  _resetApiBaseForTests: () => {},
+  resetApiBaseFromGlobal: () => {},
+}))
 import { act, render } from '@testing-library/react'
 import type { PluginRecord } from '../../pluginHost/registry'
 import type { PluginManifest } from '@tinstar/plugin-api'
 import { createPluginApi } from '../createApi'
 import { ConstellationProvider, useConstellationContext } from '../../../hotkeys/ConstellationContext'
-import type { ConstellationSlot } from '../../../hooks/useConstellations'
+import type { ConstellationSlot } from '../../../domain/constellationGraph'
 import { capabilityRegistry } from '../../constellationCapabilities'
 import { WidgetIdProvider } from '../widgetIdContext'
 
@@ -104,7 +116,7 @@ describe('api.constellations.usePeers + publishCapability', () => {
     // re-observes peers after the seed + capability publish settle.
     await act(async () => { await new Promise(r => setTimeout(r, 0)) })
     expect(observed).toEqual([
-      { id: 'editor-peer', kind: 'file-editor', capabilities: ['echo'] },
+      { id: 'editor-peer', kind: 'file-editor', capabilities: ['echo'], snapped: false },
     ])
   })
 

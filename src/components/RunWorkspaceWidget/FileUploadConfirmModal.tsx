@@ -71,6 +71,7 @@ export function FileUploadConfirmModal({ files, initialTargetDir, existingPaths,
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
           {rows.map((r, i) => {
             const v = validations[i]
+            if (!v) return null
             return (
               <div key={i} className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-sm text-slate-500">draft</span>

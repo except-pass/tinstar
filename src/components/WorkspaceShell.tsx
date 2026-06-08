@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, PluginWidgetInstance, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
+import type { BrowserWidget, EditorWidget, ImageWidget, PluginWidgetInstance, GroupingDimension, LevelLabel, Run, TreeNode } from '../domain/types'
 import { buildWorkspaceView, findNodeLabel } from '../domain/view-models'
 import { useBackendState } from '../hooks/useBackendState'
 import { useDimensionMeta } from '../hooks/useDimensionMeta'
 import { DEFAULT_LEVELS } from '../domain/dimension-meta'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
-import { cycleNext, cyclePrev } from '../hooks/useReadyQueue'
+import { cycleNext, cyclePrev, visibleCycleQueue } from '../hooks/useReadyQueue'
 import { useHiddenRuns } from '../hooks/useHiddenRuns'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
@@ -50,7 +50,7 @@ function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
 
 
 function WorkspaceShellInner() {
-  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets, pluginWidgets, connected } = useBackendState()
+  const { runRepo, taxRepo, spaces, activeSpaceId, readyQueue, addOptimistic, editorWidgets, browserWidgets, imageWidgets, pluginWidgets, connected } = useBackendState()
 
   // Force a re-render once the plugin boot pipeline completes so that any
   // plugin widgets already in the SSE snapshot (e.g. on page reload) switch
@@ -107,7 +107,7 @@ function WorkspaceShellInner() {
   // Filter out empty entity containers when showEmptyEntities is false
   const filterEmptyNodes = useCallback((nodes: TreeNode[]): TreeNode[] => {
     return nodes.reduce<TreeNode[]>((acc, node) => {
-      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer' || node.type === 'nats-traffic') {
+      if (node.type === 'run' || node.type === 'file-editor' || node.type === 'browser-widget' || node.type === 'image-viewer') {
         acc.push(node)
         return acc
       }
@@ -207,27 +207,6 @@ function WorkspaceShellInner() {
     return map
   }, [imageWidgets])
 
-  const syntheticNatsTrafficNodes: TreeNode[] = useMemo(
-    () =>
-      natsTrafficWidgets.map(w => ({
-        id: w.id,
-        label: w.sessionId ? `NATS (${w.sessionId})` : 'NATS Traffic',
-        type: 'nats-traffic' as const,
-        entityId: w.id,
-        children: [],
-        runCount: 0,
-        activeCount: 0,
-        color: w.color,
-      })),
-    [natsTrafficWidgets],
-  )
-
-  const natsTrafficWidgetMap = useMemo(() => {
-    const map = new Map<string, NatsTrafficWidget>()
-    for (const w of natsTrafficWidgets) map.set(w.id, w)
-    return map
-  }, [natsTrafficWidgets])
-
   const syntheticPluginWidgetNodes: TreeNode[] = useMemo(
     () =>
       pluginWidgets.map(w => ({
@@ -253,7 +232,7 @@ function WorkspaceShellInner() {
   const pluginWidgetIdSet = useMemo(() => new Set(pluginWidgets.map(w => w.id)), [pluginWidgets])
 
   const canvasTree = useMemo(() => {
-    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticNatsTrafficNodes, ...syntheticPluginWidgetNodes]
+    const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticPluginWidgetNodes]
     if (allSynthetic.length === 0) return sidebarTree
 
     // Map taskNodeId → synthetic nodes to nest inside it
@@ -298,11 +277,6 @@ function WorkspaceShellInner() {
       }
     }
 
-    // Add NATS traffic widgets as orphans (top-level, not associated with tasks)
-    for (const node of syntheticNatsTrafficNodes) {
-      orphans.push(node)
-    }
-
     // Add plugin widgets as orphans (top-level, no entity anchor)
     for (const node of syntheticPluginWidgetNodes) {
       orphans.push(node)
@@ -320,7 +294,7 @@ function WorkspaceShellInner() {
     }
 
     return [...inject(sidebarTree), ...orphans]
-  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticNatsTrafficNodes, syntheticPluginWidgetNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
+  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticPluginWidgetNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
 
   // Canvas view: drop run nodes the user has hidden via the eyeball. The sidebar
   // still shows them (dimmed) so the user can re-show them.
@@ -348,9 +322,14 @@ function WorkspaceShellInner() {
     for (const w of editorWidgets) ids.push(w.id)
     for (const w of browserWidgets) ids.push(w.id)
     for (const w of imageWidgets) ids.push(w.id)
-    for (const w of natsTrafficWidgets) ids.push(w.id)
+    // Plugin widgets must be included too: useConstellations prunes any slot
+    // member missing from this list (and persists the prune). Omitting them
+    // evicted plugin widgets (e.g. stretchplan) from their constellation slot
+    // on every fresh load, silently breaking their peer/capability link until
+    // the user manually re-snapped the widget.
+    for (const w of pluginWidgets) ids.push(w.id)
     return ids
-  }, [runMap, editorWidgets, browserWidgets, imageWidgets, natsTrafficWidgets])
+  }, [runMap, editorWidgets, browserWidgets, imageWidgets, pluginWidgets])
 
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null)
@@ -363,6 +342,9 @@ function WorkspaceShellInner() {
     entityId: string; entityType: GroupingDimension; entityName: string
   } | null>(null)
   const [sessionPrefill, setSessionPrefill] = useState<{ taskId?: string } | null>(null)
+  // When an add-widget flow opens the session dialog, this holds the callback to
+  // run with the created sessionId so the canvas can place the resulting run.
+  const [pendingSessionOnCreated, setPendingSessionOnCreated] = useState<((sessionId: string) => void) | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const { select, toggleSelect, expandAll, selectedCount: _selectedCount, state: selectionState } = useSelection()
   const arrangeGridRef = useRef<(() => void) | null>(null)
@@ -485,10 +467,6 @@ function WorkspaceShellInner() {
       apiFetch(`/api/image-widgets/${entityId}`, { method: 'DELETE' })
       return
     }
-    if (type === 'nats-traffic') {
-      apiFetch(`/api/nats-traffic-widgets/${entityId}`, { method: 'DELETE' })
-      return
-    }
     const endpointMap: Record<string, string> = {
       initiative: '/api/initiatives',
       epic: '/api/epics',
@@ -586,6 +564,14 @@ function WorkspaceShellInner() {
     setShowSessionDialog(true)
   }, [entityMenu])
 
+  // Open the session create dialog on behalf of the add-widget flow, capturing a
+  // callback to fire with the created sessionId once the POST succeeds.
+  const handleRequestCreateSession = useCallback((prefill: { taskId?: string; view?: string }, onCreated: (sessionId: string) => void) => {
+    setSessionPrefill(prefill)
+    setPendingSessionOnCreated(() => onCreated)
+    setShowSessionDialog(true)
+  }, [])
+
   const handleMenuRename = useCallback(() => {
     if (entityMenu) {
       const nodeId = `${entityMenu.entityType}-${entityMenu.entityId}`
@@ -624,11 +610,6 @@ function WorkspaceShellInner() {
     if (selectedType === 'file-editor') {
       const label = findNodeLabel(canvasTree, firstNodeId) ?? 'File'
       return { id: firstNodeId, type: 'file-editor', label }
-    }
-
-    if (selectedType === 'nats-traffic') {
-      const label = findNodeLabel(canvasTree, firstNodeId) ?? 'NATS Traffic'
-      return { id: firstNodeId, type: 'nats-traffic' as any, label }
     }
 
     if (selectedType === 'browser-widget') {
@@ -699,24 +680,49 @@ function WorkspaceShellInner() {
     return out
   }, [allRuns, isRunHidden])
 
+  // The sidebar reports the run ids it's currently showing, top-to-bottom, in
+  // the exact order it renders them — after collapse, search pruning, and inbox
+  // filters. Cycling reads this so `[` / `]` walk exactly what the operator
+  // sees rather than the order sessions happened to become ready.
+  const visibleRunOrderRef = useRef<string[]>([])
+  const visibleRunOrderReportedRef = useRef(false)
+  const handleVisibleRunOrder = useCallback((runIds: string[]) => {
+    visibleRunOrderRef.current = runIds
+    visibleRunOrderReportedRef.current = true
+  }, [])
+  const cycleOrder = () =>
+    visibleRunOrderRef.current
+      .map(id => runMap.get(id)?.sessionId)
+      .filter(Boolean) as string[]
+
+  // Restrict cycling to sessions actually visible in the sidebar, preserving its
+  // order. Collapsed, search-pruned, or inbox-filtered sessions are dropped from
+  // the queue entirely — not just reordered — so `[` / `]` can't reach them. Fall
+  // back to the candidates only before the sidebar has reported any order yet; once
+  // it has, an empty visible view means an empty cycle queue.
+  const visibleQueue = (candidates: string[]) =>
+    visibleCycleQueue(candidates, cycleOrder(), visibleRunOrderReportedRef.current)
+
   useGlobalHotkeys({
     onCycleReadyNext: () => {
-      const queue = readyQueue.filter(name => !hiddenSessionIds.has(name))
+      const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name)))
       const run = cycleNext(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleReadyPrev: () => {
-      const queue = readyQueue.filter(name => !hiddenSessionIds.has(name))
+      const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name)))
       const run = cyclePrev(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllNext: () => {
-      const activeNames = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const activeNames = visibleQueue(active)
       const run = cycleNext(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllPrev: () => {
-      const activeNames = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const activeNames = visibleQueue(active)
       const run = cyclePrev(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
@@ -923,6 +929,7 @@ function WorkspaceShellInner() {
                         hiddenRunIds={hiddenRunIds}
                         onToggleRunHidden={toggleRunHidden}
                         pluginWidgetIds={pluginWidgetIdSet}
+                        onVisibleRunOrder={handleVisibleRunOrder}
                       />
                     </div>
                     <WidgetsPalette />
@@ -944,7 +951,6 @@ function WorkspaceShellInner() {
                     editorWidgetMap={editorWidgetMap}
                     browserWidgetMap={browserWidgetMap}
                     imageWidgetMap={imageWidgetMap}
-                    natsTrafficWidgetMap={natsTrafficWidgetMap}
                     pluginWidgetMap={pluginWidgetMap}
                     runMap={runMap}
                     focusRunId={focusRunId}
@@ -954,11 +960,11 @@ function WorkspaceShellInner() {
                     onFocusRun={handleCanvasFocusRun}
                     onDeleteEntity={handleDelete}
                     onMenuOpen={handleMenuOpen}
+                    onRequestCreateSession={handleRequestCreateSession}
                     onTaskUpdate={handleTaskUpdate}
                     onImageWidgetCreated={(widget) => addOptimistic('imageWidget', widget)}
                     onEditorWidgetCreated={(widget) => addOptimistic('editorWidget', widget)}
                     onBrowserWidgetCreated={(widget) => addOptimistic('browserWidget', widget)}
-                    onNatsWidgetCreated={(widget) => addOptimistic('natsTrafficWidget', widget)}
                     onPluginWidgetCreated={(instance) => addOptimistic('pluginWidget', instance)}
                     arrangeGridRef={arrangeGridRef}
                     arrangeResetRef={arrangeResetRef}
@@ -981,8 +987,9 @@ function WorkspaceShellInner() {
 
               {showSessionDialog && (
                 <CreateSessionDialog
-                  onClose={() => { setShowSessionDialog(false); setSessionPrefill(null) }}
+                  onClose={() => { setShowSessionDialog(false); setSessionPrefill(null); setPendingSessionOnCreated(null) }}
                   prefill={sessionPrefill ?? undefined}
+                  onCreated={(sessionId) => { pendingSessionOnCreated?.(sessionId) }}
                 />
               )}
 

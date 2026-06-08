@@ -1,7 +1,6 @@
 {
   "name": "@tinstar/plugin-api",
-  "version": "5.1.0-dev.0",
-  "private": true,
+  "version": "5.1.0",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -16,8 +15,15 @@
   },
   "keywords": ["tinstar", "plugin", "widgets", "canvas"],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepublishOnly": "node scripts/prepublish-guard.mjs",
+    "publish:auto": "node scripts/publish.mjs"
+  },
   "files": [
-    "src/",
+    "src/index.ts",
     "README.md"
   ],
   "peerDependencies": {

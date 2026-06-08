@@ -1,0 +1,8 @@
+{
+  "//": "Type-check the root Vitest suite under tests/. Extends the app config but adds allowJs so test files can import the plain-JS CLI modules under bin/. Part of `npm run typecheck` so TS errors in tests/ fail CI like src/ and e2e/ do.",
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "allowJs": true
+  },
+  "include": ["tests"]
+}

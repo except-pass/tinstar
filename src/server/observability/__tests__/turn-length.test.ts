@@ -30,6 +30,8 @@ function fakeSession(name: string, ccConvId: string | null = 'conv-1'): Session 
     port: null,
     ttydPid: null,
     natsControlOrphanedAt: null,
+    appendSystemPrompt: null,
+    agent: null,
     created: '2026-05-17T00:00:00.000Z',
     lastActive: '2026-05-17T00:00:00.000Z',
   }
@@ -245,9 +247,9 @@ describe('turn-length: ring buffer', () => {
     ], s)
     const obs = getRecentObservations({ windowSec: 3600 })
     expect(obs).toHaveLength(1)
-    expect(obs[0].sec).toBe(5)
-    expect(obs[0].session).toBe('rb-1')
-    expect(obs[0].ccConvId).toBe('conv-rb1')
+    expect(obs[0]!.sec).toBe(5)
+    expect(obs[0]!.session).toBe('rb-1')
+    expect(obs[0]!.ccConvId).toBe('conv-rb1')
   })
 
   it('filters by session', async () => {

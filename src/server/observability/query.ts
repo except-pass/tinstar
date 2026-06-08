@@ -134,8 +134,9 @@ export class TelemetryQuery {
 
   private async instant(query: string): Promise<number | null> {
     const vec = await this.instantVec(query)
-    if (vec.length === 0) return null
-    return Number(vec[0].value[1])
+    const first = vec[0]
+    if (!first) return null
+    return Number(first.value[1])
   }
 
   private async instantVec(query: string): Promise<PromResult[]> {

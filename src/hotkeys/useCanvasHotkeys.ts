@@ -2,7 +2,7 @@
 import { useEffect, useRef } from 'react'
 import { isEditable } from './isEditable'
 import { emitBindingFired } from './bindingFiredBus'
-import type { ConstellationSlot } from '../hooks/useConstellations'
+import type { ConstellationSlot } from '../domain/constellationGraph'
 
 const SLOT_CODES: Record<string, ConstellationSlot> = {
   Digit1: '1', Digit2: '2', Digit3: '3', Digit4: '4', Digit5: '5',

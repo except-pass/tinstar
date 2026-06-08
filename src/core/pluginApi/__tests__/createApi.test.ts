@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { PluginRecord } from '../../pluginHost/registry'
 import type { PluginManifest } from '@tinstar/plugin-api'
 import { createPluginApi } from '../createApi'
-import { getWidgetComponent } from '../../../widgets/widgetComponentRegistry'
+import { getWidgetComponent, listWidgetRegistrations, registerWidgetComponent } from '../../../widgets/widgetComponentRegistry'
 
 function makeRecord(name = 'browser'): PluginRecord {
   return {
@@ -66,6 +66,35 @@ describe('createPluginApi', () => {
     expect(getWidgetComponent('delta-widget')).toBeUndefined()
   })
 
+  it('plugin-registered widgets are excluded from the host-only catalog accessor', () => {
+    const rec = makeRecord('zeta')
+    const api = createPluginApi(rec)
+    api.widgets.register({
+      type: 'zeta-widget',
+      component: FakeWidget,
+      isContainer: false,
+      minSize: { width: 100, height: 100 },
+      capabilities: ['spawnable'],
+    })
+    // Registered for rendering...
+    expect(getWidgetComponent('zeta-widget')).toBeDefined()
+    // ...but absent from the host-only list (it comes via the plugin registry),
+    // so it can't double-count even when it declares 'spawnable'.
+    const hostTypes = listWidgetRegistrations().map((r) => r.type)
+    expect(hostTypes).not.toContain('zeta-widget')
+
+    // A host registration with the same shape IS included.
+    const d = registerWidgetComponent({
+      type: 'zeta-host-widget',
+      component: FakeWidget,
+      isContainer: false,
+      minSize: { width: 100, height: 100 },
+      capabilities: ['spawnable'],
+    })
+    expect(listWidgetRegistrations().map((r) => r.type)).toContain('zeta-host-widget')
+    d.dispose()
+  })
+
   it('logger prefixes messages with [pluginId]', () => {
     const rec = makeRecord('epsilon')
     const spy = vi.spyOn(console, 'info').mockImplementation(() => {})
@@ -96,7 +125,7 @@ describe('createPluginApi', () => {
       minSize: { width: 100, height: 100 },
     })
     expect(warn).toHaveBeenCalled()
-    const firstCall = warn.mock.calls[0]
+    const firstCall = warn.mock.calls[0]!
     expect(firstCall.join(' ')).toContain('zeta-shared')
     expect(recB.disposables.length).toBe(0)
     d.dispose()  // should be safe no-op
@@ -148,7 +177,7 @@ describe('createPluginApi — api.http', () => {
     await api.http.fetch('/api/foo', { method: 'GET' })
 
     expect(mockApiFetch).toHaveBeenCalledTimes(1)
-    const [path, init] = mockApiFetch.mock.calls[0]
+    const [path, init] = mockApiFetch.mock.calls[0]!
     expect(path).toBe('/api/foo')
     expect(init.method).toBe('GET')
     const headers = new Headers(init.headers)
@@ -164,7 +193,7 @@ describe('createPluginApi — api.http', () => {
     const api = createPluginApi(rec)
     await api.http.fetch('/x', { headers: { 'X-Custom': 'v' } })
 
-    const init = mockApiFetch.mock.calls[0][1]
+    const init = mockApiFetch.mock.calls[0]![1]
     const headers = new Headers(init.headers)
     expect(headers.get('X-Custom')).toBe('v')
     expect(headers.get('X-Tinstar-Plugin')).toBe('hdr-test')

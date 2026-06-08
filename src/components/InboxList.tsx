@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { apiFetch } from '../apiClient'
 import { useInbox, type InboxRow as InboxRowData } from '../hooks/useInbox'
 import { InboxRow } from './InboxRow'
@@ -17,9 +17,12 @@ type Filter = typeof LEVELS[number]
 interface Props {
   activeSpaceId: string | null
   searchQuery?: string
+  /** Reports run ids in the inbox's filtered top-to-bottom order, so
+   *  bracket-cycling follows exactly what the inbox is showing. */
+  onVisibleRunOrder?: (runIds: string[]) => void
 }
 
-export function InboxList({ activeSpaceId, searchQuery = '' }: Props) {
+export function InboxList({ activeSpaceId, searchQuery = '', onVisibleRunOrder }: Props) {
   const { rows } = useInbox(activeSpaceId)
   const { isSelected } = useSelection()
   const [filter, setFilter] = useState<Filter>('all')
@@ -41,6 +44,12 @@ export function InboxList({ activeSpaceId, searchQuery = '' }: Props) {
       return true
     })
   }, [rows, filter, unreadOnly, searchQuery, readTick])
+
+  const visibleRunIds = useMemo(
+    () => visible.filter(r => r.source === 'run').map(r => r.widgetId),
+    [visible],
+  )
+  useEffect(() => { onVisibleRunOrder?.(visibleRunIds) }, [visibleRunIds, onVisibleRunOrder])
 
   function handleClick(widgetId: string) {
     const row = rows.find(r => r.widgetId === widgetId)

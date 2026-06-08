@@ -505,11 +505,17 @@ export const spec = {
         summary: 'Create a browser widget on the canvas',
         requestBody: { content: { 'application/json': { schema: {
           type: 'object',
-          required: ['sessionId'],
           properties: {
-            sessionId: { type: 'string', description: 'Session name (must have a running run)' },
+            sessionId: { type: 'string', description: 'Optional session name (must have a running run when given). Omit to create a standalone browser widget.' },
             url: { type: 'string', description: 'Initial URL to load' },
+            color: { type: 'string', description: 'Accent color override (hex). Defaults to the bound run color, or a neutral standalone color.' },
             headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Custom HTTP headers injected via server-side proxy (like ModHeader)' },
+            spaceId: { type: 'string', description: 'Target space (defaults to the active space). Scopes both placement and slot.' },
+            position: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, description: 'Initial canvas position seed. Wins over nearNodeId.' },
+            size: { type: 'object', properties: { width: { type: 'number' }, height: { type: 'number' } }, description: 'Initial size paired with position/nearNodeId. Defaults to 800×600.' },
+            nearNodeId: { type: 'string', description: 'Place just to the right of this node id, resolved from the persisted layout. Ignored if position is given or the node has no saved layout.' },
+            slot: { type: 'integer', minimum: 1, maximum: 9, description: 'Constellation slot (1–9) to join. An out-of-range value is not assigned to a slot, but any explicit slot input still opts out of session auto-snap.' },
+            snapToSession: { type: 'boolean', default: true, description: 'When a sessionId is given (and no explicit slot/position), the widget auto-snaps into the session\'s constellation and tiles to its right. Set false to spawn free-floating.' },
           },
         } } } },
         responses: { 200: { description: 'Created widget', content: { 'application/json': { schema: { $ref: '#/components/schemas/BrowserWidget' } } } } },
@@ -526,6 +532,10 @@ export const spec = {
             url: { type: 'string' },
             title: { type: 'string' },
             headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Replace all custom headers (empty object clears them)' },
+            position: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, description: 'New placement seed (persisted; live re-positioning of an already-placed widget needs a reload).' },
+            size: { type: 'object', properties: { width: { type: 'number' }, height: { type: 'number' } } },
+            nearNodeId: { type: 'string', description: 'Resolve position to the right of this node id (alternative to position).' },
+            slot: { type: 'integer', minimum: 1, maximum: 9, description: 'Constellation slot (1–9) to join.' },
           },
         } } } },
         responses: { 200: { description: 'Updated widget' } },
@@ -654,6 +664,92 @@ export const spec = {
         summary: 'Delete a plugin widget instance',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
         responses: { 200: { description: 'Deleted' } },
+      },
+    },
+
+    // ── Artifacts ─────────────────────────────────────────
+    '/api/artifacts': {
+      post: {
+        tags: ['Widgets'],
+        summary: 'Store an HTML file as an ephemeral artifact and open a browser widget',
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['path'],
+          properties: {
+            path: { type: 'string', description: 'Absolute path to an HTML file to read and store' },
+            name: { type: 'string', description: 'Display name for the artifact widget' },
+            sessionId: { type: 'string', description: 'Session to associate with the browser widget' },
+            color: { type: 'string', description: 'Widget accent color' },
+            spaceId: { type: 'string', description: 'Target space (defaults to active space)' },
+            position: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, description: 'Initial canvas position seed. Wins over nearNodeId.' },
+            size: { type: 'object', properties: { width: { type: 'number' }, height: { type: 'number' } }, description: 'Initial size. Defaults to 800×600.' },
+            nearNodeId: { type: 'string', description: 'Place just to the right of this node id. Ignored if position is given.' },
+            slot: { description: 'Constellation slot (1–9) to join. An out-of-range value is not assigned to a slot, but any explicit slot input still opts out of session auto-snap.', oneOf: [{ type: 'integer', minimum: 1, maximum: 9 }, { type: 'string' }] },
+            snapToSession: { type: 'boolean', default: true, description: 'When a sessionId is given (and no explicit slot/position), the artifact widget auto-snaps into the session\'s constellation and tiles to its right. Set false to spawn free-floating.' },
+          },
+        } } } },
+        responses: { 200: { description: 'Artifact created', content: { 'application/json': { schema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' }, data: { type: 'object', properties: {
+            artifactId: { type: 'string' },
+            url: { type: 'string' },
+            widgetId: { type: 'string' },
+          } } },
+        } } } } },
+      },
+      delete: {
+        tags: ['Widgets'],
+        summary: 'Clear all artifacts and close their owning browser widgets',
+        responses: { 200: { description: 'All artifacts deleted and their owning browser widgets removed', content: { 'application/json': { schema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' }, data: { type: 'object', properties: { deleted: { type: 'integer' } } } },
+        } } } } },
+      },
+    },
+    '/api/artifacts/{id}': {
+      get: {
+        tags: ['Widgets'],
+        summary: 'Serve the raw HTML for a stored artifact',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'HTML content', content: { 'text/html': { schema: { type: 'string' } } } },
+          404: { description: 'Unknown artifact' },
+        },
+      },
+      put: {
+        tags: ['Widgets'],
+        summary: 'Re-read the file and update the artifact in place (reloads the open widget)',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['path'],
+          properties: {
+            path: { type: 'string', description: 'Absolute path to the updated HTML file' },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Artifact updated', content: { 'application/json': { schema: {
+            type: 'object',
+            properties: { ok: { type: 'boolean' }, data: { type: 'object', properties: {
+              artifactId: { type: 'string' },
+              url: { type: 'string' },
+              rev: { type: 'integer' },
+            } } },
+          } } } },
+          404: { description: 'Unknown artifact' },
+        },
+      },
+      delete: {
+        tags: ['Widgets'],
+        summary: 'Delete a single artifact and close its owning browser widget',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          200: { description: 'Artifact deleted and its owning browser widget removed', content: { 'application/json': { schema: {
+            type: 'object',
+            properties: { ok: { type: 'boolean' }, data: { type: 'object', properties: { deleted: { type: 'boolean' } } } },
+          } } } },
+          404: { description: 'Unknown artifact' },
+        },
       },
     },
 
@@ -797,6 +893,8 @@ export const spec = {
           title: { type: 'string' },
           color: { type: 'string' },
           headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Custom HTTP headers injected on proxied requests' },
+          position: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, description: 'Initial canvas placement seed (set by the placement API)' },
+          size: { type: 'object', properties: { width: { type: 'number' }, height: { type: 'number' } }, description: 'Initial size paired with position' },
         },
       },
       PluginWidgetInstance: {

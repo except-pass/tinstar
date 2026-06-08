@@ -40,6 +40,18 @@ export interface WidgetRegistration {
   /** Optional function returning CSS class names for the widget's outer frame, given the current chrome state. */
   getFrameClass?: (state: WidgetFrameState) => string
   supportsMinimize?: boolean
+  /** Declarative capabilities, e.g. 'spawnable' (appears in the add-widget picker),
+   *  'web-view', 'session-host'. Drives the grow-constellation affordance. */
+  capabilities?: string[]
+  /** How an instance is created. 'standalone' → one-shot create endpoint;
+   *  'session-backed' → opens the session create flow. Defaults to 'standalone'. */
+  creator?: 'standalone' | 'session-backed'
+  /** Whether this widget participates in snapping (drag-to-snap, the [+] grow
+   *  affordance, snap-on-create). Non-container leaves snap by DEFAULT; set
+   *  `false` to opt out. Containers never snap regardless. */
+  snappable?: boolean
+  /** Free-form descriptive tags, reserved for future ordering/grouping. */
+  tags?: string[]
 }
 
 export interface PluginLogger {
@@ -128,6 +140,9 @@ export interface ConstellationPeer {
   kind: string
   /** Names of capabilities the peer has currently published. */
   capabilities: string[]
+  /** True when this peer shares a `snapped` edge with the calling widget.
+   *  Optional: older V5 hosts predate this field and return `undefined`. */
+  snapped?: boolean
 }
 
 /** Constellation (keyboard slot) integration: read which slots a widget belongs to,
@@ -250,6 +265,84 @@ export interface PluginWidgetApi {
   useAttention(): [AttentionState | null, (next: AttentionInput | null) => void]
 }
 
+/** Edge a primitive-widget accessory pane is pinned to. */
+export type AccessoryPlacement = 'left' | 'right' | 'top' | 'bottom'
+
+/** Author-supplied accessory for a primitive-backed widget. */
+export interface PrimitiveAccessory {
+  placement: AccessoryPlacement
+  /** Plugin React component. Mounted inside the widget shell, so it keeps all
+   *  `api.*` hooks AND `api.primitives.useBrowser()` / `useTerminal()`. */
+  component: ComponentType
+  /** Fixed cross-axis size of the pane in px (width for left/right, height for
+   *  top/bottom). Defaults to 220. */
+  size?: number
+}
+
+/** Live handle to the embedded browser, read by the accessory via useBrowser(). */
+export interface BrowserHandle {
+  url: string
+  navigate(url: string): void
+  reload(): void
+  /** Fires whenever the URL changes (user navigation or programmatic). */
+  onUrlChange(cb: (url: string) => void): Disposable
+}
+
+/** Live handle to the embedded terminal, read by the accessory via useTerminal().
+ *  Unlike BrowserHandle (whose url changes as the user navigates), `sessionId` is
+ *  fixed for the widget's lifetime, so there is no change subscription. */
+export interface TerminalHandle {
+  sessionId: string
+  focus(): void
+  /** Type literal text into the session. `enter` (default true) submits with Enter. */
+  sendText(text: string, opts?: { enter?: boolean }): Promise<void>
+  /** Send raw/named keys (e.g. ['Up'], ['C-c'], ['Enter']) to drive a TUI. */
+  sendKeys(keys: string[]): Promise<void>
+  /** Snapshot the rendered terminal screen (optionally including scrollback lines). */
+  readScreen(opts?: { scrollback?: number }): Promise<string>
+  /** Run a one-shot command (argv, no shell) in the session's working dir. */
+  exec(argv: string[]): Promise<{ stdout: string; stderr: string; code: number }>
+}
+
+export interface RegisterBrowserWidgetOptions {
+  type: string
+  accessory?: PrimitiveAccessory
+  defaultUrl?: string
+  defaultSize?: { width: number; height: number }
+  minSize?: { width: number; height: number }
+}
+
+export interface RegisterTerminalWidgetOptions {
+  type: string
+  accessory?: PrimitiveAccessory
+  /** Initial session id for the embedded terminal. The plugin may instead (or
+   *  later) persist `sessionId` into the widget's `data` blob; widget data wins. */
+  defaultSessionId?: string
+  defaultSize?: { width: number; height: number }
+  minSize?: { width: number; height: number }
+  /** Mark this terminal widget as a session-view: its canvas node IS a session's
+   *  run node (run.view). 'session-backed' lists it in the palette, routes spawn
+   *  through the session-create flow, and renders it at the run node. Default 'standalone'. */
+  creator?: 'standalone' | 'session-backed'
+}
+
+/** Embeddable browser/terminal primitives for plugin authors. The host owns the
+ *  primitive (chrome, proxy, tty); the plugin owns the edge-pinned accessory. */
+export interface PluginPrimitivesApi {
+  /** Register a widget whose main content is a browser primitive. */
+  registerBrowserWidget(opts: RegisterBrowserWidgetOptions): Disposable
+  /** Register a widget whose main content is a terminal primitive. The session is
+   *  resolved from the widget's `data.sessionId` (or `opts.defaultSessionId`); the
+   *  plugin is responsible for putting a session id there. */
+  registerTerminalWidget(opts: RegisterTerminalWidgetOptions): Disposable
+  /** React hook (call inside an accessory component): the live browser handle.
+   *  Throws if called outside a browser-primitive widget. */
+  useBrowser(): BrowserHandle
+  /** React hook (call inside an accessory component): the live terminal handle.
+   *  Throws if called outside a terminal-primitive widget. */
+  useTerminal(): TerminalHandle
+}
+
 /** Surface handed to plugins in activate(api). V5.0 minimum surface. */
 export interface TinstarPluginAPI {
   readonly pluginId: string
@@ -267,6 +360,7 @@ export interface TinstarPluginAPI {
   theme: PluginThemeApi
   logger: PluginLogger
   widget: PluginWidgetApi
+  primitives: PluginPrimitivesApi
 }
 
 /** The shape of a plugin module's default export (or named `activate` export).
@@ -300,6 +394,15 @@ export interface PluginManifest {
        *  'palette+context' — reserved for entity-drag shortcuts; in V5.1
        *  the palette entry renders greyed and non-draggable. */
       spawn?: 'palette' | 'palette+context'
+      capabilities?: string[]
+      creator?: 'standalone' | 'session-backed'
+      /** Whether this widget participates in snapping. Non-container leaves snap
+       *  by DEFAULT; set `false` to opt out. Containers never snap regardless. */
+      snappable?: boolean
+      tags?: string[]
+      /** When set, this widget is primitive-backed: the plugin registers it via
+       *  api.primitives.register{Browser,Terminal}Widget rather than api.widgets.register. */
+      primitive?: 'browser' | 'terminal'
     }>
   }
   permissions?: string[]

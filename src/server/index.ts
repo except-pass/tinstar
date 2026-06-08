@@ -33,6 +33,7 @@ import { registerSaloonSubs } from './api/saloonBridge'
 import { bootstrapHierarchicalTopicMetadata } from './topic-metadata'
 import { NatsHealthMonitor } from './nats-health'
 import { natsControlSocketPath } from './sessions/backends/tmux'
+import { reconnectSessionNats } from './sessions/natsReconnect'
 import { NatsManager } from './nats/nats-manager.js'
 import { ObservabilityStack } from './observability/index.js'
 import { observeFromRecapEntries, reconcileLiveSessions } from './observability/turn-length'
@@ -153,16 +154,8 @@ export function initBackend(): RouteContext {
     natsTraffic = new NatsTrafficBridge(sse, natsManager!.url)
     natsTraffic.start()
 
-    // Sync existing widget subscriptions now that the bridge is live
-    for (const widget of docStore.getAllNatsTrafficWidgets()) {
-      if (widget.subscriptions?.length) {
-        natsTraffic.updateWidgetSubscriptions(widget.id, widget.subscriptions)
-      }
-    }
-
     // Re-register every persisted session's subs with the bridge. Saloon entries
-    // are synthetic (keyed `saloon:<name>`) and not persisted as widget docs, so
-    // the widget hydration loop above doesn't cover them.
+    // are synthetic (keyed `saloon:<name>`) and not persisted as widget docs.
     if (sessionConfig) {
       const sessEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
       for (const entry of sessEntries) {
@@ -182,6 +175,16 @@ export function initBackend(): RouteContext {
         sessionsDir: sessionConfig.dirs.sessions,
         docStore,
         getSocketPath: (name) => natsControlSocketPath(name),
+        // Auto-recovery is opt-in (config.nats.autoRecoverOrphans) because it
+        // interrupts the agent's MCP. When on, a stuck orphan gets its
+        // channel-server SIGTERMed so Claude relaunches it with a fresh socket.
+        onConfirmedOrphan: sessionConfig.nats.autoRecoverOrphans
+          ? (name) => {
+              void reconnectSessionNats(name, { socketPath: natsControlSocketPath(name) })
+                .then(({ killed }) => log.info('nats-health', `${name}: auto-recover signalled ${killed.length} channel-server process(es)`))
+                .catch(err => log.warn('nats-health', `${name}: auto-recover failed: ${(err as Error).message}`))
+            }
+          : undefined,
       })
       const healthEntries = readdirSync(sessionConfig.dirs.sessions, { withFileTypes: true })
       for (const entry of healthEntries) {

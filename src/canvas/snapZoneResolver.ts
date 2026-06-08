@@ -1,4 +1,4 @@
-import type { ConstellationSlot } from '../hooks/useConstellations'
+import type { ConstellationSlot } from '../domain/constellationGraph'
 import type { Rect } from './constellationCohesion'
 
 export interface SnapWidget extends Rect {
@@ -38,6 +38,21 @@ export function rectDistance(a: Rect, b: Rect): number {
   return Math.hypot(dx, dy)
 }
 
+/** Top-left for a widget of `size` placed flush against `edge` of `source`.
+ *  Horizontal edges top-align; vertical edges left-align — matching resolveSnapTarget. */
+export function flushPosition(
+  source: Rect,
+  edge: SnapEdge,
+  size: { width: number; height: number },
+): { x: number; y: number } {
+  switch (edge) {
+    case 'right':  return { x: source.x + source.width + SNAP_GAP, y: source.y }
+    case 'left':   return { x: source.x - size.width - SNAP_GAP, y: source.y }
+    case 'bottom': return { x: source.x, y: source.y + source.height + SNAP_GAP }
+    case 'top':    return { x: source.x, y: source.y - size.height - SNAP_GAP }
+  }
+}
+
 /**
  * Find the single nearest widget within snap range and where the dragged widget should sit
  * flush against it. Picks the side the drag is approaching from (dominant axis of center offset);
@@ -65,19 +80,11 @@ export function resolveSnapTarget(
   const dy = (draggedRect.y + draggedRect.height / 2) - (nearest.y + nearest.height / 2)
 
   if (Math.abs(dx) >= Math.abs(dy)) {
-    // Horizontal placement, top-aligned.
     const edge: SnapEdge = dx >= 0 ? 'right' : 'left'
-    const x = edge === 'right'
-      ? nearest.x + nearest.width + SNAP_GAP
-      : nearest.x - draggedRect.width - SNAP_GAP
-    return { targetId: nearest.id, edge, x, y: nearest.y }
+    return { targetId: nearest.id, edge, ...flushPosition(nearest, edge, draggedRect) }
   }
-  // Vertical placement, left-aligned.
   const edge: SnapEdge = dy >= 0 ? 'bottom' : 'top'
-  const y = edge === 'bottom'
-    ? nearest.y + nearest.height + SNAP_GAP
-    : nearest.y - draggedRect.height - SNAP_GAP
-  return { targetId: nearest.id, edge, x: nearest.x, y }
+  return { targetId: nearest.id, edge, ...flushPosition(nearest, edge, draggedRect) }
 }
 
 /**

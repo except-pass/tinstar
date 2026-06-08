@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { centroidOf, boundingBoxOf, applyGroupDrag, fitToRect, computeBreakLinks, planLinkBreak } from '../constellationCohesion'
+import { centroidOf, boundingBoxOf, applyGroupDrag, fitToRect, computeBreakLinks, planLinkBreak, occupiedEdgesOf } from '../constellationCohesion'
 import type { Rect, IdRect } from '../constellationCohesion'
 
 const R = (x: number, y: number, w = 100, h = 100): Rect =>
@@ -66,6 +66,45 @@ describe('planLinkBreak', () => {
     ], 'a', 'b')
     expect(plan.removeFromSlot).toEqual([])
     expect(plan.newGroup).toEqual([])
+  })
+})
+
+describe('occupiedEdgesOf', () => {
+  const target = IR('T', 100, 100) // 100×100; right edge x=200, bottom y=200
+
+  it('returns no edges when there are no neighbors', () => {
+    expect([...occupiedEdgesOf(target, [])]).toEqual([])
+  })
+
+  it('detects a flush right neighbor', () => {
+    expect([...occupiedEdgesOf(target, [IR('R', 200, 100)])]).toEqual(['right'])
+  })
+
+  it('detects flush left and bottom neighbors', () => {
+    const edges = occupiedEdgesOf(target, [IR('L', 0, 100), IR('B', 100, 200)])
+    expect([...edges].sort()).toEqual(['bottom', 'left'])
+  })
+
+  it('ignores gapped (non-adjacent) neighbors', () => {
+    expect([...occupiedEdgesOf(target, [IR('G', 400, 100)])]).toEqual([])
+  })
+
+  it('skips itself', () => {
+    expect([...occupiedEdgesOf(target, [target])]).toEqual([])
+  })
+
+  it('uses seam orientation, not center delta, for asymmetric widgets', () => {
+    // A wide neighbor flush on the BOTTOM, offset to the right: its center is
+    // farther in x than in y from the target center (|dx|=200 >= |dy|=100), so a
+    // center-delta heuristic would wrongly call it a 'right' neighbor. The seam is
+    // horizontal, so the occupied edge must be 'bottom'.
+    const wideBottom = IR('WB', 150, 200, 400, 100) // flush at target bottom (y=200), spans x 150..550
+    expect([...occupiedEdgesOf(target, [wideBottom])]).toEqual(['bottom'])
+
+    // Symmetric check: a tall neighbor flush on the RIGHT, offset far down, where
+    // |dy| >= |dx| — must still be classified 'right' from the vertical seam.
+    const tallRight = IR('TR', 200, 150, 100, 400) // flush at target right (x=200), spans y 150..550
+    expect([...occupiedEdgesOf(target, [tallRight])]).toEqual(['right'])
   })
 })
 

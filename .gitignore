@@ -15,3 +15,9 @@ data-alloy/
 todos.txt
 # roborev snapshots
 /.roborev/
+
+# Per-session NATS channel-server config, generated into the workspace CWD by
+# generateNatsMcpConfig (machine-specific bun path + /tmp socket + per-session
+# name/subjects). When a tinstar session uses this repo as its workspace it
+# rewrites this file on every start/resume — never commit it.
+/.mcp.json

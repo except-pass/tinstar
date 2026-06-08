@@ -2,7 +2,8 @@
 declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
 import { useSyncExternalStore, useCallback } from 'react'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance } from '../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance } from '../domain/types'
+import type { ConstellationGraph } from '../domain/constellationGraph'
 import { isSystemSession, extractMarshal } from '../domain/system-sessions'
 import { apiUrl } from '../apiClient'
 import { dispatchWindowEvent } from '../lib/windowEvents'
@@ -21,10 +22,10 @@ interface ServerState {
   editorWidgets: EditorWidget[]
   browserWidgets: BrowserWidget[]
   imageWidgets: ImageWidget[]
-  natsTrafficWidgets: NatsTrafficWidget[]
   topicMetadata: TopicMetadata[]
   readyQueue: string[]
   pluginWidgets: PluginWidgetInstance[]
+  constellationGraphs: ConstellationGraph[]
 }
 
 const EMPTY_STATE: ServerState = {
@@ -39,10 +40,10 @@ const EMPTY_STATE: ServerState = {
   editorWidgets: [],
   browserWidgets: [],
   imageWidgets: [],
-  natsTrafficWidgets: [],
   topicMetadata: [],
   readyQueue: [],
   pluginWidgets: [],
+  constellationGraphs: [],
 }
 
 // ─── Singleton SSE store ───────────────────────────────────────────────
@@ -181,6 +182,9 @@ export function _resetServerEventsForTests(): void {
 
 function startSSE() {
   if (es) return
+  // No EventSource in non-browser environments (SSR, jsdom tests) — stay
+  // disconnected rather than throwing on mount.
+  if (typeof EventSource === 'undefined') return
 
   const devBase =
     import.meta.env.DEV && typeof __TINSTAR_BACKEND_PORT__ !== 'undefined'
@@ -198,6 +202,7 @@ function startSSE() {
       readyQueue: snapshot.ready_queue ?? [],
       topicMetadata: snapshot.topicMetadata ?? [],
       pluginWidgets: snapshot.pluginWidgets ?? [],
+      constellationGraphs: snapshot.constellationGraphs ?? [],
       // System sessions (e.g. marshal) have dedicated UI — never enter the
       // run set that feeds the canvas/hierarchy/sessions list. They live on
       // `marshal` instead.
@@ -266,9 +271,9 @@ function stopSSE() {
   }
 }
 
-function applyDelta(prev: ServerState, delta: { entity: string; id: string; data: unknown }): ServerState {
+export function applyDelta(prev: ServerState, delta: { entity: string; id: string; data: unknown }): ServerState {
   if (delta.entity === 'all' && delta.data === null) {
-    return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [], marshal: null, editorWidgets: [], browserWidgets: [], imageWidgets: [] }
+    return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [], marshal: null, editorWidgets: [], browserWidgets: [], imageWidgets: [], constellationGraphs: [] }
   }
 
   if (delta.entity === 'space') {
@@ -357,14 +362,6 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
     return { ...prev, imageWidgets: idx >= 0 ? iws.map((x, i) => (i === idx ? w : x)) : [...iws, w] }
   }
 
-  if (delta.entity === 'natsTrafficWidget') {
-    const nws = prev.natsTrafficWidgets
-    if (delta.data === null) return { ...prev, natsTrafficWidgets: nws.filter(w => w.id !== delta.id) }
-    const w = delta.data as NatsTrafficWidget
-    const idx = nws.findIndex(x => x.id === w.id)
-    return { ...prev, natsTrafficWidgets: idx >= 0 ? nws.map((x, i) => (i === idx ? w : x)) : [...nws, w] }
-  }
-
   if (delta.entity === 'topicMetadata') {
     const tms = prev.topicMetadata
     if (delta.data === null) return { ...prev, topicMetadata: tms.filter(m => m.subject !== delta.id) }
@@ -379,6 +376,15 @@ function applyDelta(prev: ServerState, delta: { entity: string; id: string; data
     const w = delta.data as PluginWidgetInstance
     const idx = pws.findIndex(x => x.id === w.id)
     return { ...prev, pluginWidgets: idx >= 0 ? pws.map((x, i) => (i === idx ? w : x)) : [...pws, w] }
+  }
+
+  if (delta.entity === 'constellationGraph') {
+    const graphs = prev.constellationGraphs
+    const id = delta.id // spaceId
+    if (delta.data === null) return { ...prev, constellationGraphs: graphs.filter(g => g.spaceId !== id) }
+    const g = delta.data as ConstellationGraph
+    const idx = graphs.findIndex(x => x.spaceId === g.spaceId)
+    return { ...prev, constellationGraphs: idx >= 0 ? graphs.map((x, i) => (i === idx ? g : x)) : [...graphs, g] }
   }
 
   if (delta.entity === 'commit') {
@@ -416,14 +422,14 @@ export function applyOptimistic(entity: string, data: unknown): void {
     const w = data as ImageWidget
     const exists = prev.imageWidgets.some(x => x.id === w.id)
     currentState = { ...prev, imageWidgets: exists ? prev.imageWidgets.map(x => x.id === w.id ? w : x) : [...prev.imageWidgets, w] }
-  } else if (entity === 'natsTrafficWidget') {
-    const w = data as NatsTrafficWidget
-    const exists = prev.natsTrafficWidgets.some(x => x.id === w.id)
-    currentState = { ...prev, natsTrafficWidgets: exists ? prev.natsTrafficWidgets.map(x => x.id === w.id ? w : x) : [...prev.natsTrafficWidgets, w] }
   } else if (entity === 'pluginWidget') {
     const w = data as PluginWidgetInstance
     const exists = prev.pluginWidgets.some(x => x.id === w.id)
     currentState = { ...prev, pluginWidgets: exists ? prev.pluginWidgets.map(x => x.id === w.id ? w : x) : [...prev.pluginWidgets, w] }
+  } else if (entity === 'run') {
+    const run = data as Run
+    const exists = prev.runs.some(r => r.id === run.id)
+    currentState = { ...prev, runs: exists ? prev.runs.map(r => r.id === run.id ? run : r) : [...prev.runs, run] }
   } else {
     return
   }

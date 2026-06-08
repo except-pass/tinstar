@@ -61,7 +61,7 @@ export async function installBinary(
   if (entries.length !== 1) {
     throw new Error(`unexpected archive layout for ${target.component}: found ${entries.length} entries at top level`)
   }
-  const topLevel = entries[0]
+  const topLevel = entries[0]!   // entries.length === 1 (guarded above)
   const stagedTop = join(staging, topLevel)
   const finalTop = join(installRoot, topLevel)
   if (existsSync(finalTop)) rmSync(finalTop, { recursive: true, force: true })

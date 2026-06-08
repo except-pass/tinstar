@@ -12,6 +12,10 @@ export interface PaletteWidgetEntry {
   defaultSize?: { width: number; height: number }
   singleton: boolean
   spawn: 'palette' | 'palette+context'
+  capabilities?: string[]
+  creator?: 'standalone' | 'session-backed'
+  snappable?: boolean
+  tags?: string[]
 }
 
 export interface UsePluginWidgetRegistryResult {

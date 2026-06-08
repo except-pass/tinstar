@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Camera } from '../../hooks/useCanvasCamera'
 import type { WidgetLayout } from '../../hooks/useWidgetLayouts'
-import type { TreeNode, Run, BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget } from '../../domain/types'
+import type { TreeNode, Run, BrowserWidget, EditorWidget, ImageWidget } from '../../domain/types'
 import { CanvasHud } from '../CanvasHud/CanvasHud'
 import { CanvasMinimap } from '../CanvasMinimap'
 import { MarshalTerminal } from './MarshalTerminal'
@@ -18,7 +18,6 @@ interface Props {
   editorWidgetMap: Map<string, EditorWidget>
   browserWidgetMap: Map<string, BrowserWidget>
   imageWidgetMap: Map<string, ImageWidget>
-  natsTrafficWidgetMap: Map<string, NatsTrafficWidget>
   onFocusRun?: (runId: string) => void
   selectedRunIds?: Set<string>
   /** Toggle refs forwarded for keyboard hotkeys (T = telemetry, M = minimap) */
@@ -104,7 +103,6 @@ export function CanvasSidebar(props: Props) {
           editorWidgetMap={props.editorWidgetMap}
           browserWidgetMap={props.browserWidgetMap}
           imageWidgetMap={props.imageWidgetMap}
-          natsTrafficWidgetMap={props.natsTrafficWidgetMap}
           toggleRef={props.minimapToggleRef}
         />
       </div>

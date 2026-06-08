@@ -110,6 +110,20 @@ export const BUNDLED_PLUGINS: Record<string, BundledEntry> = {
 
 The key (`'my-thing'`) is what shows up in the bundled-plugin index — conventionally matches the package `name`.
 
+> **Two-place registration rule:** a bundled plugin must appear in **both** files, or the widget will be partially broken:
+>
+> 1. `src/core/pluginHost/bundled.ts` → `BUNDLED_PLUGINS` — the runtime module + manifest for plugin activation on the client. This is what you just did in Step 5.
+> 2. `src/server/api/builtinPluginManifests.ts` → `BUILTIN_PLUGIN_PKGS` — the manifest list the server serves to the palette/registry. Without this, the widget will not appear in the WIDGETS palette or the plugin registry even though `activate()` runs fine on the client.
+>
+> Both files import the plugin's `package.json` directly, so the manifest content is single-sourced — there is no duplication of the manifest data itself. The two-place rule is only about adding your plugin's `pkg` reference to each array.
+>
+> ```ts
+> // src/server/api/builtinPluginManifests.ts
+> import myThingPkg from '../../plugins/my-thing/package.json'
+>
+> export const BUILTIN_PLUGIN_PKGS: unknown[] = [browserPkg, natsTrafficPkg, fileEditorPkg, imageViewerPkg, myThingPkg]
+> ```
+
 ---
 
 ## 6. Verify

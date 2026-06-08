@@ -1,5 +1,6 @@
 import { useRef, useState, useCallback, useEffect, type RefObject, type PointerEvent as ReactPointerEvent } from 'react'
 import type { WidgetRegistration } from './widgetComponentRegistry'
+import { isSnappable } from './widgetComponentRegistry'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import { WidgetIdProvider } from '../core/pluginApi/widgetIdContext'
 
@@ -48,9 +49,18 @@ interface CanvasWidgetShellProps {
   onDoubleClickZoom?: (id: string) => void
   onMove: (id: string, x: number, y: number) => void
   onResize: (id: string, w: number, h: number) => void
+  /** Resize gesture started (pointer down on the resize handle) — snapshot state for re-snap. */
+  onResizeStart?: (id: string) => void
+  /** Resize gesture finished (after an actual resize) — re-snap the constellation. */
+  onResizeEnd?: (id: string, width: number, height: number) => void
   onDragStart?: (id: string) => void
   onDragMove?: (id: string, clientX: number, clientY: number) => void
   onDragEnd?: (id: string) => void
+  /** Open the add-widget picker for an edge of this widget. `anchor` is screen-space. */
+  onAddWidget?: (nodeId: string, edge: 'left' | 'right' | 'top' | 'bottom', anchor: { x: number; y: number }) => void
+  /** Edges that already have a snapped neighbor (a break-link sits there) — the add-widget
+   *  [+] is suppressed on these so it only shows on exposed edges. */
+  occupiedEdges?: ReadonlySet<'left' | 'right' | 'top' | 'bottom'>
 }
 
 export function CanvasWidgetShell({
@@ -71,9 +81,13 @@ export function CanvasWidgetShell({
   onDoubleClickZoom,
   onMove,
   onResize,
+  onResizeStart,
+  onResizeEnd,
   onDragStart,
   onDragMove,
   onDragEnd,
+  onAddWidget,
+  occupiedEdges,
 }: CanvasWidgetShellProps) {
   const {
     component: WidgetComponent,
@@ -90,6 +104,10 @@ export function CanvasWidgetShell({
   const resizing = useRef(false)
   const dragStart = useRef({ x: 0, y: 0, originX: 0, originY: 0 })
   const resizeStart = useRef({ x: 0, y: 0, originW: 0, originH: 0 })
+  // Last size emitted during the active resize. onResize only queues a React state
+  // update, so reading layout state at resize-end can lag a frame; carry the final
+  // dimensions here so onResizeEnd reflows from the actual last size, not stale state.
+  const lastResizeSize = useRef({ width: 0, height: 0 })
   const dragMoved = useRef(false)
   const resizeMoved = useRef(false)
   const dragPointerId = useRef<number | null>(null)
@@ -171,8 +189,9 @@ export function CanvasWidgetShell({
         originW: layout.width,
         originH: layout.height,
       }
+      onResizeStart?.(nodeId)
     },
-    [layout.width, layout.height],
+    [layout.width, layout.height, nodeId, onResizeStart],
   )
 
   const handleResizeMove = useCallback(
@@ -189,18 +208,18 @@ export function CanvasWidgetShell({
       )
         return
       resizeMoved.current = true
-      onResize(
-        nodeId,
-        Math.round(Math.max(minSize.width, resizeStart.current.originW + dx)),
-        Math.round(Math.max(minSize.height, resizeStart.current.originH + dy)),
-      )
+      const width = Math.round(Math.max(minSize.width, resizeStart.current.originW + dx))
+      const height = Math.round(Math.max(minSize.height, resizeStart.current.originH + dy))
+      lastResizeSize.current = { width, height }
+      onResize(nodeId, width, height)
     },
     [nodeId, zoom, onResize, minSize],
   )
 
   const handleResizeUp = useCallback(() => {
     resizing.current = false
-  }, [])
+    if (resizeMoved.current) onResizeEnd?.(nodeId, lastResizeSize.current.width, lastResizeSize.current.height)
+  }, [nodeId, onResizeEnd])
 
   const handleDoubleClick = useCallback(() => {
     onDoubleClickZoom?.(nodeId)
@@ -224,6 +243,27 @@ export function CanvasWidgetShell({
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
+
+  // Clicking inside an iframe body (browser/terminal primitives) does not bubble
+  // a pointer event to the shell, so the widget would never select. Detect focus
+  // moving into an inner iframe (window blur + activeElement is our iframe) and
+  // fire the normal selection. Generic across all iframe-backed widgets.
+  useEffect(() => {
+    function onWindowBlur() {
+      if (isSelected) return
+      if (!document.hasFocus()) return // OS-level blur (tab/app switch), not an in-page iframe focus grab
+      const active = document.activeElement
+      if (
+        active &&
+        active.tagName === 'IFRAME' &&
+        containerRef.current?.contains(active)
+      ) {
+        onSelect(nodeId, false)
+      }
+    }
+    window.addEventListener('blur', onWindowBlur)
+    return () => window.removeEventListener('blur', onWindowBlur)
+  }, [isSelected, nodeId, onSelect])
 
   return (
     <div
@@ -261,6 +301,35 @@ export function CanvasWidgetShell({
           isDropTarget={isDropTarget}
         />
       </WidgetIdProvider>
+
+      {onAddWidget && isSnappable(registration) && (isHovered || isSelected) && (
+        <div className="pointer-events-none absolute inset-0">
+          {(['left','right','top','bottom'] as const).filter(edge => !occupiedEdges?.has(edge)).map(edge => {
+            const posStyle: React.CSSProperties =
+              edge === 'left'   ? { left: 0,  top: '50%', transform: `translate(-50%,-50%) scale(${1/zoom})` }
+            : edge === 'right'  ? { right: 0, top: '50%', transform: `translate(50%,-50%) scale(${1/zoom})` }
+            : edge === 'top'    ? { top: 0,  left: '50%', transform: `translate(-50%,-50%) scale(${1/zoom})` }
+            :                     { bottom: 0, left: '50%', transform: `translate(-50%,50%) scale(${1/zoom})` }
+            return (
+              <button
+                key={edge}
+                data-testid={`add-widget-btn-${edge}`}
+                className="pointer-events-auto absolute flex h-5 w-5 items-center justify-center rounded-full border border-primary/40 bg-slate-900/90 text-primary opacity-70 transition-opacity hover:opacity-100"
+                style={posStyle}
+                onPointerDown={e => e.stopPropagation()}
+                onClick={e => {
+                  e.stopPropagation()
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                  onAddWidget(nodeId, edge, { x: r.right + 4, y: r.top })
+                }}
+                title="Add widget"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {/* Resize handle — bottom-right corner */}
       <div

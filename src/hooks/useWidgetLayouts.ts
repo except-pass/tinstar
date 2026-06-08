@@ -164,6 +164,49 @@ function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
   return layouts
 }
 
+/**
+ * Keep cohesion groups (constellation members) together through a full re-layout.
+ *
+ * A re-layout (`generateDefaultLayouts`) positions every widget independently
+ * from the tree, which scatters the members of a constellation — a session and
+ * its attached browser, say — into separate cells and dissolves the snapped
+ * formation the user built. This re-anchors each group as a rigid block: one
+ * member keeps its fresh position and the others are offset from it by their
+ * pre-arrange relative positions, so snapped adjacency survives the arrange.
+ *
+ * Mutates and returns `fresh`. Members absent from either map are skipped (never
+ * created); a group with fewer than two live members is left untouched.
+ */
+export function preserveCohesion(
+  fresh: Map<string, WidgetLayout>,
+  prev: Map<string, WidgetLayout>,
+  groups: string[][],
+): Map<string, WidgetLayout> {
+  for (const group of groups) {
+    const members = group.filter(id => fresh.has(id) && prev.has(id))
+    if (members.length < 2) continue
+    // Anchor = the member the fresh layout placed top-most-left, so the block
+    // moves to the earliest of its members' arranged slots (least disruptive).
+    const anchor = members.reduce((best, id) => {
+      const a = fresh.get(best)!, b = fresh.get(id)!
+      return b.y < a.y || (b.y === a.y && b.x < a.x) ? id : best
+    })
+    const anchorFresh = fresh.get(anchor)!
+    const anchorPrev = prev.get(anchor)!
+    for (const id of members) {
+      if (id === anchor) continue
+      const p = prev.get(id)!
+      const cur = fresh.get(id)!
+      fresh.set(id, {
+        ...cur,
+        x: anchorFresh.x + (p.x - anchorPrev.x),
+        y: anchorFresh.y + (p.y - anchorPrev.y),
+      })
+    }
+  }
+  return fresh
+}
+
 // --- Smart placement for new nodes ---
 
 /**
@@ -252,12 +295,24 @@ function collectTreeIds(tree: TreeNode[]): Set<string> {
  * policy matches the previous loader (regenerate from scratch if >20% missing,
  * otherwise fill missing nodes via smart placement or defaults).
  */
-function hydrateLayouts(
+// Exported for unit tests. Pure: derives the initial layout Map for a tree from
+// persisted state, the host-provided placement seed, smart placement, and
+// defaults — in that precedence.
+export function hydrateLayouts(
   tree: TreeNode[],
   persisted: Record<string, WidgetLayout> | null | undefined,
+  seed?: Map<string, WidgetLayout>,
 ): Map<string, WidgetLayout> {
   const allIds = collectTreeIds(tree)
-  if (!persisted) return generateDefaultLayouts(tree)
+  // Overlay the host-provided placement seed onto a from-scratch layout so a
+  // seeded widget (e.g. a browser widget opened at a chosen spot / nearNodeId)
+  // lands where requested even when we fall back to default generation — a
+  // fresh space with no persisted layouts, or a >20%-missing regeneration.
+  const withSeed = (base: Map<string, WidgetLayout>): Map<string, WidgetLayout> => {
+    if (seed) for (const [id, layout] of seed) if (allIds.has(id)) base.set(id, layout)
+    return base
+  }
+  if (!persisted) return withSeed(generateDefaultLayouts(tree))
   try {
     const map = new Map<string, WidgetLayout>()
     for (const id of allIds) {
@@ -272,23 +327,25 @@ function hydrateLayouts(
       }
     }
     // If >20% missing, regenerate from scratch
-    if (map.size < allIds.size * 0.8) return generateDefaultLayouts(tree)
-    // Fill any remaining missing with smart placement (near siblings) or defaults
+    if (map.size < allIds.size * 0.8) return withSeed(generateDefaultLayouts(tree))
+    // Fill any remaining missing with the host-provided placement seed (e.g. a
+    // browser widget opened at a chosen spot), then smart placement (near
+    // siblings), then defaults.
     if (map.size < allIds.size) {
       const missing = new Set([...allIds].filter(id => !map.has(id)))
       const treeMaps = buildTreeMaps(tree)
       const smart = placeNewRuns(missing, tree, map, treeMaps)
       const defaults = generateDefaultLayouts(tree)
       for (const id of missing) {
-        map.set(id, smart.get(id) ?? defaults.get(id)!)
+        map.set(id, seed?.get(id) ?? smart.get(id) ?? defaults.get(id)!)
       }
-      for (const id of smart.keys()) {
-        cascadeExpansion(map, id, treeMaps)
+      for (const id of missing) {
+        if (seed?.has(id) || smart.has(id)) cascadeExpansion(map, id, treeMaps)
       }
     }
     return map
   } catch {
-    return generateDefaultLayouts(tree)
+    return withSeed(generateDefaultLayouts(tree))
   }
 }
 
@@ -403,9 +460,17 @@ function computeTightBounds(
 
 // --- The hook ---
 
-export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
+/**
+ * @param seedLayouts Optional id→layout seed for nodes that have no persisted
+ *   layout yet — used by the host placement API to open a widget (e.g. a browser
+ *   widget) at a chosen canvas spot. Consulted only on a node's first appearance;
+ *   once placed it flows into config.ui.layouts and user drags take over.
+ */
+export function useWidgetLayouts(tree: TreeNode[], spaceId?: string, seedLayouts?: Map<string, WidgetLayout>) {
   const storageKey = spaceId ? `${LAYOUTS_KEY_PREFIX}-${spaceId}` : LAYOUTS_KEY_PREFIX
   const storageKeyRef = useRef(storageKey)
+  const seedRef = useRef(seedLayouts)
+  seedRef.current = seedLayouts
 
   const config = useConfig()
   const patchConfig = useDebouncedConfigPatch(500)
@@ -418,7 +483,7 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
   const hydratedRef = useRef<boolean>(initialPersistedRef.current !== null)
 
   const [layouts, setLayouts] = useState<Map<string, WidgetLayout>>(() =>
-    hydrateLayouts(tree, initialPersistedRef.current),
+    hydrateLayouts(tree, initialPersistedRef.current, seedRef.current),
   )
   const layoutsRef = useRef(layouts)
   layoutsRef.current = layouts
@@ -434,7 +499,7 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     const persisted = all?.[storageKeyRef.current] ?? null
     if (!hydratedRef.current && persisted) {
       hydratedRef.current = true
-      const fresh = hydrateLayouts(tree, persisted)
+      const fresh = hydrateLayouts(tree, persisted, seedRef.current)
       layoutsRef.current = fresh
       // Hydration arrives from server — don't echo it back as a PATCH.
       skipNextPersistRef.current = true
@@ -465,17 +530,20 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
         layoutsRef.current = fresh
         queueMicrotask(() => setLayouts(fresh))
       } else {
-        // Fill in missing nodes: place runs near siblings/parent, fall back to defaults for containers
+        // Fill in missing nodes: prefer a host-provided placement seed (e.g. a
+        // browser widget opened at a chosen spot), then place runs near
+        // siblings/parent, then fall back to defaults for containers.
         const missing = new Set([...newIds].filter(id => !layoutsRef.current.has(id)))
         const smart = placeNewRuns(missing, tree, layoutsRef.current, treeMapsRef.current)
         const defaults = generateDefaultLayouts(tree)
+        const seed = seedRef.current
         const patched = new Map(layoutsRef.current)
         for (const id of missing) {
-          patched.set(id, smart.get(id) ?? defaults.get(id)!)
+          patched.set(id, seed?.get(id) ?? smart.get(id) ?? defaults.get(id)!)
         }
-        // Expand parent containers to contain any newly placed runs
-        for (const id of smart.keys()) {
-          cascadeExpansion(patched, id, treeMapsRef.current)
+        // Expand parent containers to contain any newly placed/seeded runs
+        for (const id of missing) {
+          if (seed?.has(id) || smart.has(id)) cascadeExpansion(patched, id, treeMapsRef.current)
         }
         layoutsRef.current = patched
         queueMicrotask(() => setLayouts(patched))
@@ -490,7 +558,7 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     const all = config?.ui.layouts as Record<string, Record<string, WidgetLayout>> | undefined
     const persisted = all?.[storageKey] ?? null
     if (persisted) hydratedRef.current = true
-    const fresh = hydrateLayouts(tree, persisted)
+    const fresh = hydrateLayouts(tree, persisted, seedRef.current)
     layoutsRef.current = fresh
     // Space switch is a hydration from persisted state — don't echo back.
     if (persisted) skipNextPersistRef.current = true
@@ -524,7 +592,7 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
       ...configLayoutsRef.current,
       [storageKeyRef.current]: layoutsToRecord(layouts),
     }
-    patchConfig({ ui: { layouts: merged as never } })
+    patchConfig({ ui: { layouts: merged } })
   }, [layouts, patchConfig])
 
   // Move a run (leaf), auto-expand ancestor chain
@@ -650,9 +718,14 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string) {
     [],
   )
 
-  // Full re-layout
-  const arrangeWorkspace = useCallback(() => {
-    setLayouts(generateDefaultLayouts(tree))
+  // Full re-layout. `cohesionGroups` (constellation members, by node id) are kept
+  // together as rigid blocks so a re-layout doesn't scatter snapped widgets —
+  // e.g. a session and its attached browser stay linked.
+  const arrangeWorkspace = useCallback((cohesionGroups?: string[][]) => {
+    setLayouts(prev => {
+      const fresh = generateDefaultLayouts(tree)
+      return cohesionGroups?.length ? preserveCohesion(fresh, prev, cohesionGroups) : fresh
+    })
   }, [tree])
 
   const insertLayout = useCallback((id: string, layout: WidgetLayout) => {

@@ -35,14 +35,15 @@ export function computeDeltaChip(
   const clean = nonNull(series)
   if (clean.length === 0) return null
 
-  const last = clean[clean.length - 1][1]
-  const lastTs = clean[clean.length - 1][0]
+  const lastPoint = clean[clean.length - 1]!   // clean.length >= 1 (guarded above)
+  const last = lastPoint[1]
+  const lastTs = lastPoint[0]
   const window = clean.filter(([ts]) => ts >= lastTs - ONE_MIN_SEC)
-  if (window.length === 0) return null
+  const firstInWindow = window[0]
+  if (!firstInWindow) return null
 
   if (metric === 'cost') {
     // Cost is cumulative. Rate = (last - first-in-window) over actual elapsed seconds, normalized to /min.
-    const firstInWindow = window[0]
     const elapsedSec = Math.max(1, lastTs - firstInWindow[0])
     const ratePerMin = ((last - firstInWindow[1]) * ONE_MIN_SEC) / elapsedSec
     const sign = ratePerMin >= 0 ? '+' : '−'

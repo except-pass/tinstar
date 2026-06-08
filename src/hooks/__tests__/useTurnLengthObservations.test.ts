@@ -45,7 +45,7 @@ describe('deriveData', () => {
     ]
     const d = deriveData(obs, windowSec)
     // Find which columns are non-empty in bucket 2 (<= 10)
-    const cols = d.cells[2].map((v, i) => v > 0 ? i : -1).filter(i => i >= 0)
+    const cols = d.cells[2]!.map((v, i) => v > 0 ? i : -1).filter(i => i >= 0)
     expect(cols[0]).toBeLessThanOrEqual(2)
     expect(cols[1]).toBeGreaterThan(10)
     expect(cols[1]).toBeLessThan(20)

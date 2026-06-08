@@ -1,6 +1,6 @@
 {
   "name": "tinstar",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "workspaces": [
     "packages/*"
   ],
@@ -24,6 +24,9 @@
     "tmux"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev:backend": "tsx watch src/server/standalone.ts --port 5281 --no-open",
     "dev:frontend": "vite",
@@ -34,6 +37,8 @@
     "build:all": "vite build --outDir dist/client && npm run build:server",
     "preview": "vite preview",
     "stable": "npm run build:all && node bin/tinstar.js --no-open",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.e2e.json && tsc --noEmit -p tsconfig.test.json",
+    "test:unit": "vitest run --exclude='e2e/**'",
     "test:e2e": "playwright test",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

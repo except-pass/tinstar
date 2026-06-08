@@ -13,7 +13,8 @@ const PALETTE: { name: string; shades: [string, string, string] }[] = [
 export const PALETTE_COLORS: string[] = PALETTE.flatMap(h => h.shades)
 
 export function pickRandomPaletteColor(): string {
-  return PALETTE_COLORS[Math.floor(Math.random() * PALETTE_COLORS.length)]
+  // Index is always in [0, length) and PALETTE_COLORS is a non-empty literal-derived list.
+  return PALETTE_COLORS[Math.floor(Math.random() * PALETTE_COLORS.length)]!
 }
 
 interface Props {

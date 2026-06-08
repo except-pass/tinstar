@@ -1,7 +1,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
-import { join, extname, dirname, resolve } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createReadStream, existsSync, statSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
+import { createReadStream, existsSync, statSync, writeFileSync, unlinkSync, rmSync } from 'node:fs'
 import httpProxy from 'http-proxy'
 
 // Parse --cors-origins as early as possible so that downstream module imports
@@ -22,23 +22,10 @@ import { handleFileUpload } from './api/fileUploadRoute'
 import { handleScreenshotUpload } from './api/screenshotsRoute'
 import { log } from './logger'
 import { getConfigRoot } from './configRoot'
+import { acquireBackendSingleton } from './infra/lock'
+import { decideStaticServe } from './staticServe'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-
-const MIME_TYPES: Record<string, string> = {
-  '.html': 'text/html',
-  '.js': 'application/javascript',
-  '.css': 'text/css',
-  '.json': 'application/json',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf',
-  '.map': 'application/json',
-}
 
 interface ServerOptions {
   port: number
@@ -53,36 +40,52 @@ interface ServerOptions {
    * compat a single string is still accepted.
    */
   host?: string | string[]
-}
-
-function killStalePidSync(pidFilePath: string): void {
-  try {
-    const raw = readFileSync(pidFilePath, 'utf8').trim()
-    const pid = parseInt(raw, 10)
-    if (isNaN(pid) || pid === process.pid) return
-    try { process.kill(pid, 0) } catch { return }
-    process.kill(pid, 'SIGTERM')
-    log.info('server', `killed stale server process ${pid}`)
-    const deadline = Date.now() + 3_000
-    while (Date.now() < deadline) {
-      try { process.kill(pid, 0) } catch { return }
-      const waitMs = 50
-      const start = Date.now()
-      while (Date.now() - start < waitMs) { /* spin */ }
-    }
-    try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
-  } catch { /* no pid file or process already gone */ }
+  /**
+   * Take over the config dir from a live backend instead of refusing. Without
+   * this, a second backend on the same config dir exits rather than start a
+   * port/ttyd war. Wired from the `--force` CLI flag.
+   */
+  force?: boolean
 }
 
 export function startServer(opts: ServerOptions) {
   opts.clientDir = resolve(opts.clientDir)
 
-  // Kill any stale server BEFORE starting the backend — the old server's shutdown
-  // handler will clean up its observability supervisors. If we init first, we risk
-  // adopting pids that are about to die.
+  // Last-resort safety net. The orchestrator runs many subsystems (fs watchers,
+  // child processes, NATS, SSE) and a single stray error — e.g. an FSWatcher
+  // emitting 'error' on ENOSPC as new dirs appear during a session spawn — must
+  // not be allowed to take the whole server down. Log the cause and keep
+  // running; systemd-style hard restarts on these are worse than degrading.
+  process.on('uncaughtException', (err) => {
+    log.error('server', 'uncaught exception (kept alive)', { error: err.message, stack: err.stack })
+  })
+  process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : null
+    log.error('server', 'unhandled rejection (kept alive)', { reason: err?.message ?? String(reason), stack: err?.stack })
+  })
+
+  // Enforce one backend per config dir BEFORE starting anything. Two backends
+  // sharing a config dir collide on ttyd ports (separate in-memory port sets)
+  // → restart-wars and proxy mis-binding (a run shows another run's terminal).
+  // Refuse by default; `--force` SIGTERMs the live owner and takes over. A
+  // deliberate second instance uses TINSTAR_CONFIG_HOME (a different dir).
   const configDir = getConfigRoot()
   const pidFile = join(configDir, 'server.pid')
-  killStalePidSync(pidFile)
+  const lockPath = join(configDir, 'server.lock')
+  const lockResult = acquireBackendSingleton(lockPath, { force: opts.force })
+  if (!lockResult.acquired) {
+    const who = lockResult.ownerPid ? ` (pid ${lockResult.ownerPid})` : ''
+    log.error('server', `another tinstar backend is already running on ${configDir}${who}`)
+    console.error(
+      `\n✗ tinstar is already running on ${configDir}${who}.\n` +
+      `  Stop it first, run a second instance under a different TINSTAR_CONFIG_HOME,\n` +
+      `  or pass --force to take over.\n`,
+    )
+    process.exit(1)
+  }
+  // The lock marker outlives only this process; drop it on exit so the next
+  // start sees a clean (or stale-but-stealable) lock.
+  process.on('exit', () => { try { rmSync(`${lockPath}.mark`, { recursive: true, force: true }) } catch { /* gone */ } })
 
   const ctx = initBackend()
   const proxy = httpProxy.createProxyServer({ ws: true })
@@ -135,42 +138,42 @@ export function startServer(opts: ServerOptions) {
       return
     }
 
-    // 3. Static file serving with SPA fallback
+    // 3. Static file serving with SPA fallback. A request that looks like a file
+    //    (has an extension) and doesn't exist 404s — it must NOT fall back to
+    //    index.html, or a missing/stale hashed chunk would be served as text/html
+    //    and break dynamic import() (the mermaid "Rendering diagram…" hang).
     const pathname = url.split('?')[0]!
-    const ext = extname(pathname)
-    const filePath = resolve(join(opts.clientDir, pathname))
+    const decision = decideStaticServe(pathname, opts.clientDir, existsSync)
 
-    // Prevent path traversal outside clientDir
-    if (!filePath.startsWith(opts.clientDir)) {
+    if (decision.kind === 'forbidden') {
       if (safeWriteHead(res, 403, { 'Content-Type': 'text/plain' })) res.end('Forbidden')
       return
     }
 
-    // Try to serve the exact file if it has an extension and exists
-    if (ext && existsSync(filePath)) {
+    if (decision.kind === 'file') {
       try {
-        const stat = statSync(filePath)
-        if (stat.isFile()) {
-          const mime = MIME_TYPES[ext] ?? 'application/octet-stream'
-          if (safeWriteHead(res, 200, { 'Content-Type': mime })) {
-            createReadStream(filePath).pipe(res)
+        if (statSync(decision.filePath).isFile()) {
+          if (safeWriteHead(res, 200, { 'Content-Type': decision.mime })) {
+            createReadStream(decision.filePath).pipe(res)
           }
           return
         }
       } catch {
-        // fall through to SPA fallback
+        // fall through to 404 (path is a directory, or vanished mid-request)
       }
+      if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) res.end('Not found')
+      return
     }
 
-    // SPA fallback — serve index.html for non-file routes
-    const indexPath = join(opts.clientDir, 'index.html')
-    if (existsSync(indexPath)) {
+    if (decision.kind === 'spa') {
       if (safeWriteHead(res, 200, { 'Content-Type': 'text/html' })) {
-        createReadStream(indexPath).pipe(res)
+        createReadStream(decision.indexPath).pipe(res)
       }
-    } else {
-      if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) res.end('Not found')
+      return
     }
+
+    // decision.kind === 'not-found'
+    if (safeWriteHead(res, 404, { 'Content-Type': 'text/plain' })) res.end('Not found')
   }
 
   const upgradeHandler = (req: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer) => {
@@ -270,7 +273,9 @@ export function startServer(opts: ServerOptions) {
           process.exit(1)
         }
         if (!isRetry) {
-          killStalePidSync(pidFile)
+          // The singleton lock already ensured no live tinstar backend owns
+          // this config dir, so this is usually a lingering OS socket from the
+          // instance we just replaced. Wait briefly and retry the same port.
           setTimeout(() => { void listenAll(port, true) }, 500)
         } else {
           log.warn('server', `port ${port} in use, trying ${port + 1}`)
@@ -300,7 +305,16 @@ export function startServer(opts: ServerOptions) {
     }
   }
 
-  void listenAll(opts.port)
+  // Startup must fail fast: listenAll() handles EADDRINUSE internally (retry /
+  // port-bump / explicit exit), but any other bind error rethrows. Without this
+  // catch that rejection would be swallowed by the process-wide handler above,
+  // leaving a live process with no HTTP listener. The keep-alive net is for
+  // *runtime* stray errors, not a failed boot.
+  listenAll(opts.port).catch((err) => {
+    const e = err as NodeJS.ErrnoException
+    log.error('server', 'fatal startup error — exiting', { error: e?.message, code: e?.code, stack: e?.stack })
+    process.exit(1)
+  })
 }
 
 // Auto-start when run directly (not when imported by CLI)
@@ -321,5 +335,5 @@ if (isDirectRun) {
     hosts.push(...process.env.TINSTAR_HOST.split(',').map(s => s.trim()).filter(Boolean))
   }
   const noOpen = args.includes('--no-open')
-  startServer({ port, host: hosts, clientDir: join(__dirname, '../../dist/client'), open: !noOpen })
+  startServer({ port, host: hosts, clientDir: join(__dirname, '../../dist/client'), open: !noOpen, force: args.includes('--force') })
 }

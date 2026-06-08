@@ -42,11 +42,18 @@ export function applyGroupDrag(
 export interface IdRect extends Rect { id: string }
 export interface BreakLink { x: number; y: number; aId: string; bId: string }
 
+export type CohesionEdge = 'left' | 'right' | 'top' | 'bottom'
+
 /**
- * Midpoint of the shared edge if a and b are flush/touching within `tolerance`, else null.
- * Side-by-side pairs yield a point on the vertical seam; stacked pairs on the horizontal seam.
+ * Adjacency between a and b if they are flush/touching within `tolerance`, else null.
+ * Returns the midpoint of the shared edge plus which edge of `a` that seam lies on
+ * — derived from the seam orientation itself (vertical seam → left/right, horizontal
+ * seam → top/bottom), NOT from a center-point delta. The orientation is authoritative
+ * even for very asymmetric (wide/tall) widgets, where a center delta can misclassify.
  */
-function seamPoint(a: Rect, b: Rect, tolerance: number): { x: number; y: number } | null {
+interface SeamInfo { x: number; y: number; edgeFromA: CohesionEdge }
+
+function seamInfo(a: Rect, b: Rect, tolerance: number): SeamInfo | null {
   const ax2 = a.x + a.width, ay2 = a.y + a.height
   const bx2 = b.x + b.width, by2 = b.y + b.height
   const vOverlap = Math.min(ay2, by2) - Math.max(a.y, b.y)
@@ -55,15 +62,24 @@ function seamPoint(a: Rect, b: Rect, tolerance: number): { x: number; y: number 
   if (vOverlap > 0 && hGap >= -tolerance && hGap <= tolerance) {
     const x = a.x < b.x ? (ax2 + b.x) / 2 : (bx2 + a.x) / 2
     const y = (Math.max(a.y, b.y) + Math.min(ay2, by2)) / 2
-    return { x, y }
+    return { x, y, edgeFromA: a.x < b.x ? 'right' : 'left' }
   }
   const vGap = Math.max(a.y - by2, b.y - ay2)
   if (hOverlap > 0 && vGap >= -tolerance && vGap <= tolerance) {
     const y = a.y < b.y ? (ay2 + b.y) / 2 : (by2 + a.y) / 2
     const x = (Math.max(a.x, b.x) + Math.min(ax2, bx2)) / 2
-    return { x, y }
+    return { x, y, edgeFromA: a.y < b.y ? 'bottom' : 'top' }
   }
   return null
+}
+
+/**
+ * Midpoint of the shared edge if a and b are flush/touching within `tolerance`, else null.
+ * Side-by-side pairs yield a point on the vertical seam; stacked pairs on the horizontal seam.
+ */
+function seamPoint(a: Rect, b: Rect, tolerance: number): { x: number; y: number } | null {
+  const s = seamInfo(a, b, tolerance)
+  return s ? { x: s.x, y: s.y } : null
 }
 
 /**
@@ -80,6 +96,23 @@ export function computeBreakLinks(items: IdRect[], tolerance = 20): BreakLink[] 
     }
   }
   return links
+}
+
+/**
+ * Which edges of `target` have a flush/touching neighbor among `others` — i.e. the edges
+ * that are NOT exposed. Uses the same adjacency test as the break-link seams, so callers
+ * (e.g. the add-widget [+] affordance) can avoid the edges where a break-link chip already sits.
+ * The blocked edge comes from the seam orientation (via seamInfo), so it stays correct even
+ * when widgets are resized into very wide/tall shapes.
+ */
+export function occupiedEdgesOf(target: IdRect, others: IdRect[], tolerance = 20): Set<CohesionEdge> {
+  const edges = new Set<CohesionEdge>()
+  for (const o of others) {
+    if (o.id === target.id) continue
+    const s = seamInfo(target, o, tolerance)
+    if (s) edges.add(s.edgeFromA)
+  }
+  return edges
 }
 
 export interface LinkBreakPlan {

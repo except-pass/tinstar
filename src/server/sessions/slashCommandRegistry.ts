@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync, watch, FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { SlashCommand } from '../../lib/slashMatching'
+import { log } from '../logger'
 
 export interface DiscoverOpts {
   home?: string  // defaults to os.homedir()
@@ -186,16 +187,31 @@ export class SlashCommandRegistry {
     if (this.watchers.length > 0) return
     const home = this.opts.home ?? homedir()
     const cwd  = this.opts.cwd  ?? process.cwd()
-    const dirs = [
-      join(cwd,  '.claude/commands'),
-      join(cwd,  '.claude/skills'),
-      join(home, '.claude/commands'),
-      join(home, '.claude/skills'),
-      join(home, '.claude/plugins/cache'),
+    // The plugin cache tree is enormous (one subdir per installed skill/plugin
+    // version, plus transient .in_use/<pid> markers that the claude binary
+    // creates on every session spawn). Watching it recursively adds one inotify
+    // watch descriptor per subdir, which exhausts the OS limit and — far worse —
+    // makes the watcher emit an async 'error' event we must handle, or Node
+    // rethrows it and the whole orchestrator crashes. Watch it non-recursively.
+    const dirs: Array<{ path: string; recursive: boolean }> = [
+      { path: join(cwd,  '.claude/commands'),     recursive: true },
+      { path: join(cwd,  '.claude/skills'),       recursive: true },
+      { path: join(home, '.claude/commands'),     recursive: true },
+      { path: join(home, '.claude/skills'),       recursive: true },
+      { path: join(home, '.claude/plugins/cache'), recursive: false },
     ]
-    for (const d of dirs) {
+    for (const { path: d, recursive } of dirs) {
       try {
-        const w = watch(d, { recursive: true }, () => this.invalidate())
+        const w = watch(d, { recursive }, () => this.invalidate())
+        // fs.watch surfaces failures (e.g. ENOSPC when the inotify limit is hit
+        // as new subdirs appear) as async 'error' events. Without a listener
+        // Node rethrows them as an uncaught exception and the process exits.
+        // Drop the failed watcher and keep the server alive instead.
+        w.on('error', (err) => {
+          log.warn('slash', `watcher error for ${d}, dropping watcher`, { error: (err as Error).message })
+          try { w.close() } catch { /* already closed */ }
+          this.watchers = this.watchers.filter(x => x !== w)
+        })
         this.watchers.push(w)
       } catch {
         // Directory may not exist yet — that's fine, no rescan needed for it.

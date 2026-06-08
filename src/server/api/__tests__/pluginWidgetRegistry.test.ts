@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { resolvePluginIcon } from '../pluginWidgetRegistry'
+import { resolvePluginIcon, resolveWidgetRegistry, invalidateWidgetRegistryCache } from '../pluginWidgetRegistry'
 
 let dir: string
 beforeAll(() => {
@@ -35,5 +35,71 @@ describe('resolvePluginIcon', () => {
 
   it('returns undefined for an unknown extension', () => {
     expect(resolvePluginIcon(dir, 'icon.bmp')).toBeUndefined()
+  })
+})
+
+describe('resolveWidgetRegistry built-ins', () => {
+  it('lists the palette-opt-in built-ins (Saloon, Browser) but not the context-only ones', () => {
+    invalidateWidgetRegistryCache()
+    // An empty configRoot (no plugins.json) → only the bundled built-ins surface.
+    const reg = resolveWidgetRegistry(mkdtempSync(join(tmpdir(), 'no-plugins-')))
+    const saloon = reg.find(w => w.widgetType === 'saloon')
+    expect(saloon).toBeDefined()
+    expect(saloon!.pluginId).toBe('nats-traffic')
+    expect(saloon!.pluginDisplayName).toBe('Saloon')
+    expect(saloon!.label).toBe('Saloon')
+    expect(saloon!.spawn).toBe('palette')
+    // Browser is now a standalone palette widget (decoupled from sessions) and declares
+    // the 'spawnable' capability so it appears in the add-widget [+] picker.
+    const browser = reg.find(w => w.widgetType === 'browser-widget')
+    expect(browser).toBeDefined()
+    expect(browser!.spawn).toBe('palette')
+    expect(browser!.capabilities).toContain('spawnable')
+    // file-editor / image-viewer omit `spawn` (context-only), so they stay out of the palette.
+    expect(reg.find(w => w.widgetType === 'file-editor')).toBeUndefined()
+    expect(reg.find(w => w.widgetType === 'image-viewer')).toBeUndefined()
+  })
+
+  it('omits the Saloon when its plugin is disabled', () => {
+    invalidateWidgetRegistryCache()
+    const d = mkdtempSync(join(tmpdir(), 'disabled-plugins-'))
+    writeFileSync(join(d, 'plugins.json'), JSON.stringify({ disabled: ['nats-traffic'], external: [] }))
+    const reg = resolveWidgetRegistry(d)
+    expect(reg.find(w => w.widgetType === 'saloon')).toBeUndefined()
+    invalidateWidgetRegistryCache()
+  })
+
+  it('threads snappable from an external plugin manifest onto the palette entry', () => {
+    invalidateWidgetRegistryCache()
+    const configRoot = mkdtempSync(join(tmpdir(), 'snappable-config-'))
+    const pluginDir = mkdtempSync(join(tmpdir(), 'snappable-plugin-'))
+    mkdirSync(pluginDir, { recursive: true })
+    writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({
+      name: 'snappable-fixture',
+      version: '0.1.0',
+      tinstar: {
+        apiVersion: '5',
+        displayName: 'Snappable Fixture',
+        contributes: {
+          widgets: [
+            { type: 'no-snap', label: 'No Snap', snappable: false },
+            { type: 'default-snap', label: 'Default Snap' },
+          ],
+        },
+      },
+    }))
+    writeFileSync(join(configRoot, 'plugins.json'), JSON.stringify({
+      disabled: [],
+      external: [{ name: 'snappable-fixture', path: pluginDir }],
+    }))
+
+    const reg = resolveWidgetRegistry(configRoot)
+    const noSnap = reg.find(w => w.widgetType === 'no-snap')
+    const defaultSnap = reg.find(w => w.widgetType === 'default-snap')
+    expect(noSnap).toBeDefined()
+    expect(noSnap!.snappable).toBe(false)
+    expect(defaultSnap).toBeDefined()
+    expect(defaultSnap!.snappable).toBeUndefined()
+    invalidateWidgetRegistryCache()
   })
 })

@@ -63,7 +63,7 @@ describe('<PromptComposer> quick-send buttons', () => {
     const btn = container.querySelector('[data-testid="quick-send-3"]') as HTMLButtonElement
     fireEvent.click(btn)
     expect(apiFetch).toHaveBeenCalledTimes(1)
-    const [path, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    const [path, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]!
     expect(path).toBe('/api/sessions/run-1/send-keys')
     expect(init.method).toBe('POST')
     expect(JSON.parse(init.body)).toEqual({ keys: ['3'] })
@@ -74,7 +74,7 @@ describe('<PromptComposer> quick-send buttons', () => {
     const btn = container.querySelector('[data-testid="quick-send-y"]') as HTMLButtonElement
     fireEvent.click(btn)
     expect(apiFetch).toHaveBeenCalledTimes(1)
-    const [, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    const [, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]!
     expect(JSON.parse(init.body)).toEqual({ keys: ['y'] })
   })
 
@@ -91,7 +91,7 @@ describe('<PromptComposer> quick-send hotkeys', () => {
     textarea.focus()
     fireEvent.keyDown(textarea, { key: '2', code: 'Digit2', altKey: true })
     expect(apiFetch).toHaveBeenCalledTimes(1)
-    const [path, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    const [path, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]!
     expect(path).toBe('/api/sessions/run-1/send-keys')
     expect(JSON.parse(init.body)).toEqual({ keys: ['2'] })
   })
@@ -103,7 +103,7 @@ describe('<PromptComposer> quick-send hotkeys', () => {
     textarea.focus()
     fireEvent.keyDown(textarea, { key: '2', code: 'Digit2', altKey: true })
     expect(apiFetch).toHaveBeenCalledTimes(1)
-    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toEqual({ keys: ['2'] })
+    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]![1].body)).toEqual({ keys: ['2'] })
   })
 
   it('Alt+N posts send-keys with ["n"] (lowercase)', () => {
@@ -112,7 +112,7 @@ describe('<PromptComposer> quick-send hotkeys', () => {
     textarea.focus()
     fireEvent.keyDown(textarea, { key: 'n', code: 'KeyN', altKey: true })
     expect(apiFetch).toHaveBeenCalledTimes(1)
-    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toEqual({ keys: ['n'] })
+    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]![1].body)).toEqual({ keys: ['n'] })
   })
 
   it('Alt+Y posts send-keys with ["y"] regardless of e.key case', () => {
@@ -123,7 +123,7 @@ describe('<PromptComposer> quick-send hotkeys', () => {
     textarea.focus()
     fireEvent.keyDown(textarea, { key: '¥', code: 'KeyY', altKey: true })
     expect(apiFetch).toHaveBeenCalledTimes(1)
-    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toEqual({ keys: ['y'] })
+    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]![1].body)).toEqual({ keys: ['y'] })
   })
 
   it('Alt+9 does not fire (out of supported range)', () => {
@@ -156,7 +156,7 @@ describe('<PromptComposer> empty-prompt arrow/Enter passthrough', () => {
     textarea.focus()
     fireEvent.keyDown(textarea, { key })
     expect(apiFetch).toHaveBeenCalledTimes(1)
-    const [path, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    const [path, init] = (apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]!
     expect(path).toBe('/api/sessions/run-1/send-keys')
     expect(JSON.parse(init.body)).toEqual({ keys: [tmuxKey] })
   })
@@ -191,7 +191,7 @@ describe('<PromptComposer> empty-prompt arrow/Enter passthrough', () => {
     const btn = container.querySelector('[data-testid="quick-send-up"]') as HTMLButtonElement
     fireEvent.click(btn)
     expect(apiFetch).toHaveBeenCalledTimes(1)
-    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body)).toEqual({ keys: ['Up'] })
+    expect(JSON.parse((apiFetch as ReturnType<typeof vi.fn>).mock.calls[0]![1].body)).toEqual({ keys: ['Up'] })
   })
 
   it('plain ArrowUp flashes the up nav button', () => {

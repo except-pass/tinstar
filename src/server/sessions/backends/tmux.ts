@@ -1,5 +1,5 @@
 import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import type { Session, SessionNats } from '../session'
@@ -24,6 +24,17 @@ const execFileAsync = promisify(execFile)
  */
 export function natsControlSocketPath(sessionName: string): string {
   return `/tmp/tinstar-nats-${sessionName}.sock`
+}
+
+/**
+ * Path to the session's NATS topics file (one subject per line). The static
+ * .mcp.json passes this to the channel server via --topics-file, keeping the
+ * variable-length subscription list out of the (otherwise byte-identical)
+ * .mcp.json so that file never churns. Lives in the per-session config dir,
+ * not the git workspace.
+ */
+export function natsTopicsFilePath(sessionsDir: string, sessionName: string): string {
+  return join(sessionsDir, sessionName, 'nats-topics.txt')
 }
 
 // --- Naming ---
@@ -58,7 +69,7 @@ async function autoAcceptDevChannelWarning(tmuxName: string): Promise<void> {
       await execFileAsync('tmux', ['has-session', '-t', tmuxName])
 
       // Capture pane content
-      const { stdout } = await execFileAsync('tmux', ['capture-pane', '-t', tmuxName, '-p'])
+      const stdout = await captureScreen(tmuxName)
 
       // Look for the dev channel warning prompt
       if (stdout.includes('Enter to confirm')) {
@@ -201,9 +212,20 @@ function interpolateTemplate(
 }
 
 /**
- * Write .mcp.json to the workspace CWD so Claude picks it up automatically.
- * Must use CWD placement — --mcp-config flag does NOT wire the channel server correctly.
- * Returns the path written.
+ * Write the NATS channel config Claude needs at launch. Returns the .mcp.json path.
+ *
+ * The channel must live in the workspace CWD .mcp.json: Claude's
+ * --dangerously-load-development-channels server:nats resolver only sees MCP
+ * servers from project/user scope, NOT from --mcp-config (verified — that path
+ * reports "no MCP server configured with that name"). So we can't move the file
+ * out of the repo. Instead we make it STOP CHURNING by making it byte-identical
+ * across every session: the per-session bits (--name, --control-socket, and the
+ * variable-length subscription list) come from env vars Claude expands at launch
+ * (${TINSTAR_SESSION_NAME} etc., injected via tmux set-environment) plus a
+ * --topics-file written to the per-session dir. The .mcp.json then depends only
+ * on per-machine config (bun path, package), so concurrent sessions sharing one
+ * repo all want the same bytes. Both files are written idempotently — unchanged
+ * content means no write, so mtime is stable and there is nothing to churn.
  */
 export function generateNatsMcpConfig(opts: {
   sessionsDir: string
@@ -214,19 +236,22 @@ export function generateNatsMcpConfig(opts: {
   bunPath: string
   jetstream?: boolean
 }): string {
-  // Write to workspace CWD — Claude looks for .mcp.json in the working directory
-  const mcpConfigPath = join(opts.workspacePath, '.mcp.json')
+  // Per-session topics file (one subject per line) — keeps the variable-length
+  // subscription list out of the static .mcp.json. Lives outside the git tree.
+  const topicsPath = natsTopicsFilePath(opts.sessionsDir, opts.sessionName)
+  mkdirSync(join(opts.sessionsDir, opts.sessionName), { recursive: true })
+  writeIfChanged(topicsPath, opts.nats.subscriptions.join('\n') + '\n')
 
-  // Build args: use `bun x <package>` to run from npm/github without local install
-  const args: string[] = ['x', opts.channelServerPackage, '--name', opts.sessionName]
-  for (const subject of opts.nats.subscriptions) {
-    args.push('--subscribe', subject)
-  }
+  // Build args from env tokens so the file is identical for every session.
   // --control-socket wires up the hot subscription management path used by
   // POST/DELETE /api/sessions/:name/subscriptions. Requires nats-channel-mcp
   // >= the commit that introduced the flag (except-pass/nats-channel-mcp#1).
-  args.push('--control-socket', natsControlSocketPath(opts.sessionName))
-
+  const args: string[] = [
+    'x', opts.channelServerPackage,
+    '--name', '${TINSTAR_SESSION_NAME}',
+    '--topics-file', '${TINSTAR_NATS_TOPICS_FILE}',
+    '--control-socket', '${TINSTAR_NATS_CONTROL_SOCKET}',
+  ]
   if (opts.jetstream) args.push('--jetstream')
 
   const mcpConfig = {
@@ -238,8 +263,29 @@ export function generateNatsMcpConfig(opts: {
     },
   }
 
-  writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2))
+  // Claude looks for .mcp.json in the working directory; the channels resolver
+  // requires it there (see header comment). Written idempotently so it churns
+  // only when per-machine config actually changes, never per session.
+  const mcpConfigPath = join(opts.workspacePath, '.mcp.json')
+  writeIfChanged(mcpConfigPath, JSON.stringify(mcpConfig, null, 2))
   return mcpConfigPath
+}
+
+/** Write only when content differs, so a stable config leaves mtime untouched. */
+function writeIfChanged(path: string, content: string): void {
+  if (existsSync(path) && readFileSync(path, 'utf-8') === content) return
+  writeFileSync(path, content)
+}
+
+/**
+ * Inject the per-session NATS env vars the static .mcp.json expands at launch.
+ * TINSTAR_SESSION_NAME is already set by createTmuxSession; these two carry the
+ * paths that vary per session. The launch command's `eval "$(tmux
+ * show-environment -s)"` loads them into the shell before `claude` runs.
+ */
+async function setNatsEnv(tmuxName: string, sessionsDir: string, sessionName: string): Promise<void> {
+  await execFileAsync('tmux', ['set-environment', '-t', tmuxName, 'TINSTAR_NATS_TOPICS_FILE', natsTopicsFilePath(sessionsDir, sessionName)])
+  await execFileAsync('tmux', ['set-environment', '-t', tmuxName, 'TINSTAR_NATS_CONTROL_SOCKET', natsControlSocketPath(sessionName)])
 }
 
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
@@ -262,8 +308,13 @@ export function buildAgentCommand(opts: {
       prompt: opts.resume ? null : opts.initialPrompt,
       agent: opts.agent,
     })
+    // Only append --append-system-prompt when *this* command didn't already
+    // interpolate the persona via an {agent...} placeholder. Decided per-command
+    // so asymmetric templates (placeholder in only one of startCmd/resumeCmd)
+    // still get the persona exactly once on both create and resume.
+    const interpolatedPersona = opts.agent != null && /\{agent(Name|Description|Prompt|Json)\}/.test(tmpl)
     // Insert --append-system-prompt before the -- prompt separator if present
-    if (opts.appendSystemPrompt) {
+    if (opts.appendSystemPrompt && !interpolatedPersona) {
       const promptFlag = ` --append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`
       const dashDashIdx = cmd.indexOf(' -- ')
       if (dashDashIdx !== -1) {
@@ -352,7 +403,9 @@ export async function createTmuxSession(
   // Build and send agent command
   const parts = ['eval "$(tmux show-environment -s)"']
 
-  // Generate NATS MCP config if enabled — writes .mcp.json to workspace CWD
+  // Generate NATS channel config if enabled — static .mcp.json in the workspace
+  // CWD + per-session topics file. Per-session values come from the env vars set
+  // below, which Claude expands when it reads .mcp.json.
   let natsOpts: { enabled: boolean } | null = null
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0 && opts.session.workspace?.path) {
     generateNatsMcpConfig({
@@ -364,6 +417,7 @@ export async function createTmuxSession(
       bunPath: config.nats.bunPath,
       jetstream: config.nats.jetstream,
     })
+    await setNatsEnv(tmuxName, config.dirs.sessions, opts.session.name)
     natsOpts = { enabled: true }
     log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured`)
   }
@@ -417,7 +471,7 @@ export async function startTmuxSession(
   // Tmux session exists but agent may have exited — re-send the command
   const parts = ['eval "$(tmux show-environment -s)"']
 
-  // Generate NATS MCP config if enabled — writes .mcp.json to workspace CWD
+  // Generate NATS channel config if enabled — see createTmuxSession for details.
   let natsOpts: { enabled: boolean } | null = null
   if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0 && opts.session.workspace?.path) {
     generateNatsMcpConfig({
@@ -429,6 +483,7 @@ export async function startTmuxSession(
       bunPath: config.nats.bunPath,
       jetstream: config.nats.jetstream,
     })
+    await setNatsEnv(tmuxName, config.dirs.sessions, opts.session.name)
     natsOpts = { enabled: true }
   }
 
@@ -504,6 +559,16 @@ export async function reattachTmuxSession(
   return { port: opts.port, ttydPid }
 }
 
+/** Capture a tmux pane's rendered screen. With `scrollback`, include that many
+ *  lines of history (capture-pane -S -<n>). Shared by status detection, the
+ *  codex transcript, and the GET /api/sessions/:name/screen endpoint. */
+export async function captureScreen(tmuxName: string, scrollback?: number): Promise<string> {
+  const args = ['capture-pane', '-t', tmuxName, '-p']
+  if (scrollback && scrollback > 0) args.push('-S', `-${scrollback}`)
+  const { stdout } = await execFileAsync('tmux', args)
+  return stdout
+}
+
 export async function getTmuxSessionState(config: TinstarConfig, sessionName: string): Promise<'exists' | 'missing'> {
   const tmuxName = tmuxSessionName(config, sessionName)
   const exists = await tmuxHasSession(tmuxName)
@@ -523,27 +588,118 @@ interface ManagedTtydEntry {
 
 const managedTtyd = new Map<string, ManagedTtydEntry>()
 
+// Epoch-ms of recent auto-restarts per session, for the circuit breaker.
+// Kept module-level (not on the entry) so it survives startTtyd's internal
+// stopManagedTtyd → re-spawn cycle; cleared only on an explicit stop/delete.
+const ttydRestartHistory = new Map<string, number[]>()
+
+// ttyd auto-restart circuit breaker tuning. A healthy ttyd never restarts; it
+// stays up for the life of the session. So even a handful of restarts in a
+// short window means something is wrong (the tmux target died, or another
+// process — e.g. a second backend on the same config dir — keeps killing the
+// ttyd on a contended port). Without this cap, startTtyd's exit handler spins
+// forever: one such war restarted ttyd 1,184 times over 23 hours.
+const TTYD_RESTART_MAX = 5
+const TTYD_RESTART_WINDOW_MS = 15_000
+
+/**
+ * Decide whether a ttyd that just exited should be auto-restarted.
+ *
+ * Pure so it can be unit-tested without spawning ttyd. Two give-up conditions:
+ *  - `tmux-gone`: the tmux session ttyd attaches to no longer exists, so the
+ *    session was closed/killed — restarting would attach to nothing.
+ *  - `rate-limited`: too many restarts within the window, i.e. a restart-war.
+ */
+export function shouldRestartTtyd(opts: {
+  tmuxAlive: boolean
+  restartTimestamps: number[]
+  now: number
+  maxRestarts?: number
+  windowMs?: number
+}): { restart: boolean; reason: 'tmux-gone' | 'rate-limited' | 'ok' } {
+  if (!opts.tmuxAlive) return { restart: false, reason: 'tmux-gone' }
+  const max = opts.maxRestarts ?? TTYD_RESTART_MAX
+  const windowMs = opts.windowMs ?? TTYD_RESTART_WINDOW_MS
+  const recent = opts.restartTimestamps.filter((t) => opts.now - t < windowMs)
+  if (recent.length >= max) return { restart: false, reason: 'rate-limited' }
+  return { restart: true, reason: 'ok' }
+}
+
+export interface TtydIncumbent {
+  pid: number
+  /** tmux session this ttyd attaches (e.g. "tinstar-foo"), or null if unknown. */
+  tmuxTarget: string | null
+}
+
+/** ttyd processes listening on `port`, each with the tmux session it attaches. */
+export function ttydIncumbentsOnPort(port: number): TtydIncumbent[] {
+  const out: TtydIncumbent[] = []
+  let pidLines: string
+  try {
+    pidLines = execSync(
+      `lsof -ti :${port} | xargs -r ps -o pid=,comm= -p 2>/dev/null | awk '$2=="ttyd"{print $1}'`,
+      { encoding: 'utf-8' },
+    ).trim()
+  } catch {
+    return out // nothing on the port
+  }
+  if (!pidLines) return out
+  for (const line of pidLines.split('\n')) {
+    const pid = Number(line)
+    if (!pid) continue
+    let tmuxTarget: string | null = null
+    try {
+      const args = execSync(`ps -o args= -p ${pid}`, { encoding: 'utf-8' })
+      const m = args.match(/tmux attach -t (\S+)/)
+      tmuxTarget = m ? m[1]! : null
+    } catch { /* process vanished between lsof and ps */ }
+    out.push({ pid, tmuxTarget })
+  }
+  return out
+}
+
+/**
+ * Partition ttyd incumbents on a contended port: which we may kill to reclaim
+ * the port (our own previous ttyd, or one we can't identify) vs. foreign ones
+ * serving a different live session (which we must NOT kill — that's the
+ * kill-war). Pure, for testing.
+ */
+export function ttydPidsToReclaim(
+  incumbents: TtydIncumbent[],
+  ourTmuxName: string,
+): { kill: number[]; foreign: TtydIncumbent[] } {
+  const kill: number[] = []
+  const foreign: TtydIncumbent[] = []
+  for (const inc of incumbents) {
+    if (inc.tmuxTarget === null || inc.tmuxTarget === ourTmuxName) kill.push(inc.pid)
+    else foreign.push(inc)
+  }
+  return { kill, foreign }
+}
+
 export function startTtyd(opts: {
   tmuxName: string
   port: number
   sessionName: string
 }): Promise<number | undefined> {
-  stopManagedTtyd(opts.sessionName)
+  // resetHistory:false — preserve the restart-rate history across an
+  // auto-restart so the circuit breaker can count cumulative restarts.
+  stopManagedTtyd(opts.sessionName, { resetHistory: false })
 
-  // Kill any orphaned ttyd still holding the port (e.g. after server restart).
-  // Only kill ttyd processes — lsof may also return the server itself or other
-  // servers that have proxy connections to this port.
-  try {
-    const lsof = execSync(
-      `lsof -ti :${opts.port} | xargs -r ps -o pid=,comm= -p 2>/dev/null | awk '$2=="ttyd"{print $1}'`,
-      { encoding: 'utf-8' },
-    ).trim()
-    if (lsof) {
-      for (const pid of lsof.split('\n')) {
-        try { process.kill(Number(pid), 'SIGTERM') } catch { /* already dead */ }
-      }
-    }
-  } catch { /* no process on port — good */ }
+  // Reclaim the port from an orphaned ttyd (e.g. after a server restart), but
+  // ONLY from our own previous ttyd or one we can't identify. Killing a ttyd
+  // that serves a *different* live session is the kill-war: each session's
+  // startTtyd kills the other's ttyd, both auto-restart, and the proxy /s/{name}
+  // flaps between the two terminals. If a foreign session holds the port we
+  // leave it alone and let the bind fail — the circuit breaker then backs off
+  // instead of warring.
+  const { kill, foreign } = ttydPidsToReclaim(ttydIncumbentsOnPort(opts.port), opts.tmuxName)
+  for (const pid of kill) {
+    try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
+  }
+  if (foreign.length > 0) {
+    log.warn('ttyd', `${opts.sessionName}: port ${opts.port} held by another session (${foreign.map(f => f.tmuxTarget).join(', ')}); not killing it`)
+  }
 
   return new Promise((resolve, reject) => {
     const child = spawn('ttyd', [
@@ -558,22 +714,44 @@ export function startTtyd(opts: {
 
     child.on('error', reject)
 
-    // Auto-restart on unexpected exit
+    // Auto-restart on unexpected exit — but only when it's actually warranted.
+    // Bare unconditional restart spins forever when the tmux target is gone
+    // (closed session) or when something keeps killing ttyd on a contended
+    // port (a second backend on the same config dir). See shouldRestartTtyd.
     child.on('exit', (code) => {
       const entry = managedTtyd.get(opts.sessionName)
       if (!entry || entry.stopped) {
         managedTtyd.delete(opts.sessionName)
         return
       }
-      log.info('ttyd', `${opts.sessionName}: exited (code ${code}), restarting in 2s...`)
-      entry.restartTimer = setTimeout(() => {
-        startTtyd(opts).then(pid => {
-          log.info('ttyd', `${opts.sessionName}: restarted`, { pid })
-          if (entry.onRestart && pid) entry.onRestart(pid)
-        }).catch(err => {
-          log.error('ttyd', `${opts.sessionName}: restart failed`, { error: (err as Error).message })
-        })
-      }, 2000)
+      void tmuxHasSession(opts.tmuxName).then((tmuxAlive) => {
+        const cur = managedTtyd.get(opts.sessionName)
+        if (!cur || cur.stopped) {
+          managedTtyd.delete(opts.sessionName)
+          return
+        }
+        const now = Date.now()
+        const history = (ttydRestartHistory.get(opts.sessionName) ?? []).filter(
+          (t) => now - t < TTYD_RESTART_WINDOW_MS,
+        )
+        const decision = shouldRestartTtyd({ tmuxAlive, restartTimestamps: history, now })
+        if (!decision.restart) {
+          log.info('ttyd', `${opts.sessionName}: exited (code ${code}), not restarting (${decision.reason})`)
+          managedTtyd.delete(opts.sessionName)
+          ttydRestartHistory.delete(opts.sessionName)
+          return
+        }
+        log.info('ttyd', `${opts.sessionName}: exited (code ${code}), restarting in 2s...`)
+        cur.restartTimer = setTimeout(() => {
+          ttydRestartHistory.set(opts.sessionName, [...history, Date.now()])
+          startTtyd(opts).then(pid => {
+            log.info('ttyd', `${opts.sessionName}: restarted`, { pid })
+            if (cur.onRestart && pid) cur.onRestart(pid)
+          }).catch(err => {
+            log.error('ttyd', `${opts.sessionName}: restart failed`, { error: (err as Error).message })
+          })
+        }, 2000)
+      })
     })
 
     managedTtyd.set(opts.sessionName, {
@@ -588,13 +766,19 @@ export function startTtyd(opts: {
   })
 }
 
-export function stopManagedTtyd(sessionName: string): void {
+export function stopManagedTtyd(sessionName: string, opts: { resetHistory?: boolean } = {}): void {
   const entry = managedTtyd.get(sessionName)
-  if (!entry) return
-  entry.stopped = true
-  if (entry.restartTimer) clearTimeout(entry.restartTimer)
-  try { entry.child.kill('SIGTERM') } catch { /* already dead */ }
-  managedTtyd.delete(sessionName)
+  if (entry) {
+    entry.stopped = true
+    if (entry.restartTimer) clearTimeout(entry.restartTimer)
+    try { entry.child.kill('SIGTERM') } catch { /* already dead */ }
+    managedTtyd.delete(sessionName)
+  }
+  // An explicit stop is a clean slate: a later manual (re)start should not be
+  // rate-limited by restarts from before the stop. The internal teardown at
+  // the top of startTtyd passes resetHistory:false so the circuit breaker
+  // still sees the cumulative restart rate across an auto-restart cycle.
+  if (opts.resetHistory !== false) ttydRestartHistory.delete(sessionName)
 }
 
 export function onTtydRestart(sessionName: string, callback: (pid: number) => void): void {

@@ -66,7 +66,7 @@ export function TurnLengthHistogram({ cells, accent, bucketBounds }: Props) {
               )}
               <text x={x + barW / 2} y={PAD_TOP + PLOT_H + 10}
                     fill="rgba(180,200,220,0.5)" textAnchor="middle">
-                {fmtBucket(bucketBounds[b])}
+                {bucketBounds[b] !== undefined ? fmtBucket(bucketBounds[b]!) : ''}
               </text>
             </g>
           )

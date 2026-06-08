@@ -20,9 +20,10 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, NatsTrafficWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
+import type { ConstellationGraph } from '../../domain/constellationGraph'
 
 /** Translate a run's status into a default attention signal.
  *  Returns null when the inbox shouldn't surface the run. */
@@ -78,6 +79,11 @@ function runShallowEqual(a: Run, b: Run): boolean {
   if (a.parentId !== b.parentId) return false
   if (a.breakoutRooms !== b.breakoutRooms) return false
   if (!attentionShallowEqual(a.attention, b.attention)) return false
+  if (a.view !== b.view) return false
+  // viewData is an opaque (usually object) blob; reference equality is intentional
+  // — each PATCH deserializes a fresh object, so a viewData write is always a real
+  // change. Don't "fix" this to deep-equal: that would defeat the change detection.
+  if (a.viewData !== b.viewData) return false
   // Run-only fields
   if (a.worktreeId !== b.worktreeId) return false
   if (a.createdAt !== b.createdAt) return false
@@ -112,10 +118,11 @@ export class DocumentStore {
   private commits = new Map<string, CommitRecord>()
   private editorWidgets = new Map<string, EditorWidget>()
   private browserWidgets = new Map<string, BrowserWidget>()
+  private artifacts = new Map<string, Artifact>()
   private imageWidgets = new Map<string, ImageWidget>()
-  private natsTrafficWidgets = new Map<string, NatsTrafficWidget>()
   private topicMetadata = new Map<string, TopicMetadata>()
   private pluginWidgets = new Map<string, PluginWidgetInstance>()
+  private constellationGraphs = new Map<string, ConstellationGraph>()
 
   activeSpaceId: string = ''
 
@@ -151,9 +158,10 @@ export class DocumentStore {
       if (data.commits) for (const c of data.commits) this.commits.set(c.sha, c)
       if (data.editorWidgets) for (const w of data.editorWidgets) this.editorWidgets.set(w.id, w)
       if (data.browserWidgets) for (const w of data.browserWidgets) this.browserWidgets.set(w.id, w)
+      if (data.artifacts) for (const a of data.artifacts) this.artifacts.set(a.id, a)
       if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
-      if (data.natsTrafficWidgets) for (const w of data.natsTrafficWidgets) this.natsTrafficWidgets.set(w.id, w)
       if (data.pluginWidgets) for (const w of data.pluginWidgets) this.pluginWidgets.set(w.id, w)
+      if (data.constellationGraphs) for (const g of data.constellationGraphs) this.constellationGraphs.set(g.spaceId, g)
       if (data.topicMetadata) for (const m of data.topicMetadata) this.topicMetadata.set(m.subject, m)
     } catch {
       // No file or corrupt — start fresh
@@ -312,6 +320,7 @@ export class DocumentStore {
     if (this.runs.has(id)) {
       this.runs.delete(id)
       this.changes.emit('change', { entity: 'run', id, data: null })
+      this.pruneWidgetFromGraphs(`run-${id}`)
       return
     }
     // Simulator runs are keyed by run id (R-xxx) but deleted by session name (CLD-xxx)
@@ -319,6 +328,7 @@ export class DocumentStore {
       if (run.sessionId === id) {
         this.runs.delete(key)
         this.changes.emit('change', { entity: 'run', id: key, data: null })
+        this.pruneWidgetFromGraphs(`run-${key}`)
         return
       }
     }
@@ -428,6 +438,7 @@ export class DocumentStore {
   deleteEditorWidget(id: string): void {
     this.editorWidgets.delete(id)
     this.changes.emit('change', { entity: 'editorWidget', id, data: null })
+    this.pruneWidgetFromGraphs(id)
   }
 
   getAllEditorWidgets(): EditorWidget[] {
@@ -444,10 +455,49 @@ export class DocumentStore {
   deleteBrowserWidget(id: string): void {
     this.browserWidgets.delete(id)
     this.changes.emit('change', { entity: 'browserWidget', id, data: null })
+    this.pruneWidgetFromGraphs(id)
+    // Cascade: an ephemeral artifact's lifecycle is tied to its browser widget.
+    for (const [aid, a] of this.artifacts) {
+      if (a.widgetId === id) this.deleteArtifact(aid)
+    }
   }
 
   getAllBrowserWidgets(): BrowserWidget[] {
     return [...this.browserWidgets.values()]
+  }
+
+  // --- Artifacts (ephemeral HTML) ---
+
+  upsertArtifact(id: string, data: Artifact): void {
+    this.artifacts.set(id, data)
+    // Metadata-only delta: artifacts can be multi-MB and the frontend has no
+    // artifact reducer, so broadcasting the html over SSE on every update is
+    // pure waste. Persistence reads the full record from snapshotAll(), not here.
+    this.changes.emit('change', {
+      entity: 'artifact',
+      id,
+      data: { id, spaceId: data.spaceId, widgetId: data.widgetId, rev: data.rev },
+    })
+  }
+
+  getArtifact(id: string): Artifact | undefined {
+    return this.artifacts.get(id)
+  }
+
+  getAllArtifacts(): Artifact[] {
+    return [...this.artifacts.values()]
+  }
+
+  deleteArtifact(id: string): void {
+    if (!this.artifacts.delete(id)) return
+    this.changes.emit('change', { entity: 'artifact', id, data: null })
+  }
+
+  deleteAllArtifacts(): number {
+    const count = this.artifacts.size
+    this.artifacts.clear()
+    if (count > 0) this.changes.emit('change', { entity: 'artifact', id: '*', data: null })
+    return count
   }
 
   // --- PluginWidgets ---
@@ -490,10 +540,52 @@ export class DocumentStore {
   deletePluginWidget(id: string): void {
     this.pluginWidgets.delete(id)
     this.changes.emit('change', { entity: 'pluginWidget', id, data: null })
+    this.pruneWidgetFromGraphs(id)
   }
 
   getAllPluginWidgets(): PluginWidgetInstance[] {
     return [...this.pluginWidgets.values()]
+  }
+
+  // --- ConstellationGraph (per-space membership graph) ---
+
+  private pruneWidgetFromGraphs(widgetId: string): void {
+    for (const [spaceId, g] of this.constellationGraphs) {
+      const snapped = g.snapped.filter(([a, b]) => a !== widgetId && b !== widgetId)
+      let members = g.members.filter(m => m.widget !== widgetId)
+      // Free any slot left with a single member (no 1-member constellations).
+      const countBySlot = new Map<string, number>()
+      for (const m of members) countBySlot.set(m.slot, (countBySlot.get(m.slot) ?? 0) + 1)
+      members = members.filter(m => (countBySlot.get(m.slot) ?? 0) >= 2)
+      if (snapped.length !== g.snapped.length || members.length !== g.members.length) {
+        // Server-internal mutation: bump the revision so it isn't rejected as
+        // stale and so clients see it supersede any in-flight optimistic overlay.
+        this.upsertConstellationGraph(spaceId, { ...g, snapped, members, rev: (g.rev ?? 0) + 1 })
+      }
+    }
+  }
+
+  /** Returns whether the write was applied. A stale/equal revision is rejected
+   *  (returns false) so callers can surface a conflict instead of a false success. */
+  upsertConstellationGraph(spaceId: string, data: ConstellationGraph): boolean {
+    // Revision gate (docstore mutator contract): reject writes whose revision is
+    // not newer than the stored one. An older write arriving after a newer one
+    // (e.g. an undo PUT racing the edit it reverts, reordered by the network) is
+    // a stale intent — dropping it keeps the latest intent authoritative
+    // regardless of arrival order, and also short-circuits redundant re-PUTs.
+    const existing = this.constellationGraphs.get(spaceId)
+    if (existing && (data.rev ?? 0) <= (existing.rev ?? 0)) return false
+    this.constellationGraphs.set(spaceId, data)
+    this.changes.emit('change', { entity: 'constellationGraph', id: spaceId, data })
+    return true
+  }
+
+  getConstellationGraph(spaceId: string): ConstellationGraph | undefined {
+    return this.constellationGraphs.get(spaceId)
+  }
+
+  getAllConstellationGraphs(): ConstellationGraph[] {
+    return [...this.constellationGraphs.values()]
   }
 
   // --- Image Widgets ---
@@ -506,26 +598,11 @@ export class DocumentStore {
   deleteImageWidget(id: string): void {
     this.imageWidgets.delete(id)
     this.changes.emit('change', { entity: 'imageWidget', id, data: null })
+    this.pruneWidgetFromGraphs(id)
   }
 
   getAllImageWidgets(): ImageWidget[] {
     return [...this.imageWidgets.values()]
-  }
-
-  // --- NatsTrafficWidgets ---
-
-  upsertNatsTrafficWidget(id: string, data: NatsTrafficWidget): void {
-    this.natsTrafficWidgets.set(id, data)
-    this.changes.emit('change', { entity: 'natsTrafficWidget', id, data })
-  }
-
-  deleteNatsTrafficWidget(id: string): void {
-    this.natsTrafficWidgets.delete(id)
-    this.changes.emit('change', { entity: 'natsTrafficWidget', id, data: null })
-  }
-
-  getAllNatsTrafficWidgets(): NatsTrafficWidget[] {
-    return [...this.natsTrafficWidgets.values()]
   }
 
   // --- TopicMetadata ---
@@ -566,8 +643,8 @@ export class DocumentStore {
       editorWidgets: this.getAllEditorWidgets().filter(inSpace),
       browserWidgets: this.getAllBrowserWidgets().filter(inSpace),
       imageWidgets: this.getAllImageWidgets().filter(inSpace),
-      natsTrafficWidgets: this.getAllNatsTrafficWidgets().filter(inSpace),
       pluginWidgets: this.getAllPluginWidgets().filter(inSpace),
+      constellationGraphs: this.getAllConstellationGraphs().filter(inSpace),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -585,9 +662,10 @@ export class DocumentStore {
       commits: this.getAllCommits(),
       editorWidgets: this.getAllEditorWidgets(),
       browserWidgets: this.getAllBrowserWidgets(),
+      artifacts: this.getAllArtifacts(),
       imageWidgets: this.getAllImageWidgets(),
-      natsTrafficWidgets: this.getAllNatsTrafficWidgets(),
       pluginWidgets: this.getAllPluginWidgets(),
+      constellationGraphs: this.getAllConstellationGraphs(),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -602,10 +680,17 @@ export class DocumentStore {
     for (const [id, e] of this.worktrees) if (e.spaceId === spaceId) this.worktrees.delete(id)
     for (const [id, e] of this.runs) if (e.spaceId === spaceId) this.runs.delete(id)
     for (const [id, e] of this.editorWidgets) if (e.spaceId === spaceId) this.editorWidgets.delete(id)
-    for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) this.browserWidgets.delete(id)
+    const clearedBrowserIds = new Set<string>()
+    for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) { this.browserWidgets.delete(id); clearedBrowserIds.add(id) }
+    // Artifact.spaceId is optional, so a widget-owned artifact may have only widgetId.
+    // Delete by spaceId OR by ownership of a browser widget cleared above, else the
+    // persisted HTML orphans and stays servable from /api/artifacts/:id.
+    for (const [id, e] of this.artifacts) {
+      if (e.spaceId === spaceId || (e.widgetId !== undefined && clearedBrowserIds.has(e.widgetId))) this.artifacts.delete(id)
+    }
     for (const [id, e] of this.imageWidgets) if (e.spaceId === spaceId) this.imageWidgets.delete(id)
-    for (const [id, e] of this.natsTrafficWidgets) if (e.spaceId === spaceId) this.natsTrafficWidgets.delete(id)
     for (const [id, e] of this.pluginWidgets) if (e.spaceId === spaceId) this.pluginWidgets.delete(id)
+    this.constellationGraphs.delete(spaceId)
     this.changes.emit('change', { entity: 'all', id: '*', data: null })
   }
 
@@ -623,8 +708,9 @@ export class DocumentStore {
       this.runs.clear()
       this.editorWidgets.clear()
       this.browserWidgets.clear()
+      this.artifacts.clear()
       this.imageWidgets.clear()
-      this.natsTrafficWidgets.clear()
+      this.constellationGraphs.clear()
       // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
     }

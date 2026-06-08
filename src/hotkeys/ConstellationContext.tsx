@@ -1,21 +1,22 @@
 // src/hotkeys/ConstellationContext.tsx
 import { createContext, useContext, type ReactNode } from 'react'
-import { useConstellations } from '../hooks/useConstellations'
+import { useConstellationGraph } from '../hooks/useConstellationGraph'
 
-type ConstellationsReturn = ReturnType<typeof useConstellations>
+type ConstellationsReturn = ReturnType<typeof useConstellationGraph>
 
 const ConstellationContext = createContext<ConstellationsReturn | null>(null)
 
 export function ConstellationProvider({
   spaceId,
-  nodeIds,
+  // nodeIds: kept in signature for caller compatibility; pruning moved server-side in a later task
+  nodeIds: _nodeIds,
   children,
 }: {
   spaceId: string
   nodeIds: string[]
   children: ReactNode
 }) {
-  const constellations = useConstellations(spaceId, nodeIds)
+  const constellations = useConstellationGraph(spaceId)
   return <ConstellationContext.Provider value={constellations}>{children}</ConstellationContext.Provider>
 }
 

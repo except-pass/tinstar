@@ -72,9 +72,11 @@ export function deriveData(observations: Observation[], windowSec: number): Turn
     const col = Math.min(NUM_TIME_COLS - 1, Math.max(0, Math.floor((o.tsSec - windowStart) / columnSec)))
     let row = NUM_VALUE_BUCKETS - 1
     for (let i = 0; i < NUM_VALUE_BUCKETS; i++) {
-      if (o.sec <= TURN_LENGTH_BUCKETS[i]) { row = i; break }
+      const bucket = TURN_LENGTH_BUCKETS[i]
+      if (bucket !== undefined && o.sec <= bucket) { row = i; break }
     }
-    cells[row][col]++
+    const rowCells = cells[row]
+    if (rowCells) rowCells[col] = (rowCells[col] ?? 0) + 1
   }
 
   // Percentiles over raw observation `sec` values

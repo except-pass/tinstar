@@ -1,0 +1,25 @@
+{
+  "name": "roborev",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.tsx",
+  "tinstar": {
+    "apiVersion": "5",
+    "displayName": "Roborev cockpit",
+    "description": "Wrapped roborev TUI with a live, branch-scoped review pane",
+    "contributes": {
+      "widgets": [
+        {
+          "type": "roborev-cockpit",
+          "label": "Roborev cockpit",
+          "description": "roborev tui + native review list & actions",
+          "primitive": "terminal",
+          "spawn": "palette",
+          "creator": "session-backed",
+          "defaultSize": { "width": 1100, "height": 720 }
+        }
+      ]
+    },
+    "permissions": ["sessions:read", "sessions:write"]
+  }
+}

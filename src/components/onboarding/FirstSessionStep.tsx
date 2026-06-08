@@ -16,7 +16,8 @@ export function FirstSessionStep() {
         if (cancelled) return
         const names = Object.keys(resp.data ?? {})
         setProjects(names)
-        if (names.length) setProject(prev => prev || names[0])
+        const first = names[0]
+        if (first) setProject(prev => prev || first)
       })
       .catch(() => { /* upstream onboarding state will reflect */ })
     return () => { cancelled = true }

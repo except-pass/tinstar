@@ -1,15 +1,21 @@
-import { useRef, useEffect, useCallback, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
-import type { BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget, PluginWidgetInstance, Run, TreeNode, GroupingDimension } from '../domain/types'
+import { useRef, useEffect, useCallback, useState, useMemo, Fragment, type PointerEvent as ReactPointerEvent } from 'react'
+import type { BrowserWidget, EditorWidget, ImageWidget, PluginWidgetInstance, Run, TreeNode, GroupingDimension } from '../domain/types'
 import { findNodeLabel } from '../domain/view-models'
+import { CanvasContextMenu } from './CanvasContextMenu'
+import { buildMoveTargets } from '../domain/moveTargets'
+import { relocateWidgetTo } from '../domain/relocateWidget'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
 import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
-import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
+import { getWidgetComponent, toWidgetType, isSnappable } from '../widgets/widgetComponentRegistry'
+import { resolveRunViewType } from '../domain/runView'
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
 import { useConstellationContext } from '../hotkeys/ConstellationContext'
-import type { ConstellationSlot } from '../hooks/useConstellations'
+import type { ConstellationSlot } from '../domain/constellationGraph'
+import { applyAssign, nextFreeSlot } from '../hooks/useConstellationGraph'
+import { addSnap, planBreak, addMember, removeMember, removeSnap } from '../domain/constellationGraph'
 import { registerCanvasActions } from '../hotkeys/canvasActionsRegistry'
 import { EmptyCanvasHint } from './EmptyCanvasHint'
 import { PluginWidgetDisabledPlaceholder } from './PluginWidgetDisabledPlaceholder'
@@ -18,13 +24,23 @@ import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
 import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
-import type { Rect } from '../canvas/constellationCohesion'
-import { applyGroupDrag, boundingBoxOf, fitToRect, planLinkBreak } from '../canvas/constellationCohesion'
+import type { Rect, IdRect } from '../canvas/constellationCohesion'
+import { applyGroupDrag, boundingBoxOf, fitToRect, occupiedEdgesOf } from '../canvas/constellationCohesion'
 import { tidyGrid } from '../canvas/tidyArrange'
 import type { DragMember } from '../canvas/constellationCohesion'
+import { reflowOnResize, type ReflowRect, type ReflowMember } from '../canvas/resizeReflow'
+
+/** Shared empty set so unsnapped widgets reuse one reference (all four [+] edges shown). */
+const EMPTY_EDGES: ReadonlySet<SnapEdge> = new Set()
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
 import { resolveSnapTarget, revalidateSnapTarget, resolveSnapCommit, snapMembership } from '../canvas/snapZoneResolver'
-import type { SnapWidget, SnapTarget } from '../canvas/snapZoneResolver'
+import type { SnapWidget, SnapTarget, SnapEdge } from '../canvas/snapZoneResolver'
+import { AddWidgetPicker } from './AddWidgetPicker'
+import { useWidgetCatalog } from '../hooks/useWidgetCatalog'
+import { useAddWidget } from '../hooks/useAddWidget'
+import { composeAddWidgetMembership } from '../canvas/addWidgetMembership'
+import type { WidgetLayout } from '../hooks/useWidgetLayouts'
+import { RunNodeCapabilities } from './RunNodeCapabilities'
 
 interface Props {
   tree: TreeNode[]
@@ -32,7 +48,6 @@ interface Props {
   editorWidgetMap?: Map<string, EditorWidget>
   browserWidgetMap?: Map<string, BrowserWidget>
   imageWidgetMap?: Map<string, ImageWidget>
-  natsTrafficWidgetMap?: Map<string, NatsTrafficWidget>
   pluginWidgetMap?: Map<string, PluginWidgetInstance>
   onPluginWidgetCreated?: (instance: PluginWidgetInstance) => void
   onImageWidgetCreated?: (widget: ImageWidget) => void
@@ -43,10 +58,11 @@ interface Props {
   onFocusRun?: (runId: string) => void
   onDeleteEntity?: (entityId: string, type: string) => void
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
+  /** Open the session create dialog for a session-backed add-widget; calls back with the created sessionId. */
+  onRequestCreateSession?: (prefill: { taskId?: string; view?: string }, onCreated: (sessionId: string) => void) => void
   onTaskUpdate?: (taskId: string, patch: { externalUrl?: string | null }) => void
   onEditorWidgetCreated?: (widget: EditorWidget) => void
   onBrowserWidgetCreated?: (widget: BrowserWidget) => void
-  onNatsWidgetCreated?: (widget: NatsTrafficWidget) => void
   arrangeGridRef?: React.MutableRefObject<(() => void) | null>
   arrangeResetRef?: React.MutableRefObject<(() => void) | null>
   arrangeSwimlanesRef?: React.MutableRefObject<(() => void) | null>
@@ -76,14 +92,14 @@ function buildParentMap(nodes: TreeNode[], parentId: string | null = null): Map<
   return map
 }
 
-/** Collect all leaf (non-container) node IDs from a tree */
-function collectRunNodeIds(nodes: TreeNode[]): string[] {
+/** Collect all snappable leaf node IDs from a tree (the drag-to-snap set). */
+function collectSnappableLeafIds(nodes: TreeNode[]): string[] {
   const result: string[] = []
   for (const node of nodes) {
-    if (!getWidgetComponent(toWidgetType(node.type))?.isContainer) {
+    if (isSnappable(getWidgetComponent(toWidgetType(node.type)))) {
       result.push(node.id)
     } else {
-      result.push(...collectRunNodeIds(node.children))
+      result.push(...collectSnappableLeafIds(node.children))
     }
   }
   return result
@@ -172,8 +188,36 @@ const MARQUEE_THRESHOLD = 5
 // Snap-zone snap distance (canvas units)
 const SNAP_DISTANCE = 60
 
-export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), natsTrafficWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
+export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onRequestCreateSession, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  // Seed initial placement for browser widgets opened via the host placement API
+  // (POST/PATCH /api/browser-widgets with position/nearNodeId), and for file-editor
+  // widgets snapped to their session on create (POST /api/editor-widgets). Consulted
+  // by the layout hook only for nodes that don't have a layout yet.
+  const placementSeed = useMemo(() => {
+    const seed = new Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>()
+    for (const w of browserWidgetMap.values()) {
+      if (w.position) {
+        seed.set(w.id, {
+          x: w.position.x,
+          y: w.position.y,
+          width: w.size?.width ?? 800,
+          height: w.size?.height ?? 600,
+        })
+      }
+    }
+    for (const w of editorWidgetMap.values()) {
+      if (w.position) {
+        seed.set(w.id, {
+          x: w.position.x,
+          y: w.position.y,
+          width: w.size?.width ?? 640,
+          height: w.size?.height ?? 480,
+        })
+      }
+    }
+    return seed
+  }, [browserWidgetMap, editorWidgetMap])
   const {
     layouts,
     treeMaps,
@@ -186,7 +230,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     arrangeWorkspace,
     insertLayout,
     batchSetLayouts,
-  } = useWidgetLayouts(tree, activeSpaceId)
+  } = useWidgetLayouts(tree, activeSpaceId, placementSeed)
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
   const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState } = useSelection()
 
@@ -212,7 +256,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // Constellation group-drag: snapshot of ALL members' start positions (including dragged widget)
   const constellationDragSnapshot = useRef<Map<string, { x: number; y: number }> | null>(null)
   // Which constellation slot the current drag belongs to (null = no constellation drag)
-  const constellationDragSlot = useRef<import('../hooks/useConstellations').ConstellationSlot | null>(null)
+  const constellationDragSlot = useRef<import('../domain/constellationGraph').ConstellationSlot | null>(null)
   // Whether alt was held at drag-start (triggers pop-out on drag-end)
   const altHeldAtDragStart = useRef(false)
 
@@ -225,22 +269,22 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const minimapToggleRef = useRef<(() => void) | null>(null)
   const hudToggleRef = useRef<(() => void) | null>(null)
 
-  // All run node IDs for marquee intersection
-  const runNodeIdsRef = useRef<string[]>([])
+  // All snappable leaf node IDs (drag-to-snap + marquee intersection set)
+  const snappableLeafIdsRef = useRef<string[]>([])
 
-  // Spawn animation: track which run node IDs are newly created (not present on initial load)
+  // Spawn animation: track which snappable leaf node IDs are newly created (not present on initial load)
   const seenRunNodeIdsRef = useRef<Set<string> | null>(null)
   const [spawnedNodeIds, setSpawnedNodeIds] = useState<Set<string>>(new Set())
 
-  // Keep parent map, depth map, and run node IDs in sync with tree
+  // Keep parent map, depth map, and snappable leaf node IDs in sync with tree
   const parentMapRef = useRef<Map<string, string | null>>(new Map())
   const depthMapRef = useRef<Map<string, number>>(new Map())
   useEffect(() => {
     parentMapRef.current = buildParentMap(tree)
     depthMapRef.current = treeMaps.depthMap
-    runNodeIdsRef.current = collectRunNodeIds(tree)
+    snappableLeafIdsRef.current = collectSnappableLeafIds(tree)
 
-    const leafIds = runNodeIdsRef.current
+    const leafIds = snappableLeafIdsRef.current
     if (seenRunNodeIdsRef.current === null) {
       // First render — mark all as seen without animating
       seenRunNodeIdsRef.current = new Set(leafIds)
@@ -510,7 +554,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           const y2 = (Math.max(marquee.startY, marquee.endY) - rect.top - camera.y) / camera.zoom
 
           const selected: string[] = []
-          for (const nodeId of runNodeIdsRef.current) {
+          for (const nodeId of snappableLeafIdsRef.current) {
             const layout = layouts.get(nodeId)
             if (!layout) continue
             // Check AABB intersection
@@ -599,10 +643,126 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // Constellation context — must be declared before widget drag callbacks that reference it
   const constellations = useConstellationContext()
 
+  // ── Add-widget picker + orchestrator ──────────────────────────────────────
+  const { entries: catalog } = useWidgetCatalog()
+  const [addPicker, setAddPicker] = useState<{ sourceNodeId: string; edge: SnapEdge; anchor: { x: number; y: number } } | null>(null)
+  // Smart default: from a saloon you most likely add a run; from a run you most
+  // likely add a browser. Falls back to GLOBAL_DEFAULT for everything else.
+  const DEFAULT_FOR: Record<string, string> = { 'saloon': 'run-workspace', 'run-workspace': 'browser-widget' }
+  const GLOBAL_DEFAULT = 'run-workspace'
+
+  // nodeId → widget type, used to resolve the picker's smart default.
+  const nodeTypeById = useMemo(() => {
+    const map = new Map<string, string>()
+    const walk = (nodes: TreeNode[]) => {
+      for (const n of nodes) { map.set(n.id, n.type); walk(n.children) }
+    }
+    walk(tree)
+    return map
+  }, [tree])
+
+  // ── Right-click "Move widget here" context menu ───────────────────────────
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; canvasX: number; canvasY: number } | null>(null)
+
+  const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // Empty-space only: right-click on a widget falls through to the native /
+    // future per-widget menu (do NOT preventDefault before this guard).
+    if ((e.target as HTMLElement).closest('[data-widget-id]')) return
+    e.preventDefault()
+    // Screen→canvas conversion — verbatim from handleDrop's drop-point math.
+    const rect = containerRef.current!.getBoundingClientRect()
+    const canvasX = Math.round((e.clientX - rect.left - camera.x) / camera.zoom)
+    const canvasY = Math.round((e.clientY - rect.top - camera.y) / camera.zoom)
+    setCtxMenu({ x: e.clientX, y: e.clientY, canvasX, canvasY })
+  }, [camera.x, camera.y, camera.zoom])
+
+  const moveTargets = useMemo(
+    () => buildMoveTargets(tree, layouts, {
+      isContainer: (id) => !!getWidgetComponent(toWidgetType(nodeTypeById.get(id) ?? ''))?.isContainer,
+      labelOf: (id) => findNodeLabel(tree, id) ?? id,
+      slotsOf: (id) => constellations.slotsForNode(id).map(Number).filter((n) => !Number.isNaN(n)),
+    }),
+    [tree, layouts, nodeTypeById, constellations],
+  )
+
+  const relocateWidget = useCallback((id: string) => {
+    if (!ctxMenu) return
+    relocateWidgetTo(id, { x: ctxMenu.canvasX, y: ctxMenu.canvasY }, {
+      getLayout, insertLayout,
+      slotsForNode: constellations.slotsForNode,
+      removeFromSlot: constellations.remove,
+    })
+    setCtxMenu(null)
+  }, [ctxMenu, getLayout, insertLayout, constellations])
+
+  // Pending run placements, keyed by sessionId. When a session-backed widget is
+  // added we open the create dialog; once the resulting run appears via SSE we
+  // flush its layout + snap it to the source. Node id for a run is `run-<run.id>`.
+  const pendingRunPlacement = useRef<Map<string, { layout: WidgetLayout; sourceNodeId: string; spaceId: string }>>(new Map())
+  const registerPendingRunPlacement = useCallback((sessionId: string, layout: WidgetLayout, sourceNodeId: string, spaceId: string) => {
+    pendingRunPlacement.current.set(sessionId, { layout, sourceNodeId, spaceId })
+  }, [])
+  useEffect(() => {
+    if (pendingRunPlacement.current.size === 0) return
+    for (const run of runMap.values()) {
+      const pend = pendingRunPlacement.current.get(run.sessionId)
+      if (!pend) continue
+      // Only apply in the space the add was initiated from. insertLayout and
+      // constellations are bound to activeSpaceId, so applying here while the
+      // user has navigated away would write the layout + membership (and a stale
+      // sourceNodeId) into the wrong space. Leave it pending until they return.
+      if (pend.spaceId !== activeSpaceId) continue
+      const nodeId = `run-${run.id}`
+      insertLayout(nodeId, { ...pend.layout })
+      // Plan from the live graph and persist as one atomic write (see useAddWidget).
+      constellations.update(g => composeAddWidgetMembership(g, pend.sourceNodeId, nodeId))
+      pendingRunPlacement.current.delete(run.sessionId)
+    }
+  }, [runMap, insertLayout, constellations, activeSpaceId])
+
+  // Promise wrapper around the host's session create dialog. Resolves with the
+  // created sessionId; if the dialog is cancelled `onCreated` never fires and the
+  // promise simply never resolves — acceptable here since the only deferred side
+  // effect is registering a pending placement (nothing leaks). No timers.
+  const openCreateSession = useCallback((prefill: { spaceId: string; view?: string }) => {
+    return new Promise<string | null>((resolve) => {
+      if (!onRequestCreateSession) { resolve(null); return }
+      onRequestCreateSession(prefill.view ? { view: prefill.view } : {}, (sessionId) => resolve(sessionId))
+    })
+  }, [onRequestCreateSession])
+
+  const addWidget = useAddWidget({
+    spaceId: activeSpaceId ?? '',
+    getLayout,
+    insertLayout,
+    updateConstellation: constellations.update,
+    openCreateSession,
+    registerPendingRunPlacement,
+  })
+
+  // Edges of a node that already abut a snapped constellation neighbor (where a break-link
+  // chip sits) — the add-widget [+] is suppressed there so it only shows on exposed edges.
+  const occupiedEdgesFor = useCallback((nodeId: string): ReadonlySet<SnapEdge> => {
+    const slots = constellations.slotsForNode(nodeId)
+    if (slots.length === 0) return EMPTY_EDGES
+    const target = getLayout(nodeId)
+    if (!target) return EMPTY_EDGES
+    const memberIds = new Set<string>()
+    for (const s of slots) for (const m of constellations.nodesInSlot(s)) memberIds.add(m)
+    const others: IdRect[] = []
+    for (const id of memberIds) {
+      if (id === nodeId) continue
+      const l = getLayout(id)
+      if (l) others.push({ id, x: l.x, y: l.y, width: l.width, height: l.height })
+    }
+    if (others.length === 0) return EMPTY_EDGES
+    return occupiedEdgesOf({ id: nodeId, x: target.x, y: target.y, width: target.width, height: target.height }, others)
+  }, [constellations, getLayout])
+
   // Memoized inverted index: nodeId → slot (first slot only) and occupied slot set
   const slotByNode = useMemo(() => {
-    const map = new Map<string, import('../hooks/useConstellations').ConstellationSlot>()
-    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../hooks/useConstellations').ConstellationSlot, string[]][]) {
+    const map = new Map<string, import('../domain/constellationGraph').ConstellationSlot>()
+    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../domain/constellationGraph').ConstellationSlot, string[]][]) {
       for (const id of nodeIds) {
         if (!map.has(id)) map.set(id, slot)
       }
@@ -611,8 +771,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   }, [constellations.store])
 
   const occupiedSlots = useMemo(() => {
-    const set = new Set<import('../hooks/useConstellations').ConstellationSlot>()
-    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../hooks/useConstellations').ConstellationSlot, string[]][]) {
+    const set = new Set<import('../domain/constellationGraph').ConstellationSlot>()
+    for (const [slot, nodeIds] of Object.entries(constellations.store) as [import('../domain/constellationGraph').ConstellationSlot, string[]][]) {
       if (nodeIds.length > 0) set.add(slot)
     }
     return set
@@ -620,9 +780,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   const collectSnapNeighbors = useCallback((nodeId: string): SnapWidget[] => {
     // Magnetic snap only targets work widgets (runs, plugin widgets, editors, browsers, …) —
-    // never grouping containers (Initiative/Epic/Task). runNodeIdsRef holds exactly the
-    // non-container leaf nodes (see collectRunNodeIds), so filter neighbors to that set.
-    const leafIds = new Set(runNodeIdsRef.current)
+    // never grouping containers (Initiative/Epic/Task). snappableLeafIdsRef holds exactly the
+    // snappable leaf nodes (see collectSnappableLeafIds), so filter neighbors to that set.
+    const leafIds = new Set(snappableLeafIdsRef.current)
     const neighbors: SnapWidget[] = []
     for (const [id, l] of layouts) {
       if (id === nodeId || !leafIds.has(id)) continue
@@ -632,6 +792,35 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   }, [layouts])
 
   // Widget drag callbacks
+  // Resize re-snap: snapshot the resized widget + its constellation co-members at resize-start,
+  // then on resize-end shift members flush against the new size (push when grown, pull when
+  // shrunk). Overlap/gaps during the drag are intentional — only the end state re-snaps.
+  const resizeReflowSnapshot = useRef<{ nodeId: string; start: ReflowRect; members: ReflowMember[] } | null>(null)
+
+  const handleResizeStart = useCallback((nodeId: string) => {
+    const slot = constellations.slotsForNode(nodeId)[0]
+    const l = getLayout(nodeId)
+    if (!slot || !l) { resizeReflowSnapshot.current = null; return }
+    const members: ReflowMember[] = []
+    for (const id of constellations.nodesInSlot(slot)) {
+      if (id === nodeId) continue
+      const ml = getLayout(id)
+      if (ml) members.push({ id, x: ml.x, y: ml.y, width: ml.width, height: ml.height })
+    }
+    resizeReflowSnapshot.current = { nodeId, start: { x: l.x, y: l.y, width: l.width, height: l.height }, members }
+  }, [constellations, getLayout])
+
+  // width/height are the final dragged dimensions, passed in from the shell — reading
+  // them from getLayout here would risk a stale (pre-last-frame) size, since onResize
+  // only queues a React state update.
+  const handleResizeEnd = useCallback((nodeId: string, width: number, height: number) => {
+    const snap = resizeReflowSnapshot.current
+    resizeReflowSnapshot.current = null
+    if (!snap || snap.nodeId !== nodeId) return
+    const moves = reflowOnResize({ start: snap.start, final: { width, height }, members: snap.members })
+    for (const [id, pos] of moves) updateRunPosition(id, pos.x, pos.y)
+  }, [updateRunPosition])
+
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
     setDraggingNodeId(nodeId)
@@ -664,7 +853,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
     if (isSelected(nodeId)) {
       const snap = new Map<string, { x: number; y: number }>()
-      for (const leafId of runNodeIdsRef.current) {
+      for (const leafId of snappableLeafIdsRef.current) {
         if (leafId !== nodeId && isSelected(leafId)) {
           const layout = layouts.get(leafId)
           if (layout) snap.set(leafId, { x: layout.x, y: layout.y })
@@ -710,11 +899,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           )
         : null
       const commit = resolveSnapCommit(validatedPreview, slotByNode, occupiedSlots)
-      if (commit.kind === 'join') {
-        constellations.assign(commit.slot, nodeId)
+      if (commit.kind === 'join' && validatedPreview) {
+        let next = applyAssign(constellations.graph, commit.slot, nodeId)
+        next = addSnap(next, nodeId, validatedPreview.targetId)
+        constellations.applyGraph(next)
       } else if (commit.kind === 'form') {
-        constellations.assign(commit.slot, nodeId)
-        constellations.assign(commit.slot, commit.withId)
+        let next = applyAssign(constellations.graph, commit.slot, nodeId)
+        next = applyAssign(next, commit.slot, commit.withId)
+        next = addSnap(next, nodeId, commit.withId)
+        constellations.applyGraph(next)
       } else {
         const unsnapped = lastUnsnappedDragPositionRef.current
         if (unsnapped) updateRunPosition(nodeId, unsnapped.x, unsnapped.y)
@@ -960,9 +1153,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   }, [arrangeGridRef, arrangeGrid])
 
   useEffect(() => {
-    if (arrangeResetRef) arrangeResetRef.current = arrangeWorkspace
+    // Pass constellation slot members so reset keeps snapped groups (e.g. a
+    // session and its attached browser) together instead of scattering them.
+    if (arrangeResetRef) arrangeResetRef.current = () => arrangeWorkspace(Object.values(constellations.store))
     return () => { if (arrangeResetRef) arrangeResetRef.current = null }
-  }, [arrangeResetRef, arrangeWorkspace])
+  }, [arrangeResetRef, arrangeWorkspace, constellations.store])
 
   useEffect(() => {
     if (arrangeSwimlanesRef) arrangeSwimlanesRef.current = arrangeSwimlanes
@@ -1064,14 +1259,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     },
     onConstellationAssign: (slot) => {
       const { selectedType, selectedIds } = selectionState
-      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer')) return
       for (const nodeId of selectedIds) {
         constellations.assign(slot, nodeId)
       }
     },
     onConstellationRemove: (slot) => {
       const { selectedType, selectedIds } = selectionState
-      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer' && selectedType !== 'nats-traffic')) return
+      if (!selectedType || (selectedType !== 'run' && selectedType !== 'file-editor' && selectedType !== 'browser-widget' && selectedType !== 'image-viewer')) return
       for (const nodeId of selectedIds) {
         constellations.remove(slot, nodeId)
       }
@@ -1343,47 +1538,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return
       }
 
-      const rawBrowser = e.dataTransfer.getData('application/tinstar-browser')
-      if (rawBrowser) {
-        const { sessionId } = JSON.parse(rawBrowser) as { sessionId: string }
-        const spawnLayout = { x: dropX, y: dropY, width: 800, height: 600 }
-        const res = await apiFetch('/api/browser-widgets', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId }),
-        })
-        const resJson = await res.json() as { ok: boolean; data?: BrowserWidget }
-        if (!resJson.ok || !resJson.data) return
-        insertLayout(resJson.data.id, spawnLayout)
-        onBrowserWidgetCreated?.(resJson.data)
-        return
-      }
-
-      const rawNats = e.dataTransfer.getData('application/tinstar-nats')
-      if (rawNats) {
-        const { sessionId, natsSubject, color } = JSON.parse(rawNats) as { sessionId: string; natsSubject?: string; color?: string }
-        const spawnLayout = { x: dropX, y: dropY, width: 500, height: 400 }
-        // Build subscription filter: two-tier model (direct DM + task broadcast)
-        // natsSubject is the direct address (e.g., tinstar.space.init.epic.task.session)
-        // Broadcast = strip session name (no wildcard needed)
-        const subscriptions = natsSubject
-          ? [
-              natsSubject,  // direct DM inbox for this session
-              natsSubject.replace(/\.[^.]+$/, ''),  // task broadcast channel (no wildcard)
-            ]
-          : [`tinstar.>`]  // fallback to all tinstar traffic
-        const res = await apiFetch('/api/nats-traffic-widgets', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, subscriptions, color }),
-        })
-        const resJson = await res.json() as { ok: boolean; data?: NatsTrafficWidget }
-        if (!resJson.ok || !resJson.data) return
-        insertLayout(resJson.data.id, spawnLayout)
-        onNatsWidgetCreated?.(resJson.data)
-        return
-      }
-
       // Hand spawn drop
       const handData = e.dataTransfer.getData('application/tinstar-hand')
       if (handData) {
@@ -1412,12 +1566,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return
       }
     },
-    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onNatsWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated],
+    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated],
   )
 
   // Recursive render: groups render behind their children (natural DOM order)
   function renderNode(node: TreeNode, _depth: number): React.ReactNode {
-    const widgetType = toWidgetType(node.type)
+    const run = node.type === 'run' ? runMap.get(node.entityId) : undefined
+    const widgetType = node.type === 'run'
+      ? resolveRunViewType(run ?? {}, (t) => !!getWidgetComponent(t))
+      : toWidgetType(node.type)
     const reg = getWidgetComponent(widgetType)
     if (!reg) {
       // If this is a plugin widget whose type is no longer registered (plugin disabled,
@@ -1429,7 +1586,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return (
           <CanvasWidgetShell
             key={node.id}
-            registration={{ type: node.type, component: () => <PluginWidgetDisabledPlaceholder instance={instance} reason="unknown-type" />, isContainer: false }}
+            registration={{ type: node.type, component: () => <PluginWidgetDisabledPlaceholder instance={instance} reason="unknown-type" />, isContainer: false, minSize: { width: 200, height: 150 } }}
             nodeId={node.id}
             widgetId={node.entityId}
             data={instance}
@@ -1445,6 +1602,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             onDoubleClickZoom={handleDoubleClickZoom}
             onMove={handleMultiMove}
             onResize={updateRunSize}
+            onResizeStart={handleResizeStart}
+            onResizeEnd={handleResizeEnd}
+            onAddWidget={(nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor })}
+            occupiedEdges={occupiedEdgesFor(node.id)}
           />
         )
       }
@@ -1456,20 +1617,20 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
     const data: unknown =
       node.type === 'run'
-        ? runMap.get(node.entityId)
+        ? (widgetType === 'run-workspace'
+            ? run
+            : { ...(run?.viewData && typeof run.viewData === 'object' ? run.viewData as Record<string, unknown> : {}), sessionId: run?.sessionId })
         : node.type === 'file-editor'
           ? editorWidgetMap.get(node.entityId)
           : node.type === 'browser-widget'
             ? browserWidgetMap.get(node.entityId)
             : node.type === 'image-viewer'
               ? imageWidgetMap.get(node.entityId)
-              : node.type === 'nats-traffic'
-                ? natsTrafficWidgetMap.get(node.entityId)
-                : pluginWidgetMap.has(node.entityId)
-                  // Plugin widget: pass the instance as data. The widget's useData hook
-                  // reads live state from the singleton SSE store; this prop is a
-                  // convenience snapshot the component may optionally reference.
-                  ? pluginWidgetMap.get(node.entityId)
+              : pluginWidgetMap.has(node.entityId)
+                // Plugin widget: pass the instance as data. The widget's useData hook
+                // reads live state from the singleton SSE store; this prop is a
+                // convenience snapshot the component may optionally reference.
+                ? pluginWidgetMap.get(node.entityId)
                   : ({
               node,
               depth: depthMapRef.current.get(node.id) ?? 0,
@@ -1491,33 +1652,39 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       ? { ...reg, component: getOrCreatePluginChromeWrapper(reg.type, reg.component) }
       : reg
 
-    // Any non-container leaf widget participates in constellation snap, not
-    // just runs. Runs, plugin widgets, editors, browsers, images, nats-traffic
+    // Any snappable leaf widget participates in constellation snap, not
+    // just runs. Runs, plugin widgets, editors, browsers, images
     // all behave the same in the snap pipeline.
-    const isSnapLeaf = !reg.isContainer
+    const isSnapLeaf = isSnappable(reg)
 
     return (
-      <CanvasWidgetShell
-        key={node.id}
-        registration={effectiveReg}
-        nodeId={node.id}
-        widgetId={node.entityId}
-        data={data}
-        layout={layout}
-        zoom={camera.zoom}
-        isSelected={isSelected(node.id)}
-        isFocused={focusedWidgetId === node.id}
-        isSpawning={spawnedNodeIds.has(node.id)}
-        spawnColor={node.type === 'run' ? runMap.get(node.entityId)?.color : undefined}
-        isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
-        spaceHeldRef={spaceHeld}
-        onSelect={handleSelect}
-        onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (isSnapLeaf ? handleDoubleClickZoom : undefined)}
-        onMove={moveHandler}
-        onResize={resizeHandler}
-        onDragStart={isSnapLeaf ? handleWidgetDragStart : undefined}
-        onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
-      />
+      <Fragment key={node.id}>
+        {run && <RunNodeCapabilities run={run} />}
+        <CanvasWidgetShell
+          registration={effectiveReg}
+          nodeId={node.id}
+          widgetId={node.entityId}
+          data={data}
+          layout={layout}
+          zoom={camera.zoom}
+          isSelected={isSelected(node.id)}
+          isFocused={focusedWidgetId === node.id}
+          isSpawning={spawnedNodeIds.has(node.id)}
+          spawnColor={node.type === 'run' ? runMap.get(node.entityId)?.color : undefined}
+          isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
+          spaceHeldRef={spaceHeld}
+          onSelect={handleSelect}
+          onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (isSnapLeaf ? handleDoubleClickZoom : undefined)}
+          onMove={moveHandler}
+          onResize={resizeHandler}
+          onResizeStart={isSnapLeaf ? handleResizeStart : undefined}
+          onResizeEnd={isSnapLeaf ? handleResizeEnd : undefined}
+          onDragStart={isSnapLeaf ? handleWidgetDragStart : undefined}
+          onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
+          onAddWidget={isSnapLeaf ? (nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor }) : undefined}
+          occupiedEdges={occupiedEdgesFor(node.id)}
+        />
+      </Fragment>
     )
   }
 
@@ -1604,10 +1771,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       onPointerUp={onPointerUp}
       onPointerLeave={onPointerLeave}
       onMouseDown={(e) => { if (e.button === 1) e.preventDefault() }}
+      onContextMenu={handleContextMenu}
       onDragOver={(e) => { e.preventDefault() }}
       onDrop={handleDrop}
       onDragEnter={(e) => {
-        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-browser') || e.dataTransfer.types.includes('application/tinstar-nats') || e.dataTransfer.types.includes('application/tinstar-hand')) {
+        if (e.dataTransfer.types.includes('application/tinstar-editor') || e.dataTransfer.types.includes('application/tinstar-hand')) {
           dragEnterCountRef.current++
           setEditorDragActive(true)
         }
@@ -1663,12 +1831,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
               onBreak={(aId, bId) => {
                 // Break only this seam: split the constellation along it. Larger side keeps the
                 // slot; the smaller side becomes its own group (≥2) or is freed (lone widget).
-                const plan = planLinkBreak(members, aId, bId)
-                for (const id of plan.removeFromSlot) constellations.remove(slot, id)
-                if (plan.newGroup.length >= 2) {
-                  const free = (['1','2','3','4','5','6','7','8','9'] as const).find(s => !occupiedSlots.has(s))
-                  if (free) for (const id of plan.newGroup) constellations.assign(free, id)
+                const liveIds = new Set(members.map(m => m.id))
+                const plan = planBreak(constellations.graph, aId, bId, slot, liveIds)
+                let next = removeSnap(constellations.graph, aId, bId)
+                for (const id of plan.removeFromSlot) next = removeMember(next, id, slot)
+                if (plan.newGroup.length > 0) {
+                  const free = nextFreeSlot(next)
+                  if (free) for (const id of plan.newGroup) next = addMember(next, id, free)
                 }
+                constellations.applyGraph(next)
               }}
             />
           )
@@ -1692,7 +1863,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         editorWidgetMap={editorWidgetMap}
         browserWidgetMap={browserWidgetMap}
         imageWidgetMap={imageWidgetMap}
-        natsTrafficWidgetMap={natsTrafficWidgetMap}
         onFocusRun={onFocusRun}
         selectedRunIds={selectionState.selectedType === 'run' ? selectionState.selectedIds : undefined}
         hudToggleRef={hudToggleRef}
@@ -1709,6 +1879,32 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           {Math.round(camera.zoom * 100)}%
         </div>
       </div>
+
+      {/* Add-widget picker — screen-space (anchored to the clicked ghost button) */}
+      {addPicker && catalog.length > 0 && (() => {
+        const sourceType = toWidgetType(nodeTypeById.get(addPicker.sourceNodeId) ?? '')
+        const wanted = DEFAULT_FOR[sourceType] ?? GLOBAL_DEFAULT
+        const defaultType = catalog.some(e => e.type === wanted) ? wanted : catalog[0]!.type
+        return (
+          <AddWidgetPicker
+            entries={catalog}
+            defaultType={defaultType}
+            anchor={addPicker.anchor}
+            onPick={(entry) => { void addWidget(entry, addPicker.sourceNodeId, addPicker.edge); setAddPicker(null) }}
+            onClose={() => setAddPicker(null)}
+          />
+        )
+      })()}
+
+      {/* Right-click "Move widget here" menu — screen-space, empty-space only */}
+      {ctxMenu && (
+        <CanvasContextMenu
+          anchor={{ x: ctxMenu.x, y: ctxMenu.y }}
+          targets={moveTargets}
+          onPick={relocateWidget}
+          onClose={() => setCtxMenu(null)}
+        />
+      )}
 
     </div>
   )

@@ -2,7 +2,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 import type { Camera } from '../hooks/useCanvasCamera'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
-import type { TreeNode, Run, BrowserWidget, EditorWidget, ImageWidget, NatsTrafficWidget } from '../domain/types'
+import type { TreeNode, Run, BrowserWidget, EditorWidget, ImageWidget } from '../domain/types'
 import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
 import { resolveRunAccent, hexToRgba } from './runAccent'
 import { getPref, setPref } from '../lib/uiPrefs'
@@ -20,7 +20,6 @@ interface MinimapProps {
   editorWidgetMap: Map<string, EditorWidget>
   browserWidgetMap: Map<string, BrowserWidget>
   imageWidgetMap: Map<string, ImageWidget>
-  natsTrafficWidgetMap: Map<string, NatsTrafficWidget>
   toggleRef?: React.MutableRefObject<(() => void) | null>
   /** When true, render in normal document flow instead of as a floating bottom-right overlay. */
   embedded?: boolean
@@ -46,7 +45,6 @@ function getNodeColor(
   editorWidgetMap: Map<string, EditorWidget>,
   browserWidgetMap: Map<string, BrowserWidget>,
   imageWidgetMap: Map<string, ImageWidget>,
-  natsTrafficWidgetMap: Map<string, NatsTrafficWidget>,
 ): string {
   switch (node.type) {
     case 'run':
@@ -57,8 +55,6 @@ function getNodeColor(
       return resolveRunAccent(browserWidgetMap.get(node.entityId)?.color)
     case 'image-viewer':
       return resolveRunAccent(imageWidgetMap.get(node.entityId)?.color)
-    case 'nats-traffic':
-      return resolveRunAccent(natsTrafficWidgetMap.get(node.entityId)?.color)
     default:
       return resolveRunAccent()
   }
@@ -66,7 +62,7 @@ function getNodeColor(
 
 export function CanvasMinimap({
   camera, setCamera, layouts, tree,
-  runMap, editorWidgetMap, browserWidgetMap, imageWidgetMap, natsTrafficWidgetMap,
+  runMap, editorWidgetMap, browserWidgetMap, imageWidgetMap,
   toggleRef, embedded = false,
 }: MinimapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -165,7 +161,7 @@ export function CanvasMinimap({
 
     // Draw widget rectangles
     for (const { node, layout } of workEntries) {
-      const color = getNodeColor(node, runMap, editorWidgetMap, browserWidgetMap, imageWidgetMap, natsTrafficWidgetMap)
+      const color = getNodeColor(node, runMap, editorWidgetMap, browserWidgetMap, imageWidgetMap)
       const [mx, my] = worldToMinimap(layout.x, layout.y)
       const mw = Math.max(2, layout.width * scale)
       const mh = Math.max(2, layout.height * scale)
@@ -183,7 +179,7 @@ export function CanvasMinimap({
 
     // Store mapping for pointer interaction
     mappingRef.current = { originX, originY, scale, offsetX, offsetY }
-  }, [visible, camera, layouts, tree, runMap, editorWidgetMap, browserWidgetMap, imageWidgetMap, natsTrafficWidgetMap])
+  }, [visible, camera, layouts, tree, runMap, editorWidgetMap, browserWidgetMap, imageWidgetMap])
 
   // --- Interaction (Task 2) ---
   /** Convert minimap pixel coords to world coords, then set camera to center viewport there */

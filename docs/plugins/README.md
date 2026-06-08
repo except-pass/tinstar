@@ -120,6 +120,7 @@ Each `widgets[]` entry accepts:
 | `icon` | string | no | Path to an SVG icon, relative to your plugin's `package.json`. |
 | `singleton` | boolean | no | If `true`, the host rejects spawning a second instance per space. |
 | `spawn` | `'palette' \| 'palette+context'` | no | Default `'palette'`. `'palette+context'` is reserved for entity-drag shortcuts in V5.2+; entries currently render greyed and non-draggable in the palette. |
+| `snappable` | boolean | no | Whether the widget participates in canvas snapping (drag-to-snap, the `[+]` grow affordance, snap-on-create). Non-container leaf widgets snap by default; set `false` to opt out. Containers never snap. |
 
 If `activate()` registers a widget type not in the manifest, the host logs a warning and accepts it. If the manifest declares one not actually registered at runtime, the host quietly drops the stale entry.
 
@@ -257,6 +258,26 @@ Beyond `widgets`, `http`, `events`, and `logger`, these surfaces are live and us
   }
   ```
 - `api.constellations` — peer discovery, capability publish/invoke, slot membership, and arrange actions. See [Constellations & capabilities](#constellations--capabilities) below.
+- `api.primitives.registerTerminalWidget(opts)` / `registerBrowserWidget(opts)` — register a widget whose main content is a host-owned terminal (tmux/ttyd) or browser primitive, with an optional edge-pinned `accessory` React pane.
+- `api.primitives.useTerminal()` — React hook (call inside a terminal-primitive accessory): the live `TerminalHandle` for driving and observing the session. Imperative methods (safe from event handlers):
+  - `sendText(text, { enter? })` — type text into the session; `enter` (default `true`) submits. Backed by `POST /api/sessions/:name/enter-prompt` (or `/send-keys` when `enter: false`).
+  - `sendKeys(keys[])` — send raw/named keys (`['Up']`, `['C-c']`, `['Enter']`) to drive a TUI. Backed by `POST /api/sessions/:name/send-keys`.
+  - `readScreen({ scrollback? })` — snapshot the rendered terminal screen. Backed by `GET /api/sessions/:name/screen`.
+  - `exec(argv[]): Promise<{ stdout, stderr, code }>` — run a one-shot command (argv array, no shell) in the **session's working directory** and get structured output. A non-zero exit resolves with `code` set (callers branch on it); spawn failure/timeout rejects. Backed by `POST /api/sessions/:name/exec`. Because it runs in the session cwd, it is automatically scoped to that worktree's repo/branch — e.g. `exec(['roborev','list','--json'])`. Bundled/trusted-plugin scoped; no broader than the existing send-keys input surface.
+
+### Session-view widgets
+
+A terminal widget registered with `creator: 'session-backed'` is a **session-view**: its canvas node IS the session's run node — there is exactly one node per session, not a separate run-workspace alongside it. The run's `view` field stores the plugin widget type, and `renderNode` uses it to select which component renders the run.
+
+**Spawning:** dragging a session-view widget from the palette opens the normal session-create flow. The created run gets `view = <widget type>`, and the canvas renders that plugin widget at the run node's position. No duplicate run-workspace is created.
+
+**Inside a session-view component:**
+- `api.primitives.useTerminal()` resolves the run's session automatically — the host injects `sessionId` into the component's `data` at render time; the plugin does not manage it.
+- `api.widget.useData<T>()` reads and writes `run.viewData` (via `PATCH /api/runs/:id`, debounced 250 ms) instead of the per-instance plugin-widget store. This means the state persists on the run, survives tab reloads, and round-trips through SSE deltas like any other run field.
+
+**Fallback safety:** `run-workspace` is the default session-view. If `run.view` names a plugin type that is not registered (e.g. the plugin is disabled), `resolveRunViewType` falls back to `run-workspace` so the session is always reachable on the canvas.
+
+**Reference implementation:** `src/plugins/roborev/src/index.tsx` — the roborev cockpit is the first session-view. It registers as `creator: 'session-backed'`, reads its `launched` flag from `run.viewData` via `useData`, and gets its session from `useTerminal()`.
 
 ### Still future (V5.1)
 

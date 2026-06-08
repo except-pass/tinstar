@@ -31,7 +31,7 @@ test.describe('Topic metadata', () => {
     expect(tooltip).toContain('Subject:')
 
     // 3. PATCH the topic with a friendly name via the API.
-    const realSubject = tooltip!.split('\n')[0].replace('Subject: ', '').trim()
+    const realSubject = tooltip!.split('\n')[0]!.replace('Subject: ', '').trim()
     const r = await request.patch(`/api/topics/${encodeURIComponent(realSubject)}`, {
       data: { name: 'E2E renamed topic' },
     })

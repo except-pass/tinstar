@@ -185,7 +185,7 @@ interface SquarifyInput {
   value: number
   name: string
   tokens: number
-  percentage?: number
+  percentage: number
   rank: number
 }
 

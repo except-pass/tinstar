@@ -41,15 +41,21 @@ import {
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
+import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
-import { registerSaloonSubs, unregisterSaloonSubs } from './saloonBridge'
+import { resolveProxyTarget } from './proxyResolve'
+import { rewriteProxyBody, proxyRuntimeShim } from './proxyRewrite'
+import { registerSaloonSubs, unregisterSaloonSubs, registerFirehose, unregisterFirehose } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
 import { buildCommitRecord, reconcileGitHistory } from '../commits'
 import { shortId } from '../utils/shortId'
 import { imageSize } from 'image-size'
 import { computeNatsSubscriptions, diffSubscriptions, sanitizeSubjectToken } from '../sessions/nats-subscriptions'
-import { natsControlSocketPath } from '../sessions/backends/tmux'
+import { natsControlSocketPath, captureScreen, tmuxSessionName } from '../sessions/backends/tmux'
+import { probeNatsLiveStatus } from '../nats-health'
+import { reconnectSessionNats } from '../sessions/natsReconnect'
+import { execCommand } from '../infra/execCommand'
 import { getDetailedUsage } from '../sessions/context-usage'
 import type { TelemetryRoutes } from './telemetry'
 import { joinParticipants, deriveHierarchicalName, bootstrapHierarchicalTopicMetadata } from '../topic-metadata'
@@ -63,6 +69,25 @@ import type { PluginWidgetInstance } from '../../domain/types'
 
 function currentCorsAllowlist(): string[] {
   return parseAllowlistFromEnv(process.env.TINSTAR_CORS_ORIGINS)
+}
+
+function isConstellationGraph(v: unknown): v is ConstellationGraph {
+  if (!v || typeof v !== 'object') return false
+  const g = v as Record<string, unknown>
+  if (!Array.isArray(g.snapped) || !Array.isArray(g.members)) return false
+  const snappedOk = g.snapped.every(e =>
+    Array.isArray(e) && e.length === 2 && typeof e[0] === 'string' && typeof e[1] === 'string')
+  const validSlots = new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9'])
+  const membersOk = g.members.every(m =>
+    !!m && typeof m === 'object' &&
+    typeof (m as Record<string, unknown>).widget === 'string' &&
+    validSlots.has((m as Record<string, unknown>).slot as string))
+  // rev is optional, but when present it feeds arithmetic/comparisons in the
+  // revision gate, so it must be a non-negative safe integer (an oversized
+  // value would lose precision and break strict monotonicity).
+  const revOk = g.rev === undefined ||
+    (typeof g.rev === 'number' && Number.isSafeInteger(g.rev) && g.rev >= 0)
+  return snappedOk && membersOk && revOk
 }
 
 /** Build a hierarchical NATS subject for a session: tinstar.<space>.<init>.<epic>.<task>.<session> */
@@ -121,7 +146,7 @@ function buildNatsSubject(
     session: sanitize(sessionName),
   })
 }
-import { discoverHands, getHandByName } from '../hands'
+import { discoverHands, getHandByName, type Hand } from '../hands'
 import { MARSHAL_AGENT_NAME, MARSHAL_AGENT_DESCRIPTION, MARSHAL_AGENT_PROMPT } from '../hands/builtins/index'
 
 // ─── NATS socket communication ─────────────────────────────────────────
@@ -161,12 +186,15 @@ function sendNatsSocketCommand(sessionName: string, cmd: { action: 'subscribe' |
  *
  * - NATS_SOCKET_UNREACHABLE (ENOENT): socket file is gone — session stopped
  *   or never started. Persisted state will apply on next startup. Safe.
- * - NATS_SOCKET_ORPHANED (ECONNREFUSED, file present): a second channel-server
- *   instance unlinked the original listener's socket file (see
- *   except-pass/nats-channel-mcp channel-server.ts unlinkSync+listen on start).
- *   The live channel-server's listener is bound to an orphaned inode. Static
- *   subscriptions from startup still work — dynamic subscribes never will
- *   until the session is restarted.
+ * - NATS_SOCKET_ORPHANED (ECONNREFUSED, file present): the channel-server that
+ *   owns this socket is wedged — typically a prior instance whose MCP stdio
+ *   closed but whose process lingered (it kept the socket, so the replacement
+ *   refused to bind; see nats-channel-mcp channel-server.ts isSocketLive guard).
+ *   Static subscriptions from startup still work — dynamic subscribes never
+ *   will. Recover via POST /api/sessions/:name/nats-reconnect (or a restart),
+ *   which SIGTERMs the channel-server so Claude relaunches it with a fresh
+ *   socket. (The channel-server's exit-on-transport-close fix makes this
+ *   self-heal on the next relaunch instead of persisting.)
  * - NATS_SOCKET_ERROR: other unexpected failure.
  */
 type NatsSocketWarningCode =
@@ -354,6 +382,16 @@ interface CreateSessionParams {
    * via {agentName}/{agentJson}/{agentPrompt}/{agentDescription} placeholders.
    * Used by the marshal so its persona survives `/clear`. */
   agent?: { name: string; description: string; prompt: string }
+  /** Extra text appended to the agent's system prompt via the CLI's
+   * --append-system-prompt. Used to inject a resolved hand's prompt. The
+   * caller resolves the hand (POST /api/sessions owns the not-found response);
+   * this is the already-resolved text. */
+  appendSystemPrompt?: string | null
+  /** Widget type to render this session's run node (a registered session-view
+   *  plugin widget type, e.g. 'roborev-cockpit'). Absent ⇒ default run-workspace. */
+  view?: string
+  /** Initial persisted state for a plugin session-view (run.viewData). */
+  viewData?: unknown
 }
 
 interface CreateSessionContext {
@@ -376,10 +414,11 @@ async function createSessionInternal(
   const {
     name, project, worktree = false, worktreePath,
     prompt, skipPermissions = true, cliTemplate: cliTemplateName,
-    taskId, epicId, initiativeId, color: colorParam, nats, agent
+    taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt,
+    view, viewData
   } = params
 
-  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, dashboardUrl, natsTraffic, natsHealth } = ctx
+  const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, natsTraffic, natsHealth } = ctx
 
   if (!name) return { ok: false, error: { code: 'MISSING_NAME', message: 'Session name is required' } }
 
@@ -441,7 +480,14 @@ async function createSessionInternal(
     epicId: epicId || null,
     initiativeId: initiativeId || null,
   }
-  if (!nats && (taskId || epicId || initiativeId)) {
+  if (!nats && (taskId || epicId || initiativeId || natsCtx.spaceId)) {
+    // NATS on by default whenever there's *any* hierarchy to root a subject in —
+    // including a bare space. Previously the gate omitted spaceId, so a
+    // standalone session (created with just an active space and no explicit
+    // `nats` arg — e.g. marshal, ad-hoc sessions) silently spawned with NATS
+    // off and never joined the bus. computeNatsSubscriptions already yields a
+    // space-level subject for the space-only case. Passing `nats:{enabled:false}`
+    // explicitly still opts out, since this branch only runs when `nats` is absent.
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
   } else if (nats?.enabled && !nats.subscriptions?.length) {
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
@@ -463,6 +509,8 @@ async function createSessionInternal(
     cliTemplate: cliTemplateName ?? null,
     adapter: resolvedTemplate?.adapter ?? null,
     nats: resolvedNats,
+    appendSystemPrompt: appendSystemPrompt ?? null,
+    agent: agent ?? null,
   })
 
   const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
@@ -472,7 +520,7 @@ async function createSessionInternal(
   const port = await tmuxBackend.findPort(cfg.ports.hostStart)
   if (prompt) enriched.initialPrompt = prompt
 
-  const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, agent: agent ?? null })
+  const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, agent: agent ?? null, appendSystemPrompt: appendSystemPrompt ?? null })
   const sessionPort = result.port
   updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
   tmuxBackend.onTtydRestart(name, (newPid) => {
@@ -514,6 +562,8 @@ async function createSessionInternal(
     worktreeId: worktreeEntityId,
     createdAt: new Date().toISOString(),
     spaceId: docStore.activeSpaceId,
+    view,
+    viewData,
   })
 
   registerSaloonSubs(natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
@@ -579,6 +629,264 @@ function deepMergeEntity<T extends Record<string, unknown>>(existing: T, patch: 
   return result
 }
 
+// --- Canvas widget placement (host placement API) ---
+
+/** Gap (canvas units) placed between a widget and its `nearNodeId` reference.
+ *  Mirrors RUN_GAP in useWidgetLayouts.ts. */
+const PLACEMENT_GAP = 20
+const DEFAULT_BROWSER_SIZE = { width: 800, height: 600 }
+const DEFAULT_EDITOR_SIZE = { width: 640, height: 480 }
+
+interface PlacementInput {
+  position?: { x: number; y: number }
+  size?: { width: number; height: number }
+  nearNodeId?: string
+}
+
+interface LayoutEntry { x: number; y: number; width: number; height: number }
+
+/** Look up a node's persisted layout (x/y/width/height) from
+ *  `config.ui.layouts['tinstar-layouts-v3-<spaceId>']`. This is the SSOT the
+ *  frontend hydrates from, so it's the right place to resolve `nearNodeId`. */
+function lookupNodeLayout(ctx: RouteContext, spaceId: string, nodeId: string): LayoutEntry | null {
+  try {
+    const cfg = loadConfigMerged(ctx.sessionConfig?.dirs.root) as { ui?: { layouts?: Record<string, Record<string, LayoutEntry>> } }
+    const byKey = cfg.ui?.layouts ?? {}
+    const entry = byKey[`tinstar-layouts-v3-${spaceId}`]?.[nodeId]
+    if (entry && typeof entry.x === 'number' && typeof entry.y === 'number') return entry
+  } catch { /* fall through */ }
+  return null
+}
+
+/** Resolve a placement request to a concrete `{ position, size }` seed, or null
+ *  when no placement was requested / couldn't be resolved. Explicit `position`
+ *  wins; otherwise `nearNodeId` places the new widget just to the right of the
+ *  referenced node (same top edge). */
+function resolvePlacement(
+  ctx: RouteContext,
+  spaceId: string,
+  input: PlacementInput,
+): { position: { x: number; y: number }; size: { width: number; height: number } } | null {
+  const size = (input.size && Number.isFinite(input.size.width) && Number.isFinite(input.size.height))
+    ? { width: input.size.width, height: input.size.height }
+    : DEFAULT_BROWSER_SIZE
+  if (input.position && Number.isFinite(input.position.x) && Number.isFinite(input.position.y)) {
+    return { position: { x: input.position.x, y: input.position.y }, size }
+  }
+  if (input.nearNodeId) {
+    const ref = lookupNodeLayout(ctx, spaceId, input.nearNodeId)
+    if (ref) {
+      return { position: { x: ref.x + ref.width + PLACEMENT_GAP, y: ref.y }, size }
+    }
+  }
+  return null
+}
+
+/** Coerce a slot value (1..9, number or string) to a ConstellationSlot, or null. */
+function toSlot(value: unknown): ConstellationSlot | null {
+  const n = typeof value === 'string' ? Number(value) : value
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > 9) return null
+  return String(n) as ConstellationSlot
+}
+
+/** Add a widget to a space's constellation slot, server-side (reactive via SSE).
+ *  Idempotent: addMember is a no-op if the membership already exists. */
+function assignWidgetToSlot(ctx: RouteContext, spaceId: string, widgetId: string, slot: ConstellationSlot): void {
+  const graph = ctx.docStore.getConstellationGraph(spaceId) ?? emptyGraph(spaceId)
+  const next = addMember(graph, widgetId, slot)
+  // Bump the revision on a real change so this server-side write isn't rejected as
+  // stale by the revision gate and supersedes any in-flight client overlay.
+  if (next !== graph) ctx.docStore.upsertConstellationGraph(spaceId, { ...next, rev: (graph.rev ?? 0) + 1 })
+}
+
+/** Snap a freshly-created widget to its spawning session's constellation so it
+ *  rafts with that session. Joins the session's existing slot, or forms a new
+ *  group (session + widget in a free slot) plus a snap edge. Returns a tiled
+ *  position (to the right of the session, offset past existing slot members) or
+ *  null when the session's position can't be resolved. Mutates + persists the graph. */
+function snapWidgetToSession(
+  ctx: RouteContext,
+  spaceId: string,
+  sessionNodeId: string,
+  widgetId: string,
+): { position: { x: number; y: number } | null } {
+  const graph = ctx.docStore.getConstellationGraph(spaceId) ?? emptyGraph(spaceId)
+  const sessionSlots = slotsForNode(graph, sessionNodeId)
+  let targetSlot: ConstellationSlot | null = null
+  // Existing slot members the newcomer tiles after (the session + any prior widgets),
+  // captured from the pre-mutation graph so the new widget isn't counted.
+  let priorMembers: string[] = []
+  let next = graph
+  if (sessionSlots.length > 0) {
+    targetSlot = sessionSlots[0]!
+    priorMembers = nodesInSlot(graph, targetSlot).filter(id => id !== widgetId)
+    next = addMember(next, widgetId, targetSlot)
+  } else {
+    const used = new Set<string>()
+    for (const s of ['1','2','3','4','5','6','7','8','9'] as ConstellationSlot[]) {
+      if (nodesInSlot(graph, s).length > 0) used.add(s)
+    }
+    const free = (['1','2','3','4','5','6','7','8','9'] as ConstellationSlot[]).find(s => !used.has(s)) ?? null
+    if (free) {
+      targetSlot = free
+      priorMembers = [sessionNodeId]
+      next = addMember(addMember(next, sessionNodeId, free), widgetId, free)
+    }
+  }
+  if (targetSlot) next = addSnap(next, sessionNodeId, widgetId)
+  // Bump the revision on a real change so this server-side write isn't rejected as
+  // stale by the revision gate and supersedes any in-flight client overlay.
+  if (next !== graph) ctx.docStore.upsertConstellationGraph(spaceId, { ...next, rev: (graph.rev ?? 0) + 1 })
+
+  const sessionLayout = lookupNodeLayout(ctx, spaceId, sessionNodeId)
+  if (!sessionLayout) return { position: null }
+  // Tile after the actual rightmost edge of the existing slot members (which may have
+  // different sizes or have been resized), not a uniform-width offset — otherwise the
+  // newcomer overlaps a wider neighbor or leaves a gap after a narrower one. Each
+  // member's edge comes from the persisted layout (authoritative once the user has
+  // dragged/resized), falling back to the seeded position+size on its widget record
+  // (so back-to-back server-side spawns, not yet flushed to layouts, still tile).
+  const browserById = new Map(ctx.docStore.getAllBrowserWidgets().map(w => [w.id, w]))
+  const editorById = new Map(ctx.docStore.getAllEditorWidgets().map(w => [w.id, w]))
+  const rightEdgeOf = (id: string): number | null => {
+    const cfg = lookupNodeLayout(ctx, spaceId, id)
+    if (cfg) return cfg.x + cfg.width
+    const bw = browserById.get(id)
+    if (bw?.position && bw?.size) return bw.position.x + bw.size.width
+    const ed = editorById.get(id)
+    if (ed?.position && ed?.size) return ed.position.x + ed.size.width
+    return null
+  }
+  let maxRight = sessionLayout.x + sessionLayout.width
+  for (const id of priorMembers) {
+    if (id === sessionNodeId) continue
+    const edge = rightEdgeOf(id)
+    if (edge !== null) maxRight = Math.max(maxRight, edge)
+  }
+  return { position: { x: maxRight + PLACEMENT_GAP, y: sessionLayout.y } }
+}
+
+/** Snap a newly created widget to its spawning session's constellation slot
+ *  (joining the session's slot + adding a snap edge) when a session context
+ *  exists and snapping wasn't opted out. Returns the tiled position for callers
+ *  that store one (browser/artifact); the constellation membership is the snap
+ *  itself. Shared by the browser, artifact, and editor create paths so
+ *  snap-on-create is decided in ONE place. */
+function maybeSnapOnCreate(
+  ctx: RouteContext,
+  opts: { spaceId: string | undefined; sessionId: string | undefined; widgetId: string; slotProvided: boolean; snapToSession?: boolean },
+): { x: number; y: number } | null {
+  const { spaceId, sessionId, widgetId, slotProvided, snapToSession } = opts
+  if (snapToSession === false || slotProvided || !spaceId || !sessionId) return null
+  const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
+  if (!run) return null
+  return snapWidgetToSession(ctx, spaceId, `run-${run.id}`, widgetId).position
+}
+
+interface CreateBrowserWidgetParams {
+  sessionId?: string
+  url?: string
+  headers?: Record<string, string>
+  spaceId?: string
+  color?: string
+  title?: string
+  position?: { x: number; y: number }
+  size?: { width: number; height: number }
+  nearNodeId?: string
+  slot?: number | string
+  snapToSession?: boolean
+}
+
+type CreateBrowserWidgetResult =
+  | { widget: import('../../domain/types').BrowserWidget }
+  | { error: { code: ErrorCode; message: string } }
+
+/** Create a browser widget from API params (placement, session color, slot).
+ *  Shared by POST /api/browser-widgets and POST /api/artifacts so the placement
+ *  logic lives in one place. */
+function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParams): CreateBrowserWidgetResult {
+  const { sessionId, url: widgetUrl = '', headers: widgetHeaders, color: colorOverride, title } = parsed
+  // Distinguish "omitted" (standalone widget — allowed) from "present but
+  // empty/whitespace" (a malformed payload that should fail, not silently
+  // create a standalone widget).
+  if (sessionId !== undefined && !sessionId.trim()) {
+    return { error: { code: 'INVALID_PARAMS', message: 'sessionId must be a non-empty session name when provided' } }
+  }
+  const run = sessionId ? ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId) : undefined
+  if (sessionId && !run) {
+    return { error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }
+  }
+  // Reject an explicit spaceId that doesn't exist, so a typo/stale value can't
+  // persist an orphaned widget (and constellation membership) under no real
+  // space — matching the guard the plugin-widget create path already uses.
+  if (parsed.spaceId && !ctx.docStore.getSpace(parsed.spaceId)) {
+    return { error: { code: 'NOT_FOUND', message: `No space ${parsed.spaceId}` } }
+  }
+  const widgetColor = colorOverride ?? run?.color ?? '#5b6b7a'
+  const spaceId = parsed.spaceId || ctx.docStore.activeSpaceId || ''
+  const explicitSlot = toSlot(parsed.slot)
+  // Any explicit slot input opts out of auto-snap — even an invalid one. toSlot()
+  // returns null for a bad value, so keying off explicitSlot alone would silently
+  // auto-snap when the caller clearly meant to place by slot; track "was slot
+  // provided" separately to preserve the documented "explicit slot → no auto-snap".
+  const slotProvided = parsed.slot !== undefined && parsed.slot !== null && parsed.slot !== ''
+  const placement = resolvePlacement(ctx, spaceId, parsed)
+  const size = placement?.size ?? DEFAULT_BROWSER_SIZE
+  const widgetId = shortId('browser')
+
+  // Auto-snap to the spawning session unless opted out or any slot was given.
+  const snapPosition = maybeSnapOnCreate(ctx, { spaceId, sessionId, widgetId, slotProvided, snapToSession: parsed.snapToSession })
+
+  // Explicit placement wins; otherwise use the tiled snap position if we got one.
+  const finalPosition = placement?.position ?? snapPosition ?? null
+
+  const widget: import('../../domain/types').BrowserWidget = {
+    id: widgetId,
+    spaceId: spaceId || undefined,
+    ...(sessionId ? { sessionId } : {}),
+    url: widgetUrl,
+    color: widgetColor,
+    ...(title ? { title } : {}),
+    ...(widgetHeaders && Object.keys(widgetHeaders).length > 0 ? { headers: widgetHeaders } : {}),
+    ...(finalPosition ? { position: finalPosition, size } : {}),
+  }
+  ctx.docStore.upsertBrowserWidget(widget.id, widget)
+  if (explicitSlot && spaceId) assignWidgetToSlot(ctx, spaceId, widget.id, explicitSlot)
+  return { widget }
+}
+
+const ARTIFACT_MAX_BYTES = 5 * 1024 * 1024
+
+/** Read an agent-supplied HTML file path for an artifact. Validates and, on
+ *  failure, writes the error response and returns null. Localhost single-user
+ *  trust model: arbitrary local reads are acceptable (no privilege boundary). */
+function readArtifactFile(
+  path: unknown,
+  res: ServerResponse,
+  fail: (res: ServerResponse, code: ErrorCode, message: string) => unknown,
+): string | null {
+  if (typeof path !== 'string' || !path.trim()) {
+    fail(res, 'INVALID_PARAMS', 'path is required (absolute path to an HTML file)')
+    return null
+  }
+  let stat: import('node:fs').Stats
+  try { stat = statSync(path) } catch {
+    fail(res, 'NOT_FOUND', `File not found: ${path}`)
+    return null
+  }
+  if (!stat.isFile()) { fail(res, 'INVALID_PARAMS', `Not a regular file: ${path}`); return null }
+  if (stat.size > ARTIFACT_MAX_BYTES) { fail(res, 'INVALID_PARAMS', `Artifact too large (max 5 MB): ${path}`); return null }
+  try { return readFileSync(path, 'utf-8') } catch {
+    fail(res, 'NOT_FOUND', `Cannot read file: ${path}`)
+    return null
+  }
+}
+
+/** The server's own origin, for artifact URLs the widget proxy will fetch. */
+function serverBase(): string {
+  return `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`
+}
+
 /** Synchronously enumerate every persisted session on disk. Mirrors the
  * rehydrate loop in index.ts (readdirSync + getSession per entry). Used by
  * topic-metadata routes to derive participants live from `nats.subscriptions`.
@@ -631,6 +939,27 @@ function buildCreateSessionContext(ctx: RouteContext): CreateSessionContext | nu
   }
 }
 
+/** Derive a hand-backed session's one-shot initial prompt and persistent
+ * system prompt from `hand.systemPrompt`/`hand.prompt`. A hand with a dedicated
+ * `systemPrompt` keeps that as the persisted persona (re-injected on /start so
+ * it survives restart and `/clear`) while its `prompt` is a one-shot intro
+ * fired as the first user message. A hand without `systemPrompt` carries its
+ * persona in `prompt`, so that becomes the persisted system prompt. A
+ * caller-supplied `prompt` always takes precedence as the initial message.
+ * Keying on the field (not the hand name) lets a user-defined `marshal.md`
+ * override supply its own system prompt. Shared by every creation path so
+ * direct create, marshal boot, and spawn all honor the same semantics. */
+function resolveHandPrompts(
+  hand: Hand,
+  callerPrompt?: string,
+): { initialPrompt: string | undefined; systemPrompt: string | null } {
+  const intro = hand.systemPrompt ? hand.prompt : undefined
+  return {
+    initialPrompt: callerPrompt ?? intro,
+    systemPrompt: hand.systemPrompt ?? hand.prompt ?? null,
+  }
+}
+
 type MarshalResult =
   | { ok: true; data: { name: string; port: number | null; state: string } }
   | { ok: false; error: { code: string; message: string } }
@@ -650,16 +979,26 @@ export async function ensureMarshalSession(ctx: RouteContext): Promise<MarshalRe
   const hand = getHandByName('marshal')
   if (!hand) return { ok: false, error: { code: 'HAND_NOT_FOUND', message: 'marshal hand definition is missing' } }
 
+  const { initialPrompt, systemPrompt } = resolveHandPrompts(hand)
+  const persona = systemPrompt ?? MARSHAL_AGENT_PROMPT
+  // Pass the persona both as structured `agent` metadata (for templates whose
+  // start/resume commands carry persona placeholders {agentPrompt}/{agentJson}/etc)
+  // and as appendSystemPrompt (the fallback for user-overridden templates that
+  // omit them). Both are persisted so the persona survives `/clear` and `/start`.
+  // buildAgentCommand decides per-command at runtime whether the append is still
+  // needed, so a template that interpolates the persona in only one of
+  // startCmd/resumeCmd still gets it exactly once on both create and resume.
   const result = await createSessionInternal({
     name: MARSHAL_NAME,
     skipPermissions: true,
     cliTemplate: hand.cliTemplate,
-    prompt: hand.prompt,
+    prompt: initialPrompt,
     agent: {
       name: MARSHAL_AGENT_NAME,
       description: MARSHAL_AGENT_DESCRIPTION,
-      prompt: MARSHAL_AGENT_PROMPT,
+      prompt: persona,
     },
+    appendSystemPrompt: persona,
   }, createCtx)
   if (!result.ok) return { ok: false, error: result.error }
 
@@ -734,7 +1073,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // Telemetry routes — delegated to createTelemetryRoutes
   if (ctx.telemetryRoutes && url.startsWith('/api/telemetry/')) {
     // Normalize pathname (strip query string)
-    const pathname = url.split('?')[0]
+    const pathname = url.split('?')[0] ?? url
     if (await ctx.telemetryRoutes.handle(req, res, pathname, corsHeaders)) return true
   }
 
@@ -1375,9 +1714,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         return workspacePath ? resolve(workspacePath, filePath.replace(/^\/+/, '')) : filePath
       })()
 
+      const widgetId = shortId('editor')
+      const editorSpaceId = ctx.docStore.activeSpaceId || undefined
+      // File-editors snap to their spawning session's constellation like browsers do:
+      // join the session's slot (+ snap edge) and seed a tiled position. The position
+      // is honored for a layout-less node (e.g. an API/agent-created editor); an
+      // interactive open that sets its own client layout ignores the seed.
+      const snapPos = maybeSnapOnCreate(ctx, { spaceId: editorSpaceId, sessionId, widgetId, slotProvided: false, snapToSession: undefined })
       const widget: EditorWidget = {
-        id: shortId('editor'),
-        spaceId: ctx.docStore.activeSpaceId || undefined,
+        id: widgetId,
+        spaceId: editorSpaceId,
         sessionId,
         filePath: absoluteFilePath,
         task: task?.name ?? '',
@@ -1386,6 +1732,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         worktree: worktree?.name ?? '',
         repo: worktree?.repo ?? run.repo ?? '',
         color: run.color,
+        ...(snapPos ? { position: snapPos, size: DEFAULT_EDITOR_SIZE } : {}),
       }
       ctx.docStore.upsertEditorWidget(widget.id, widget)
       ok(res, widget)
@@ -1556,119 +1903,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
-  // POST /api/nats-traffic-widgets — create a NATS traffic monitor widget
-  if (method === 'POST' && url === '/api/nats-traffic-widgets') {
+  // POST /api/nats-traffic/firehose — an unsnapped Saloon in 'all' mode toggles a
+  // full-bus (tinstar.>) subscription so it actually shows all traffic instead of
+  // only whatever subjects bound sessions happen to register. Body:
+  // { widgetId: string, on: boolean }. Idempotent; the bridge unions+dedupes, so
+  // multiple firehose widgets share one upstream subscription.
+  if (method === 'POST' && url === '/api/nats-traffic/firehose') {
     readBody(req).then(body => {
-      try {
-        const { sessionId, subscriptions, color } = JSON.parse(body) as { sessionId?: string; subscriptions?: string[]; color?: string }
-        const widget = {
-          id: shortId('nats'),
-          spaceId: ctx.docStore.activeSpaceId || undefined,
-          sessionId: sessionId ?? '',
-          subscriptions: subscriptions ?? ['tinstar.>'],  // Default to all tinstar traffic
-          color,
-        }
-        ctx.docStore.upsertNatsTrafficWidget(widget.id, widget)
-        // Update NATS bridge subscriptions
-        ctx.natsTraffic?.updateWidgetSubscriptions(widget.id, widget.subscriptions)
-        ok(res, widget)
-      } catch {
-        fail(res, 'BAD_REQUEST', 'Invalid request body')
-      }
-    })
-    return true
-  }
-
-  // POST /api/nats-traffic-widgets/:id/subscribe — add subscription
-  if (method === 'POST' && url.match(/^\/api\/nats-traffic-widgets\/[^/]+\/subscribe$/)) {
-    const id = url.split('/')[3]!
-    readBody(req).then(body => {
-      try {
-        const { subject } = JSON.parse(body) as { subject: string }
-        if (!subject) {
-          fail(res, 'BAD_REQUEST', 'subject required')
-          return
-        }
-        const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
-        if (!existing) {
-          fail(res, 'NOT_FOUND', `Widget ${id} not found`)
-          return
-        }
-        const existingSubs = existing.subscriptions || []
-        const subs = [...new Set([...existingSubs, subject])]
-        const updated = { ...existing, subscriptions: subs }
-        ctx.docStore.upsertNatsTrafficWidget(id, updated)
-        ctx.natsTraffic?.updateWidgetSubscriptions(id, subs)
-        ok(res, updated)
-      } catch {
-        fail(res, 'BAD_REQUEST', 'Invalid request body')
-      }
-    })
-    return true
-  }
-
-  // DELETE /api/nats-traffic-widgets/:id/subscribe — remove subscription
-  if (method === 'DELETE' && url.match(/^\/api\/nats-traffic-widgets\/[^/]+\/subscribe$/)) {
-    const id = url.split('/')[3]!
-    readBody(req).then(body => {
-      try {
-        const { subject } = JSON.parse(body) as { subject: string }
-        if (!subject) {
-          fail(res, 'BAD_REQUEST', 'subject required')
-          return
-        }
-        const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
-        if (!existing) {
-          fail(res, 'NOT_FOUND', `Widget ${id} not found`)
-          return
-        }
-        const subs = (existing.subscriptions || []).filter(s => s !== subject)
-        const updated = { ...existing, subscriptions: subs }
-        ctx.docStore.upsertNatsTrafficWidget(id, updated)
-        ctx.natsTraffic?.updateWidgetSubscriptions(id, subs)
-        ok(res, updated)
-      } catch {
-        fail(res, 'BAD_REQUEST', 'Invalid request body')
-      }
-    })
-    return true
-  }
-
-  // POST /api/nats-traffic-widgets/:id/publish — publish a message
-  if (method === 'POST' && url.match(/^\/api\/nats-traffic-widgets\/[^/]+\/publish$/)) {
-    const id = url.split('/')[3]
-    readBody(req).then(body => {
-      try {
-        const { subject, message } = JSON.parse(body) as { subject: string; message: string }
-        if (!subject || !message) {
-          fail(res, 'BAD_REQUEST', 'subject and message required')
-          return
-        }
-        const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
-        if (!existing) {
-          fail(res, 'NOT_FOUND', `Widget ${id} not found`)
-          return
-        }
-        ctx.natsTraffic?.publish(subject, message, 'tinstar-ui')
-        ok(res, null)
-      } catch {
-        fail(res, 'BAD_REQUEST', 'Invalid request body')
-      }
-    })
-    return true
-  }
-
-  // DELETE /api/nats-traffic-widgets/:id
-  if (method === 'DELETE' && url.startsWith('/api/nats-traffic-widgets/') && !url.includes('/subscribe')) {
-    const id = url.slice('/api/nats-traffic-widgets/'.length)
-    const existing = ctx.docStore.getAllNatsTrafficWidgets().find(w => w.id === id)
-    if (!existing) {
-      fail(res, 'NOT_FOUND', `NatsTrafficWidget ${id} not found`)
-      return true
-    }
-    ctx.natsTraffic?.removeWidget(id)
-    ctx.docStore.deleteNatsTrafficWidget(id)
-    ok(res, null)
+      let parsed: { widgetId?: unknown; on?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
+      if (typeof parsed.widgetId !== 'string' || !parsed.widgetId) { fail(res, 'BAD_REQUEST', 'widgetId required'); return }
+      if (parsed.on) registerFirehose(ctx.natsTraffic, parsed.widgetId)
+      else unregisterFirehose(ctx.natsTraffic, parsed.widgetId)
+      ok(res, null)
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
     return true
   }
 
@@ -1793,15 +2041,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const widgetId = slashIdx === -1 ? afterProxy.split('?')[0]! : afterProxy.slice(0, slashIdx)
     const proxyPath = slashIdx === -1 ? '/' : afterProxy.slice(slashIdx)
 
-    const widget = ctx.docStore.getAllBrowserWidgets().find(w => w.id === widgetId)
-    if (!widget) {
+    const proxyTarget = resolveProxyTarget(
+      widgetId,
+      ctx.docStore.getAllBrowserWidgets(),
+      ctx.docStore.getAllPluginWidgets(),
+    )
+    if (!proxyTarget) {
       res.writeHead(404, { 'Content-Type': 'text/plain' })
-      res.end('Browser widget not found')
+      res.end('Browser target not found')
       return true
     }
 
     let origin: string
-    try { origin = new URL(widget.url).origin } catch {
+    try { origin = new URL(proxyTarget.url).origin } catch {
       res.writeHead(400, { 'Content-Type': 'text/plain' })
       res.end('Invalid widget URL')
       return true
@@ -1812,8 +2064,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // Request uncompressed so we can rewrite text responses
     delete fwdHeaders['accept-encoding']
     // Inject custom headers
-    if (widget.headers) {
-      for (const [k, v] of Object.entries(widget.headers)) fwdHeaders[k.toLowerCase()] = v
+    if (proxyTarget.headers) {
+      for (const [k, v] of Object.entries(proxyTarget.headers)) fwdHeaders[k.toLowerCase()] = v
     }
 
     const proxyBase = `/api/proxy/${widgetId}`
@@ -1835,14 +2087,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         proxyRes.on('data', (c: Buffer) => chunks.push(c))
         proxyRes.on('end', () => {
           let body = Buffer.concat(chunks).toString('utf-8')
-          // Rewrite quoted root-relative paths: "/foo" → "/api/proxy/{id}/foo"
-          // Skip protocol-relative "//..." URLs
-          body = body.replace(/(["'])\/((?!\/)[^"']*)/g, `$1${proxyBase}/$2`)
-          // Rewrite unquoted url() in CSS: url(/foo) → url(/api/proxy/{id}/foo)
-          body = body.replace(/url\(\/((?!\/)[^)]*)\)/g, `url(${proxyBase}/$1)`)
+          // Rewrite root-relative URLs in HTML/CSS/JSON to route back through the proxy.
+          // JS is left byte-exact (regex literals make source rewriting unsound) — the
+          // shim injected below rewrites JS-generated URLs at runtime. See proxyRewrite.ts.
+          body = rewriteProxyBody(body, ct, proxyBase)
 
-          // Inject console-capture script into HTML so the widget can show a dev console
+          // Inject runtime shim + console-capture into HTML. The shim must run before the
+          // page's own scripts so fetch/XHR are patched before any request fires.
           if (ct.includes('text/html')) {
+            const shim = `<script>${proxyRuntimeShim(proxyBase)}</script>`
             const capture = `<script>(function(){` +
               `var W='${widgetId}',O={l:console.log,w:console.warn,e:console.error};` +
               `function s(l,a){try{var r=[];for(var i=0;i<a.length;i++){var v=a[i];` +
@@ -1856,8 +2109,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               `window.addEventListener('unhandledrejection',function(e){s('error',['Unhandled rejection: '+(e.reason&&(e.reason.stack||e.reason))])})` +
               `})()</script>`
             const headMatch = body.match(/<head[^>]*>/i)
-            if (headMatch) body = body.replace(headMatch[0], headMatch[0] + capture)
-            else body = capture + body
+            if (headMatch) body = body.replace(headMatch[0], headMatch[0] + shim + capture)
+            else body = shim + capture + body
           }
 
           const headers: Record<string, string | string[] | undefined> = { ...proxyRes.headers }
@@ -1887,26 +2140,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/browser-widgets
   if (method === 'POST' && url === '/api/browser-widgets') {
     readBody(req).then(body => {
-      const { sessionId, url: widgetUrl = '', headers: widgetHeaders } = JSON.parse(body) as { sessionId?: string; url?: string; headers?: Record<string, string> }
-      if (!sessionId) {
-        fail(res, 'INVALID_PARAMS', 'sessionId required')
+      const parsed = JSON.parse(body) as CreateBrowserWidgetParams
+      const result = createBrowserWidget(ctx, parsed)
+      if ('error' in result) {
+        fail(res, result.error.code, result.error.message)
         return
       }
-      const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
-      if (!run) {
-        fail(res, 'SESSION_NOT_FOUND', `No run with sessionId ${sessionId}`)
-        return
-      }
-      const widget: import('../../domain/types').BrowserWidget = {
-        id: shortId('browser'),
-        spaceId: ctx.docStore.activeSpaceId || undefined,
-        sessionId,
-        url: widgetUrl,
-        color: run.color,
-        ...(widgetHeaders && Object.keys(widgetHeaders).length > 0 ? { headers: widgetHeaders } : {}),
-      }
-      ctx.docStore.upsertBrowserWidget(widget.id, widget)
-      ok(res, widget)
+      ok(res, result.widget)
     })
     return true
   }
@@ -1920,9 +2160,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'NOT_FOUND', `BrowserWidget ${id} not found`)
         return
       }
-      const patch = JSON.parse(body) as { url?: string; title?: string; headers?: Record<string, string> }
-      const updated = { ...existing, ...patch }
+      const patch = JSON.parse(body) as {
+        url?: string; title?: string; headers?: Record<string, string>;
+        position?: { x: number; y: number }; size?: { width: number; height: number };
+        nearNodeId?: string; slot?: number | string;
+      }
+      const spaceId = existing.spaceId || ctx.docStore.activeSpaceId || ''
+      const placement = resolvePlacement(ctx, spaceId, patch)
+      const { position: _p, size: _s, nearNodeId: _n, slot: _sl, ...rest } = patch
+      const updated = {
+        ...existing,
+        ...rest,
+        // PATCH semantics: a position-only update must not reset size. Keep the
+        // existing size unless the caller explicitly sends a new one.
+        ...(placement ? { position: placement.position, size: patch.size ? placement.size : existing.size } : {}),
+      }
       ctx.docStore.upsertBrowserWidget(id, updated)
+      const slot = toSlot(patch.slot)
+      if (slot && spaceId) assignWidgetToSlot(ctx, spaceId, id, slot)
       ok(res, updated)
     })
     return true
@@ -1938,6 +2193,123 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
     ctx.docStore.deleteBrowserWidget(id)
     ok(res, null)
+    return true
+  }
+
+  // POST /api/artifacts — store an HTML file's content and open a browser widget on it
+  if (method === 'POST' && url === '/api/artifacts') {
+    readBody(req).then(body => {
+      let parsed: { path?: unknown; name?: string; sessionId?: string; color?: string; spaceId?: string;
+        position?: { x: number; y: number }; size?: { width: number; height: number };
+        nearNodeId?: string; slot?: number | string; snapToSession?: boolean }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'invalid JSON body'); return }
+
+      const html = readArtifactFile(parsed.path, res, fail)
+      if (html === null) return
+
+      const artifactId = shortId('eph')
+      const artifactUrl = `${serverBase()}/api/artifacts/${artifactId}`
+      const result = createBrowserWidget(ctx, {
+        url: artifactUrl,
+        title: parsed.name,
+        sessionId: parsed.sessionId,
+        color: parsed.color,
+        spaceId: parsed.spaceId,
+        position: parsed.position,
+        size: parsed.size,
+        nearNodeId: parsed.nearNodeId,
+        slot: parsed.slot,
+        snapToSession: parsed.snapToSession,
+      })
+      if ('error' in result) { fail(res, result.error.code, result.error.message); return }
+
+      const now = Date.now()
+      ctx.docStore.upsertArtifact(artifactId, {
+        id: artifactId,
+        html,
+        name: parsed.name,
+        rev: 1,
+        widgetId: result.widget.id,
+        spaceId: result.widget.spaceId,
+        createdAt: now,
+        updatedAt: now,
+      })
+      ok(res, { artifactId, url: artifactUrl, widgetId: result.widget.id })
+    })
+    return true
+  }
+
+  // GET /api/artifacts/:id — serve stored HTML (fetched via the widget proxy)
+  if (method === 'GET' && url.startsWith('/api/artifacts/')) {
+    const id = url.slice('/api/artifacts/'.length).split('?')[0]!
+    const artifact = ctx.docStore.getArtifact(id)
+    if (!artifact) { fail(res, 'NOT_FOUND', `Artifact ${id} not found`); return true }
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      ...corsHeaders,
+    })
+    res.end(artifact.html)
+    return true
+  }
+
+  // PUT /api/artifacts/:id — re-read the file, bump rev, reload the open widget
+  if (method === 'PUT' && url.startsWith('/api/artifacts/')) {
+    const id = url.slice('/api/artifacts/'.length).split('?')[0]!
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getArtifact(id)
+      if (!existing) { fail(res, 'NOT_FOUND', `Artifact ${id} not found`); return }
+      let parsed: { path?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'INVALID_PARAMS', 'invalid JSON body'); return }
+
+      const html = readArtifactFile(parsed.path, res, fail)
+      if (html === null) return
+
+      const rev = existing.rev + 1
+      ctx.docStore.upsertArtifact(id, { ...existing, html, rev, updatedAt: Date.now() })
+
+      // Nudge the owning widget's URL with a cache-buster so the browser widget's
+      // existing SSE-driven reload fires (proxyUrl includes the query string).
+      if (existing.widgetId) {
+        const widget = ctx.docStore.getAllBrowserWidgets().find(w => w.id === existing.widgetId)
+        if (widget) {
+          ctx.docStore.upsertBrowserWidget(widget.id, { ...widget, url: `${serverBase()}/api/artifacts/${id}?v=${rev}` })
+        }
+      }
+      ok(res, { artifactId: id, url: `${serverBase()}/api/artifacts/${id}`, rev })
+    })
+    return true
+  }
+
+  // DELETE /api/artifacts — clear all (escape hatch). Also removes the owning
+  // browser widgets so live canvases (which only react to browserWidget SSE deltas,
+  // never artifact ones) see the widgets disappear instead of keeping stale HTML.
+  if (method === 'DELETE' && url === '/api/artifacts') {
+    const artifacts = ctx.docStore.getAllArtifacts()
+    const total = artifacts.length
+    const existing = new Set(ctx.docStore.getAllBrowserWidgets().map(w => w.id))
+    const owningWidgetIds = new Set(
+      artifacts.map(a => a.widgetId).filter((w): w is string => !!w && existing.has(w)),
+    )
+    for (const wid of owningWidgetIds) ctx.docStore.deleteBrowserWidget(wid) // cascades the artifact + emits a widget delta
+    ctx.docStore.deleteAllArtifacts() // sweep any artifacts with no (live) owning widget
+    ok(res, { deleted: total })
+    return true
+  }
+
+  // DELETE /api/artifacts/:id — remove one, and the browser widget that surfaces it
+  // (the client has no artifact reducer, so it only un-renders on a browserWidget delta).
+  if (method === 'DELETE' && url.startsWith('/api/artifacts/')) {
+    const id = url.slice('/api/artifacts/'.length).split('?')[0]!
+    const artifact = ctx.docStore.getArtifact(id)
+    if (!artifact) { fail(res, 'NOT_FOUND', `Artifact ${id} not found`); return true }
+    const widgetId = artifact.widgetId
+    if (widgetId && ctx.docStore.getAllBrowserWidgets().some(w => w.id === widgetId)) {
+      ctx.docStore.deleteBrowserWidget(widgetId) // cascades: removes this artifact + emits the widget delta
+    } else {
+      ctx.docStore.deleteArtifact(id)
+    }
+    ok(res, { deleted: true })
     return true
   }
 
@@ -2093,6 +2465,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // PUT /api/constellation-graph/:spaceId — replace a space's membership graph (whole-doc, atomic)
+  if (method === 'PUT' && url.startsWith('/api/constellation-graph/')) {
+    const spaceId = decodeURIComponent(url.slice('/api/constellation-graph/'.length))
+    if (!ctx.docStore.getSpace(spaceId)) { fail(res, 'NOT_FOUND', 'space not found'); return true }
+    readBody(req).then(body => {
+      let parsed: unknown
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
+      if (!isConstellationGraph(parsed)) { fail(res, 'BAD_REQUEST', 'invalid constellation graph'); return }
+      // Reject stale/equal-revision writes with a conflict rather than a false
+      // success — the revision gate drops them, so the doc is not stored.
+      if (!ctx.docStore.upsertConstellationGraph(spaceId, { ...parsed, spaceId })) {
+        fail(res, 'CONFLICT', 'stale constellation graph revision'); return
+      }
+      ok(res, null)
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
+    return true
+  }
+
   // GET /api/plugin-widgets/registry — palette UI lists available widget types
   if (method === 'GET' && url === '/api/plugin-widgets/registry') {
     const configRoot = ctx.sessionConfig?.dirs.root
@@ -2243,9 +2633,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
 
-    // GET /api/sessions/:name (exact match, no trailing path)
-    if (method === 'GET' && url.startsWith('/api/sessions/') && !url.includes('/start') && !url.includes('/stop') && !url.includes('/files') && !url.includes('/context')) {
-      const name = extractSessionName(url, '/api/sessions/')
+    // GET /api/sessions/:name (exact match — no trailing path segment, so
+    // sub-routes like /nats-status or /files aren't shadowed and a session
+    // literally named "nats-status-worker" still resolves here)
+    if (method === 'GET' && url.startsWith('/api/sessions/') && !(url.split('?')[0] ?? url).slice('/api/sessions/'.length).includes('/')) {
+      const name = extractSessionName(url.split('?')[0] ?? url, '/api/sessions/')
       if (name) {
         const session = getSession(sessDir, name)
         if (!session) {
@@ -2339,174 +2731,43 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName } = JSON.parse(body)
+        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
-        if (!name) return fail(res, 'BAD_REQUEST', 'Session name is required')
-
-        if (getSession(sessDir, name)) {
-          return fail(res, 'CONFLICT', `Session '${name}' already exists`)
+        // Resolve a named hand here so the HTTP layer keeps ownership of the
+        // not-found response. The resolved CLI template + persona prompt are
+        // handed to the shared createSessionInternal, which does the rest of
+        // the work (worktree, color, NATS subscriptions, run projection, …).
+        let resolvedHand: ReturnType<typeof getHandByName> = null
+        if (handName) {
+          resolvedHand = getHandByName(handName)
+          if (!resolvedHand) return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
         }
 
+        const { initialPrompt: handInitialPrompt, systemPrompt: handSystemPrompt } =
+          resolvedHand ? resolveHandPrompts(resolvedHand, prompt) : { initialPrompt: prompt, systemPrompt: null }
+
+        const createCtx = buildCreateSessionContext(ctx)
+        if (!createCtx) return fail(res, 'INTERNAL', 'sessionConfig unavailable')
+
         try {
-          // Resolve project
-          let projectPath: string | null = null
-          if (project) {
-            projectPath = getProject(cfg.files.projects, project)
-            if (!projectPath) return fail(res, 'NOT_FOUND', `Project '${project}' not found`)
-          }
+          const result = await createSessionInternal({
+            name, project, worktree, worktreePath, prompt: handInitialPrompt, skipPermissions,
+            cliTemplate: cliTemplateName ?? resolvedHand?.cliTemplate,
+            taskId, epicId, initiativeId, color: colorParam, nats,
+            appendSystemPrompt: handSystemPrompt,
+            view, viewData,
+          }, createCtx)
 
-          // Create worktree or use existing
-          let workspacePath = projectPath
-          let branch: string | null = null
-          if (worktreePath && projectPath) {
-            workspacePath = worktreePath
-            branch = await detectBranch(worktreePath)
-          } else if (worktree && projectPath) {
-            workspacePath = await createWorktree(projectPath, name)
-            branch = name
-          }
-
-          const isWorktree = !!(worktreePath || worktree)
-
-          // Register a Worktree entity so it appears in hierarchy/grouping
-          let worktreeEntityId = ''
-          if (isWorktree && workspacePath) {
-            worktreeEntityId = name
-            ctx.docStore.upsertWorktree(worktreeEntityId, {
-              id: worktreeEntityId,
-              name,
-              branch: branch ?? name,
-              repo: project ?? '',
-              worktreePath: workspacePath,
-              spaceId: ctx.docStore.activeSpaceId,
-            })
-          }
-
-          // Resolve run color: explicit param > task > epic > initiative > undefined
-          const color = colorParam
-            ?? (taskId ? ctx.docStore.getTask(taskId)?.settings?.defaultRunColor : undefined)
-            ?? (epicId ? ctx.docStore.getEpic(epicId)?.settings?.defaultRunColor : undefined)
-            ?? (initiativeId ? ctx.docStore.getInitiative(initiativeId)?.settings?.defaultRunColor : undefined)
-
-          // Resolve hand if specified
-          let resolvedHand: ReturnType<typeof getHandByName> = null
-          if (handName) {
-            resolvedHand = getHandByName(handName)
-            if (!resolvedHand) {
-              return fail(res, 'NOT_FOUND', `Hand '${handName}' not found`)
+          if (!result.ok) {
+            switch (result.error.code) {
+              case 'MISSING_NAME': return fail(res, 'BAD_REQUEST', result.error.message)
+              case 'SESSION_EXISTS': return fail(res, 'CONFLICT', result.error.message)
+              case 'PROJECT_NOT_FOUND': return fail(res, 'NOT_FOUND', result.error.message)
+              default: return fail(res, 'INTERNAL', result.error.message)
             }
           }
-
-          // Resolve CLI template (hand's template as fallback if no explicit template)
-          const templateName = cliTemplateName ?? resolvedHand?.cliTemplate ?? null
-          const resolvedTemplate = templateName
-            ? cfg.cliTemplates.find(t => t.name === templateName) ?? null
-            : null
-
-          // Compute NATS subscriptions from entity hierarchy if not explicitly provided
-          let resolvedNats = nats ?? null
-          if (!nats && (taskId || epicId || initiativeId)) {
-            const natsCtx = {
-              sessionName: name,
-              spaceId: ctx.docStore.activeSpaceId || null,
-              taskId: taskId || null,
-              epicId: epicId || null,
-              initiativeId: initiativeId || null,
-            }
-            const subscriptions = computeNatsSubscriptions(natsCtx, ctx.docStore)
-            resolvedNats = { enabled: true, subscriptions }
-          }
-
-          const session = createSession(sessDir, {
-            name,
-            backend: 'tmux',
-            project,
-            workspace: {
-              path: workspacePath,
-              worktree: isWorktree,
-              branch,
-              basePath: isWorktree ? projectPath : null,
-            },
-            profile: null,
-            oneshot: false,
-            skipPermissions,
-            cliTemplate: cliTemplateName ?? null,
-            adapter: resolvedTemplate?.adapter ?? null,
-            nats: resolvedNats,
-          })
-
-          const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
-          enriched._stateDir = claudeStateDir(sessDir, name)
-
-          const sec = secrets()
-          const port = await tmuxBackend.findPort(cfg.ports.hostStart)
-          if (prompt) enriched.initialPrompt = prompt
-
-          const result = await tmuxBackend.createTmuxSession(cfg, {
-            session: enriched,
-            secrets: sec,
-            port,
-            template: resolvedTemplate,
-            appendSystemPrompt: resolvedHand?.prompt ?? null,
-          })
-          const sessionPort = result.port
-          updateSession(sessDir, name, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
-          tmuxBackend.onTtydRestart(name, (newPid) => {
-            updateSession(sessDir, name, { ttydPid: newPid })
-          })
-
-          const updated = getSession(sessDir, name)
-
-          // Create a Run in the document store so it appears on the canvas
-          // If a prompt was given, Claude is immediately executing — 'running'.
-          // If not, Claude opens at the REPL waiting for input — 'idle'.
-          const runId = name
-          const initialStatus = prompt ? 'running' : 'idle'
-          const backendInfo = `tmux session: ${name}`
-
-          // Build NATS subject for this session
-          const natsSubject = resolvedNats?.enabled
-            ? buildNatsSubject(name, ctx.docStore, taskId, epicId, initiativeId)
-            : undefined
-
-          ctx.docStore.upsertRun(runId, {
-            id: runId,
-            color,
-            status: initialStatus,
-            sessionId: name,
-            initiative: initiativeId ?? '',
-            epic: epicId ?? '',
-            task: taskId ?? '',
-            repo: project ?? '',
-            worktree: isWorktree ? (branch ?? name) : '',
-            touchedFiles: [],
-            recapEntries: [],
-            rawLogs: '',
-            port: sessionPort ?? null,
-            backend: 'tmux',
-            backendInfo,
-            agentIcon: resolvedTemplate?.icon ?? undefined,
-            natsEnabled: resolvedNats?.enabled ?? false,
-            natsSubject,
-            natsControlOrphanedAt: session.natsControlOrphanedAt ?? null,
-            taskId: taskId ?? '',
-            worktreeId: worktreeEntityId,
-            createdAt: new Date().toISOString(),
-            spaceId: ctx.docStore.activeSpaceId,
-          })
-
-          registerSaloonSubs(ctx.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
-          bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, ctx.docStore)
-          if (resolvedNats?.enabled) ctx.natsHealth?.trackSession(name)
-
-          ctx.readyQueue.onStatusChange(name, initialStatus)
-          ctx.sse.setReadyQueue(ctx.readyQueue.getQueue())
-          ctx.sse.broadcastReadyQueueUpdate()
-          emitSessionEvent('managed_session.created', { name, state: 'running' })
-          log.info('sessions', `session created: ${name}`, { port: sessionPort, state: 'running' })
-
-          ok(res, updated, { status: 201 })
+          ok(res, result.session, { status: 201 })
         } catch (err) {
           log.error('sessions', `session creation failed: ${name}`, { error: (err as Error).message })
           fail(res, 'INTERNAL', (err as Error).message)
@@ -2632,7 +2893,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             const resumeTemplate = session.cliTemplate
               ? cfg.cliTemplates.find(t => t.name === session.cliTemplate) ?? null
               : null
-            const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port, template: resumeTemplate })
+            const result = await tmuxBackend.startTmuxSession(cfg, { session, secrets: sec, port, template: resumeTemplate, appendSystemPrompt: session.appendSystemPrompt, agent: session.agent })
             updateSession(sessDir, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
             tmuxBackend.onTtydRestart(session.name, (newPid) => {
               updateSession(sessDir, session.name, { ttydPid: newPid })
@@ -2658,6 +2919,34 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             }
             emitSessionEvent('managed_session.state_changed', { name: session.name, state: 'running' })
             ok(res, updated)
+          } catch (err) {
+            fail(res, 'INTERNAL', (err as Error).message)
+          }
+        })
+        return true
+      }
+    }
+
+    // POST /api/sessions/:name/nats-reconnect — recover an orphaned control
+    // socket on a *running* session (vs /start, which resumes a stopped one).
+    // SIGTERMs the session's channel-server so it exits cleanly and Claude
+    // relaunches the MCP with a fresh socket. Clears the orphan flag so the
+    // health probe re-evaluates from scratch.
+    if (method === 'POST' && url.endsWith('/nats-reconnect') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        readBody(req).then(async () => {
+          const session = getSession(sessDir, name)
+          if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
+          if (!session.nats?.enabled) return fail(res, 'BRIDGE_UNAVAILABLE', `NATS is not enabled for session '${name}'`)
+          try {
+            const { killed } = await reconnectSessionNats(name, { socketPath: natsControlSocketPath(name) })
+            // Clear the orphan flag; the next health probe re-establishes truth.
+            updateSession(sessDir, name, { natsControlOrphanedAt: null })
+            const run = ctx.docStore.getRun(name)
+            if (run) ctx.docStore.upsertRun(name, { ...run, natsControlOrphanedAt: null })
+            log.info('nats', `${name}: reconnect requested — signalled ${killed.length} channel-server process(es)`)
+            ok(res, { killed })
           } catch (err) {
             fail(res, 'INTERNAL', (err as Error).message)
           }
@@ -2878,10 +3167,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // Generate unique session name
       const spawnedName = `${parentName}-${handName}-${randomUUID().slice(0, 8)}`
 
-      // Build the prompt: hand base + optional override
-      let fullPrompt = hand.prompt
+      // Resolve the persisted persona (system prompt) and one-shot intro from
+      // the hand. For a hand with a dedicated `systemPrompt`, the persona is
+      // that field and `prompt` is the intro fired as the first message; for a
+      // hand without one, `prompt` serves as both.
+      const { initialPrompt: handIntro, systemPrompt: handPersona } = resolveHandPrompts(hand)
+
+      // Build the prompt: hand intro + optional override
+      const introMessage = handIntro ?? hand.prompt
+      let fullPrompt = introMessage
       if (promptOverride) {
-        fullPrompt = `${hand.prompt}\n\n---\n\n${promptOverride}`
+        fullPrompt = `${introMessage}\n\n---\n\n${promptOverride}`
       }
 
       // Resolve the parent's run to get taskId for NATS subject computation
@@ -3014,15 +3310,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // room. When fallback kicked in (parent's control socket was orphan/
         // unreachable), effectiveRoom is the parent's persistent direct
         // subject rather than the fresh breakout room.
-        const handSystemPrompt = hand.prompt
+        const handSystemPrompt = handPersona
           ? effectiveRoom
-            ? `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${effectiveRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${effectiveRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
-            : `${hand.prompt}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
+            ? `${handPersona}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.\nTalk to your parent on: \`${effectiveRoom}\`\n\nYour FIRST action must be to introduce yourself to your parent:\n\`\`\`\nreply(to="${effectiveRoom}", text="${handName} online. <your one-line capability>. Ready.")\n\`\`\``
+            : `${handPersona}\n\n## Your Parent\n\nYou were spawned by **${parentName}**.`
           : null
 
         const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, appendSystemPrompt: handSystemPrompt })
         const sessionPort = result.port
-        updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running' })
+        updateSession(sessDir, spawnedName, { port: sessionPort, ttydPid: result.ttydPid ?? null, state: 'running', appendSystemPrompt: handSystemPrompt })
         tmuxBackend.onTtydRestart(spawnedName, (newPid) => {
           updateSession(sessDir, spawnedName, { ttydPid: newPid })
         })
@@ -3171,6 +3467,43 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
     }
 
+    // POST /api/sessions/:name/exec  { argv: string[] } → run in session cwd
+    if (method === 'POST' && url.endsWith('/exec') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (!name) return fail(res, 'BAD_REQUEST', 'session name required')
+      const session = getSession(sessDir, name)
+      if (!session) return fail(res, 'NOT_FOUND', 'Session not found')
+      const cwd = session.workspace?.path
+      if (!cwd) return fail(res, 'CONFLICT', 'Session has no workspace path')
+      readBody(req).then(async (raw) => {
+        let argv: unknown
+        try { argv = JSON.parse(raw).argv } catch { return fail(res, 'BAD_REQUEST', 'invalid JSON body') }
+        if (!Array.isArray(argv) || argv.length === 0 || !argv.every((a) => typeof a === 'string')) {
+          return fail(res, 'BAD_REQUEST', 'argv must be a non-empty string array')
+        }
+        try {
+          const result = await execCommand(argv as string[], { cwd })
+          ok(res, result)
+        } catch (err) {
+          fail(res, 'INTERNAL', (err as Error).message)
+        }
+      }).catch((err) => fail(res, 'INTERNAL', (err as Error).message))
+      return true
+    }
+
+    // GET /api/sessions/:name/screen?scrollback=<n>  → rendered terminal screen
+    if (method === 'GET' && url.startsWith('/api/sessions/') && url.split('?')[0]!.endsWith('/screen')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (!name) return fail(res, 'BAD_REQUEST', 'session name required')
+      const session = getSession(sessDir, name)
+      if (!session) return fail(res, 'NOT_FOUND', 'Session not found')
+      const sb = Number(new URL(url, 'http://localhost').searchParams.get('scrollback'))
+      captureScreen(tmuxSessionName(cfg, name), Number.isFinite(sb) && sb > 0 ? sb : undefined)
+        .then((screen) => ok(res, { screen }))
+        .catch((err) => fail(res, 'INTERNAL', (err as Error).message))
+      return true
+    }
+
     // POST /api/sessions/:name/enter-prompt — type text then submit with Enter
     if (method === 'POST' && url.endsWith('/enter-prompt') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
@@ -3189,6 +3522,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         } catch (err) {
           fail(res, 'INTERNAL', (err as Error).message)
         }
+        return true
+      }
+    }
+
+    // GET /api/sessions/:name/nats-status — observed NATS truth, probed live
+    // from the channel-server control socket: the actual connection state plus
+    // the subjects it's actually subscribed to. This is the SSOT the Saloon
+    // dot/topics read — independent of session.nats config, CLI flags, or which
+    // .mcp.json is on disk. Cheap (one socket round-trip); safe to call on
+    // panel-open and on dot-click. A session with no live channel-server
+    // resolves to { connection: 'down' } — that's the truth, not an error.
+    if (method === 'GET' && url.endsWith('/nats-status') && url.startsWith('/api/sessions/')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const status = await probeNatsLiveStatus(natsControlSocketPath(name))
+        ok(res, status)
         return true
       }
     }

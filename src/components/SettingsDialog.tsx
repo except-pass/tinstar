@@ -3,7 +3,7 @@ import { PluginsTab } from './Settings/PluginsTab'
 import { useDimensionMeta, autoPlural } from '../hooks/useDimensionMeta'
 import { useBackendState } from '../hooks/useBackendState'
 import type { LevelLabel } from '../domain/types'
-import { AgentIcon, isIconUrl } from './agentIcon'
+import { AgentIcon } from './agentIcon'
 import { apiFetch } from '../apiClient'
 import { useConfig, useConfigPatch } from '../context/ConfigContext'
 

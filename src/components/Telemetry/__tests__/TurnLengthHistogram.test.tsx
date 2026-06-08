@@ -18,10 +18,10 @@ describe('TurnLengthHistogram', () => {
 
   it('renders one bar per non-empty bucket (collapsed across time)', () => {
     const cells = emptyCells()
-    cells[2][5] = 3       // bucket 2
-    cells[2][10] = 1      // same bucket — should still be one bar
-    cells[7][29] = 1      // bucket 7
-    cells[9][0] = 7       // bucket 9
+    cells[2]![5] = 3       // bucket 2
+    cells[2]![10] = 1      // same bucket — should still be one bar
+    cells[7]![29] = 1      // bucket 7
+    cells[9]![0] = 7       // bucket 9
     const { container } = render(
       <TurnLengthHistogram cells={cells} accent="255, 132, 100" bucketBounds={BUCKETS} />
     )
@@ -33,8 +33,8 @@ describe('TurnLengthHistogram', () => {
 
   it('tallest bar corresponds to the bucket with the highest total', () => {
     const cells = emptyCells()
-    cells[0][0] = 10
-    cells[1][1] = 5
+    cells[0]![0] = 10
+    cells[1]![1] = 5
     const { container } = render(
       <TurnLengthHistogram cells={cells} accent="255, 132, 100" bucketBounds={BUCKETS} />
     )

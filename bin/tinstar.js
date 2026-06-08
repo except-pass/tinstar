@@ -224,7 +224,7 @@ async function main() {
     hosts.push(...process.env.TINSTAR_HOST.split(',').map(s => s.trim()).filter(Boolean))
   }
   const { startServer } = await import('../dist/server/standalone.js')
-  startServer({ port, host: hosts, clientDir: join(import.meta.dirname, '..', 'dist', 'client'), open: !noOpen })
+  startServer({ port, host: hosts, clientDir: join(import.meta.dirname, '..', 'dist', 'client'), open: !noOpen, force: process.argv.includes('--force') })
 }
 
 main().catch(err => {

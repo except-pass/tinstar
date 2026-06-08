@@ -39,6 +39,8 @@ curl -s -X POST "$TINSTAR_URL/api/sessions/NAME/prompt" -d '{"text":"…"}'   # 
 
 Use this only when the session is genuinely standalone — a new line of work, not a helper for your current task. **If it's a helper, use the `tinstar-hand` skill** (spawns under `/api/sessions/<parent>/spawn`).
 
+**Send the kickoff prompt IN the creation request** via the `prompt` field — do NOT create the session and then `POST .../prompt` as a second step. The CLI re-initializes during boot (the conversation id changes), so a separate prompt fired right after creation hits a race and is silently dropped. The `prompt` field is stored as the session's `initialPrompt` and delivered once the agent is actually ready.
+
 ```bash
 curl -s -X POST "$TINSTAR_URL/api/sessions" \
   -H "Content-Type: application/json" \
@@ -47,11 +49,12 @@ curl -s -X POST "$TINSTAR_URL/api/sessions" \
     "backend": "tmux",
     "cliTemplate": "Claude (multi-agent)",
     "project": "myproject",
-    "worktree": true
+    "worktree": true,
+    "prompt": "Read context/entrypoint.md, then continue the work: <clear first task>."
   }'
 ```
 
-`cliTemplate: "Claude (multi-agent)"` enables NATS. Omit only for plain non-collaborative sessions.
+`cliTemplate: "Claude (multi-agent)"` enables NATS. Omit only for plain non-collaborative sessions. `prompt` is the kickoff message (preferred). The separate `POST /api/sessions/<name>/prompt` endpoint is for **steering an already-running** session, not for the initial kickoff.
 
 ## Editor widgets (file on canvas)
 
@@ -114,6 +117,32 @@ tinstar.<space>.<initiative>.<epic>.<task>.<session>
 Each session auto-subscribes to its task broadcast (`*` at the task level) and ancestor wildcards (`>`). Use the `reply` MCP tool to publish — from inside a running agent session it's the only sanctioned way to speak on NATS.
 
 Full scheme lives in `docs/nats-agent-channels.md` in the Tinstar repo.
+
+## Show the user an HTML artifact
+
+When you want to show the user a chart, table, diagram, or any rendered output — **don't** ask them to open a file or browser tab. Write the HTML and POST its path; Tinstar reads the file, stores it, and auto-opens a browser widget on the canvas.
+
+```bash
+# 1. Write the HTML with your normal file tool, e.g. /tmp/energy-chart.html
+# 2. Hand Tinstar the path:
+curl -s -X POST "$TINSTAR_URL/api/artifacts" \
+  -H "Content-Type: application/json" \
+  -d '{ "path": "/tmp/energy-chart.html", "name": "energy-chart" }'
+# → { "ok": true, "data": { "artifactId": "eph-ab12", "url": ".../api/artifacts/eph-ab12", "widgetId": "browser-7" } }
+```
+
+```bash
+# Iterate: rewrite the same file, then PUT the path to refresh the open widget in place
+curl -s -X PUT "$TINSTAR_URL/api/artifacts/eph-ab12" \
+  -H "Content-Type: application/json" \
+  -d '{ "path": "/tmp/energy-chart.html" }'
+```
+
+- The HTML is copied into Tinstar at POST/PUT time; the source file can be deleted after.
+- Optional placement: `position`, `size`, `nearNodeId`, `slot`, `color` — same as `POST /api/browser-widgets`. Pass `sessionId` to color/associate the widget with a session.
+- Spawned widgets snap to the session's constellation by default (so they raft with the session and tile in a row to its right); pass `"snapToSession": false` to spawn free-floating.
+- An artifact and its browser widget share a lifecycle: closing/removing the widget deletes the artifact, and deleting the artifact removes the widget. `DELETE /api/artifacts/<id>` removes one artifact and closes its widget; `DELETE /api/artifacts` clears every artifact and closes their widgets.
+- Max 5 MB. `console.log` from the page shows in the widget's console panel.
 
 ## See also
 

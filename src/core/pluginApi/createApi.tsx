@@ -1,0 +1,422 @@
+import { useSyncExternalStore, useCallback, useRef, useMemo, useState, useEffect } from 'react'
+import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi, PluginPrimitivesApi, PrimitiveAccessory, RegisterBrowserWidgetOptions, RegisterTerminalWidgetOptions, BrowserHandle, TerminalHandle, WidgetProps } from '@tinstar/plugin-api'
+import { usePluginWidgetData } from './usePluginWidgetData'
+import { makeBrowserPrimitive } from '../../plugins/browser/src/BrowserPrimitive'
+import { TerminalPrimitive } from '../../widgets/primitives/TerminalPrimitive'
+import { BrowserHandleContext, TerminalHandleContext, useBrowserHandle, useTerminalHandle } from './browserPrimitiveContext'
+import { useDeletePluginWidget } from './useDeletePluginWidget'
+import { useInitialContext } from './useInitialContext'
+import { useAttention } from './useAttention'
+import type { PluginRecord } from '../pluginHost/registry'
+import { registerWidgetComponent } from '../../widgets/widgetComponentRegistry'
+import { apiFetch } from '../../apiClient'
+import { makeTerminalHandle } from './terminalHandle'
+import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
+import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
+import { useConstellationContext } from '../../hotkeys/ConstellationContext'
+import { ConstellationBadge } from '../../components/ConstellationBadge'
+import { useFileWatch } from '../../hooks/useFileWatch'
+import { useImageWatch } from '../../hooks/useImageWatch'
+import { resolveRunAccent, hexToRgba } from '../../components/runAccent'
+import { EventBridge } from './eventBridge'
+import { useWidgetId } from './widgetIdContext'
+import { capabilityRegistry } from '../constellationCapabilities'
+
+/** Pure helper: annotate each peer with `snapped: true` if it shares a
+ *  direct snap edge with `myId`, according to `snapNeighborsOf`. */
+export function markSnapped(
+  myId: string,
+  peers: Array<{ id: string; kind: string; capabilities: string[] }>,
+  snapNeighborsOf: (id: string) => string[],
+): Array<{ id: string; kind: string; capabilities: string[]; snapped: boolean }> {
+  const mine = new Set(snapNeighborsOf(myId))
+  return peers.map(p => ({ ...p, snapped: mine.has(p.id) }))
+}
+
+/** Derive a coarse widget "kind" from its full node id. Mirrors the
+ *  prefix convention the host uses when constructing TreeNode ids
+ *  (see src/domain/grouping.ts and the widget render path). */
+function kindOfWidgetId(id: string): string {
+  if (id.startsWith('run-')) return 'run'
+  if (id.startsWith('editor-')) return 'file-editor'
+  if (id.startsWith('browser-')) return 'browser'
+  if (id.startsWith('image-')) return 'image'
+  const dash = id.indexOf('-')
+  return dash > 0 ? id.slice(0, dash) : id
+}
+
+const NOOP_DISPOSABLE: Disposable = { dispose: () => {} }
+
+let sharedBridge: EventBridge | null = null
+function getBridge(): EventBridge {
+  if (!sharedBridge) sharedBridge = new EventBridge()
+  return sharedBridge
+}
+
+function makeLogger(pluginId: string): PluginLogger {
+  const prefix = `[${pluginId}]`
+  return {
+    /* eslint-disable no-console */
+    debug: (...args) => console.debug(prefix, ...args),
+    info:  (...args) => console.info(prefix, ...args),
+    warn:  (...args) => console.warn(prefix, ...args),
+    error: (...args) => console.error(prefix, ...args),
+    /* eslint-enable no-console */
+  }
+}
+
+const FLEX_DIR: Record<PrimitiveAccessory['placement'], React.CSSProperties['flexDirection']> = {
+  left: 'row', right: 'row-reverse', top: 'column', bottom: 'column-reverse',
+}
+
+function AccessoryLayout({ accessory, children }: { accessory?: PrimitiveAccessory; children: React.ReactNode }) {
+  if (!accessory) return <div className="h-full w-full">{children}</div>
+  const size = accessory.size ?? 220
+  const isRow = accessory.placement === 'left' || accessory.placement === 'right'
+  const Accessory = accessory.component
+  return (
+    <div className="h-full w-full flex" style={{ flexDirection: FLEX_DIR[accessory.placement] }}>
+      <div className="min-h-0 min-w-0 flex-1">{children}</div>
+      <div
+        className="min-h-0 min-w-0 overflow-auto"
+        style={isRow ? { width: size, flex: `0 0 ${size}px` } : { height: size, flex: `0 0 ${size}px` }}
+      >
+        <Accessory />
+      </div>
+    </div>
+  )
+}
+
+export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
+  const logger = makeLogger(record.name)
+
+  const widgets = {
+    register(reg: WidgetRegistration): Disposable {
+      try {
+        const d = registerWidgetComponent(reg, 'plugin')
+        record.disposables.push(d)
+        return d
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        // Only the "already registered" throw is recoverable via no-op + warn.
+        // Anything else (validation errors, future host-internal failures) must
+        // propagate to registry.activate's catch so the plugin is marked failed.
+        if (msg.startsWith('Widget type already registered:')) {
+          logger.warn(`widgets.register("${reg.type}") rejected: ${msg}`)
+          return NOOP_DISPOSABLE
+        }
+        throw e
+      }
+    },
+  }
+
+  const http = {
+    fetch(path: string, init?: RequestInit): Promise<Response> {
+      const headers = new Headers(init?.headers)
+      headers.set('X-Tinstar-Plugin', record.name)
+      return apiFetch(path, { ...init, headers })
+    },
+  }
+
+  const events = {
+    subscribe<T = unknown>(channel: string, handler: (msg: T) => void): Disposable {
+      const d = getBridge().subscribe(channel, handler as (msg: unknown) => void)
+      record.disposables.push(d)
+      return d
+    },
+  }
+
+  const hotkeys = {
+    onAction(widgetId: string, handler: (action: string) => void): Disposable {
+      registerActionHandler(widgetId, handler)
+      const d: Disposable = { dispose: () => deregisterActionHandler(widgetId) }
+      record.disposables.push(d)
+      return d
+    },
+  }
+
+  const canvas = {
+    fitWidget(widgetId: string): void {
+      fitWidgetToViewport(widgetId)
+    },
+  }
+
+  const constellations = {
+    Badge: ConstellationBadge,
+
+    useContext: (): { slotsForNode: (nodeId: string) => string[]; nodesInSlot: (slot: string) => string[] } => {
+      const ctx = useConstellationContext()
+      return {
+        slotsForNode: (nodeId: string) => ctx.slotsForNode(nodeId),
+        nodesInSlot: (slot: string) => ctx.nodesInSlot(slot),
+      }
+    },
+
+    useMyNodeId(): string {
+      return useWidgetId()
+    },
+
+    useMySlots(): string[] {
+      const widgetId = useWidgetId()
+      const ctx = useConstellationContext()
+      return ctx.slotsForNode(widgetId)
+    },
+
+    useMySlot(): number | null {
+      const widgetId = useWidgetId()
+      const ctx = useConstellationContext()
+      const slots = ctx.slotsForNode(widgetId)
+      return slots.length > 0 ? Number(slots[0]) : null
+    },
+
+    usePeers(): ConstellationPeer[] {
+      const widgetId = useWidgetId()
+      const ctx = useConstellationContext()
+
+      // Re-render whenever the capability registry changes — the snapshot
+      // string is intentionally cheap and order-stable per widget.
+      useSyncExternalStore(
+        (listener) => capabilityRegistry.subscribe(listener),
+        () => {
+          const slots = ctx.slotsForNode(widgetId)
+          if (slots.length === 0) return ''
+          const peers = ctx.nodesInSlot(slots[0]!).filter((id) => id !== widgetId)
+          return peers.map((id) => `${id}:${capabilityRegistry.capabilitiesOf(id).join(',')}`).join('|')
+        },
+        () => '',
+      )
+
+      const slots = ctx.slotsForNode(widgetId)
+      if (slots.length === 0) return []
+      const slot = slots[0]!
+      const peerIds = ctx.nodesInSlot(slot).filter((id) => id !== widgetId)
+      const raw = peerIds.map((id) => ({
+        id,
+        kind: kindOfWidgetId(id),
+        capabilities: capabilityRegistry.capabilitiesOf(id),
+      }))
+      return markSnapped(widgetId, raw, (id) => ctx.snapNeighbors(id))
+    },
+
+    usePublishCapability(): (
+      name: string,
+      handler: (args: unknown) => Promise<unknown>,
+    ) => Disposable {
+      const widgetId = useWidgetId()
+      return useCallback((name, handler) => {
+        const undo = capabilityRegistry.publish(widgetId, name, handler)
+        const d: Disposable = { dispose: undo }
+        record.disposables.push(d)
+        return d
+      }, [widgetId])
+    },
+
+    useInvokePeerCapability(): (
+      peerId: string,
+      name: string,
+      args: unknown,
+    ) => Promise<unknown> {
+      const widgetId = useWidgetId()
+      const ctx = useConstellationContext()
+      const ctxRef = useRef(ctx)
+      ctxRef.current = ctx
+      return useCallback(async (peerId, name, args) => {
+        const mySlots = ctxRef.current.slotsForNode(widgetId)
+        const peerSlots = ctxRef.current.slotsForNode(peerId)
+        const shared = mySlots.find((s) => peerSlots.includes(s))
+        if (!shared) throw new Error(`peer ${peerId} is not in the same constellation`)
+        return capabilityRegistry.invoke(peerId, name, args)
+      }, [widgetId])
+    },
+
+    useFitToMine(): () => void {
+      const widgetId = useWidgetId()
+      return useCallback(() => {
+        window.dispatchEvent(new CustomEvent('constellation:fit-mine', { detail: { widgetId } }))
+      }, [widgetId])
+    },
+    useTidyMine(): () => void {
+      const widgetId = useWidgetId()
+      return useCallback(() => {
+        window.dispatchEvent(new CustomEvent('constellation:tidy-mine', { detail: { widgetId } }))
+      }, [widgetId])
+    },
+    useAssignToSlot(): (slot: number) => void {
+      const widgetId = useWidgetId()
+      return useCallback((slot) => {
+        window.dispatchEvent(new CustomEvent('constellation:assign', { detail: { widgetId, slot } }))
+      }, [widgetId])
+    },
+    useLeave(): () => void {
+      const widgetId = useWidgetId()
+      return useCallback(() => {
+        window.dispatchEvent(new CustomEvent('constellation:leave', { detail: { widgetId } }))
+      }, [widgetId])
+    },
+  }
+
+  const watch = {
+    file: useFileWatch,
+    image: useImageWatch,
+  }
+
+  const theme = {
+    accent: {
+      resolve: resolveRunAccent,
+      hexToRgba,
+    },
+  }
+
+  const widget: PluginWidgetApi = {
+    useData: function useWidgetDataBound<T>(): [T | null, (next: T) => void] {
+      return usePluginWidgetData<T>()
+    },
+    useDelete: function useWidgetDeleteBound(): () => Promise<void> {
+      return useDeletePluginWidget()
+    },
+    useInitialContext: function useWidgetInitialContextBound<T>(): T | null {
+      return useInitialContext<T>()
+    },
+    useAttention: function useWidgetAttentionBound() {
+      return useAttention()
+    },
+  }
+
+  // Build primitives lazily, closing over the fully-assembled `api` object below.
+  // Component bodies only read `api.*` at RENDER time, by which point `api` is
+  // fully populated, so closing over `api` is safe.
+  function buildPrimitives(api: TinstarPluginAPI): PluginPrimitivesApi {
+    function registerBrowserWidget(opts: RegisterBrowserWidgetOptions): Disposable {
+      function BrowserBackedWidget(props: WidgetProps) {
+        const [data, setData] = api.widget.useData<{ _browser?: { url: string; headers?: Record<string, string> } }>()
+        const nodeId = api.constellations.useMyNodeId()
+        const url = data?._browser?.url ?? opts.defaultUrl ?? ''
+        const headers = data?._browser?.headers
+        const accent = api.theme.accent.resolve(undefined)
+        const slots = api.constellations.useContext().slotsForNode(nodeId)
+
+        const listenersRef = useRef(new Set<(u: string) => void>())
+        const [reloadTick, setReloadTick] = useState(0)
+
+        // Read the latest data via a ref so the persist callbacks (and the handle
+        // derived from them) keep a stable identity across edits.
+        const dataRef = useRef(data)
+        dataRef.current = data
+
+        const persistUrl = useCallback((next: string) => {
+          const cur = dataRef.current?._browser
+          setData({ ...(dataRef.current ?? {}), _browser: { url: next, headers: cur?.headers } })
+          for (const cb of listenersRef.current) cb(next)
+        }, [setData])
+
+        const persistHeaders = useCallback((next: Record<string, string>) => {
+          const cur = dataRef.current?._browser
+          setData({ ...(dataRef.current ?? {}), _browser: { url: cur?.url ?? '', headers: next } })
+        }, [setData])
+
+        // Browser-primitive widgets render through the server-side proxy, which
+        // resolves its target from the PERSISTED data._browser.url (see
+        // proxyResolve.ts). A freshly spawned widget has data:{}, so the proxy
+        // 404s ("Browser target not found") even though the client falls back to
+        // opts.defaultUrl for display. Persist defaultUrl once on mount when no
+        // url is set yet so the proxy can resolve it. useData is synchronous
+        // (useSyncExternalStore), so an existing widget's url is already present
+        // on first render and this won't clobber it.
+        useEffect(() => {
+          if (!dataRef.current?._browser?.url && opts.defaultUrl) {
+            persistUrl(opts.defaultUrl)
+          }
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [persistUrl])
+
+        const handle: BrowserHandle = useMemo(() => ({
+          url,
+          navigate: persistUrl,
+          reload: () => setReloadTick(t => t + 1),
+          onUrlChange: (cb: (u: string) => void) => {
+            listenersRef.current.add(cb)
+            return { dispose: () => { listenersRef.current.delete(cb) } }
+          },
+        }), [url, persistUrl])
+
+        const Primitive = useMemo(() => makeBrowserPrimitive(api), [])
+
+        return (
+          <BrowserHandleContext.Provider value={handle}>
+            <AccessoryLayout accessory={opts.accessory}>
+              <Primitive nodeId={nodeId} hotkeyId={nodeId} url={url} headers={headers} accent={accent}
+                slots={slots} title={undefined} isSelected={props.isSelected} isDragging={props.isDragging}
+                isHovered={props.isHovered} onNavigate={persistUrl} onHeadersChange={persistHeaders}
+                reloadSignal={reloadTick} />
+            </AccessoryLayout>
+          </BrowserHandleContext.Provider>
+        )
+      }
+
+      return widgets.register({
+        type: opts.type,
+        component: BrowserBackedWidget as never,
+        isContainer: false,
+        defaultSize: opts.defaultSize ?? { width: 800, height: 600 },
+        minSize: opts.minSize ?? { width: 360, height: 280 },
+        dragHandleSelector: '.widget-drag-handle',
+        capabilities: ['web-view'],
+      })
+    }
+
+    function registerTerminalWidget(opts: RegisterTerminalWidgetOptions): Disposable {
+      function TerminalBackedWidget(_props: WidgetProps) {
+        const [data] = api.widget.useData<{ sessionId?: string }>()
+        // For a session-view, data.sessionId is injected by renderNode from the run (run.sessionId).
+        const sessionId = data?.sessionId ?? opts.defaultSessionId ?? ''
+        const frameRef = useRef<HTMLIFrameElement>(null)
+        const handle: TerminalHandle = useMemo(
+          () => makeTerminalHandle(sessionId, () => frameRef.current?.contentWindow?.focus()),
+          [sessionId],
+        )
+        return (
+          <TerminalHandleContext.Provider value={handle}>
+            <AccessoryLayout accessory={opts.accessory}>
+              <TerminalPrimitive ref={frameRef} sessionId={sessionId} />
+            </AccessoryLayout>
+          </TerminalHandleContext.Provider>
+        )
+      }
+      return widgets.register({
+        type: opts.type,
+        component: TerminalBackedWidget as never,
+        isContainer: false,
+        defaultSize: opts.defaultSize ?? { width: 720, height: 480 },
+        minSize: opts.minSize ?? { width: 360, height: 240 },
+        dragHandleSelector: '.widget-drag-handle',
+        capabilities: ['session-host'],
+        creator: opts.creator,
+      })
+    }
+
+    return {
+      registerBrowserWidget,
+      registerTerminalWidget,
+      useBrowser: () => useBrowserHandle(),
+      useTerminal: () => useTerminalHandle(),
+    }
+  }
+
+  const api: TinstarPluginAPI = {
+    pluginId: record.name,
+    version: record.version,
+    widgets,
+    http,
+    events,
+    hotkeys,
+    canvas,
+    constellations,
+    watch,
+    theme,
+    logger,
+    widget,
+    primitives: undefined as never,
+  }
+  api.primitives = buildPrimitives(api)
+  return api
+}

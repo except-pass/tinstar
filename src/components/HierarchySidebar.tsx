@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo, createContext, useCo
 import Fuse from 'fuse.js'
 import { getPref, setPref, getSidebarView, setSidebarView } from '../lib/uiPrefs'
 import { useInbox } from '../hooks/useInbox'
+import { orderedVisibleRunIds } from '../hooks/useReadyQueue'
 import { InboxList } from './InboxList'
 import type { TreeNode, GroupingDimension, Space } from '../domain/types'
 import { getDimensionIcon } from '../domain/dimension-meta'
@@ -10,14 +11,13 @@ import { useSelection } from './SelectionProvider'
 import { useSidebarDrag, type DropTarget } from '../hooks/useSidebarDrag'
 import { SpaceSwitcher } from './SpaceSwitcher'
 import { useConstellationContext } from '../hotkeys/ConstellationContext'
-import type { ConstellationSlot } from '../hooks/useConstellations'
+import type { ConstellationSlot } from '../domain/constellationGraph'
 import { ConstellationBadge } from './ConstellationBadge'
 import { useHotkeyContext } from '../hotkeys/FocusPathContext'
 import { onBindingFired } from '../hotkeys/bindingFiredBus'
 import type { Binding, WidgetContext } from '../hotkeys/widgetTypes'
 import { BindingRow, GLOBAL_KEYS, CANVAS_KEYS, QUICKDRAW_KEYS } from './HotkeyBindingRow'
 import { AgentIcon, isIconUrl } from './agentIcon'
-import { apiFetch } from '../apiClient'
 import { usePluginWidgetRegistry } from '../hooks/usePluginWidgetRegistry'
 
 /** widgetType → resolved icon, so plugin-widget hierarchy rows show the plugin's own icon. */
@@ -144,6 +144,10 @@ interface HierarchySidebarProps {
    *  widgets (closeable × button, no entity-style kebab menu) regardless of
    *  the plugin's chosen widget type string. */
   pluginWidgetIds?: Set<string>
+  /** Reports the run ids currently visible in the sidebar, top-to-bottom, in
+   *  the exact order they're rendered — after collapse, search pruning, and
+   *  inbox filters. Lets bracket-cycling follow what the operator sees. */
+  onVisibleRunOrder?: (runIds: string[]) => void
 }
 
 /** Metadata for all Work Widget types — drives sidebar icons, badge, close button, and focus behavior */
@@ -152,7 +156,6 @@ const WORK_WIDGET_META: Record<string, { icon: string; closeable: boolean }> = {
   'file-editor':    { icon: '📄', closeable: true  },
   'browser-widget': { icon: '🌐', closeable: true  },
   'image-viewer':   { icon: '🖼️', closeable: true  },
-  'nats-traffic':   { icon: '📡', closeable: true  },
 }
 
 /** Return inline style for a colored status dot on run nodes */
@@ -688,7 +691,7 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden, pluginWidgetIds }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
+export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden, pluginWidgetIds, onVisibleRunOrder }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
   const { isExpanded, expandAll, select } = useSelection()
   const showEmpty = showEmptyEntities ?? true
 
@@ -763,8 +766,20 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
     [tree, visibleIds],
   )
 
+  // Run ids in the exact top-to-bottom order the hierarchy renders them.
+  const hierarchyVisibleRunIds = useMemo(
+    () => orderedVisibleRunIds(displayedTree, isExpanded),
+    [displayedTree, isExpanded],
+  )
+
+  // Report the hierarchy order up whenever it's the active view; InboxList
+  // reports its own filtered order while the inbox view is mounted.
+  useEffect(() => {
+    if (view === 'hierarchy') onVisibleRunOrder?.(hierarchyVisibleRunIds)
+  }, [view, hierarchyVisibleRunIds, onVisibleRunOrder])
+
   const commitSelection = useCallback((node: FlatNode) => {
-    select(node.id, node.type as GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer' | 'nats-traffic')
+    select(node.id, node.type as GroupingDimension | 'run' | 'file-editor' | 'browser-widget' | 'image-viewer')
     if (node.type === 'run' && onFocusRun) onFocusRun(node.id)
     // Scroll the row into view after React commits
     requestAnimationFrame(() => {
@@ -1057,7 +1072,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
           )}
         </div>
       ) : (
-        <InboxList activeSpaceId={activeSpaceId} searchQuery={query} />
+        <InboxList activeSpaceId={activeSpaceId} searchQuery={query} onVisibleRunOrder={onVisibleRunOrder} />
       )}
 
       {/* Drag divider between tree and hotkeys */}
@@ -1072,13 +1087,6 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
       {/* Tools section */}
       <div className="border-t border-white/10 px-3 py-2 flex items-center gap-2">
         <span className="text-2xs text-slate-500 uppercase tracking-wider">Tools</span>
-        <button
-          className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-primary rounded hover:bg-white/5 transition-colors"
-          onClick={() => apiFetch('/api/nats-traffic-widgets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })}
-          title="Open NATS Traffic Monitor"
-        >
-          <span className="material-symbols-outlined text-base">cell_tower</span>
-        </button>
         {(onArrangeGrid || onArrangeSwimlanes || onArrangeReset) && (
           <div className="w-px h-4 bg-white/10 mx-1" />
         )}

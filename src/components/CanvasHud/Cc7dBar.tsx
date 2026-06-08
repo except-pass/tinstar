@@ -83,7 +83,7 @@ export function Cc7dBar({ bucket, nowMs }: Props) {
   const cells: Cell[] = []
   for (let r = 0; r < weekStarts.length; r++) {
     for (let c = 0; c < 7; c++) {
-      const dayStart = addDays(weekStarts[r], c)
+      const dayStart = addDays(weekStarts[r]!, c)   // r < weekStarts.length
       const dayEnd = addDays(dayStart, 1)
       cells.push({
         x: PAD_X + c * (CELL_W + GAP),
