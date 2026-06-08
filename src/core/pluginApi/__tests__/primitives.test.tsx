@@ -196,7 +196,7 @@ describe('api.primitives browser round-trip', () => {
     // An existing widget reloads with its url already in the store; the mount
     // persist must be a no-op (useData is synchronous, so the url is present on
     // first render) — otherwise reload would reset the user's navigation.
-    mockState.pluginWidgets[0].data = { _browser: { url: 'http://x/p/keep' } }
+    mockState.pluginWidgets[0]!.data = { _browser: { url: 'http://x/p/keep' } }
     const api = createPluginApi(makeRecord())
     const disposable = api.primitives.registerBrowserWidget({ type: 'test-browser', defaultUrl: DEFAULT_URL })
     const RegisteredWidget = getWidgetComponent('test-browser')!.component
