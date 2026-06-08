@@ -10,26 +10,47 @@ export interface AddWidgetPickerProps {
   onClose: () => void
 }
 
+/** Case-insensitive subsequence match: every char of `query` appears in `text` in order. */
+function fuzzyMatch(query: string, text: string): boolean {
+  if (!query) return true
+  const q = query.toLowerCase()
+  const t = text.toLowerCase()
+  let qi = 0
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) qi++
+  }
+  return qi === q.length
+}
+
 export function AddWidgetPicker({ entries, defaultType, anchor, onPick, onClose }: AddWidgetPickerProps) {
   const ordered = [
     ...entries.filter(e => e.type === defaultType),
     ...entries.filter(e => e.type !== defaultType),
   ]
+  const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const ref = useRef<HTMLDivElement>(null)
+
+  const q = query.trim()
+  const filtered = q
+    ? ordered.filter(e => fuzzyMatch(q, e.label) || fuzzyMatch(q, e.type))
+    : ordered
+
+  // Keep the active index within the (possibly shrunk) filtered list.
+  useEffect(() => { setActive(0) }, [query])
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') { e.preventDefault(); onClose() }
-      else if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(a + 1, ordered.length - 1)) }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); setActive(a => Math.min(a + 1, filtered.length - 1)) }
       else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(a - 1, 0)) }
-      else if (e.key === 'Enter') { e.preventDefault(); const sel = ordered[active]; if (sel) onPick(sel) }
+      else if (e.key === 'Enter') { e.preventDefault(); const sel = filtered[active]; if (sel) onPick(sel) }
     }
     function onDown(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) onClose() }
     window.addEventListener('keydown', onKey)
     window.addEventListener('mousedown', onDown)
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('mousedown', onDown) }
-  }, [ordered, active, onPick, onClose])
+  }, [filtered, active, onPick, onClose])
 
   return (
     <div
@@ -38,7 +59,18 @@ export function AddWidgetPicker({ entries, defaultType, anchor, onPick, onClose 
       className="fixed z-50 min-w-44 rounded-md border border-white/10 bg-slate-900/95 backdrop-blur p-1 shadow-xl"
       style={{ left: anchor.x, top: anchor.y }}
     >
-      {ordered.map((e, i) => (
+      <input
+        data-testid="add-widget-search"
+        autoFocus
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        placeholder="Search widgets…"
+        className="mb-1 w-full rounded bg-white/5 px-2 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 outline-none focus:bg-white/10"
+      />
+      {filtered.length === 0 && (
+        <div className="px-2 py-1.5 text-xs text-slate-500">No widgets match</div>
+      )}
+      {filtered.map((e, i) => (
         <button
           key={e.pluginId ? `${e.pluginId}/${e.type}` : e.type}
           data-testid={`add-widget-option-${e.type}`}
