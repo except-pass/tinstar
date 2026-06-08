@@ -22,19 +22,6 @@ The UI must be snappy and responsive. It should feel like playing a video game â
 - Type check + unit tests: see [docs/testing.md](docs/testing.md). The headline trap: `npx tsc --noEmit` against the root tsconfig is a no-op; use `-p tsconfig.app.json`. Vitest needs `--exclude='e2e/**'`.
 - `npx playwright test` â€” E2E tests (needs `TINSTAR_FAST_SIM=1 BASE_URL=http://localhost:<port>`)
 
-## Task Activity & Commit Tracking
-
-Tinstar's **Task Activity** panel tracks commits by extracting task tags from commit messages using the regex `#([A-Za-z0-9_-]+)`. A commit tagged `#my-task-name` will appear under that task in the panel.
-
-The `tinstar-commit` skill (`~/.claude/commands/tinstar-commit.md`) handles this correctly: it looks up the current task name from the tinstar API, derives a tag, commits with it, and immediately notifies the server via `POST /api/git/commit-hook`.
-
-**Installation requirement**: `tinstar-commit` must be installed as a procedure on your root initiative so it is available in every session. After installing tinstar on a new machine:
-
-1. Copy `tinstar-commit.md` to `~/.claude/commands/tinstar-commit.md`
-2. Open Tinstar, navigate to your root initiative, open the skill picker, and star `tinstar-commit`
-
-Without step 2, commits from agent sessions will not appear in Task Activity until the next server restart triggers reconciliation.
-
 ## Multi-Agent / NATS
 
 Agents communicate via NATS pub/sub. Subject scheme: `tinstar.<space>.<init>.<epic>.<task>.<agent>`
