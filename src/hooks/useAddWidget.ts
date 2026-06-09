@@ -4,8 +4,19 @@ import { flushPosition } from '../canvas/snapZoneResolver'
 import type { SnapEdge } from '../canvas/snapZoneResolver'
 import { composeAddWidgetMembership } from '../canvas/addWidgetMembership'
 import type { ConstellationGraph } from '../domain/constellationGraph'
+import type { AnchorPair } from '../domain/anchors'
 import type { CatalogEntry } from './useWidgetCatalog'
 import type { WidgetLayout } from './useWidgetLayouts'
+
+// The [+] affordance grows along one edge; express it as the canonical corner
+// anchor pair [sourceAnchor, newAnchor] so the persisted attachment matches a
+// manual edge-flush snap.
+const EDGE_ANCHORS: Record<SnapEdge, AnchorPair> = {
+  right:  ['top-right', 'top-left'],
+  left:   ['top-left', 'top-right'],
+  bottom: ['bottom-left', 'top-left'],
+  top:    ['top-left', 'bottom-left'],
+}
 
 export interface AddWidgetDeps {
   spaceId: string
@@ -40,7 +51,7 @@ export function useAddWidget(deps: AddWidgetDeps) {
     // Plan membership from the latest graph at apply time (not a render-time
     // snapshot captured before the create POST), and persist it atomically.
     const applyMembership = (newNodeId: string) =>
-      updateConstellation(g => composeAddWidgetMembership(g, sourceNodeId, newNodeId))
+      updateConstellation(g => composeAddWidgetMembership(g, sourceNodeId, newNodeId, EDGE_ANCHORS[edge]))
 
     if (entry.creator === 'session-backed') {
       // A session-backed PLUGIN entry is a session-view: the new run renders it

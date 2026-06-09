@@ -901,12 +901,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const commit = resolveSnapCommit(validatedPreview, slotByNode, occupiedSlots)
       if (commit.kind === 'join' && validatedPreview) {
         let next = applyAssign(constellations.graph, commit.slot, nodeId)
-        next = addSnap(next, nodeId, validatedPreview.targetId)
+        next = addSnap(next, nodeId, validatedPreview.targetId, validatedPreview.anchors)
         constellations.applyGraph(next)
       } else if (commit.kind === 'form') {
         let next = applyAssign(constellations.graph, commit.slot, nodeId)
         next = applyAssign(next, commit.slot, commit.withId)
-        next = addSnap(next, nodeId, commit.withId)
+        next = addSnap(next, nodeId, commit.withId, validatedPreview?.anchors)
         constellations.applyGraph(next)
       } else {
         const unsnapped = lastUnsnappedDragPositionRef.current

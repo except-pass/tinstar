@@ -27,7 +27,7 @@ describe('composeAddWidgetMembership', () => {
     const next = composeAddWidgetMembership(g, 'A', 'B')
     expect(slotsForNode(next, 'B')).toEqual(['3'])
     expect(slotsForNode(next, 'A')).toEqual(['3'])
-    expect(next.snapped).toContainEqual(['A', 'B'])
+    expect(next.snapped).toContainEqual({ nodes: ['A', 'B'] })
   })
 
   it('forms a new constellation in the next free slot when the source is unslotted', () => {

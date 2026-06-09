@@ -86,7 +86,7 @@ describe('useConstellationGraph composition', () => {
     h.serverState = {
       constellationGraphs: [{
         spaceId: 's',
-        snapped: [['a', 'b'], ['b', 'c'], ['c', 'd']],
+        snapped: [{ nodes: ['a', 'b'] }, { nodes: ['b', 'c'] }, { nodes: ['c', 'd'] }],
         members: ['a', 'b', 'c', 'd'].map(w => ({ widget: w, slot: '1' as const })),
       }],
     }

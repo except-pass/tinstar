@@ -2,6 +2,7 @@ import {
   addMember, addSnap, nextFreeSlot, slotsForNode as graphSlotsForNode,
   type ConstellationGraph, type ConstellationSlot,
 } from '../domain/constellationGraph'
+import type { AnchorPair } from '../domain/anchors'
 
 export interface MembershipPlan {
   assigns: Array<{ slot: ConstellationSlot; nodeId: string }>
@@ -9,7 +10,7 @@ export interface MembershipPlan {
    *  A snap edge is only emitted alongside slot membership — never on its own —
    *  to match the drag snap-commit flow, which rolls back (no persisted snap)
    *  when slots are full rather than leaving an unslotted snapped pair behind. */
-  snap?: { a: string; b: string }
+  snap?: { a: string; b: string; anchors?: AnchorPair }
 }
 
 /** Decide constellation membership when adding `newId` next to `sourceId`.
@@ -22,9 +23,10 @@ export function addWidgetMembership(input: {
   freeSlot: ConstellationSlot | null
   sourceId: string
   newId: string
+  anchors?: AnchorPair
 }): MembershipPlan {
-  const { sourceSlot, freeSlot, sourceId, newId } = input
-  const snap = { a: sourceId, b: newId }
+  const { sourceSlot, freeSlot, sourceId, newId, anchors } = input
+  const snap = { a: sourceId, b: newId, anchors }
   if (sourceSlot) return { assigns: [{ slot: sourceSlot, nodeId: newId }], snap }
   if (freeSlot) {
     return { assigns: [{ slot: freeSlot, nodeId: sourceId }, { slot: freeSlot, nodeId: newId }], snap }
@@ -42,11 +44,12 @@ export function composeAddWidgetMembership(
   g: ConstellationGraph,
   sourceNodeId: string,
   newNodeId: string,
+  anchors?: AnchorPair,
 ): ConstellationGraph {
   const sourceSlot = (graphSlotsForNode(g, sourceNodeId)[0] ?? null) as ConstellationSlot | null
-  const plan = addWidgetMembership({ sourceSlot, freeSlot: nextFreeSlot(g), sourceId: sourceNodeId, newId: newNodeId })
+  const plan = addWidgetMembership({ sourceSlot, freeSlot: nextFreeSlot(g), sourceId: sourceNodeId, newId: newNodeId, anchors })
   let next = g
   for (const a of plan.assigns) next = addMember(next, a.nodeId, a.slot)
-  if (plan.snap) next = addSnap(next, plan.snap.a, plan.snap.b)
+  if (plan.snap) next = addSnap(next, plan.snap.a, plan.snap.b, plan.snap.anchors)
   return next
 }
