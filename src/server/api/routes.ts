@@ -42,6 +42,9 @@ import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
+import { parseAttach, type ParsedAttach } from './anchorAttach'
+import { DEFAULT_ANCHORS, anchorByName, type AnchorPair } from '../../domain/anchors'
+import { anchorPosition } from '../../canvas/anchors'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
 import { resolveProxyTarget } from './proxyResolve'
@@ -770,6 +773,41 @@ function snapWidgetToSession(
   return { position: { x: maxRight + PLACEMENT_GAP, y: sessionLayout.y } }
 }
 
+/** Place `widgetId` (of `size`) anchored to the target per `attach`, write the
+ *  snap edge (carrying the anchor pair) into the space graph joining/forming the
+ *  target's slot, and return the computed top-left. Returns null when the target
+ *  layout can't be resolved. Mutates + persists the graph (rev-bumped). */
+function attachWidget(
+  ctx: RouteContext,
+  spaceId: string,
+  attach: ParsedAttach,
+  widgetId: string,
+  size: { width: number; height: number },
+): { x: number; y: number } | null {
+  const targetLayout = lookupNodeLayout(ctx, spaceId, attach.to)
+  if (!targetLayout) return null
+  const ta = anchorByName(DEFAULT_ANCHORS, attach.targetAnchor)!
+  const na = anchorByName(DEFAULT_ANCHORS, attach.newAnchor)!
+  const pos = anchorPosition(targetLayout, ta, na, size)
+
+  const graph = ctx.docStore.getConstellationGraph(spaceId) ?? emptyGraph(spaceId)
+  const targetSlot = slotsForNode(graph, attach.to)[0] ?? null
+  let next = graph
+  let slot = targetSlot
+  if (!slot) {
+    const used = new Set(graph.members.map(m => m.slot))
+    slot = (['1','2','3','4','5','6','7','8','9'] as ConstellationSlot[]).find(s => !used.has(s)) ?? null
+    if (slot) next = addMember(next, attach.to, slot)
+  }
+  if (slot) {
+    next = addMember(next, widgetId, slot)
+    const pair: AnchorPair = [attach.targetAnchor, attach.newAnchor]  // [anchorOnTarget, anchorOnNew] aligns with addSnap(a=target,b=new)
+    next = addSnap(next, attach.to, widgetId, pair)
+  }
+  if (next !== graph) ctx.docStore.upsertConstellationGraph(spaceId, { ...next, rev: (graph.rev ?? 0) + 1 })
+  return pos
+}
+
 /** Snap a newly created widget to its spawning session's constellation slot
  *  (joining the session's slot + adding a snap edge) when a session context
  *  exists and snapping wasn't opted out. Returns the tiled position for callers
@@ -799,6 +837,7 @@ interface CreateBrowserWidgetParams {
   nearNodeId?: string
   slot?: number | string
   snapToSession?: boolean
+  attach?: { to: string; anchors: string }
 }
 
 type CreateBrowserWidgetResult =
@@ -838,11 +877,17 @@ function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParam
   const size = placement?.size ?? DEFAULT_BROWSER_SIZE
   const widgetId = shortId('browser')
 
-  // Auto-snap to the spawning session unless opted out or any slot was given.
-  const snapPosition = maybeSnapOnCreate(ctx, { spaceId, sessionId, widgetId, slotProvided, snapToSession: parsed.snapToSession })
+  const attach = parseAttach(parsed.attach)
+  if (attach === null) {
+    return { error: { code: 'INVALID_PARAMS', message: 'attach.anchors must be "<anchor>/<anchor>" with known anchor names, and attach.to a widget id' } }
+  }
+  const attachPosition = attach && spaceId ? attachWidget(ctx, spaceId, attach, widgetId, size) : null
 
-  // Explicit placement wins; otherwise use the tiled snap position if we got one.
-  const finalPosition = placement?.position ?? snapPosition ?? null
+  // Auto-snap to the spawning session unless opted out, any slot was given, or an explicit attach was provided.
+  const snapPosition = attach ? null : maybeSnapOnCreate(ctx, { spaceId, sessionId, widgetId, slotProvided, snapToSession: parsed.snapToSession })
+
+  // attach takes precedence; then explicit placement; then session-snap position.
+  const finalPosition = attachPosition ?? placement?.position ?? snapPosition ?? null
 
   const widget: import('../../domain/types').BrowserWidget = {
     id: widgetId,
@@ -2325,11 +2370,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         position?: { x: number; y: number };
         size?: { width: number; height: number };
         data?: unknown;
+        attach?: { to: string; anchors: string };
       }
       const { pluginId, widgetType, spaceId, position, size, data } = parsed
 
-      if (!pluginId || !widgetType || !spaceId || !position || !size) {
-        fail(res, 'INVALID_PARAMS', 'pluginId, widgetType, spaceId, position, size all required')
+      // Parse attach early so we can report malformed input before heavier checks.
+      const attach = parseAttach(parsed.attach)
+      if (attach === null) {
+        fail(res, 'INVALID_PARAMS', 'attach.anchors must be "<anchor>/<anchor>" with known anchor names, and attach.to a widget id')
+        return
+      }
+
+      if (!pluginId || !widgetType || !spaceId || !size) {
+        fail(res, 'INVALID_PARAMS', 'pluginId, widgetType, spaceId, size all required')
+        return
+      }
+      // position is required unless an attach was provided (attach computes the position).
+      if (!attach && !position) {
+        fail(res, 'INVALID_PARAMS', 'position is required when attach is not provided')
         return
       }
 
@@ -2370,13 +2428,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
       }
 
+      // Generate the id before calling attachWidget so it can record the snap edge.
+      const widgetId = shortId('pw')
+      const resolvedSize = size
+      const attachPosition = attach ? attachWidget(ctx, spaceId, attach, widgetId, resolvedSize) : null
+      const finalPosition = attachPosition ?? position ?? null
+      if (!finalPosition) {
+        fail(res, 'INVALID_PARAMS', 'could not resolve position: attach.to widget not found in layout')
+        return
+      }
+
       const now = new Date().toISOString()
       const instance: PluginWidgetInstance = {
-        id: shortId('pw'),
+        id: widgetId,
         pluginId,
         widgetType,
         spaceId,
-        position,
+        position: finalPosition,
         size,
         data: data ?? null,
         createdAt: now,
