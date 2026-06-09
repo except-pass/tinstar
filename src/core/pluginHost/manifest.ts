@@ -1,4 +1,5 @@
 import type { PluginManifest } from '@tinstar/plugin-api'
+import { validateAnchors, type Anchor } from '../../domain/anchors'
 
 export interface ParsedManifest {
   name: string
@@ -55,15 +56,8 @@ function validateWidgetContribution(w: Record<string, unknown>, pluginName: stri
     if (!Array.isArray(w.anchors)) {
       throw new ManifestError(`${where}: anchors must be an array if present`)
     }
-    for (const a of w.anchors as unknown[]) {
-      const an = a as Record<string, unknown>
-      if (!an || typeof an !== 'object' || typeof an.name !== 'string' || an.name === '') {
-        throw new ManifestError(`${where}: each anchor needs a non-empty name`)
-      }
-      if (typeof an.x !== 'number' || an.x < 0 || an.x > 1 || typeof an.y !== 'number' || an.y < 0 || an.y > 1) {
-        throw new ManifestError(`${where}: anchor ${String(an.name)} x/y must be numbers in [0,1]`)
-      }
-    }
+    const anchorErr = validateAnchors(w.anchors as Anchor[])
+    if (anchorErr) throw new ManifestError(`${where}: ${anchorErr}`)
   }
 }
 

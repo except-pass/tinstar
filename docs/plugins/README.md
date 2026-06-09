@@ -144,7 +144,7 @@ Anchor points are the named snap-attachment sites on a widget. When a user drags
 
 There is no center anchor by default.
 
-**Overriding anchors** is useful when your widget has a natural docking rail that doesn't match the default grid — e.g. a timeline widget that should snap to an exact tick mark, or a widget with an asymmetric header. Declare them in the manifest:
+**Declaring a custom anchor set** lets you name the attachment points that make sense for your widget's geometry — e.g. a timeline widget that should snap to an exact tick mark, or a widget with an asymmetric header. Declare them in the manifest:
 
 ```jsonc
 {
@@ -169,7 +169,9 @@ There is no center anchor by default.
 
 `x` and `y` are fractions of the widget's rendered width/height, both in `[0, 1]`. `(0, 0)` is the top-left corner; `(1, 1)` is the bottom-right.
 
-Overriding `anchors` replaces the full default set — the 8 defaults are not merged in. Anchor `name` values are arbitrary strings; the only constraint is that they must be unique within the widget type and must not be empty.
+A declared `anchors` array replaces the full default set — the 8 defaults are not merged in. Anchor `name` values are arbitrary strings; they must be unique within the widget type and non-empty.
+
+> **Note:** Custom anchor sets are validated and stored by the host, but are **not yet honored** by drag-to-snap or the `attach` spawn parameter — both currently operate on the 8 default anchors. Custom declarations are forward-looking; this is reserved for a future release.
 
 ---
 

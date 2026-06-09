@@ -133,11 +133,11 @@ Both `POST /api/browser-widgets` and `POST /api/plugin-widgets` accept an option
 
 **Example:** `"anchors": "top-right/top-left"` places the new widget flush to the right of the target, aligning their top edges.
 
-**Valid anchor names** (the 8 defaults on any widget that doesn't override them):
+**Valid anchor names** — the 8 defaults, accepted on any widget:
 
 `top-left`, `top-center`, `top-right`, `middle-left`, `middle-right`, `bottom-left`, `bottom-center`, `bottom-right`
 
-A widget may declare custom anchors via the `anchors` manifest field — use those names instead. Supplying an unknown anchor name returns `400 INVALID_PARAMS`.
+The `attach` API currently accepts only these 8 names. Supplying any other name returns `400 INVALID_PARAMS`. (Plugins can declare custom anchor sets in their manifest, but those are not yet honored by `attach` or drag-to-snap.)
 
 **Target layout constraint:** `attach.to` must be a widget that already has a persisted layout entry in the canvas layout store (`tinstar-layouts-v3`). This is the same resolution path used by `nearNodeId`. A widget created moments ago via the API whose position has not yet been flushed to the store will not resolve as an attach target — use a widget that is already placed on the canvas (e.g. the session's run widget, a seeded workspace widget, or any widget the user has positioned). If the target layout cannot be resolved the request returns an error.
 

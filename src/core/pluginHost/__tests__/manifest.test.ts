@@ -229,4 +229,8 @@ describe('manifest anchors validation', () => {
   it('rejects a non-array anchors', () => {
     expect(() => parseManifest(base({ type: 't', label: 'T', anchors: 'nope' }))).toThrow(ManifestError)
   })
+  it('rejects duplicate anchor names', () => {
+    expect(() => parseManifest(base({ type: 't', label: 'T', anchors: [{ name: 'a', x: 0, y: 0 }, { name: 'a', x: 1, y: 1 }] })))
+      .toThrow(ManifestError)
+  })
 })
