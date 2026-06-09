@@ -6,9 +6,14 @@
 //  - `member`  : widget→constellation-node (the slot it belongs to).
 // All functions are pure and return a new graph; never mutate the input.
 
+import type { AnchorPair } from './anchors'
+
 export type ConstellationSlot = '1'|'2'|'3'|'4'|'5'|'6'|'7'|'8'|'9'
 
-export type SnapEdge = [string, string]
+export interface SnapEdge {
+  nodes: [string, string]            // canon-ordered (nodes[0] <= nodes[1])
+  anchors?: AnchorPair               // aligned to nodes order; undefined = legacy/edge-flush
+}
 export interface MemberEdge { widget: string; slot: ConstellationSlot }
 
 export interface ConstellationGraph {
@@ -26,30 +31,49 @@ export function emptyGraph(spaceId: string): ConstellationGraph {
   return { spaceId, snapped: [], members: [] }
 }
 
-function canon(a: string, b: string): SnapEdge {
+function canon(a: string, b: string): [string, string] {
   return a <= b ? [a, b] : [b, a]
 }
 
-export function addSnap(g: ConstellationGraph, a: string, b: string): ConstellationGraph {
+export function addSnap(g: ConstellationGraph, a: string, b: string, anchors?: AnchorPair): ConstellationGraph {
   if (a === b) return g
   const [x, y] = canon(a, b)
-  if (g.snapped.some(([p, q]) => p === x && q === y)) return g
-  return { ...g, snapped: [...g.snapped, [x, y]] }
+  if (g.snapped.some(e => e.nodes[0] === x && e.nodes[1] === y)) return g
+  // Align the anchor pair to canon order: anchors arg is [anchorOnA, anchorOnB];
+  // if canon swapped the nodes, swap the anchors too so anchors[i] ↔ nodes[i].
+  const aligned: AnchorPair | undefined = anchors ? (a <= b ? anchors : [anchors[1], anchors[0]]) : undefined
+  const edge: SnapEdge = aligned ? { nodes: [x, y], anchors: aligned } : { nodes: [x, y] }
+  return { ...g, snapped: [...g.snapped, edge] }
 }
 
 export function removeSnap(g: ConstellationGraph, a: string, b: string): ConstellationGraph {
   const [x, y] = canon(a, b)
-  const snapped = g.snapped.filter(([p, q]) => !(p === x && q === y))
+  const snapped = g.snapped.filter(e => !(e.nodes[0] === x && e.nodes[1] === y))
   return snapped.length === g.snapped.length ? g : { ...g, snapped }
 }
 
 export function snapNeighbors(g: ConstellationGraph, id: string): string[] {
   const out: string[] = []
-  for (const [p, q] of g.snapped) {
+  for (const { nodes: [p, q] } of g.snapped) {
     if (p === id) out.push(q)
     else if (q === id) out.push(p)
   }
   return out
+}
+
+/** Normalize a graph that may contain legacy `[a,b]` tuple edges into structured
+ *  edges. Idempotent on already-structured graphs. Call on hydrate / on PUT. */
+export function migrateSnapEdges(g: ConstellationGraph): ConstellationGraph {
+  let changed = false
+  const snapped: SnapEdge[] = g.snapped.map(e => {
+    if (Array.isArray(e)) {
+      changed = true
+      const [x, y] = canon((e as unknown as [string, string])[0], (e as unknown as [string, string])[1])
+      return { nodes: [x, y] }
+    }
+    return e
+  })
+  return changed ? { ...g, snapped } : g
 }
 
 export function addMember(g: ConstellationGraph, widget: string, slot: ConstellationSlot): ConstellationGraph {
@@ -92,7 +116,7 @@ export function planBreak(g: ConstellationGraph, aId: string, bId: string, slot:
   const stale = liveIds ? slotMembers.filter(id => !liveIds.has(id)) : []
   const adj = new Map<string, Set<string>>()
   for (const id of ids) adj.set(id, new Set())
-  for (const [p, q] of g.snapped) {
+  for (const { nodes: [p, q] } of g.snapped) {
     if (!ids.has(p) || !ids.has(q)) continue
     if ((p === aId && q === bId) || (p === bId && q === aId)) continue // the broken edge
     adj.get(p)!.add(q)
