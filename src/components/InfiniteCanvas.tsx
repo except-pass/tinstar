@@ -97,11 +97,13 @@ function buildParentMap(nodes: TreeNode[], parentId: string | null = null): Map<
 function collectSnappableLeafIds(nodes: TreeNode[]): string[] {
   const result: string[] = []
   for (const node of nodes) {
-    if (isSnappable(getWidgetComponent(toWidgetType(node.type)))) {
-      result.push(node.id)
-    } else {
+    const hasChildren = Array.isArray(node.children) && node.children.length > 0
+    if (hasChildren) {
       result.push(...collectSnappableLeafIds(node.children))
+      continue
     }
+    // Leaf node: snappable unless its (present) registration opts out / is a container.
+    if (isSnappable(getWidgetComponent(toWidgetType(node.type)))) result.push(node.id)
   }
   return result
 }
@@ -969,6 +971,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     if (snapEligible && layout) {
       const neighbors = collectSnapNeighbors(nodeId)
       preview = resolveSnapTarget(nodeId, { x: newX, y: newY, width: layout.width, height: layout.height }, neighbors, SNAP_DISTANCE)
+      if (import.meta.env.DEV && !preview) {
+        // eslint-disable-next-line no-console
+        console.debug('[snap] no target', { nodeId, candidates: neighbors.length, snapDistance: SNAP_DISTANCE })
+      }
       const membership = preview ? snapMembership(preview.targetId, slotByNode, occupiedSlots) : null
       if (preview && membership?.kind !== 'full-slots') {
         finalX = preview.x
