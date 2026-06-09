@@ -41,7 +41,7 @@ import {
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
-import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
+import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
 import { resolveProxyTarget } from './proxyResolve'
@@ -76,7 +76,11 @@ function isConstellationGraph(v: unknown): v is ConstellationGraph {
   const g = v as Record<string, unknown>
   if (!Array.isArray(g.snapped) || !Array.isArray(g.members)) return false
   const snappedOk = g.snapped.every(e =>
-    Array.isArray(e) && e.length === 2 && typeof e[0] === 'string' && typeof e[1] === 'string')
+    !!e && typeof e === 'object' && !Array.isArray(e) &&
+    Array.isArray((e as Record<string, unknown>).nodes) &&
+    ((e as { nodes: unknown[] }).nodes).length === 2 &&
+    typeof (e as { nodes: unknown[] }).nodes[0] === 'string' &&
+    typeof (e as { nodes: unknown[] }).nodes[1] === 'string')
   const validSlots = new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9'])
   const membersOk = g.members.every(m =>
     !!m && typeof m === 'object' &&
@@ -2472,10 +2476,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       let parsed: unknown
       try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
-      if (!isConstellationGraph(parsed)) { fail(res, 'BAD_REQUEST', 'invalid constellation graph'); return }
+      // Migrate legacy tuple edges before validation — older clients still send [a,b] tuples.
+      // migrateSnapEdges is idempotent on already-structured graphs.
+      const migrated = parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>).snapped)
+        ? migrateSnapEdges(parsed as ConstellationGraph)
+        : parsed
+      if (!isConstellationGraph(migrated)) { fail(res, 'BAD_REQUEST', 'invalid constellation graph'); return }
       // Reject stale/equal-revision writes with a conflict rather than a false
       // success — the revision gate drops them, so the doc is not stored.
-      if (!ctx.docStore.upsertConstellationGraph(spaceId, { ...parsed, spaceId })) {
+      if (!ctx.docStore.upsertConstellationGraph(spaceId, { ...migrated, spaceId })) {
         fail(res, 'CONFLICT', 'stale constellation graph revision'); return
       }
       ok(res, null)

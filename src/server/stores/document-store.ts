@@ -24,6 +24,7 @@ import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, Browse
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
+import { migrateSnapEdges } from '../../domain/constellationGraph'
 
 /** Translate a run's status into a default attention signal.
  *  Returns null when the inbox shouldn't surface the run. */
@@ -161,7 +162,7 @@ export class DocumentStore {
       if (data.artifacts) for (const a of data.artifacts) this.artifacts.set(a.id, a)
       if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
       if (data.pluginWidgets) for (const w of data.pluginWidgets) this.pluginWidgets.set(w.id, w)
-      if (data.constellationGraphs) for (const g of data.constellationGraphs) this.constellationGraphs.set(g.spaceId, g)
+      if (data.constellationGraphs) for (const g of data.constellationGraphs) this.constellationGraphs.set(g.spaceId, migrateSnapEdges(g))
       if (data.topicMetadata) for (const m of data.topicMetadata) this.topicMetadata.set(m.subject, m)
     } catch {
       // No file or corrupt — start fresh
@@ -551,7 +552,7 @@ export class DocumentStore {
 
   private pruneWidgetFromGraphs(widgetId: string): void {
     for (const [spaceId, g] of this.constellationGraphs) {
-      const snapped = g.snapped.filter(([a, b]) => a !== widgetId && b !== widgetId)
+      const snapped = g.snapped.filter(e => e.nodes[0] !== widgetId && e.nodes[1] !== widgetId)
       let members = g.members.filter(m => m.widget !== widgetId)
       // Free any slot left with a single member (no 1-member constellations).
       const countBySlot = new Map<string, number>()
