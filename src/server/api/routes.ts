@@ -43,8 +43,7 @@ import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { parseAttach, type ParsedAttach } from './anchorAttach'
-import { DEFAULT_ANCHORS, anchorByName, type AnchorPair } from '../../domain/anchors'
-import { anchorPosition } from '../../canvas/anchors'
+import { planAttach } from './attachPlan'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
 import { resolveProxyTarget } from './proxyResolve'
@@ -786,26 +785,10 @@ function attachWidget(
 ): { x: number; y: number } | null {
   const targetLayout = lookupNodeLayout(ctx, spaceId, attach.to)
   if (!targetLayout) return null
-  const ta = anchorByName(DEFAULT_ANCHORS, attach.targetAnchor)!
-  const na = anchorByName(DEFAULT_ANCHORS, attach.newAnchor)!
-  const pos = anchorPosition(targetLayout, ta, na, size)
-
   const graph = ctx.docStore.getConstellationGraph(spaceId) ?? emptyGraph(spaceId)
-  const targetSlot = slotsForNode(graph, attach.to)[0] ?? null
-  let next = graph
-  let slot = targetSlot
-  if (!slot) {
-    const used = new Set(graph.members.map(m => m.slot))
-    slot = (['1','2','3','4','5','6','7','8','9'] as ConstellationSlot[]).find(s => !used.has(s)) ?? null
-    if (slot) next = addMember(next, attach.to, slot)
-  }
-  if (slot) {
-    next = addMember(next, widgetId, slot)
-    const pair: AnchorPair = [attach.targetAnchor, attach.newAnchor]  // [anchorOnTarget, anchorOnNew] aligns with addSnap(a=target,b=new)
-    next = addSnap(next, attach.to, widgetId, pair)
-  }
-  if (next !== graph) ctx.docStore.upsertConstellationGraph(spaceId, { ...next, rev: (graph.rev ?? 0) + 1 })
-  return pos
+  const plan = planAttach(graph, targetLayout, attach, widgetId, size)
+  if (plan.graph !== graph) ctx.docStore.upsertConstellationGraph(spaceId, { ...plan.graph, rev: (graph.rev ?? 0) + 1 })
+  return plan.position
 }
 
 /** Snap a newly created widget to its spawning session's constellation slot
