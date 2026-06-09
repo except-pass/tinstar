@@ -17,19 +17,22 @@ describe('resolveSnapTarget', () => {
     // dragged centered to the right of the target → right edge, y aligned to target.y
     const result = resolveSnapTarget('d', { x: 130, y: 5, width: 100, height: 100 },
       [W('t', 0, 0)], SNAP_DISTANCE)
-    expect(result).toEqual({ targetId: 't', edge: 'right', x: 100, y: 0 })
+    expect(result).toEqual(expect.objectContaining({ targetId: 't', edge: 'right', x: 100, y: 0 }))
+    expect(result?.anchors).toBeDefined()
   })
 
   it('snaps flush to the left edge when approaching from the left', () => {
     const result = resolveSnapTarget('d', { x: -130, y: 5, width: 100, height: 100 },
       [W('t', 0, 0)], SNAP_DISTANCE)
-    expect(result).toEqual({ targetId: 't', edge: 'left', x: -100, y: 0 })
+    expect(result).toEqual(expect.objectContaining({ targetId: 't', edge: 'left', x: -100, y: 0 }))
+    expect(result?.anchors).toBeDefined()
   })
 
   it('snaps flush below, left-aligned, when approaching from below', () => {
     const result = resolveSnapTarget('d', { x: 5, y: 130, width: 100, height: 100 },
       [W('t', 0, 0)], SNAP_DISTANCE)
-    expect(result).toEqual({ targetId: 't', edge: 'bottom', x: 0, y: 100 })
+    expect(result).toEqual(expect.objectContaining({ targetId: 't', edge: 'bottom', x: 0, y: 100 }))
+    expect(result?.anchors).toBeDefined()
   })
 
   it('picks the nearest neighbor among several in range', () => {
@@ -38,6 +41,23 @@ describe('resolveSnapTarget', () => {
       W('farish', -160, 0),  // right edge at -60, gap 180 (out of range anyway)
     ], SNAP_DISTANCE)
     expect(result?.targetId).toBe('near')
+  })
+})
+
+describe('resolveSnapTarget anchors', () => {
+  const target = { id: 't', x: 100, y: 100, width: 200, height: 100 }
+  it('returns an anchor pair and an anchor-resolved flush position', () => {
+    const dragged = { x: 305, y: 100, width: 80, height: 100 }
+    const r = resolveSnapTarget('d', dragged, [target], 60)!
+    expect(r.targetId).toBe('t')
+    expect(r.anchors).toBeDefined()
+    expect(r.anchors![0]).toMatch(/left$/)
+    expect(r.anchors![1]).toMatch(/right$/)
+    expect(r.x).toBe(300)
+    expect(r.y).toBe(100)
+  })
+  it('returns null when out of range', () => {
+    expect(resolveSnapTarget('d', { x: 1000, y: 1000, width: 80, height: 80 }, [target], 60)).toBeNull()
   })
 })
 
@@ -62,7 +82,7 @@ describe('resolveSnapCommit', () => {
   it('commits a join when the revalidated preview still targets an occupied slot', () => {
     expect(
       resolveSnapCommit(
-        { targetId: 'm', edge: 'right', x: 100, y: 0 },
+        { targetId: 'm', edge: 'right', anchors: ['middle-left', 'middle-right'] as [string, string], x: 100, y: 0 },
         new Map([['m', '3']]),
         new Set(['3']),
       ),
@@ -76,7 +96,7 @@ describe('resolveSnapCommit', () => {
   it('rolls back when slot availability changes to full before drop', () => {
     expect(
       resolveSnapCommit(
-        { targetId: 'u', edge: 'right', x: 100, y: 0 },
+        { targetId: 'u', edge: 'right', anchors: ['middle-left', 'middle-right'] as [string, string], x: 100, y: 0 },
         new Map(),
         new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9']),
       ),
@@ -86,15 +106,15 @@ describe('resolveSnapCommit', () => {
 
 describe('revalidateSnapTarget', () => {
   it('keeps a preview when the same target is still the active snap target', () => {
-    const preview = { targetId: 't', edge: 'right' as const, x: 100, y: 0 }
+    const preview = { targetId: 't', edge: 'right' as const, anchors: ['top-left', 'top-right'] as [string, string], x: 100, y: 0 }
 
     expect(
       revalidateSnapTarget('d', preview, { x: 100, y: 0, width: 100, height: 100 }, [W('t', 0, 0)], SNAP_DISTANCE),
-    ).toEqual(preview)
+    ).toEqual(expect.objectContaining({ targetId: 't', edge: 'right' }))
   })
 
   it('drops a preview when the snapped-against widget no longer exists', () => {
-    const preview = { targetId: 't', edge: 'right' as const, x: 100, y: 0 }
+    const preview = { targetId: 't', edge: 'right' as const, anchors: ['top-left', 'top-right'] as [string, string], x: 100, y: 0 }
 
     expect(
       revalidateSnapTarget('d', preview, { x: 100, y: 0, width: 100, height: 100 }, [], SNAP_DISTANCE),
@@ -102,7 +122,7 @@ describe('revalidateSnapTarget', () => {
   })
 
   it('drops a preview when the target is no longer within snap range', () => {
-    const preview = { targetId: 't', edge: 'right' as const, x: 100, y: 0 }
+    const preview = { targetId: 't', edge: 'right' as const, anchors: ['top-left', 'top-right'] as [string, string], x: 100, y: 0 }
 
     expect(
       revalidateSnapTarget('d', preview, { x: 100, y: 0, width: 100, height: 100 }, [W('t', 500, 0)], SNAP_DISTANCE),

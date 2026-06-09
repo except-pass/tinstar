@@ -1,4 +1,6 @@
 import type { ConstellationSlot } from '../domain/constellationGraph'
+import { DEFAULT_ANCHORS, anchorByName, type AnchorPair } from '../domain/anchors'
+import { anchorPosition, nearestAnchorPair } from './anchors'
 import type { Rect } from './constellationCohesion'
 
 export interface SnapWidget extends Rect {
@@ -11,7 +13,9 @@ export type SnapEdge = 'left' | 'right' | 'top' | 'bottom'
 export interface SnapTarget {
   targetId: string
   edge: SnapEdge
-  /** Snapped top-left for the dragged widget: flush against `edge`, aligned on the perpendicular axis. */
+  /** Anchor pair [draggedAnchor, targetAnchor] that produced this snap. */
+  anchors: AnchorPair
+  /** Snapped top-left for the dragged widget so its anchor meets the target's. */
   x: number
   y: number
 }
@@ -76,15 +80,18 @@ export function resolveSnapTarget(
   }
   if (!nearest) return null
 
+  // Pick the nearest (dragged-anchor, target-anchor) pair. Both use DEFAULT_ANCHORS
+  // here; per-widget custom anchors can be threaded in later via an overload —
+  // defaults cover every host widget.
+  const { pair } = nearestAnchorPair(draggedRect, DEFAULT_ANCHORS, nearest, DEFAULT_ANCHORS)
+  const da = anchorByName(DEFAULT_ANCHORS, pair[0])!
+  const ta = anchorByName(DEFAULT_ANCHORS, pair[1])!
+  const pos = anchorPosition(nearest, ta, da, draggedRect)
+  // Derive the legacy `edge` from the dominant center offset (preview chrome still reads it).
   const dx = (draggedRect.x + draggedRect.width / 2) - (nearest.x + nearest.width / 2)
   const dy = (draggedRect.y + draggedRect.height / 2) - (nearest.y + nearest.height / 2)
-
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    const edge: SnapEdge = dx >= 0 ? 'right' : 'left'
-    return { targetId: nearest.id, edge, ...flushPosition(nearest, edge, draggedRect) }
-  }
-  const edge: SnapEdge = dy >= 0 ? 'bottom' : 'top'
-  return { targetId: nearest.id, edge, ...flushPosition(nearest, edge, draggedRect) }
+  const edge: SnapEdge = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'right' : 'left') : (dy >= 0 ? 'bottom' : 'top')
+  return { targetId: nearest.id, edge, anchors: pair, x: pos.x, y: pos.y }
 }
 
 /**
