@@ -104,7 +104,7 @@ test.describe('Add-widget ghost [+] affordance', () => {
       const slot = sourceSlots[0]
       const slotMembers: string[] = graph.members.filter((m: { slot: string }) => m.slot === slot).map((m: { widget: string }) => m.widget)
       const partner = slotMembers.find((w) => w !== sourceNode)
-      const snapped = (graph.snapped ?? []).some(([a, b]: [string, string]) => (a === sourceNode || b === sourceNode))
+      const snapped = (graph.snapped ?? []).some((e: { nodes: [string, string] }) => e.nodes[0] === sourceNode || e.nodes[1] === sourceNode)
       return { memberCount: slotMembers.length, hasPartner: Boolean(partner), snapped }
     }, { timeout: 5000 }).toEqual({ memberCount: 2, hasPartner: true, snapped: true })
   })
