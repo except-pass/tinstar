@@ -121,8 +121,55 @@ Each `widgets[]` entry accepts:
 | `singleton` | boolean | no | If `true`, the host rejects spawning a second instance per space. |
 | `spawn` | `'palette' \| 'palette+context'` | no | Default `'palette'`. `'palette+context'` is reserved for entity-drag shortcuts in V5.2+; entries currently render greyed and non-draggable in the palette. |
 | `snappable` | boolean | no | Whether the widget participates in canvas snapping (drag-to-snap, the `[+]` grow affordance, snap-on-create). Non-container leaf widgets snap by default; set `false` to opt out. Containers never snap. |
+| `anchors` | `Array<{ name: string; x: number; y: number }>` | no | Named attachment points used for anchor snapping. `x` and `y` are fractions of the widget's width/height in `[0, 1]`. Omit to use the 8 defaults. Only relevant when `snappable` is `true` (or implicitly true). See [Anchor points](#anchor-points) below. |
 
 If `activate()` registers a widget type not in the manifest, the host logs a warning and accepts it. If the manifest declares one not actually registered at runtime, the host quietly drops the stale entry.
+
+### Anchor points
+
+Anchor points are the named snap-attachment sites on a widget. When a user drags one snappable widget near another the host aligns the closest pair of anchor points; the `attach` spawn parameter (see [`Spawning with attach`](../agent-api.md#spawning-with-attach) in the agent API) lets agents name the exact pair to use.
+
+**Default anchors (used when `anchors` is omitted):**
+
+| Name | Position |
+|---|---|
+| `top-left` | top-left corner |
+| `top-center` | top edge, horizontal center |
+| `top-right` | top-right corner |
+| `middle-left` | left edge, vertical center |
+| `middle-right` | right edge, vertical center |
+| `bottom-left` | bottom-left corner |
+| `bottom-center` | bottom edge, horizontal center |
+| `bottom-right` | bottom-right corner |
+
+There is no center anchor by default.
+
+**Overriding anchors** is useful when your widget has a natural docking rail that doesn't match the default grid — e.g. a timeline widget that should snap to an exact tick mark, or a widget with an asymmetric header. Declare them in the manifest:
+
+```jsonc
+{
+  "tinstar": {
+    "contributes": {
+      "widgets": [
+        {
+          "type": "my-timeline",
+          "label": "Timeline",
+          "snappable": true,
+          "anchors": [
+            { "name": "header-right",  "x": 1.0, "y": 0.08 },
+            { "name": "header-left",   "x": 0.0, "y": 0.08 },
+            { "name": "bottom-center", "x": 0.5, "y": 1.0  }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+`x` and `y` are fractions of the widget's rendered width/height, both in `[0, 1]`. `(0, 0)` is the top-left corner; `(1, 1)` is the bottom-right.
+
+Overriding `anchors` replaces the full default set — the 8 defaults are not merged in. Anchor `name` values are arbitrary strings; the only constraint is that they must be unique within the widget type and must not be empty.
 
 ---
 

@@ -93,8 +93,6 @@ curl -s -X POST "$TINSTAR_URL/api/sessions" \
 
 Agents can spawn three types of widgets onto the canvas. All widget types appear immediately for the human watching the canvas.
 
-> **Canvas positioning note:** Widget positions are managed by the human's browser (localStorage). When an agent spawns a widget, it appears on the canvas but the human controls where it lands — there is no API for agents to specify `x, y` coordinates yet. This is a known limitation being addressed in a future version.
-
 ### Browser Widgets
 
 Embed a live web page on the canvas — useful for showing a running dev server, test results, or any URL.
@@ -115,6 +113,33 @@ curl -s -X DELETE "$TINSTAR_URL/api/browser-widgets/{id}"
 ```
 
 **Typical pattern:** create when starting a dev server, then PATCH the URL as new content is ready. The human can also drag the BROWSER button from a run widget header to create one manually.
+
+#### Spawning with `attach`
+
+Both `POST /api/browser-widgets` and `POST /api/plugin-widgets` accept an optional `attach` field that positions the new widget flush against an existing one by aligning named anchor points:
+
+```json
+{
+  "url": "http://localhost:3000",
+  "attach": {
+    "to": "<target-widget-id>",
+    "anchors": "<existing-anchor>/<new-anchor>"
+  }
+}
+```
+
+- `to` — the node id of the existing widget to attach to.
+- `anchors` — a `/`-separated pair: the anchor on the **target** (left of `/`) and the anchor on the **new** widget (right of `/`). The new widget is positioned so those two points coincide, and a snap edge joins them into the target's constellation.
+
+**Example:** `"anchors": "top-right/top-left"` places the new widget flush to the right of the target, aligning their top edges.
+
+**Valid anchor names** (the 8 defaults on any widget that doesn't override them):
+
+`top-left`, `top-center`, `top-right`, `middle-left`, `middle-right`, `bottom-left`, `bottom-center`, `bottom-right`
+
+A widget may declare custom anchors via the `anchors` manifest field — use those names instead. Supplying an unknown anchor name returns `400 INVALID_PARAMS`.
+
+**Target layout constraint:** `attach.to` must be a widget that already has a persisted layout entry in the canvas layout store (`tinstar-layouts-v3`). This is the same resolution path used by `nearNodeId`. A widget created moments ago via the API whose position has not yet been flushed to the store will not resolve as an attach target — use a widget that is already placed on the canvas (e.g. the session's run widget, a seeded workspace widget, or any widget the user has positioned). If the target layout cannot be resolved the request returns an error.
 
 ### File Editor Widgets
 
