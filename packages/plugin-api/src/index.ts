@@ -52,6 +52,10 @@ export interface WidgetRegistration {
   snappable?: boolean
   /** Free-form descriptive tags, reserved for future ordering/grouping. */
   tags?: string[]
+  /** Named attachment points in the widget's normalized coord space (fractions of
+   *  width/height). Omit for the default 4 corners + 4 edge-midpoints. Used by
+   *  drag-to-snap and the spawn-time `attach` param. */
+  anchors?: Array<{ name: string; x: number; y: number }>
 }
 
 export interface PluginLogger {
@@ -403,6 +407,10 @@ export interface PluginManifest {
       /** When set, this widget is primitive-backed: the plugin registers it via
        *  api.primitives.register{Browser,Terminal}Widget rather than api.widgets.register. */
       primitive?: 'browser' | 'terminal'
+      /** Named attachment points in the widget's normalized coord space (fractions of
+       *  width/height). Omit for the default 4 corners + 4 edge-midpoints. Used by
+       *  drag-to-snap and the spawn-time `attach` param. */
+      anchors?: Array<{ name: string; x: number; y: number }>
     }>
   }
   permissions?: string[]

@@ -211,3 +211,22 @@ describe('parseManifest contributes.widgets new fields', () => {
     })).not.toThrow()
   })
 })
+
+describe('manifest anchors validation', () => {
+  const base = (widget: object) => ({
+    name: 'p', version: '1.0.0',
+    tinstar: { apiVersion: '5', displayName: 'P', contributes: { widgets: [widget] } },
+  })
+
+  it('accepts a valid anchors array', () => {
+    const m = parseManifest(base({ type: 't', label: 'T', anchors: [{ name: 'a', x: 0, y: 0 }] }))
+    expect(m.manifest.contributes!.widgets![0]!.anchors).toEqual([{ name: 'a', x: 0, y: 0 }])
+  })
+  it('rejects anchors with out-of-range coords', () => {
+    expect(() => parseManifest(base({ type: 't', label: 'T', anchors: [{ name: 'a', x: 5, y: 0 }] })))
+      .toThrow(ManifestError)
+  })
+  it('rejects a non-array anchors', () => {
+    expect(() => parseManifest(base({ type: 't', label: 'T', anchors: 'nope' }))).toThrow(ManifestError)
+  })
+})
