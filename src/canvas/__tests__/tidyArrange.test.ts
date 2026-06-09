@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { tidyGrid } from '../tidyArrange'
+import { tidyGrid, tidyGridClusters } from '../tidyArrange'
+import { emptyGraph, addSnap } from '../../domain/constellationGraph'
 
 describe('tidyGrid', () => {
   it('arranges 4 widgets in a 2x2 grid centered on centroid', () => {
@@ -23,5 +24,20 @@ describe('tidyGrid', () => {
 
   it('returns empty map for empty input', () => {
     expect(tidyGrid([], 40).size).toBe(0)
+  })
+})
+
+describe('tidyGridClusters', () => {
+  it('keeps a snapped pair flush (same relative offset) after arrange', () => {
+    const g = addSnap(emptyGraph('s'), 'a', 'b', ['top-right', 'top-left'])
+    const layouts = [
+      { id: 'a', x: 0, y: 0, width: 100, height: 100 },
+      { id: 'b', x: 100, y: 0, width: 100, height: 100 },
+      { id: 'c', x: 500, y: 500, width: 100, height: 100 },
+    ]
+    const out = tidyGridClusters(layouts, g, 40)
+    const a = out.get('a')!, b = out.get('b')!
+    expect(b.x - a.x).toBe(100)
+    expect(b.y - a.y).toBe(0)
   })
 })

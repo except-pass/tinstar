@@ -1,5 +1,7 @@
 import { centroidOf } from './constellationCohesion'
 import type { Point, Rect } from './constellationCohesion'
+import { clusterize } from './clusterize'
+import type { ConstellationGraph } from '../domain/constellationGraph'
 
 type LayoutWithId = Rect & { id: string }
 
@@ -33,5 +35,26 @@ export function tidyGrid(
     })
   })
 
+  return out
+}
+
+/** Grid arrange that keeps snap-attached widgets rigid: lays out cluster
+ *  bounding boxes on a grid, then shifts each cluster's members by the block
+ *  delta. Singletons behave exactly like the old per-widget tidy. */
+export function tidyGridClusters(
+  layouts: LayoutWithId[],
+  graph: ConstellationGraph,
+  gap: number,
+): Map<string, Point> {
+  const blocks = clusterize(layouts, graph)
+  const blockRects = blocks.map((b, i) => ({ id: String(i), ...b.bbox }))
+  const blockPositions = tidyGrid(blockRects, gap)
+  const out = new Map<string, Point>()
+  blocks.forEach((b, i) => {
+    const np = blockPositions.get(String(i))!
+    const dx = np.x - b.bbox.x
+    const dy = np.y - b.bbox.y
+    for (const m of b.members) out.set(m.id, { x: m.x + dx, y: m.y + dy })
+  })
   return out
 }

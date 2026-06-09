@@ -5,7 +5,7 @@ import { CanvasContextMenu } from './CanvasContextMenu'
 import { buildMoveTargets } from '../domain/moveTargets'
 import { relocateWidgetTo } from '../domain/relocateWidget'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
-import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
+import { useWidgetLayouts, preserveCohesion } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
 import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
 import { getWidgetComponent, toWidgetType, isSnappable } from '../widgets/widgetComponentRegistry'
@@ -26,7 +26,8 @@ import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
 import type { Rect, IdRect } from '../canvas/constellationCohesion'
 import { applyGroupDrag, boundingBoxOf, fitToRect, occupiedEdgesOf } from '../canvas/constellationCohesion'
-import { tidyGrid } from '../canvas/tidyArrange'
+import { tidyGridClusters } from '../canvas/tidyArrange'
+import { clusterGroups } from '../canvas/clusterize'
 import type { DragMember } from '../canvas/constellationCohesion'
 import { reflowOnResize, type ReflowRect, type ReflowMember } from '../canvas/resizeReflow'
 
@@ -995,6 +996,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   }, [collectSnapNeighbors, updateRunPosition, layouts, constellations, slotByNode, occupiedSlots])
 
   // Grid arrange: treemap-style nested layout filling the viewport
+  // Rigid snap-clusters derived from the current layouts + snap graph. Passed to
+  // preserveCohesion so each arrange path keeps snap-attached widgets as one block.
+  const computeClusterGroups = useCallback(() => {
+    const rects = Array.from(layouts, ([id, l]) => ({ id, x: l.x, y: l.y, width: l.width, height: l.height }))
+    return clusterGroups(rects, constellations.graph)
+  }, [layouts, constellations.graph])
+
   const arrangeGrid = useCallback(() => {
     const el = containerRef.current
     if (!el) return
@@ -1016,8 +1024,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const vh = rect.height / camera.zoom
 
     const newLayouts = computeTreemapLayouts(rootNodes, vx, vy, vw, vh, 20, layouts)
-    batchSetLayouts(newLayouts)
-  }, [camera, selectionState, tree, batchSetLayouts])
+    batchSetLayouts(preserveCohesion(newLayouts, layouts, computeClusterGroups()))
+  }, [camera, selectionState, tree, layouts, batchSetLayouts, computeClusterGroups])
 
   // Swim lanes: rows of runs grouped by task, stacked by epic/initiative
   const arrangeSwimlanes = useCallback(() => {
@@ -1143,8 +1151,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       cursorY += EMPTY_H + GAP
     }
 
-    if (updates.size > 0) batchSetLayouts(updates)
-  }, [camera, tree, layouts, batchSetLayouts])
+    if (updates.size > 0) batchSetLayouts(preserveCohesion(updates, layouts, computeClusterGroups()))
+  }, [camera, tree, layouts, batchSetLayouts, computeClusterGroups])
 
   // Expose arrange functions to parent via refs
   useEffect(() => {
@@ -1155,9 +1163,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   useEffect(() => {
     // Pass constellation slot members so reset keeps snapped groups (e.g. a
     // session and its attached browser) together instead of scattering them.
-    if (arrangeResetRef) arrangeResetRef.current = () => arrangeWorkspace(Object.values(constellations.store))
+    if (arrangeResetRef) arrangeResetRef.current = () => arrangeWorkspace(computeClusterGroups())
     return () => { if (arrangeResetRef) arrangeResetRef.current = null }
-  }, [arrangeResetRef, arrangeWorkspace, constellations.store])
+  }, [arrangeResetRef, arrangeWorkspace, computeClusterGroups])
 
   useEffect(() => {
     if (arrangeSwimlanesRef) arrangeSwimlanesRef.current = arrangeSwimlanes
@@ -1302,7 +1310,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         })
         .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
       if (memberRects.length === 0) return
-      const positions = tidyGrid(memberRects, 40)
+      const positions = tidyGridClusters(memberRects, constellations.graph, 40)
       for (const [id, p] of positions) updateRunPosition(id, p.x, p.y)
     },
     onConstellationLeave: () => {
@@ -1356,7 +1364,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         })
         .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
       if (memberRects.length === 0) return
-      const positions = tidyGrid(memberRects, 40)
+      const positions = tidyGridClusters(memberRects, constellations.graph, 40)
       for (const [posId, p] of positions) updateRunPosition(posId, p.x, p.y)
     }
     const onAssign = (e: Event) => {
