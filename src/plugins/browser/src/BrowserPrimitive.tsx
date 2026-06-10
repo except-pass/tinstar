@@ -38,6 +38,30 @@ interface ConsoleEntry {
   ts: number
 }
 
+/**
+ * Inverse of the proxy URL mapping: given the proxied location an iframe loaded
+ * (`/api/proxy/<nodeId>/p/x` + search) and the widget's current real URL (for its
+ * origin), reconstruct the real target URL (`<origin>/p/x` + search). Returns null
+ * when the path isn't under this widget's proxy prefix or `currentUrl` has no
+ * parseable origin. Pure + exported so the round-trip with proxyUrl() is unit-tested
+ * independently of the React component (cf. rewriteUrlForProxy in proxyRewrite.ts).
+ */
+export function unproxyPath(
+  pathname: string,
+  search: string,
+  nodeId: string,
+  currentUrl: string,
+): string | null {
+  const prefix = `/api/proxy/${nodeId}`
+  if (pathname.indexOf(prefix + '/') !== 0 && pathname !== prefix) return null
+  const rest = pathname.slice(prefix.length) || '/'
+  try {
+    return new URL(currentUrl).origin + rest + search
+  } catch {
+    return null
+  }
+}
+
 export function makeBrowserPrimitive(api: TinstarPluginAPI) {
   const ConstellationBadge = api.constellations.Badge
   const hexToRgba = (c: string, a: number) => api.theme.accent.hexToRgba(c, a)
@@ -135,6 +159,32 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
         setEditing(false)
       }
     }, [inputValue, url, navigate])
+
+    // Track navigations that happen INSIDE the iframe (link clicks / full-page
+    // loads the proxied app drives itself). The primitive otherwise only learns
+    // its URL from the address bar or an agent push, so an app that navigates on
+    // its own — e.g. the stretchplan plan picker hitting /p/<slug> — would leave
+    // _browser.url, and any plugin reading useBrowser().url, frozen on the spawn
+    // URL. The proxied page is served from Tinstar's own origin so
+    // contentWindow.location is readable (allow-same-origin); a genuinely
+    // cross-origin document throws on access and is skipped. We un-proxy the path
+    // (/api/proxy/<nodeId>/p/x → <origin>/p/x) so the persisted URL stays a real
+    // target the proxy can resolve, and round-trips through proxyUrl() unchanged
+    // (same iframeSrc key ⇒ no remount ⇒ no reload loop).
+    const handleIframeLoad = useCallback((e: React.SyntheticEvent<HTMLIFrameElement>) => {
+      let real: string | null
+      try {
+        const loc = e.currentTarget.contentWindow?.location
+        if (!loc) return
+        real = unproxyPath(loc.pathname, loc.search, nodeId, url)
+      } catch {
+        return // cross-origin document — location is opaque, nothing to track
+      }
+      if (real && real !== url) {
+        setUrl(real)
+        onNavigate(real)
+      }
+    }, [nodeId, url, onNavigate])
 
     const reload = useCallback(() => {
       const current = url
@@ -267,6 +317,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
             <iframe
               key={iframeSrc}
               src={iframeSrc}
+              onLoad={handleIframeLoad}
               className="w-full h-full border-0 bg-white"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
               title={title ?? url}
