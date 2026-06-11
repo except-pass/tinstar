@@ -77,12 +77,19 @@ function isConstellationGraph(v: unknown): v is ConstellationGraph {
   if (!v || typeof v !== 'object') return false
   const g = v as Record<string, unknown>
   if (!Array.isArray(g.snapped) || !Array.isArray(g.members)) return false
+  // anchors is optional, but when present clients treat it as an AnchorPair
+  // ([string, string]) in snap-placement math, so a malformed value persisted
+  // here would break layout for every viewer of the space — validate it.
+  const anchorsOk = (a: unknown) =>
+    a === undefined ||
+    (Array.isArray(a) && a.length === 2 && typeof a[0] === 'string' && typeof a[1] === 'string')
   const snappedOk = g.snapped.every(e =>
     !!e && typeof e === 'object' && !Array.isArray(e) &&
     Array.isArray((e as Record<string, unknown>).nodes) &&
     ((e as { nodes: unknown[] }).nodes).length === 2 &&
     typeof (e as { nodes: unknown[] }).nodes[0] === 'string' &&
-    typeof (e as { nodes: unknown[] }).nodes[1] === 'string')
+    typeof (e as { nodes: unknown[] }).nodes[1] === 'string' &&
+    anchorsOk((e as Record<string, unknown>).anchors))
   const validSlots = new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9'])
   const membersOk = g.members.every(m =>
     !!m && typeof m === 'object' &&
