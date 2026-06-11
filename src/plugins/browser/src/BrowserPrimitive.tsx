@@ -105,12 +105,20 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
     const [placing, setPlacing] = useState(false)
     const [openNoteId, setOpenNoteId] = useState<string | null>(null)
     const [iframeScroll, setIframeScroll] = useState({ x: 0, y: 0 })
-    const scrollBoundRef = useRef(new WeakSet<Window>())
+    // The currently-bound scroll listener. The iframe's inner Window is replaced
+    // on every cross-document navigation (the WindowProxy identity is stable), so
+    // we re-bind on each load rather than dedupe by identity — see handleIframeLoad.
+    const scrollBindRef = useRef<{ win: Window; handler: () => void; raf: number } | null>(null)
     const [submitting, setSubmitting] = useState(false)
     const [submitError, setSubmitError] = useState<string | null>(null)
 
     // Sync from SSE pushes; local mutations below also call onNotesChange to persist.
     useEffect(() => { setLocalNotes(notesProp ?? []) }, [notesProp])
+
+    // Fresh view of localNotes for async callbacks that would otherwise close over
+    // a stale snapshot across an await (submitNotes).
+    const localNotesRef = useRef(localNotes)
+    localNotesRef.current = localNotes
 
     const updateNotes = useCallback((next: BrowserNote[]) => {
       setLocalNotes(next)
@@ -124,6 +132,12 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
       window.addEventListener('keydown', h)
       return () => window.removeEventListener('keydown', h)
     }, [placing])
+
+    // Tear down the iframe scroll listener (and any pending rAF) on unmount.
+    useEffect(() => () => {
+      const b = scrollBindRef.current
+      if (b) { try { b.win.removeEventListener('scroll', b.handler); if (b.raf) b.win.cancelAnimationFrame(b.raf) } catch { /* gone */ } }
+    }, [])
 
     const placeNote = useCallback((pt: { viewportX: number; viewportY: number }) => {
       // Document coords = viewport point + iframe scroll; DOM capture is
@@ -170,7 +184,12 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
         const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
         if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
         const now = Date.now()
-        updateNotes(localNotes.map(n => (n.sentAt ? n : { ...n, sentAt: now })))
+        // Mark only the notes we actually sent, merged into the CURRENT notes
+        // (localNotesRef) — not the pre-await snapshot. Otherwise a note placed
+        // or a comment edited while the request was in flight is overwritten and
+        // durably lost (the placing/editing UI stays live during submit).
+        const sentIds = new Set(localNotes.filter(n => !n.sentAt).map(n => n.id))
+        updateNotes(localNotesRef.current.map(n => (sentIds.has(n.id) ? { ...n, sentAt: now } : n)))
       } catch (err) {
         setSubmitError((err as Error).message)
       } finally {
@@ -251,12 +270,22 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
       try {
         const win = e.currentTarget.contentWindow
         if (win) {
-          if (!scrollBoundRef.current.has(win)) {
-            scrollBoundRef.current.add(win)
-            let raf = 0
-            const update = () => { raf = 0; setIframeScroll({ x: win.scrollX, y: win.scrollY }) }
-            win.addEventListener('scroll', () => { if (!raf) raf = win.requestAnimationFrame(update) }, { passive: true })
+          // Re-bind every load: a cross-document navigation (e.g. the stretchplan
+          // picker hitting /p/<slug>) replaces the inner Window, discarding its
+          // listener, while the WindowProxy identity stays the same — so a
+          // dedupe-by-identity skip would leave the new document untracked and
+          // pins would drift on scroll. Tear down the prior binding, bind the new.
+          const prev = scrollBindRef.current
+          if (prev) { try { prev.win.removeEventListener('scroll', prev.handler) } catch { /* gone */ } }
+          const binding = { win, handler: () => {}, raf: 0 }
+          binding.handler = () => {
+            if (!binding.raf) binding.raf = win.requestAnimationFrame(() => {
+              binding.raf = 0
+              setIframeScroll({ x: win.scrollX, y: win.scrollY })
+            })
           }
+          win.addEventListener('scroll', binding.handler, { passive: true })
+          scrollBindRef.current = binding
           setIframeScroll({ x: win.scrollX, y: win.scrollY })
         }
       } catch { /* cross-origin */ }

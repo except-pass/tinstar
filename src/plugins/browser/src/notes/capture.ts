@@ -6,18 +6,24 @@
 import type { BrowserNoteTarget } from '../../../../domain/types'
 import { unproxyPath } from '../proxyPaths'
 
+/** CSS.escape, guarded for realms/environments (jsdom) that lack it. */
+const esc = (s: string): string => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s)
+
 /** Best-effort short CSS selector: #id, else up-to-4-level tag.class:nth-child path. */
 export function cssSelectorFor(el: Element): string {
-  if (el.id) return `#${el.id}`
+  if (el.id) return `#${esc(el.id)}`
   const parts: string[] = []
   let cur: Element | null = el
   while (cur && parts.length < 4) {
     const tag = cur.tagName.toLowerCase()
     if (tag === 'html' || tag === 'body') break
-    if (cur.id) { parts.unshift(`#${cur.id}`); break }
+    if (cur.id) { parts.unshift(`#${esc(cur.id)}`); break }
     let part = tag
-    const cls = Array.from(cur.classList).slice(0, 2)
-    if (cls.length) part += '.' + cls.join('.')
+    // Skip variant/arbitrary utility classes (e.g. `hover:underline`, `w-1/2`,
+    // `p-[3px]`) — low-information for an agent and selector-breaking — then
+    // CSS.escape the rest so a class like `w-1/2` can't corrupt the selector.
+    const cls = Array.from(cur.classList).filter(c => !/[:[]/.test(c)).slice(0, 2)
+    if (cls.length) part += '.' + cls.map(esc).join('.')
     const parent: Element | null = cur.parentElement
     if (parent) part += `:nth-child(${Array.from(parent.children).indexOf(cur) + 1})`
     parts.unshift(part)
