@@ -1,6 +1,7 @@
 // Built-in plugin — consumes @tinstar/plugin-api only.
 // Host imports are forbidden by ESLint (see docs/adrs/0002-plugin-api-boundary.md).
 // Lone exception: `import type` from src/domain/types for widget data shapes.
+import { useMemo } from 'react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { BrowserWidget } from '../../../domain/types'
 import { makeBrowserPrimitive } from './BrowserPrimitive'
@@ -11,7 +12,25 @@ export function makeBrowserWidget(api: TinstarPluginAPI) {
   function BrowserWidget({ data, isSelected, isDragging, isHovered }: WidgetProps<BrowserWidget>) {
     const widget = data
     const accent = api.theme.accent.resolve(widget.color)
-    const { slotsForNode } = api.constellations.useContext()
+    // The canonical node id (no manual prefixing — `widget.id` already carries
+    // the `browser-` prefix, so `browser-${widget.id}` would double it up).
+    const myNodeId = api.constellations.useMyNodeId()
+    const { slotsForNode, nodesInSlot } = api.constellations.useContext()
+    const mySlots = slotsForNode(myNodeId)
+
+    // Page-notes need a session to submit to. An explicit `sessionId` (e.g. an
+    // agent's artifact push) wins; otherwise a browser snapped into a run's
+    // constellation slot is treated as attached to that run's session — so
+    // "snap to the run" == "attach", matching what the user expects. Run node
+    // ids are `run-<sessionId>` (run.id === sessionId), so strip the prefix.
+    const effectiveSessionId = useMemo(() => {
+      if (widget.sessionId) return widget.sessionId
+      for (const slot of mySlots) {
+        const runPeer = nodesInSlot(slot).find(id => id !== myNodeId && id.startsWith('run-'))
+        if (runPeer) return runPeer.slice('run-'.length)
+      }
+      return undefined
+    }, [widget.sessionId, mySlots, nodesInSlot, myNodeId])
 
     const persist = (patch: Partial<Pick<BrowserWidget, 'url' | 'headers' | 'notes'>>) => {
       api.http.fetch(`/api/browser-widgets/${widget.id}`, {
@@ -29,13 +48,13 @@ export function makeBrowserWidget(api: TinstarPluginAPI) {
         headers={widget.headers}
         title={widget.title}
         accent={accent}
-        slots={slotsForNode(`browser-${widget.id}`)}
+        slots={mySlots}
         isSelected={isSelected}
         isDragging={isDragging}
         isHovered={isHovered}
         onNavigate={(url) => persist({ url })}
         onHeadersChange={(headers) => persist({ headers })}
-        sessionId={widget.sessionId}
+        sessionId={effectiveSessionId}
         notes={widget.notes}
         onNotesChange={(notes) => persist({ notes })}
         onClose={() => api.http.fetch(`/api/browser-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})}

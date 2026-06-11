@@ -11,6 +11,9 @@ export function makeImageViewerWidget(api: TinstarPluginAPI) {
   return function ImageViewerWidget({ data }: WidgetProps<ImageWidget>) {
     const widget = data
     const { connected, lastUpdatedAt } = api.watch.image(widget.sessionId, widget.filePath)
+    // Canonical node id — `widget.id` already carries the `image-` prefix, so
+    // `image-${widget.id}` would double it and resolve to no slot.
+    const myNodeId = api.constellations.useMyNodeId()
     const { slotsForNode } = api.constellations.useContext()
 
     const filename = widget.filePath.split('/').pop() ?? widget.filePath
@@ -66,7 +69,7 @@ export function makeImageViewerWidget(api: TinstarPluginAPI) {
           >
             ↗ Open
           </button>
-          <ConstellationBadge slots={slotsForNode(`image-${widget.id}`)} />
+          <ConstellationBadge slots={slotsForNode(myNodeId)} />
           <button
             onPointerDown={e => e.stopPropagation()}
             onClick={handleClose}
