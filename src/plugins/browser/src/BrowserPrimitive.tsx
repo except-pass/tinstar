@@ -1,4 +1,5 @@
 // Built-in plugin — consumes @tinstar/plugin-api only. Host imports forbidden (ADR-0002).
+// Lone exception: import type from src/domain/types for widget data shapes.
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
 import { unproxyPath } from './proxyPaths'
@@ -104,6 +105,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
     const [placing, setPlacing] = useState(false)
     const [openNoteId, setOpenNoteId] = useState<string | null>(null)
     const [iframeScroll, setIframeScroll] = useState({ x: 0, y: 0 })
+    const scrollBoundRef = useRef(new WeakSet<Window>())
     const [submitting, setSubmitting] = useState(false)
     const [submitError, setSubmitError] = useState<string | null>(null)
 
@@ -249,9 +251,12 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
       try {
         const win = e.currentTarget.contentWindow
         if (win) {
-          let raf = 0
-          const update = () => { raf = 0; setIframeScroll({ x: win.scrollX, y: win.scrollY }) }
-          win.addEventListener('scroll', () => { if (!raf) raf = win.requestAnimationFrame(update) }, { passive: true })
+          if (!scrollBoundRef.current.has(win)) {
+            scrollBoundRef.current.add(win)
+            let raf = 0
+            const update = () => { raf = 0; setIframeScroll({ x: win.scrollX, y: win.scrollY }) }
+            win.addEventListener('scroll', () => { if (!raf) raf = win.requestAnimationFrame(update) }, { passive: true })
+          }
           setIframeScroll({ x: win.scrollX, y: win.scrollY })
         }
       } catch { /* cross-origin */ }
@@ -437,7 +442,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
               hasSession={!!sessionId}
               submitting={submitting}
               submitError={submitError}
-              onTogglePlacing={() => setPlacing(v => !v)}
+              onTogglePlacing={() => setPlacing(v => { if (!v) setOpenNoteId(null); return !v })}
               onSubmit={submitNotes}
               onClearAll={() => { updateNotes([]); setOpenNoteId(null) }}
               accent={accent}
