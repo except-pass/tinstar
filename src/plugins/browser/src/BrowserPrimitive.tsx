@@ -1,6 +1,10 @@
 // Built-in plugin — consumes @tinstar/plugin-api only. Host imports forbidden (ADR-0002).
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
+import { unproxyPath } from './proxyPaths'
+
+// Re-export: external importers/tests treat BrowserPrimitive as unproxyPath's home.
+export { unproxyPath }
 
 export interface BrowserPrimitiveProps {
   /** Host node id — used for the proxy path (`/api/proxy/:nodeId`). */
@@ -36,30 +40,6 @@ interface ConsoleEntry {
   level: 'log' | 'warn' | 'error'
   args: string[]
   ts: number
-}
-
-/**
- * Inverse of the proxy URL mapping: given the proxied location an iframe loaded
- * (`/api/proxy/<nodeId>/p/x` + search) and the widget's current real URL (for its
- * origin), reconstruct the real target URL (`<origin>/p/x` + search). Returns null
- * when the path isn't under this widget's proxy prefix or `currentUrl` has no
- * parseable origin. Pure + exported so the round-trip with proxyUrl() is unit-tested
- * independently of the React component (cf. rewriteUrlForProxy in proxyRewrite.ts).
- */
-export function unproxyPath(
-  pathname: string,
-  search: string,
-  nodeId: string,
-  currentUrl: string,
-): string | null {
-  const prefix = `/api/proxy/${nodeId}`
-  if (pathname.indexOf(prefix + '/') !== 0 && pathname !== prefix) return null
-  const rest = pathname.slice(prefix.length) || '/'
-  try {
-    return new URL(currentUrl).origin + rest + search
-  } catch {
-    return null
-  }
 }
 
 export function makeBrowserPrimitive(api: TinstarPluginAPI) {
