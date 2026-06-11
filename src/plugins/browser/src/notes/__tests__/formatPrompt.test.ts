@@ -15,6 +15,13 @@ describe('regionWord', () => {
     expect(regionWord({ x: 0.1, y: 0.5 })).toBe('middle-left')
     expect(regionWord({ x: 0.5, y: 0.9 })).toBe('lower-center')
   })
+
+  it('pins boundary values to the higher cell', () => {
+    // x === 1/3 is NOT < 1/3, so col = 'center'; y < 1/3, so row = 'upper'
+    expect(regionWord({ x: 1 / 3, y: 0.1 })).toBe('upper-center')
+    // x === 2/3 is NOT < 2/3, so col = 'right'; y === 2/3 is NOT < 2/3, so row = 'lower'
+    expect(regionWord({ x: 2 / 3, y: 2 / 3 })).toBe('lower-right')
+  })
 })
 
 describe('formatNotesPrompt', () => {

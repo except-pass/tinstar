@@ -99,6 +99,41 @@ describe('BrowserPrimitive notes integration', () => {
     expect(onNotesChange).toHaveBeenCalledWith([])
   })
 
+  it('full place→comment→submit flow: typed comment reaches formatter and is marked sent', async () => {
+    httpFetch.mockResolvedValue(okEnvelope())
+    const onNotesChange = vi.fn()
+    render(<BrowserPrimitive {...baseProps} notes={[]} onNotesChange={onNotesChange} sessionId="sess-1" />)
+
+    // enter placing mode and drop a note
+    fireEvent.click(screen.getByTestId('bw-notes-add'))
+    fireEvent.click(screen.getByTestId('bw-notes-placement-layer'), { clientX: 200, clientY: 300 })
+
+    // get the new note's id from the first onNotesChange call
+    expect(onNotesChange).toHaveBeenCalledTimes(1)
+    const placed = onNotesChange.mock.calls[0]![0] as BrowserNote[]
+    const newId = placed[0]!.id
+
+    // the popover textarea is open — type the comment and blur
+    const textarea = screen.getByTestId(`bw-note-comment-${newId}`)
+    fireEvent.change(textarea, { target: { value: 'ship it' } })
+    fireEvent.blur(textarea)
+
+    // submit — expect httpFetch to be called
+    fireEvent.click(screen.getByTestId('bw-notes-submit'))
+    await waitFor(() => expect(httpFetch).toHaveBeenCalled())
+
+    // the POST body prompt contains the typed comment, not the empty initial value
+    const [, init] = httpFetch.mock.calls[0] as [string, { body: string }]
+    const body = JSON.parse(init.body)
+    expect(body.prompt).toContain('ship it')
+
+    // the last onNotesChange call has the note marked sent with comment 'ship it'
+    const lastCall = onNotesChange.mock.calls[onNotesChange.mock.calls.length - 1]![0] as BrowserNote[]
+    const sentNote = lastCall.find(n => n.id === newId)!
+    expect(sentNote.sentAt).toBeTypeOf('number')
+    expect(sentNote.comment).toBe('ship it')
+  })
+
   it('hides pins from other pages but keeps them in state', () => {
     render(<BrowserPrimitive {...baseProps} sessionId="sess-1" onNotesChange={vi.fn()}
       notes={[note(), note({ id: 'n2', url: 'http://localhost:3000/other' })]} />)
