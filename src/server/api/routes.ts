@@ -2079,8 +2079,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       ctx.docStore.getAllPluginWidgets(),
     )
     if (!proxyTarget) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' })
-      res.end('Browser target not found')
+      // A freshly spawned browser-backed widget races its first iframe load
+      // against the client's debounced persist of data._browser.url — the
+      // target typically resolves within a second. For iframe navigations
+      // (Accept: text/html) serve a self-refreshing page so the widget heals
+      // once the persist lands (or the target server comes back up), instead
+      // of a dead-end message that sticks until a manual reload.
+      if ((req.headers.accept ?? '').includes('text/html')) {
+        res.writeHead(404, { 'Content-Type': 'text/html' })
+        res.end('<!DOCTYPE html><html><head><meta http-equiv="refresh" content="2"></head>'
+          + '<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;'
+          + 'background:#0f172a;color:#94a3b8;font:13px system-ui">Connecting to widget target…</body></html>')
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('Browser target not found')
+      }
       return true
     }
 
