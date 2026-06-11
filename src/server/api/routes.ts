@@ -666,7 +666,10 @@ function lookupNodeLayout(ctx: RouteContext, spaceId: string, nodeId: string): L
     const cfg = loadConfigMerged(ctx.sessionConfig?.dirs.root) as { ui?: { layouts?: Record<string, Record<string, LayoutEntry>> } }
     const byKey = cfg.ui?.layouts ?? {}
     const entry = byKey[`tinstar-layouts-v3-${spaceId}`]?.[nodeId]
-    if (entry && typeof entry.x === 'number' && typeof entry.y === 'number') return entry
+    // Require width/height too: anchor math does `x + a.x * width`, and a missing
+    // dimension yields `0 * undefined === NaN`, which would persist a NaN position.
+    if (entry && typeof entry.x === 'number' && typeof entry.y === 'number'
+      && typeof entry.width === 'number' && typeof entry.height === 'number') return entry
   } catch { /* fall through */ }
   return null
 }

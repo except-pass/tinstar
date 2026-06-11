@@ -103,9 +103,12 @@ function collectSnappableLeafIds(nodes: TreeNode[]): string[] {
       continue
     }
     // Leaf node: snappable unless its (present) registration opts out / is a container.
-    // isSnappable fails open for a missing registration (the spawn race), which is safe
-    // here only because real containers always have children (recursed above) — empty
-    // containers are pruned upstream by WorkspaceShell's filterEmptyNodes before this runs.
+    // isSnappable fails open for a missing registration (the spawn race). Empty
+    // containers CAN reach here as leaves (filterEmptyNodes is conditional on
+    // showEmptyEntities, and hidden-run pruning can empty a container afterward) —
+    // but every host container type registers with isContainer:true, so isSnappable
+    // rejects them via the registration check. Fail-open therefore only admits
+    // genuinely unregistered (spawn-race) widget types, which are never host containers.
     if (isSnappable(getWidgetComponent(toWidgetType(node.type)))) result.push(node.id)
   }
   return result
