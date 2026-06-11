@@ -44,4 +44,7 @@ describe('validateAnchors', () => {
   it('rejects an empty set (would leave no attachment points)', () => {
     expect(validateAnchors([])).toMatch(/must not be empty/)
   })
+  it('rejects a null/non-object element instead of throwing', () => {
+    expect(validateAnchors([null as unknown as Anchor])).toMatch(/must be an object/)
+  })
 })

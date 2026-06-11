@@ -34,6 +34,10 @@ export function validateAnchors(anchors: Anchor[]): string | null {
   if (anchors.length === 0) return 'anchor set must not be empty'
   const seen = new Set<string>()
   for (const a of anchors) {
+    // Element-shape guard: a null/non-object element (e.g. `anchors: [null]` from
+    // an untrusted plugin manifest) must yield a returned error string, not a raw
+    // TypeError when we read a.name below — callers discriminate on error type.
+    if (!a || typeof a !== 'object') return 'anchor must be an object'
     if (typeof a.name !== 'string' || a.name === '') return 'anchor name must be non-empty'
     if (seen.has(a.name)) return `duplicate anchor name: ${a.name}`
     seen.add(a.name)

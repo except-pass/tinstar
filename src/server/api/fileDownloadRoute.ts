@@ -26,11 +26,14 @@ export async function handleFileDownload(req: IncomingMessage, res: ServerRespon
   if (!m || m[1] === undefined) return false
 
   const sessionName = decodeURIComponent(m[1])
-  const wsRoot = getSessionWorkspace(ctx.sessDir, sessionName)
-  if (!wsRoot) {
+  const rawWsRoot = getSessionWorkspace(ctx.sessDir, sessionName)
+  if (!rawWsRoot) {
     fail(res, 'SESSION_NOT_FOUND', `Session '${sessionName}' not found`)
     return true
   }
+  // Normalize once so a trailing slash on the workspace path doesn't turn the
+  // `wsRoot + '/'` containment check into `…//` and 403 every request.
+  const wsRoot = resolve(rawWsRoot)
 
   const params = new URL(req.url, 'http://localhost').searchParams
   const rel = params.get('path')
@@ -64,6 +67,9 @@ export async function handleFileDownload(req: IncomingMessage, res: ServerRespon
     'Content-Length': stat.size,
     'Content-Disposition': `attachment; filename="${safeName}"`,
   })
-  createReadStream(abs).pipe(res)
+  // pipe() doesn't forward source errors; without this an open/read failure
+  // after writeHead (file deleted between stat and open, or EACCES) escalates to
+  // uncaughtException and leaves the client hanging on already-sent 200 headers.
+  createReadStream(abs).on('error', () => res.destroy()).pipe(res)
   return true
 }
