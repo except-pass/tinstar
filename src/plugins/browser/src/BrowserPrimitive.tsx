@@ -2,6 +2,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
 import { unproxyPath } from './proxyPaths'
+import { NotesToolbar } from './notes/NotesToolbar'
+import { NotesOverlay } from './notes/NotesOverlay'
+import { formatNotesPrompt } from './notes/formatPrompt'
+import { captureTarget } from './notes/capture'
+import type { BrowserNote } from '../../../domain/types'
 
 // Re-export: external importers/tests treat BrowserPrimitive as unproxyPath's home.
 export { unproxyPath }
@@ -33,6 +38,12 @@ export interface BrowserPrimitiveProps {
   isHovered?: boolean
   /** Bump this number to force an iframe reload from the host/accessory. */
   reloadSignal?: number
+  /** Attached session id — enables Submit notes. */
+  sessionId?: string
+  /** Page notes (persisted by the caller). */
+  notes?: BrowserNote[]
+  /** Called when notes change; caller persists. Omit to hide the notes feature entirely. */
+  onNotesChange?: (notes: BrowserNote[]) => void
 }
 
 interface ConsoleEntry {
@@ -71,6 +82,9 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
       isDragging,
       isHovered,
       reloadSignal,
+      sessionId,
+      notes: notesProp,
+      onNotesChange,
     } = props
 
     const hasHeaders = headers && Object.keys(headers).length > 0
@@ -83,6 +97,84 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
     const [consoleEntries, setConsoleEntries] = useState<ConsoleEntry[]>([])
     const nextIdRef = useRef(0)
     const inputRef = useRef<HTMLInputElement>(null)
+    const iframeRef = useRef<HTMLIFrameElement>(null)
+
+    const notesEnabled = !!onNotesChange
+    const [localNotes, setLocalNotes] = useState<BrowserNote[]>(notesProp ?? [])
+    const [placing, setPlacing] = useState(false)
+    const [openNoteId, setOpenNoteId] = useState<string | null>(null)
+    const [iframeScroll, setIframeScroll] = useState({ x: 0, y: 0 })
+    const [submitting, setSubmitting] = useState(false)
+    const [submitError, setSubmitError] = useState<string | null>(null)
+
+    // Sync from SSE pushes; local mutations below also call onNotesChange to persist.
+    useEffect(() => { setLocalNotes(notesProp ?? []) }, [notesProp])
+
+    const updateNotes = useCallback((next: BrowserNote[]) => {
+      setLocalNotes(next)
+      onNotesChange?.(next)
+    }, [onNotesChange])
+
+    // Escape cancels placing mode.
+    useEffect(() => {
+      if (!placing) return
+      const h = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlacing(false) }
+      window.addEventListener('keydown', h)
+      return () => window.removeEventListener('keydown', h)
+    }, [placing])
+
+    const placeNote = useCallback((pt: { viewportX: number; viewportY: number }) => {
+      // Document coords = viewport point + iframe scroll; DOM capture is
+      // best-effort (cross-origin docs and jsdom degrade to coords-only).
+      let sx = 0, sy = 0, dw = 0, dh = 0
+      let target: BrowserNote['target']
+      try {
+        const win = iframeRef.current?.contentWindow
+        const doc = win?.document
+        if (win && doc) {
+          sx = win.scrollX; sy = win.scrollY
+          dw = doc.documentElement?.scrollWidth ?? 0
+          dh = doc.documentElement?.scrollHeight ?? 0
+          target = captureTarget(doc, pt.viewportX, pt.viewportY, nodeId, url)
+        }
+      } catch { /* opaque document — coords-only */ }
+      const x = pt.viewportX + sx
+      const y = pt.viewportY + sy
+      const newNote: BrowserNote = {
+        id: `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        url, comment: '',
+        x, y,
+        nx: dw > 0 ? Math.min(1, x / dw) : 0,
+        ny: dh > 0 ? Math.min(1, y / dh) : 0,
+        ...(target ? { target } : {}),
+        createdAt: Date.now(),
+      }
+      updateNotes([...localNotes, newNote])
+      setPlacing(false)
+      setOpenNoteId(newNote.id)
+    }, [localNotes, updateNotes, nodeId, url])
+
+    const submitNotes = useCallback(async () => {
+      const prompt = formatNotesPrompt(localNotes)
+      if (!prompt || !sessionId) return
+      setSubmitting(true)
+      setSubmitError(null)
+      try {
+        const res = await api.http.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        })
+        const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
+        if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
+        const now = Date.now()
+        updateNotes(localNotes.map(n => (n.sentAt ? n : { ...n, sentAt: now })))
+      } catch (err) {
+        setSubmitError((err as Error).message)
+      } finally {
+        setSubmitting(false)
+      }
+    }, [localNotes, sessionId, updateNotes])
 
     // Listen for console messages from the proxied iframe
     useEffect(() => {
@@ -152,6 +244,17 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
     // target the proxy can resolve, and round-trips through proxyUrl() unchanged
     // (same iframeSrc key ⇒ no remount ⇒ no reload loop).
     const handleIframeLoad = useCallback((e: React.SyntheticEvent<HTMLIFrameElement>) => {
+      // Track the proxied document's scroll so pins stay glued to content.
+      // Same-origin via the proxy ⇒ direct listener; opaque docs are skipped.
+      try {
+        const win = e.currentTarget.contentWindow
+        if (win) {
+          let raf = 0
+          const update = () => { raf = 0; setIframeScroll({ x: win.scrollX, y: win.scrollY }) }
+          win.addEventListener('scroll', () => { if (!raf) raf = win.requestAnimationFrame(update) }, { passive: true })
+          setIframeScroll({ x: win.scrollX, y: win.scrollY })
+        }
+      } catch { /* cross-origin */ }
       let real: string | null
       try {
         const loc = e.currentTarget.contentWindow?.location
@@ -292,21 +395,53 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
         )}
 
         {/* Body */}
-        <div className="flex-1 min-h-0 relative">
-          {iframeSrc ? (
-            <iframe
-              key={iframeSrc}
-              src={iframeSrc}
-              onLoad={handleIframeLoad}
-              className="w-full h-full border-0 bg-white"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-              title={title ?? url}
+        <div className="flex-1 min-h-0 flex">
+          <div className="flex-1 min-w-0 relative">
+            {iframeSrc ? (
+              <>
+                <iframe
+                  ref={iframeRef}
+                  key={iframeSrc}
+                  src={iframeSrc}
+                  onLoad={handleIframeLoad}
+                  className="w-full h-full border-0 bg-white"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                  title={title ?? url}
+                />
+                {notesEnabled && (
+                  <NotesOverlay
+                    notes={localNotes.filter(n => n.url === url)}
+                    scroll={iframeScroll}
+                    placing={placing}
+                    accent={accent}
+                    onPlace={placeNote}
+                    onCommentChange={(id, comment) => updateNotes(localNotes.map(n => n.id === id ? { ...n, comment } : n))}
+                    onDelete={(id) => { updateNotes(localNotes.filter(n => n.id !== id)); setOpenNoteId(null) }}
+                    openNoteId={openNoteId}
+                    onToggleOpen={setOpenNoteId}
+                  />
+                )}
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: hexToRgba(accent, 0.3) }}>
+                <span className="material-symbols-outlined text-5xl">language</span>
+                <span className="text-xs font-mono text-slate-600">enter a URL above or wait for an agent to push one</span>
+              </div>
+            )}
+          </div>
+          {notesEnabled && (
+            <NotesToolbar
+              placing={placing}
+              unsentCount={localNotes.filter(n => !n.sentAt).length}
+              totalCount={localNotes.length}
+              hasSession={!!sessionId}
+              submitting={submitting}
+              submitError={submitError}
+              onTogglePlacing={() => setPlacing(v => !v)}
+              onSubmit={submitNotes}
+              onClearAll={() => { updateNotes([]); setOpenNoteId(null) }}
+              accent={accent}
             />
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: hexToRgba(accent, 0.3) }}>
-              <span className="material-symbols-outlined text-5xl">language</span>
-              <span className="text-xs font-mono text-slate-600">enter a URL above or wait for an agent to push one</span>
-            </div>
           )}
         </div>
 
