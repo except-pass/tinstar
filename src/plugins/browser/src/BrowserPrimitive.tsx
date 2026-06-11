@@ -276,7 +276,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
           // dedupe-by-identity skip would leave the new document untracked and
           // pins would drift on scroll. Tear down the prior binding, bind the new.
           const prev = scrollBindRef.current
-          if (prev) { try { prev.win.removeEventListener('scroll', prev.handler) } catch { /* gone */ } }
+          if (prev) { try { prev.win.removeEventListener('scroll', prev.handler); if (prev.raf) prev.win.cancelAnimationFrame(prev.raf) } catch { /* gone */ } }
           const binding = { win, handler: () => {}, raf: 0 }
           binding.handler = () => {
             if (!binding.raf) binding.raf = win.requestAnimationFrame(() => {

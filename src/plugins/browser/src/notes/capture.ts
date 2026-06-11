@@ -19,9 +19,10 @@ export function cssSelectorFor(el: Element): string {
     if (tag === 'html' || tag === 'body') break
     if (cur.id) { parts.unshift(`#${esc(cur.id)}`); break }
     let part = tag
-    // Skip variant/arbitrary utility classes (e.g. `hover:underline`, `w-1/2`,
-    // `p-[3px]`) — low-information for an agent and selector-breaking — then
-    // CSS.escape the rest so a class like `w-1/2` can't corrupt the selector.
+    // Skip variant/arbitrary utility classes (e.g. `hover:underline`, `p-[3px]`)
+    // — low-information for an agent and selector-breaking — and CSS.escape the
+    // rest, so a class like `w-1/2` is kept but escaped (w-1\/2) rather than
+    // corrupting the selector.
     const cls = Array.from(cur.classList).filter(c => !/[:[]/.test(c)).slice(0, 2)
     if (cls.length) part += '.' + cls.map(esc).join('.')
     const parent: Element | null = cur.parentElement
