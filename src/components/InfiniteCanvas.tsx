@@ -251,6 +251,24 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const draggedSnapRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
   const lastUnsnappedDragPositionRef = useRef<{ x: number; y: number } | null>(null)
 
+  // Safety net for the iframe-pointer guard ([data-dragging] in the CSS): the
+  // normal drag-end path clears draggingNodeId, but a shell Escape-cancel does
+  // NOT call onDragEnd, so without this the guard could stick and freeze iframes.
+  // Clear on Escape (immediately) and on any pointer release (idempotent on the
+  // normal path, which already nulled it). UI-only — never affects snap commit.
+  useEffect(() => {
+    const clear = () => setDraggingNodeId(prev => (prev === null ? prev : null))
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') clear() }
+    window.addEventListener('pointerup', clear)
+    window.addEventListener('pointercancel', clear)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerup', clear)
+      window.removeEventListener('pointercancel', clear)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [])
+
   // File-drag overlay: shows a full-canvas drop target when a tinstar-editor drag enters,
   // so the terminal iframe doesn't swallow the drop
   const [editorDragActive, setEditorDragActive] = useState(false)
@@ -1776,6 +1794,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       ref={containerRef}
       tabIndex={-1}
       data-testid="infinite-canvas"
+      data-dragging={draggingNodeId ? 'true' : undefined}
       className="w-full h-full overflow-clip relative outline-none"
       style={{
         cursor: cursorStyle,

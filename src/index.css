@@ -7,6 +7,16 @@
     @apply border-primary/10;
   }
 
+  /* While a canvas widget is being dragged, iframes (browser widgets, terminals)
+     must not capture the pointer stream. setPointerCapture alone does NOT hold
+     over an <iframe> in Chromium — the iframe swallows pointermove/pointerup and
+     the drag dies mid-flight, so the widget never reaches snap range and won't
+     mate. Mirrors the file-drop overlay that already covers iframes for HTML5
+     drops (see InfiniteCanvas). The attribute is cleared on drag end. */
+  [data-testid='infinite-canvas'][data-dragging='true'] iframe {
+    pointer-events: none;
+  }
+
   html, body, #root {
     @apply overflow-hidden;
   }
