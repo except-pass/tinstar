@@ -2194,6 +2194,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
       const patch = JSON.parse(body) as {
         url?: string; title?: string; headers?: Record<string, string>;
+        notes?: import('../../domain/types').BrowserNote[];
         position?: { x: number; y: number }; size?: { width: number; height: number };
         nearNodeId?: string; slot?: number | string;
       }
