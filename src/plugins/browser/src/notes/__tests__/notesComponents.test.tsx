@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { NotesToolbar } from '../NotesToolbar'
 import { NotesOverlay } from '../NotesOverlay'
 import type { BrowserNote } from '../../../../../domain/types'
@@ -51,9 +51,26 @@ describe('NotesToolbar', () => {
     const onClearAll = vi.fn()
     render(<NotesToolbar {...toolbarProps} onClearAll={onClearAll} />)
     fireEvent.click(screen.getByTestId('bw-notes-clear'))
-    vi.advanceTimersByTime(2100)
+    act(() => { vi.advanceTimersByTime(2100) })
     fireEvent.click(screen.getByTestId('bw-notes-clear'))
     expect(onClearAll).not.toHaveBeenCalled()           // re-armed instead
+  })
+
+  it('add-note button title reflects placing state', () => {
+    const { rerender } = render(<NotesToolbar {...toolbarProps} placing={false} />)
+    expect(screen.getByTestId('bw-notes-add')).toHaveAttribute('title', expect.stringContaining('Add note'))
+    rerender(<NotesToolbar {...toolbarProps} placing={true} />)
+    expect(screen.getByTestId('bw-notes-add')).toHaveAttribute('title', expect.stringContaining('Cancel'))
+  })
+
+  it('submit button is disabled when submitting is true', () => {
+    render(<NotesToolbar {...toolbarProps} submitting={true} />)
+    expect(screen.getByTestId('bw-notes-submit')).toBeDisabled()
+  })
+
+  it('clear-all button is absent when totalCount is 0', () => {
+    render(<NotesToolbar {...toolbarProps} totalCount={0} />)
+    expect(screen.queryByTestId('bw-notes-clear')).toBeNull()
   })
 
   it('shows the submit error', () => {
