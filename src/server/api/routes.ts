@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, watch, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
@@ -2745,6 +2745,45 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         } catch (err) {
           fail(res, 'INTERNAL', (err as Error).message)
         }
+        return true
+      }
+    }
+
+    // POST /api/sessions/:name/files/rename  body: { from, to } (workspace-relative)
+    if (method === 'POST' && url.startsWith('/api/sessions/') && url.endsWith('/files/rename')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session?.workspace?.path) {
+          fail(res, 'CONFLICT', 'Session has no workspace')
+          return true
+        }
+        const wsRoot = session.workspace.path
+        readBody(req).then(body => {
+          let from: unknown, to: unknown
+          try {
+            ({ from, to } = JSON.parse(body || '{}'))
+          } catch {
+            return fail(res, 'BAD_REQUEST', 'Invalid JSON body')
+          }
+          if (typeof from !== 'string' || typeof to !== 'string' || !from || !to) {
+            return fail(res, 'INVALID_PARAMS', 'from and to are required')
+          }
+          const absFrom = resolve(wsRoot, from)
+          const absTo = resolve(wsRoot, to)
+          if ((!absFrom.startsWith(wsRoot + '/') && absFrom !== wsRoot) ||
+              (!absTo.startsWith(wsRoot + '/') && absTo !== wsRoot)) {
+            return fail(res, 'PATH_OUTSIDE_WORKSPACE', 'Path escapes workspace')
+          }
+          if (!existsSync(absFrom)) return fail(res, 'NOT_FOUND', `'${from}' not found`)
+          if (existsSync(absTo)) return fail(res, 'CONFLICT', `'${to}' already exists`)
+          try {
+            renameSync(absFrom, absTo)
+            ok(res, { from: relative(wsRoot, absFrom), to: relative(wsRoot, absTo) })
+          } catch (err) {
+            fail(res, 'INTERNAL', (err as Error).message)
+          }
+        }).catch(err => fail(res, 'INTERNAL', (err as Error).message))
         return true
       }
     }

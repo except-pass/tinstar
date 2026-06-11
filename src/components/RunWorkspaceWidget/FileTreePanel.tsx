@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { apiFetch } from '../../apiClient'
 import { useConfig } from '../../context/ConfigContext'
 import { FileUploadConfirmModal, type PendingUpload } from './FileUploadConfirmModal'
@@ -30,6 +31,12 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
   const [dirs, setDirs] = useState<Map<string, TreeNodeState>>(() => new Map())
   const [pending, setPending] = useState<{ files: File[]; dir: string } | null>(null)
   const [hoverDir, setHoverDir] = useState<string | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(null)
+  const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  // Set when Enter/Escape already resolved a rename, so the input's onBlur
+  // (fired as it unmounts) doesn't submit a second time.
+  const renameResolvedRef = useRef(false)
   const config = useConfig()
   const maxBytes = config?.uploadMaxBytes ?? 100 * 1024 * 1024
   const { start: startUpload } = useFileUpload()
@@ -177,6 +184,89 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
     }
   }, [sessionId, loadDir, startUpload])
 
+  const openMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setActionError(null)
+    setMenu({ x: e.clientX, y: e.clientY, entry })
+  }, [])
+
+  const downloadFile = useCallback(async (entry: FileEntry) => {
+    try {
+      const res = await apiFetch(`/api/sessions/${sessionId}/files/download?path=${encodeURIComponent(entry.path)}`)
+      if (!res.ok) throw new Error(`Download failed (HTTP ${res.status})`)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = entry.name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setActionError((err as Error).message || 'Download failed')
+    }
+  }, [sessionId])
+
+  const commitRename = useCallback(async (entry: FileEntry, rawName: string) => {
+    const name = rawName.trim()
+    setRenaming(null)
+    if (!name || name === entry.name) return
+    if (name.includes('/')) { setActionError('Name cannot contain "/"'); return }
+    const dir = dirnameRel(entry.path)
+    const to = dir === '.' ? name : `${dir}/${name}`
+    try {
+      const res = await apiFetch(`/api/sessions/${sessionId}/files/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: entry.path, to }),
+      })
+      const data = await res.json()
+      if (data.ok) loadDir(dir)
+      else setActionError(data.error?.message || 'Rename failed')
+    } catch (err) {
+      setActionError((err as Error).message || 'Rename failed')
+    }
+  }, [sessionId, loadDir])
+
+  // Dismiss the context menu on Escape or any outside click.
+  useEffect(() => {
+    if (!menu) return
+    const close = () => setMenu(null)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null) }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [menu])
+
+  function renderRenameInput(entry: FileEntry): React.ReactNode {
+    return (
+      <input
+        autoFocus
+        value={renaming?.value ?? entry.name}
+        onChange={(e) => setRenaming({ path: entry.path, value: e.target.value })}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter') { renameResolvedRef.current = true; commitRename(entry, (e.target as HTMLInputElement).value) }
+          else if (e.key === 'Escape') { renameResolvedRef.current = true; setRenaming(null) }
+        }}
+        onBlur={(e) => {
+          if (renameResolvedRef.current) { renameResolvedRef.current = false; return }
+          commitRename(entry, e.target.value)
+        }}
+        className="text-[11px] font-mono bg-surface-2 text-slate-100 px-1 rounded outline outline-1 outline-primary/60 min-w-0 flex-1"
+        spellCheck={false}
+      />
+    )
+  }
+
   function renderEntries(dirPath: string, depth: number): React.ReactNode {
     const state = dirs.get(dirPath)
     if (!state || !state.open) return null
@@ -203,6 +293,7 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
                 hoverDir === entry.path ? 'outline outline-1 outline-primary/60 bg-primary/10' : 'hover:bg-surface-hover'
               }`}
               style={{ paddingLeft: depth * 14 + 4 }}
+              onContextMenu={(e) => openMenu(e, entry)}
               onDragOver={(e) => handleRowDragOver(e, entry.path, true)}
               onDrop={handleDrop}
             >
@@ -210,7 +301,9 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
                 {dirs.get(entry.path)?.open ? 'expand_more' : 'chevron_right'}
               </span>
               <span className="material-symbols-outlined text-sm text-primary/40 group-hover:text-primary/60">folder</span>
-              <span className="text-[11px] font-mono text-slate-300 truncate">{entry.name}</span>
+              {renaming?.path === entry.path
+                ? renderRenameInput(entry)
+                : <span className="text-[11px] font-mono text-slate-300 truncate">{entry.name}</span>}
             </button>
             {renderEntries(entry.path, depth + 1)}
           </>
@@ -221,6 +314,7 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
             onDragOver={(e) => handleRowDragOver(e, entry.path, false)}
             onDrop={handleDrop}
             onDoubleClick={(e) => { e.stopPropagation(); onOpenFile?.(entry.path) }}
+            onContextMenu={(e) => openMenu(e, entry)}
             onPointerDown={(e) => { if (e.button === 0) e.stopPropagation() }}
             className={`flex items-center gap-1 py-[2px] cursor-grab active:cursor-grabbing group relative ${
               hoverDir === dirnameRel(entry.path) ? 'outline outline-1 outline-primary/60 bg-primary/5' : 'hover:bg-surface-hover'
@@ -236,9 +330,13 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
             <span className="material-symbols-outlined text-sm text-slate-600 group-hover:text-slate-400">
               {entry.uploadError ? 'error' : fileIcon(entry.name)}
             </span>
-            <span className={`text-[11px] font-mono truncate ${entry.uploadError ? 'text-red-300' : 'text-slate-400 group-hover:text-slate-200'}`}>
-              {entry.name}
-            </span>
+            {renaming?.path === entry.path
+              ? renderRenameInput(entry)
+              : (
+                <span className={`text-[11px] font-mono truncate ${entry.uploadError ? 'text-red-300' : 'text-slate-400 group-hover:text-slate-200'}`}>
+                  {entry.name}
+                </span>
+              )}
           </div>
         )}
       </div>
@@ -255,6 +353,41 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
       onDrop={handleDrop}
     >
       {renderEntries('.', 0)}
+      {menu && createPortal(
+        <div
+          data-testid="file-context-menu"
+          className="fixed z-[1000] min-w-[150px] rounded-md border border-border bg-surface-2 py-1 shadow-xl text-[12px]"
+          style={{
+            left: Math.min(menu.x, window.innerWidth - 170),
+            top: Math.min(menu.y, window.innerHeight - 120),
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          {!menu.entry.isDir && (
+            <>
+              <ContextMenuItem icon="open_in_new" label="Open" onClick={() => { onOpenFile?.(menu.entry.path); setMenu(null) }} />
+              <ContextMenuItem icon="download" label="Download" onClick={() => { downloadFile(menu.entry); setMenu(null) }} />
+            </>
+          )}
+          <ContextMenuItem
+            icon="edit"
+            label="Rename"
+            onClick={() => { setRenaming({ path: menu.entry.path, value: menu.entry.name }); setMenu(null) }}
+          />
+        </div>,
+        document.body,
+      )}
+      {actionError && createPortal(
+        <button
+          className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[1000] max-w-[90%] truncate rounded-md bg-red-600/90 px-3 py-1.5 text-[11px] text-white shadow-lg"
+          onClick={() => setActionError(null)}
+          title="Click to dismiss"
+        >
+          {actionError}
+        </button>,
+        document.body,
+      )}
       {pending && (
         <FileUploadConfirmModal
           files={pending.files}
@@ -266,6 +399,18 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
         />
       )}
     </div>
+  )
+}
+
+function ContextMenuItem({ icon, label, onClick }: { icon: string; label: string; onClick: () => void }) {
+  return (
+    <button
+      className="w-full flex items-center gap-2 px-3 py-1 text-left text-slate-200 hover:bg-primary/15"
+      onClick={onClick}
+    >
+      <span className="material-symbols-outlined text-sm text-slate-400">{icon}</span>
+      <span className="font-mono">{label}</span>
+    </button>
   )
 }
 

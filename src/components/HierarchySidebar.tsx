@@ -446,6 +446,24 @@ function SidebarNode({
           </button>
         )}
 
+        {/* Close (×) — stopped agents only. Deletes the dead session, same as the
+            inbox card's ×. Running agents get no × (hide from canvas instead). */}
+        {isRun && node.status === 'stopped' && !editing && (
+          <button
+            className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-accent-red opacity-0 group-hover:opacity-100"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(node.entityId, node.type as GroupingDimension)
+            }}
+            data-testid={`run-close-${node.id}`}
+            aria-label={`Close ${node.label}`}
+            title="Close agent (delete stopped session)"
+            style={{ opacity: hovered ? 1 : undefined }}
+          >
+            ×
+          </button>
+        )}
+
         {/* Count badge */}
         {!isRun && node.runCount > 0 && !editing && (
           <span className="text-2xs bg-surface-raised px-1.5 py-0.5 rounded-full text-slate-400">

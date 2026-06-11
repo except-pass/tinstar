@@ -35,14 +35,18 @@ export function InboxRow({
   row,
   selected = false,
   onClick,
-  onClear,
+  onClose,
 }: {
   row: InboxRowData
   selected?: boolean
   onClick: (widgetId: string) => void
-  onClear: (widgetId: string) => void
+  onClose: (widgetId: string) => void
 }) {
   const isRun = row.source === 'run'
+  // The close (×) affordance only applies to a stopped agent — deleting it
+  // removes the dead session. A running agent has no × (kill the canvas widget
+  // to stop it first).
+  const canClose = isRun && row.status === 'stopped'
   const accent = resolveRunAccent(row.color ?? undefined)
   const statusUi = row.status ? STATUS_DOT[row.status] : null
   const dotClass = statusUi?.dot ?? (row.attention ? LEVEL_DOT[row.attention.level] : 'bg-slate-600')
@@ -95,13 +99,13 @@ export function InboxRow({
         {time && <span className="text-2xs text-slate-500">{relativeTime(time)}</span>}
       </div>
 
-      {row.attention && (
+      {canClose && (
         <button
-          data-testid={`inbox-row-clear-${row.widgetId}`}
+          data-testid={`inbox-row-close-${row.widgetId}`}
           className="absolute top-0.5 right-0.5 opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 text-xs leading-none px-1"
-          onClick={(e) => { e.stopPropagation(); onClear(row.widgetId) }}
-          aria-label="Dismiss"
-          title="Clear attention"
+          onClick={(e) => { e.stopPropagation(); onClose(row.widgetId) }}
+          aria-label="Close agent"
+          title="Close agent (delete stopped session)"
         >
           ×
         </button>
