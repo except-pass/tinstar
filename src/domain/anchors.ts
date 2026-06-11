@@ -29,13 +29,18 @@ export function anchorByName(anchors: Anchor[], name: string): Anchor | undefine
 
 /** Validate a custom anchor set. Returns an error string, or null when valid. */
 export function validateAnchors(anchors: Anchor[]): string | null {
+  // An empty set would leave a widget with no attachment points and crash
+  // nearestAnchorPair (which indexes [0]); reject it rather than accept silently.
+  if (anchors.length === 0) return 'anchor set must not be empty'
   const seen = new Set<string>()
   for (const a of anchors) {
     if (typeof a.name !== 'string' || a.name === '') return 'anchor name must be non-empty'
     if (seen.has(a.name)) return `duplicate anchor name: ${a.name}`
     seen.add(a.name)
-    if (typeof a.x !== 'number' || a.x < 0 || a.x > 1) return `anchor ${a.name}: x must be in [0,1]`
-    if (typeof a.y !== 'number' || a.y < 0 || a.y > 1) return `anchor ${a.name}: y must be in [0,1]`
+    // Number.isFinite also rejects NaN/Infinity (and non-numbers), which a bare
+    // `typeof === 'number'` + range check lets through (NaN<0/NaN>1 are false).
+    if (!Number.isFinite(a.x) || a.x < 0 || a.x > 1) return `anchor ${a.name}: x must be in [0,1]`
+    if (!Number.isFinite(a.y) || a.y < 0 || a.y > 1) return `anchor ${a.name}: y must be in [0,1]`
   }
   return null
 }

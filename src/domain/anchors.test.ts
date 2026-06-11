@@ -37,4 +37,11 @@ describe('validateAnchors', () => {
     expect(validateAnchors([{ name: '', x: 0, y: 0 }])).toMatch(/non-empty/)
     expect(validateAnchors([{ name: 'a', x: 0, y: 0 }, { name: 'a', x: 1, y: 1 }])).toMatch(/duplicate/)
   })
+  it('rejects NaN/Infinity coords', () => {
+    expect(validateAnchors([{ name: 'a', x: NaN, y: 0 }])).toMatch(/in \[0,1\]/)
+    expect(validateAnchors([{ name: 'a', x: 0, y: Infinity }])).toMatch(/in \[0,1\]/)
+  })
+  it('rejects an empty set (would leave no attachment points)', () => {
+    expect(validateAnchors([])).toMatch(/must not be empty/)
+  })
 })
