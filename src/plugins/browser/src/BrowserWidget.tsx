@@ -13,7 +13,7 @@ export function makeBrowserWidget(api: TinstarPluginAPI) {
     const accent = api.theme.accent.resolve(widget.color)
     const { slotsForNode } = api.constellations.useContext()
 
-    const persist = (patch: Partial<Pick<BrowserWidget, 'url' | 'headers'>>) => {
+    const persist = (patch: Partial<Pick<BrowserWidget, 'url' | 'headers' | 'notes'>>) => {
       api.http.fetch(`/api/browser-widgets/${widget.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -35,6 +35,9 @@ export function makeBrowserWidget(api: TinstarPluginAPI) {
         isHovered={isHovered}
         onNavigate={(url) => persist({ url })}
         onHeadersChange={(headers) => persist({ headers })}
+        sessionId={widget.sessionId}
+        notes={widget.notes}
+        onNotesChange={(notes) => persist({ notes })}
         onClose={() => api.http.fetch(`/api/browser-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})}
       />
     )
