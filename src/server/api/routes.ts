@@ -39,7 +39,7 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
+import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { parseAttach, type ParsedAttach } from './anchorAttach'
@@ -2194,7 +2194,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
       const patch = JSON.parse(body) as {
         url?: string; title?: string; headers?: Record<string, string>;
-        notes?: import('../../domain/types').BrowserNote[];
+        notes?: BrowserNote[];
         position?: { x: number; y: number }; size?: { width: number; height: number };
         nearNodeId?: string; slot?: number | string;
       }

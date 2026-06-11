@@ -221,7 +221,7 @@ export interface BrowserNoteTarget {
 }
 
 /** A positioned annotation on a page shown in a browser widget. Submitted to the
- *  attached session via POST /api/sessions/:id/enter-prompt; sentAt marks delivery. */
+ *  attached session via POST /api/sessions/:name/enter-prompt; sentAt marks delivery. */
 export interface BrowserNote {
   id: string
   url: string                          // page URL the note was placed on
