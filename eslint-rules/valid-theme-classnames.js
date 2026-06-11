@@ -47,6 +47,10 @@ function checkToken(raw) {
   for (const util of COLOR_UTILS) {
     if (!token.startsWith(util + '-')) continue
     const rest = token.slice(util.length + 1) // after "util-"
+    // A trailing hyphen means this is a template-literal quasi cut off at an
+    // interpolation boundary (e.g. `bg-surface-${shade}` → cooked `bg-surface-`).
+    // The shade is supplied dynamically, so don't flag the incomplete fragment.
+    if (rest.endsWith('-')) return null
     const [color, sub] = rest.split('-')
 
     if (NAMESPACES.has(color)) {
