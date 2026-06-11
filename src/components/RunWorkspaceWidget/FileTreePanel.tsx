@@ -261,7 +261,7 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
           if (renameResolvedRef.current) { renameResolvedRef.current = false; return }
           commitRename(entry, e.target.value)
         }}
-        className="text-[11px] font-mono bg-surface-2 text-slate-100 px-1 rounded outline outline-1 outline-primary/60 min-w-0 flex-1"
+        className="text-[11px] font-mono bg-surface-raised text-slate-100 px-1 rounded outline outline-1 outline-primary/60 min-w-0 flex-1"
         spellCheck={false}
       />
     )
@@ -356,7 +356,7 @@ export function FileTreePanel({ sessionId, onOpenFile }: Props) {
       {menu && createPortal(
         <div
           data-testid="file-context-menu"
-          className="fixed z-[1000] min-w-[150px] rounded-md border border-border bg-surface-2 py-1 shadow-xl text-[12px]"
+          className="fixed z-[1000] min-w-[150px] rounded-md border border-primary/10 bg-surface-raised py-1 shadow-xl text-[12px]"
           style={{
             left: Math.min(menu.x, window.innerWidth - 170),
             top: Math.min(menu.y, window.innerHeight - 120),
