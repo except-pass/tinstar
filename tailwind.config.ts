@@ -1,27 +1,13 @@
 import type { Config } from 'tailwindcss'
+// Custom palette lives in a shared module so the ESLint className linter reads
+// the exact same keys — see eslint-rules/valid-theme-classnames.js.
+import { colors } from './tailwind.theme.js'
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   darkMode: 'class',
   theme: {
     extend: {
-      colors: {
-        primary: {
-          DEFAULT: '#00f0ff',
-          dim: '#00a5b0',
-          glow: 'rgba(0, 240, 255, 0.15)',
-        },
-        surface: {
-          base: '#06080a',
-          panel: '#0a0e12',
-          raised: '#0f1419',
-          hover: '#141c24',
-        },
-        accent: {
-          red: '#ff3366',
-          green: '#00ff88',
-          amber: '#ffaa00',
-        },
-      },
+      colors,
       fontFamily: {
         display: ['"Chakra Petch"', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'monospace'],

@@ -44,7 +44,7 @@ export function WidgetsPalette() {
         <div className="px-3 py-3 text-xs text-slate-400 space-y-2">
           <div>No widget plugins active.</div>
           <button
-            className="text-primary underline hover:text-primary-bright"
+            className="text-primary underline hover:text-white"
             onClick={() => window.dispatchEvent(new CustomEvent('tinstar:open-settings', { detail: { section: 'plugins' } }))}
             data-testid="widgets-palette-open-settings"
           >
