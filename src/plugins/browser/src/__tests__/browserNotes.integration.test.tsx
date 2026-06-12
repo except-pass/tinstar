@@ -285,25 +285,29 @@ describe('BrowserPrimitive pin integration', () => {
     const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
     render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
 
-    // Stub getBoundingClientRect globally so the BrowserPinLayer's layerRef
-    // returns a known box for the docX/docY computation during the drag.
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
-      left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON: () => {},
-    } as DOMRect)
+    // Stub getBoundingClientRect with a NON-ZERO offset (left:10, top:20) so the
+    // docX/docY math actually exercises the rect-subtraction. try/finally so the
+    // global prototype spy is always restored even if the drag throws (else it
+    // leaks into sibling tests). scroll = 0.
+    try {
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        left: 10, top: 20, right: 810, bottom: 620, width: 800, height: 600, x: 10, y: 20, toJSON: () => {},
+      } as DOMRect)
 
-    const marker = screen.getByTestId('pin-marker-p1')
-    // Past-threshold drag (dx=160, dy=120 >> 8px threshold).
-    fireEvent.pointerDown(marker, { pointerId: 1, clientX: 50, clientY: 60 })
-    fireEvent.pointerMove(marker, { pointerId: 1, clientX: 210, clientY: 180 })
-    fireEvent.pointerUp(marker,   { pointerId: 1, clientX: 210, clientY: 180 })
-
-    vi.restoreAllMocks()
+      const marker = screen.getByTestId('pin-marker-p1')
+      // Past-threshold drag (dx=160, dy=120 >> 8px threshold).
+      fireEvent.pointerDown(marker, { pointerId: 1, clientX: 50, clientY: 60 })
+      fireEvent.pointerMove(marker, { pointerId: 1, clientX: 210, clientY: 180 })
+      fireEvent.pointerUp(marker,   { pointerId: 1, clientX: 210, clientY: 180 })
+    } finally {
+      vi.restoreAllMocks()
+    }
 
     const stored = store.get()[0]!
     // url must now be stamped with the widget's current page url.
     expect(stored.context?.url).toBe('http://localhost:3000/')
-    // docX/docY must reflect the dragged position (clientX - rect.left + scroll.x/y, scroll=0).
-    expect(stored.context?.docX).toBe(210)
-    expect(stored.context?.docY).toBe(180)
+    // docX/docY = clientX - rect.left + scroll.x (= 210 - 10 + 0), clientY - rect.top + scroll.y (= 180 - 20 + 0).
+    expect(stored.context?.docX).toBe(200)
+    expect(stored.context?.docY).toBe(160)
   })
 })
