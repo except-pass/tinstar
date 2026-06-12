@@ -232,6 +232,10 @@ export interface PluginConstellationsApi {
    *  number (1–9), or null if the widget is not assigned to any slot. */
   useMySlot(): number | null
 
+  /** The sessionId backing a node, resolved from constellation membership
+   *  (run node → its own session; else a run peer sharing a slot; else null). */
+  useBackingSession(nodeId: string): string | null
+
   /** React hook: returns the peers sharing my constellation, with their
    *  currently-published capabilities. Re-renders whenever the capability
    *  registry changes. */

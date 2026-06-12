@@ -3,7 +3,6 @@
 // Lone exception: `import type` from src/domain/types for widget data shapes.
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { BrowserWidget } from '../../../domain/types'
-import { resolveBackingSession } from '../../../canvas/resolveBackingSession'
 import { makeBrowserPrimitive } from './BrowserPrimitive'
 
 export function makeBrowserWidget(api: TinstarPluginAPI) {
@@ -15,17 +14,18 @@ export function makeBrowserWidget(api: TinstarPluginAPI) {
     // The canonical node id (no manual prefixing — `widget.id` already carries
     // the `browser-` prefix, so `browser-${widget.id}` would double it up).
     const myNodeId = api.constellations.useMyNodeId()
-    const { slotsForNode, nodesInSlot } = api.constellations.useContext()
+    const { slotsForNode } = api.constellations.useContext()
     const mySlots = slotsForNode(myNodeId)
 
     // Page-notes need a session to submit to. An explicit `sessionId` (e.g. an
     // agent's artifact push) wins; otherwise a browser snapped into a run's
     // constellation slot is treated as attached to that run's session — so
-    // "snap to the run" == "attach", matching what the user expects. Run node
-    // ids are `run-<sessionId>` (run.id === sessionId), so strip the prefix.
-    // Computed inline (not memoized): context functions are fresh each render,
-    // so a useMemo would never hit its cache — and the loop is cheap.
-    const effectiveSessionId = widget.sessionId ?? resolveBackingSession(myNodeId, { slotsForNode, nodesInSlot }) ?? undefined
+    // "snap to the run" == "attach", matching what the user expects. The host
+    // resolves the backing session from constellation membership via the plugin
+    // API (kept off host internals per ADR-0002); `useBackingSession` is a hook,
+    // so call it unconditionally before the `??` precedence below.
+    const backingSession = api.constellations.useBackingSession(myNodeId)
+    const effectiveSessionId = widget.sessionId ?? backingSession ?? undefined
 
     const persist = (patch: Partial<Pick<BrowserWidget, 'url' | 'headers' | 'notes'>>) => {
       api.http.fetch(`/api/browser-widgets/${widget.id}`, {

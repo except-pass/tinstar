@@ -14,6 +14,7 @@ import { makeTerminalHandle } from './terminalHandle'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { useConstellationContext } from '../../hotkeys/ConstellationContext'
+import { resolveBackingSession } from '../../canvas/resolveBackingSession'
 import { ConstellationBadge } from '../../components/ConstellationBadge'
 import { useFileWatch } from '../../hooks/useFileWatch'
 import { useImageWatch } from '../../hooks/useImageWatch'
@@ -170,6 +171,11 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
       const ctx = useConstellationContext()
       const slots = ctx.slotsForNode(widgetId)
       return slots.length > 0 ? Number(slots[0]) : null
+    },
+
+    useBackingSession(nodeId: string): string | null {
+      const ctx = useConstellationContext()
+      return resolveBackingSession(nodeId, { slotsForNode: ctx.slotsForNode, nodesInSlot: ctx.nodesInSlot })
     },
 
     usePeers(): ConstellationPeer[] {
