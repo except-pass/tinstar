@@ -100,6 +100,11 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
     const pins = api.pins.useNodePins(nodeId)
     const [iframeScroll, setIframeScroll] = useState({ x: 0, y: 0 })
     const [iframeSize, setIframeSize] = useState({ width: 0, height: 0 })
+    // True while a pin marker is being dragged to reposition. The markers sit OVER
+    // the iframe and setPointerCapture does NOT hold over iframes (repo memory
+    // canvas_iframe_drag_guard), so we disable the iframe's pointer-events during
+    // the drag locally — the plugin owns its iframe, no host coupling needed.
+    const [markerDragging, setMarkerDragging] = useState(false)
     // The currently-bound scroll listener. The iframe's inner Window is replaced
     // on every cross-document navigation (the WindowProxy identity is stable), so
     // we re-bind on each load rather than dedupe by identity — see handleIframeLoad.
@@ -404,6 +409,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
                   src={iframeSrc}
                   onLoad={handleIframeLoad}
                   className="w-full h-full border-0 bg-white"
+                  style={{ pointerEvents: markerDragging ? 'none' : undefined }}
                   sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
                   title={title ?? url}
                 />
@@ -418,6 +424,8 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
                   onCommentChange={(id, comment) => api.pins.update(nodeId, id, p => ({ ...p, comment }))}
                   onDelete={(id) => api.pins.remove(nodeId, id)}
                   onSubmit={submitPin}
+                  onReposition={(id, docX, docY) => api.pins.update(nodeId, id, p => ({ ...p, context: { ...(p.context ?? {}), docX, docY } }))}
+                  onDragActiveChange={setMarkerDragging}
                 />
               </>
             ) : (

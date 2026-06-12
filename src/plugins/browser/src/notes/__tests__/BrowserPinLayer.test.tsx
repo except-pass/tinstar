@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserPinLayer } from '../BrowserPinLayer'
 import type { Pin } from '../../../../../domain/pinSet'
+
+// jsdom implements neither pointer capture nor a real layout box; stub both.
+beforeAll(() => {
+  HTMLElement.prototype.setPointerCapture = vi.fn()
+  HTMLElement.prototype.releasePointerCapture = vi.fn()
+})
 
 const pin = (over: Partial<Pin> = {}): Pin => ({
   id: 'p1', nodeId: 'browser-w1', nx: 0.5, ny: 0.5, comment: 'hi', createdAt: 1, ...over,
@@ -19,6 +25,15 @@ const baseProps = {
   onCommentChange: vi.fn(),
   onDelete: vi.fn(),
   onSubmit: vi.fn(),
+  onReposition: vi.fn(),
+}
+
+/** Open a pin's bubble: a sub-threshold down→up is a click (toggle). The marker
+ *  captures the pointer on down; pointerup bubbles to the layer's handler. */
+function clickMarker(id: string, x = 5, y = 5) {
+  const marker = screen.getByTestId(`pin-marker-${id}`)
+  fireEvent.pointerDown(marker, { pointerId: 1, clientX: x, clientY: y })
+  fireEvent.pointerUp(marker, { pointerId: 1, clientX: x, clientY: y })
 }
 
 describe('BrowserPinLayer', () => {
@@ -59,7 +74,7 @@ describe('BrowserPinLayer', () => {
   it('clicking a marker opens the bubble; editing commits on blur', () => {
     const onCommentChange = vi.fn()
     render(<BrowserPinLayer {...baseProps} onCommentChange={onCommentChange} />)
-    fireEvent.pointerDown(screen.getByTestId('pin-marker-p1'))
+    clickMarker('p1')
     const ta = screen.getByTestId('pin-comment-p1')
     fireEvent.change(ta, { target: { value: 'new text' } })
     fireEvent.blur(ta)
@@ -69,7 +84,7 @@ describe('BrowserPinLayer', () => {
   it('delete button fires onDelete and closes the bubble', () => {
     const onDelete = vi.fn()
     render(<BrowserPinLayer {...baseProps} onDelete={onDelete} />)
-    fireEvent.pointerDown(screen.getByTestId('pin-marker-p1'))
+    clickMarker('p1')
     fireEvent.click(screen.getByTestId('pin-delete-p1'))
     expect(onDelete).toHaveBeenCalledWith('p1')
     expect(screen.queryByTestId('pin-comment-p1')).toBeNull()
@@ -78,13 +93,61 @@ describe('BrowserPinLayer', () => {
   it('Send fires onSubmit and is disabled without a session', () => {
     const onSubmit = vi.fn()
     const { rerender } = render(<BrowserPinLayer {...baseProps} onSubmit={onSubmit} />)
-    fireEvent.pointerDown(screen.getByTestId('pin-marker-p1'))
+    clickMarker('p1')
     fireEvent.click(screen.getByTestId('pin-submit-p1'))
     // FIX 1: onSubmit now threads the bubble draft (initialized to the stored
     // comment 'hi' since nothing was typed) so the fresh comment is sent.
     expect(onSubmit).toHaveBeenCalledWith('p1', 'hi')
     rerender(<BrowserPinLayer {...baseProps} canSubmit={false} />)
     expect(screen.getByTestId('pin-submit-p1')).toBeDisabled()
+  })
+
+  // ── Drag-to-reposition: a past-threshold drag updates the pin's DOCUMENT coords
+  // (docX/docY = clientX - layerRect.left + scroll.x); a sub-threshold release is a
+  // click (toggles the bubble) and never repositions. ──
+  describe('drag-to-reposition', () => {
+    /** The overlay (layerRef) box is the docX/docY origin. jsdom zeros it, so stub
+     *  it to a known rect via the marker's grandparent — but the layer is the
+     *  outermost div; spy on HTMLDivElement.prototype.getBoundingClientRect to
+     *  return our box for the overlay. We target by spying on the element directly. */
+    function stubLayerRect(left = 0, top = 0, width = 800, height = 600) {
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        left, top, right: left + width, bottom: top + height, width, height, x: left, y: top, toJSON: () => {},
+      } as DOMRect)
+    }
+
+    it('drag past threshold calls onReposition with doc coords (clientX - rect.left + scroll.x)', () => {
+      const onReposition = vi.fn()
+      const onDragActiveChange = vi.fn()
+      stubLayerRect(0, 0, 800, 600)
+      render(<BrowserPinLayer {...baseProps} scroll={{ x: 10, y: 50 }} onReposition={onReposition} onDragActiveChange={onDragActiveChange} />)
+      const marker = screen.getByTestId('pin-marker-p1')
+
+      fireEvent.pointerDown(marker, { pointerId: 1, clientX: 100, clientY: 100 })
+      // Move 30px right (>threshold) → drag. Up bubbles to the layer.
+      fireEvent.pointerMove(marker, { pointerId: 1, clientX: 130, clientY: 110 })
+
+      expect(onDragActiveChange).toHaveBeenCalledWith(true)
+      // docX = 130 - 0 + 10 = 140 ; docY = 110 - 0 + 50 = 160
+      expect(onReposition).toHaveBeenCalledWith('p1', 140, 160)
+
+      fireEvent.pointerUp(marker, { pointerId: 1, clientX: 130, clientY: 110 })
+      expect(onDragActiveChange).toHaveBeenLastCalledWith(false)
+    })
+
+    it('sub-threshold down→up toggles the bubble and does NOT reposition', () => {
+      const onReposition = vi.fn()
+      render(<BrowserPinLayer {...baseProps} onReposition={onReposition} />)
+      const marker = screen.getByTestId('pin-marker-p1')
+
+      expect(screen.queryByTestId('pin-bubble-p1')).toBeNull()
+      fireEvent.pointerDown(marker, { pointerId: 1, clientX: 100, clientY: 100 })
+      fireEvent.pointerMove(marker, { pointerId: 1, clientX: 102, clientY: 101 }) // <threshold
+      fireEvent.pointerUp(marker, { pointerId: 1, clientX: 102, clientY: 101 })
+
+      expect(onReposition).not.toHaveBeenCalled()
+      expect(screen.getByTestId('pin-bubble-p1')).toBeInTheDocument()
+    })
   })
 })
 

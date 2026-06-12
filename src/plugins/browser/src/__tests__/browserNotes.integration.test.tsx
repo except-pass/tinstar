@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { useSyncExternalStore, useEffect, useRef } from 'react'
 import { makeBrowserPrimitive } from '../BrowserPrimitive'
@@ -82,6 +82,20 @@ const baseProps = {
 const okEnvelope = () => ({ ok: true, status: 200, json: async () => ({ ok: true, data: null }) })
 
 beforeEach(() => httpFetch.mockReset())
+
+// jsdom lacks pointer capture; the BrowserPinLayer marker captures on down.
+beforeAll(() => {
+  HTMLElement.prototype.setPointerCapture = vi.fn()
+  HTMLElement.prototype.releasePointerCapture = vi.fn()
+})
+
+/** Open a pin's bubble via a click (sub-threshold down→up). The bubble toggle
+ *  moved to pointerUp (drag-to-reposition uses pointerDown to start a gesture). */
+function openMarker(id: string) {
+  const m = screen.getByTestId(`pin-marker-${id}`)
+  fireEvent.pointerDown(m, { pointerId: 1, clientX: 0, clientY: 0 })
+  fireEvent.pointerUp(m, { pointerId: 1, clientX: 0, clientY: 0 })
+}
 
 // Stub the iframe's bounding box (and optionally contentDocument) after render so
 // the registered capture fn maps the drop point correctly. Returns the iframe el.
@@ -193,7 +207,7 @@ describe('BrowserPrimitive pin integration', () => {
     ])
     const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
     render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
-    fireEvent.pointerDown(screen.getByTestId('pin-marker-p1'))
+    openMarker('p1')
     fireEvent.click(screen.getByTestId('pin-submit-p1'))
     await waitFor(() => expect(httpFetch).toHaveBeenCalled())
     const [url, init] = httpFetch.mock.calls[0] as [string, { body: string }]
@@ -217,7 +231,7 @@ describe('BrowserPrimitive pin integration', () => {
     ])
     const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
     render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
-    fireEvent.pointerDown(screen.getByTestId('pin-marker-p1'))
+    openMarker('p1')
     fireEvent.change(screen.getByTestId('pin-comment-p1'), { target: { value: 'use a brighter blue' } })
     fireEvent.click(screen.getByTestId('pin-submit-p1'))
     await waitFor(() => expect(httpFetch).toHaveBeenCalled())
@@ -235,7 +249,7 @@ describe('BrowserPrimitive pin integration', () => {
     const store = makePinStore([pin({ context: { url: 'http://localhost:3000/', docX: 0, docY: 0 } })])
     const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
     render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
-    fireEvent.pointerDown(screen.getByTestId('pin-marker-p1'))
+    openMarker('p1')
     fireEvent.click(screen.getByTestId('pin-submit-p1'))
     await waitFor(() => expect(httpFetch).toHaveBeenCalled())
     await act(async () => { await Promise.resolve() })
@@ -246,7 +260,7 @@ describe('BrowserPrimitive pin integration', () => {
     const store = makePinStore([pin({ context: { url: 'http://localhost:3000/', docX: 0, docY: 0 } })])
     const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
     render(<BrowserPrimitive {...baseProps} />)
-    fireEvent.pointerDown(screen.getByTestId('pin-marker-p1'))
+    openMarker('p1')
     expect(screen.getByTestId('pin-submit-p1')).toBeDisabled()
   })
 
@@ -254,7 +268,7 @@ describe('BrowserPrimitive pin integration', () => {
     const store = makePinStore([pin({ context: { url: 'http://localhost:3000/', docX: 0, docY: 0 } })])
     const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
     render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
-    fireEvent.pointerDown(screen.getByTestId('pin-marker-p1'))
+    openMarker('p1')
     fireEvent.click(screen.getByTestId('pin-delete-p1'))
     expect(store.get()).toHaveLength(0)
   })

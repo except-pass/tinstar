@@ -188,6 +188,38 @@ describe('CanvasWidgetShell pins', () => {
     })
   })
 
+  // ── Ghost note: a semi-transparent preview portaled to document.body that
+  // trails the cursor during a place-drag, cleared on up/cancel. ──
+  describe('pin place-drag ghost', () => {
+    it('shows the ghost on down+move and removes it on pointer up', () => {
+      renderShell({ isSelected: true, onCreatePin: vi.fn() })
+      const affordance = screen.getByTestId('pin-drop-affordance')
+
+      expect(screen.queryByTestId('pin-ghost')).toBeNull()
+      fireEvent.pointerDown(affordance, { button: 0, pointerId: 1, clientX: 10, clientY: 20 })
+      fireEvent.pointerMove(affordance, { pointerId: 1, clientX: 40, clientY: 60 })
+      const ghost = screen.getByTestId('pin-ghost')
+      expect(ghost).toBeTruthy()
+      // Portaled to document.body, positioned (fixed) at the cursor.
+      expect(ghost.parentElement).toBe(document.body)
+      expect(ghost.style.left).toBe('40px')
+      expect(ghost.style.top).toBe('60px')
+
+      // Pointer-up tears the ghost down (and would place the pin if over the body).
+      fireEvent.pointerUp(affordance, { pointerId: 1, clientX: 40, clientY: 60 })
+      expect(screen.queryByTestId('pin-ghost')).toBeNull()
+    })
+
+    it('removes the ghost on pointer cancel', () => {
+      renderShell({ isSelected: true, onCreatePin: vi.fn() })
+      const affordance = screen.getByTestId('pin-drop-affordance')
+      fireEvent.pointerDown(affordance, { button: 0, pointerId: 1, clientX: 10, clientY: 20 })
+      expect(screen.getByTestId('pin-ghost')).toBeTruthy()
+      fireEvent.pointerCancel(affordance, { pointerId: 1, clientX: 10, clientY: 20 })
+      expect(screen.queryByTestId('pin-ghost')).toBeNull()
+    })
+  })
+
   it('clears the iframe guard when capture is lost mid-place-drag (onPointerCancel path)', () => {
     const onPinDragActive = vi.fn()
     renderShell({ isSelected: true, onCreatePin: vi.fn(), onPinDragActive })

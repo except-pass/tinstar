@@ -7,10 +7,11 @@
 //
 // The layer is pointer-transparent; each pin wrapper is pointer-active. Uses the
 // shared PinMarker/PinBubble so it matches every other widget's pins.
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { Pin } from '../../../../domain/pinSet'
 import { PinMarker } from '../../../../pins/PinMarker'
 import { PinBubble } from '../../../../pins/PinBubble'
+import { classifyPointerUp } from '../../../../pins/pinGestures'
 
 export interface BrowserPinLayerProps {
   /** Pins for THIS node (caller passes api.pins.useNodePins(nodeId) — already
@@ -30,6 +31,13 @@ export interface BrowserPinLayerProps {
   onCommentChange: (id: string, comment: string) => void
   onDelete: (id: string) => void
   onSubmit: (id: string, comment: string) => void
+  /** Drag-to-reposition: fires with the new DOCUMENT coords (docX/docY) as the
+   *  marker is dragged. Caller persists into the pin's context. */
+  onReposition: (id: string, docX: number, docY: number) => void
+  /** Fires true on the first drag move past threshold, false on up/cancel. The
+   *  host plugin toggles the iframe's pointer-events so a marker drag over the
+   *  iframe isn't swallowed (setPointerCapture doesn't hold over iframes). */
+  onDragActiveChange?: (active: boolean) => void
 }
 
 /** A pin belongs to the current page if its enriched context url matches, OR it
@@ -53,10 +61,53 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
   const [openId, setOpenId] = useState<string | null>(null)
   // The open pin's wrapper element anchors the portaled bubble (see PinBubble).
   const [openAnchor, setOpenAnchor] = useState<HTMLElement | null>(null)
+  // In-flight marker drag. `moved` flips once past the click→drag threshold; a
+  // sub-threshold release is treated as a click (toggles the bubble). The marker
+  // captures the pointer on down, so move/up retarget to it and bubble up here.
+  const dragRef = useRef<{ id: string; startX: number; startY: number; moved: boolean } | null>(null)
+  // The overlay div — its bounding box is the docX/docY origin (markers are
+  // positioned at docX - scroll.x within it), so reposition math reuses it.
+  const layerRef = useRef<HTMLDivElement>(null)
   const pins = p.pins.filter(pin => onCurrentPage(pin, p.url))
 
+  const onPointerDown = (pin: Pin) => (e: React.PointerEvent) => {
+    e.stopPropagation()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    dragRef.current = { id: pin.id, startX: e.clientX, startY: e.clientY, moved: false }
+  }
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current
+    if (!d) return
+    if (classifyPointerUp({ dx: e.clientX - d.startX, dy: e.clientY - d.startY }) === 'drag') {
+      if (!d.moved) p.onDragActiveChange?.(true)
+      d.moved = true
+    }
+    if (d.moved && layerRef.current) {
+      // Invert the marker layout (left = docX - scroll.x): docX = (clientX - rect.left) + scroll.x.
+      // No clamping — document coords can be anywhere in the page.
+      const r = layerRef.current.getBoundingClientRect()
+      const docX = (e.clientX - r.left) + p.scroll.x
+      const docY = (e.clientY - r.top) + p.scroll.y
+      p.onReposition(d.id, docX, docY)
+    }
+  }
+  const onPointerUp = () => {
+    const d = dragRef.current
+    dragRef.current = null
+    if (!d) return
+    if (d.moved) p.onDragActiveChange?.(false)
+    else setOpenId(cur => (cur === d.id ? null : d.id)) // sub-threshold release == click
+  }
+
   return (
-    <div className="absolute inset-0 overflow-hidden" style={{ pointerEvents: 'none' }}>
+    <div
+      ref={layerRef}
+      className="absolute inset-0 overflow-hidden"
+      style={{ pointerEvents: 'none' }}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
       {pins.map((pin, i) => {
         const { x, y } = docPoint(pin, p.iframeWidth, p.iframeHeight)
         const isOpen = openId === pin.id
@@ -74,7 +125,7 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
               accent={p.accent}
               comment={pin.comment}
               zoom={1}
-              onPointerDown={e => { e.stopPropagation(); setOpenId(cur => (cur === pin.id ? null : pin.id)) }}
+              onPointerDown={onPointerDown(pin)}
             />
             {isOpen && (
               <PinBubble
