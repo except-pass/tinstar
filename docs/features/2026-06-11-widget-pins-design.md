@@ -131,7 +131,10 @@ Additions to `WidgetRegistration` (`packages/plugin-api/src/index.ts:33-60`):
 New API for widgets that enrich or self-render:
 
 - `api.pins.useNodePins(nodeId): Pin[]` — reactive read of this node's pins.
-- `api.pins.update(nodeId, pins): void` — patch this node's pins (revision-gated PUT under the hood).
+- `api.pins.create(nodeId, pin)` / `update(nodeId, id, fn)` / `remove(nodeId, id)` — per-pin
+  mutations (revision-gated PUT under the hood; `nodeId` is reserved/forward-looking since pins
+  are keyed by id today). Plus `api.constellations.useBackingSession(nodeId): string | null` for
+  submit-target resolution. (As-built shape — finer-grained than the per-array sketch above.)
 
 No upward closures — consistent with the existing one-way data flow (widgets read context / the
 store and write through the API; they never hand callbacks to the shell).

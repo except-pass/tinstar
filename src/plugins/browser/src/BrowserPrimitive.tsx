@@ -1,5 +1,8 @@
 // Built-in plugin — consumes @tinstar/plugin-api only. Host imports forbidden (ADR-0002).
-// Lone exception: import type from src/domain/types for widget data shapes.
+// Exceptions: `import type` from src/domain/types for widget data shapes, and the
+// shared pin primitives (src/pins/PinMarker, PinBubble) so self-rendered browser
+// pins are visually identical to host-rendered pins on every other widget. These
+// are intentionally shared UI, not host internals; src/pins is not ESLint-fenced.
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
 import { unproxyPath } from './proxyPaths'
