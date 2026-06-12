@@ -5,6 +5,7 @@ import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import { WidgetIdProvider } from '../core/pluginApi/widgetIdContext'
 import { PinLayer } from '../pins/PinLayer'
 import { clamp01 } from '../pins/pinGestures'
+import { captureWidgetContext, type PinCapturedContext } from '../pins/captureWidgetContext'
 import type { Pin } from '../domain/pinSet'
 
 const DRAG_THRESHOLD = 5
@@ -70,7 +71,7 @@ interface CanvasWidgetShellProps {
   pins?: Pin[]
   pinAccent?: string
   pinCanSubmit?: boolean
-  onCreatePin?: (nodeId: string, nx: number, ny: number) => void
+  onCreatePin?: (nodeId: string, nx: number, ny: number, captured?: PinCapturedContext) => void
   onRepositionPin?: (id: string, nx: number, ny: number) => void
   onPinCommentChange?: (id: string, comment: string) => void
   onDeletePin?: (id: string) => void
@@ -296,7 +297,13 @@ export function CanvasWidgetShell({
       const rawY = (e.clientY - rect.top) / rect.height
       // Only place when released over the widget body; otherwise treat as cancel.
       if (rawX < 0 || rawX > 1 || rawY < 0 || rawY > 1) return
-      onCreatePin?.(nodeId, clamp01(rawX), clamp01(rawY))
+      // Capture the semantic context under the drop BEFORE the pin exists. The
+      // pin layer is pointer-events:none and the util skips [data-testid^="pin-"],
+      // so elementFromPoint sees the real widget content (not the marker). For
+      // iframe-backed widgets (browser) this returns undefined and the plugin
+      // enriches its own pins instead.
+      const captured = captureWidgetContext(e.clientX, e.clientY)
+      onCreatePin?.(nodeId, clamp01(rawX), clamp01(rawY), captured)
     },
     [nodeId, onCreatePin, endPinPlace],
   )

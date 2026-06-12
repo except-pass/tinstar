@@ -693,7 +693,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const sessionId = resolveBackingSession(nodeId, pinCtx)
       if (!sessionId) return // button is disabled in this state; guard anyway
       const label = findNodeLabel(tree, nodeId) ?? nodeId
-      const prompt = `📍 Pinned on ${label} — ${pin.comment || '(no comment)'}`
+      const comment = pin.comment || '(no comment)'
+      // Native-widget pins carry a semantic capture of what was under the marker
+      // (browser pins use their own richer format via formatBrowserPin instead).
+      const captureLabel = (pin.context?.capture as { label?: string } | undefined)?.label
+      const prompt = captureLabel
+        ? `📍 Pinned on ${label} — on "${captureLabel}" — ${comment}`
+        : `📍 Pinned on ${label} — ${comment}`
       try {
         const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
           method: 'POST',
@@ -1764,7 +1770,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           pins={pinSet.forNode(node.id)}
           pinAccent={run?.color}
           pinCanSubmit={resolveBackingSession(node.id, pinCtx) !== null}
-          onCreatePin={(nodeId, nx, ny) => pinSet.create({ id: makePinId(), nodeId, nx, ny, comment: '', createdAt: Date.now() })}
+          onCreatePin={(nodeId, nx, ny, captured) => pinSet.create({ id: makePinId(), nodeId, nx, ny, comment: '', createdAt: Date.now(), ...(captured ? { context: { capture: captured } } : {}) })}
           onRepositionPin={(id, nx, ny) => pinSet.update(id, p => ({ ...p, nx, ny }))}
           onPinCommentChange={(id, comment) => pinSet.update(id, p => ({ ...p, comment }))}
           onDeletePin={(id) => pinSet.remove(id)}
