@@ -51,16 +51,20 @@ function docPoint(pin: Pin, iframeWidth: number, iframeHeight: number): { x: num
 
 export function BrowserPinLayer(p: BrowserPinLayerProps) {
   const [openId, setOpenId] = useState<string | null>(null)
+  // The open pin's wrapper element anchors the portaled bubble (see PinBubble).
+  const [openAnchor, setOpenAnchor] = useState<HTMLElement | null>(null)
   const pins = p.pins.filter(pin => onCurrentPage(pin, p.url))
 
   return (
     <div className="absolute inset-0 overflow-hidden" style={{ pointerEvents: 'none' }}>
       {pins.map((pin, i) => {
         const { x, y } = docPoint(pin, p.iframeWidth, p.iframeHeight)
+        const isOpen = openId === pin.id
         return (
           <div
             key={pin.id}
             className="absolute"
+            ref={isOpen ? setOpenAnchor : undefined}
             style={{ left: x - p.scroll.x, top: y - p.scroll.y, pointerEvents: 'auto' }}
           >
             <PinMarker
@@ -72,12 +76,13 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
               zoom={1}
               onPointerDown={e => { e.stopPropagation(); setOpenId(cur => (cur === pin.id ? null : pin.id)) }}
             />
-            {openId === pin.id && (
+            {isOpen && (
               <PinBubble
                 id={pin.id}
                 comment={pin.comment}
                 sent={!!pin.sentAt}
                 canSubmit={p.canSubmit}
+                anchorEl={openAnchor}
                 onCommentChange={c => p.onCommentChange(pin.id, c)}
                 onDelete={() => { p.onDelete(pin.id); setOpenId(null) }}
                 onSubmit={() => p.onSubmit(pin.id)}

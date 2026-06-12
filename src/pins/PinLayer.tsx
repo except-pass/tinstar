@@ -27,6 +27,9 @@ export interface PinLayerProps {
 
 export function PinLayer(p: PinLayerProps) {
   const [openId, setOpenId] = useState<string | null>(null)
+  // The open pin's wrapper element, anchoring the portaled bubble to the marker's
+  // screen position. A callback ref keeps it in sync as the open pin changes.
+  const [openAnchor, setOpenAnchor] = useState<HTMLElement | null>(null)
   const dragRef = useRef<{ id: string; startX: number; startY: number; moved: boolean } | null>(null)
   const layerRef = useRef<HTMLDivElement>(null)
 
@@ -61,17 +64,23 @@ export function PinLayer(p: PinLayerProps) {
   return (
     <div ref={layerRef} className="absolute inset-0 overflow-hidden" style={{ pointerEvents: 'none' }}
       onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
-      {p.pins.map((pin, i) => (
-        <div key={pin.id} className="absolute" style={{ left: `${pin.nx * 100}%`, top: `${pin.ny * 100}%`, pointerEvents: 'auto' }}>
-          <PinMarker id={pin.id} index={i + 1} sent={!!pin.sentAt} accent={p.accent} comment={pin.comment}
-            zoom={p.zoom} onPointerDown={onPointerDown(pin)} />
-          {openId === pin.id && (
-            <PinBubble id={pin.id} comment={pin.comment} sent={!!pin.sentAt} canSubmit={p.canSubmit}
-              onCommentChange={c => p.onCommentChange(pin.id, c)} onDelete={() => p.onDelete(pin.id)}
-              onSubmit={() => p.onSubmit(pin.id)} />
-          )}
-        </div>
-      ))}
+      {p.pins.map((pin, i) => {
+        const isOpen = openId === pin.id
+        return (
+          <div key={pin.id} className="absolute"
+            ref={isOpen ? setOpenAnchor : undefined}
+            style={{ left: `${pin.nx * 100}%`, top: `${pin.ny * 100}%`, pointerEvents: 'auto' }}>
+            <PinMarker id={pin.id} index={i + 1} sent={!!pin.sentAt} accent={p.accent} comment={pin.comment}
+              zoom={p.zoom} onPointerDown={onPointerDown(pin)} />
+            {isOpen && (
+              <PinBubble id={pin.id} comment={pin.comment} sent={!!pin.sentAt} canSubmit={p.canSubmit}
+                anchorEl={openAnchor}
+                onCommentChange={c => p.onCommentChange(pin.id, c)} onDelete={() => p.onDelete(pin.id)}
+                onSubmit={() => p.onSubmit(pin.id)} />
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

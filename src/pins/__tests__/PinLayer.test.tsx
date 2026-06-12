@@ -43,10 +43,15 @@ describe('PinLayer', () => {
   })
 
   it('toggles the bubble open and closed on marker click', () => {
-    renderLayer()
+    const { container } = renderLayer()
     expect(screen.queryByTestId('pin-bubble-a')).toBeNull()
     clickMarker('a')
-    expect(screen.getByTestId('pin-bubble-a')).toBeTruthy()
+    const bubble = screen.getByTestId('pin-bubble-a')
+    expect(bubble).toBeTruthy()
+    // The bubble is portaled to document.body so it can overshoot the (overflow-hidden)
+    // layer — it must NOT be a DOM descendant of the rendered layer container.
+    expect(container.contains(bubble)).toBe(false)
+    expect(document.body.contains(bubble)).toBe(true)
     clickMarker('a')
     expect(screen.queryByTestId('pin-bubble-a')).toBeNull()
   })
