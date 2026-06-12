@@ -1808,7 +1808,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           pins={pinSet.forNode(node.id)}
           pinAccent={run?.color}
           pinCanSubmit={resolveBackingSession(node.id, pinCtx) !== null}
-          onCreatePin={(nodeId, nx, ny, captured) => pinSet.create({ id: makePinId(), nodeId, nx, ny, comment: '', createdAt: Date.now(), ...(captured ? { context: { capture: captured } } : {}) })}
+          onCreatePin={(nodeId, nx, ny, context) => pinSet.create({ id: makePinId(), nodeId, nx, ny, comment: '', createdAt: Date.now(), ...(context ? { context } : {}) })}
           onRepositionPin={(id, nx, ny) => pinSet.update(id, p => ({ ...p, nx, ny }))}
           onPinCommentChange={(id, comment) => pinSet.update(id, p => ({ ...p, comment }))}
           onDeletePin={(id) => pinSet.remove(id)}

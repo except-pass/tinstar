@@ -21,6 +21,7 @@ import { useImageWatch } from '../../hooks/useImageWatch'
 import { resolveRunAccent, hexToRgba } from '../../components/runAccent'
 import { EventBridge } from './eventBridge'
 import { getPinsBridge } from './pinsBridge'
+import { registerPinCapture, unregisterPinCapture } from '../../pins/captureRegistry'
 import { usePinSet } from '../../hooks/usePinSet'
 import { useServerEvents } from '../../hooks/useServerEvents'
 import { useWidgetId } from './widgetIdContext'
@@ -294,6 +295,20 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
       const bridge = getPinsBridge()
       if (!bridge) { console.warn('[pins] api.pins.remove called with no active PinsBridge (no active space?) — dropping'); return }
       bridge.remove(id)
+    },
+    // Front door for pin context capture: the widget registers "what's under
+    // this point on me" keyed by its node id. The host shell invokes it at the
+    // drop point (handlePinPlaceUp) to enrich the new pin. The fn is kept fresh
+    // via a ref so the registration is stable (re-register only on nodeId change)
+    // while always calling the latest closure (current url/scroll/geometry).
+    useProvideCapture(fn: (point: { clientX: number; clientY: number }) => Record<string, unknown> | undefined): void {
+      const nodeId = useWidgetId()
+      const fnRef = useRef(fn)
+      fnRef.current = fn
+      useEffect(() => {
+        registerPinCapture(nodeId, (pt) => fnRef.current(pt))
+        return () => unregisterPinCapture(nodeId)
+      }, [nodeId])
     },
   }
 

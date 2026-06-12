@@ -295,6 +295,14 @@ export interface PluginPinsApi {
   update(nodeId: string, id: string, fn: (p: Pin) => Pin): void
   /** Remove a pin by id. No-op if the id isn't found. */
   remove(nodeId: string, id: string): void
+  /** React hook: register a capture fn for THIS widget's node. The host invokes
+   *  it at pin placement (drag-drop of the pin affordance) to enrich the new
+   *  pin's `context`. Return the context blob — e.g. DOM/semantic info about
+   *  what's under the drop point — or undefined to leave the pin context-less.
+   *  Call once at the top of the widget component; the registration is bound to
+   *  the widget's node id and torn down on unmount. The host falls back to its
+   *  generic native capture for any node that hasn't registered one. */
+  useProvideCapture(fn: (point: { clientX: number; clientY: number }) => Record<string, unknown> | undefined): void
 }
 
 /** Urgency of a widget's "needs attention" signal. */

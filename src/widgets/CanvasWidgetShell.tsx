@@ -5,7 +5,8 @@ import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import { WidgetIdProvider } from '../core/pluginApi/widgetIdContext'
 import { PinLayer } from '../pins/PinLayer'
 import { clamp01 } from '../pins/pinGestures'
-import { captureWidgetContext, type PinCapturedContext } from '../pins/captureWidgetContext'
+import { captureWidgetContext } from '../pins/captureWidgetContext'
+import { getPinCapture } from '../pins/captureRegistry'
 import type { Pin } from '../domain/pinSet'
 
 const DRAG_THRESHOLD = 5
@@ -71,7 +72,7 @@ interface CanvasWidgetShellProps {
   pins?: Pin[]
   pinAccent?: string
   pinCanSubmit?: boolean
-  onCreatePin?: (nodeId: string, nx: number, ny: number, captured?: PinCapturedContext) => void
+  onCreatePin?: (nodeId: string, nx: number, ny: number, context?: Record<string, unknown>) => void
   onRepositionPin?: (id: string, nx: number, ny: number) => void
   onPinCommentChange?: (id: string, comment: string) => void
   onDeletePin?: (id: string) => void
@@ -303,13 +304,21 @@ export function CanvasWidgetShell({
       const rawY = (e.clientY - rect.top) / rect.height
       // Only place when released over the widget body; otherwise treat as cancel.
       if (rawX < 0 || rawX > 1 || rawY < 0 || rawY > 1) return
-      // Capture the semantic context under the drop BEFORE the pin exists. The
-      // pin layer is pointer-events:none and the util skips [data-testid^="pin-"],
-      // so elementFromPoint sees the real widget content (not the marker). For
-      // iframe-backed widgets (browser) this returns undefined and the plugin
-      // enriches its own pins instead.
-      const captured = captureWidgetContext(e.clientX, e.clientY)
-      onCreatePin?.(nodeId, clamp01(rawX), clamp01(rawY), captured)
+      // Capture the context under the drop BEFORE the pin exists, via the front
+      // door: a plugin may register a per-node capture fn (browser maps the point
+      // into iframe-body-relative DOM context). Falls back to the generic native
+      // capture — pin layer is pointer-events:none and the util skips
+      // [data-testid^="pin-"], so elementFromPoint sees the real widget content
+      // (not the marker). The plugin blob is opaque/flat; the native one nests
+      // under `capture` so submit can distinguish the two formats.
+      const pluginCapture = getPinCapture(nodeId)
+      const context = pluginCapture
+        ? pluginCapture({ clientX: e.clientX, clientY: e.clientY })
+        : (() => {
+            const c = captureWidgetContext(e.clientX, e.clientY)
+            return c ? { capture: c } : undefined
+          })()
+      onCreatePin?.(nodeId, clamp01(rawX), clamp01(rawY), context)
     },
     [nodeId, onCreatePin, endPinPlace],
   )

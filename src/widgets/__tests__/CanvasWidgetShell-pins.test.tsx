@@ -4,13 +4,19 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { CanvasWidgetShell } from '../CanvasWidgetShell'
 import type { WidgetRegistration } from '../widgetComponentRegistry'
 import type { Pin } from '../../domain/pinSet'
+import { registerPinCapture, unregisterPinCapture } from '../../pins/captureRegistry'
 import type { ComponentType } from 'react'
 import type { WidgetProps } from '@tinstar/plugin-api'
 
-// jsdom implements neither pointer capture nor hasFocus; stub both.
+// jsdom implements neither pointer capture, hasFocus, nor elementFromPoint; stub all.
 beforeAll(() => {
   HTMLElement.prototype.setPointerCapture = vi.fn()
   HTMLElement.prototype.releasePointerCapture = vi.fn()
+  // captureWidgetContext (native fallback) calls document.elementFromPoint; jsdom
+  // lacks it, so install a no-op base that individual tests spy on.
+  if (!document.elementFromPoint) {
+    document.elementFromPoint = () => null
+  }
 })
 
 beforeEach(() => {
@@ -117,6 +123,69 @@ describe('CanvasWidgetShell pins', () => {
     renderShell({ isSelected: true, pins: [pin({ id: 'p1' })], onRepositionPin: vi.fn(), onClearAllPins })
     fireEvent.click(screen.getByTestId('pin-clear-all'))
     expect(onClearAllPins).toHaveBeenCalledWith('pw-pins')
+  })
+
+  // ── Capture front door: handlePinPlaceUp routes through the per-node capture
+  // registry (plugin) or falls back to the native captureWidgetContext util. ──
+  describe('pin placement capture front door', () => {
+    // Drive a full place-drag: pointer-down on the affordance, then pointer-up
+    // over the widget body. The shell reads the container's getBoundingClientRect
+    // (jsdom zeros it) so we stub it to a real box; elementFromPoint is stubbed
+    // for the native-capture path.
+    function placePinAt(clientX: number, clientY: number) {
+      const affordance = screen.getByTestId('pin-drop-affordance')
+      const widget = screen.getByTestId('canvas-widget-pw-pins') as HTMLElement
+      vi.spyOn(widget, 'getBoundingClientRect').mockReturnValue({
+        left: 0, top: 0, right: 200, bottom: 200, width: 200, height: 200, x: 0, y: 0, toJSON: () => {},
+      } as DOMRect)
+      fireEvent.pointerDown(affordance, { button: 0, pointerId: 1, clientX, clientY })
+      fireEvent.pointerUp(affordance, { pointerId: 1, clientX, clientY })
+    }
+
+    afterEach(() => unregisterPinCapture('pw-pins'))
+
+    it('falls back to native capture (nested under `capture`) when no plugin capture is registered', () => {
+      const onCreatePin = vi.fn()
+      // elementFromPoint backs captureWidgetContext; give it a labeled element.
+      const el = document.createElement('button')
+      el.textContent = 'Deploy'
+      vi.spyOn(document, 'elementFromPoint').mockReturnValue(el)
+
+      renderShell({ isSelected: true, onCreatePin })
+      placePinAt(100, 100)
+
+      expect(onCreatePin).toHaveBeenCalledTimes(1)
+      const [nodeId, nx, ny, context] = onCreatePin.mock.calls[0]!
+      expect(nodeId).toBe('pw-pins')
+      expect(nx).toBeCloseTo(0.5)
+      expect(ny).toBeCloseTo(0.5)
+      // Native fallback nests its blob under `capture`.
+      expect(context).toMatchObject({ capture: { label: 'Deploy', tag: 'button' } })
+    })
+
+    it('uses the registered plugin capture blob (flat, not nested) when one is registered', () => {
+      const onCreatePin = vi.fn()
+      const efp = vi.spyOn(document, 'elementFromPoint')
+      registerPinCapture('pw-pins', (pt) => ({ url: 'http://x/', docX: pt.clientX, docY: pt.clientY }))
+
+      renderShell({ isSelected: true, onCreatePin })
+      placePinAt(100, 100)
+
+      expect(onCreatePin).toHaveBeenCalledTimes(1)
+      const context = onCreatePin.mock.calls[0]![3]
+      // Plugin blob is passed through flat — NOT wrapped under `capture`.
+      expect(context).toEqual({ url: 'http://x/', docX: 100, docY: 100 })
+      // Native capture is bypassed entirely when a plugin capture is present.
+      expect(efp).not.toHaveBeenCalled()
+    })
+
+    it('passes undefined context when the registered plugin capture returns undefined', () => {
+      const onCreatePin = vi.fn()
+      registerPinCapture('pw-pins', () => undefined)
+      renderShell({ isSelected: true, onCreatePin })
+      placePinAt(100, 100)
+      expect(onCreatePin).toHaveBeenCalledWith('pw-pins', expect.any(Number), expect.any(Number), undefined)
+    })
   })
 
   it('clears the iframe guard when capture is lost mid-place-drag (onPointerCancel path)', () => {

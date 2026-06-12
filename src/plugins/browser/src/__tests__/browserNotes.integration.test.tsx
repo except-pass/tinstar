@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
-import { useSyncExternalStore } from 'react'
+import { useSyncExternalStore, useEffect, useRef } from 'react'
 import { makeBrowserPrimitive } from '../BrowserPrimitive'
+import { getPinCapture, registerPinCapture, unregisterPinCapture } from '../../../../pins/captureRegistry'
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
 import type { Pin } from '../../../../domain/pinSet'
 
@@ -40,6 +41,17 @@ function makePinStore(initial: Pin[] = []) {
         pins = pins.map(p => (p.id === id ? fn(p) : p)); emit()
       },
       remove(_nodeId: string, id: string) { pins = pins.filter(p => p.id !== id); emit() },
+      // Mirrors createApi's useProvideCapture: keep the fn fresh via a ref and
+      // register it in the real per-node capture registry (the host shell would
+      // invoke it at placement). The browser primitive renders with nodeId 'w1'.
+      useProvideCapture(fn: (pt: { clientX: number; clientY: number }) => Record<string, unknown> | undefined) {
+        const fnRef = useRef(fn)
+        fnRef.current = fn
+        useEffect(() => {
+          registerPinCapture('w1', (pt) => fnRef.current(pt))
+          return () => unregisterPinCapture('w1')
+        }, [])
+      },
     },
   }
 }
@@ -71,100 +83,96 @@ const okEnvelope = () => ({ ok: true, status: 200, json: async () => ({ ok: true
 
 beforeEach(() => httpFetch.mockReset())
 
+// Stub the iframe's bounding box (and optionally contentDocument) after render so
+// the registered capture fn maps the drop point correctly. Returns the iframe el.
+function stubIframe(
+  container: HTMLElement,
+  rect: Partial<DOMRect>,
+  contentDocument?: Document | null,
+): HTMLIFrameElement {
+  const iframeEl = container.querySelector('iframe') as HTMLIFrameElement
+  vi.spyOn(iframeEl, 'getBoundingClientRect').mockReturnValue({
+    left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => {}, ...rect,
+  } as DOMRect)
+  if (contentDocument !== undefined) {
+    Object.defineProperty(iframeEl, 'contentDocument', { configurable: true, get: () => contentDocument })
+  }
+  return iframeEl
+}
+
 describe('BrowserPrimitive pin integration', () => {
-  it('enriches a fresh shell-placed pin once with the current url + doc coords', async () => {
-    const store = makePinStore([pin({ context: undefined })])
+  beforeEach(() => unregisterPinCapture('w1'))
+
+  // ── Capture front door (api.pins.useProvideCapture). The browser registers a
+  // capture fn at render; the host invokes it at the drop point. We exercise it
+  // by reading the registry and calling it with a client point + stubbed iframe
+  // geometry — capture now happens AT placement, not via a reactive effect. ──
+  it('registers a capture fn that returns url + iframe-body-relative doc coords', () => {
+    const store = makePinStore([])
     const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
     const { container } = render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
-    // jsdom returns zero rects by default; stub both elements so the 0-size guard
-    // passes and enrichment proceeds.
-    const rootEl = container.firstElementChild as HTMLElement
-    const iframeEl = container.querySelector('iframe') as HTMLIFrameElement
-    vi.spyOn(rootEl, 'getBoundingClientRect').mockReturnValue({
-      left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON: () => {},
-    } as DOMRect)
-    vi.spyOn(iframeEl, 'getBoundingClientRect').mockReturnValue({
-      left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON: () => {},
-    } as DOMRect)
-    // Re-trigger the enrichment effect by updating the store after geometry is stubbed.
-    act(() => { store.set([pin({ context: undefined })]) })
-    // The enrichment effect writes context.
-    await waitFor(() => expect(store.get()[0]!.context).toBeTruthy())
-    const ctx = store.get()[0]!.context!
+    // Iframe sits below a 44px toolbar; a same-origin doc with no real element
+    // under the point (jsdom elementFromPoint ⇒ null) ⇒ no target, coords-only.
+    stubIframe(container, { left: 0, top: 44, width: 800, height: 600 }, document)
+
+    const capture = getPinCapture('w1')
+    expect(capture).toBeTruthy()
+    // Drop at client (400, 322): vx = 400-0 = 400, vy = 322-44 = 278; scroll 0.
+    const ctx = capture!({ clientX: 400, clientY: 322 })!
     expect(ctx.url).toBe('http://localhost:3000/')
-    expect(typeof ctx.docX).toBe('number')
-    expect(typeof ctx.docY).toBe('number')
-  })
-
-  it('removes toolbar header from vertical coord when enriching (getBoundingClientRect geometry)', async () => {
-    // Verify the fixed enrichment: nx/ny are normalized against the whole widget
-    // container (root element), but the iframe sits BELOW the toolbar.  The
-    // enrichment must subtract the header offset so docY is iframe-body-relative.
-    //
-    // Geometry in this test:
-    //   host (root) rect : { left:0, top:0, width:800, height:644 }
-    //   iframe rect      : { left:0, top:44, width:800, height:600 }  (HEADER=44)
-    //
-    // Pin dropped at nx=0.5, ny=0.5:
-    //   clientX = 0 + 0.5*800 = 400
-    //   clientY = 0 + 0.5*644 = 322
-    //   vx = 400 - 0 = 400           (iframe-body-relative x)
-    //   vy = 322 - 44 = 278          (iframe-body-relative y, header removed)
-    //   scrollX=0, scrollY=10 (mocked)
-    //   docX = 400 + 0 = 400
-    //   docY = 278 + 10 = 288
-    const HEADER = 44
-    const HOST_W = 800, HOST_H = 644
-    const IFR_H = HOST_H - HEADER  // 600
-
-    const store = makePinStore([pin({ nx: 0.5, ny: 0.5, context: undefined })])
-    const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
-
-    const { container } = render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
-
-    // Stub getBoundingClientRect on the root and the iframe after render.
-    const rootEl = container.firstElementChild as HTMLElement
-    const iframeEl = container.querySelector('iframe') as HTMLIFrameElement
-
-    vi.spyOn(rootEl, 'getBoundingClientRect').mockReturnValue({
-      left: 0, top: 0, right: HOST_W, bottom: HOST_H,
-      width: HOST_W, height: HOST_H, x: 0, y: 0, toJSON: () => {},
-    } as DOMRect)
-    vi.spyOn(iframeEl, 'getBoundingClientRect').mockReturnValue({
-      left: 0, top: HEADER, right: HOST_W, bottom: HOST_H,
-      width: HOST_W, height: IFR_H, x: 0, y: HEADER, toJSON: () => {},
-    } as DOMRect)
-
-    // Also stub contentWindow scroll to give a non-zero scrollY so we can
-    // verify it's added correctly.
-    Object.defineProperty(iframeEl, 'contentWindow', {
-      configurable: true,
-      get: () => ({ scrollX: 0, scrollY: 10 }),
-    })
-
-    // Re-trigger enrichment by updating the pin store (simulates the effect
-    // re-running after layout is available).
-    act(() => {
-      store.set([pin({ nx: 0.5, ny: 0.5, context: undefined })])
-    })
-
-    await waitFor(() => expect(store.get()[0]!.context).toBeTruthy())
-    const ctx = store.get()[0]!.context!
-    expect(ctx.url).toBe('http://localhost:3000/')
-    // docX = 0.5 * 800 - 0 (no horizontal iframe offset) = 400 + scrollX=0
     expect(ctx.docX).toBe(400)
-    // docY = (0.5 * 644 - 44) + scrollY=10 = 278 + 10 = 288
-    expect(ctx.docY).toBe(288)
+    expect(ctx.docY).toBe(278)   // header offset removed
+    expect(ctx.target).toBeUndefined()  // no element under the point
   })
 
-  it('does not re-enrich a pin that already carries context', async () => {
-    const store = makePinStore([pin({ context: { url: 'http://localhost:3000/', docX: 7, docY: 9 } })])
-    const spy = vi.spyOn(store.api, 'update')
+  it('capture fn includes a DOM target when an element is under the point', () => {
+    const store = makePinStore([])
     const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
-    render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
-    await act(async () => { await Promise.resolve() })
-    expect(spy).not.toHaveBeenCalled()
-    expect(store.get()[0]!.context).toEqual({ url: 'http://localhost:3000/', docX: 7, docY: 9 })
+    const { container } = render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
+
+    // Build a same-origin-ish document whose elementFromPoint returns an <h2>.
+    const h2 = document.createElement('h2')
+    h2.textContent = 'Pricing'
+    const fakeDoc = {
+      elementFromPoint: () => h2,
+    } as unknown as Document
+    stubIframe(container, { left: 0, top: 0, width: 800, height: 600 }, fakeDoc)
+
+    const ctx = getPinCapture('w1')!({ clientX: 100, clientY: 50 })!
+    expect(ctx.url).toBe('http://localhost:3000/')
+    expect((ctx.target as { tag: string }).tag).toBe('h2')
+    expect(ctx.docX).toBe(100)
+    expect(ctx.docY).toBe(50)
+  })
+
+  it('cross-origin doc yields no target but still url + doc coords', () => {
+    const store = makePinStore([])
+    const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
+    const { container } = render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
+    // contentDocument access throws (cross-origin) — capture swallows and returns
+    // url + coords only.
+    const iframeEl = container.querySelector('iframe') as HTMLIFrameElement
+    vi.spyOn(iframeEl, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON: () => {},
+    } as DOMRect)
+    Object.defineProperty(iframeEl, 'contentDocument', {
+      configurable: true,
+      get: () => { throw new Error('cross-origin') },
+    })
+
+    const ctx = getPinCapture('w1')!({ clientX: 10, clientY: 20 })!
+    expect(ctx.url).toBe('http://localhost:3000/')
+    expect(ctx.target).toBeUndefined()
+    expect(ctx.docX).toBe(10)
+    expect(ctx.docY).toBe(20)
+  })
+
+  it('capture returns undefined when the iframe is not laid out (0-size)', () => {
+    const store = makePinStore([])
+    const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
+    const { container } = render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
+    stubIframe(container, { left: 0, top: 0, width: 0, height: 0 }, document)
+    expect(getPinCapture('w1')!({ clientX: 100, clientY: 100 })).toBeUndefined()
   })
 
   it('renders a current-page pin and hides an other-page pin', () => {

@@ -95,8 +95,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
     const inputRef = useRef<HTMLInputElement>(null)
     const iframeRef = useRef<HTMLIFrameElement>(null)
     // Root element ref — the outermost div of this component, filling the shell
-    // container box. Used to map container-normalized nx/ny drop coords into real
-    // client coords before translating them into iframe-body-relative coords.
+    // container box.
     const rootRef = useRef<HTMLDivElement>(null)
 
     // Pins are host-owned (one PinSet per space); the browser reads its node's
@@ -115,60 +114,34 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
       if (b) { try { b.win.removeEventListener('scroll', b.handler); if (b.raf) b.win.cancelAnimationFrame(b.raf) } catch { /* gone */ } }
     }, [])
 
-    // Enrich shell-placed pins ONCE. The host shell drops a pin via its corner
-    // affordance with only nx/ny (normalized to the whole widget container box)
-    // and NO context. The browser turns that viewport point into a content-glued
-    // pin: capture DOM context at the point and record absolute document coords
-    // (docX/docY = iframe-body-relative pixel + scroll) so the marker tracks
-    // content as the page scrolls.
+    // Pin context capture FRONT DOOR. The host shell invokes this at the drop
+    // point (handlePinPlaceUp) — capture happens AT placement, not reactively.
+    // We turn the viewport drop point into a content-glued pin: DOM context at
+    // the point plus absolute document coords (docX/docY = iframe-body-relative
+    // pixel + scroll) so the marker tracks content as the page scrolls.
     //
-    // Coordinate mapping: nx/ny are normalized against the shell container, which
-    // equals the root element of this component. The iframe sits below the URL
-    // toolbar, so its top is offset from the root top by the toolbar height.
-    // We use getBoundingClientRect on both the root and the iframe to convert the
-    // container-normalized point into iframe-body-relative viewport pixels.
+    // The host passes real clientX/clientY; the iframe sits below the URL toolbar,
+    // so we offset by the iframe's live bounding box (ifr.left/top) to get
+    // iframe-body-relative viewport pixels, then add the current scroll. The fn
+    // closes over the latest `url`/`iframeScroll` — createApi keeps it fresh via a
+    // ref, so registration stays stable while the closure always sees live state.
     //
-    // A pin placed on this node always belongs to the page loaded at placement
-    // time, so enriching `!context` pins with the current `url` is correct; once
-    // `context` is set the effect no-ops on it (and never touches a pin already
-    // carrying a different url's context).
-    useEffect(() => {
-      const fresh = pins.filter(p => !p.context)
-      if (fresh.length === 0) return
-      const iframeEl = iframeRef.current
-      const rootEl = rootRef.current
-      const win = iframeEl?.contentWindow
-      // Resolve real bounding boxes to correctly map container-normalized coords
-      // into iframe-body-relative coords, accounting for the toolbar header offset.
-      const hostRect = rootEl?.getBoundingClientRect()
-      const ifrRect = iframeEl?.getBoundingClientRect()
-      // Skip enrichment if layout hasn't happened yet (zero-sized elements in
-      // initial render or when invisible). The effect re-runs on the next render
-      // cycle (pins/url/component state changes) so the pin will be enriched once
-      // geometry is ready. Do NOT mark the pin enriched here — leave context unset.
-      if (!hostRect || !ifrRect || ifrRect.width === 0 || ifrRect.height === 0) return
-      let sx = 0, sy = 0
+    // Returns undefined (pin stays context-less, BrowserPinLayer renders it at the
+    // nx fallback) when the iframe isn't laid out yet. Cross-origin documents yield
+    // no `target` but still carry `url` + docX/docY.
+    api.pins.useProvideCapture(({ clientX, clientY }) => {
+      const ifr = iframeRef.current?.getBoundingClientRect()
+      if (!ifr || ifr.width === 0 || ifr.height === 0) return undefined
+      const vx = clientX - ifr.left
+      const vy = clientY - ifr.top
       let doc: Document | undefined
-      try {
-        if (win) { sx = win.scrollX; sy = win.scrollY; doc = win.document }
-      } catch { /* opaque document — coords-only */ }
-      for (const p of fresh) {
-        // Container-normalized point → client coords (using the root/host box)
-        const clientX = hostRect.left + p.nx * hostRect.width
-        const clientY = hostRect.top + p.ny * hostRect.height
-        // → iframe-body-relative viewport pixels
-        const vx = clientX - ifrRect.left
-        const vy = clientY - ifrRect.top
-        let target: ReturnType<typeof captureTarget>
-        try { if (doc) target = captureTarget(doc, vx, vy, nodeId, url) } catch { /* cross-origin */ }
-        const docX = vx + sx
-        const docY = vy + sy
-        api.pins.update(nodeId, p.id, prev => ({
-          ...prev,
-          context: { url, ...(target ? { target } : {}), docX, docY },
-        }))
-      }
-    }, [pins, nodeId, url])
+      try { doc = iframeRef.current?.contentDocument ?? undefined } catch { /* opaque */ }
+      let target: ReturnType<typeof captureTarget>
+      try { if (doc) target = captureTarget(doc, vx, vy, nodeId, url) } catch { /* cross-origin */ }
+      const docX = vx + iframeScroll.x
+      const docY = vy + iframeScroll.y
+      return { url, ...(target ? { target } : {}), docX, docY }
+    })
 
     const submitPin = useCallback(async (id: string) => {
       const pin = pins.find(p => p.id === id)
