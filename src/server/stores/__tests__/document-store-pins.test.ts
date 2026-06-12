@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { DocumentStore } from '../document-store'
 import { emptyPinSet, addPin } from '../../../domain/pinSet'
 
@@ -38,5 +41,44 @@ describe('DocumentStore pins', () => {
     s.removePinsForNodeAcrossSpaces('run-a')
     expect(s.getPinSet('space-1')!.pins.map(p => p.id)).toEqual(['pin-2'])
     expect(s.getPinSet('space-1')!.rev).toBe(2)
+  })
+
+  it('removePinsForNodeAcrossSpaces drops a node from every space (multi-space GC)', () => {
+    const s = new DocumentStore()
+    s.upsertPinSet('space-1', { ...addPin(emptyPinSet('space-1'), mkPin('p1', 'run-x')), rev: 1 })
+    s.upsertPinSet('space-2', { ...addPin(emptyPinSet('space-2'), mkPin('p2', 'run-x')), rev: 1 })
+    s.removePinsForNodeAcrossSpaces('run-x')
+    expect(s.getPinSet('space-1')!.pins).toHaveLength(0)
+    expect(s.getPinSet('space-2')!.pins).toHaveLength(0)
+  })
+
+  it('removePinsForNodeAcrossSpaces is a no-op when no space pins the node', () => {
+    const s = new DocumentStore()
+    s.upsertPinSet('space-1', { ...addPin(emptyPinSet('space-1'), mkPin('p1', 'run-a')), rev: 5 })
+    const before = s.getPinSet('space-1')!.rev
+    const seen: Array<{ entity: string }> = []
+    s.changes.on('change', (c: { entity: string }) => seen.push(c))
+    s.removePinsForNodeAcrossSpaces('nonexistent-node')
+    expect(s.getPinSet('space-1')!.rev).toBe(before)
+    expect(seen.some(c => c.entity === 'pinSet')).toBe(false)
+  })
+
+  it('persists a pinSet across a save/reload cycle', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pins-reload-'))
+    const file = join(dir, 'snapshot.json')
+    try {
+      const store = new DocumentStore()
+      store.enablePersistence(file)
+      store.upsertPinSet('space-1', { ...addPin(emptyPinSet('space-1'), mkPin('p1', 'run-a')), rev: 1 })
+      store.flush()
+
+      const reloaded = new DocumentStore()
+      reloaded.enablePersistence(file)
+      const after = reloaded.getPinSet('space-1')!
+      expect(after.pins.map(p => p.id)).toEqual(['p1'])
+      expect(after.rev).toBe(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

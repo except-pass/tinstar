@@ -165,6 +165,8 @@ export class DocumentStore {
       if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
       if (data.pluginWidgets) for (const w of data.pluginWidgets) this.pluginWidgets.set(w.id, w)
       if (data.constellationGraphs) for (const g of data.constellationGraphs) this.constellationGraphs.set(g.spaceId, migrateSnapEdges(g))
+      // Pins have no legacy schema, so no migrate hook — load straight.
+      if (data.pinSets) for (const set of data.pinSets) this.pinSets.set(set.spaceId, set)
       if (data.topicMetadata) for (const m of data.topicMetadata) this.topicMetadata.set(m.subject, m)
     } catch {
       // No file or corrupt — start fresh
@@ -711,6 +713,7 @@ export class DocumentStore {
       imageWidgets: this.getAllImageWidgets(),
       pluginWidgets: this.getAllPluginWidgets(),
       constellationGraphs: this.getAllConstellationGraphs(),
+      pinSets: this.getAllPinSets(),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -736,6 +739,7 @@ export class DocumentStore {
     for (const [id, e] of this.imageWidgets) if (e.spaceId === spaceId) this.imageWidgets.delete(id)
     for (const [id, e] of this.pluginWidgets) if (e.spaceId === spaceId) this.pluginWidgets.delete(id)
     this.constellationGraphs.delete(spaceId)
+    this.pinSets.delete(spaceId)
     this.changes.emit('change', { entity: 'all', id: '*', data: null })
   }
 
@@ -756,6 +760,7 @@ export class DocumentStore {
       this.artifacts.clear()
       this.imageWidgets.clear()
       this.constellationGraphs.clear()
+      this.pinSets.clear()
       // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
     }
