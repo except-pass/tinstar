@@ -193,6 +193,32 @@ once. Leave `browserWidget.notes` in place for one release as a rollback safety 
   bubble; reposition; submit reaches the backing session; browser pins still glue on scroll.
 - Type-check `-p tsconfig.app.json`; vitest with `--exclude='e2e/**'` (per docs/testing.md).
 
+## Deferred: widget-entity unification (intentional)
+
+Building pins surfaced a real smell: **backend persistence is heterogeneous** while the frontend
+is not. Recorded here so the deferral is a decision, not an oversight.
+
+- **Already unified (frontend):** one `WidgetRegistration`, one `CanvasWidgetShell`, one
+  `WidgetProps`. This is why pins-in-the-shell work uniformly across all widget types.
+- **Not unified (backend):** five separate docstore Maps (`runs`, `browserWidgets`,
+  `editorWidgets`, `imageWidgets`, `pluginWidgets`) with uneven CRUD — browser/run/plugin expose
+  PATCH; editor/image are POST/DELETE-only. The generic target already exists as
+  `pluginWidgets` (the v5 unified widget); browser/editor/image are legacy bespoke types that
+  predate it.
+- **Why pins don't wait for it:** pins are stored *off* the entity — a universal per-space store
+  keyed by node id, exactly like `config.ui.layouts` (position) and `constellationGraph`
+  (snap/membership). They land on the unified side of the line, add nothing to the per-entity
+  debt, and survive a future unification unchanged. The only contact points with entity
+  heterogeneity are GC-on-delete (one hook per delete path) and `resolveBackingSession` — both
+  small, both survivable.
+- **What a future unification would do (its own spec, V6-scale):** collapse the legacy entity
+  stores toward the `pluginWidgets` model — a single `Widget` base (id, type, type-specific data
+  blob), uniform PATCH, one delete path, with a one-time migration of already-persisted docstore
+  data. Pins are a reference implementation of the universal-property pattern that effort would
+  generalize. It must not ride on this feature: high blast radius (every store/endpoint/SSE
+  channel + persisted-data migration, against the ADR-0002 plugin boundary) and no place in a
+  point release.
+
 ## Future (out of scope)
 
 - Pin lists / jump-to-pin navigation.
