@@ -692,6 +692,7 @@ export class DocumentStore {
       imageWidgets: this.getAllImageWidgets().filter(inSpace),
       pluginWidgets: this.getAllPluginWidgets().filter(inSpace),
       constellationGraphs: this.getAllConstellationGraphs().filter(inSpace),
+      pinSets: this.getAllPinSets().filter(inSpace),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }

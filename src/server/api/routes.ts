@@ -42,6 +42,7 @@ import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
+import { isPinSet } from '../../domain/pinSet'
 import { parseAttach, type ParsedAttach } from './anchorAttach'
 import { planAttach } from './attachPlan'
 import { spec as openapiSpec } from './openapi'
@@ -2561,6 +2562,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // success — the revision gate drops them, so the doc is not stored.
       if (!ctx.docStore.upsertConstellationGraph(spaceId, { ...migrated, spaceId })) {
         fail(res, 'CONFLICT', 'stale constellation graph revision'); return
+      }
+      ok(res, null)
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
+    return true
+  }
+
+  // PUT /api/pins/:spaceId — replace a space's pin set (whole-doc, atomic)
+  if (method === 'PUT' && url.startsWith('/api/pins/')) {
+    const spaceId = decodeURIComponent(url.slice('/api/pins/'.length))
+    if (!ctx.docStore.getSpace(spaceId)) { fail(res, 'NOT_FOUND', 'space not found'); return true }
+    readBody(req).then(body => {
+      let parsed: unknown
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
+      if (!isPinSet(parsed)) { fail(res, 'BAD_REQUEST', 'invalid pin set'); return }
+      // Reject stale/equal-revision writes with a conflict rather than a false
+      // success — the revision gate drops them, so the doc is not stored.
+      if (!ctx.docStore.upsertPinSet(spaceId, { ...parsed, spaceId })) {
+        fail(res, 'CONFLICT', 'stale pin set revision'); return
       }
       ok(res, null)
     }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
