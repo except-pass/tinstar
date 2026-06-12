@@ -272,4 +272,38 @@ describe('BrowserPrimitive pin integration', () => {
     fireEvent.click(screen.getByTestId('pin-delete-p1'))
     expect(store.get()).toHaveLength(0)
   })
+
+  // ── Write-side M2 regression: repositioning a url-less pin must stamp the
+  // current page url into the pin's context (prevents the pin from vanishing on
+  // the next page-load because onCurrentPage treats a url-less context as
+  // current-page, but ONLY when url is undefined — a stale url would hide it).
+  // The read-side (onCurrentPage tolerance) is covered in BrowserPinLayer.test;
+  // THIS test proves the write side: onReposition → api.pins.update stamps url. ──
+  it('reposition stamps current page url into a previously url-less pin context (M2 write-side)', () => {
+    // Seed a pin whose context has docX/docY but NO url — the pre-fix legacy shape.
+    const store = makePinStore([pin({ context: { docX: 50, docY: 60 } })])
+    const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
+    render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
+
+    // Stub getBoundingClientRect globally so the BrowserPinLayer's layerRef
+    // returns a known box for the docX/docY computation during the drag.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON: () => {},
+    } as DOMRect)
+
+    const marker = screen.getByTestId('pin-marker-p1')
+    // Past-threshold drag (dx=160, dy=120 >> 8px threshold).
+    fireEvent.pointerDown(marker, { pointerId: 1, clientX: 50, clientY: 60 })
+    fireEvent.pointerMove(marker, { pointerId: 1, clientX: 210, clientY: 180 })
+    fireEvent.pointerUp(marker,   { pointerId: 1, clientX: 210, clientY: 180 })
+
+    vi.restoreAllMocks()
+
+    const stored = store.get()[0]!
+    // url must now be stamped with the widget's current page url.
+    expect(stored.context?.url).toBe('http://localhost:3000/')
+    // docX/docY must reflect the dragged position (clientX - rect.left + scroll.x/y, scroll=0).
+    expect(stored.context?.docX).toBe(210)
+    expect(stored.context?.docY).toBe(180)
+  })
 })
