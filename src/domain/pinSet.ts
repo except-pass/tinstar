@@ -68,7 +68,7 @@ export function isPinSet(v: unknown): v is PinSet {
   if (v === null || typeof v !== 'object') return false
   const o = v as Record<string, unknown>
   if (typeof o.spaceId !== 'string' || !Array.isArray(o.pins)) return false
-  if (!(typeof o.rev === 'undefined' || typeof o.rev === 'number')) return false
+  if (!(o.rev === undefined || (typeof o.rev === 'number' && Number.isSafeInteger(o.rev) && o.rev >= 0))) return false
   return o.pins.every(p => {
     if (p === null || typeof p !== 'object') return false
     const pin = p as Record<string, unknown>

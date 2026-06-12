@@ -137,6 +137,24 @@ describe('PUT /api/pins/:spaceId', () => {
     expect(stored!.spaceId).toBe(SPACE_ID)
   })
 
+  it('handles URL-encoded spaceId', async () => {
+    const encodedSpaceId = 'space%2F1'
+    const decodedSpaceId = 'space/1'
+    testCtx.docStore.upsertSpace(decodedSpaceId, { id: decodedSpaceId, name: 'Slashy', createdAt: new Date().toISOString() })
+    const set = emptyPinSet(decodedSpaceId)
+
+    const res = await testCtx.fetch(`/api/pins/${encodedSpaceId}`, {
+      method: 'PUT',
+      body: JSON.stringify(set),
+    })
+
+    expect(res.status).toBe(200)
+
+    const stored = testCtx.docStore.getPinSet(decodedSpaceId)
+    expect(stored).toBeDefined()
+    expect(stored!.spaceId).toBe(decodedSpaceId)
+  })
+
   it('returns 400 on a malformed JSON body instead of hanging', async () => {
     const res = await testCtx.fetch(`/api/pins/${SPACE_ID}`, {
       method: 'PUT',

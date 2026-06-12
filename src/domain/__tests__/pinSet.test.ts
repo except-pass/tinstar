@@ -66,6 +66,14 @@ describe('pinSet', () => {
     expect(isPinSet(null)).toBe(false)
   })
 
+  it('isPinSet rejects an unsafe rev', () => {
+    expect(isPinSet({ spaceId: 's', pins: [], rev: 1.5 })).toBe(false)
+    expect(isPinSet({ spaceId: 's', pins: [], rev: -1 })).toBe(false)
+    expect(isPinSet({ spaceId: 's', pins: [], rev: Number.MAX_SAFE_INTEGER + 1 })).toBe(false)
+    expect(isPinSet({ spaceId: 's', pins: [], rev: 3 })).toBe(true)
+    expect(isPinSet({ spaceId: 's', pins: [] })).toBe(true) // undefined rev still ok
+  })
+
   it('mutators do not mutate their input', () => {
     const s = addPin(emptyPinSet('s'), pin())
     const snapshot = JSON.parse(JSON.stringify(s))
