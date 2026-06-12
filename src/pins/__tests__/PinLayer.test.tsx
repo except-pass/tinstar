@@ -109,6 +109,56 @@ describe('PinLayer', () => {
     expect(screen.queryByTestId('pin-bubble-a')).toBeNull()
   })
 
+  // M1: a drag now persists ONCE on pointer-up — NOT a PUT per pointer-move.
+  it('persists ONCE on pointer-up after a multi-move drag, with the FINAL coords', () => {
+    const onReposition = vi.fn()
+    const { container } = renderLayer({ onReposition })
+    stubLayerRect(container)
+    const marker = screen.getByTestId('pin-marker-a')
+    fireEvent.pointerDown(marker, { clientX: 10, clientY: 10, pointerId: 1 })
+    // Several moves while dragging — none of these may call onReposition.
+    fireEvent.pointerMove(marker, { clientX: 30, clientY: 10, pointerId: 1 })
+    fireEvent.pointerMove(marker, { clientX: 60, clientY: 20, pointerId: 1 })
+    fireEvent.pointerMove(marker, { clientX: 100, clientY: 40, pointerId: 1 })
+    expect(onReposition).not.toHaveBeenCalled()
+    // Release commits exactly one write with the FINAL position.
+    fireEvent.pointerUp(marker, { clientX: 100, clientY: 40, pointerId: 1 })
+    expect(onReposition).toHaveBeenCalledTimes(1)
+    const [id, nx, ny] = onReposition.mock.calls[0]!
+    expect(id).toBe('a')
+    expect(nx).toBeCloseTo(0.5)  // 100/200
+    expect(ny).toBeCloseTo(0.4)  // 40/100
+  })
+
+  it('tracks the cursor via LOCAL state during a drag (marker style moves before pointer-up)', () => {
+    const onReposition = vi.fn()
+    const { container } = renderLayer({ onReposition })
+    stubLayerRect(container)
+    const marker = screen.getByTestId('pin-marker-a')
+    const wrapper = marker.parentElement as HTMLElement
+    // Starts at the persisted 0.5/0.5 → 50%/50%.
+    expect(wrapper.style.left).toBe('50%')
+    fireEvent.pointerDown(marker, { clientX: 10, clientY: 10, pointerId: 1 })
+    fireEvent.pointerMove(marker, { clientX: 160, clientY: 40, pointerId: 1 })
+    // Mid-drag, BEFORE pointer-up: the marker reflects the live dragPos, not the store.
+    expect(wrapper.style.left).toBe('80%')  // 160/200 = 0.8 → 80%
+    expect(wrapper.style.top).toBe('40%')   // 40/100 = 0.4 → 40%
+    expect(onReposition).not.toHaveBeenCalled()
+  })
+
+  it('does NOT persist on pointer-cancel (cancel == no move)', () => {
+    const onReposition = vi.fn()
+    const onDragActiveChange = vi.fn()
+    const { container } = renderLayer({ onReposition, onDragActiveChange })
+    stubLayerRect(container)
+    const marker = screen.getByTestId('pin-marker-a')
+    fireEvent.pointerDown(marker, { clientX: 10, clientY: 10, pointerId: 1 })
+    fireEvent.pointerMove(marker, { clientX: 100, clientY: 40, pointerId: 1 })
+    fireEvent.pointerCancel(marker, { clientX: 100, clientY: 40, pointerId: 1 })
+    expect(onReposition).not.toHaveBeenCalled()
+    expect(onDragActiveChange).toHaveBeenLastCalledWith(false)
+  })
+
   it('does NOT reposition (and DOES open the bubble) on a sub-threshold click', () => {
     const onReposition = vi.fn()
     const { container } = renderLayer({ onReposition })

@@ -42,10 +42,13 @@ export interface BrowserPinLayerProps {
 
 /** A pin belongs to the current page if its enriched context url matches, OR it
  *  is freshly placed and not yet enriched (no context) — a pin placed on this
- *  node always belongs to the page loaded at placement time. */
+ *  node always belongs to the page loaded at placement time. A context that has
+ *  docX/docY but no url (e.g. an old pin repositioned before the url-stamp fix)
+ *  is also treated as current-page so it can never vanish from storage. */
 function onCurrentPage(pin: Pin, url: string): boolean {
-  if (!pin.context) return true
-  return pin.context.url === url
+  const u = pin.context?.url
+  if (u === undefined) return true
+  return u === url
 }
 
 /** Document-space anchor for a marker. Enriched pins carry docX/docY (glued to
@@ -65,6 +68,9 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
   // sub-threshold release is treated as a click (toggles the bubble). The marker
   // captures the pointer on down, so move/up retarget to it and bubble up here.
   const dragRef = useRef<{ id: string; startX: number; startY: number; moved: boolean } | null>(null)
+  // Live drag position in DOCUMENT coords, rendered from LOCAL state so the marker
+  // tracks the cursor without a store write per move. Persisted once on pointer-up.
+  const [dragPos, setDragPos] = useState<{ id: string; docX: number; docY: number } | null>(null)
   // The overlay div — its bounding box is the docX/docY origin (markers are
   // positioned at docX - scroll.x within it), so reposition math reuses it.
   const layerRef = useRef<HTMLDivElement>(null)
@@ -88,15 +94,37 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
       const r = layerRef.current.getBoundingClientRect()
       const docX = (e.clientX - r.left) + p.scroll.x
       const docY = (e.clientY - r.top) + p.scroll.y
-      p.onReposition(d.id, docX, docY)
+      // Local-only: no onReposition (and thus no PUT) per move — see onPointerUp.
+      setDragPos({ id: d.id, docX, docY })
     }
   }
-  const onPointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent) => {
     const d = dragRef.current
     dragRef.current = null
-    if (!d) return
-    if (d.moved) p.onDragActiveChange?.(false)
-    else setOpenId(cur => (cur === d.id ? null : d.id)) // sub-threshold release == click
+    if (!d) {
+      setDragPos(null)
+      return
+    }
+    if (d.moved) {
+      // Persist the final position exactly once (one PUT per completed reposition).
+      // Prefer the live dragPos; fall back to recomputing from the event if absent.
+      if (dragPos && dragPos.id === d.id) {
+        p.onReposition(d.id, dragPos.docX, dragPos.docY)
+      } else if (layerRef.current) {
+        const r = layerRef.current.getBoundingClientRect()
+        p.onReposition(d.id, (e.clientX - r.left) + p.scroll.x, (e.clientY - r.top) + p.scroll.y)
+      }
+      setDragPos(null)
+      p.onDragActiveChange?.(false)
+    } else {
+      setOpenId(cur => (cur === d.id ? null : d.id)) // sub-threshold release == click
+    }
+  }
+  const onPointerCancel = () => {
+    const d = dragRef.current
+    dragRef.current = null
+    setDragPos(null) // cancel == no move: discard without persisting
+    if (d?.moved) p.onDragActiveChange?.(false)
   }
 
   return (
@@ -106,10 +134,13 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
       style={{ pointerEvents: 'none' }}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerCancel={onPointerCancel}
     >
       {pins.map((pin, i) => {
-        const { x, y } = docPoint(pin, p.iframeWidth, p.iframeHeight)
+        // Render the dragged marker from live local doc-coords so it tracks the
+        // cursor without a store write; others from their persisted/derived coords.
+        const live = dragPos?.id === pin.id ? dragPos : null
+        const { x, y } = live ? { x: live.docX, y: live.docY } : docPoint(pin, p.iframeWidth, p.iframeHeight)
         const isOpen = openId === pin.id
         return (
           <div

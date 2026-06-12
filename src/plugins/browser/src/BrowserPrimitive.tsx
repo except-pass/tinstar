@@ -424,7 +424,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
                   onCommentChange={(id, comment) => api.pins.update(nodeId, id, p => ({ ...p, comment }))}
                   onDelete={(id) => api.pins.remove(nodeId, id)}
                   onSubmit={submitPin}
-                  onReposition={(id, docX, docY) => api.pins.update(nodeId, id, p => ({ ...p, context: { ...(p.context ?? {}), docX, docY } }))}
+                  onReposition={(id, docX, docY) => api.pins.update(nodeId, id, p => ({ ...p, context: { ...(p.context ?? {}), url: p.context?.url ?? url, docX, docY } }))}
                   onDragActiveChange={setMarkerDragging}
                 />
               </>

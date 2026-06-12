@@ -312,7 +312,6 @@ export function CanvasWidgetShell({
       if (pinPlacePointerId.current === null) return
       // Teardown first (clears ref + lowers guard + drops the ghost), then place.
       endPinPlace()
-      setPinGhost(null)
       const rect = containerRef.current?.getBoundingClientRect()
       if (!rect || rect.width === 0 || rect.height === 0) return
       const rawX = (e.clientX - rect.left) / rect.width

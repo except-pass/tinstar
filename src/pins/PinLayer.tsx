@@ -31,6 +31,9 @@ export function PinLayer(p: PinLayerProps) {
   // screen position. A callback ref keeps it in sync as the open pin changes.
   const [openAnchor, setOpenAnchor] = useState<HTMLElement | null>(null)
   const dragRef = useRef<{ id: string; startX: number; startY: number; moved: boolean } | null>(null)
+  // Live drag position, rendered from LOCAL state so the marker tracks the cursor
+  // without a store write per move. Persisted once on pointer-up (see onPointerUp).
+  const [dragPos, setDragPos] = useState<{ id: string; nx: number; ny: number } | null>(null)
   const layerRef = useRef<HTMLDivElement>(null)
 
   const onPointerDown = (pin: Pin) => (e: React.PointerEvent) => {
@@ -48,28 +51,62 @@ export function PinLayer(p: PinLayerProps) {
     if (d.moved && layerRef.current) {
       const r = layerRef.current.getBoundingClientRect()
       const { nx, ny } = localToNormalized(e.clientX - r.left, e.clientY - r.top, r.width, r.height)
-      p.onReposition(d.id, clamp01(nx), clamp01(ny), p.capture?.(clamp01(nx), clamp01(ny)))
+      // Local-only: no onReposition (and thus no PUT) per move — see onPointerUp.
+      setDragPos({ id: d.id, nx: clamp01(nx), ny: clamp01(ny) })
     }
   }
   const onPointerUp = (e: React.PointerEvent) => {
     const d = dragRef.current
     dragRef.current = null
-    if (!d) return
-    if (d.moved) p.onDragActiveChange?.(false)
-    if (classifyPointerUp({ dx: e.clientX - d.startX, dy: e.clientY - d.startY }) === 'click') {
+    if (!d) {
+      setDragPos(null)
+      return
+    }
+    if (d.moved) {
+      // Persist the final position exactly once (one PUT per completed reposition).
+      // Prefer the live dragPos; fall back to recomputing from the event if absent.
+      let nx: number, ny: number
+      if (dragPos && dragPos.id === d.id) {
+        nx = dragPos.nx
+        ny = dragPos.ny
+      } else if (layerRef.current) {
+        const r = layerRef.current.getBoundingClientRect()
+        const n = localToNormalized(e.clientX - r.left, e.clientY - r.top, r.width, r.height)
+        nx = clamp01(n.nx)
+        ny = clamp01(n.ny)
+      } else {
+        setDragPos(null)
+        p.onDragActiveChange?.(false)
+        return
+      }
+      p.onReposition(d.id, nx, ny, p.capture?.(nx, ny))
+      setDragPos(null)
+      p.onDragActiveChange?.(false)
+    } else if (classifyPointerUp({ dx: e.clientX - d.startX, dy: e.clientY - d.startY }) === 'click') {
       setOpenId(cur => (cur === d.id ? null : d.id))
     }
+  }
+  const onPointerCancel = () => {
+    const d = dragRef.current
+    dragRef.current = null
+    setDragPos(null) // cancel == no move: discard without persisting
+    if (d?.moved) p.onDragActiveChange?.(false)
   }
 
   return (
     <div ref={layerRef} className="absolute inset-0 overflow-hidden" style={{ pointerEvents: 'none' }}
-      onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
+      onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}>
       {p.pins.map((pin, i) => {
         const isOpen = openId === pin.id
+        // Render the dragged marker from live local state so it tracks the cursor
+        // without a store write; all other markers from their persisted nx/ny.
+        const live = dragPos?.id === pin.id ? dragPos : null
+        const nx = live ? live.nx : pin.nx
+        const ny = live ? live.ny : pin.ny
         return (
           <div key={pin.id} className="absolute"
             ref={isOpen ? setOpenAnchor : undefined}
-            style={{ left: `${pin.nx * 100}%`, top: `${pin.ny * 100}%`, pointerEvents: 'auto' }}>
+            style={{ left: `${nx * 100}%`, top: `${ny * 100}%`, pointerEvents: 'auto' }}>
             <PinMarker id={pin.id} index={i + 1} sent={!!pin.sentAt} accent={p.accent} comment={pin.comment}
               zoom={p.zoom} onPointerDown={onPointerDown(pin)} />
             {isOpen && (

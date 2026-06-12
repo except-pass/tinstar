@@ -57,6 +57,16 @@ describe('BrowserPinLayer', () => {
     expect(screen.getByTestId('pin-marker-p1')).toBeInTheDocument()
   })
 
+  it('renders a docX/docY-bearing pin with NO url as current-page (M2: never vanish)', () => {
+    // Regression for an old context-less pin that was repositioned before the
+    // url-stamp fix: context exists (docX/docY) but url is undefined. onCurrentPage
+    // must treat it as current-page so it can still render (otherwise it survives in
+    // storage but is invisible forever).
+    render(<BrowserPinLayer {...baseProps}
+      pins={[pin({ context: { docX: 100, docY: 150 } })]} />)
+    expect(screen.getByTestId('pin-marker-p1')).toBeInTheDocument()
+  })
+
   it('hides pins whose context url is a different page', () => {
     render(<BrowserPinLayer {...baseProps}
       pins={[pin({ context: { url: 'http://x/', docX: 0, docY: 0 } }),
@@ -116,7 +126,7 @@ describe('BrowserPinLayer', () => {
       } as DOMRect)
     }
 
-    it('drag past threshold calls onReposition with doc coords (clientX - rect.left + scroll.x)', () => {
+    it('drag persists ONCE on pointer-up with the FINAL doc coords (clientX - rect.left + scroll.x)', () => {
       const onReposition = vi.fn()
       const onDragActiveChange = vi.fn()
       stubLayerRect(0, 0, 800, 600)
@@ -124,14 +134,47 @@ describe('BrowserPinLayer', () => {
       const marker = screen.getByTestId('pin-marker-p1')
 
       fireEvent.pointerDown(marker, { pointerId: 1, clientX: 100, clientY: 100 })
-      // Move 30px right (>threshold) → drag. Up bubbles to the layer.
+      // M1: several moves while dragging — NONE may call onReposition (no PUT-per-move).
       fireEvent.pointerMove(marker, { pointerId: 1, clientX: 130, clientY: 110 })
-
+      fireEvent.pointerMove(marker, { pointerId: 1, clientX: 200, clientY: 180 })
+      fireEvent.pointerMove(marker, { pointerId: 1, clientX: 240, clientY: 210 })
       expect(onDragActiveChange).toHaveBeenCalledWith(true)
-      // docX = 130 - 0 + 10 = 140 ; docY = 110 - 0 + 50 = 160
-      expect(onReposition).toHaveBeenCalledWith('p1', 140, 160)
+      expect(onReposition).not.toHaveBeenCalled()
 
-      fireEvent.pointerUp(marker, { pointerId: 1, clientX: 130, clientY: 110 })
+      // Release commits exactly one write with the FINAL position.
+      fireEvent.pointerUp(marker, { pointerId: 1, clientX: 240, clientY: 210 })
+      // docX = 240 - 0 + 10 = 250 ; docY = 210 - 0 + 50 = 260
+      expect(onReposition).toHaveBeenCalledTimes(1)
+      expect(onReposition).toHaveBeenCalledWith('p1', 250, 260)
+      expect(onDragActiveChange).toHaveBeenLastCalledWith(false)
+    })
+
+    it('tracks the cursor via LOCAL state during a drag (marker style moves before pointer-up)', () => {
+      const onReposition = vi.fn()
+      stubLayerRect(0, 0, 800, 600)
+      render(<BrowserPinLayer {...baseProps} scroll={{ x: 10, y: 50 }} onReposition={onReposition} />)
+      const marker = screen.getByTestId('pin-marker-p1')
+      const wrapper = marker.parentElement as HTMLElement
+      // Persisted: docX 100, docY 150, scroll 10/50 → left 90, top 100.
+      expect(wrapper.style.left).toBe('90px')
+      fireEvent.pointerDown(marker, { pointerId: 1, clientX: 100, clientY: 100 })
+      fireEvent.pointerMove(marker, { pointerId: 1, clientX: 240, clientY: 210 })
+      // Mid-drag: live docX 250 / docY 260 → left 250-10=240, top 260-50=210.
+      expect(wrapper.style.left).toBe('240px')
+      expect(wrapper.style.top).toBe('210px')
+      expect(onReposition).not.toHaveBeenCalled()
+    })
+
+    it('does NOT persist on pointer-cancel (cancel == no move)', () => {
+      const onReposition = vi.fn()
+      const onDragActiveChange = vi.fn()
+      stubLayerRect(0, 0, 800, 600)
+      render(<BrowserPinLayer {...baseProps} onReposition={onReposition} onDragActiveChange={onDragActiveChange} />)
+      const marker = screen.getByTestId('pin-marker-p1')
+      fireEvent.pointerDown(marker, { pointerId: 1, clientX: 100, clientY: 100 })
+      fireEvent.pointerMove(marker, { pointerId: 1, clientX: 240, clientY: 210 })
+      fireEvent.pointerCancel(marker, { pointerId: 1, clientX: 240, clientY: 210 })
+      expect(onReposition).not.toHaveBeenCalled()
       expect(onDragActiveChange).toHaveBeenLastCalledWith(false)
     })
 
