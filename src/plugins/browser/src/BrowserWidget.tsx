@@ -3,6 +3,7 @@
 // Lone exception: `import type` from src/domain/types for widget data shapes.
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { BrowserWidget } from '../../../domain/types'
+import { resolveBackingSession } from '../../../canvas/resolveBackingSession'
 import { makeBrowserPrimitive } from './BrowserPrimitive'
 
 export function makeBrowserWidget(api: TinstarPluginAPI) {
@@ -22,15 +23,9 @@ export function makeBrowserWidget(api: TinstarPluginAPI) {
     // constellation slot is treated as attached to that run's session — so
     // "snap to the run" == "attach", matching what the user expects. Run node
     // ids are `run-<sessionId>` (run.id === sessionId), so strip the prefix.
-    // Computed inline (not memoized): `mySlots`/`nodesInSlot` are fresh each
-    // render, so a useMemo would never hit its cache — and the loop is cheap.
-    let effectiveSessionId = widget.sessionId
-    if (!effectiveSessionId) {
-      for (const slot of mySlots) {
-        const runPeer = nodesInSlot(slot).find(id => id !== myNodeId && id.startsWith('run-'))
-        if (runPeer) { effectiveSessionId = runPeer.slice('run-'.length); break }
-      }
-    }
+    // Computed inline (not memoized): context functions are fresh each render,
+    // so a useMemo would never hit its cache — and the loop is cheap.
+    const effectiveSessionId = widget.sessionId ?? resolveBackingSession(myNodeId, { slotsForNode, nodesInSlot }) ?? undefined
 
     const persist = (patch: Partial<Pick<BrowserWidget, 'url' | 'headers' | 'notes'>>) => {
       api.http.fetch(`/api/browser-widgets/${widget.id}`, {
