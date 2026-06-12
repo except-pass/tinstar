@@ -16,6 +16,10 @@ export function activate(api: TinstarPluginAPI) {
       minSize: { width: 320, height: 240 },
       dragHandleSelector: '.widget-drag-handle',
       supportsMinimize: false,
+      // Pins glue to scrolling page content, so the browser self-renders its pin
+      // markers/bubbles (positioned in document coords minus iframe scroll). The
+      // host still owns placement (corner affordance → onCreatePin) and the store.
+      rendersOwnPinMarkers: true,
     }),
   ]
 }

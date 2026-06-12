@@ -27,7 +27,12 @@ export function makeBrowserWidget(api: TinstarPluginAPI) {
     const backingSession = api.constellations.useBackingSession(myNodeId)
     const effectiveSessionId = widget.sessionId ?? backingSession ?? undefined
 
-    const persist = (patch: Partial<Pick<BrowserWidget, 'url' | 'headers' | 'notes'>>) => {
+    // `widget.notes` is LEGACY: page annotations now live in the host-wide pin
+    // system (api.pins), self-rendered by the browser primitive. The browser no
+    // longer writes `notes`; the field is kept read-only on the type for the
+    // Task 9 migration that backfills old notes into pins. Only url/headers are
+    // persisted here.
+    const persist = (patch: Partial<Pick<BrowserWidget, 'url' | 'headers'>>) => {
       api.http.fetch(`/api/browser-widgets/${widget.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -50,8 +55,6 @@ export function makeBrowserWidget(api: TinstarPluginAPI) {
         onNavigate={(url) => persist({ url })}
         onHeadersChange={(headers) => persist({ headers })}
         sessionId={effectiveSessionId}
-        notes={widget.notes}
-        onNotesChange={(notes) => persist({ notes })}
         onClose={() => api.http.fetch(`/api/browser-widgets/${widget.id}`, { method: 'DELETE' }).catch(() => {})}
       />
     )

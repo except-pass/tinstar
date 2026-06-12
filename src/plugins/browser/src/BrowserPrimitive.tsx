@@ -3,11 +3,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
 import { unproxyPath } from './proxyPaths'
-import { NotesToolbar } from './notes/NotesToolbar'
-import { NotesOverlay } from './notes/NotesOverlay'
-import { formatNotesPrompt } from './notes/formatPrompt'
+import { BrowserPinLayer } from './notes/BrowserPinLayer'
+import { formatBrowserPin } from './notes/formatBrowserPin'
 import { captureTarget } from './notes/capture'
-import type { BrowserNote } from '../../../domain/types'
 
 // Re-export: external importers/tests treat BrowserPrimitive as unproxyPath's home.
 export { unproxyPath }
@@ -39,12 +37,8 @@ export interface BrowserPrimitiveProps {
   isHovered?: boolean
   /** Bump this number to force an iframe reload from the host/accessory. */
   reloadSignal?: number
-  /** Attached session id — enables Submit notes. */
+  /** Attached session id — enables submitting a pin to the backing session. */
   sessionId?: string
-  /** Page notes (persisted by the caller). */
-  notes?: BrowserNote[]
-  /** Called when notes change; caller persists. Omit to hide the notes feature entirely. */
-  onNotesChange?: (notes: BrowserNote[]) => void
 }
 
 interface ConsoleEntry {
@@ -84,8 +78,6 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
       isHovered,
       reloadSignal,
       sessionId,
-      notes: notesProp,
-      onNotesChange,
     } = props
 
     const hasHeaders = headers && Object.keys(headers).length > 0
@@ -100,38 +92,15 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
     const inputRef = useRef<HTMLInputElement>(null)
     const iframeRef = useRef<HTMLIFrameElement>(null)
 
-    const notesEnabled = !!onNotesChange
-    const [localNotes, setLocalNotes] = useState<BrowserNote[]>(notesProp ?? [])
-    const [placing, setPlacing] = useState(false)
-    const [openNoteId, setOpenNoteId] = useState<string | null>(null)
+    // Pins are host-owned (one PinSet per space); the browser reads its node's
+    // pins reactively and self-renders them so they glue to scrolling content.
+    const pins = api.pins.useNodePins(nodeId)
     const [iframeScroll, setIframeScroll] = useState({ x: 0, y: 0 })
+    const [iframeSize, setIframeSize] = useState({ width: 0, height: 0 })
     // The currently-bound scroll listener. The iframe's inner Window is replaced
     // on every cross-document navigation (the WindowProxy identity is stable), so
     // we re-bind on each load rather than dedupe by identity — see handleIframeLoad.
     const scrollBindRef = useRef<{ win: Window; handler: () => void; raf: number } | null>(null)
-    const [submitting, setSubmitting] = useState(false)
-    const [submitError, setSubmitError] = useState<string | null>(null)
-
-    // Sync from SSE pushes; local mutations below also call onNotesChange to persist.
-    useEffect(() => { setLocalNotes(notesProp ?? []) }, [notesProp])
-
-    // Fresh view of localNotes for async callbacks that would otherwise close over
-    // a stale snapshot across an await (submitNotes).
-    const localNotesRef = useRef(localNotes)
-    localNotesRef.current = localNotes
-
-    const updateNotes = useCallback((next: BrowserNote[]) => {
-      setLocalNotes(next)
-      onNotesChange?.(next)
-    }, [onNotesChange])
-
-    // Escape cancels placing mode.
-    useEffect(() => {
-      if (!placing) return
-      const h = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlacing(false) }
-      window.addEventListener('keydown', h)
-      return () => window.removeEventListener('keydown', h)
-    }, [placing])
 
     // Tear down the iframe scroll listener (and any pending rAF) on unmount.
     useEffect(() => () => {
@@ -139,63 +108,57 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
       if (b) { try { b.win.removeEventListener('scroll', b.handler); if (b.raf) b.win.cancelAnimationFrame(b.raf) } catch { /* gone */ } }
     }, [])
 
-    const placeNote = useCallback((pt: { viewportX: number; viewportY: number }) => {
-      // Document coords = viewport point + iframe scroll; DOM capture is
-      // best-effort (cross-origin docs and jsdom degrade to coords-only).
-      let sx = 0, sy = 0, dw = 0, dh = 0
-      let target: BrowserNote['target']
+    // Enrich shell-placed pins ONCE. The host shell drops a pin via its corner
+    // affordance with only nx/ny (normalized to the visible iframe box) and NO
+    // context. The browser turns that viewport point into a content-glued pin:
+    // capture DOM context at the point and record absolute document coords
+    // (docX/docY = viewport point + scroll) so the marker tracks content as the
+    // page scrolls. A pin placed on this node always belongs to the page loaded
+    // at placement time, so enriching `!context` pins with the current `url` is
+    // correct; once `context` is set the effect no-ops on it (and never touches a
+    // pin already carrying a different url's context).
+    useEffect(() => {
+      const fresh = pins.filter(p => !p.context)
+      if (fresh.length === 0) return
+      const win = iframeRef.current?.contentWindow
+      // clientWidth/clientHeight = the visible iframe box the shell normalized against.
+      const iw = iframeRef.current?.clientWidth ?? 0
+      const ih = iframeRef.current?.clientHeight ?? 0
+      let sx = 0, sy = 0
+      let doc: Document | undefined
       try {
-        const win = iframeRef.current?.contentWindow
-        const doc = win?.document
-        if (win && doc) {
-          sx = win.scrollX; sy = win.scrollY
-          dw = doc.documentElement?.scrollWidth ?? 0
-          dh = doc.documentElement?.scrollHeight ?? 0
-          target = captureTarget(doc, pt.viewportX, pt.viewportY, nodeId, url)
-        }
+        if (win) { sx = win.scrollX; sy = win.scrollY; doc = win.document }
       } catch { /* opaque document — coords-only */ }
-      const x = pt.viewportX + sx
-      const y = pt.viewportY + sy
-      const newNote: BrowserNote = {
-        id: `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-        url, comment: '',
-        x, y,
-        nx: dw > 0 ? Math.min(1, x / dw) : 0,
-        ny: dh > 0 ? Math.min(1, y / dh) : 0,
-        ...(target ? { target } : {}),
-        createdAt: Date.now(),
+      for (const p of fresh) {
+        const vx = p.nx * iw
+        const vy = p.ny * ih
+        let target: ReturnType<typeof captureTarget>
+        try { if (doc) target = captureTarget(doc, vx, vy, nodeId, url) } catch { /* cross-origin */ }
+        const docX = vx + sx
+        const docY = vy + sy
+        api.pins.update(nodeId, p.id, prev => ({
+          ...prev,
+          context: { url, ...(target ? { target } : {}), docX, docY },
+        }))
       }
-      updateNotes([...localNotes, newNote])
-      setPlacing(false)
-      setOpenNoteId(newNote.id)
-    }, [localNotes, updateNotes, nodeId, url])
+    }, [pins, nodeId, url])
 
-    const submitNotes = useCallback(async () => {
-      const prompt = formatNotesPrompt(localNotes)
-      if (!prompt || !sessionId) return
-      setSubmitting(true)
-      setSubmitError(null)
+    const submitPin = useCallback(async (id: string) => {
+      const pin = pins.find(p => p.id === id)
+      if (!pin || !sessionId) return
       try {
         const res = await api.http.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt }),
+          body: JSON.stringify({ prompt: formatBrowserPin(pin) }),
         })
         const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
         if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
-        const now = Date.now()
-        // Mark only the notes we actually sent, merged into the CURRENT notes
-        // (localNotesRef) — not the pre-await snapshot. Otherwise a note placed
-        // or a comment edited while the request was in flight is overwritten and
-        // durably lost (the placing/editing UI stays live during submit).
-        const sentIds = new Set(localNotes.filter(n => !n.sentAt).map(n => n.id))
-        updateNotes(localNotesRef.current.map(n => (sentIds.has(n.id) ? { ...n, sentAt: now } : n)))
+        api.pins.update(nodeId, id, p => ({ ...p, sentAt: Date.now() }))
       } catch (err) {
-        setSubmitError((err as Error).message)
-      } finally {
-        setSubmitting(false)
+        api.logger?.warn?.('[browser-pins] submit failed:', (err as Error).message)
       }
-    }, [localNotes, sessionId, updateNotes])
+    }, [pins, sessionId, nodeId])
 
     // Listen for console messages from the proxied iframe
     useEffect(() => {
@@ -289,6 +252,9 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
           setIframeScroll({ x: win.scrollX, y: win.scrollY })
         }
       } catch { /* cross-origin */ }
+      // Record the visible iframe box so the pin layer can place not-yet-enriched
+      // pins (whose only coords are nx/ny normalized to that box).
+      setIframeSize({ width: e.currentTarget.clientWidth, height: e.currentTarget.clientHeight })
       let real: string | null
       try {
         const loc = e.currentTarget.contentWindow?.location
@@ -442,19 +408,18 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
                   sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
                   title={title ?? url}
                 />
-                {notesEnabled && (
-                  <NotesOverlay
-                    notes={localNotes.filter(n => n.url === url)}
-                    scroll={iframeScroll}
-                    placing={placing}
-                    accent={accent}
-                    onPlace={placeNote}
-                    onCommentChange={(id, comment) => updateNotes(localNotes.map(n => n.id === id ? { ...n, comment } : n))}
-                    onDelete={(id) => { updateNotes(localNotes.filter(n => n.id !== id)); setOpenNoteId(null) }}
-                    openNoteId={openNoteId}
-                    onToggleOpen={setOpenNoteId}
-                  />
-                )}
+                <BrowserPinLayer
+                  pins={pins}
+                  url={url}
+                  scroll={iframeScroll}
+                  iframeWidth={iframeSize.width}
+                  iframeHeight={iframeSize.height}
+                  accent={accent}
+                  canSubmit={!!sessionId}
+                  onCommentChange={(id, comment) => api.pins.update(nodeId, id, p => ({ ...p, comment }))}
+                  onDelete={(id) => api.pins.remove(nodeId, id)}
+                  onSubmit={submitPin}
+                />
               </>
             ) : (
               <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: hexToRgba(accent, 0.3) }}>
@@ -463,20 +428,6 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
               </div>
             )}
           </div>
-          {notesEnabled && (
-            <NotesToolbar
-              placing={placing}
-              unsentCount={localNotes.filter(n => !n.sentAt).length}
-              totalCount={localNotes.length}
-              hasSession={!!sessionId}
-              submitting={submitting}
-              submitError={submitError}
-              onTogglePlacing={() => setPlacing(v => { if (!v) setOpenNoteId(null); return !v })}
-              onSubmit={submitNotes}
-              onClearAll={() => { updateNotes([]); setOpenNoteId(null) }}
-              accent={accent}
-            />
-          )}
         </div>
 
         {/* Console panel */}
