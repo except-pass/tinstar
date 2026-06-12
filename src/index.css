@@ -17,6 +17,14 @@
     pointer-events: none;
   }
 
+  /* Same guard, but for pin place/reposition drags. A pin can be dragged onto or
+     across an iframe-backed widget (browser/terminal); setPointerCapture does not
+     hold over an <iframe>, so we must disable iframe pointer-events for the
+     duration of the pin drag too (data-pin-dragging is set by InfiniteCanvas). */
+  [data-testid='infinite-canvas'][data-pin-dragging='true'] iframe {
+    pointer-events: none;
+  }
+
   html, body, #root {
     @apply overflow-hidden;
   }

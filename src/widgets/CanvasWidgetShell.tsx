@@ -3,6 +3,9 @@ import type { WidgetRegistration } from './widgetComponentRegistry'
 import { isSnappable } from './widgetComponentRegistry'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import { WidgetIdProvider } from '../core/pluginApi/widgetIdContext'
+import { PinLayer } from '../pins/PinLayer'
+import { clamp01 } from '../pins/pinGestures'
+import type { Pin } from '../domain/pinSet'
 
 const DRAG_THRESHOLD = 5
 
@@ -61,6 +64,20 @@ interface CanvasWidgetShellProps {
   /** Edges that already have a snapped neighbor (a break-link sits there) — the add-widget
    *  [+] is suppressed on these so it only shows on exposed edges. */
   occupiedEdges?: ReadonlySet<'left' | 'right' | 'top' | 'bottom'>
+  /** Pins anchored to this node (normalized coords). When provided alongside the pin
+   *  callbacks the shell renders the default PinLayer (unless the widget renders its
+   *  own markers) plus the drag-to-place hover affordance. */
+  pins?: Pin[]
+  pinAccent?: string
+  pinCanSubmit?: boolean
+  onCreatePin?: (nodeId: string, nx: number, ny: number) => void
+  onRepositionPin?: (id: string, nx: number, ny: number) => void
+  onPinCommentChange?: (id: string, comment: string) => void
+  onDeletePin?: (id: string) => void
+  onSubmitPin?: (id: string) => void
+  /** Toggles the canvas-level iframe pointer guard during place/reposition drags so
+   *  the drag stream isn't swallowed by browser/terminal iframe widgets. */
+  onPinDragActive?: (active: boolean) => void
 }
 
 export function CanvasWidgetShell({
@@ -88,6 +105,15 @@ export function CanvasWidgetShell({
   onDragEnd,
   onAddWidget,
   occupiedEdges,
+  pins,
+  pinAccent,
+  pinCanSubmit,
+  onCreatePin,
+  onRepositionPin,
+  onPinCommentChange,
+  onDeletePin,
+  onSubmitPin,
+  onPinDragActive,
 }: CanvasWidgetShellProps) {
   const {
     component: WidgetComponent,
@@ -114,6 +140,12 @@ export function CanvasWidgetShell({
 
   const frameClass =
     getFrameClass?.({ isDragging, isSelected, isHovered, isDropTarget }) ?? ''
+
+  const pinnable = registration.pinnable !== false
+  // Active placement-drag pointer id; non-null while dragging the pin affordance
+  // onto the widget body. setPointerCapture keeps the stream on the affordance,
+  // but the iframe guard (onPinDragActive) is what makes it survive iframe widgets.
+  const pinPlacePointerId = useRef<number | null>(null)
 
   // Pointer down on shell: fire selection + start drag if on handle
   const handlePointerDown = useCallback(
@@ -225,6 +257,36 @@ export function CanvasWidgetShell({
     onDoubleClickZoom?.(nodeId)
   }, [nodeId, onDoubleClickZoom])
 
+  // Pin drag-to-place: capture the pointer on the affordance, raise the iframe
+  // guard, and on pointer-up drop a pin at the cursor's normalized position
+  // within the widget body (cancel if released outside the widget).
+  const handlePinPlaceDown = useCallback(
+    (e: ReactPointerEvent) => {
+      if (e.button !== 0) return
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+      pinPlacePointerId.current = e.pointerId
+      onPinDragActive?.(true)
+    },
+    [onPinDragActive],
+  )
+
+  const handlePinPlaceUp = useCallback(
+    (e: ReactPointerEvent) => {
+      if (pinPlacePointerId.current === null) return
+      pinPlacePointerId.current = null
+      onPinDragActive?.(false)
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect || rect.width === 0 || rect.height === 0) return
+      const rawX = (e.clientX - rect.left) / rect.width
+      const rawY = (e.clientY - rect.top) / rect.height
+      // Only place when released over the widget body; otherwise treat as cancel.
+      if (rawX < 0 || rawX > 1 || rawY < 0 || rawY > 1) return
+      onCreatePin?.(nodeId, clamp01(rawX), clamp01(rawY))
+    },
+    [nodeId, onCreatePin, onPinDragActive],
+  )
+
   // Escape cancels any in-progress drag or resize
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -301,6 +363,35 @@ export function CanvasWidgetShell({
           isDropTarget={isDropTarget}
         />
       </WidgetIdProvider>
+
+      {pinnable && !registration.rendersOwnPinMarkers && pins && onRepositionPin && (
+        <PinLayer
+          pins={pins}
+          accent={pinAccent ?? '#00f0ff'}
+          zoom={zoom}
+          canSubmit={!!pinCanSubmit}
+          onReposition={(id, nx, ny) => onRepositionPin(id, nx, ny)}
+          onCommentChange={(id, c) => onPinCommentChange?.(id, c)}
+          onDelete={(id) => onDeletePin?.(id)}
+          onSubmit={(id) => onSubmitPin?.(id)}
+          onDragActiveChange={onPinDragActive}
+        />
+      )}
+
+      {pinnable && (isHovered || isSelected) && onCreatePin && (
+        <button
+          data-testid="pin-drop-affordance"
+          className="pointer-events-auto absolute right-1 top-1 z-20 flex h-5 w-5 items-center justify-center rounded-full border border-primary/40 bg-slate-900/90 text-primary opacity-70 transition-opacity hover:opacity-100"
+          style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'top right' }}
+          onPointerDown={handlePinPlaceDown}
+          onPointerUp={handlePinPlaceUp}
+          onPointerCancel={handlePinPlaceUp}
+          onClick={e => e.stopPropagation()}
+          title="Drag onto the widget to drop a pin"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>push_pin</span>
+        </button>
+      )}
 
       {onAddWidget && isSnappable(registration) && (isHovered || isSelected) && (
         <div className="pointer-events-none absolute inset-0">

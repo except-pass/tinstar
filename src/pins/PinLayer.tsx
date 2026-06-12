@@ -19,6 +19,10 @@ export interface PinLayerProps {
   onCommentChange: (id: string, comment: string) => void
   onDelete: (id: string) => void
   onSubmit: (id: string) => void
+  /** Fires true when a marker drag begins (first move past threshold) and false on
+   *  pointer up/cancel. The shell uses this to toggle the iframe pointer guard so a
+   *  reposition drag over a browser/terminal widget isn't swallowed. */
+  onDragActiveChange?: (active: boolean) => void
 }
 
 export function PinLayer(p: PinLayerProps) {
@@ -34,7 +38,10 @@ export function PinLayer(p: PinLayerProps) {
   const onPointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current
     if (!d) return
-    if (classifyPointerUp({ dx: e.clientX - d.startX, dy: e.clientY - d.startY }) === 'drag') d.moved = true
+    if (classifyPointerUp({ dx: e.clientX - d.startX, dy: e.clientY - d.startY }) === 'drag') {
+      if (!d.moved) p.onDragActiveChange?.(true)
+      d.moved = true
+    }
     if (d.moved && layerRef.current) {
       const r = layerRef.current.getBoundingClientRect()
       const { nx, ny } = localToNormalized(e.clientX - r.left, e.clientY - r.top, r.width, r.height)
@@ -45,6 +52,7 @@ export function PinLayer(p: PinLayerProps) {
     const d = dragRef.current
     dragRef.current = null
     if (!d) return
+    if (d.moved) p.onDragActiveChange?.(false)
     if (classifyPointerUp({ dx: e.clientX - d.startX, dy: e.clientY - d.startY }) === 'click') {
       setOpenId(cur => (cur === d.id ? null : d.id))
     }

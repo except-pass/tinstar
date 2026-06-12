@@ -22,6 +22,8 @@ import { PluginWidgetDisabledPlaceholder } from './PluginWidgetDisabledPlacehold
 import { getOrCreatePluginChromeWrapper } from './PluginWidgetChrome'
 import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
+import { usePinSet } from '../hooks/usePinSet'
+import { resolveBackingSession } from '../canvas/resolveBackingSession'
 import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
 import type { Rect, IdRect } from '../canvas/constellationCohesion'
@@ -33,6 +35,9 @@ import { reflowOnResize, type ReflowRect, type ReflowMember } from '../canvas/re
 
 /** Shared empty set so unsnapped widgets reuse one reference (all four [+] edges shown). */
 const EMPTY_EDGES: ReadonlySet<SnapEdge> = new Set()
+
+/** Unique pin id, mirroring the browser's note-id style (`note-<ts36>-<rand>`). */
+const makePinId = (): string => `pin-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
 import { resolveSnapTarget, revalidateSnapTarget, resolveSnapCommit, snapMembership } from '../canvas/snapZoneResolver'
 import type { SnapWidget, SnapTarget, SnapEdge } from '../canvas/snapZoneResolver'
@@ -669,6 +674,41 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
   // Constellation context — must be declared before widget drag callbacks that reference it
   const constellations = useConstellationContext()
+
+  // ── Pins ──────────────────────────────────────────────────────────────────
+  // Universal per-node canvas pins (one PinSet per space). The iframe pointer
+  // guard is raised during place/reposition drags so dragging over browser/
+  // terminal iframe widgets doesn't swallow the pointer stream.
+  const pinSet = usePinSet(activeSpaceId ?? '')
+  const [pinDragging, setPinDragging] = useState(false)
+  const pinCtx = useMemo(
+    () => ({ slotsForNode: constellations.slotsForNode, nodesInSlot: constellations.nodesInSlot }),
+    [constellations.slotsForNode, constellations.nodesInSlot],
+  )
+
+  const submitPin = useCallback(
+    async (pinId: string, nodeId: string) => {
+      const pin = pinSet.set.pins.find(p => p.id === pinId)
+      if (!pin) return
+      const sessionId = resolveBackingSession(nodeId, pinCtx)
+      if (!sessionId) return // button is disabled in this state; guard anyway
+      const label = findNodeLabel(tree, nodeId) ?? nodeId
+      const prompt = `📍 Pinned on ${label} — ${pin.comment || '(no comment)'}`
+      try {
+        const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        })
+        const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
+        if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
+        pinSet.update(pinId, p => ({ ...p, sentAt: Date.now() }))
+      } catch (err) {
+        console.warn('[pins] submit failed:', err)
+      }
+    },
+    [pinSet, pinCtx, tree],
+  )
 
   // ── Add-widget picker + orchestrator ──────────────────────────────────────
   const { entries: catalog } = useWidgetCatalog()
@@ -1721,6 +1761,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
           onAddWidget={isSnapLeaf ? (nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor }) : undefined}
           occupiedEdges={occupiedEdgesFor(node.id)}
+          pins={pinSet.forNode(node.id)}
+          pinAccent={run?.color}
+          pinCanSubmit={resolveBackingSession(node.id, pinCtx) !== null}
+          onCreatePin={(nodeId, nx, ny) => pinSet.create({ id: makePinId(), nodeId, nx, ny, comment: '', createdAt: Date.now() })}
+          onRepositionPin={(id, nx, ny) => pinSet.update(id, p => ({ ...p, nx, ny }))}
+          onPinCommentChange={(id, comment) => pinSet.update(id, p => ({ ...p, comment }))}
+          onDeletePin={(id) => pinSet.remove(id)}
+          onSubmitPin={(id) => submitPin(id, node.id)}
+          onPinDragActive={setPinDragging}
         />
       </Fragment>
     )
@@ -1798,6 +1847,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       tabIndex={-1}
       data-testid="infinite-canvas"
       data-dragging={draggingNodeId ? 'true' : undefined}
+      data-pin-dragging={pinDragging ? 'true' : undefined}
       className="w-full h-full overflow-clip relative outline-none"
       style={{
         cursor: cursorStyle,
