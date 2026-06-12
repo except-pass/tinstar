@@ -1123,7 +1123,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     }
   }, [collectSnapNeighbors, updateRunPosition, layouts, constellations, slotByNode, occupiedSlots])
 
-  // Grid arrange: treemap-style nested layout filling the viewport
   // Rigid snap-clusters derived from the current layouts + snap graph. Passed to
   // preserveCohesion so each arrange path keeps snap-attached widgets as one block.
   const computeClusterGroups = useCallback(() => {
@@ -1131,6 +1130,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return clusterGroups(rects, constellations.graph)
   }, [layouts, constellations.graph])
 
+  // Grid arrange: treemap-style nested layout filling the viewport
   const arrangeGrid = useCallback(() => {
     const el = containerRef.current
     if (!el) return

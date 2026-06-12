@@ -128,3 +128,7 @@ Disable with `TINSTAR_TELEMETRY=0`. For the full Grafana power-user experience: 
 | `TINSTAR_FAST_SIM` | unset | Set to `1` to auto-start mock data simulator |
 | `TINSTAR_NO_SESSIONS` | unset | Set to `1` to skip session management (CI) |
 | `TINSTAR_TELEMETRY` | unset | Set to `0` to disable the embedded Prometheus + Alloy stack |
+
+## License
+
+Released under the [MIT License](LICENSE).
