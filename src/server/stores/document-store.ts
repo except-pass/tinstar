@@ -26,6 +26,7 @@ import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
 import { migrateSnapEdges } from '../../domain/constellationGraph'
 import { type PinSet, removePinsForNode } from '../../domain/pinSet'
+import { migrateAllBrowserNotes } from '../migrations/migrateAllBrowserNotes'
 
 /** Translate a run's status into a default attention signal.
  *  Returns null when the inbox shouldn't surface the run. */
@@ -170,6 +171,15 @@ export class DocumentStore {
       if (data.topicMetadata) for (const m of data.topicMetadata) this.topicMetadata.set(m.subject, m)
     } catch {
       // No file or corrupt — start fresh
+    }
+
+    // One-time, idempotent: migrate legacy browser widget.notes → per-space pins.
+    // Runs after all entities (browserWidgets AND pinSets) are hydrated; only
+    // seeds spaces whose PinSet is absent/empty, so it's safe on every load.
+    try {
+      migrateAllBrowserNotes(this)
+    } catch (err) {
+      console.warn('[docstore] browser-notes → pins migration failed:', err)
     }
 
     // Debounced save on every change
