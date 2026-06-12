@@ -37,8 +37,9 @@ export function PinBubble(p: PinBubbleProps) {
             </button>
             <button data-testid={`pin-submit-${p.id}`} disabled={!p.canSubmit}
               onClick={() => { p.onCommentChange(draft); p.onSubmit() }}
-              className="text-2xs px-1.5 py-0.5 rounded bg-primary/80 text-white disabled:opacity-40 disabled:cursor-not-allowed"
+              className="text-2xs px-1.5 py-0.5 rounded bg-primary/80 text-white flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
               title={p.canSubmit ? 'Send to the agent' : 'Snap into a run to send'}>
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>send</span>
               Send
             </button>
           </div>

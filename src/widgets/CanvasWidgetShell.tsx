@@ -401,16 +401,16 @@ export function CanvasWidgetShell({
       {pinnable && (isHovered || isSelected) && onCreatePin && (
         <button
           data-testid="pin-drop-affordance"
-          className="pointer-events-auto absolute right-1 top-1 z-20 flex h-5 w-5 items-center justify-center rounded-full border border-primary/40 bg-slate-900/90 text-primary opacity-70 transition-opacity hover:opacity-100"
-          style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'top right' }}
+          className="pointer-events-auto absolute left-1 bottom-1 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-primary/40 bg-slate-900/90 text-primary opacity-70 transition-opacity hover:opacity-100"
+          style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'bottom left' }}
           onPointerDown={handlePinPlaceDown}
           onPointerUp={handlePinPlaceUp}
           onPointerCancel={endPinPlace}
           onLostPointerCapture={endPinPlace}
           onClick={e => e.stopPropagation()}
-          title="Drag onto the widget to drop a pin"
+          title="Drag a note onto this widget"
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>push_pin</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>sticky_note_2</span>
         </button>
       )}
 
