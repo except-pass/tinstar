@@ -51,7 +51,7 @@ describe('PinLayer', () => {
     expect(screen.queryByTestId('pin-bubble-a')).toBeNull()
   })
 
-  it('disables Send when canSubmit is false and enables it when true', () => {
+  it('disables Send when canSubmit is false', () => {
     renderLayer({ canSubmit: false })
     clickMarker('a')
     expect((screen.getByTestId('pin-submit-a') as HTMLButtonElement).disabled).toBe(true)
