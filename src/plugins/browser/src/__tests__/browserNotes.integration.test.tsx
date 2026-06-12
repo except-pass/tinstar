@@ -75,13 +75,86 @@ describe('BrowserPrimitive pin integration', () => {
   it('enriches a fresh shell-placed pin once with the current url + doc coords', async () => {
     const store = makePinStore([pin({ context: undefined })])
     const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
-    render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
-    // The iframe onLoad fires in jsdom; the enrichment effect writes context.
+    const { container } = render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
+    // jsdom returns zero rects by default; stub both elements so the 0-size guard
+    // passes and enrichment proceeds.
+    const rootEl = container.firstElementChild as HTMLElement
+    const iframeEl = container.querySelector('iframe') as HTMLIFrameElement
+    vi.spyOn(rootEl, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON: () => {},
+    } as DOMRect)
+    vi.spyOn(iframeEl, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON: () => {},
+    } as DOMRect)
+    // Re-trigger the enrichment effect by updating the store after geometry is stubbed.
+    act(() => { store.set([pin({ context: undefined })]) })
+    // The enrichment effect writes context.
     await waitFor(() => expect(store.get()[0]!.context).toBeTruthy())
     const ctx = store.get()[0]!.context!
     expect(ctx.url).toBe('http://localhost:3000/')
     expect(typeof ctx.docX).toBe('number')
     expect(typeof ctx.docY).toBe('number')
+  })
+
+  it('removes toolbar header from vertical coord when enriching (getBoundingClientRect geometry)', async () => {
+    // Verify the fixed enrichment: nx/ny are normalized against the whole widget
+    // container (root element), but the iframe sits BELOW the toolbar.  The
+    // enrichment must subtract the header offset so docY is iframe-body-relative.
+    //
+    // Geometry in this test:
+    //   host (root) rect : { left:0, top:0, width:800, height:644 }
+    //   iframe rect      : { left:0, top:44, width:800, height:600 }  (HEADER=44)
+    //
+    // Pin dropped at nx=0.5, ny=0.5:
+    //   clientX = 0 + 0.5*800 = 400
+    //   clientY = 0 + 0.5*644 = 322
+    //   vx = 400 - 0 = 400           (iframe-body-relative x)
+    //   vy = 322 - 44 = 278          (iframe-body-relative y, header removed)
+    //   scrollX=0, scrollY=10 (mocked)
+    //   docX = 400 + 0 = 400
+    //   docY = 278 + 10 = 288
+    const HEADER = 44
+    const HOST_W = 800, HOST_H = 644
+    const IFR_H = HOST_H - HEADER  // 600
+
+    const store = makePinStore([pin({ nx: 0.5, ny: 0.5, context: undefined })])
+    const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
+
+    const { container } = render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
+
+    // Stub getBoundingClientRect on the root and the iframe after render.
+    const rootEl = container.firstElementChild as HTMLElement
+    const iframeEl = container.querySelector('iframe') as HTMLIFrameElement
+
+    vi.spyOn(rootEl, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, right: HOST_W, bottom: HOST_H,
+      width: HOST_W, height: HOST_H, x: 0, y: 0, toJSON: () => {},
+    } as DOMRect)
+    vi.spyOn(iframeEl, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: HEADER, right: HOST_W, bottom: HOST_H,
+      width: HOST_W, height: IFR_H, x: 0, y: HEADER, toJSON: () => {},
+    } as DOMRect)
+
+    // Also stub contentWindow scroll to give a non-zero scrollY so we can
+    // verify it's added correctly.
+    Object.defineProperty(iframeEl, 'contentWindow', {
+      configurable: true,
+      get: () => ({ scrollX: 0, scrollY: 10 }),
+    })
+
+    // Re-trigger enrichment by updating the pin store (simulates the effect
+    // re-running after layout is available).
+    act(() => {
+      store.set([pin({ nx: 0.5, ny: 0.5, context: undefined })])
+    })
+
+    await waitFor(() => expect(store.get()[0]!.context).toBeTruthy())
+    const ctx = store.get()[0]!.context!
+    expect(ctx.url).toBe('http://localhost:3000/')
+    // docX = 0.5 * 800 - 0 (no horizontal iframe offset) = 400 + scrollX=0
+    expect(ctx.docX).toBe(400)
+    // docY = (0.5 * 644 - 44) + scrollY=10 = 278 + 10 = 288
+    expect(ctx.docY).toBe(288)
   })
 
   it('does not re-enrich a pin that already carries context', async () => {

@@ -85,3 +85,63 @@ describe('BrowserPinLayer', () => {
     expect(screen.getByTestId('pin-submit-p1')).toBeDisabled()
   })
 })
+
+describe('BrowserPinLayer fresh-pin fallback coords (overlay origin = iframe body)', () => {
+  // The BrowserPinLayer overlay is `absolute inset-0` within the body section
+  // (the `relative` wrapper that sits BELOW the toolbar and covers exactly the
+  // iframe).  iframeWidth/iframeHeight are the iframe's own dimensions (NOT the
+  // whole widget).  A fresh pin's nx/ny was normalized against the whole container
+  // by the shell, so the BrowserPrimitive enrichment effect must correct for the
+  // header offset before writing docX/docY.  Once enriched, the render is simply
+  // docX - scroll.x within the overlay.  These tests verify that the fallback
+  // path (un-enriched pin rendered directly from nx/ny) places the marker at the
+  // expected iframe-body position, and that an enriched pin with a toolbar-
+  // corrected docY renders at the right spot.
+  const HEADER = 44
+  const iframeWidth = 800
+  const iframeHeight = 600  // iframe body height (excludes toolbar)
+
+  it('fresh pin fallback: positioned at nx*iframeWidth / ny*iframeHeight within overlay', () => {
+    // nx=0.5, ny=0.5 with no context.  The overlay covers the iframe body, so
+    // the marker should land at (400, 300) — dead-centre of the iframe.
+    render(
+      <BrowserPinLayer
+        {...baseProps}
+        pins={[pin({ nx: 0.5, ny: 0.5, context: undefined })]}
+        iframeWidth={iframeWidth}
+        iframeHeight={iframeHeight}
+        scroll={{ x: 0, y: 0 }}
+      />,
+    )
+    const marker = screen.getByTestId('pin-marker-p1')
+    expect(marker.parentElement!.style.left).toBe('400px')  // 0.5 * 800
+    expect(marker.parentElement!.style.top).toBe('300px')   // 0.5 * 600
+  })
+
+  it('enriched pin: docY accounts for toolbar offset — docY = (0.5*hostHeight) - headerHeight + scrollY', () => {
+    // Simulate what the fixed enrichment produces.
+    // hostHeight = iframeHeight + HEADER = 644 (full widget box height)
+    // pin dropped at ny=0.5  →  clientY = host.top + 0.5 * 644
+    //                       →  vy = clientY - ifrFrame.top
+    //                            = (host.top + 0.5*644) - (host.top + HEADER)
+    //                            = 0.5*644 - 44 = 322 - 44 = 278
+    //                       →  docY = vy + scrollY = 278 + 20 = 298
+    // Rendered position within overlay: docY - scroll.y = 298 - 20 = 278 = vy ✓
+    const hostHeight = iframeHeight + HEADER  // 644
+    const scrollY = 20
+    const expectedDocY = 0.5 * hostHeight - HEADER + scrollY  // 278
+    render(
+      <BrowserPinLayer
+        {...baseProps}
+        pins={[pin({ nx: 0.5, ny: 0.5, context: { url: 'http://x/', docX: 400, docY: expectedDocY } })]}
+        iframeWidth={iframeWidth}
+        iframeHeight={iframeHeight}
+        scroll={{ x: 0, y: scrollY }}
+      />,
+    )
+    const marker = screen.getByTestId('pin-marker-p1')
+    // Rendered top = docY - scroll.y = (0.5*hostHeight - HEADER + scrollY) - scrollY
+    //             = 0.5*644 - 44 = 278px
+    expect(marker.parentElement!.style.top).toBe('278px')
+  })
+})

@@ -91,6 +91,10 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
     const nextIdRef = useRef(0)
     const inputRef = useRef<HTMLInputElement>(null)
     const iframeRef = useRef<HTMLIFrameElement>(null)
+    // Root element ref — the outermost div of this component, filling the shell
+    // container box. Used to map container-normalized nx/ny drop coords into real
+    // client coords before translating them into iframe-body-relative coords.
+    const rootRef = useRef<HTMLDivElement>(null)
 
     // Pins are host-owned (one PinSet per space); the browser reads its node's
     // pins reactively and self-renders them so they glue to scrolling content.
@@ -109,29 +113,49 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
     }, [])
 
     // Enrich shell-placed pins ONCE. The host shell drops a pin via its corner
-    // affordance with only nx/ny (normalized to the visible iframe box) and NO
-    // context. The browser turns that viewport point into a content-glued pin:
-    // capture DOM context at the point and record absolute document coords
-    // (docX/docY = viewport point + scroll) so the marker tracks content as the
-    // page scrolls. A pin placed on this node always belongs to the page loaded
-    // at placement time, so enriching `!context` pins with the current `url` is
-    // correct; once `context` is set the effect no-ops on it (and never touches a
-    // pin already carrying a different url's context).
+    // affordance with only nx/ny (normalized to the whole widget container box)
+    // and NO context. The browser turns that viewport point into a content-glued
+    // pin: capture DOM context at the point and record absolute document coords
+    // (docX/docY = iframe-body-relative pixel + scroll) so the marker tracks
+    // content as the page scrolls.
+    //
+    // Coordinate mapping: nx/ny are normalized against the shell container, which
+    // equals the root element of this component. The iframe sits below the URL
+    // toolbar, so its top is offset from the root top by the toolbar height.
+    // We use getBoundingClientRect on both the root and the iframe to convert the
+    // container-normalized point into iframe-body-relative viewport pixels.
+    //
+    // A pin placed on this node always belongs to the page loaded at placement
+    // time, so enriching `!context` pins with the current `url` is correct; once
+    // `context` is set the effect no-ops on it (and never touches a pin already
+    // carrying a different url's context).
     useEffect(() => {
       const fresh = pins.filter(p => !p.context)
       if (fresh.length === 0) return
-      const win = iframeRef.current?.contentWindow
-      // clientWidth/clientHeight = the visible iframe box the shell normalized against.
-      const iw = iframeRef.current?.clientWidth ?? 0
-      const ih = iframeRef.current?.clientHeight ?? 0
+      const iframeEl = iframeRef.current
+      const rootEl = rootRef.current
+      const win = iframeEl?.contentWindow
+      // Resolve real bounding boxes to correctly map container-normalized coords
+      // into iframe-body-relative coords, accounting for the toolbar header offset.
+      const hostRect = rootEl?.getBoundingClientRect()
+      const ifrRect = iframeEl?.getBoundingClientRect()
+      // Skip enrichment if layout hasn't happened yet (zero-sized elements in
+      // initial render or when invisible). The effect re-runs on the next render
+      // cycle (pins/url/component state changes) so the pin will be enriched once
+      // geometry is ready. Do NOT mark the pin enriched here — leave context unset.
+      if (!hostRect || !ifrRect || ifrRect.width === 0 || ifrRect.height === 0) return
       let sx = 0, sy = 0
       let doc: Document | undefined
       try {
         if (win) { sx = win.scrollX; sy = win.scrollY; doc = win.document }
       } catch { /* opaque document — coords-only */ }
       for (const p of fresh) {
-        const vx = p.nx * iw
-        const vy = p.ny * ih
+        // Container-normalized point → client coords (using the root/host box)
+        const clientX = hostRect.left + p.nx * hostRect.width
+        const clientY = hostRect.top + p.ny * hostRect.height
+        // → iframe-body-relative viewport pixels
+        const vx = clientX - ifrRect.left
+        const vy = clientY - ifrRect.top
         let target: ReturnType<typeof captureTarget>
         try { if (doc) target = captureTarget(doc, vx, vy, nodeId, url) } catch { /* cross-origin */ }
         const docX = vx + sx
@@ -300,6 +324,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
 
     return (
       <div
+        ref={rootRef}
         className="flex flex-col h-full bg-surface-base border overflow-hidden"
         style={borderStyle}
       >
