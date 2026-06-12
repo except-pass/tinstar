@@ -57,6 +57,56 @@ export interface WidgetRegistration {
    *  host; the host currently snaps using the 8 default anchors, so custom sets
    *  are reserved for future use. Omit to use the defaults. */
   anchors?: Array<{ name: string; x: number; y: number }>
+  /** Pins are a built-in widget capability. Set false to opt a widget out of the
+   *  contextual-pin overlay entirely. Defaults to true. */
+  pinnable?: boolean
+  /** When true the host does NOT render default pin markers for this widget — the
+   *  widget renders its own (e.g. browser glues pins to scrolling page content).
+   *  Placement/gestures/store/bubble remain host-owned. Default false. */
+  rendersOwnPinMarkers?: boolean
+}
+
+/** DOM context captured when a pin is dropped on a browser widget (best-effort;
+ *  absent ⇒ coords-only). Other widgets leave this undefined. Structurally
+ *  mirrors the host's `BrowserNoteTarget`; duplicated here per the plugin-api
+ *  isolation convention (ADR-0002) — the package imports no host domain types. */
+export interface PinContext {
+  /** Browser fills url + target; other widgets leave these undefined. */
+  url?: string
+  target?: {
+    tag: string
+    selector?: string
+    text?: string
+    imageSrc?: string
+    imageAlt?: string
+    within?: { x: number; y: number }
+  }
+  [k: string]: unknown
+}
+
+/** A positioned annotation pinned to a widget's content. Duplicated from the
+ *  host's `src/domain/pinSet.ts` per the plugin-api isolation convention — keep
+ *  the two structurally identical. */
+export interface Pin {
+  id: string
+  nodeId: string
+  /** Normalized 0..1 within the widget's content box (browser interprets these
+   *  as document-content coords when it self-renders). */
+  nx: number
+  ny: number
+  comment: string
+  createdAt: number
+  /** undefined = unsent; set when submitted to the backing session. */
+  sentAt?: number
+  context?: PinContext
+}
+
+/** All pins for one space, revision-gated. Mirrors the host's `PinSet`. */
+export interface PinSet {
+  spaceId: string
+  pins: Pin[]
+  /** Monotonic write revision for conflict resolution. */
+  rev?: number
 }
 
 export interface PluginLogger {
@@ -226,6 +276,23 @@ export interface PluginConstellationsApi {
   useLeave(): () => void
 }
 
+/** Per-node pin access: read a node's pins (reactively) and mutate the space's
+ *  pin set. Pins are host-owned, revision-gated, and stored off the entity (one
+ *  PinSet per space). Mutators publish optimistically and persist in the
+ *  background; failed persists roll back. */
+export interface PluginPinsApi {
+  /** React hook: returns the pins currently placed on `nodeId`. Re-renders on
+   *  any pin change (local optimistic or remote echo). Must be called from
+   *  inside the host shell. */
+  useNodePins(nodeId: string): Pin[]
+  /** Add a pin. Callers generate `pin.id`; no dedupe. */
+  create(nodeId: string, pin: Pin): void
+  /** Update a pin in place by id. No-op if the id isn't found. */
+  update(nodeId: string, id: string, fn: (p: Pin) => Pin): void
+  /** Remove a pin by id. No-op if the id isn't found. */
+  remove(nodeId: string, id: string): void
+}
+
 /** Urgency of a widget's "needs attention" signal. */
 export type AttentionLevel = 'urgent' | 'attention' | 'info'
 
@@ -361,6 +428,7 @@ export interface TinstarPluginAPI {
   hotkeys: PluginHotkeysApi
   canvas: PluginCanvasApi
   constellations: PluginConstellationsApi
+  pins: PluginPinsApi
   watch: PluginWatchApi
   theme: PluginThemeApi
   logger: PluginLogger

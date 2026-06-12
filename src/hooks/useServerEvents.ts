@@ -4,6 +4,7 @@ declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 import { useSyncExternalStore, useCallback } from 'react'
 import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance } from '../domain/types'
 import type { ConstellationGraph } from '../domain/constellationGraph'
+import type { PinSet } from '../domain/pinSet'
 import { isSystemSession, extractMarshal } from '../domain/system-sessions'
 import { apiUrl } from '../apiClient'
 import { dispatchWindowEvent } from '../lib/windowEvents'
@@ -26,6 +27,7 @@ interface ServerState {
   readyQueue: string[]
   pluginWidgets: PluginWidgetInstance[]
   constellationGraphs: ConstellationGraph[]
+  pinSets: PinSet[]
 }
 
 const EMPTY_STATE: ServerState = {
@@ -44,6 +46,7 @@ const EMPTY_STATE: ServerState = {
   readyQueue: [],
   pluginWidgets: [],
   constellationGraphs: [],
+  pinSets: [],
 }
 
 // ─── Singleton SSE store ───────────────────────────────────────────────
@@ -203,6 +206,7 @@ function startSSE() {
       topicMetadata: snapshot.topicMetadata ?? [],
       pluginWidgets: snapshot.pluginWidgets ?? [],
       constellationGraphs: snapshot.constellationGraphs ?? [],
+      pinSets: snapshot.pinSets ?? [],
       // System sessions (e.g. marshal) have dedicated UI — never enter the
       // run set that feeds the canvas/hierarchy/sessions list. They live on
       // `marshal` instead.
@@ -273,7 +277,7 @@ function stopSSE() {
 
 export function applyDelta(prev: ServerState, delta: { entity: string; id: string; data: unknown }): ServerState {
   if (delta.entity === 'all' && delta.data === null) {
-    return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [], marshal: null, editorWidgets: [], browserWidgets: [], imageWidgets: [], constellationGraphs: [] }
+    return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [], marshal: null, editorWidgets: [], browserWidgets: [], imageWidgets: [], constellationGraphs: [], pinSets: [] }
   }
 
   if (delta.entity === 'space') {
@@ -385,6 +389,15 @@ export function applyDelta(prev: ServerState, delta: { entity: string; id: strin
     const g = delta.data as ConstellationGraph
     const idx = graphs.findIndex(x => x.spaceId === g.spaceId)
     return { ...prev, constellationGraphs: idx >= 0 ? graphs.map((x, i) => (i === idx ? g : x)) : [...graphs, g] }
+  }
+
+  if (delta.entity === 'pinSet') {
+    const sets = prev.pinSets
+    const id = delta.id // spaceId
+    if (delta.data === null) return { ...prev, pinSets: sets.filter(s => s.spaceId !== id) }
+    const set = delta.data as PinSet
+    const idx = sets.findIndex(x => x.spaceId === set.spaceId)
+    return { ...prev, pinSets: idx >= 0 ? sets.map((x, i) => (i === idx ? set : x)) : [...sets, set] }
   }
 
   if (delta.entity === 'commit') {

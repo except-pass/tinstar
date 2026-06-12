@@ -1,5 +1,5 @@
 import { useSyncExternalStore, useCallback, useRef, useMemo, useState, useEffect } from 'react'
-import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi, PluginPrimitivesApi, PrimitiveAccessory, RegisterBrowserWidgetOptions, RegisterTerminalWidgetOptions, BrowserHandle, TerminalHandle, WidgetProps } from '@tinstar/plugin-api'
+import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi, PluginPrimitivesApi, PrimitiveAccessory, RegisterBrowserWidgetOptions, RegisterTerminalWidgetOptions, BrowserHandle, TerminalHandle, WidgetProps, Pin } from '@tinstar/plugin-api'
 import { usePluginWidgetData } from './usePluginWidgetData'
 import { makeBrowserPrimitive } from '../../plugins/browser/src/BrowserPrimitive'
 import { TerminalPrimitive } from '../../widgets/primitives/TerminalPrimitive'
@@ -19,6 +19,9 @@ import { useFileWatch } from '../../hooks/useFileWatch'
 import { useImageWatch } from '../../hooks/useImageWatch'
 import { resolveRunAccent, hexToRgba } from '../../components/runAccent'
 import { EventBridge } from './eventBridge'
+import { getPinsBridge } from './pinsBridge'
+import { usePinSet } from '../../hooks/usePinSet'
+import { useServerEvents } from '../../hooks/useServerEvents'
 import { useWidgetId } from './widgetIdContext'
 import { capabilityRegistry } from '../constellationCapabilities'
 
@@ -255,6 +258,27 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     },
   }
 
+  const pins = {
+    useNodePins(nodeId: string): Pin[] {
+      const { state } = useServerEvents()
+      const ps = usePinSet(state.activeSpaceId)
+      return ps.forNode(nodeId)
+    },
+    // Mutators are not hooks — they call through the host-mounted PinsBridge ref
+    // (mirrors the events getBridge() pattern). `nodeId` is carried by the pin
+    // for create and by id-lookup for update/remove, so it is accepted for
+    // contract symmetry but the set is keyed by pin id.
+    create(_nodeId: string, pin: Pin): void {
+      getPinsBridge()?.create(pin)
+    },
+    update(_nodeId: string, id: string, fn: (p: Pin) => Pin): void {
+      getPinsBridge()?.update(id, fn)
+    },
+    remove(_nodeId: string, id: string): void {
+      getPinsBridge()?.remove(id)
+    },
+  }
+
   const watch = {
     file: useFileWatch,
     image: useImageWatch,
@@ -411,6 +435,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     hotkeys,
     canvas,
     constellations,
+    pins,
     watch,
     theme,
     logger,

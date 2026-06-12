@@ -26,6 +26,7 @@ const baseState = (() => {
     readyQueue: [],
     pluginWidgets: [],
     constellationGraphs: [],
+    pinSets: [],
   } as Parameters<typeof applyDelta>[0]
 })()
 

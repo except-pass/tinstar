@@ -17,6 +17,7 @@ import { TaxonomyProvider } from './TaxonomyContext'
 import { EntityMenu } from './EntityMenu'
 import { EntitySettingsDialog } from './EntitySettingsDialog'
 import { ConstellationProvider } from '../hotkeys/ConstellationContext'
+import { PinsBridge } from '../core/pluginApi/PinsBridge'
 import { FocusPathProvider, useFocusPath } from '../hotkeys/FocusPathContext'
 import { useContextRouter } from '../hotkeys/contextRouter'
 import { triggerWidgetFlourish, registerActionHandler, deregisterActionHandler } from '../hotkeys/actionHandlerRegistry'
@@ -840,6 +841,7 @@ function WorkspaceShellInner() {
       <PluginFailedBanner />
       {activeSpaceId ? (
         <ConstellationProvider spaceId={activeSpaceId} nodeIds={allNodeIds}>
+          <PinsBridge spaceId={activeSpaceId} />
           <TaxonomyProvider taxRepo={taxRepo}>
             <div className="flex h-screen w-screen bg-surface-base text-slate-200 font-mono">
               {/* Left column: top bar + sidebar stacked — canvas gets full height */}
