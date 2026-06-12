@@ -23,6 +23,7 @@ import { getOrCreatePluginChromeWrapper } from './PluginWidgetChrome'
 import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
 import { usePinSet } from '../hooks/usePinSet'
+import type { Pin } from '../domain/pinSet'
 import { resolveBackingSession } from '../canvas/resolveBackingSession'
 import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
@@ -201,6 +202,19 @@ interface MarqueeRect {
 const MARQUEE_THRESHOLD = 5
 // Snap-zone snap distance (canvas units)
 const SNAP_DISTANCE = 60
+
+// Build the richest available descriptor for any pin shape (native capture or
+// browser flat blob). Exported for unit testing; used in the batched send-all
+// prompt so each bullet carries meaningful context rather than bare coordinates.
+export function describePinSpot(p: Pin): string {
+  const c = p.context as { capture?: { label?: string }; url?: string; target?: { text?: string; imageAlt?: string; tag?: string } } | undefined
+  if (c?.capture?.label) return c.capture.label
+  if (c?.url) {
+    const el = c.target?.text || c.target?.imageAlt || c.target?.tag
+    return el ? `${el} — ${c.url}` : c.url
+  }
+  return `${Math.round(p.nx * 100)}%,${Math.round(p.ny * 100)}%`
+}
 
 export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onRequestCreateSession, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -724,11 +738,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const widgetPins = pinSet.forNode(nodeId).filter(p => !p.sentAt)
       if (widgetPins.length === 0) return
       const label = findNodeLabel(tree, nodeId) ?? nodeId
-      const bullets = widgetPins.map(p => {
-        const captureLabel = (p.context?.capture as { label?: string } | undefined)?.label
-        const where = captureLabel ?? `${Math.round(p.nx * 100)}%,${Math.round(p.ny * 100)}%`
-        return `• on "${where}" — ${p.comment || '(no comment)'}`
-      }).join('\n')
+      const bullets = widgetPins.map(p =>
+        `• on "${describePinSpot(p)}" — ${p.comment || '(no comment)'}`
+      ).join('\n')
       const prompt = `📍 ${widgetPins.length} pins on ${label}:\n${bullets}`
       try {
         const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
@@ -749,7 +761,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // Remove every pin on a node (no confirm — matches the original toolbar's clear-all).
   const clearAllPins = useCallback(
     (nodeId: string) => {
-      for (const p of pinSet.forNode(nodeId)) pinSet.remove(p.id)
+      pinSet.clearNode(nodeId)
     },
     [pinSet],
   )

@@ -153,6 +153,35 @@ describe('usePinSet no-op short-circuit', () => {
   })
 })
 
+// clearNode removes all pins for a node in a single apply (one PUT).
+describe('usePinSet clearNode', () => {
+  it('removes all pins for the given node with a single PUT', () => {
+    h.serverState = {
+      pinSets: [{
+        spaceId: 's',
+        pins: [pin('a', 'n1'), pin('b', 'n1'), pin('c', 'n2')],
+        rev: 0,
+      }],
+    }
+    const { result } = renderHook(() => usePinSet('s'))
+    act(() => { result.current.clearNode('n1') })
+    // Only 'c' (n2) should remain.
+    expect(result.current.set.pins.map(p => p.id)).toEqual(['c'])
+    // Exactly one PUT was fired.
+    expect(h.puts.length).toBe(1)
+    expect(h.puts[0]!.pins.map((p: { id: string }) => p.id)).toEqual(['c'])
+  })
+
+  it('issues no PUT when the node has no pins (no-op short-circuit)', () => {
+    h.serverState = {
+      pinSets: [{ spaceId: 's', pins: [pin('a', 'n2')], rev: 0 }],
+    }
+    const { result } = renderHook(() => usePinSet('s'))
+    act(() => { result.current.clearNode('n1') })
+    expect(h.puts.length).toBe(0)
+  })
+})
+
 // Writes to two different spaceIds keep independent rev counters.
 describe('usePinSet per-space rev monotonicity', () => {
   it('tracks revisions independently per space across switches', () => {

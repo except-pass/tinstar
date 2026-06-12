@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import { useServerEvents } from './useServerEvents'
 import { apiFetch } from '../apiClient'
-import { emptyPinSet, addPin, updatePin, removePin, pinsForNode, type PinSet, type Pin } from '../domain/pinSet'
+import { emptyPinSet, addPin, updatePin, removePin, removePinsForNode, pinsForNode, type PinSet, type Pin } from '../domain/pinSet'
 
 export function usePinSet(spaceId: string) {
   const { state } = useServerEvents()
@@ -70,7 +70,8 @@ export function usePinSet(spaceId: string) {
   const create = useCallback((pin: Pin) => apply(s => addPin(s, pin)), [apply])
   const update = useCallback((id: string, fn: (p: Pin) => Pin) => apply(s => updatePin(s, id, fn)), [apply])
   const remove = useCallback((id: string) => apply(s => removePin(s, id)), [apply])
+  const clearNode = useCallback((nodeId: string) => apply(s => removePinsForNode(s, nodeId)), [apply])
   const forNode = useCallback((nodeId: string) => pinsForNode(set, nodeId), [set])
 
-  return { set, create, update, remove, forNode }
+  return { set, create, update, remove, clearNode, forNode }
 }

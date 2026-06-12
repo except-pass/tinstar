@@ -94,9 +94,6 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
     const nextIdRef = useRef(0)
     const inputRef = useRef<HTMLInputElement>(null)
     const iframeRef = useRef<HTMLIFrameElement>(null)
-    // Root element ref — the outermost div of this component, filling the shell
-    // container box.
-    const rootRef = useRef<HTMLDivElement>(null)
 
     // Pins are host-owned (one PinSet per space); the browser reads its node's
     // pins reactively and self-renders them so they glue to scrolling content.
@@ -300,7 +297,6 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
 
     return (
       <div
-        ref={rootRef}
         className="flex flex-col h-full bg-surface-base border overflow-hidden"
         style={borderStyle}
       >
