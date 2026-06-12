@@ -257,6 +257,20 @@ export function CanvasWidgetShell({
     onDoubleClickZoom?.(nodeId)
   }, [nodeId, onDoubleClickZoom])
 
+  // Shared teardown for pin place-drag — clears the placing ref and lowers the
+  // iframe guard. Called from pointer-up, onPointerCancel, onLostPointerCapture,
+  // and the unmount effect. Does NOT do pin placement (that stays in pointer-up
+  // only, so lostpointercapture/cancel can't double-place).
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally stable; onPinDragActive identity change shouldn't retrigger unmount guard
+  const onPinDragActiveRef = useRef(onPinDragActive)
+  useEffect(() => { onPinDragActiveRef.current = onPinDragActive })
+
+  const endPinPlace = useCallback(() => {
+    if (pinPlacePointerId.current === null) return
+    pinPlacePointerId.current = null
+    onPinDragActiveRef.current?.(false)
+  }, [])
+
   // Pin drag-to-place: capture the pointer on the affordance, raise the iframe
   // guard, and on pointer-up drop a pin at the cursor's normalized position
   // within the widget body (cancel if released outside the widget).
@@ -274,8 +288,8 @@ export function CanvasWidgetShell({
   const handlePinPlaceUp = useCallback(
     (e: ReactPointerEvent) => {
       if (pinPlacePointerId.current === null) return
-      pinPlacePointerId.current = null
-      onPinDragActive?.(false)
+      // Teardown first (clears ref + lowers guard), then place the pin.
+      endPinPlace()
       const rect = containerRef.current?.getBoundingClientRect()
       if (!rect || rect.width === 0 || rect.height === 0) return
       const rawX = (e.clientX - rect.left) / rect.width
@@ -284,8 +298,14 @@ export function CanvasWidgetShell({
       if (rawX < 0 || rawX > 1 || rawY < 0 || rawY > 1) return
       onCreatePin?.(nodeId, clamp01(rawX), clamp01(rawY))
     },
-    [nodeId, onCreatePin, onPinDragActive],
+    [nodeId, onCreatePin, endPinPlace],
   )
+
+  // Unmount guard: if the affordance button unmounts while a place-drag is active
+  // (hover-only button, hover drops before pointerup), clear the iframe guard so
+  // all iframes don't stay frozen. Deps are [] — pure unmount effect.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => { endPinPlace() }, [])
 
   // Escape cancels any in-progress drag or resize
   useEffect(() => {
@@ -385,7 +405,8 @@ export function CanvasWidgetShell({
           style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'top right' }}
           onPointerDown={handlePinPlaceDown}
           onPointerUp={handlePinPlaceUp}
-          onPointerCancel={handlePinPlaceUp}
+          onPointerCancel={endPinPlace}
+          onLostPointerCapture={endPinPlace}
           onClick={e => e.stopPropagation()}
           title="Drag onto the widget to drop a pin"
         >

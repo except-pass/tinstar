@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { render, cleanup, screen } from '@testing-library/react'
+import { render, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CanvasWidgetShell } from '../CanvasWidgetShell'
 import type { WidgetRegistration } from '../widgetComponentRegistry'
 import type { Pin } from '../../domain/pinSet'
+import type { ComponentType } from 'react'
+import type { WidgetProps } from '@tinstar/plugin-api'
 
 // jsdom implements neither pointer capture nor hasFocus; stub both.
 beforeAll(() => {
@@ -19,8 +21,9 @@ afterEach(() => {
   cleanup()
 })
 
-const LeafWidget = () => <div data-testid="leaf-body" />
+const LeafWidget: ComponentType<WidgetProps> = () => <div data-testid="leaf-body" />
 
+/** Minimal well-typed WidgetRegistration; only required fields + explicit overrides. */
 function makeReg(overrides: Partial<WidgetRegistration> = {}): WidgetRegistration {
   return {
     type: 'test-leaf',
@@ -28,7 +31,7 @@ function makeReg(overrides: Partial<WidgetRegistration> = {}): WidgetRegistratio
     isContainer: false,
     minSize: { width: 100, height: 100 },
     ...overrides,
-  } as unknown as WidgetRegistration
+  }
 }
 
 function pin(over: Partial<Pin> = {}): Pin {
@@ -42,7 +45,7 @@ function renderShell(overrides: Partial<React.ComponentProps<typeof CanvasWidget
       registration={makeReg()}
       nodeId="pw-pins"
       data={{}}
-      layout={layout as never}
+      layout={layout}
       zoom={1}
       isSelected={false}
       spaceHeldRef={{ current: false }}
@@ -61,7 +64,7 @@ describe('CanvasWidgetShell pins', () => {
   })
 
   it('does NOT render the affordance when registration is not pinnable', () => {
-    renderShell({ registration: makeReg({ pinnable: false } as never), isSelected: true, onCreatePin: vi.fn() })
+    renderShell({ registration: makeReg({ pinnable: false }), isSelected: true, onCreatePin: vi.fn() })
     expect(screen.queryByTestId('pin-drop-affordance')).toBeNull()
   })
 
@@ -72,10 +75,30 @@ describe('CanvasWidgetShell pins', () => {
 
   it('skips the default PinLayer when the widget renders its own pin markers', () => {
     renderShell({
-      registration: makeReg({ rendersOwnPinMarkers: true } as never),
+      registration: makeReg({ rendersOwnPinMarkers: true }),
       pins: [pin({ id: 'p1' })],
       onRepositionPin: vi.fn(),
     })
     expect(screen.queryByTestId('pin-marker-p1')).toBeNull()
+  })
+
+  it('clears the iframe guard when capture is lost mid-place-drag (onPointerCancel path)', () => {
+    const onPinDragActive = vi.fn()
+    renderShell({ isSelected: true, onCreatePin: vi.fn(), onPinDragActive })
+
+    const affordance = screen.getByTestId('pin-drop-affordance')
+
+    // Start a place-drag — guard should raise
+    fireEvent.pointerDown(affordance, { button: 0, pointerId: 1, clientX: 10, clientY: 10 })
+    expect(onPinDragActive).toHaveBeenLastCalledWith(true)
+
+    // Simulate involuntary capture loss via pointercancel (exercises endPinPlace via onPointerCancel)
+    fireEvent.pointerCancel(affordance, { pointerId: 1, clientX: 10, clientY: 10 })
+    expect(onPinDragActive).toHaveBeenLastCalledWith(false)
+
+    // Guard must not be raised any more — a subsequent cancel is idempotent (ref already null)
+    const callCount = onPinDragActive.mock.calls.length
+    fireEvent.pointerCancel(affordance, { pointerId: 1, clientX: 10, clientY: 10 })
+    expect(onPinDragActive.mock.calls.length).toBe(callCount)
   })
 })
