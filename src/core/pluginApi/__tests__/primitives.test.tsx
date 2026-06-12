@@ -20,7 +20,7 @@ vi.mock('../../../apiClient', () => ({
 // In-memory plugin-widget store. addOptimistic mutates it AND bumps a version
 // so subscribers (useServerEvents consumers) re-render with the new data —
 // exactly the round-trip usePluginWidgetData performs against the real store.
-let mockState: { pluginWidgets: PluginWidgetInstance[]; constellationGraphs: unknown[] } = { pluginWidgets: [], constellationGraphs: [] }
+let mockState: { pluginWidgets: PluginWidgetInstance[]; constellationGraphs: unknown[]; pinSets: unknown[] } = { pluginWidgets: [], constellationGraphs: [], pinSets: [] }
 const listeners = new Set<() => void>()
 function emit() { for (const l of [...listeners]) l() }
 const addOptimistic = vi.fn((_kind: string, instance: PluginWidgetInstance) => {
@@ -69,6 +69,7 @@ describe('api.primitives browser round-trip', () => {
     // Seed the host's plugin-widget instance the BrowserBackedWidget binds to.
     mockState = {
       constellationGraphs: [],
+      pinSets: [],
       pluginWidgets: [{
         id: NODE_ID,
         pluginId: 'primitives-test-plugin',

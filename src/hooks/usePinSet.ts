@@ -6,7 +6,7 @@ import { emptyPinSet, addPin, updatePin, removePin, pinsForNode, type PinSet, ty
 export function usePinSet(spaceId: string) {
   const { state } = useServerEvents()
   const serverSet = useMemo<PinSet>(
-    () => state.pinSets.find(s => s.spaceId === spaceId) ?? emptyPinSet(spaceId),
+    () => (state.pinSets ?? []).find(s => s.spaceId === spaceId) ?? emptyPinSet(spaceId),
     [state.pinSets, spaceId],
   )
 
