@@ -35,6 +35,7 @@ export function emptyPinSet(spaceId: string): PinSet {
   return { spaceId, pins: [], rev: 0 }
 }
 
+/** Callers are responsible for generating a unique `id`; addPin does not dedupe. */
 export function addPin(set: PinSet, pin: Pin): PinSet {
   return { ...set, pins: [...set.pins, pin] }
 }
@@ -50,11 +51,13 @@ export function updatePin(set: PinSet, id: string, fn: (p: Pin) => Pin): PinSet 
 }
 
 export function removePin(set: PinSet, id: string): PinSet {
-  return { ...set, pins: set.pins.filter(p => p.id !== id) }
+  const pins = set.pins.filter(p => p.id !== id)
+  return pins.length === set.pins.length ? set : { ...set, pins }
 }
 
 export function removePinsForNode(set: PinSet, nodeId: string): PinSet {
-  return { ...set, pins: set.pins.filter(p => p.nodeId !== nodeId) }
+  const pins = set.pins.filter(p => p.nodeId !== nodeId)
+  return pins.length === set.pins.length ? set : { ...set, pins }
 }
 
 export function pinsForNode(set: PinSet, nodeId: string): Pin[] {
@@ -65,6 +68,7 @@ export function isPinSet(v: unknown): v is PinSet {
   if (v === null || typeof v !== 'object') return false
   const o = v as Record<string, unknown>
   if (typeof o.spaceId !== 'string' || !Array.isArray(o.pins)) return false
+  if (!(typeof o.rev === 'undefined' || typeof o.rev === 'number')) return false
   return o.pins.every(p => {
     if (p === null || typeof p !== 'object') return false
     const pin = p as Record<string, unknown>

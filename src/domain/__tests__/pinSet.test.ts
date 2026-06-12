@@ -29,12 +29,18 @@ describe('pinSet', () => {
 
   it('updatePin on a missing id is a no-op (same array contents)', () => {
     const s = addPin(emptyPinSet('s'), pin())
-    expect(updatePin(s, 'nope', p => ({ ...p, comment: 'x' })).pins).toEqual(s.pins)
+    const next = updatePin(s, 'nope', p => ({ ...p, comment: 'x' }))
+    expect(next).toBe(s)
   })
 
   it('removePin drops by id', () => {
     const s = addPin(emptyPinSet('s'), pin())
     expect(removePin(s, 'pin-1').pins).toHaveLength(0)
+  })
+
+  it('removePin no-op returns the same reference', () => {
+    const s = addPin(emptyPinSet('s'), pin())
+    expect(removePin(s, 'missing')).toBe(s)
   })
 
   it('removePinsForNode drops every pin on that node', () => {
@@ -58,5 +64,15 @@ describe('pinSet', () => {
     expect(isPinSet({ pins: [] })).toBe(false)
     expect(isPinSet({ spaceId: 's', pins: [{ id: 'x' }] })).toBe(false)
     expect(isPinSet(null)).toBe(false)
+  })
+
+  it('mutators do not mutate their input', () => {
+    const s = addPin(emptyPinSet('s'), pin())
+    const snapshot = JSON.parse(JSON.stringify(s))
+    addPin(s, pin({ id: 'pin-2' }))
+    updatePin(s, 'pin-1', p => ({ ...p, comment: 'x' }))
+    removePin(s, 'pin-1')
+    removePinsForNode(s, 'browser-a')
+    expect(s).toEqual(snapshot)
   })
 })
