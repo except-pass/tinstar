@@ -79,6 +79,10 @@ interface CanvasWidgetShellProps {
   /** Toggles the canvas-level iframe pointer guard during place/reposition drags so
    *  the drag stream isn't swallowed by browser/terminal iframe widgets. */
   onPinDragActive?: (active: boolean) => void
+  /** Batch-submit every unsent pin on this node to its backing session. */
+  onSendAllPins?: (nodeId: string) => void
+  /** Remove every pin on this node. */
+  onClearAllPins?: (nodeId: string) => void
 }
 
 export function CanvasWidgetShell({
@@ -115,6 +119,8 @@ export function CanvasWidgetShell({
   onDeletePin,
   onSubmitPin,
   onPinDragActive,
+  onSendAllPins,
+  onClearAllPins,
 }: CanvasWidgetShellProps) {
   const {
     component: WidgetComponent,
@@ -404,6 +410,42 @@ export function CanvasWidgetShell({
           onDragActiveChange={onPinDragActive}
         />
       )}
+
+      {pinnable && (isHovered || isSelected) && pins && pins.length > 0 && (() => {
+        const unsentCount = pins.filter(p => !p.sentAt).length
+        const sendDisabled = !pinCanSubmit || unsentCount === 0
+        const sendTitle = !pinCanSubmit
+          ? 'Snap into a run to send'
+          : unsentCount === 0
+            ? 'All pins already sent'
+            : 'Send all unsent pins to the session'
+        return (
+          <div
+            className="pointer-events-auto absolute left-1 bottom-8 z-20 flex items-center gap-1 rounded border border-primary/40 bg-slate-900/90 px-1 py-0.5 text-primary"
+            style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'bottom left' }}
+            onPointerDown={e => e.stopPropagation()}
+          >
+            <span data-testid="pin-count" className="text-2xs px-0.5">{pins.length}</span>
+            <button
+              data-testid="pin-send-all"
+              disabled={sendDisabled}
+              className="flex h-5 w-5 items-center justify-center rounded bg-primary/80 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              title={sendTitle}
+              onClick={e => { e.stopPropagation(); onSendAllPins?.(nodeId) }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>send</span>
+            </button>
+            <button
+              data-testid="pin-clear-all"
+              className="flex h-5 w-5 items-center justify-center rounded text-primary hover:text-red-400"
+              title="Delete all pins on this widget"
+              onClick={e => { e.stopPropagation(); onClearAllPins?.(nodeId) }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete_sweep</span>
+            </button>
+          </div>
+        )
+      })()}
 
       {pinnable && (isHovered || isSelected) && onCreatePin && (
         <button

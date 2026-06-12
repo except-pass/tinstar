@@ -716,6 +716,44 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     [pinSet, pinCtx, tree],
   )
 
+  // Batch-submit every UNSENT pin on a node as one prompt, then mark them all sent.
+  const sendAllPins = useCallback(
+    async (nodeId: string) => {
+      const sessionId = resolveBackingSession(nodeId, pinCtx)
+      if (!sessionId) return // button is disabled in this state; guard anyway
+      const widgetPins = pinSet.forNode(nodeId).filter(p => !p.sentAt)
+      if (widgetPins.length === 0) return
+      const label = findNodeLabel(tree, nodeId) ?? nodeId
+      const bullets = widgetPins.map(p => {
+        const captureLabel = (p.context?.capture as { label?: string } | undefined)?.label
+        const where = captureLabel ?? `${Math.round(p.nx * 100)}%,${Math.round(p.ny * 100)}%`
+        return `• on "${where}" — ${p.comment || '(no comment)'}`
+      }).join('\n')
+      const prompt = `📍 ${widgetPins.length} pins on ${label}:\n${bullets}`
+      try {
+        const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        })
+        const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
+        if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
+        for (const p of widgetPins) pinSet.update(p.id, x => ({ ...x, sentAt: Date.now() }))
+      } catch (err) {
+        console.warn('[pins] send-all failed:', err)
+      }
+    },
+    [pinSet, pinCtx, tree],
+  )
+
+  // Remove every pin on a node (no confirm — matches the original toolbar's clear-all).
+  const clearAllPins = useCallback(
+    (nodeId: string) => {
+      for (const p of pinSet.forNode(nodeId)) pinSet.remove(p.id)
+    },
+    [pinSet],
+  )
+
   // ── Add-widget picker + orchestrator ──────────────────────────────────────
   const { entries: catalog } = useWidgetCatalog()
   const [addPicker, setAddPicker] = useState<{ sourceNodeId: string; edge: SnapEdge; anchor: { x: number; y: number } } | null>(null)
@@ -1776,6 +1814,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           onDeletePin={(id) => pinSet.remove(id)}
           onSubmitPin={(id) => submitPin(id, node.id)}
           onPinDragActive={setPinDragging}
+          onSendAllPins={(nodeId) => sendAllPins(nodeId)}
+          onClearAllPins={(nodeId) => clearAllPins(nodeId)}
         />
       </Fragment>
     )

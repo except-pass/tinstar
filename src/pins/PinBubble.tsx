@@ -51,8 +51,14 @@ export function PinBubble(p: PinBubbleProps) {
       className="w-52 rounded border border-white/15 bg-surface-panel shadow-xl p-1.5 flex flex-col gap-1"
     >
       {p.sent ? (
-        <div className="text-2xs text-slate-400 whitespace-pre-wrap">
-          <span className="text-slate-600">✓ sent · </span>{p.comment || '(no comment)'}
+        <div className="flex items-start justify-between gap-1">
+          <div className="text-2xs text-slate-400 whitespace-pre-wrap flex-1">
+            <span className="text-slate-600">✓ sent · </span>{p.comment || '(no comment)'}
+          </div>
+          <button data-testid={`pin-delete-${p.id}`} onClick={p.onDelete}
+            className="text-slate-600 hover:text-red-400 shrink-0" title="Delete pin">
+            <span className="material-symbols-outlined text-sm">delete</span>
+          </button>
         </div>
       ) : (
         <>

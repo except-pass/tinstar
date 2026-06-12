@@ -82,6 +82,43 @@ describe('CanvasWidgetShell pins', () => {
     expect(screen.queryByTestId('pin-marker-p1')).toBeNull()
   })
 
+  it('shows the pin cluster (count + send-all + clear-all) when hovered with pins', () => {
+    renderShell({ isSelected: true, pins: [pin({ id: 'p1' })], onRepositionPin: vi.fn(), pinCanSubmit: true })
+    expect(screen.getByTestId('pin-count').textContent).toBe('1')
+    expect(screen.getByTestId('pin-send-all')).toBeTruthy()
+    expect(screen.getByTestId('pin-clear-all')).toBeTruthy()
+  })
+
+  it('does NOT show the cluster when there are no pins', () => {
+    renderShell({ isSelected: true, pins: [], onRepositionPin: vi.fn() })
+    expect(screen.queryByTestId('pin-count')).toBeNull()
+    expect(screen.queryByTestId('pin-send-all')).toBeNull()
+  })
+
+  it('send-all is disabled when there is no backing session, enabled with unsent pins', () => {
+    const onSendAllPins = vi.fn()
+    renderShell({ isSelected: true, pins: [pin({ id: 'p1' })], onRepositionPin: vi.fn(), pinCanSubmit: false, onSendAllPins })
+    expect((screen.getByTestId('pin-send-all') as HTMLButtonElement).disabled).toBe(true)
+    cleanup()
+    renderShell({ isSelected: true, pins: [pin({ id: 'p1' })], onRepositionPin: vi.fn(), pinCanSubmit: true, onSendAllPins })
+    const btn = screen.getByTestId('pin-send-all') as HTMLButtonElement
+    expect(btn.disabled).toBe(false)
+    fireEvent.click(btn)
+    expect(onSendAllPins).toHaveBeenCalledWith('pw-pins')
+  })
+
+  it('send-all is disabled when every pin is already sent', () => {
+    renderShell({ isSelected: true, pins: [pin({ id: 'p1', sentAt: 123 })], onRepositionPin: vi.fn(), pinCanSubmit: true })
+    expect((screen.getByTestId('pin-send-all') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('clear-all fires onClearAllPins with the nodeId', () => {
+    const onClearAllPins = vi.fn()
+    renderShell({ isSelected: true, pins: [pin({ id: 'p1' })], onRepositionPin: vi.fn(), onClearAllPins })
+    fireEvent.click(screen.getByTestId('pin-clear-all'))
+    expect(onClearAllPins).toHaveBeenCalledWith('pw-pins')
+  })
+
   it('clears the iframe guard when capture is lost mid-place-drag (onPointerCancel path)', () => {
     const onPinDragActive = vi.fn()
     renderShell({ isSelected: true, onCreatePin: vi.fn(), onPinDragActive })
