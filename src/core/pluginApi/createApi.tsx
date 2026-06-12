@@ -264,18 +264,30 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
       const ps = usePinSet(state.activeSpaceId)
       return ps.forNode(nodeId)
     },
-    // Mutators are not hooks — they call through the host-mounted PinsBridge ref
-    // (mirrors the events getBridge() pattern). `nodeId` is carried by the pin
-    // for create and by id-lookup for update/remove, so it is accepted for
-    // contract symmetry but the set is keyed by pin id.
+    // Mutators are not hooks — they call through `getPinsBridge()`, a host-mounted
+    // ref published by the <PinsBridge> component (inside the active-space
+    // ConstellationProvider). Unlike the lazily-constructed events getBridge(),
+    // this ref is null whenever no space is active (or during teardown), so each
+    // mutator null-guards and warns rather than silently dropping the call.
+    //
+    // `_nodeId` is RESERVED / forward-looking: pins are keyed by pin id today
+    // (the pin carries its own nodeId for create; update/remove look up by id),
+    // so the param is unused. The slot pre-reserves multi-space / multi-node
+    // disambiguation so the public signature won't need a breaking change later.
     create(_nodeId: string, pin: Pin): void {
-      getPinsBridge()?.create(pin)
+      const bridge = getPinsBridge()
+      if (!bridge) { console.warn('[pins] api.pins.create called with no active PinsBridge (no active space?) — dropping'); return }
+      bridge.create(pin)
     },
     update(_nodeId: string, id: string, fn: (p: Pin) => Pin): void {
-      getPinsBridge()?.update(id, fn)
+      const bridge = getPinsBridge()
+      if (!bridge) { console.warn('[pins] api.pins.update called with no active PinsBridge (no active space?) — dropping'); return }
+      bridge.update(id, fn)
     },
     remove(_nodeId: string, id: string): void {
-      getPinsBridge()?.remove(id)
+      const bridge = getPinsBridge()
+      if (!bridge) { console.warn('[pins] api.pins.remove called with no active PinsBridge (no active space?) — dropping'); return }
+      bridge.remove(id)
     },
   }
 
