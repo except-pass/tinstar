@@ -25,6 +25,7 @@ import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
 import { migrateSnapEdges } from '../../domain/constellationGraph'
+import { type PinSet, removePinsForNode } from '../../domain/pinSet'
 
 /** Translate a run's status into a default attention signal.
  *  Returns null when the inbox shouldn't surface the run. */
@@ -124,6 +125,7 @@ export class DocumentStore {
   private topicMetadata = new Map<string, TopicMetadata>()
   private pluginWidgets = new Map<string, PluginWidgetInstance>()
   private constellationGraphs = new Map<string, ConstellationGraph>()
+  private pinSets = new Map<string, PinSet>()
 
   activeSpaceId: string = ''
 
@@ -321,7 +323,10 @@ export class DocumentStore {
     if (this.runs.has(id)) {
       this.runs.delete(id)
       this.changes.emit('change', { entity: 'run', id, data: null })
+      // Node-id convention: a run's canvas node is `run-${id}` (see grouping.ts
+      // and WorkspaceShell synthetic nodes); pins key off that prefixed id.
       this.pruneWidgetFromGraphs(`run-${id}`)
+      this.removePinsForNodeAcrossSpaces(`run-${id}`)
       return
     }
     // Simulator runs are keyed by run id (R-xxx) but deleted by session name (CLD-xxx)
@@ -330,6 +335,7 @@ export class DocumentStore {
         this.runs.delete(key)
         this.changes.emit('change', { entity: 'run', id: key, data: null })
         this.pruneWidgetFromGraphs(`run-${key}`)
+        this.removePinsForNodeAcrossSpaces(`run-${key}`)
         return
       }
     }
@@ -439,7 +445,11 @@ export class DocumentStore {
   deleteEditorWidget(id: string): void {
     this.editorWidgets.delete(id)
     this.changes.emit('change', { entity: 'editorWidget', id, data: null })
+    // Widget ids are already type-prefixed (shortId('editor') → `editor-...`) and
+    // the canvas node id is that same id (WorkspaceShell synthetic nodes use id: w.id),
+    // so the bare id is the pin nodeId — no extra prefix.
     this.pruneWidgetFromGraphs(id)
+    this.removePinsForNodeAcrossSpaces(id)
   }
 
   getAllEditorWidgets(): EditorWidget[] {
@@ -457,6 +467,7 @@ export class DocumentStore {
     this.browserWidgets.delete(id)
     this.changes.emit('change', { entity: 'browserWidget', id, data: null })
     this.pruneWidgetFromGraphs(id)
+    this.removePinsForNodeAcrossSpaces(id)
     // Cascade: an ephemeral artifact's lifecycle is tied to its browser widget.
     for (const [aid, a] of this.artifacts) {
       if (a.widgetId === id) this.deleteArtifact(aid)
@@ -542,6 +553,7 @@ export class DocumentStore {
     this.pluginWidgets.delete(id)
     this.changes.emit('change', { entity: 'pluginWidget', id, data: null })
     this.pruneWidgetFromGraphs(id)
+    this.removePinsForNodeAcrossSpaces(id)
   }
 
   getAllPluginWidgets(): PluginWidgetInstance[] {
@@ -589,6 +601,37 @@ export class DocumentStore {
     return [...this.constellationGraphs.values()]
   }
 
+  // --- Pins ---
+
+  /** Returns whether the write was applied. A stale/equal revision is rejected
+   *  (returns false), mirroring the constellation graph contract. */
+  upsertPinSet(spaceId: string, data: PinSet): boolean {
+    const existing = this.pinSets.get(spaceId)
+    if (existing && (data.rev ?? 0) <= (existing.rev ?? 0)) return false
+    this.pinSets.set(spaceId, data)
+    this.changes.emit('change', { entity: 'pinSet', id: spaceId, data })
+    return true
+  }
+
+  getPinSet(spaceId: string): PinSet | undefined {
+    return this.pinSets.get(spaceId)
+  }
+
+  getAllPinSets(): PinSet[] {
+    return [...this.pinSets.values()]
+  }
+
+  /** GC: drop a deleted node's pins from every space. Bumps rev so the write is
+   *  not rejected by the gate and so clients supersede any optimistic overlay. */
+  removePinsForNodeAcrossSpaces(nodeId: string): void {
+    for (const [spaceId, set] of this.pinSets) {
+      const next = removePinsForNode(set, nodeId)
+      if (next.pins.length !== set.pins.length) {
+        this.upsertPinSet(spaceId, { ...next, rev: (set.rev ?? 0) + 1 })
+      }
+    }
+  }
+
   // --- Image Widgets ---
 
   upsertImageWidget(id: string, data: ImageWidget): void {
@@ -600,6 +643,7 @@ export class DocumentStore {
     this.imageWidgets.delete(id)
     this.changes.emit('change', { entity: 'imageWidget', id, data: null })
     this.pruneWidgetFromGraphs(id)
+    this.removePinsForNodeAcrossSpaces(id)
   }
 
   getAllImageWidgets(): ImageWidget[] {
