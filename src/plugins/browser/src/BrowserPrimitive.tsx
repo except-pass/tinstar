@@ -140,18 +140,20 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
       return { url, ...(target ? { target } : {}), docX, docY }
     })
 
-    const submitPin = useCallback(async (id: string) => {
+    const submitPin = useCallback(async (id: string, comment: string) => {
       const pin = pins.find(p => p.id === id)
       if (!pin || !sessionId) return
       try {
+        // Use the FRESH comment from the bubble draft, not pin.comment — the store
+        // update is async and pin.comment still holds the pre-edit value this tick.
         const res = await api.http.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: formatBrowserPin(pin) }),
+          body: JSON.stringify({ prompt: formatBrowserPin({ ...pin, comment }) }),
         })
         const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
         if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
-        api.pins.update(nodeId, id, p => ({ ...p, sentAt: Date.now() }))
+        api.pins.update(nodeId, id, p => ({ ...p, comment, sentAt: Date.now() }))
       } catch (err) {
         api.logger?.warn?.('[browser-pins] submit failed:', (err as Error).message)
       }

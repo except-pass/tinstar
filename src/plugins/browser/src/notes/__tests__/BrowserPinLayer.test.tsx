@@ -80,7 +80,9 @@ describe('BrowserPinLayer', () => {
     const { rerender } = render(<BrowserPinLayer {...baseProps} onSubmit={onSubmit} />)
     fireEvent.pointerDown(screen.getByTestId('pin-marker-p1'))
     fireEvent.click(screen.getByTestId('pin-submit-p1'))
-    expect(onSubmit).toHaveBeenCalledWith('p1')
+    // FIX 1: onSubmit now threads the bubble draft (initialized to the stored
+    // comment 'hi' since nothing was typed) so the fresh comment is sent.
+    expect(onSubmit).toHaveBeenCalledWith('p1', 'hi')
     rerender(<BrowserPinLayer {...baseProps} canSubmit={false} />)
     expect(screen.getByTestId('pin-submit-p1')).toBeDisabled()
   })

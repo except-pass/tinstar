@@ -196,6 +196,12 @@ test.describe('Widget Pins (browser widget — live iframe render + scroll glue)
     await page.reload()
     await page.waitForTimeout(300)
     await expect(page.getByTestId('infinite-canvas')).toBeVisible({ timeout: 10000 })
+    // Reset SERVER pins for the active space so tests don't share state. Without
+    // this, each test PUTs a pin with the SAME PIN_ID and leaves a stale pin at
+    // index 0 — which the affordance-drag test would then assert against (passing
+    // even if place→enrich→render is broken). Clear to an empty set (rev+1).
+    const spaceId = await activeSpaceId(page)
+    await putPinSet(page, spaceId, [])
   })
 
   // 1. A pin injected at known document coords renders a marker over the page,
@@ -383,14 +389,24 @@ test.describe('Widget Pins (browser widget — live iframe render + scroll glue)
     // A new pin landed and persisted.
     await expect.poll(async () => (await getPinSet(page, spaceId))?.pins?.length ?? 0, { timeout: 5000 }).toBe(before + 1)
 
-    // The freshly-placed pin gets enriched by BrowserPrimitive (nx/ny → docX/docY,
-    // context.url=pageUrlA) and renders a marker over the page.
+    // Identify the NEWLY-created pin (the one on this widget), not pins[0] — a
+    // stale leftover at index 0 would let a broken place→enrich path pass.
     await expect.poll(async () => {
       const ps = await getPinSet(page, spaceId)
-      const p = ps?.pins?.[0]
+      return (ps?.pins as { nodeId: string }[] | undefined)?.some(x => x.nodeId === widgetId) ?? false
+    }, { timeout: 6000 }).toBe(true)
+    const ps = await getPinSet(page, spaceId)
+    const newPinId = (ps!.pins as { id: string; nodeId: string }[]).find(x => x.nodeId === widgetId)!.id
+
+    // The freshly-placed pin gets enriched by BrowserPrimitive (nx/ny → docX/docY,
+    // context.url=pageUrlA). Assert on THAT pin specifically.
+    await expect.poll(async () => {
+      const cur = await getPinSet(page, spaceId)
+      const p = (cur?.pins as { id: string; context?: { url?: string } }[] | undefined)?.find(x => x.id === newPinId)
       return p?.context?.url
     }, { timeout: 6000 }).toBe(pageUrlA)
-    const placed = page.locator('[data-testid^="pin-marker-"]').first()
+    // Scope the marker assertion to the new pin's id (not .first()).
+    const placed = page.getByTestId(`pin-marker-${newPinId}`)
     await expect(placed).toBeVisible({ timeout: 6000 })
     await page.screenshot({ path: `${SHOT_DIR}/05-browser-affordance-placed.png` })
     assertNoPinErrors(errors)

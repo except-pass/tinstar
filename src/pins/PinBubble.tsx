@@ -14,7 +14,7 @@ interface PinBubbleProps {
   id: string; comment: string; sent: boolean; canSubmit: boolean
   /** The open marker's wrapper/button element — anchors the bubble's screen position. */
   anchorEl: HTMLElement | null
-  onCommentChange: (c: string) => void; onDelete: () => void; onSubmit: () => void
+  onCommentChange: (c: string) => void; onDelete: () => void; onSubmit: (comment: string) => void
 }
 
 // Bubble dimensions used only for viewport-edge flipping (w-52 = 208px; height varies
@@ -77,7 +77,7 @@ export function PinBubble(p: PinBubbleProps) {
               <span className="material-symbols-outlined text-sm">delete</span>
             </button>
             <button data-testid={`pin-submit-${p.id}`} disabled={!p.canSubmit}
-              onClick={() => { p.onCommentChange(draft); p.onSubmit() }}
+              onClick={() => { p.onCommentChange(draft); p.onSubmit(draft) }}
               className="text-2xs px-1.5 py-0.5 rounded bg-primary/80 text-white flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
               title={p.canSubmit ? 'Send to the agent' : 'Snap into a run to send'}>
               <span className="material-symbols-outlined" style={{ fontSize: 14 }}>send</span>

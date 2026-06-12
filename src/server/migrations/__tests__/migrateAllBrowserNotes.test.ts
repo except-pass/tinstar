@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { DocumentStore } from '../../stores/document-store'
 import { migrateAllBrowserNotes } from '../migrateAllBrowserNotes'
 import type { BrowserWidget } from '../../../domain/types'
@@ -56,15 +59,50 @@ describe('migrateAllBrowserNotes', () => {
     expect(res2.skippedExisting.sort()).toEqual(['A', 'B', 'C'])
   })
 
-  it('seeds a space whose PinSet exists but is empty, beating its revision', () => {
+  it('leaves an existing-but-EMPTY PinSet untouched (no resurrection of deleted pins)', () => {
+    // Once a space has been migrated it always has a PinSet. If the user later
+    // deletes every pin, that PinSet is empty. Reseeding it would resurrect the
+    // deleted pins from the legacy widget.notes — so an existing PinSet, empty or
+    // not, must be left alone.
     const s = new DocumentStore()
     s.upsertBrowserWidget('browser-e', widget('browser-e', { spaceId: 'E', notes: [note('ne')] }))
     s.upsertPinSet('E', { spaceId: 'E', pins: [], rev: 3 })
 
-    migrateAllBrowserNotes(s)
+    const res = migrateAllBrowserNotes(s)
 
     const set = s.getPinSet('E')!
-    expect(set.pins.map(p => p.id)).toEqual(['ne'])
-    expect(set.rev).toBe(4) // beat the existing rev:3 so the upsert gate accepts it
+    expect(set.pins).toEqual([]) // NOT reseeded from widget.notes
+    expect(set.rev).toBe(3) // untouched
+    expect(res.seeded).toEqual([])
+    expect(res.skippedExisting).toEqual(['E'])
+  })
+
+  it('persists the seeded migration so it does NOT re-run on reload (durability)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tinstar-migrate-'))
+    const file = join(dir, 'docstore.json')
+
+    // First boot: enablePersistence on an empty file attaches the change→persist
+    // listener, then we add a browser widget with notes (no PinSet yet) and run
+    // the migration — the seed's change event schedules a persist.
+    const s1 = new DocumentStore()
+    s1.enablePersistence(file) // empty file: nothing to hydrate, listener attached
+    s1.upsertBrowserWidget('browser-d', widget('browser-d', { spaceId: 'D', notes: [note('nd')] }))
+    migrateAllBrowserNotes(s1) // seeds D's PinSet; emits change → schedules persist
+    s1.flush() // force the scheduled persist to disk synchronously
+
+    // The seeded PinSet must be on disk.
+    const onDisk = JSON.parse(readFileSync(file, 'utf-8'))
+    const dSet = onDisk.pinSets?.find((p: { spaceId: string }) => p.spaceId === 'D')
+    expect(dSet?.pins.map((p: { id: string }) => p.id)).toEqual(['nd'])
+
+    // Second boot from the same file: the PinSet is hydrated, so the migration
+    // sees an existing PinSet and does NOT re-seed.
+    const s2 = new DocumentStore()
+    s2.enablePersistence(file)
+    // Re-running the migration explicitly proves it now skips (existing PinSet).
+    const res = migrateAllBrowserNotes(s2)
+    expect(res.seeded).toEqual([])
+    expect(res.skippedExisting).toEqual(['D'])
+    expect(s2.getPinSet('D')!.pins.map(p => p.id)).toEqual(['nd'])
   })
 })

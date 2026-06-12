@@ -701,13 +701,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   )
 
   const submitPin = useCallback(
-    async (pinId: string, nodeId: string) => {
+    async (pinId: string, nodeId: string, freshComment: string) => {
       const pin = pinSet.set.pins.find(p => p.id === pinId)
       if (!pin) return
       const sessionId = resolveBackingSession(nodeId, pinCtx)
       if (!sessionId) return // button is disabled in this state; guard anyway
       const label = findNodeLabel(tree, nodeId) ?? nodeId
-      const comment = pin.comment || '(no comment)'
+      // Use the FRESH comment from the bubble draft, not pin.comment — the store
+      // update is async and pin.comment still holds the pre-edit value this tick.
+      const comment = freshComment || '(no comment)'
       // Native-widget pins carry a semantic capture of what was under the marker
       // (browser pins use their own richer format via formatBrowserPin instead).
       const captureLabel = (pin.context?.capture as { label?: string } | undefined)?.label
@@ -722,7 +724,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         })
         const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
         if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
-        pinSet.update(pinId, p => ({ ...p, sentAt: Date.now() }))
+        pinSet.update(pinId, p => ({ ...p, comment: freshComment, sentAt: Date.now() }))
       } catch (err) {
         console.warn('[pins] submit failed:', err)
       }
@@ -1824,7 +1826,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           onRepositionPin={(id, nx, ny) => pinSet.update(id, p => ({ ...p, nx, ny }))}
           onPinCommentChange={(id, comment) => pinSet.update(id, p => ({ ...p, comment }))}
           onDeletePin={(id) => pinSet.remove(id)}
-          onSubmitPin={(id) => submitPin(id, node.id)}
+          onSubmitPin={(id, comment) => submitPin(id, node.id, comment)}
           onPinDragActive={setPinDragging}
           onSendAllPins={(nodeId) => sendAllPins(nodeId)}
           onClearAllPins={(nodeId) => clearAllPins(nodeId)}

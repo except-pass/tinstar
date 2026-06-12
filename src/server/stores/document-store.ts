@@ -173,17 +173,19 @@ export class DocumentStore {
       // No file or corrupt — start fresh
     }
 
+    // Debounced save on every change
+    this.changes.on('change', () => this.schedulePersist())
+
     // One-time, idempotent: migrate legacy browser widget.notes → per-space pins.
-    // Runs after all entities (browserWidgets AND pinSets) are hydrated; only
-    // seeds spaces whose PinSet is absent/empty, so it's safe on every load.
+    // Runs after all entities (browserWidgets AND pinSets) are hydrated AND after
+    // the change→persist listener is attached, so each seed's change event actually
+    // schedules a disk persist — otherwise the "one-time" migration re-runs every
+    // boot until an unrelated mutation flushes. Only seeds spaces with NO PinSet.
     try {
       migrateAllBrowserNotes(this)
     } catch (err) {
       console.warn('[docstore] browser-notes → pins migration failed:', err)
     }
-
-    // Debounced save on every change
-    this.changes.on('change', () => this.schedulePersist())
   }
 
   private schedulePersist(): void {

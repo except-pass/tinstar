@@ -29,7 +29,7 @@ export interface BrowserPinLayerProps {
   canSubmit: boolean
   onCommentChange: (id: string, comment: string) => void
   onDelete: (id: string) => void
-  onSubmit: (id: string) => void
+  onSubmit: (id: string, comment: string) => void
 }
 
 /** A pin belongs to the current page if its enriched context url matches, OR it
@@ -85,7 +85,7 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
                 anchorEl={openAnchor}
                 onCommentChange={c => p.onCommentChange(pin.id, c)}
                 onDelete={() => { p.onDelete(pin.id); setOpenId(null) }}
-                onSubmit={() => p.onSubmit(pin.id)}
+                onSubmit={(comment) => p.onSubmit(pin.id, comment)}
               />
             )}
           </div>

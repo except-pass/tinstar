@@ -18,7 +18,7 @@ export interface PinLayerProps {
   onReposition: (id: string, nx: number, ny: number, context?: Pin['context']) => void
   onCommentChange: (id: string, comment: string) => void
   onDelete: (id: string) => void
-  onSubmit: (id: string) => void
+  onSubmit: (id: string, comment: string) => void
   /** Fires true when a marker drag begins (first move past threshold) and false on
    *  pointer up/cancel. The shell uses this to toggle the iframe pointer guard so a
    *  reposition drag over a browser/terminal widget isn't swallowed. */
@@ -76,7 +76,7 @@ export function PinLayer(p: PinLayerProps) {
               <PinBubble id={pin.id} comment={pin.comment} sent={!!pin.sentAt} canSubmit={p.canSubmit}
                 anchorEl={openAnchor}
                 onCommentChange={c => p.onCommentChange(pin.id, c)} onDelete={() => p.onDelete(pin.id)}
-                onSubmit={() => p.onSubmit(pin.id)} />
+                onSubmit={(comment) => p.onSubmit(pin.id, comment)} />
             )}
           </div>
         )

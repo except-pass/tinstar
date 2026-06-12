@@ -12,12 +12,11 @@ export interface MigrateAllResult {
 }
 
 /** One-time, idempotent migration of legacy browser `widget.notes` into the
- *  per-space PinSet store. Groups browser widgets by spaceId; for each space
- *  whose PinSet is absent or empty, seeds it with the pins migrated from every
- *  browser widget in that space. Spaces whose PinSet already holds pins are left
- *  untouched (a real PinSet means the user is already on the new system) — this
- *  makes the migration safe to run on every load. Widget.notes are NOT removed
- *  (rollback safety net). */
+ *  per-space PinSet store. Groups browser widgets by spaceId; seeds a space ONLY
+ *  when it has no PinSet at all. A space with ANY PinSet — even an empty one (the
+ *  user deleted every pin post-migration) — is left untouched, so deleted pins are
+ *  never resurrected from the legacy widget.notes. This makes the migration safe to
+ *  run on every load. Widget.notes are NOT removed (rollback safety net). */
 export function migrateAllBrowserNotes(store: DocumentStore): MigrateAllResult {
   const seeded: string[] = []
   const skippedExisting: string[] = []
@@ -40,15 +39,15 @@ export function migrateAllBrowserNotes(store: DocumentStore): MigrateAllResult {
 
   for (const [spaceId, pins] of pinsBySpace) {
     const existing = store.getPinSet(spaceId)
-    // Guard: never clobber a space that already has pins — it's already migrated
-    // or the user has created pins on the new system.
-    if (existing && existing.pins.length > 0) {
+    // Guard: seed ONLY when the space has NO PinSet at all. Once migrated, a space
+    // always has a PinSet — even an EMPTY one (the user deleted every pin). Reseeding
+    // an empty PinSet would resurrect deleted pins from the legacy widget.notes, so we
+    // must skip any existing PinSet, empty or not.
+    if (existing) {
       skippedExisting.push(spaceId)
       continue
     }
-    // Beat any existing (empty) PinSet's revision so the upsert gate accepts it.
-    const rev = (existing?.rev ?? 0) + 1
-    store.upsertPinSet(spaceId, { spaceId, pins, rev })
+    store.upsertPinSet(spaceId, { spaceId, pins, rev: 1 })
     seeded.push(spaceId)
   }
 

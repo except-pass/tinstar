@@ -205,6 +205,31 @@ describe('BrowserPrimitive pin integration', () => {
     await waitFor(() => expect(store.get()[0]!.sentAt).toBeTypeOf('number'))
   })
 
+  it('sends the FRESHLY-TYPED comment, not the stale stored one (regression)', async () => {
+    // FIX 1 regression: onCommentChange persists to the store async (next-tick
+    // re-render), but onSubmit runs synchronously in the same tick — pin.comment
+    // still holds the pre-edit value. Threading the bubble draft through onSubmit
+    // is the only fresh source. This proves the POST carries the NEW text; under
+    // the old bug it would have carried 'make it pop' (the stored comment).
+    httpFetch.mockResolvedValue(okEnvelope())
+    const store = makePinStore([
+      pin({ comment: 'make it pop', context: { url: 'http://localhost:3000/', docX: 0, docY: 0 } }),
+    ])
+    const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
+    render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
+    fireEvent.pointerDown(screen.getByTestId('pin-marker-p1'))
+    fireEvent.change(screen.getByTestId('pin-comment-p1'), { target: { value: 'use a brighter blue' } })
+    fireEvent.click(screen.getByTestId('pin-submit-p1'))
+    await waitFor(() => expect(httpFetch).toHaveBeenCalled())
+    const [, init] = httpFetch.mock.calls[0] as [string, { body: string }]
+    const body = JSON.parse(init.body)
+    expect(body.prompt).toContain('use a brighter blue') // the fresh draft
+    expect(body.prompt).not.toContain('make it pop')     // not the stale stored comment
+    // And the store is updated with the fresh comment when marked sent.
+    await waitFor(() => expect(store.get()[0]!.comment).toBe('use a brighter blue'))
+    await waitFor(() => expect(store.get()[0]!.sentAt).toBeTypeOf('number'))
+  })
+
   it('failed submit leaves the pin unsent', async () => {
     httpFetch.mockResolvedValue({ ok: false, status: 500, json: async () => ({ ok: false, error: { message: 'boom' } }) })
     const store = makePinStore([pin({ context: { url: 'http://localhost:3000/', docX: 0, docY: 0 } })])
