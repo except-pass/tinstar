@@ -7,6 +7,7 @@ import { AgentIcon } from './agentIcon'
 import { apiFetch } from '../apiClient'
 import { useConfig, useConfigPatch } from '../context/ConfigContext'
 import { AspectRatioField } from './Settings/AspectRatioField'
+import { PercentField } from './Settings/PercentField'
 import { DEFAULT_WIDGET_SIZE_PRESETS, type WidgetSizePresets } from '../widgets/widgetSizePresets'
 import { listWidgetRegistrations } from '../widgets/widgetComponentRegistry'
 import { usePluginWidgetRegistry } from '../hooks/usePluginWidgetRegistry'
@@ -916,14 +917,9 @@ export function SettingsDialog({ onClose }: Props) {
                     {(['small', 'medium', 'large'] as const).map(key => (
                       <label key={key} className="flex items-center gap-3">
                         <span className="text-xs text-slate-300 w-16 capitalize">{key}</span>
-                        <input
-                          type="number" min={5} max={100}
+                        <PercentField
                           value={Math.round(presets[key] * 100)}
-                          onChange={e => {
-                            const pct = Math.max(5, Math.min(100, Number(e.target.value) || 5))
-                            save({ ...presets, [key]: pct / 100 })
-                          }}
-                          className="w-20 px-2 py-1 text-xs font-mono bg-surface-base border border-white/20 rounded text-slate-200 focus:outline-none focus:border-primary/60"
+                          onCommit={pct => save({ ...presets, [key]: pct / 100 })}
                         />
                         <span className="text-2xs text-slate-500">% of viewport</span>
                       </label>
