@@ -14,6 +14,14 @@ export interface TinstarConfigClient {
       duty: boolean
       turnLength: boolean
     }
+    // Mirrors WidgetSizePresets in src/widgets/widgetSizePresets.ts
+    widgetSizePresets: {
+      small: number
+      medium: number
+      large: number
+      defaultAspect: number
+      aspectByType: Record<string, number>
+    }
   }
   // server-side-only fields (cliTemplates, ports, etc.) come through as `unknown`
   [k: string]: unknown

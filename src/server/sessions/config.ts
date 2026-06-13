@@ -62,6 +62,14 @@ export interface TinstarConfig {
       duty: boolean
       turnLength: boolean
     }
+    /** S/M/L quick-resize presets. Shape mirrors widgetSizePresets.ts on the client. */
+    widgetSizePresets: {
+      small: number
+      medium: number
+      large: number
+      defaultAspect: number
+      aspectByType: Record<string, number>
+    }
   }
 }
 
@@ -197,6 +205,14 @@ export const BASE_CONFIG = {
       cacheHit: false,
       duty: true,
       turnLength: true,
+    },
+    // Keep in sync with DEFAULT_WIDGET_SIZE_PRESETS in src/widgets/widgetSizePresets.ts
+    widgetSizePresets: {
+      small: 0.35,
+      medium: 0.6,
+      large: 0.85,
+      defaultAspect: 1.5,
+      aspectByType: {},
     },
   },
 }
