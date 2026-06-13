@@ -42,7 +42,7 @@ import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
-import { isPinSet } from '../../domain/pinSet'
+import { isPinSet, addReply, mergePreservingReplies } from '../../domain/pinSet'
 import { parseAttach, type ParsedAttach } from './anchorAttach'
 import { planAttach } from './attachPlan'
 import { spec as openapiSpec } from './openapi'
@@ -2576,12 +2576,41 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       let parsed: unknown
       try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
       if (!isPinSet(parsed)) { fail(res, 'BAD_REQUEST', 'invalid pin set'); return }
+      const merged = mergePreservingReplies({ ...parsed, spaceId }, ctx.docStore.getPinSet(spaceId))
       // Reject stale/equal-revision writes with a conflict rather than a false
       // success — the revision gate drops them, so the doc is not stored.
-      if (!ctx.docStore.upsertPinSet(spaceId, { ...parsed, spaceId })) {
+      if (!ctx.docStore.upsertPinSet(spaceId, merged)) {
         fail(res, 'CONFLICT', 'stale pin set revision'); return
       }
       ok(res, null)
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
+    return true
+  }
+
+  // POST /api/notes/:noteId/replies — append a thread reply to a note. The agent
+  // runs this (curl baked into the pin prompt); the UI runs it for user follow-ups.
+  // spaceId-less on purpose: pin ids are globally unique and the browser plugin has
+  // no spaceId — the server resolves the owning space by scanning.
+  if (method === 'POST' && /^\/api\/notes\/[^/]+\/replies$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const noteId = decodeURIComponent(path.slice('/api/notes/'.length, -'/replies'.length))
+    readBody(req).then(body => {
+      let parsed: { text?: unknown; author?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
+      const text = parsed.text
+      if (typeof text !== 'string' || text.trim() === '') {
+        fail(res, 'BAD_REQUEST', "missing 'text' in request body"); return
+      }
+      const author: 'user' | 'agent' = parsed.author === 'user' ? 'user' : 'agent'
+      // Pin ids are globally unique across spaces, so the first match owns the note.
+      const owning = ctx.docStore.getAllPinSets().find(s => s.pins.some(p => p.id === noteId))
+      if (!owning) { fail(res, 'NOT_FOUND', `no note found with id '${noteId}'`); return }
+      const replyId = shortId('reply')
+      const next = addReply(owning, noteId, { id: replyId, author, text, createdAt: Date.now() })
+      if (!ctx.docStore.upsertPinSet(owning.spaceId, { ...next, rev: (owning.rev ?? 0) + 1 })) {
+        fail(res, 'CONFLICT', 'concurrent write — retry'); return
+      }
+      ok(res, { replyId })
     }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
     return true
   }
