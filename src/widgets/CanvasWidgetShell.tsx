@@ -78,6 +78,9 @@ interface CanvasWidgetShellProps {
   onPinCommentChange?: (id: string, comment: string) => void
   onDeletePin?: (id: string) => void
   onSubmitPin?: (id: string, comment: string) => void
+  onReplyPin?: (id: string, text: string) => void
+  onResolvePin?: (id: string) => void
+  onReopenPin?: (id: string) => void
   /** Toggles the canvas-level iframe pointer guard during place/reposition drags so
    *  the drag stream isn't swallowed by browser/terminal iframe widgets. */
   onPinDragActive?: (active: boolean) => void
@@ -125,6 +128,9 @@ export function CanvasWidgetShell({
   onPinCommentChange,
   onDeletePin,
   onSubmitPin,
+  onReplyPin,
+  onResolvePin,
+  onReopenPin,
   onPinDragActive,
   onSendAllPins,
   onClearAllPins,
@@ -437,6 +443,9 @@ export function CanvasWidgetShell({
           onCommentChange={(id, c) => onPinCommentChange?.(id, c)}
           onDelete={(id) => onDeletePin?.(id)}
           onSubmit={(id, comment) => onSubmitPin?.(id, comment)}
+          onReply={(id, text) => onReplyPin?.(id, text)}
+          onResolve={(id) => onResolvePin?.(id)}
+          onReopen={(id) => onReopenPin?.(id)}
           onDragActiveChange={onPinDragActive}
         />
       )}

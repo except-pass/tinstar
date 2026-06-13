@@ -53,8 +53,13 @@ export function PinBubble(p: PinBubbleProps) {
   const [reply, setReply] = useState('')
   if (!p.anchorEl) return null
   const { left, top } = placement(p.anchorEl)
+  // PinBubble renders author/text/key only — it does not read createdAt — so we pass
+  // just the fields threadMessages needs for display (the bubble has no full Pin here).
   const msgs = threadMessages({ id: p.id, comment: p.comment, replies: p.replies } as Parameters<typeof threadMessages>[0])
   const lastMsg = msgs[msgs.length - 1]
+  // Shimmer = the note is sent, unresolved, and the last message is the user's
+  // (either the original comment with no agent reply yet, or a user follow-up
+  // awaiting a reply). Intentionally true right after send until the agent replies.
   const awaiting = p.sent && !p.resolved && lastMsg?.author === 'user'
 
   return createPortal(

@@ -24,6 +24,9 @@ function renderLayer(over: Partial<PinLayerProps> = {}) {
     onCommentChange: vi.fn(),
     onDelete: vi.fn(),
     onSubmit: vi.fn(),
+    onReply: vi.fn(),
+    onResolve: vi.fn(),
+    onReopen: vi.fn(),
     ...over,
   }
   return render(<PinLayer {...props} />)
@@ -170,5 +173,29 @@ describe('PinLayer', () => {
     fireEvent.pointerUp(marker, { clientX: 12, clientY: 10, pointerId: 1 })
     expect(onReposition).not.toHaveBeenCalled()
     expect(screen.getByTestId('pin-bubble-a')).toBeTruthy()
+  })
+
+  it('passes replies/resolved into the bubble and forwards onReply', () => {
+    const onReply = vi.fn()
+    const pins = [{ id: 'p1', nodeId: 'n', nx: 0.5, ny: 0.5, comment: 'q', createdAt: 1, sentAt: 2, replies: [{ id: 'r1', author: 'agent', text: 'a', createdAt: 3 }] }]
+    const { getByTestId } = render(<PinLayer pins={pins as never} accent="#0ff" zoom={1} canSubmit
+      onReposition={() => {}} onCommentChange={() => {}} onDelete={() => {}} onSubmit={() => {}}
+      onReply={onReply} onResolve={() => {}} onReopen={() => {}} />)
+    fireEvent.pointerDown(getByTestId('pin-marker-p1'))
+    fireEvent.pointerUp(getByTestId('pin-marker-p1'))
+    fireEvent.change(getByTestId('pin-reply-input-p1'), { target: { value: 'ok' } })
+    fireEvent.click(getByTestId('pin-reply-send-p1'))
+    expect(onReply).toHaveBeenCalledWith('p1', 'ok')
+  })
+
+  it('shows an unread dot for an agent reply not yet seen, clears after opening', () => {
+    const pins = [{ id: 'p1', nodeId: 'n', nx: 0.5, ny: 0.5, comment: 'q', createdAt: 1, sentAt: 2, replies: [{ id: 'r1', author: 'agent', text: 'a', createdAt: 3 }] }]
+    const { getByTestId, queryByTestId } = render(<PinLayer pins={pins as never} accent="#0ff" zoom={1} canSubmit
+      onReposition={() => {}} onCommentChange={() => {}} onDelete={() => {}} onSubmit={() => {}}
+      onReply={() => {}} onResolve={() => {}} onReopen={() => {}} />)
+    expect(getByTestId('pin-unread-p1')).toBeTruthy()
+    fireEvent.pointerDown(getByTestId('pin-marker-p1'))
+    fireEvent.pointerUp(getByTestId('pin-marker-p1'))
+    expect(queryByTestId('pin-unread-p1')).toBeNull()
   })
 })
