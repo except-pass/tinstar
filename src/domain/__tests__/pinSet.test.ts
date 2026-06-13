@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   emptyPinSet, addPin, updatePin, removePin, removePinsForNode,
-  pinsForNode, isPinSet, type Pin,
+  pinsForNode, isPinSet, addReply, resolvePin, reopenPin, mergePreservingReplies, threadMessages,
+  type Pin, type PinSet,
 } from '../pinSet'
 
 const pin = (over: Partial<Pin> = {}): Pin => ({
@@ -82,5 +83,85 @@ describe('pinSet', () => {
     removePin(s, 'pin-1')
     removePinsForNode(s, 'browser-a')
     expect(s).toEqual(snapshot)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Replies, resolve/reopen, threadMessages, mergePreservingReplies
+// ---------------------------------------------------------------------------
+
+describe('replies', () => {
+  it('addReply appends a reply to the matching pin', () => {
+    const set: PinSet = { spaceId: 's', pins: [pin({ createdAt: 100 })], rev: 1 }
+    const next = addReply(set, 'pin-1', { id: 'r1', author: 'agent', text: 'yo', createdAt: 200 })
+    expect(next.pins[0]!.replies).toEqual([{ id: 'r1', author: 'agent', text: 'yo', createdAt: 200 }])
+    expect(next).not.toBe(set) // immutable
+  })
+
+  it('addReply preserves existing replies (append order)', () => {
+    const set: PinSet = { spaceId: 's', pins: [pin({ replies: [{ id: 'r1', author: 'user', text: 'a', createdAt: 1 }] })], rev: 1 }
+    const next = addReply(set, 'pin-1', { id: 'r2', author: 'agent', text: 'b', createdAt: 2 })
+    expect(next.pins[0]!.replies!.map(r => r.id)).toEqual(['r1', 'r2'])
+  })
+
+  it('addReply is a no-op for an unknown id', () => {
+    const set: PinSet = { spaceId: 's', pins: [pin()], rev: 1 }
+    expect(addReply(set, 'nope', { id: 'r1', author: 'agent', text: 'x', createdAt: 2 })).toBe(set)
+  })
+
+  it('resolvePin sets resolvedAt on the matching pin', () => {
+    const set: PinSet = { spaceId: 's', pins: [pin()], rev: 1 }
+    const resolved = resolvePin(set, 'pin-1', 999)
+    expect(resolved.pins[0]!.resolvedAt).toBe(999)
+  })
+
+  it('reopenPin removes resolvedAt from the matching pin', () => {
+    const set: PinSet = { spaceId: 's', pins: [pin({ resolvedAt: 999 })], rev: 1 }
+    const reopened = reopenPin(set, 'pin-1')
+    expect(reopened.pins[0]!.resolvedAt).toBeUndefined()
+    expect('resolvedAt' in reopened.pins[0]!).toBe(false)
+  })
+
+  it('resolvePin / reopenPin return the same ref for an unknown id', () => {
+    const set: PinSet = { spaceId: 's', pins: [pin()], rev: 1 }
+    expect(resolvePin(set, 'nope', 5)).toBe(set)
+    expect(reopenPin(set, 'nope')).toBe(set)
+  })
+
+  it('threadMessages prepends the comment as the first user message', () => {
+    const p = pin({ comment: 'root', createdAt: 100, replies: [{ id: 'r1', author: 'agent', text: 'ans', createdAt: 200 }] })
+    expect(threadMessages(p)).toEqual([
+      { id: 'pin-1-root', author: 'user', text: 'root', createdAt: 100 },
+      { id: 'r1', author: 'agent', text: 'ans', createdAt: 200 },
+    ])
+  })
+
+  it('threadMessages returns just the root message when there are no replies', () => {
+    const p = pin({ comment: 'solo', createdAt: 7 })
+    expect(threadMessages(p)).toEqual([{ id: `${p.id}-root`, author: 'user', text: 'solo', createdAt: 7 }])
+  })
+})
+
+describe('mergePreservingReplies', () => {
+  it('keeps server replies even when the client payload has stale/empty ones', () => {
+    const existing: PinSet = { spaceId: 's', pins: [pin({ replies: [{ id: 'r1', author: 'agent', text: 'fresh', createdAt: 5 }] })], rev: 2 }
+    const incoming: PinSet = { spaceId: 's', pins: [pin({ comment: 'edited', replies: [] })], rev: 3 }
+    const merged = mergePreservingReplies(incoming, existing)
+    expect(merged.pins[0]!.comment).toBe('edited')                 // geometry/comment from client
+    expect(merged.pins[0]!.replies).toEqual(existing.pins[0]!.replies) // replies from server
+    expect(merged.rev).toBe(3)
+  })
+
+  it('drops client-supplied replies for a pin the server has never seen', () => {
+    const incoming: PinSet = { spaceId: 's', pins: [pin({ id: 'new', replies: [{ id: 'x', author: 'user', text: 'nope', createdAt: 1 }] })], rev: 1 }
+    const merged = mergePreservingReplies(incoming, undefined)
+    expect(merged.pins[0]!.replies).toBeUndefined()
+  })
+
+  it('does not inherit client replies for an existing pin that has none server-side', () => {
+    const existing: PinSet = { spaceId: 's', pins: [pin()], rev: 2 } // pin() has no replies
+    const incoming: PinSet = { spaceId: 's', pins: [pin({ replies: [{ id: 'x', author: 'user', text: 'nope', createdAt: 1 }] })], rev: 3 }
+    const merged = mergePreservingReplies(incoming, existing)
+    expect('replies' in merged.pins[0]!).toBe(false)
   })
 })
