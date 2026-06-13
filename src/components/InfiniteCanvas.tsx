@@ -5,7 +5,7 @@ import { CanvasContextMenu } from './CanvasContextMenu'
 import { buildMoveTargets } from '../domain/moveTargets'
 import { relocateWidgetTo } from '../domain/relocateWidget'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
-import { useWidgetLayouts, preserveCohesion } from '../hooks/useWidgetLayouts'
+import { useWidgetLayouts, preserveCohesion, MIN_WIDTH, MIN_HEIGHT } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
 import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
 import { getWidgetComponent, toWidgetType, isSnappable } from '../widgets/widgetComponentRegistry'
@@ -225,6 +225,13 @@ export function describePinSpot(p: Pin): string {
   return `${Math.round(p.nx * 100)}%,${Math.round(p.ny * 100)}%`
 }
 
+/** Floor a widget's own minSize to the global layout floor that updateRunSize
+ *  actually enforces, so preset sizes (and the active-state match) agree with
+ *  what gets stored. */
+function effectiveMinSize(min: { width: number; height: number }) {
+  return { width: Math.max(MIN_WIDTH, min.width), height: Math.max(MIN_HEIGHT, min.height) }
+}
+
 export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onRequestCreateSession, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   // Seed initial placement for browser widgets opened via the host placement API
@@ -272,6 +279,22 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const appConfig = useConfig()
   const sizePresets = appConfig?.ui.widgetSizePresets ?? DEFAULT_WIDGET_SIZE_PRESETS
   const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState } = useSelection()
+
+  // Container size tracked via ResizeObserver — avoids getBoundingClientRect in the render body
+  // (which forces a layout flush on every render, including 60fps pan).
+  const [containerSize, setContainerSize] = useState<{ width: number; height: number } | null>(null)
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const measure = () => {
+      const r = el.getBoundingClientRect()
+      setContainerSize({ width: r.width, height: r.height })
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // Drag state
   const draggingRunRef = useRef<string | null>(null)
@@ -960,16 +983,18 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   /** Resize a widget to an S/M/L preset: viewport-relative size, per-type aspect,
    *  applied through the same resize path a drag uses (persist + cascade + re-snap). */
   const applySizePreset = useCallback(
-    (nodeId: string, widgetType: string, minSize: { width: number; height: number }, preset: SizePreset) => {
+    (nodeId: string, widgetType: string, preset: SizePreset) => {
       const el = containerRef.current
       const layout = getLayout(nodeId)
       if (!el || !layout) return
       const rect = el.getBoundingClientRect()
       const viewport = { width: rect.width / camera.zoom, height: rect.height / camera.zoom }
+
+      const reg = getWidgetComponent(widgetType)
+      const minSize = effectiveMinSize(reg?.minSize ?? { width: MIN_WIDTH, height: MIN_HEIGHT })
       const aspect = resolveAspect(sizePresets, widgetType)
       const size = computePresetSize(viewport, sizePresets[preset], aspect, minSize)
 
-      const reg = getWidgetComponent(widgetType)
       const resize = reg?.isContainer ? resizeNode : updateRunSize
       // Mirror a drag-resize gesture so the constellation re-settles identically.
       handleResizeStart(nodeId)
@@ -977,17 +1002,23 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       handleResizeEnd(nodeId, size.width, size.height)
 
       // Keep the widget within the visible viewport (top-left anchored).
-      const vx = -camera.x / camera.zoom
-      const vy = -camera.y / camera.zoom
-      let nx = layout.x
-      let ny = layout.y
-      if (nx + size.width > vx + viewport.width) nx = Math.max(vx, vx + viewport.width - size.width)
-      if (ny + size.height > vy + viewport.height) ny = Math.max(vy, vy + viewport.height - size.height)
-      if (Math.round(nx) !== layout.x || Math.round(ny) !== layout.y) {
-        updateRunPosition(nodeId, Math.round(nx), Math.round(ny))
+      // Skip for constellation members: handleResizeEnd already reflowed them
+      // relative to the anchor's original position — nudging the anchor afterward
+      // would desync the other members.
+      const inConstellation = constellations.slotsForNode(nodeId).length > 0
+      if (!inConstellation) {
+        const vx = -camera.x / camera.zoom
+        const vy = -camera.y / camera.zoom
+        let nx = layout.x
+        let ny = layout.y
+        if (nx + size.width > vx + viewport.width) nx = Math.max(vx, vx + viewport.width - size.width)
+        if (ny + size.height > vy + viewport.height) ny = Math.max(vy, vy + viewport.height - size.height)
+        if (Math.round(nx) !== layout.x || Math.round(ny) !== layout.y) {
+          updateRunPosition(nodeId, Math.round(nx), Math.round(ny))
+        }
       }
     },
-    [camera, sizePresets, resizeNode, updateRunSize, updateRunPosition, getLayout, handleResizeStart, handleResizeEnd],
+    [camera, sizePresets, resizeNode, updateRunSize, updateRunPosition, getLayout, handleResizeStart, handleResizeEnd, constellations],
   )
 
   const handleWidgetDragStart = useCallback((nodeId: string) => {
@@ -1749,6 +1780,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated],
   )
 
+  // Viewport in canvas-space for preset size resolution (null until ResizeObserver fires).
+  const presetViewport = containerSize
+    ? { width: containerSize.width / camera.zoom, height: containerSize.height / camera.zoom }
+    : null
+
   // Recursive render: groups render behind their children (natural DOM order)
   function renderNode(node: TreeNode, _depth: number): React.ReactNode {
     const run = node.type === 'run' ? runMap.get(node.entityId) : undefined
@@ -1840,7 +1876,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     let activeSizePreset: SizePreset | null = null
     if (isSnapLeaf && presetViewport) {
       const aspect = resolveAspect(sizePresets, widgetType)
-      const sizes = resolvePresetSizes(presetViewport, sizePresets, aspect, reg.minSize)
+      const sizes = resolvePresetSizes(presetViewport, sizePresets, aspect, effectiveMinSize(reg.minSize))
       activeSizePreset = matchPreset({ width: layout.width, height: layout.height }, sizes)
     }
 
@@ -1870,7 +1906,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
           onAddWidget={isSnapLeaf ? (nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor }) : undefined}
           occupiedEdges={occupiedEdgesFor(node.id)}
-          onApplySizePreset={isSnapLeaf ? (preset) => applySizePreset(node.id, widgetType, reg.minSize, preset) : undefined}
+          onApplySizePreset={isSnapLeaf ? (preset) => applySizePreset(node.id, widgetType, preset) : undefined}
           activeSizePreset={activeSizePreset}
           pins={pinSet.forNode(node.id)}
           pinAccent={run?.color}
@@ -1900,11 +1936,6 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     }
     return result
   }
-
-  const presetViewport = (() => {
-    const r = containerRef.current?.getBoundingClientRect()
-    return r ? { width: r.width / camera.zoom, height: r.height / camera.zoom } : null
-  })()
 
   const renderedNodes = collectRenderOrder(tree, 0)
 

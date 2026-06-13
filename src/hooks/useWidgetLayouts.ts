@@ -20,8 +20,8 @@ export interface TreeMaps {
 const LAYOUTS_KEY_PREFIX = 'tinstar-layouts-v3'
 const DEFAULT_RUN_WIDTH = 1560
 const DEFAULT_RUN_HEIGHT = 1410
-const MIN_WIDTH = 300
-const MIN_HEIGHT = 150
+export const MIN_WIDTH = 300
+export const MIN_HEIGHT = 150
 
 // Depth-aware padding for containers
 function getPadding(depth: number) {
