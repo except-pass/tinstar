@@ -9,12 +9,20 @@
 // ancestor becomes the containing block — see memory feedback_fixed_menu_canvas_transform).
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
+import { threadMessages, type Reply } from '../domain/pinSet'
 
 interface PinBubbleProps {
   id: string; comment: string; sent: boolean; canSubmit: boolean
+  replies: Reply[]
+  resolved: boolean
   /** The open marker's wrapper/button element — anchors the bubble's screen position. */
   anchorEl: HTMLElement | null
-  onCommentChange: (c: string) => void; onDelete: () => void; onSubmit: (comment: string) => void
+  onCommentChange: (c: string) => void
+  onDelete: () => void
+  onSubmit: (comment: string) => void
+  onReply: (text: string) => void
+  onResolve: () => void
+  onReopen: () => void
 }
 
 // Bubble dimensions used only for viewport-edge flipping (w-52 = 208px; height varies
@@ -42,25 +50,20 @@ function placement(anchorEl: HTMLElement): { left: number; top: number } {
 
 export function PinBubble(p: PinBubbleProps) {
   const [draft, setDraft] = useState(p.comment)
+  const [reply, setReply] = useState('')
   if (!p.anchorEl) return null
   const { left, top } = placement(p.anchorEl)
+  const msgs = threadMessages({ id: p.id, comment: p.comment, replies: p.replies } as Parameters<typeof threadMessages>[0])
+  const lastMsg = msgs[msgs.length - 1]
+  const awaiting = p.sent && !p.resolved && lastMsg?.author === 'user'
+
   return createPortal(
     <div
       data-testid={`pin-bubble-${p.id}`}
       style={{ position: 'fixed', left, top, zIndex: 60 }}
       className="w-52 rounded border border-white/15 bg-surface-panel shadow-xl p-1.5 flex flex-col gap-1"
     >
-      {p.sent ? (
-        <div className="flex items-start justify-between gap-1">
-          <div className="text-2xs text-slate-400 whitespace-pre-wrap flex-1">
-            <span className="text-slate-600">✓ sent · </span>{p.comment || '(no comment)'}
-          </div>
-          <button data-testid={`pin-delete-${p.id}`} onClick={p.onDelete}
-            className="text-slate-600 hover:text-red-400 shrink-0" title="Delete pin">
-            <span className="material-symbols-outlined text-sm">delete</span>
-          </button>
-        </div>
-      ) : (
+      {!p.sent ? (
         <>
           <textarea
             data-testid={`pin-comment-${p.id}`}
@@ -84,6 +87,53 @@ export function PinBubble(p: PinBubbleProps) {
               Send
             </button>
           </div>
+        </>
+      ) : (
+        <>
+          <div className="flex items-center justify-end gap-1 -mt-0.5">
+            {p.resolved ? (
+              <button data-testid={`pin-reopen-${p.id}`} onClick={p.onReopen}
+                className="text-2xs text-slate-500 hover:text-primary" title="Reopen note">reopen</button>
+            ) : (
+              <button data-testid={`pin-resolve-${p.id}`} onClick={p.onResolve}
+                className="text-slate-600 hover:text-emerald-400" title="Resolve note">
+                <span className="material-symbols-outlined text-sm">check_circle</span>
+              </button>
+            )}
+            <button data-testid={`pin-delete-${p.id}`} onClick={p.onDelete}
+              className="text-slate-600 hover:text-red-400" title="Delete pin">
+              <span className="material-symbols-outlined text-sm">delete</span>
+            </button>
+          </div>
+          <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+            {msgs.map(m => (
+              <div key={m.id} className="text-2xs">
+                <div className={m.author === 'agent' ? 'text-primary/80' : 'text-slate-500'}>{m.author}</div>
+                <div className="text-slate-200 whitespace-pre-wrap">{m.text || '(no comment)'}</div>
+              </div>
+            ))}
+            {awaiting && (
+              <div data-testid={`pin-awaiting-${p.id}`} className="text-2xs text-slate-500 animate-pulse">agent is replying…</div>
+            )}
+          </div>
+          {!p.resolved && (
+            <div className="flex items-center gap-1">
+              <input
+                data-testid={`pin-reply-input-${p.id}`}
+                value={reply}
+                onChange={e => setReply(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && reply.trim()) { p.onReply(reply.trim()); setReply('') } }}
+                placeholder="Reply…"
+                className="flex-1 bg-surface-base text-2xs text-slate-200 rounded border border-white/10 outline-none focus:border-primary/50 px-1 py-0.5"
+              />
+              <button data-testid={`pin-reply-send-${p.id}`} disabled={!reply.trim()}
+                onClick={() => { if (reply.trim()) { p.onReply(reply.trim()); setReply('') } }}
+                className="text-2xs px-1 py-0.5 rounded bg-primary/80 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Send reply">
+                <span className="material-symbols-outlined" style={{ fontSize: 14 }}>send</span>
+              </button>
+            </div>
+          )}
         </>
       )}
     </div>,
