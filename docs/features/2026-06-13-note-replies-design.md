@@ -41,7 +41,7 @@ revision, and rides the existing SSE channel back to every open canvas.
 | Decision | Choice | Why |
 |---|---|---|
 | Thread model | Full back-and-forth, unbounded | Matches the cited Figma/Jira/Slack precedent |
-| Return path | New REST route on the existing pins API | API already exists for this feature; no MCP admin; agent is prompted, not autonomous |
+| Return path | New REST route (`POST /api/notes/:noteId/replies`, server resolves space) | API already exists for this feature; no MCP admin; agent is prompted, not autonomous; `spaceId`-less keeps the agent curl uniform + plugin-api surface untouched |
 | Reply storage | Co-located `replies[]` on `Pin` | Delete-pin disposes the thread for free; one SSE entity; no second store to GC/rev-gate |
 | Replies authority | Server-owned via the new route only | Avoids whole-doc PUT clobbering a freshly-arrived agent reply |
 | Resolve | Soft (greyed, reopenable) | Non-destructive; threads stay readable |
@@ -83,18 +83,24 @@ reopenPin(set: PinSet, pinId: string): PinSet
 `src/server/api/routes.ts` — new route, the single authority for thread content:
 
 ```
-POST /api/pins/:spaceId/notes/:noteId/replies
+POST /api/notes/:noteId/replies
   body: { text: string, author?: 'user' | 'agent' }   // defaults to 'agent'
   200 → { ok: true, data: { replyId } }
   400 → { error: "missing 'text' in request body" }
-  404 → { error: "no note found with id '<noteId>' in space '<spaceId>'" }
+  404 → { error: "no note found with id '<noteId>'" }
 ```
 
+The route is **`spaceId`-less on purpose.** Pin ids are globally unique
+(`pin-<ts>-<rand>`), and the browser plugin — which builds the agent's prompt for browser
+pins — has no access to `spaceId` (the plugin-api only exposes `useNodePins(nodeId)`).
+Resolving the space server-side keeps the agent's `curl` identical across every widget type
+and adds **zero** surface to the separately-published `@tinstar/plugin-api`.
+
 Server behavior:
-1. Load the `PinSet` for `spaceId` (`getPinSet`).
-2. Find the pin by `noteId`; 404 with the message above if absent.
-3. Append `{ id, author, text, createdAt }` to `pin.replies`, bump `pinSet.rev`, persist via
-   `upsertPinSet`, which emits the `pinSet` SSE entity.
+1. Scan `getAllPinSets()` for the set containing a pin with id `noteId`.
+2. 404 with the message above if no set contains it.
+3. Append `{ id, author, text, createdAt }` to `pin.replies`, bump that set's `rev`, persist
+   via `upsertPinSet`, which emits the `pinSet` SSE entity.
 4. Return `{ ok: true, data: { replyId } }`.
 
 Error messages are deliberately specific because the agent reads them in its terminal and
@@ -130,7 +136,7 @@ Reuses `resolveBackingSession(nodeId)` → `POST /api/sessions/:id/enter-prompt`
 "<comment>"
 
 Reply to this note by running exactly:
-curl -s -X POST '<origin>/api/pins/<spaceId>/notes/<noteId>/replies' \
+curl -s -X POST '<origin>/api/notes/<noteId>/replies' \
   -H 'Content-Type: application/json' \
   -d '{"text":"YOUR REPLY"}'
 Your reply appears in the thread on the note. Keep it concise.
@@ -156,7 +162,7 @@ Thread so far:
 [user] <follow-up>
 
 Reply with the same curl:
-curl -s -X POST '<origin>/api/pins/<spaceId>/notes/<noteId>/replies' ...
+curl -s -X POST '<origin>/api/notes/<noteId>/replies' ...
 ```
 
 Thread context is sent in full (notes are short); revisit only if length becomes a problem.
