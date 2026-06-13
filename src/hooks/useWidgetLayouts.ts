@@ -72,8 +72,17 @@ function buildTreeMaps(tree: TreeNode[]): TreeMaps {
  * 1. Bottom-up sizing: runs get DEFAULT_RUN_WIDTH×HEIGHT, containers wrap children.
  * 2. Root grid packing: ceil(sqrt(n)) columns.
  * 3. Top-down absolutization: parent-relative → absolute canvas coordinates.
+ *
+ * `prevLayouts`, when given, makes a re-layout *position-only* for leaf widgets:
+ * each widget keeps the size the user gave it (floored at its registered
+ * minSize) instead of being reset to its default. A widget with no prior layout
+ * still falls back to the registered default. Containers always wrap whatever
+ * sizes their children resolve to, so preserved (larger) leaves stay contained.
  */
-function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
+export function generateDefaultLayouts(
+  tree: TreeNode[],
+  prevLayouts?: Map<string, WidgetLayout>,
+): Map<string, WidgetLayout> {
   const layouts = new Map<string, WidgetLayout>()
   const sizeMap = new Map<string, { width: number; height: number }>()
 
@@ -81,8 +90,11 @@ function generateDefaultLayouts(tree: TreeNode[]): Map<string, WidgetLayout> {
   function computeSize(node: TreeNode, depth: number): { width: number; height: number } {
     const reg = getWidgetComponent(toWidgetType(node.type))
     if (!reg?.isContainer) {
-      const w = reg?.defaultSize?.width ?? DEFAULT_RUN_WIDTH
-      const h = reg?.defaultSize?.height ?? DEFAULT_RUN_HEIGHT
+      const prev = prevLayouts?.get(node.id)
+      const dw = reg?.defaultSize?.width ?? DEFAULT_RUN_WIDTH
+      const dh = reg?.defaultSize?.height ?? DEFAULT_RUN_HEIGHT
+      const w = Math.max(reg?.minSize?.width ?? MIN_WIDTH, prev?.width ?? dw)
+      const h = Math.max(reg?.minSize?.height ?? MIN_HEIGHT, prev?.height ?? dh)
       const size = { width: w, height: h }
       sizeMap.set(node.id, size)
       return size
@@ -720,10 +732,12 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string, seedLayouts
 
   // Full re-layout. `cohesionGroups` (constellation members, by node id) are kept
   // together as rigid blocks so a re-layout doesn't scatter snapped widgets —
-  // e.g. a session and its attached browser stay linked.
+  // e.g. a session and its attached browser stay linked. Passing `prev` keeps
+  // each widget at its current size (this is a tidy-positions arrange, not a
+  // size reset), so a hand-sized browser isn't shrunk back to its default.
   const arrangeWorkspace = useCallback((cohesionGroups?: string[][]) => {
     setLayouts(prev => {
-      const fresh = generateDefaultLayouts(tree)
+      const fresh = generateDefaultLayouts(tree, prev)
       return cohesionGroups?.length ? preserveCohesion(fresh, prev, cohesionGroups) : fresh
     })
   }, [tree])
