@@ -434,18 +434,12 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
       .filter((f): f is File => f !== null)
     for (const blob of blobs) {
       startUpload(blob)
-        .then(({ path, ocrText }) => {
+        .then(({ path }) => {
           const ta = textareaRef.current
           if (!ta) return
           const before = ta.value.slice(0, ta.selectionStart)
           const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
-          // Insert @path, plus an OCR transcript fenced block when available.
-          // Sentinels wrap the transcript so handleRemoveTile can strip it
-          // cleanly if the user removes the tile.
-          const ocrBlock = ocrText
-            ? `\n<!-- ocr:${path} -->\n\`\`\`text\n${ocrText}\n\`\`\`\n<!-- /ocr:${path} -->\n`
-            : ''
-          const insert = `${needsLeadingSpace ? ' ' : ''}@${path}${ocrBlock} `
+          const insert = `${needsLeadingSpace ? ' ' : ''}@${path} `
           ta.focus({ preventScroll: true })
           ta.setRangeText(insert, ta.selectionStart, ta.selectionEnd, 'end')
           // Force the React onChange to fire so controlled state stays in sync
@@ -460,15 +454,11 @@ function ComposerInput({ sessionId, accent, status, expanded, onToggle, focusTri
     removeTile(clientId)
     if (!tile?.path) return
     const escaped = tile.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    // Strip the sentinel-wrapped OCR block first (if present), then the @path
-    // reference plus one adjacent whitespace. Trailing whitespace cleanup only;
-    // don't collapse internal newlines (user-authored layout must survive).
-    const ocrBlock = new RegExp(
-      `\\n?<!-- ocr:${escaped} -->[\\s\\S]*?<!-- /ocr:${escaped} -->\\n?`,
-      'g',
-    )
+    // Strip the @path reference plus one adjacent whitespace. Trailing
+    // whitespace cleanup only; don't collapse internal newlines (user-authored
+    // layout must survive).
     const refPattern = new RegExp(`\\s?@${escaped}\\s?`, 'g')
-    setText(prev => prev.replace(ocrBlock, '').replace(refPattern, ' ').trimEnd())
+    setText(prev => prev.replace(refPattern, ' ').trimEnd())
   }, [tiles, removeTile])
   const { history, push: pushHistory } = usePromptHistory(sessionId)
   const { slots: stashSlots, setSlot: setStashSlot } = usePromptStash(sessionId)

@@ -7,13 +7,11 @@ export interface Tile {
   previewUrl: string // blob URL for client-side preview
   status: TileStatus
   path?: string // absolute path on disk, populated on 'ready'
-  ocrText?: string // tesseract transcript, populated on 'ready' if available
   errorMessage?: string
 }
 
 export interface UploadResult {
   path: string
-  ocrText?: string
 }
 
 interface Envelope<T> {
@@ -31,9 +29,8 @@ export interface UseScreenshotUploadReturn {
   tiles: Tile[]
   pendingCount: number
   /**
-   * Upload a blob. Resolves to { path, ocrText? } on success; rejects on
-   * failure (tile is marked 'error' either way). ocrText is populated when
-   * tesseract is available server-side and produced non-empty output.
+   * Upload a blob. Resolves to { path } on success; rejects on failure
+   * (tile is marked 'error' either way).
    */
   startUpload(file: File): Promise<UploadResult>
   /** Remove a tile from the gallery (does not delete the file on disk). */
@@ -69,7 +66,7 @@ export function useScreenshotUpload(): UseScreenshotUploadReturn {
 
     try {
       const res = await fetch('/api/screenshots', { method: 'POST', body: form })
-      const body = (await res.json()) as Envelope<{ path: string; ocrText?: string }>
+      const body = (await res.json()) as Envelope<{ path: string }>
       if (!res.ok || body.error) {
         const message = body.error?.message ?? `HTTP ${res.status}`
         setTiles(prev => prev.map(t =>
@@ -77,11 +74,11 @@ export function useScreenshotUpload(): UseScreenshotUploadReturn {
         ))
         throw new Error(message)
       }
-      const { path, ocrText } = body.data!
+      const { path } = body.data!
       setTiles(prev => prev.map(t =>
-        t.clientId === clientId ? { ...t, status: 'ready', path, ocrText } : t,
+        t.clientId === clientId ? { ...t, status: 'ready', path } : t,
       ))
-      return { path, ocrText }
+      return { path }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       setTiles(prev => prev.map(t =>
