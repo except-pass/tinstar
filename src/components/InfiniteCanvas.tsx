@@ -9,6 +9,15 @@ import { useWidgetLayouts, preserveCohesion } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
 import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
 import { getWidgetComponent, toWidgetType, isSnappable } from '../widgets/widgetComponentRegistry'
+import { useConfig } from '../context/ConfigContext'
+import {
+  DEFAULT_WIDGET_SIZE_PRESETS,
+  computePresetSize,
+  resolveAspect,
+  resolvePresetSizes,
+  matchPreset,
+  type SizePreset,
+} from '../widgets/widgetSizePresets'
 import { resolveRunViewType } from '../domain/runView'
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
@@ -260,6 +269,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     batchSetLayouts,
   } = useWidgetLayouts(tree, activeSpaceId, placementSeed)
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
+  const appConfig = useConfig()
+  const sizePresets = appConfig?.ui.widgetSizePresets ?? DEFAULT_WIDGET_SIZE_PRESETS
   const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState } = useSelection()
 
   // Drag state
@@ -945,6 +956,39 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const moves = reflowOnResize({ start: snap.start, final: { width, height }, members: snap.members })
     for (const [id, pos] of moves) updateRunPosition(id, pos.x, pos.y)
   }, [updateRunPosition])
+
+  /** Resize a widget to an S/M/L preset: viewport-relative size, per-type aspect,
+   *  applied through the same resize path a drag uses (persist + cascade + re-snap). */
+  const applySizePreset = useCallback(
+    (nodeId: string, widgetType: string, minSize: { width: number; height: number }, preset: SizePreset) => {
+      const el = containerRef.current
+      const layout = getLayout(nodeId)
+      if (!el || !layout) return
+      const rect = el.getBoundingClientRect()
+      const viewport = { width: rect.width / camera.zoom, height: rect.height / camera.zoom }
+      const aspect = resolveAspect(sizePresets, widgetType)
+      const size = computePresetSize(viewport, sizePresets[preset], aspect, minSize)
+
+      const reg = getWidgetComponent(widgetType)
+      const resize = reg?.isContainer ? resizeNode : updateRunSize
+      // Mirror a drag-resize gesture so the constellation re-settles identically.
+      handleResizeStart(nodeId)
+      resize(nodeId, size.width, size.height)
+      handleResizeEnd(nodeId, size.width, size.height)
+
+      // Keep the widget within the visible viewport (top-left anchored).
+      const vx = -camera.x / camera.zoom
+      const vy = -camera.y / camera.zoom
+      let nx = layout.x
+      let ny = layout.y
+      if (nx + size.width > vx + viewport.width) nx = Math.max(vx, vx + viewport.width - size.width)
+      if (ny + size.height > vy + viewport.height) ny = Math.max(vy, vy + viewport.height - size.height)
+      if (Math.round(nx) !== layout.x || Math.round(ny) !== layout.y) {
+        updateRunPosition(nodeId, Math.round(nx), Math.round(ny))
+      }
+    },
+    [camera, sizePresets, resizeNode, updateRunSize, updateRunPosition, getLayout, handleResizeStart, handleResizeEnd],
+  )
 
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
@@ -1793,6 +1837,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     // all behave the same in the snap pipeline.
     const isSnapLeaf = isSnappable(reg)
 
+    let activeSizePreset: SizePreset | null = null
+    if (isSnapLeaf && presetViewport) {
+      const aspect = resolveAspect(sizePresets, widgetType)
+      const sizes = resolvePresetSizes(presetViewport, sizePresets, aspect, reg.minSize)
+      activeSizePreset = matchPreset({ width: layout.width, height: layout.height }, sizes)
+    }
+
     return (
       <Fragment key={node.id}>
         {run && <RunNodeCapabilities run={run} />}
@@ -1819,6 +1870,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
           onAddWidget={isSnapLeaf ? (nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor }) : undefined}
           occupiedEdges={occupiedEdgesFor(node.id)}
+          onApplySizePreset={isSnapLeaf ? (preset) => applySizePreset(node.id, widgetType, reg.minSize, preset) : undefined}
+          activeSizePreset={activeSizePreset}
           pins={pinSet.forNode(node.id)}
           pinAccent={run?.color}
           pinCanSubmit={resolveBackingSession(node.id, pinCtx) !== null}
@@ -1847,6 +1900,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     }
     return result
   }
+
+  const presetViewport = (() => {
+    const r = containerRef.current?.getBoundingClientRect()
+    return r ? { width: r.width / camera.zoom, height: r.height / camera.zoom } : null
+  })()
 
   const renderedNodes = collectRenderOrder(tree, 0)
 
