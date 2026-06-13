@@ -85,6 +85,11 @@ interface CanvasWidgetShellProps {
   onSendAllPins?: (nodeId: string) => void
   /** Remove every pin on this node. */
   onClearAllPins?: (nodeId: string) => void
+  /** Apply a size preset (S/M/L). Bound per-node by the canvas, which owns the
+   *  viewport + config needed to resolve the concrete dimensions. */
+  onApplySizePreset?: (preset: 'small' | 'medium' | 'large') => void
+  /** Which preset the current size matches — highlights that button, or null. */
+  activeSizePreset?: 'small' | 'medium' | 'large' | null
 }
 
 export function CanvasWidgetShell({
@@ -123,6 +128,8 @@ export function CanvasWidgetShell({
   onPinDragActive,
   onSendAllPins,
   onClearAllPins,
+  onApplySizePreset,
+  activeSizePreset,
 }: CanvasWidgetShellProps) {
   const {
     component: WidgetComponent,
@@ -510,6 +517,32 @@ export function CanvasWidgetShell({
                 title="Add widget"
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {onApplySizePreset && (isHovered || isSelected) && (
+        <div
+          data-testid="size-preset-toolbar"
+          className="pointer-events-auto absolute right-1 top-1 z-20 flex items-center gap-0.5 rounded border border-primary/40 bg-slate-900/90 px-0.5 py-0.5"
+          style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'top right' }}
+          onPointerDown={e => e.stopPropagation()}
+        >
+          {(['small', 'medium', 'large'] as const).map(preset => {
+            const label = preset === 'small' ? 'S' : preset === 'medium' ? 'M' : 'L'
+            const active = activeSizePreset === preset
+            return (
+              <button
+                key={preset}
+                data-testid={`size-preset-${preset}`}
+                aria-pressed={active}
+                className={`flex h-5 w-5 items-center justify-center rounded text-2xs font-mono ${active ? 'bg-primary/80 text-white' : 'text-primary hover:bg-primary/20'}`}
+                title={`Resize to ${preset}`}
+                onClick={e => { e.stopPropagation(); onApplySizePreset(preset) }}
+              >
+                {label}
               </button>
             )
           })}
