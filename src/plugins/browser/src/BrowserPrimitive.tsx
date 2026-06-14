@@ -347,6 +347,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
               value={inputValue}
               onChange={e => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
+              onFocus={e => e.currentTarget.select()}
               onBlur={() => { setInputValue(url); setEditing(false) }}
               onPointerDown={e => e.stopPropagation()}
               placeholder="localhost:3000"
@@ -371,6 +372,16 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
               title="Reload"
             >
               <span className="material-symbols-outlined text-sm">refresh</span>
+            </button>
+          )}
+          {url && (
+            <button
+              onPointerDown={e => e.stopPropagation()}
+              onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
+              className="text-slate-500 hover:text-slate-300 flex-shrink-0"
+              title="Open in system browser"
+            >
+              <span className="material-symbols-outlined text-sm">open_in_new</span>
             </button>
           )}
           {onHeadersChange && (
