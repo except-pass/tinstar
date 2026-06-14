@@ -10,6 +10,13 @@ export interface PinContext {
   [k: string]: unknown
 }
 
+export interface Reply {
+  id: string
+  author: 'user' | 'agent'
+  text: string
+  createdAt: number
+}
+
 export interface Pin {
   id: string
   nodeId: string
@@ -22,6 +29,12 @@ export interface Pin {
   /** undefined = unsent; set when submitted to the backing session. */
   sentAt?: number
   context?: PinContext
+  /** Thread beneath the originating comment (message 0). Append-only; written
+   *  exclusively by POST /api/notes/:noteId/replies (the server merge preserves it
+   *  across whole-doc PUTs). */
+  replies?: Reply[]
+  /** Set when the user resolves the note (soft — thread stays readable). */
+  resolvedAt?: number
 }
 
 export interface PinSet {
@@ -76,4 +89,46 @@ export function isPinSet(v: unknown): v is PinSet {
       typeof pin.nx === 'number' && typeof pin.ny === 'number' &&
       typeof pin.comment === 'string' && typeof pin.createdAt === 'number'
   })
+}
+
+export function addReply(set: PinSet, pinId: string, reply: Reply): PinSet {
+  return updatePin(set, pinId, p => ({ ...p, replies: [...(p.replies ?? []), reply] }))
+}
+
+export function resolvePin(set: PinSet, id: string, at: number): PinSet {
+  return updatePin(set, id, p => ({ ...p, resolvedAt: at }))
+}
+
+export function reopenPin(set: PinSet, id: string): PinSet {
+  return updatePin(set, id, p => {
+    const { resolvedAt: _drop, ...rest } = p
+    return rest
+  })
+}
+
+/** On a whole-doc PUT, the client must not clobber replies the agent appended
+ *  server-side. Take geometry/comment/sentAt/resolvedAt from the client payload
+ *  but keep each pin's `replies` from the existing server doc (by id). */
+export function mergePreservingReplies(incoming: PinSet, existing?: PinSet): PinSet {
+  const prev = new Map((existing?.pins ?? []).map(p => [p.id, p.replies]))
+  return {
+    ...incoming,
+    pins: incoming.pins.map(p => {
+      const kept = prev.has(p.id) ? prev.get(p.id) : undefined
+      if (kept === undefined) {
+        const { replies: _drop, ...rest } = p
+        return rest
+      }
+      return { ...p, replies: kept }
+    }),
+  }
+}
+
+/** The full thread for rendering: the originating comment as message 0 (user),
+ *  then the replies in order. The synthetic id is stable for React keys. */
+export function threadMessages(pin: Pin): Reply[] {
+  return [
+    { id: `${pin.id}-root`, author: 'user', text: pin.comment, createdAt: pin.createdAt },
+    ...(pin.replies ?? []),
+  ]
 }

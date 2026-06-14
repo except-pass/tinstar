@@ -25,6 +25,9 @@ const baseProps = {
   onCommentChange: vi.fn(),
   onDelete: vi.fn(),
   onSubmit: vi.fn(),
+  onReply: vi.fn(),
+  onResolve: vi.fn(),
+  onReopen: vi.fn(),
   onReposition: vi.fn(),
 }
 
@@ -110,6 +113,33 @@ describe('BrowserPinLayer', () => {
     expect(onSubmit).toHaveBeenCalledWith('p1', 'hi')
     rerender(<BrowserPinLayer {...baseProps} canSubmit={false} />)
     expect(screen.getByTestId('pin-submit-p1')).toBeDisabled()
+  })
+
+  it('reply input + send calls onReply with (id, text)', () => {
+    const onReply = vi.fn()
+    const sentPin = pin({ sentAt: 1, context: { url: 'http://x/', docX: 100, docY: 150 } })
+    render(<BrowserPinLayer {...baseProps} pins={[sentPin]} onReply={onReply} />)
+    clickMarker('p1')
+    const input = screen.getByTestId('pin-reply-input-p1')
+    fireEvent.change(input, { target: { value: 'looks great' } })
+    fireEvent.click(screen.getByTestId('pin-reply-send-p1'))
+    expect(onReply).toHaveBeenCalledWith('p1', 'looks great')
+  })
+
+  it('unread dot present for unseen agent reply, cleared after opening', () => {
+    // Use a past timestamp — seenAt starts at 0, so any positive value is "unread".
+    // After opening, seenAt[id] = Date.now() which will be > the reply's createdAt.
+    const agentReply = { id: 'r1', author: 'agent' as const, text: 'done', createdAt: 100 }
+    const sentPin = pin({ sentAt: 1, replies: [agentReply], context: { url: 'http://x/', docX: 100, docY: 150 } })
+    render(<BrowserPinLayer {...baseProps} pins={[sentPin]} />)
+    // Before opening: unread dot (pin-unread-<id> span) should be present
+    expect(screen.getByTestId('pin-unread-p1')).toBeInTheDocument()
+    // Open the bubble (stamps seenAt to Date.now() > 100)
+    clickMarker('p1')
+    // Close the bubble
+    clickMarker('p1')
+    // After opening: unread dot should be gone (seenAt[p1] > reply.createdAt)
+    expect(screen.queryByTestId('pin-unread-p1')).toBeNull()
   })
 
   // ── Drag-to-reposition: a past-threshold drag updates the pin's DOCUMENT coords

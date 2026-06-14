@@ -279,6 +279,35 @@ describe('BrowserPrimitive pin integration', () => {
   // current-page, but ONLY when url is undefined — a stale url would hide it).
   // The read-side (onCurrentPage tolerance) is covered in BrowserPinLayer.test;
   // THIS test proves the write side: onReposition → api.pins.update stamps url. ──
+  it('reply path: POSTs to /api/notes/:id/replies then /api/sessions/:id/enter-prompt', async () => {
+    httpFetch.mockResolvedValue({ ok: true, status: 200, json: async () => ({}) })
+    const store = makePinStore([
+      pin({ sentAt: 1, context: { url: 'http://localhost:3000/', docX: 12, docY: 34 } }),
+    ])
+    const BrowserPrimitive = makeBrowserPrimitive(makeApi(store))
+    render(<BrowserPrimitive {...baseProps} sessionId="sess-1" />)
+    openMarker('p1')
+    // Type reply text and submit
+    const input = screen.getByTestId('pin-reply-input-p1')
+    fireEvent.change(input, { target: { value: 'use a bolder font' } })
+    fireEvent.click(screen.getByTestId('pin-reply-send-p1'))
+    await waitFor(() => expect(httpFetch).toHaveBeenCalledTimes(2))
+    // First call: POST to /api/notes/:id/replies
+    const [notesUrl, notesInit] = httpFetch.mock.calls[0] as [string, { body: string; method: string }]
+    expect(notesUrl).toBe('/api/notes/p1/replies')
+    expect(notesInit.method).toBe('POST')
+    const notesBody = JSON.parse(notesInit.body)
+    expect(notesBody.text).toBe('use a bolder font')
+    expect(notesBody.author).toBe('user')
+    // Second call: POST to /api/sessions/:id/enter-prompt
+    const [promptUrl, promptInit] = httpFetch.mock.calls[1] as [string, { body: string; method: string }]
+    expect(promptUrl).toBe('/api/sessions/sess-1/enter-prompt')
+    expect(promptInit.method).toBe('POST')
+    const promptBody = JSON.parse(promptInit.body)
+    expect(promptBody.prompt).toContain('use a bolder font')
+    expect(promptBody.prompt).toContain('/api/notes/p1/replies')
+  })
+
   it('reposition stamps current page url into a previously url-less pin context (M2 write-side)', () => {
     // Seed a pin whose context has docX/docY but NO url — the pre-fix legacy shape.
     const store = makePinStore([pin({ context: { docX: 50, docY: 60 } })])

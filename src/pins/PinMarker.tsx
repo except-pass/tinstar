@@ -4,6 +4,8 @@
 interface PinMarkerProps {
   id: string; index: number; sent: boolean; accent: string; comment: string
   zoom: number
+  unread?: boolean
+  resolved?: boolean
   onPointerDown: (e: React.PointerEvent) => void
 }
 
@@ -12,14 +14,26 @@ export function PinMarker(p: PinMarkerProps) {
     <button
       data-testid={`pin-marker-${p.id}`}
       data-sent={p.sent ? 'true' : 'false'}
+      data-resolved={p.resolved ? 'true' : 'false'}
       onPointerDown={p.onPointerDown}
-      className={`w-5 h-5 rounded-full border text-[10px] font-mono font-bold flex items-center justify-center shadow transition-transform hover:scale-110 ${
-        p.sent ? 'bg-slate-700 border-slate-500 text-slate-400' : 'text-white border-white/40'
+      className={`relative w-5 h-5 rounded-full border text-[10px] font-mono font-bold flex items-center justify-center shadow transition-transform hover:scale-110 ${
+        p.resolved
+          ? 'bg-slate-800 border-slate-600 text-slate-500'
+          : p.sent
+            ? 'bg-slate-700 border-slate-500 text-slate-400'
+            : 'text-white border-white/40'
       }`}
-      style={{ ...(p.sent ? {} : { background: p.accent }), transform: `translate(-50%, -50%) scale(${1 / p.zoom})` }}
+      style={{ ...(p.sent || p.resolved ? {} : { background: p.accent }), transform: `translate(-50%, -50%) scale(${1 / p.zoom})` }}
       title={p.sent ? `Sent — ${p.comment}` : p.comment || 'Click to edit'}
     >
-      {p.sent ? '✓' : p.index}
+      {p.sent || p.resolved ? '✓' : p.index}
+      {p.unread && !p.resolved && (
+        <span
+          data-testid={`pin-unread-${p.id}`}
+          className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full border border-slate-900"
+          style={{ background: p.accent }}
+        />
+      )}
     </button>
   )
 }

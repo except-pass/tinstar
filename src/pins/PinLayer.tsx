@@ -19,6 +19,9 @@ export interface PinLayerProps {
   onCommentChange: (id: string, comment: string) => void
   onDelete: (id: string) => void
   onSubmit: (id: string, comment: string) => void
+  onReply: (id: string, text: string) => void
+  onResolve: (id: string) => void
+  onReopen: (id: string) => void
   /** Fires true when a marker drag begins (first move past threshold) and false on
    *  pointer up/cancel. The shell uses this to toggle the iframe pointer guard so a
    *  reposition drag over a browser/terminal widget isn't swallowed. */
@@ -35,6 +38,9 @@ export function PinLayer(p: PinLayerProps) {
   // without a store write per move. Persisted once on pointer-up (see onPointerUp).
   const [dragPos, setDragPos] = useState<{ id: string; nx: number; ny: number } | null>(null)
   const layerRef = useRef<HTMLDivElement>(null)
+  // Per-viewer read state: wall-clock when each pin's bubble was last opened. Unread =
+  // a newer agent reply exists. Never persisted/synced (read state is per-viewer).
+  const [seenAt, setSeenAt] = useState<Record<string, number>>({})
 
   const onPointerDown = (pin: Pin) => (e: React.PointerEvent) => {
     e.stopPropagation()
@@ -83,7 +89,11 @@ export function PinLayer(p: PinLayerProps) {
       setDragPos(null)
       p.onDragActiveChange?.(false)
     } else if (classifyPointerUp({ dx: e.clientX - d.startX, dy: e.clientY - d.startY }) === 'click') {
-      setOpenId(cur => (cur === d.id ? null : d.id))
+      setOpenId(cur => {
+        const next = cur === d.id ? null : d.id
+        if (next) setSeenAt(s => ({ ...s, [next]: Date.now() }))
+        return next
+      })
     }
   }
   const onPointerCancel = () => {
@@ -91,6 +101,11 @@ export function PinLayer(p: PinLayerProps) {
     dragRef.current = null
     setDragPos(null) // cancel == no move: discard without persisting
     if (d?.moved) p.onDragActiveChange?.(false)
+  }
+
+  const latestAgentReplyAt = (pin: Pin): number => {
+    const agent = (pin.replies ?? []).filter(r => r.author === 'agent')
+    return agent.length ? agent[agent.length - 1]!.createdAt : 0
   }
 
   return (
@@ -108,12 +123,23 @@ export function PinLayer(p: PinLayerProps) {
             ref={isOpen ? setOpenAnchor : undefined}
             style={{ left: `${nx * 100}%`, top: `${ny * 100}%`, pointerEvents: 'auto' }}>
             <PinMarker id={pin.id} index={i + 1} sent={!!pin.sentAt} accent={p.accent} comment={pin.comment}
-              zoom={p.zoom} onPointerDown={onPointerDown(pin)} />
+              zoom={p.zoom}
+              resolved={!!pin.resolvedAt}
+              // Unread compares server reply time (createdAt) to client open time
+              // (seenAt). A lagging client clock can leave a false-positive dot that
+              // clears on the next open — acceptable for a per-viewer, unsynced cue.
+              unread={!isOpen && latestAgentReplyAt(pin) > (seenAt[pin.id] ?? 0)}
+              onPointerDown={onPointerDown(pin)} />
             {isOpen && (
               <PinBubble id={pin.id} comment={pin.comment} sent={!!pin.sentAt} canSubmit={p.canSubmit}
                 anchorEl={openAnchor}
+                replies={pin.replies ?? []}
+                resolved={!!pin.resolvedAt}
                 onCommentChange={c => p.onCommentChange(pin.id, c)} onDelete={() => p.onDelete(pin.id)}
-                onSubmit={(comment) => p.onSubmit(pin.id, comment)} />
+                onSubmit={(comment) => p.onSubmit(pin.id, comment)}
+                onReply={(text) => p.onReply(pin.id, text)}
+                onResolve={() => p.onResolve(pin.id)}
+                onReopen={() => p.onReopen(pin.id)} />
             )}
           </div>
         )

@@ -84,6 +84,15 @@ export interface PinContext {
   [k: string]: unknown
 }
 
+/** A single thread message under a pin. Mirrors the host's `src/domain/pinSet.ts`
+ *  per the plugin-api isolation convention — keep the two structurally identical. */
+export interface Reply {
+  id: string
+  author: 'user' | 'agent'
+  text: string
+  createdAt: number
+}
+
 /** A positioned annotation pinned to a widget's content. Duplicated from the
  *  host's `src/domain/pinSet.ts` per the plugin-api isolation convention — keep
  *  the two structurally identical. */
@@ -99,6 +108,10 @@ export interface Pin {
   /** undefined = unsent; set when submitted to the backing session. */
   sentAt?: number
   context?: PinContext
+  /** Thread beneath the originating comment (message 0). */
+  replies?: Reply[]
+  /** Set when the user resolves the note. */
+  resolvedAt?: number
 }
 
 /** All pins for one space, revision-gated. Mirrors the host's `PinSet`. */

@@ -9,6 +9,7 @@ import { unproxyPath } from './proxyPaths'
 import { BrowserPinLayer } from './notes/BrowserPinLayer'
 import { formatBrowserPin } from './notes/formatBrowserPin'
 import { captureTarget } from './notes/capture'
+import { replyInstructions, threadSoFar } from '../../../pins/replyPrompt'
 
 // Re-export: external importers/tests treat BrowserPrimitive as unproxyPath's home.
 export { unproxyPath }
@@ -154,7 +155,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
         const res = await api.http.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: formatBrowserPin({ ...pin, comment }) }),
+          body: JSON.stringify({ prompt: `${formatBrowserPin({ ...pin, comment })}\n\n${replyInstructions(id, window.location.origin)}` }),
         })
         const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
         if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
@@ -163,6 +164,28 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
         api.logger?.warn?.('[browser-pins] submit failed:', (err as Error).message)
       }
     }, [pins, sessionId, nodeId])
+
+    const replyToPin = useCallback(async (id: string, text: string) => {
+      if (!sessionId) return
+      const pin = pins.find(p => p.id === id)
+      try {
+        await api.http.fetch(`/api/notes/${encodeURIComponent(id)}/replies`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, author: 'user' }),
+        })
+      } catch (err) { api.logger?.warn?.('[browser-pins] reply failed:', (err as Error).message); return }
+      const history = pin ? `${threadSoFar(pin)}\n[user] ${text}` : `[user] ${text}`
+      const prompt = `📍 Follow-up on the note:\n\n${history}\n\n${replyInstructions(id, window.location.origin)}`
+      try {
+        await api.http.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        })
+      } catch (err) { api.logger?.warn?.('[browser-pins] re-prompt failed:', (err as Error).message) }
+    }, [pins, sessionId, nodeId])
+
+    const resolvePin = useCallback((id: string) => api.pins.update(nodeId, id, p => ({ ...p, resolvedAt: Date.now() })), [nodeId])
+    const reopenPin = useCallback((id: string) => api.pins.update(nodeId, id, p => { const { resolvedAt: _d, ...rest } = p; return rest }), [nodeId])
 
     // Listen for console messages from the proxied iframe
     useEffect(() => {
@@ -424,6 +447,9 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
                   onCommentChange={(id, comment) => api.pins.update(nodeId, id, p => ({ ...p, comment }))}
                   onDelete={(id) => api.pins.remove(nodeId, id)}
                   onSubmit={submitPin}
+                  onReply={replyToPin}
+                  onResolve={resolvePin}
+                  onReopen={reopenPin}
                   onReposition={(id, docX, docY) => api.pins.update(nodeId, id, p => ({ ...p, context: { ...(p.context ?? {}), url: p.context?.url ?? url, docX, docY } }))}
                   onDragActiveChange={setMarkerDragging}
                 />

@@ -31,6 +31,9 @@ export interface BrowserPinLayerProps {
   onCommentChange: (id: string, comment: string) => void
   onDelete: (id: string) => void
   onSubmit: (id: string, comment: string) => void
+  onReply: (id: string, text: string) => void
+  onResolve: (id: string) => void
+  onReopen: (id: string) => void
   /** Drag-to-reposition: fires with the new DOCUMENT coords (docX/docY) as the
    *  marker is dragged. Caller persists into the pin's context. */
   onReposition: (id: string, docX: number, docY: number) => void
@@ -74,6 +77,9 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
   // The overlay div — its bounding box is the docX/docY origin (markers are
   // positioned at docX - scroll.x within it), so reposition math reuses it.
   const layerRef = useRef<HTMLDivElement>(null)
+  // Per-viewer read state: wall-clock when each pin's bubble was last opened. Unread =
+  // a newer agent reply exists. Never persisted/synced (read state is per-viewer).
+  const [seenAt, setSeenAt] = useState<Record<string, number>>({})
   const pins = p.pins.filter(pin => onCurrentPage(pin, p.url))
 
   const onPointerDown = (pin: Pin) => (e: React.PointerEvent) => {
@@ -117,7 +123,11 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
       setDragPos(null)
       p.onDragActiveChange?.(false)
     } else {
-      setOpenId(cur => (cur === d.id ? null : d.id)) // sub-threshold release == click
+      setOpenId(cur => {
+        const next = cur === d.id ? null : d.id
+        if (next) setSeenAt(s => ({ ...s, [next]: Date.now() }))
+        return next
+      })
     }
   }
   const onPointerCancel = () => {
@@ -125,6 +135,11 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
     dragRef.current = null
     setDragPos(null) // cancel == no move: discard without persisting
     if (d?.moved) p.onDragActiveChange?.(false)
+  }
+
+  const latestAgentReplyAt = (pin: Pin): number => {
+    const agent = (pin.replies ?? []).filter(r => r.author === 'agent')
+    return agent.length ? agent[agent.length - 1]!.createdAt : 0
   }
 
   return (
@@ -156,6 +171,8 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
               accent={p.accent}
               comment={pin.comment}
               zoom={1}
+              resolved={!!pin.resolvedAt}
+              unread={!isOpen && latestAgentReplyAt(pin) > (seenAt[pin.id] ?? 0)}
               onPointerDown={onPointerDown(pin)}
             />
             {isOpen && (
@@ -165,9 +182,14 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
                 sent={!!pin.sentAt}
                 canSubmit={p.canSubmit}
                 anchorEl={openAnchor}
+                replies={pin.replies ?? []}
+                resolved={!!pin.resolvedAt}
                 onCommentChange={c => p.onCommentChange(pin.id, c)}
                 onDelete={() => { p.onDelete(pin.id); setOpenId(null) }}
                 onSubmit={(comment) => p.onSubmit(pin.id, comment)}
+                onReply={(text) => p.onReply(pin.id, text)}
+                onResolve={() => p.onResolve(pin.id)}
+                onReopen={() => p.onReopen(pin.id)}
               />
             )}
           </div>

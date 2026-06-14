@@ -42,6 +42,7 @@ import { tidyGridClusters } from '../canvas/tidyArrange'
 import { clusterGroups } from '../canvas/clusterize'
 import type { DragMember } from '../canvas/constellationCohesion'
 import { reflowOnResize, type ReflowRect, type ReflowMember } from '../canvas/resizeReflow'
+import { replyInstructions, threadSoFar } from '../pins/replyPrompt'
 
 /** Shared empty set so unsnapped widgets reuse one reference (all four [+] edges shown). */
 const EMPTY_EDGES: ReadonlySet<SnapEdge> = new Set()
@@ -747,9 +748,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       // Native-widget pins carry a semantic capture of what was under the marker
       // (browser pins use their own richer format via formatBrowserPin instead).
       const captureLabel = (pin.context?.capture as { label?: string } | undefined)?.label
-      const prompt = captureLabel
-        ? `📍 Pinned on ${label} — on "${captureLabel}" — ${comment}`
-        : `📍 Pinned on ${label} — ${comment}`
+      const where = captureLabel ? `${label} — on "${captureLabel}"` : label
+      const prompt = `📍 New note on ${where} — ${comment}\n\n${replyInstructions(pinId, window.location.origin)}`
       try {
         const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
           method: 'POST',
@@ -801,6 +801,40 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     },
     [pinSet],
   )
+
+  // Append a user follow-up to a note's thread, then re-prompt the agent with the
+  // thread so far so it replies again (server owns the replies array).
+  const replyToPin = useCallback(
+    async (pinId: string, nodeId: string, text: string) => {
+      const sessionId = resolveBackingSession(nodeId, pinCtx)
+      if (!sessionId) return
+      try {
+        await apiFetch(`/api/notes/${encodeURIComponent(pinId)}/replies`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, author: 'user' }),
+        })
+      } catch (err) { console.warn('[pins] reply persist failed:', err); return }
+      const pin = pinSet.set.pins.find(p => p.id === pinId)
+      const label = findNodeLabel(tree, nodeId) ?? nodeId
+      const history = pin ? `${threadSoFar(pin)}\n[user] ${text}` : `[user] ${text}`
+      const prompt = `📍 Follow-up on note ${label}:\n\n${history}\n\n${replyInstructions(pinId, window.location.origin)}`
+      try {
+        await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        })
+      } catch (err) { console.warn('[pins] reply re-prompt failed:', err) }
+    },
+    [pinSet, pinCtx, tree],
+  )
+
+  const resolvePinCb = useCallback((pinId: string) => {
+    pinSet.update(pinId, p => ({ ...p, resolvedAt: Date.now() }))
+  }, [pinSet])
+
+  const reopenPinCb = useCallback((pinId: string) => {
+    pinSet.update(pinId, p => { const { resolvedAt: _d, ...rest } = p; return rest })
+  }, [pinSet])
 
   // ── Add-widget picker + orchestrator ──────────────────────────────────────
   const { entries: catalog } = useWidgetCatalog()
@@ -1919,6 +1953,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           onPinDragActive={setPinDragging}
           onSendAllPins={(nodeId) => sendAllPins(nodeId)}
           onClearAllPins={(nodeId) => clearAllPins(nodeId)}
+          onReplyPin={(id, text) => replyToPin(id, node.id, text)}
+          onResolvePin={resolvePinCb}
+          onReopenPin={reopenPinCb}
         />
       </Fragment>
     )

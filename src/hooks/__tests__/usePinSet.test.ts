@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { usePinSet } from '../usePinSet'
 import type { PinSet, Pin } from '../../domain/pinSet'
@@ -58,11 +58,13 @@ describe('usePinSet successful mutation', () => {
 // A rejected PUT must roll back the optimistic overlay so reads fall back to
 // server state instead of compounding edits the backend refused.
 describe('usePinSet failed persist (rollback)', () => {
-  it('rolls back the overlay when the server responds non-OK (409/500)', async () => {
+  // Non-409 failures roll back immediately. (409 is special-cased into a
+  // rebase-retry — see the 'usePinSet 409 rebase-retry' suite below.)
+  it('rolls back the overlay when the server responds non-OK (500)', async () => {
     h.serverState = {
       pinSets: [{ spaceId: 's', pins: [pin('a')], rev: 0 }],
     }
-    h.nextResponse = () => Promise.resolve({ ok: false, status: 409, text: () => Promise.resolve('conflict') } as Response)
+    h.nextResponse = () => Promise.resolve({ ok: false, status: 500, text: () => Promise.resolve('boom') } as Response)
     const { result } = renderHook(() => usePinSet('s'))
     await act(async () => {
       result.current.create(pin('b'))
@@ -179,6 +181,126 @@ describe('usePinSet clearNode', () => {
     const { result } = renderHook(() => usePinSet('s'))
     act(() => { result.current.clearNode('n1') })
     expect(h.puts.length).toBe(0)
+  })
+})
+
+// A 409 from the revision gate means a competing writer (e.g. an agent reply)
+// bumped the server rev first. Rather than discard the user's edit, the hook
+// rebases onto fresher server state and re-PUTs with a higher rev. A short
+// timeout sits before the retry, so these tests drive fake timers.
+describe('usePinSet 409 rebase-retry', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('409 then 200 → edit survives, a second PUT fires with a higher rev', async () => {
+    // Server starts at rev 5 with an existing pin 'a'.
+    h.serverState = { pinSets: [{ spaceId: 's', pins: [pin('a')], rev: 5 }] }
+    // First PUT is rejected as stale; the second succeeds.
+    const responses = [
+      { ok: false, status: 409, text: () => Promise.resolve('stale') } as Response,
+      { ok: true, status: 200 } as Response,
+    ]
+    h.nextResponse = () => Promise.resolve(responses.shift()!)
+
+    const { result, rerender } = renderHook(() => usePinSet('s'))
+    // User edits → optimistic PUT stamped rev 6.
+    act(() => { result.current.create(pin('b')) })
+    expect(result.current.set.pins.map(p => p.id).sort()).toEqual(['a', 'b'])
+    expect(h.puts.length).toBe(1)
+    expect(h.puts[0]!.rev).toBe(6)
+
+    // The competing agent reply lands first: server advances to rev 6 carrying a
+    // reply on 'a'. The hook's overlay (rev 6) does NOT clear (we still own it,
+    // and the 409 reply path will rebase).
+    await act(async () => {
+      h.serverState = { pinSets: [{ spaceId: 's', pins: [pin('a')], rev: 6 }] }
+      rerender()
+      await Promise.resolve()
+    })
+
+    // Let the 409 resolve and the rebase timer fire.
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+
+    // A second PUT fired, re-based onto server rev 6 → stamped rev 7 (> 6).
+    expect(h.puts.length).toBe(2)
+    expect(h.puts[1]!.rev!).toBeGreaterThan(h.puts[0]!.rev!)
+    expect(h.puts[1]!.rev).toBe(7)
+    // The user's edit ('b') survives in the re-PUT and the live overlay.
+    expect(h.puts[1]!.pins.map(p => p.id).sort()).toEqual(['a', 'b'])
+    expect(result.current.set.pins.map(p => p.id).sort()).toEqual(['a', 'b'])
+  })
+
+  it('non-409 failure (500) → single PUT, rollback, no retry', async () => {
+    h.serverState = { pinSets: [{ spaceId: 's', pins: [pin('a')], rev: 0 }] }
+    h.nextResponse = () => Promise.resolve({ ok: false, status: 500, text: () => Promise.resolve('boom') } as Response)
+    const { result } = renderHook(() => usePinSet('s'))
+    await act(async () => {
+      result.current.create(pin('b'))
+      await Promise.resolve()
+    })
+    // Advance well past the retry delay to prove no retry is scheduled.
+    await act(async () => { await vi.advanceTimersByTimeAsync(500) })
+    expect(h.puts.length).toBe(1)
+    // Overlay rolled back → reads fall to server truth.
+    expect(result.current.set.pins.map(p => p.id)).toEqual(['a'])
+  })
+
+  it('no-op apply does not cancel an in-flight 409 rebase-retry', async () => {
+    // Regression: before the fix, a no-op apply() bumped editGenRef unconditionally,
+    // marking the prior real edit's retry chain as stale → the retry would silently
+    // not fire and the edit would roll back.
+    h.serverState = { pinSets: [{ spaceId: 's', pins: [pin('a')], rev: 5 }] }
+    // First PUT is rejected as stale; the second (rebase-retry) succeeds.
+    const responses = [
+      { ok: false, status: 409, text: () => Promise.resolve('stale') } as Response,
+      { ok: true, status: 200 } as Response,
+    ]
+    h.nextResponse = () => Promise.resolve(responses.shift()!)
+
+    const { result, rerender } = renderHook(() => usePinSet('s'))
+    // Real edit: add pin 'b' → first PUT fires (rev 6), returns 409.
+    act(() => { result.current.create(pin('b')) })
+    expect(h.puts.length).toBe(1)
+
+    // The competing write lands: server advances to rev 6.
+    await act(async () => {
+      h.serverState = { pinSets: [{ spaceId: 's', pins: [pin('a')], rev: 6 }] }
+      rerender()
+      await Promise.resolve()
+    })
+
+    // NO-OP apply: update pin 'b' returning it unchanged. This must NOT bump
+    // editGenRef, so the rebase-retry from the real edit above remains live.
+    act(() => { result.current.update('b', p => p) })
+    // Still exactly 1 PUT — the no-op issued nothing.
+    expect(h.puts.length).toBe(1)
+
+    // Advance timers: the rebase-retry fires.
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+
+    // The retry (second PUT) must have fired — the real edit survived.
+    expect(h.puts.length).toBe(2)
+    expect(h.puts[1]!.rev).toBeGreaterThan(h.puts[0]!.rev!)
+    // Pin 'b' must still be present in the retry body and the live state.
+    expect(h.puts[1]!.pins.map((p: Pin) => p.id).sort()).toEqual(['a', 'b'])
+    expect(result.current.set.pins.map(p => p.id).sort()).toEqual(['a', 'b'])
+  })
+
+  it('409 storm → bounded attempts (3 total), ends rolled back', async () => {
+    h.serverState = { pinSets: [{ spaceId: 's', pins: [pin('a')], rev: 0 }] }
+    // Every PUT is rejected 409.
+    h.nextResponse = () => Promise.resolve({ ok: false, status: 409, text: () => Promise.resolve('stale') } as Response)
+    const { result } = renderHook(() => usePinSet('s'))
+    await act(async () => {
+      result.current.create(pin('b'))
+      await Promise.resolve()
+    })
+    // Drain all scheduled retries.
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    // Exactly MAX_ATTEMPTS (3) PUTs, not an infinite loop.
+    expect(h.puts.length).toBe(3)
+    // Exhausted → rolled back to server truth.
+    expect(result.current.set.pins.map(p => p.id)).toEqual(['a'])
   })
 })
 

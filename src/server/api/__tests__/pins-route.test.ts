@@ -202,4 +202,146 @@ describe('PUT /api/pins/:spaceId', () => {
     expect(stale.status).toBe(409)
     expect(testCtx.docStore.getPinSet(SPACE_ID)!.pins).toEqual([])
   })
+
+  it('preserves agent replies when a client whole-doc PUT arrives with no replies', async () => {
+    // Seed a pin set with pin-A
+    const pinA = samplePin({ id: 'pin-A', nx: 0.5 })
+    const initial = addPin(emptyPinSet(SPACE_ID), pinA)
+    await testCtx.fetch(`/api/pins/${SPACE_ID}`, {
+      method: 'PUT',
+      body: JSON.stringify(initial),
+    })
+
+    // Agent appends a reply via the POST route (rev becomes 1)
+    const postRes = await testCtx.fetch('/api/notes/pin-A/replies', {
+      method: 'POST',
+      body: JSON.stringify({ text: 'the answer', author: 'agent' }),
+    })
+    expect(postRes.status).toBe(200)
+
+    // Client PUTs the whole pinSet built from older knowledge (no replies on pin-A,
+    // but a higher rev and an edited geometry — nx:0.9)
+    const stored = testCtx.docStore.getPinSet(SPACE_ID)!
+    const clientView = {
+      ...stored,
+      rev: (stored.rev ?? 0) + 1,
+      pins: stored.pins.map(p => p.id === 'pin-A' ? { ...p, nx: 0.9, replies: undefined } : p),
+    }
+    const putRes = await testCtx.fetch(`/api/pins/${SPACE_ID}`, {
+      method: 'PUT',
+      body: JSON.stringify(clientView),
+    })
+    expect(putRes.status).toBe(200)
+
+    // Client geometry wins; server-side reply survives
+    const final = testCtx.docStore.getPinSet(SPACE_ID)!
+    const pinAfter = final.pins.find(p => p.id === 'pin-A')!
+    expect(pinAfter.nx).toBe(0.9)
+    expect(pinAfter.replies).toBeDefined()
+    expect(pinAfter.replies!.length).toBe(1)
+    expect(pinAfter.replies![0]).toMatchObject({ author: 'agent', text: 'the answer' })
+  })
+})
+
+describe('POST /api/notes/:noteId/replies', () => {
+  function seedPinA() {
+    const pinA = samplePin({ id: 'pin-A', nx: 0.5 })
+    const set = addPin(emptyPinSet(SPACE_ID), pinA)
+    // Seed directly into docStore (rev 0)
+    testCtx.docStore.upsertPinSet(SPACE_ID, set)
+  }
+
+  it('appends a reply with default author=agent and increments rev', async () => {
+    seedPinA()
+    const res = await testCtx.fetch('/api/notes/pin-A/replies', {
+      method: 'POST',
+      body: JSON.stringify({ text: 'the answer' }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; data: { replyId: string } }
+    expect(body.ok).toBe(true)
+    expect(typeof body.data.replyId).toBe('string')
+
+    const stored = testCtx.docStore.getPinSet(SPACE_ID)!
+    const pinAfter = stored.pins.find(p => p.id === 'pin-A')!
+    expect(pinAfter.replies).toBeDefined()
+    expect(pinAfter.replies!.length).toBe(1)
+    expect(pinAfter.replies![0]).toMatchObject({ author: 'agent', text: 'the answer' })
+    // rev should have incremented by 1 from the initial seed (rev 0 → 1)
+    expect(stored.rev).toBe(1)
+  })
+
+  it('uses provided author=user when specified', async () => {
+    seedPinA()
+    const res = await testCtx.fetch('/api/notes/pin-A/replies', {
+      method: 'POST',
+      body: JSON.stringify({ text: 'follow up', author: 'user' }),
+    })
+
+    expect(res.status).toBe(200)
+    const stored = testCtx.docStore.getPinSet(SPACE_ID)!
+    const pinAfter = stored.pins.find(p => p.id === 'pin-A')!
+    expect(pinAfter.replies![0]).toMatchObject({ author: 'user', text: 'follow up' })
+  })
+
+  it('returns 404 with noteId in message for unknown note id', async () => {
+    seedPinA()
+    const res = await testCtx.fetch('/api/notes/pin-ZZZ/replies', {
+      method: 'POST',
+      body: JSON.stringify({ text: 'hello' }),
+    })
+
+    expect(res.status).toBe(404)
+    const body = await res.json() as { ok: false; error: { code: string; message: string } }
+    expect(body.ok).toBe(false)
+    expect(body.error.message).toContain('pin-ZZZ')
+  })
+
+  it('returns 400 when text is missing', async () => {
+    seedPinA()
+    const res = await testCtx.fetch('/api/notes/pin-A/replies', {
+      method: 'POST',
+      body: JSON.stringify({ author: 'agent' }),
+    })
+
+    expect(res.status).toBe(400)
+    const body = await res.json() as { ok: false; error: { code: string; message: string } }
+    expect(body.ok).toBe(false)
+    expect(body.error.message).toContain('text')
+  })
+
+  it('returns 400 when text is empty string', async () => {
+    seedPinA()
+    const res = await testCtx.fetch('/api/notes/pin-A/replies', {
+      method: 'POST',
+      body: JSON.stringify({ text: '' }),
+    })
+
+    expect(res.status).toBe(400)
+    const body = await res.json() as { ok: false; error: { code: string; message: string } }
+    expect(body.error.message).toContain('text')
+  })
+
+  it('returns 400 when text is whitespace-only', async () => {
+    seedPinA()
+    const res = await testCtx.fetch('/api/notes/pin-A/replies', {
+      method: 'POST',
+      body: JSON.stringify({ text: '   ' }),
+    })
+
+    expect(res.status).toBe(400)
+    const body = await res.json() as { ok: false; error: { code: string; message: string } }
+    expect(body.error.message).toContain('text')
+  })
+
+  it('returns 400 on a malformed JSON body', async () => {
+    seedPinA()
+    const res = await testCtx.fetch('/api/notes/pin-A/replies', {
+      method: 'POST',
+      body: '{ not json',
+    })
+
+    expect(res.status).toBe(400)
+  })
 })
