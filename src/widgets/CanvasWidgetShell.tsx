@@ -480,8 +480,8 @@ export function CanvasWidgetShell({
       {pinnable && (isHovered || isSelected) && onCreatePin && (
         <button
           data-testid="pin-drop-affordance"
-          className="pointer-events-auto absolute left-1 bottom-1 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-primary/40 bg-slate-900/90 text-primary opacity-70 transition-opacity hover:opacity-100"
-          style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'bottom left' }}
+          className="pointer-events-auto absolute left-1 bottom-0 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-primary/40 bg-slate-900/90 text-primary opacity-70 transition-opacity hover:opacity-100"
+          style={{ transform: `translateY(100%) scale(${1 / zoom})`, transformOrigin: 'top left' }}
           onPointerDown={handlePinPlaceDown}
           onPointerMove={handlePinPlaceMove}
           onPointerUp={handlePinPlaceUp}
@@ -526,8 +526,8 @@ export function CanvasWidgetShell({
       {onApplySizePreset && (isHovered || isSelected) && (
         <div
           data-testid="size-preset-toolbar"
-          className="pointer-events-auto absolute right-1 top-1 z-20 flex items-center gap-0.5 rounded border border-primary/40 bg-slate-900/90 px-0.5 py-0.5"
-          style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'top right' }}
+          className="pointer-events-auto absolute right-1 top-0 z-20 flex items-center gap-0.5 rounded border border-primary/40 bg-slate-900/90 px-0.5 py-0.5"
+          style={{ transform: `translateY(-100%) scale(${1 / zoom})`, transformOrigin: 'bottom right' }}
           onPointerDown={e => e.stopPropagation()}
         >
           {(['small', 'medium', 'large'] as const).map(preset => {
