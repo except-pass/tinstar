@@ -2608,7 +2608,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const replyId = shortId('reply')
       const next = addReply(owning, noteId, { id: replyId, author, text, createdAt: Date.now() })
       if (!ctx.docStore.upsertPinSet(owning.spaceId, { ...next, rev: (owning.rev ?? 0) + 1 })) {
-        fail(res, 'CONFLICT', 'concurrent write — retry'); return
+        // Defensive: the read-modify-write above is atomic under Node's single thread,
+        // so this is currently unreachable — but if a future concurrent writer makes it
+        // fire, the agent (caller) gets an actionable instruction rather than a bare 409.
+        fail(res, 'CONFLICT',
+          `Your reply to note '${noteId}' was not saved because the note's thread was updated concurrently. ` +
+          `This usually means another reply or edit landed at the same moment. ` +
+          `Wait ~1 second and retry the exact same POST — your reply was NOT stored, so retrying will not duplicate it.`)
+        return
       }
       ok(res, { replyId })
     }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
