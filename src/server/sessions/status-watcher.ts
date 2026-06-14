@@ -462,11 +462,22 @@ export function pickNewestUnclaimed(
  * its shared project dir and the convIds claimed by live peers. Pure: this is
  * the per-session core, mirroring the two cases the watcher must handle.
  *
- *  - Contested: the convId we track is also claimed by a peer (we've
- *    cross-pollinated). Repair to our own file — newest unclaimed born after
+ *  - Normal (uncontested): track our own launch transcript and nothing else.
+ *    We deliberately do NOT adopt a "newer unclaimed" transcript here. A
+ *    session's convId equals the unique `--session-id` it was launched with
+ *    (see createSession), so its own file is authoritative. In a shared
+ *    workdir the project dir fills with orphan transcripts — dead peers,
+ *    `/clear` leftovers, and especially headless `claude -p` runs (code
+ *    reviewers, subagents) — and a newer orphan is filesystem-indistinguishable
+ *    from a legitimate in-place `/clear` successor. The old "adopt newest
+ *    unclaimed" rule made live sessions hop onto strangers' transcripts,
+ *    producing wrong status lights and telemetry misattributed between
+ *    co-located sessions. We choose correct attribution over live `/clear`
+ *    discovery; an in-place `/clear` re-tracks when the session is
+ *    relaunched/resumed (which sets conversation.id deliberately).
+ *  - Contested: the convId we track is also claimed by a live peer (residual
+ *    cross-pollination). Repair to our own file — newest unclaimed born at/after
  *    we started (the birthtime floor breaks symmetry between peers).
- *  - Normal: adopt the newest unclaimed transcript only if it's strictly
- *    newer than what we track (covers /clear and --resume).
  */
 export function decideConversationId(args: {
   currentConvId: string
@@ -476,28 +487,24 @@ export function decideConversationId(args: {
 }): string {
   const { currentConvId, sessionCreatedMs, transcripts, claimedByPeers } = args
 
-  if (claimedByPeers.has(currentConvId)) {
-    const floor = Number.isNaN(sessionCreatedMs) ? undefined : sessionCreatedMs
-    const candidate = pickNewestUnclaimed(transcripts, claimedByPeers, floor)
-    if (!candidate || candidate.convId === currentConvId) return currentConvId
-    return candidate.convId
-  }
+  // Uncontested: keep our own launch transcript. Never chase a newer orphan.
+  if (!claimedByPeers.has(currentConvId)) return currentConvId
 
-  const candidate = pickNewestUnclaimed(transcripts, claimedByPeers)
+  // Contested: repair to our own file, born at/after we started.
+  const floor = Number.isNaN(sessionCreatedMs) ? undefined : sessionCreatedMs
+  const candidate = pickNewestUnclaimed(transcripts, claimedByPeers, floor)
   if (!candidate || candidate.convId === currentConvId) return currentConvId
-  const tracked = transcripts.find((t) => t.convId === currentConvId)
-  const trackedMtime = tracked?.mtimeMs ?? 0
-  if (candidate.mtimeMs <= trackedMtime) return currentConvId
   return candidate.convId
 }
 
 /**
  * Resolve the convId each session sharing one project dir should track for a
  * single watcher tick. Claims accumulate *live* across sessions (in listing
- * order) so two sessions never adopt the same transcript in one tick. That
- * live threading is what makes the result a fixpoint and stops the
- * adopt→repair oscillation that ran when N sessions shared a workdir and a
- * newer orphan transcript sat in the dir.
+ * order) so the contested-repair branch never lands two sessions on the same
+ * transcript in one tick. Since the uncontested branch no longer adopts newer
+ * orphans (see decideConversationId), each session simply keeps its own launch
+ * transcript — the old adopt→repair oscillation (and the orphan-chasing
+ * misattribution it masked) is gone by construction.
  */
 export function planSharedDirAssignments(
   sessions: { name: string; convId: string; createdMs: number }[],
