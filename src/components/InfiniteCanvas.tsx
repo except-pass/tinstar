@@ -50,6 +50,7 @@ const EMPTY_EDGES: ReadonlySet<SnapEdge> = new Set()
 /** Unique pin id, mirroring the browser's note-id style (`note-<ts36>-<rand>`). */
 const makePinId = (): string => `pin-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
+import { FreeDragHint } from './FreeDragHint'
 import { resolveSnapTarget, revalidateSnapTarget, resolveSnapCommit, snapMembership } from '../canvas/snapZoneResolver'
 import type { SnapWidget, SnapTarget, SnapEdge } from '../canvas/snapZoneResolver'
 import { AddWidgetPicker } from './AddWidgetPicker'
@@ -704,9 +705,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // Track alt key state globally so drag-start can read it even though onDragStart
   // receives only nodeId (no pointer event). Use a ref so it doesn't cause re-renders.
   const altKeyRef = useRef(false)
+  // Reactive mirror of altKeyRef, used only to flip the free-drag hint label
+  // live as Alt is pressed/released mid-drag. Kept separate from the ref so the
+  // drag-start/snap logic stays render-independent.
+  const [altPressed, setAltPressed] = useState(false)
   useEffect(() => {
-    const onDown = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyRef.current = true }
-    const onUp = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyRef.current = false }
+    const onDown = (e: KeyboardEvent) => { if (e.key === 'Alt') { altKeyRef.current = true; setAltPressed(true) } }
+    const onUp = (e: KeyboardEvent) => { if (e.key === 'Alt') { altKeyRef.current = false; setAltPressed(false) } }
     window.addEventListener('keydown', onDown)
     window.addEventListener('keyup', onUp)
     return () => {
@@ -2063,6 +2068,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         }
       }}
     >
+      {/* Free-drag reminder — slides down while dragging a snap-eligible (ungrouped)
+          widget. Screen-fixed (outside the transform), pointer-events-none. */}
+      <FreeDragHint
+        visible={!!draggingNodeId && constellations.slotsForNode(draggingNodeId).length === 0}
+        altActive={altPressed}
+      />
+
       {/* File-editor drag overlay — covers iframes so the drop always lands on the canvas */}
       {editorDragActive && (
         <div
