@@ -47,6 +47,59 @@ describe('PinBubble', () => {
     expect(screen.getByTestId('pin-submit-p2')).toBeTruthy()
     expect(screen.getByTestId('pin-delete-p2')).toBeTruthy()
   })
+
+  // Ctrl/Cmd+Enter sends the note, mirroring the prompt composer. Plain Enter is
+  // left for newlines (notes can be multi-line), and the canSubmit gate that
+  // disables the Send button must also gate the keyboard send.
+  it.each([
+    ['ctrlKey', { ctrlKey: true }],
+    ['metaKey', { metaKey: true }],
+  ])('sends the note on %s+Enter', (_label, mods) => {
+    const onCommentChange = vi.fn(); const onSubmit = vi.fn()
+    render(
+      <PinBubble
+        id="p3" comment="" sent={false} canSubmit
+        replies={[]} resolved={false}
+        anchorEl={anchor()}
+        onCommentChange={onCommentChange} onDelete={() => {}} onSubmit={onSubmit}
+        onReply={() => {}} onResolve={() => {}} onReopen={() => {}}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('pin-comment-p3'), { target: { value: 'fix this spacing' } })
+    fireEvent.keyDown(screen.getByTestId('pin-comment-p3'), { key: 'Enter', ...mods })
+    expect(onCommentChange).toHaveBeenCalledWith('fix this spacing')
+    expect(onSubmit).toHaveBeenCalledWith('fix this spacing')
+  })
+
+  it('does NOT send on plain Enter (reserved for newlines)', () => {
+    const onSubmit = vi.fn()
+    render(
+      <PinBubble
+        id="p4" comment="" sent={false} canSubmit
+        replies={[]} resolved={false}
+        anchorEl={anchor()}
+        onCommentChange={() => {}} onDelete={() => {}} onSubmit={onSubmit}
+        onReply={() => {}} onResolve={() => {}} onReopen={() => {}}
+      />,
+    )
+    fireEvent.keyDown(screen.getByTestId('pin-comment-p4'), { key: 'Enter' })
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('Ctrl+Enter does not send when canSubmit is false', () => {
+    const onSubmit = vi.fn()
+    render(
+      <PinBubble
+        id="p5" comment="" sent={false} canSubmit={false}
+        replies={[]} resolved={false}
+        anchorEl={anchor()}
+        onCommentChange={() => {}} onDelete={() => {}} onSubmit={onSubmit}
+        onReply={() => {}} onResolve={() => {}} onReopen={() => {}}
+      />,
+    )
+    fireEvent.keyDown(screen.getByTestId('pin-comment-p5'), { key: 'Enter', ctrlKey: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
 })
 
 // ── Thread / reply tests ──────────────────────────────────────────────────────

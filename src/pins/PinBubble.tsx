@@ -75,7 +75,17 @@ export function PinBubble(p: PinBubbleProps) {
             value={draft} autoFocus rows={3}
             onChange={e => setDraft(e.target.value)}
             onBlur={() => p.onCommentChange(draft)}
-            onKeyDown={e => { if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur() }}
+            onKeyDown={e => {
+              if (e.key === 'Escape') { (e.target as HTMLTextAreaElement).blur(); return }
+              // Ctrl/Cmd+Enter sends, matching the prompt composer. Plain Enter is
+              // left free for newlines (notes can be multi-line). Gate on canSubmit
+              // so this mirrors the Send button's disabled state exactly.
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && p.canSubmit) {
+                e.preventDefault()
+                p.onCommentChange(draft)
+                p.onSubmit(draft)
+              }
+            }}
             placeholder="What about this spot?"
             className="w-full bg-surface-base text-2xs text-slate-200 rounded border border-white/10 outline-none focus:border-primary/50 p-1 resize-none"
           />
