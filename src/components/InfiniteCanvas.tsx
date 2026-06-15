@@ -710,13 +710,33 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // drag-start/snap logic stays render-independent.
   const [altPressed, setAltPressed] = useState(false)
   useEffect(() => {
-    const onDown = (e: KeyboardEvent) => { if (e.key === 'Alt') { altKeyRef.current = true; setAltPressed(true) } }
-    const onUp = (e: KeyboardEvent) => { if (e.key === 'Alt') { altKeyRef.current = false; setAltPressed(false) } }
-    window.addEventListener('keydown', onDown)
-    window.addEventListener('keyup', onUp)
+    const sync = (alt: boolean) => {
+      altKeyRef.current = alt
+      // Functional bail-out: pointermove fires constantly, so only re-render when
+      // the value actually flips (React skips the render when the updater returns
+      // the same reference).
+      setAltPressed(prev => (prev === alt ? prev : alt))
+    }
+    // Keyboard gives the snappiest response while the pointer is still. But a lone
+    // Alt tap activates the browser menu bar, and after a couple taps the menu
+    // grabs focus and swallows further Alt keydowns before they reach window —
+    // leaving altKeyRef stuck and free-drag unresponsive. So we ALSO derive Alt
+    // from pointer events, whose `altKey` modifier is authoritative and always
+    // fires during a drag. Capture phase so the ref is fresh before the widget's
+    // bubble-phase onMove reads it; this self-heals any keyboard desync the moment
+    // the pointer moves (which, mid-drag, is always).
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Alt') sync(true) }
+    const onKeyUp = (e: KeyboardEvent) => { if (e.key === 'Alt') sync(false) }
+    const onPointer = (e: PointerEvent) => sync(e.altKey)
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('pointerdown', onPointer, true)
+    window.addEventListener('pointermove', onPointer, true)
     return () => {
-      window.removeEventListener('keydown', onDown)
-      window.removeEventListener('keyup', onUp)
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('pointerdown', onPointer, true)
+      window.removeEventListener('pointermove', onPointer, true)
     }
   }, [])
 
@@ -863,9 +883,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; canvasX: number; canvasY: number } | null>(null)
 
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    // Empty-space only: right-click on a widget falls through to the native /
-    // future per-widget menu (do NOT preventDefault before this guard).
-    if ((e.target as HTMLElement).closest('[data-widget-id]')) return
+    // Show the move-here menu on empty canvas AND on container entities
+    // (initiative/epic/task) — their box is a sensible "move a widget into this
+    // region" target. Leaf content widgets (runs, terminals, browsers, editors)
+    // keep their own/native right-click, so fall through for those. Don't
+    // preventDefault before this guard.
+    const widgetEl = (e.target as HTMLElement).closest('[data-widget-id]') as HTMLElement | null
+    if (widgetEl && !getWidgetComponent(widgetEl.getAttribute('data-widget-type') ?? '')?.isContainer) return
     e.preventDefault()
     // Screen→canvas conversion — verbatim from handleDrop's drop-point math.
     const rect = containerRef.current!.getBoundingClientRect()

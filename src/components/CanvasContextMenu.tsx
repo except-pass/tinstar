@@ -17,9 +17,21 @@ export function CanvasContextMenu({ anchor, targets, onPick, onClose }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose() }
+    // Keep wheel scrolling inside the menu from bubbling to the canvas's native,
+    // non-passive wheel handler (which zooms/pans). stopPropagation only — the
+    // browser still scrolls the overflow list. A native listener is required:
+    // the canvas handler sits on the container element, so it would fire before
+    // React's delegated onWheel and a synthetic stopPropagation would be too late.
+    const onWheel = (e: WheelEvent) => { e.stopPropagation() }
+    const el = ref.current
     window.addEventListener('keydown', onKey)
     window.addEventListener('mousedown', onDown)
-    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('mousedown', onDown) }
+    el?.addEventListener('wheel', onWheel)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('mousedown', onDown)
+      el?.removeEventListener('wheel', onWheel)
+    }
   }, [onClose])
 
   return (

@@ -35,4 +35,19 @@ describe('CanvasContextMenu', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(onClose).toHaveBeenCalled()
   })
+  it('swallows wheel so it scrolls the list, not the canvas beneath', () => {
+    // The canvas attaches a native, non-passive wheel listener to its container
+    // for zoom/pan. The menu lives inside that container, so an un-stopped wheel
+    // over the menu's list would zoom the canvas. Render inside a stand-in
+    // "canvas" with a native wheel listener and assert it never fires.
+    const canvasWheel = vi.fn()
+    const canvas = document.createElement('div')
+    canvas.addEventListener('wheel', canvasWheel)
+    document.body.appendChild(canvas)
+    render(<CanvasContextMenu anchor={{ x: 0, y: 0 }} targets={targets} onPick={vi.fn()} onClose={vi.fn()} />, { container: canvas })
+    const menu = (screen.getByText('Move widget here').closest('div'))!
+    fireEvent.wheel(menu)
+    expect(canvasWheel).not.toHaveBeenCalled()
+    document.body.removeChild(canvas)
+  })
 })
