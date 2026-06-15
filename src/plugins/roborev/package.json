@@ -12,6 +12,7 @@
         {
           "type": "roborev-cockpit",
           "label": "Roborev cockpit",
+          "icon": "/widget-icons/roborev-cockpit.svg",
           "description": "roborev tui + native review list & actions",
           "primitive": "terminal",
           "spawn": "palette",

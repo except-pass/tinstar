@@ -9,7 +9,7 @@
     "description": "Watch a session's NATS traffic",
     "contributes": {
       "widgets": [
-        { "type": "saloon", "label": "Saloon", "defaultSize": { "width": 1200, "height": 600 }, "spawn": "palette", "capabilities": ["spawnable"], "creator": "standalone" }
+        { "type": "saloon", "label": "Saloon", "icon": "/widget-icons/saloon.svg", "defaultSize": { "width": 1200, "height": 600 }, "spawn": "palette", "capabilities": ["spawnable"], "creator": "standalone" }
       ]
     },
     "permissions": ["nats:subscribe"]
