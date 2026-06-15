@@ -7,11 +7,12 @@
 //
 // The layer is pointer-transparent; each pin wrapper is pointer-active. Uses the
 // shared PinMarker/PinBubble so it matches every other widget's pins.
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { Pin } from '../../../../domain/pinSet'
 import { PinMarker } from '../../../../pins/PinMarker'
 import { PinBubble } from '../../../../pins/PinBubble'
 import { classifyPointerUp } from '../../../../pins/pinGestures'
+import { useAutoOpenNewPin } from '../../../../pins/useAutoOpenNewPin'
 
 export interface BrowserPinLayerProps {
   /** Pins for THIS node (caller passes api.pins.useNodePins(nodeId) — already
@@ -81,6 +82,15 @@ export function BrowserPinLayer(p: BrowserPinLayerProps) {
   // a newer agent reply exists. Never persisted/synced (read state is per-viewer).
   const [seenAt, setSeenAt] = useState<Record<string, number>>({})
   const pins = p.pins.filter(pin => onCurrentPage(pin, p.url))
+
+  // Open a pin's bubble and mark it read. Stable so the auto-open effect doesn't
+  // re-fire every render.
+  const openPin = useCallback((id: string) => {
+    setOpenId(id)
+    setSeenAt(s => ({ ...s, [id]: Date.now() }))
+  }, [])
+  // A just-dropped note opens immediately so the user can type without a click.
+  useAutoOpenNewPin(pins, openPin)
 
   const onPointerDown = (pin: Pin) => (e: React.PointerEvent) => {
     e.stopPropagation()

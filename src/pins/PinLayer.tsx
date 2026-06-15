@@ -3,11 +3,12 @@
 // pointer-transparent (so it doesn't block the widget beneath); each pin wrapper is
 // pointer-active. The marker captures the pointer on down, so move/up retarget to it
 // and bubble up to the layer's handlers — letting a drag continue off the marker.
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { Pin } from '../domain/pinSet'
 import { PinMarker } from './PinMarker'
 import { PinBubble } from './PinBubble'
 import { clamp01, classifyPointerUp, localToNormalized } from './pinGestures'
+import { useAutoOpenNewPin } from './useAutoOpenNewPin'
 
 export interface PinLayerProps {
   pins: Pin[]
@@ -41,6 +42,15 @@ export function PinLayer(p: PinLayerProps) {
   // Per-viewer read state: wall-clock when each pin's bubble was last opened. Unread =
   // a newer agent reply exists. Never persisted/synced (read state is per-viewer).
   const [seenAt, setSeenAt] = useState<Record<string, number>>({})
+
+  // Open a pin's bubble and mark it read. Stable so the auto-open effect below
+  // doesn't re-fire on every render.
+  const openPin = useCallback((id: string) => {
+    setOpenId(id)
+    setSeenAt(s => ({ ...s, [id]: Date.now() }))
+  }, [])
+  // A just-dropped note opens immediately so the user can type without a click.
+  useAutoOpenNewPin(p.pins, openPin)
 
   const onPointerDown = (pin: Pin) => (e: React.PointerEvent) => {
     e.stopPropagation()
