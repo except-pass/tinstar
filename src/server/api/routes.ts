@@ -499,9 +499,10 @@ async function createSessionInternal(
     // including a bare space. Previously the gate omitted spaceId, so a
     // standalone session (created with just an active space and no explicit
     // `nats` arg — e.g. marshal, ad-hoc sessions) silently spawned with NATS
-    // off and never joined the bus. computeNatsSubscriptions already yields a
-    // space-level subject for the space-only case. Passing `nats:{enabled:false}`
-    // explicitly still opts out, since this branch only runs when `nats` is absent.
+    // off and never joined the bus. computeNatsSubscriptions yields a DM-only
+    // inbox for the task-less case (not a space wildcard — see that fn). Passing
+    // `nats:{enabled:false}` explicitly still opts out, since this branch only
+    // runs when `nats` is absent.
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
   } else if (nats?.enabled && !nats.subscriptions?.length) {
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }

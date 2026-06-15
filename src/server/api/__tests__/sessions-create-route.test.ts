@@ -139,7 +139,7 @@ describe('POST /api/sessions', () => {
   it('enables NATS by default for a standalone session (active space, no task)', async () => {
     // Regression: standalone sessions (no taskId/epicId/initiativeId, no explicit
     // `nats` arg) used to spawn with NATS off because the auto-enable gate omitted
-    // spaceId. They now join the bus on the space-level subject.
+    // spaceId. They now join the bus.
     const res = await testCtx.fetch('/api/sessions', {
       method: 'POST',
       body: JSON.stringify({ name: 'lone-wolf' }),
@@ -149,9 +149,12 @@ describe('POST /api/sessions', () => {
     const run = testCtx.docStore.getRun('lone-wolf') as Run
     expect(run).toBeTruthy()
     expect(run.natsEnabled).toBe(true)
-    expect(run.natsSubscriptions!.length).toBeGreaterThan(0)
-    // Rooted at the active space's sanitized name.
-    expect(run.natsSubscriptions!.every(s => s.startsWith('tinstar.create-space'))).toBe(true)
+    // Scope leak guard: a task-less agent gets a DM-ONLY inbox — its own exact
+    // direct subject with '_' for the unresolved levels — and NOT a space
+    // wildcard. A `tinstar.<space>.>` sub would funnel every task broadcast in
+    // the space into an un-seated agent (the remote-control leak).
+    expect(run.natsSubscriptions).toEqual(['tinstar.create-space._._._.lone-wolf'])
+    expect(run.natsSubscriptions!.some(s => s.includes('>'))).toBe(false)
   })
 
   it('still honors an explicit nats:{enabled:false} opt-out', async () => {
