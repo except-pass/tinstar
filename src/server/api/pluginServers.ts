@@ -1,5 +1,5 @@
-import { exec } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { exec, spawn } from 'node:child_process'
+import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PluginServerSpec } from '@tinstar/plugin-api'
 import { parseManifest, ManifestError } from '../../core/pluginHost/manifest'
@@ -104,4 +104,38 @@ export async function getStatuses(
 export function __resetStatusCacheForTests(): void {
   statusCache.clear()
   inFlight.clear()
+}
+
+/** Fire the plugin's start command fire-and-forget; stdout/stderr → a truncated
+ *  per-plugin log under <configRoot>/plugin-servers/<id>.log. Returns immediately. */
+export function startServer(configRoot: string, pluginId: string): { started: true } {
+  const entry = resolvePluginServers(configRoot).find((e) => e.pluginId === pluginId)
+  if (!entry) throw new NoStartError(`unknown plugin server: ${pluginId}`)
+  if (!entry.spec.start) throw new NoStartError(`plugin ${pluginId} declares no start command`)
+
+  const logDir = join(configRoot, 'plugin-servers')
+  mkdirSync(logDir, { recursive: true })
+  const fd = openSync(join(logDir, `${pluginId}.log`), 'w') // truncate
+
+  const child = spawn(entry.spec.start, {
+    cwd: entry.cwd,
+    shell: true,
+    detached: true,
+    stdio: ['ignore', fd, fd],
+    windowsHide: true,
+  })
+  child.unref()
+  closeSync(fd) // child keeps its own dup; don't leak the parent fd
+  statusCache.delete(pluginId) // force a fresh probe on the next poll
+  return { started: true }
+}
+
+/** Tail of a plugin's start log (most-recent bytes), or '' when absent. */
+export function readServerLog(configRoot: string, pluginId: string, maxBytes = 64 * 1024): string {
+  try {
+    const buf = readFileSync(join(configRoot, 'plugin-servers', `${pluginId}.log`))
+    return buf.length > maxBytes ? buf.subarray(buf.length - maxBytes).toString('utf8') : buf.toString('utf8')
+  } catch {
+    return ''
+  }
 }
