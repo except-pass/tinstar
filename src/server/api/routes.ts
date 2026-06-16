@@ -68,6 +68,7 @@ import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
+import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
 import type { PluginWidgetInstance } from '../../domain/types'
 
 function currentCorsAllowlist(): string[] {
@@ -2631,6 +2632,39 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
     ok(res, resolveWidgetRegistry(configRoot))
+    return true
+  }
+
+  // GET /api/plugin-servers/status — per-plugin backend health for the palette dots
+  if (method === 'GET' && url === '/api/plugin-servers/status') {
+    const configRoot = ctx.sessionConfig?.dirs.root
+    if (!configRoot) { ok(res, {}); return true }
+    getStatuses(configRoot)
+      .then((s) => ok(res, s))
+      .catch((e) => fail(res, 'INTERNAL', String((e as Error)?.message ?? e)))
+    return true
+  }
+
+  // POST /api/plugin-servers/:id/start — fire the plugin's start command
+  if (method === 'POST' && /^\/api\/plugin-servers\/[^/]+\/start$/.test(url)) {
+    const pluginId = decodeURIComponent(url.split('/')[3]!)
+    const configRoot = ctx.sessionConfig?.dirs.root
+    if (!configRoot) { fail(res, 'CONFIG_UNAVAILABLE', 'configRoot unavailable'); return true }
+    try {
+      ok(res, startServer(configRoot, pluginId))
+    } catch (e) {
+      if (e instanceof NoStartError) fail(res, 'BAD_REQUEST', e.message)
+      else fail(res, 'INTERNAL', String((e as Error)?.message ?? e))
+    }
+    return true
+  }
+
+  // GET /api/plugin-servers/:id/log — tail of a plugin's start log
+  if (method === 'GET' && /^\/api\/plugin-servers\/[^/]+\/log$/.test(url)) {
+    const pluginId = decodeURIComponent(url.split('/')[3]!)
+    const configRoot = ctx.sessionConfig?.dirs.root
+    if (!configRoot) { ok(res, { log: '' }); return true }
+    ok(res, { log: readServerLog(configRoot, pluginId) })
     return true
   }
 
