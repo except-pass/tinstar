@@ -5,6 +5,9 @@ export interface PluginServerStatus {
   status: 'up' | 'down' | 'unknown'
   startable: boolean
   checkedAt: number
+  /** 'server' = a plugin-declared server block (start/log popover); 'nats' = the
+   *  Saloon's host NATS broker light (informational). Defaults to 'server'. */
+  kind?: 'server' | 'nats'
 }
 
 const SLOW_POLL_MS = 5000

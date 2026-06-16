@@ -34,6 +34,16 @@ describe('ServerStatusDot', () => {
     expect(parentClick).not.toHaveBeenCalled()
   })
 
+  it('nats kind shows broker labels and no Start/View-log popover content', () => {
+    render(<ServerStatusDot pluginId="nats-traffic" displayName="Saloon" status="down" startable={false} kind="nats" onStart={vi.fn()} />)
+    const dot = screen.getByTestId('server-status-dot-nats-traffic')
+    expect(dot.getAttribute('aria-label')).toContain('NATS broker down')
+    fireEvent.click(dot)
+    expect(screen.queryByTestId('server-status-start-nats-traffic')).toBeNull()
+    expect(screen.queryByText('View log')).toBeNull()
+    expect(screen.getByText(/Host NATS observer is not connected/)).toBeTruthy()
+  })
+
   it('stops a drag started on the dot from bubbling into the tile (native HTML5 drag)', () => {
     const parentDragStart = vi.fn()
     render(

@@ -1927,6 +1927,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // GET /api/nats-traffic/status — host NATS broker reachability for the Saloon's
+  // palette health light. Reflects the live observer connection (undefined bridge
+  // = not started yet = down). Cheap; safe to poll.
+  if (method === 'GET' && url === '/api/nats-traffic/status') {
+    ok(res, ctx.natsTraffic ? ctx.natsTraffic.status() : { connection: 'down' })
+    return true
+  }
+
   // POST /api/nats-traffic/bounce — stop+start the NATS observer connection
   // and re-establish all widget subscriptions. Used by the Saloon refresh
   // button. Safe: does not touch session control sockets or running agents.

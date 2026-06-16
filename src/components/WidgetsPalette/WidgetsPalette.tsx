@@ -1,13 +1,23 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { usePluginWidgetRegistry, type PaletteWidgetEntry } from '../../hooks/usePluginWidgetRegistry'
 import { isIconUrl } from '../agentIcon'
 import { usePluginServerStatus } from '../../hooks/usePluginServerStatus'
+import { useNatsBrokerStatus } from '../../hooks/useNatsBrokerStatus'
 import { ServerStatusDot } from './ServerStatusDot'
+
+// The Saloon (plugin id 'nats-traffic') shows host NATS broker health rather than
+// a server-block status; it's merged into the same per-tile status map by id.
+const NATS_PLUGIN_ID = 'nats-traffic'
 
 export function WidgetsPalette() {
   const { entries, error } = usePluginWidgetRegistry()
   const [expanded, setExpanded] = useState(true)
-  const { statuses, start } = usePluginServerStatus()
+  const { statuses: serverStatuses, start } = usePluginServerStatus()
+  const natsStatus = useNatsBrokerStatus()
+  const statuses = useMemo(
+    () => (natsStatus ? { ...serverStatuses, [NATS_PLUGIN_ID]: natsStatus } : serverStatuses),
+    [serverStatuses, natsStatus],
+  )
 
   const total = entries?.length ?? 0
 
@@ -113,6 +123,7 @@ function PaletteTile({ entry, server, onStart }: {
           displayName={entry.pluginDisplayName}
           status={server.status}
           startable={server.startable}
+          kind={server.kind ?? 'server'}
           onStart={onStart}
         />
       )}

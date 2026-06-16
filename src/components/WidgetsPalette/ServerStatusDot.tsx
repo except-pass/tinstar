@@ -6,6 +6,9 @@ export interface ServerStatusDotProps {
   displayName: string
   status: 'up' | 'down' | 'unknown'
   startable: boolean
+  /** 'server' = plugin-declared server block (Start/View-log popover);
+   *  'nats' = the Saloon's host NATS broker light (informational popover). */
+  kind?: 'server' | 'nats'
   onStart: (pluginId: string) => void
 }
 
@@ -15,13 +18,13 @@ const COLOR: Record<ServerStatusDotProps['status'], string> = {
   unknown: 'bg-amber-400 animate-pulse',
 }
 
-const LABEL: Record<ServerStatusDotProps['status'], string> = {
-  up: 'Server up',
-  down: 'Server down',
-  unknown: 'Checking…',
+const LABEL: Record<'server' | 'nats', Record<ServerStatusDotProps['status'], string>> = {
+  server: { up: 'Server up', down: 'Server down', unknown: 'Checking…' },
+  nats: { up: 'NATS broker up', down: 'NATS broker down', unknown: 'Checking NATS…' },
 }
 
-export function ServerStatusDot({ pluginId, displayName, status, startable, onStart }: ServerStatusDotProps) {
+export function ServerStatusDot({ pluginId, displayName, status, startable, kind = 'server', onStart }: ServerStatusDotProps) {
+  const label = LABEL[kind][status]
   const [open, setOpen] = useState(false)
   const [log, setLog] = useState<string | null>(null)
 
@@ -47,8 +50,8 @@ export function ServerStatusDot({ pluginId, displayName, status, startable, onSt
         type="button"
         data-testid={`server-status-dot-${pluginId}`}
         data-status={status}
-        title={LABEL[status]}
-        aria-label={`${displayName}: ${LABEL[status]}`}
+        title={label}
+        aria-label={`${displayName}: ${label}`}
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
         className={`block h-2.5 w-2.5 rounded-full ring-1 ring-black/30 ${COLOR[status]}`}
       />
@@ -57,29 +60,39 @@ export function ServerStatusDot({ pluginId, displayName, status, startable, onSt
           className="absolute left-0 top-3.5 z-20 w-52 rounded-md border border-white/10 bg-surface-raised p-2 text-left shadow-lg"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="mb-1 text-2xs font-medium text-slate-200">{displayName} — {LABEL[status]}</div>
-          {status === 'down' && startable && (
-            <button
-              type="button"
-              data-testid={`server-status-start-${pluginId}`}
-              onClick={(e) => { e.stopPropagation(); onStart(pluginId); setOpen(false) }}
-              className="w-full rounded bg-primary/20 px-2 py-1 text-2xs text-primary hover:bg-primary/30"
-            >
-              Start server
-            </button>
-          )}
-          {status === 'down' && !startable && (
-            <div className="text-2xs text-slate-400">No start command declared. Start it manually.</div>
-          )}
-          <button
-            type="button"
-            onClick={viewLog}
-            className="mt-1 w-full text-left text-[10px] text-slate-400 underline hover:text-slate-200"
-          >
-            View log
-          </button>
-          {log !== null && (
-            <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded bg-black/40 p-1 text-[10px] text-slate-300">{log}</pre>
+          <div className="mb-1 text-2xs font-medium text-slate-200">{displayName} — {label}</div>
+          {kind === 'nats' ? (
+            <div className="text-2xs text-slate-400">
+              {status === 'up'
+                ? 'Host NATS observer is connected to the broker.'
+                : 'Host NATS observer is not connected. Open a Saloon to reconnect, or check the broker.'}
+            </div>
+          ) : (
+            <>
+              {status === 'down' && startable && (
+                <button
+                  type="button"
+                  data-testid={`server-status-start-${pluginId}`}
+                  onClick={(e) => { e.stopPropagation(); onStart(pluginId); setOpen(false) }}
+                  className="w-full rounded bg-primary/20 px-2 py-1 text-2xs text-primary hover:bg-primary/30"
+                >
+                  Start server
+                </button>
+              )}
+              {status === 'down' && !startable && (
+                <div className="text-2xs text-slate-400">No start command declared. Start it manually.</div>
+              )}
+              <button
+                type="button"
+                onClick={viewLog}
+                className="mt-1 w-full text-left text-[10px] text-slate-400 underline hover:text-slate-200"
+              >
+                View log
+              </button>
+              {log !== null && (
+                <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded bg-black/40 p-1 text-[10px] text-slate-300">{log}</pre>
+              )}
+            </>
           )}
         </div>
       )}
