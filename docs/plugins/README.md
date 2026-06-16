@@ -173,6 +173,41 @@ A declared `anchors` array replaces the full default set — the 8 defaults are 
 
 > **Note:** Custom anchor sets are validated and stored by the host, but are **not yet honored** by drag-to-snap or the `attach` spawn parameter — both currently operate on the 8 default anchors. Custom declarations are forward-looking; this is reserved for a future release.
 
+### Plugin server (health + start)
+
+A plugin that ships its own backend (a server the plugin's browser widget points at —
+e.g. whoachart, stretchplan) can declare a `server` block in its `tinstar` manifest. The
+host then shows a **status light** on the plugin's WIDGETS-palette tile and can fire the
+start command when the backend is down.
+
+```jsonc
+"tinstar": {
+  "displayName": "Whoachart",
+  "server": {
+    "health": "curl -sf localhost:5180/healthz",  // required; exit 0 = up (like Docker HEALTHCHECK)
+    "start":  "bun run start",                      // optional; host fires it fire-and-forget
+    "cwd":    "..",                                 // optional; relative to this package.json's dir; default "."
+    "healthTimeoutMs": 3000                          // optional; default 3000
+  }
+}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `health` | yes | Shell command. Exit 0 = up; any non-zero exit or a timeout = down. Run host-side in `cwd`, cached ~4s. |
+| `start` | no | Shell command the host spawns detached. stdout/stderr → `<config>/plugin-servers/<id>.log`. Omit to make the dot status-only (no Start button). |
+| `cwd` | no | Working dir for `health`/`start`, relative to the plugin's package directory. Default `"."`. Use `".."` when the manifest lives in `<repo>/tinstar-plugin` but the server runs from `<repo>`. |
+| `healthTimeoutMs` | no | Health-command timeout in ms. Default `3000`. |
+
+**Status dot:** green = up · red = down · amber = checking/starting. Click it for a popover;
+when down with a `start` command it offers **Start server** and a **View log** link.
+
+**Trust note:** this is the first host-side **declared-shell execution** for plugins — a
+deliberate, modest extension of the otherwise frontend-only plugin model. It stays inside the
+existing trust boundary: only plugins already listed in `~/.config/tinstar/plugins.json` are
+eligible, the same trust level as plugin code that already runs in-realm with full DOM/network
+access. Server resolution is **external-plugins-only** in this release.
+
 ---
 
 ## TinstarPluginAPI
