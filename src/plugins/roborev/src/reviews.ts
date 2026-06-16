@@ -15,8 +15,10 @@ export type ReviewAction = 'close' | 'reopen' | 'comment'
 export function parseReviewList(stdout: string): Review[] {
   const trimmed = stdout.trim()
   if (!trimmed) return []
-  const raw = JSON.parse(trimmed) as Array<Record<string, unknown>>
-  return raw.map((j) => ({
+  const raw = JSON.parse(trimmed)
+  // `roborev list --json` emits `null` (not `[]`) for a repo with no reviews.
+  if (!Array.isArray(raw)) return []
+  return (raw as Array<Record<string, unknown>>).map((j) => ({
     id: Number(j.id),
     status: (j.status as Review['status']) ?? 'done',
     verdict: (j.verdict as string | undefined) ?? null,
@@ -106,4 +108,38 @@ export function pickBootstrapSource(state: StateSlice): { project: string; workt
   const src = candidates[0]
   if (!src?.project || !src.workspace?.path) return null
   return { project: src.project, worktreePath: src.workspace.path }
+}
+
+// ── Fleet overview (standalone roborev-fleet widget) ───────────────────────────
+
+export interface FleetSession { sessionId: string; project: string; worktree: string }
+
+/** Real agent sessions with a worktree we can run `roborev list` in. Excludes the
+ *  shell/cockpit helper sessions, mirroring pickBootstrapSource's filter. */
+export function pickFleetSessions(state: StateSlice): FleetSession[] {
+  return (state.sessions ?? [])
+    .filter((s) => s.cliTemplate !== 'shell' && s.cliTemplate !== 'roborev-tui' && !!s.workspace?.path)
+    .map((s) => ({ sessionId: s.name, project: s.project ?? '', worktree: s.workspace!.path! }))
+}
+
+export interface FleetRow extends FleetSession {
+  /** null = the per-session probe failed (roborev missing / exec error). */
+  open: number | null
+  failed: number
+}
+
+/** One fleet row: open-finding counts for a session, from its `roborev list
+ *  --open --json` output. `open: null` signals the probe failed for that session. */
+export function fleetRow(session: FleetSession, openReviews: Review[] | null): FleetRow {
+  if (openReviews === null) return { ...session, open: null, failed: 0 }
+  return {
+    ...session,
+    open: openReviews.length,
+    failed: openReviews.filter((r) => r.status === 'failed').length,
+  }
+}
+
+/** Total open findings across the fleet (probe failures count as 0). */
+export function fleetOpenTotal(rows: FleetRow[]): number {
+  return rows.reduce((n, r) => n + (r.open ?? 0), 0)
 }

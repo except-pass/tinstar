@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, cockpitState, type Review } from './reviews'
+import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, cockpitState, pickFleetSessions, fleetRow, fleetOpenTotal, type Review } from './reviews'
 
 const row = (o: Partial<Review> & { id: number }): Review => ({ status: 'done', verdict: 'P', closed: false, commit_subject: 's', branch: 'b', ...o })
 
@@ -85,5 +85,35 @@ describe('cockpitState', () => {
   it('list (with open count) whenever reviews exist, even mid-probe or with a stale error', () => {
     const reviews = [row({ id: 2, closed: false }), row({ id: 1, closed: true })]
     expect(cockpitState({ ...base, installed: null, error: 'blip', reviews })).toEqual({ kind: 'list', reviews, open: 1 })
+  })
+})
+
+describe('pickFleetSessions', () => {
+  it('keeps real sessions with a worktree, drops shell/cockpit helpers', () => {
+    const state = { sessions: [
+      { name: 'a', project: 'p', cliTemplate: 'claude-code', workspace: { path: '/w/a' } },
+      { name: 'sh', project: 'p', cliTemplate: 'shell', workspace: { path: '/w/sh' } },
+      { name: 'tui', cliTemplate: 'roborev-tui', workspace: { path: '/w/tui' } },
+      { name: 'nows', project: 'p', cliTemplate: 'claude-code' },
+    ] }
+    expect(pickFleetSessions(state)).toEqual([{ sessionId: 'a', project: 'p', worktree: '/w/a' }])
+  })
+})
+
+describe('fleetRow / fleetOpenTotal', () => {
+  const s = { sessionId: 'a', project: 'p', worktree: '/w/a' }
+  it('counts open + failed from the open-review list', () => {
+    const reviews = [row({ id: 1, status: 'failed' }), row({ id: 2, status: 'done' }), row({ id: 3, status: 'failed' })]
+    expect(fleetRow(s, reviews)).toEqual({ ...s, open: 3, failed: 2 })
+  })
+  it('marks open=null when the probe failed', () => {
+    expect(fleetRow(s, null)).toEqual({ ...s, open: null, failed: 0 })
+  })
+  it('totals open across rows, treating probe failures as 0', () => {
+    expect(fleetOpenTotal([
+      { ...s, open: 3, failed: 1 },
+      { ...s, sessionId: 'b', open: null, failed: 0 },
+      { ...s, sessionId: 'c', open: 2, failed: 0 },
+    ])).toBe(5)
   })
 })

@@ -2,6 +2,7 @@
 // Host imports are forbidden by ESLint (see docs/adrs/0002-plugin-api-boundary.md).
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
 import { makeCockpitAccessory } from './CockpitAccessory'
+import { makeFleetView } from './FleetView'
 
 export function activate(api: TinstarPluginAPI) {
   api.logger.info('roborev cockpit plugin activating')
@@ -16,6 +17,15 @@ export function activate(api: TinstarPluginAPI) {
         size: 320,
         component: makeCockpitAccessory(api),
       },
+    }),
+    // Standalone fleet overview: open roborev findings across every session.
+    api.widgets.register({
+      type: 'roborev-fleet',
+      component: makeFleetView(api),
+      isContainer: false,
+      defaultSize: { width: 480, height: 440 },
+      minSize: { width: 320, height: 240 },
+      dragHandleSelector: '.widget-drag-handle',
     }),
   ]
 }
