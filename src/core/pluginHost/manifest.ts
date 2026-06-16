@@ -61,6 +61,23 @@ function validateWidgetContribution(w: Record<string, unknown>, pluginName: stri
   }
 }
 
+function validateServerSpec(s: Record<string, unknown>, pluginName: string): void {
+  const where = `${pluginName}: tinstar.server`
+  if (typeof s.health !== 'string' || s.health === '') {
+    throw new ManifestError(`${where}.health must be a non-empty string`)
+  }
+  if (s.start !== undefined && (typeof s.start !== 'string' || s.start === '')) {
+    throw new ManifestError(`${where}.start must be a non-empty string if present`)
+  }
+  if (s.cwd !== undefined && typeof s.cwd !== 'string') {
+    throw new ManifestError(`${where}.cwd must be a string if present`)
+  }
+  if (s.healthTimeoutMs !== undefined &&
+      (typeof s.healthTimeoutMs !== 'number' || !Number.isFinite(s.healthTimeoutMs) || s.healthTimeoutMs <= 0)) {
+    throw new ManifestError(`${where}.healthTimeoutMs must be a positive number if present`)
+  }
+}
+
 function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string')
 }
@@ -102,6 +119,13 @@ export function parseManifest(pkgJson: unknown): ParsedManifest {
       }
       validateWidgetContribution(w as Record<string, unknown>, String(pkg.name), i)
     })
+  }
+
+  if (m.server !== undefined) {
+    if (!m.server || typeof m.server !== 'object') {
+      throw new ManifestError(`${pkg.name}: tinstar.server must be an object`)
+    }
+    validateServerSpec(m.server as Record<string, unknown>, String(pkg.name))
   }
 
   return {
