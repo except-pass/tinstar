@@ -471,6 +471,22 @@ export interface Plugin {
   activate(api: TinstarPluginAPI): Disposable[] | void | Promise<Disposable[] | void>
 }
 
+/**
+ * Optional backend-server lifecycle declaration. When present, the host shows a
+ * status light on the plugin's WIDGETS-palette tile and can fire the start command.
+ * Both `health` and `start` are shell command strings run host-side in `cwd`.
+ */
+export interface PluginServerSpec {
+  /** Shell command; exit 0 = up, non-zero/timeout = down (like Docker HEALTHCHECK). Required. */
+  health: string
+  /** Optional shell command the host fires fire-and-forget to start the server. */
+  start?: string
+  /** Working dir for `health`/`start`, relative to the plugin's package.json dir. Default '.'. */
+  cwd?: string
+  /** Health-command timeout in ms. Default 3000. */
+  healthTimeoutMs?: number
+}
+
 /** Manifest stored under `tinstar` in a plugin's package.json. */
 export interface PluginManifest {
   apiVersion: '5'
@@ -509,6 +525,8 @@ export interface PluginManifest {
     }>
   }
   permissions?: string[]
+  /** Optional backend-server lifecycle. See PluginServerSpec. */
+  server?: PluginServerSpec
 }
 
 /**
