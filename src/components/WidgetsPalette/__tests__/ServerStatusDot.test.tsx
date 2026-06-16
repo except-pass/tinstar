@@ -33,4 +33,15 @@ describe('ServerStatusDot', () => {
     fireEvent.click(screen.getByTestId('server-status-dot-who'))
     expect(parentClick).not.toHaveBeenCalled()
   })
+
+  it('stops a drag started on the dot from bubbling into the tile (native HTML5 drag)', () => {
+    const parentDragStart = vi.fn()
+    render(
+      <div onDragStart={parentDragStart}>
+        <ServerStatusDot pluginId="who" displayName="Who" status="down" startable onStart={vi.fn()} />
+      </div>,
+    )
+    fireEvent.dragStart(screen.getByTestId('server-status-dot-who'))
+    expect(parentDragStart).not.toHaveBeenCalled()
+  })
 })

@@ -35,7 +35,13 @@ export function ServerStatusDot({ pluginId, displayName, status, startable, onSt
   }
 
   return (
-    <div className="absolute top-1 left-1 z-10">
+    // draggable=false + stopPropagation so a press-drag starting on the dot never
+    // bleeds into the palette tile's native HTML5 drag (which would spawn the widget).
+    <div
+      className="absolute top-1 left-1 z-10"
+      draggable={false}
+      onDragStart={(e) => e.stopPropagation()}
+    >
       <button
         type="button"
         data-testid={`server-status-dot-${pluginId}`}

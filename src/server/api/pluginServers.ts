@@ -1,5 +1,5 @@
 import { exec, spawn } from 'node:child_process'
-import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs'
+import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PluginServerSpec } from '@tinstar/plugin-api'
 import { parseManifest, ManifestError } from '../../core/pluginHost/manifest'
@@ -115,7 +115,8 @@ export function startServer(configRoot: string, pluginId: string): { started: tr
 
   const logDir = join(configRoot, 'plugin-servers')
   mkdirSync(logDir, { recursive: true })
-  const fd = openSync(join(logDir, `${pluginId}.log`), 'w') // truncate
+  const logPath = join(logDir, `${pluginId}.log`)
+  const fd = openSync(logPath, 'w') // truncate
 
   const child = spawn(entry.spec.start, {
     cwd: entry.cwd,
@@ -123,6 +124,12 @@ export function startServer(configRoot: string, pluginId: string): { started: tr
     detached: true,
     stdio: ['ignore', fd, fd],
     windowsHide: true,
+  })
+  // A detached child whose spawn fails asynchronously (e.g. ENOENT on a bad cwd)
+  // emits 'error'; with no listener that throws as an uncaught exception and takes
+  // the host down. Capture it to the log instead — the fd is already closed by then.
+  child.on('error', (err) => {
+    try { appendFileSync(logPath, `\n[host] failed to start: ${err.message}\n`) } catch { /* best effort */ }
   })
   child.unref()
   closeSync(fd) // child keeps its own dup; don't leak the parent fd
