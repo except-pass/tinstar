@@ -1,3 +1,4 @@
+import { exec } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PluginServerSpec } from '@tinstar/plugin-api'
@@ -54,3 +55,53 @@ export function resolvePluginServers(configRoot: string): PluginServerEntry[] {
   return buildServerEntries(config, (dir) => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')))
 }
 
+const CACHE_TTL_MS = 4000
+const statusCache = new Map<string, PluginServerStatus>()
+const inFlight = new Map<string, Promise<'up' | 'down'>>()
+
+/** Run the health command once; exit 0 → 'up', any error (non-zero/timeout) → 'down'. */
+export function checkHealthOnce(entry: PluginServerEntry): Promise<'up' | 'down'> {
+  return new Promise((resolve) => {
+    exec(entry.spec.health, {
+      cwd: entry.cwd,
+      timeout: entry.spec.healthTimeoutMs ?? 3000,
+      windowsHide: true,
+    }, (err) => resolve(err ? 'down' : 'up'))
+  })
+}
+
+async function refreshStatus(entry: PluginServerEntry, now: number): Promise<void> {
+  let p = inFlight.get(entry.pluginId)
+  if (!p) {
+    p = checkHealthOnce(entry)
+    inFlight.set(entry.pluginId, p)
+    void p.finally(() => inFlight.delete(entry.pluginId))
+  }
+  const status = await p
+  statusCache.set(entry.pluginId, { status, startable: !!entry.spec.start, checkedAt: now })
+}
+
+/** Per-plugin backend status. Cached ~4s; concurrent calls share one in-flight probe. */
+export async function getStatuses(
+  configRoot: string,
+  now: number = Date.now(),
+): Promise<Record<string, PluginServerStatus>> {
+  const entries = resolvePluginServers(configRoot)
+  await Promise.all(entries.map((e) => {
+    const cached = statusCache.get(e.pluginId)
+    if (cached && now - cached.checkedAt < CACHE_TTL_MS) return Promise.resolve()
+    return refreshStatus(e, now)
+  }))
+  const out: Record<string, PluginServerStatus> = {}
+  for (const e of entries) {
+    out[e.pluginId] = statusCache.get(e.pluginId)
+      ?? { status: 'unknown', startable: !!e.spec.start, checkedAt: now }
+  }
+  return out
+}
+
+/** Test-only: clear the module-level status cache. */
+export function __resetStatusCacheForTests(): void {
+  statusCache.clear()
+  inFlight.clear()
+}
