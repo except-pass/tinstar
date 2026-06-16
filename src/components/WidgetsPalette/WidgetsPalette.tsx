@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { usePluginWidgetRegistry, type PaletteWidgetEntry } from '../../hooks/usePluginWidgetRegistry'
 import { isIconUrl } from '../agentIcon'
+import { usePluginServerStatus } from '../../hooks/usePluginServerStatus'
+import { ServerStatusDot } from './ServerStatusDot'
 
 export function WidgetsPalette() {
   const { entries, error } = usePluginWidgetRegistry()
   const [expanded, setExpanded] = useState(true)
+  const { statuses, start } = usePluginServerStatus()
 
   const total = entries?.length ?? 0
 
@@ -52,7 +55,14 @@ export function WidgetsPalette() {
 
           {!error && entries !== null && entries.length > 0 && (
             <div className="grid grid-cols-2 gap-2 px-1 pb-1">
-              {entries.map(w => <PaletteTile key={`${w.pluginId}/${w.widgetType}`} entry={w} />)}
+              {entries.map(w => (
+                <PaletteTile
+                  key={`${w.pluginId}/${w.widgetType}`}
+                  entry={w}
+                  server={statuses[w.pluginId]}
+                  onStart={start}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -61,7 +71,11 @@ export function WidgetsPalette() {
   )
 }
 
-function PaletteTile({ entry }: { entry: PaletteWidgetEntry }) {
+function PaletteTile({ entry, server, onStart }: {
+  entry: PaletteWidgetEntry
+  server?: import('../../hooks/usePluginServerStatus').PluginServerStatus
+  onStart: (pluginId: string) => void
+}) {
   const isContextOnly = entry.spawn === 'palette+context'
 
   return (
@@ -93,6 +107,15 @@ function PaletteTile({ entry }: { entry: PaletteWidgetEntry }) {
           : `${entry.pluginDisplayName}${entry.description ? ` — ${entry.description}` : ''}`
       }
     >
+      {server && (
+        <ServerStatusDot
+          pluginId={entry.pluginId}
+          displayName={entry.pluginDisplayName}
+          status={server.status}
+          startable={server.startable}
+          onStart={onStart}
+        />
+      )}
       <TileIcon entry={entry} />
       <div className="text-2xs font-medium leading-tight text-slate-200 truncate w-full">{entry.label}</div>
       {isContextOnly && (
