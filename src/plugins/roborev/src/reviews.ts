@@ -39,6 +39,34 @@ export function sortReviews(reviews: Review[]): Review[] {
   return [...reviews].sort((a, b) => (a.closed !== b.closed ? (a.closed ? 1 : -1) : b.id - a.id))
 }
 
+/** What the cockpit accessory should render, resolved from the probe inputs.
+ *  Keeps the branchy "why is this pane empty?" logic pure and testable so the
+ *  accessory never falls back to a blank/ambiguous state. `installed` is the
+ *  result of a `which roborev` probe (null until it resolves). */
+export type CockpitView =
+  | { kind: 'no-session' }
+  | { kind: 'probing' }
+  | { kind: 'not-installed' }
+  | { kind: 'error'; message: string }
+  | { kind: 'empty' }
+  | { kind: 'list'; reviews: Review[]; open: number }
+
+export function cockpitState(input: {
+  sessionId: string
+  installed: boolean | null
+  error: string | null
+  reviews: Review[]
+}): CockpitView {
+  if (!input.sessionId) return { kind: 'no-session' }
+  if (input.installed === false) return { kind: 'not-installed' }
+  if (input.reviews.length > 0) {
+    return { kind: 'list', reviews: input.reviews, open: input.reviews.filter((r) => !r.closed).length }
+  }
+  if (input.error) return { kind: 'error', message: input.error }
+  if (input.installed === null) return { kind: 'probing' }
+  return { kind: 'empty' }
+}
+
 /** Optimistic local update before the next poll confirms. */
 export function applyOptimisticAction(reviews: Review[], jobId: number, action: ReviewAction): Review[] {
   if (action === 'comment') return reviews
