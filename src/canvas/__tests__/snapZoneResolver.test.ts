@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { resolveSnapTarget, revalidateSnapTarget, resolveSnapCommit, snapMembership } from '../snapZoneResolver'
+import { SNAP_GAP } from '../snapConstants'
 
 const W = (id: string, x: number, y: number, w = 100, h = 100) =>
   ({ id, x, y, width: w, height: h })
@@ -13,25 +14,26 @@ describe('resolveSnapTarget', () => {
     expect(result).toBeNull()
   })
 
-  it('snaps flush to the right edge, top-aligned, when approaching from the right', () => {
-    // dragged centered to the right of the target → right edge, y aligned to target.y
+  it('snaps to the right edge with a gutter, top-aligned, when approaching from the right', () => {
+    // dragged centered to the right of the target → right edge, y aligned to target.y,
+    // settled a SNAP_GAP gutter off the edge.
     const result = resolveSnapTarget('d', { x: 130, y: 5, width: 100, height: 100 },
       [W('t', 0, 0)], SNAP_DISTANCE)
-    expect(result).toEqual(expect.objectContaining({ targetId: 't', edge: 'right', x: 100, y: 0 }))
+    expect(result).toEqual(expect.objectContaining({ targetId: 't', edge: 'right', x: 100 + SNAP_GAP, y: 0 }))
     expect(result?.anchors).toBeDefined()
   })
 
-  it('snaps flush to the left edge when approaching from the left', () => {
+  it('snaps to the left edge with a gutter when approaching from the left', () => {
     const result = resolveSnapTarget('d', { x: -130, y: 5, width: 100, height: 100 },
       [W('t', 0, 0)], SNAP_DISTANCE)
-    expect(result).toEqual(expect.objectContaining({ targetId: 't', edge: 'left', x: -100, y: 0 }))
+    expect(result).toEqual(expect.objectContaining({ targetId: 't', edge: 'left', x: -100 - SNAP_GAP, y: 0 }))
     expect(result?.anchors).toBeDefined()
   })
 
-  it('snaps flush below, left-aligned, when approaching from below', () => {
+  it('snaps below with a gutter, left-aligned, when approaching from below', () => {
     const result = resolveSnapTarget('d', { x: 5, y: 130, width: 100, height: 100 },
       [W('t', 0, 0)], SNAP_DISTANCE)
-    expect(result).toEqual(expect.objectContaining({ targetId: 't', edge: 'bottom', x: 0, y: 100 }))
+    expect(result).toEqual(expect.objectContaining({ targetId: 't', edge: 'bottom', x: 0, y: 100 + SNAP_GAP }))
     expect(result?.anchors).toBeDefined()
   })
 
@@ -71,7 +73,8 @@ describe('resolveSnapTarget', () => {
     // not point at a side the widget never reaches.
     const target = W('t', 0, 0)
     const result = resolveSnapTarget('d', { x: 90, y: 120, width: 100, height: 100 }, [target], SNAP_DISTANCE)!
-    expect(result).toMatchObject({ x: 100, y: 100, anchors: ['top-left', 'bottom-right'] })
+    // Corner snap resolves edge 'right' (dx===dy tie), so the gutter offsets x only.
+    expect(result).toMatchObject({ x: 100 + SNAP_GAP, y: 100, anchors: ['top-left', 'bottom-right'] })
     // Placement is to the right of AND below the target; edge must name one of those sides.
     expect(['right', 'bottom']).toContain(result.edge)
     // And it must be consistent with the resolved position relative to the target.
@@ -93,7 +96,7 @@ describe('resolveSnapTarget anchors', () => {
     expect(r.anchors).toBeDefined()
     expect(r.anchors![0]).toMatch(/left$/)
     expect(r.anchors![1]).toMatch(/right$/)
-    expect(r.x).toBe(300)
+    expect(r.x).toBe(300 + SNAP_GAP)
     expect(r.y).toBe(100)
   })
   it('returns null when out of range', () => {
@@ -153,7 +156,7 @@ describe('revalidateSnapTarget', () => {
 
     expect(
       revalidateSnapTarget('d', preview, { x: 100, y: 0, width: 100, height: 100 }, [W('t', 0, 0)], SNAP_DISTANCE),
-    ).toEqual({ targetId: 't', edge: 'right', anchors: ['top-left', 'top-right'], x: 100, y: 0 })
+    ).toEqual({ targetId: 't', edge: 'right', anchors: ['top-left', 'top-right'], x: 100 + SNAP_GAP, y: 0 })
   })
 
   it('drops a preview when the snapped-against widget no longer exists', () => {

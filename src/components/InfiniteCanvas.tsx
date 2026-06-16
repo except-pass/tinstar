@@ -38,7 +38,7 @@ import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
 import type { Rect, IdRect } from '../canvas/constellationCohesion'
 import { applyGroupDrag, boundingBoxOf, fitToRect, occupiedEdgesOf } from '../canvas/constellationCohesion'
-import { tidyGridClusters } from '../canvas/tidyArrange'
+import { tidyGridClusters, mergeUnitsByConstellation, packBlocksRow } from '../canvas/tidyArrange'
 import { clusterGroups } from '../canvas/clusterize'
 import type { DragMember } from '../canvas/constellationCohesion'
 import { reflowOnResize, type ReflowRect, type ReflowMember } from '../canvas/resizeReflow'
@@ -50,6 +50,8 @@ const EMPTY_EDGES: ReadonlySet<SnapEdge> = new Set()
 /** Unique pin id, mirroring the browser's note-id style (`note-<ts36>-<rand>`). */
 const makePinId = (): string => `pin-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
+import { ConstellationLinks } from '../canvas/ConstellationLinks'
+import { buildConstellationLinks } from '../canvas/constellationLinkGeometry'
 import { FreeDragHint } from './FreeDragHint'
 import { resolveSnapTarget, revalidateSnapTarget, resolveSnapCommit, snapMembership } from '../canvas/snapZoneResolver'
 import type { SnapWidget, SnapTarget, SnapEdge } from '../canvas/snapZoneResolver'
@@ -144,64 +146,13 @@ function collectSelectedNodes(nodes: TreeNode[], selectedIds: Set<string>): Tree
   return result
 }
 
-const TREEMAP_HEADER_H = 32  // h-8 drag handle on all container widgets
-const TREEMAP_PAD = 8        // inner padding around children
-
-/**
- * Compute treemap layouts for a set of nodes within a bounding rect.
- * Places nodes in an aspect-ratio-aware grid, then recurses into containers.
- * Returns a flat Map<nodeId, layout> covering every node in the subtree.
- * Work widgets (non-containers) preserve their existing size; only position changes.
- */
-function computeTreemapLayouts(
-  nodes: TreeNode[],
-  x: number, y: number, w: number, h: number,
-  gap: number,
-  currentLayouts?: Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>,
-): Map<string, import('../hooks/useWidgetLayouts').WidgetLayout> {
-  const result = new Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>()
-  const n = nodes.length
-  if (n === 0 || w <= 0 || h <= 0) return result
-
-  // Aspect-ratio-aware column count: cells will be as square as possible
-  const R = Math.max(0.2, Math.min(5, w / h))
-  const cols = Math.max(1, Math.round(Math.sqrt(n * R)))
-  const rows = Math.ceil(n / cols)
-  const cellW = (w - gap * (cols + 1)) / cols
-  const cellH = (h - gap * (rows + 1)) / rows
-
-  for (let i = 0; i < n; i++) {
-    const node = nodes[i]!
-    const col = i % cols
-    const row = Math.floor(i / cols)
-    const nx = Math.round(x + gap + col * (cellW + gap))
-    const ny = Math.round(y + gap + row * (cellH + gap))
-
-    const isContainer = getWidgetComponent(toWidgetType(node.type))?.isContainer
-    if (isContainer) {
-      // Containers: resize to fit the grid cell
-      result.set(node.id, { x: nx, y: ny, width: Math.round(cellW), height: Math.round(cellH) })
-      if (node.children.length > 0 && cellW > 120 && cellH > 80) {
-        const childGap = Math.max(6, Math.floor(gap * 0.6))
-        const innerX = nx + TREEMAP_PAD
-        const innerY = ny + TREEMAP_HEADER_H
-        const innerW = cellW - TREEMAP_PAD * 2
-        const innerH = cellH - TREEMAP_HEADER_H - TREEMAP_PAD
-        const childLayouts = computeTreemapLayouts(node.children, innerX, innerY, innerW, innerH, childGap, currentLayouts)
-        for (const [id, layout] of childLayouts) result.set(id, layout)
-      }
-    } else {
-      // Work widgets: preserve existing size, only update position
-      const existing = currentLayouts?.get(node.id)
-      const width = existing?.width ?? 1560
-      const height = existing?.height ?? 1410
-      result.set(node.id, { x: nx, y: ny, width, height })
-    }
-  }
-
-  return result
+/** All ids in a subtree (self + every descendant), so a container and its runs
+ *  pack as one rigid block. */
+function collectSubtreeIds(node: TreeNode): string[] {
+  const ids = [node.id]
+  for (const child of node.children) ids.push(...collectSubtreeIds(child))
+  return ids
 }
-
 
 interface MarqueeRect {
   startX: number
@@ -1268,7 +1219,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return clusterGroups(rects, constellations.graph)
   }, [layouts, constellations.graph])
 
-  // Grid arrange: treemap-style nested layout filling the viewport
+  // Grid arrange: pack every top-level block (a run, a browser, a snapped
+  // constellation, or a whole task container with its runs) into a tidy,
+  // non-overlapping row grid at its real size. Each block moves rigidly so
+  // snapped formations and container nesting are preserved and nothing lands on
+  // top of another widget.
   const arrangeGrid = useCallback(() => {
     const el = containerRef.current
     if (!el) return
@@ -1283,15 +1238,29 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     }
     if (rootNodes.length === 0) return
 
-    // Viewport in canvas coords
+    // Viewport top-left + width in canvas coords — pack within the current view,
+    // wrapping downward as it fills.
     const vx = -camera.x / camera.zoom
     const vy = -camera.y / camera.zoom
     const vw = rect.width / camera.zoom
-    const vh = rect.height / camera.zoom
 
-    const newLayouts = computeTreemapLayouts(rootNodes, vx, vy, vw, vh, 20, layouts)
-    batchSetLayouts(preserveCohesion(newLayouts, layouts, computeClusterGroups()))
-  }, [camera, selectionState, tree, layouts, batchSetLayouts, computeClusterGroups])
+    // One unit per top-level subtree; snap edges and constellation-slot
+    // membership then fuse units that belong together (e.g. an orphan browser
+    // snapped to a run, or a session + widget sharing a constellation slot).
+    const units = rootNodes.map(n => collectSubtreeIds(n).filter(id => layouts.has(id)))
+    const rectById = new Map(
+      Array.from(layouts, ([id, l]) => [id, { x: l.x, y: l.y, width: l.width, height: l.height }]),
+    )
+    const blocks = mergeUnitsByConstellation(units, rectById, constellations.graph)
+    const positions = packBlocksRow(blocks, { x: vx, y: vy }, vw, 40)
+
+    const updates = new Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>()
+    for (const [id, p] of positions) {
+      const l = layouts.get(id)
+      if (l) updates.set(id, { ...l, x: p.x, y: p.y })
+    }
+    if (updates.size > 0) batchSetLayouts(updates)
+  }, [camera, selectionState, tree, layouts, batchSetLayouts, constellations.graph])
 
   // Swim lanes: rows of runs grouped by task, stacked by epic/initiative
   const arrangeSwimlanes = useCallback(() => {
@@ -2015,6 +1984,20 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     ? (slotByNode.has(snapPreview.targetId) || occupiedSlots.size < 9)
     : true
 
+  // Constellation links: a star on each anchor point + a line between every
+  // snapped pair. Brighter when the constellation is focused (hotkey-active or a
+  // member selected). Recomputed from the live layouts so the line tracks drags.
+  const constellationLinks = useMemo(() => {
+    const rectById = new Map(
+      Array.from(layouts, ([id, l]) => [id, { x: l.x, y: l.y, width: l.width, height: l.height }]),
+    )
+    const isActive = (aId: string, bId: string) => {
+      const slot = slotByNode.get(aId)
+      return (!!slot && activeConstellationSlot === slot) || isSelected(aId) || isSelected(bId)
+    }
+    return buildConstellationLinks(constellations.graph, rectById, isActive)
+  }, [constellations.graph, layouts, slotByNode, activeConstellationSlot, isSelected])
+
   // Compute drag ghost: precise dashed outline at the widget's current drag position.
   // Sits behind the widget (z-index 50 < widget's 100) so the widget floats on top.
   let dragGhost: React.CSSProperties | null = null
@@ -2121,6 +2104,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       >
         {renderedNodes}
         {dragGhost && <div style={dragGhost} />}
+        {/* Constellation links sit above widgets (visible across the gap) but below
+            the interactive break chips rendered by the chrome below. */}
+        <ConstellationLinks links={constellationLinks} zoom={camera.zoom} />
         {/* Chrome is inside the camera transform so it scales with canvas zoom — unlike the screen-space marquee. */}
         {(['1','2','3','4','5','6','7','8','9'] as const).map(slot => {
           const memberIds = constellations.nodesInSlot(slot)

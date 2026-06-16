@@ -2,6 +2,7 @@ import type { ConstellationSlot } from '../domain/constellationGraph'
 import { DEFAULT_ANCHORS, type AnchorPair } from '../domain/anchors'
 import { anchorPoint, anchorPosition } from './anchors'
 import type { Rect } from './constellationCohesion'
+import { SNAP_GAP } from './snapConstants'
 
 export interface SnapWidget extends Rect {
   id: string
@@ -32,9 +33,6 @@ export type SnapCommitResult =
   | { kind: 'rollback' }
 
 const ALL_SLOTS: ConstellationSlot[] = ['1','2','3','4','5','6','7','8','9']
-
-// Flush by default — widgets touch when joined. Bump for a gutter between snapped widgets.
-const SNAP_GAP = 0
 
 // A flush snap touches the target edge-to-edge (corner) so the placed rect overlaps the
 // target by ~0 on at least one axis. We allow a few px of two-axis overlap for rounding;
@@ -130,7 +128,16 @@ export function resolveSnapTarget(
   const dx = (bestPos.x + draggedRect.width / 2) - (nearest.x + nearest.width / 2)
   const dy = (bestPos.y + draggedRect.height / 2) - (nearest.y + nearest.height / 2)
   const edge: SnapEdge = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'right' : 'left') : (dy >= 0 ? 'bottom' : 'top')
-  return { targetId: nearest.id, edge, anchors: bestPair, x: bestPos.x, y: bestPos.y }
+
+  // Push the dragged widget off the target edge by SNAP_GAP so the pair settles
+  // with a small gutter (room for the constellation link), rather than flush.
+  let { x, y } = bestPos
+  if (edge === 'right') x += SNAP_GAP
+  else if (edge === 'left') x -= SNAP_GAP
+  else if (edge === 'bottom') y += SNAP_GAP
+  else y -= SNAP_GAP
+
+  return { targetId: nearest.id, edge, anchors: bestPair, x, y }
 }
 
 /**

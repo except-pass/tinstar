@@ -1,6 +1,8 @@
 export interface ReflowRect { x: number; y: number; width: number; height: number }
 export interface ReflowMember extends ReflowRect { id: string }
 
+import { ADJACENCY_TOL } from './snapConstants'
+
 export interface ResizeReflowInput {
   /** The resized widget's geometry at resize-START (top-left is fixed; only size changes). */
   start: ReflowRect
@@ -10,8 +12,10 @@ export interface ResizeReflowInput {
   members: ReflowMember[]
 }
 
-// Layouts are grid-snapped, so flush seams are exact; a 1px tolerance absorbs float noise.
-const CONTACT_TOL = 1
+// Snapped widgets sit a SNAP_GAP gutter apart (not flush), so contact detection
+// must tolerate that gap; ADJACENCY_TOL is sized to exceed it. Shifting members
+// by the resize delta preserves whatever gap existed.
+const CONTACT_TOL = ADJACENCY_TOL
 
 function overlap1D(aStart: number, aLen: number, bStart: number, bLen: number): number {
   return Math.min(aStart + aLen, bStart + bLen) - Math.max(aStart, bStart)
