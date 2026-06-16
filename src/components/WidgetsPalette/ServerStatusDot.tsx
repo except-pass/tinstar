@@ -28,8 +28,9 @@ export function ServerStatusDot({ pluginId, displayName, status, startable, onSt
   const viewLog = async (e: React.MouseEvent) => {
     e.stopPropagation()
     try {
-      const r = await apiFetch(`/api/plugin-servers/${pluginId}/log`)
+      const r = await apiFetch(`/api/plugin-servers/${encodeURIComponent(pluginId)}/log`)
       const j = (await r.json()) as { ok: boolean; data?: { log: string } }
+      if (!r.ok || !j.ok) { setLog('(failed to read log)'); return }
       setLog(j.data?.log || '(log empty)')
     } catch { setLog('(failed to read log)') }
   }

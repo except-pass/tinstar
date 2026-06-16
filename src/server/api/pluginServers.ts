@@ -137,8 +137,12 @@ export function startServer(configRoot: string, pluginId: string): { started: tr
   return { started: true }
 }
 
-/** Tail of a plugin's start log (most-recent bytes), or '' when absent. */
+/** Tail of a plugin's start log (most-recent bytes), or '' when absent.
+ *  Only serves logs for a currently-resolved plugin server — this both scopes the
+ *  endpoint to real plugins and blocks path traversal via a crafted id (e.g.
+ *  `../../etc/passwd`), which matches no resolved pluginId and returns ''. */
 export function readServerLog(configRoot: string, pluginId: string, maxBytes = 64 * 1024): string {
+  if (!resolvePluginServers(configRoot).some((e) => e.pluginId === pluginId)) return ''
   try {
     const buf = readFileSync(join(configRoot, 'plugin-servers', `${pluginId}.log`))
     return buf.length > maxBytes ? buf.subarray(buf.length - maxBytes).toString('utf8') : buf.toString('utf8')
