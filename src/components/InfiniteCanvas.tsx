@@ -230,7 +230,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   } = useWidgetLayouts(tree, activeSpaceId, placementSeed)
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
   const appConfig = useConfig()
-  const sizePresets = appConfig?.ui.widgetSizePresets ?? DEFAULT_WIDGET_SIZE_PRESETS
+  // Merge over defaults so a partial persisted config (missing aspectByType)
+  // can't crash resolveAspect in the canvas render path.
+  const sizePresets = { ...DEFAULT_WIDGET_SIZE_PRESETS, ...(appConfig?.ui.widgetSizePresets ?? {}) }
   const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState } = useSelection()
 
   // Container size tracked via ResizeObserver — avoids getBoundingClientRect in the render body

@@ -891,7 +891,10 @@ export function SettingsDialog({ onClose }: Props) {
                 you're on.
               </p>
               {(() => {
-                const presets = (config?.ui.widgetSizePresets ?? DEFAULT_WIDGET_SIZE_PRESETS) as WidgetSizePresets
+                // Merge over defaults (not whole-object fallback): a persisted
+                // config predating aspectByType/defaultAspect would otherwise
+                // leave those sub-fields undefined and crash the panel below.
+                const presets = { ...DEFAULT_WIDGET_SIZE_PRESETS, ...(config?.ui.widgetSizePresets ?? {}) } as WidgetSizePresets
                 const save = (next: WidgetSizePresets) =>
                   patchConfig({ ui: { widgetSizePresets: next } }).catch(err =>
                     console.warn('[settings] widget size presets patch failed:', err))
