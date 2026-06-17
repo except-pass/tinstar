@@ -143,3 +143,29 @@ export function fleetRow(session: FleetSession, openReviews: Review[] | null): F
 export function fleetOpenTotal(rows: FleetRow[]): number {
   return rows.reduce((n, r) => n + (r.open ?? 0), 0)
 }
+
+/** The prompt the fleet "nudge" button sends to a session's agent to make it
+ *  burn down its open roborev backlog. Encodes Will's preferred workflow:
+ *  one-at-a-time, verify-before-fixing (most findings are stale), commit + close,
+ *  and never `roborev refine` on a backlog. `open` personalizes the count. */
+export function nudgePrompt(open: number): string {
+  return [
+    `Burn down the open roborev review backlog in this worktree (${open} open).`,
+    'Work the findings one at a time: `roborev list --open`, then for each one `roborev show <job>`,',
+    'check the finding against the current code, and either fix it (make the change + commit) and',
+    '`roborev close <job>`, or — if it is already addressed or stale — `roborev close <job>` with a',
+    'comment citing the evidence. Many findings are stale, so verify before "fixing". Do not run',
+    '`roborev refine`. Stop to ask only on a genuine product/design fork.',
+  ].join(' ')
+}
+
+/** Outcome of a fleet nudge, derived from the POST /prompt response so the UI
+ *  layer stays dumb. 'busy' = the agent was mid-task (CONFLICT); we never force. */
+export type NudgeResult = 'sent' | 'busy' | 'error'
+
+/** Classify a POST /api/sessions/:id/prompt response into a NudgeResult. */
+export function nudgeResult(body: unknown): NudgeResult {
+  const b = body as { ok?: boolean; error?: { code?: string } }
+  if (b?.ok) return 'sent'
+  return b?.error?.code === 'CONFLICT' ? 'busy' : 'error'
+}

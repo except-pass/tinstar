@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, cockpitState, pickFleetSessions, fleetRow, fleetOpenTotal, type Review } from './reviews'
+import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, cockpitState, pickFleetSessions, fleetRow, fleetOpenTotal, nudgePrompt, nudgeResult, type Review } from './reviews'
 
 const row = (o: Partial<Review> & { id: number }): Review => ({ status: 'done', verdict: 'P', closed: false, commit_subject: 's', branch: 'b', ...o })
 
@@ -116,4 +116,27 @@ describe('fleetRow / fleetOpenTotal', () => {
       { ...s, sessionId: 'c', open: 2, failed: 0 },
     ])).toBe(5)
   })
+})
+
+describe('nudgePrompt', () => {
+  it('personalizes the open count and encodes the one-at-a-time workflow', () => {
+    const p = nudgePrompt(7)
+    expect(p).toContain('(7 open)')
+    expect(p).toContain('one at a time')
+    expect(p).toContain('roborev close <job>')
+  })
+  it('steers away from `roborev refine` (Will fixes backlogs by hand)', () => {
+    expect(nudgePrompt(1)).toContain('Do not run `roborev refine`')
+  })
+})
+
+describe('nudgeResult', () => {
+  it('sent on an ok response', () => { expect(nudgeResult({ ok: true })).toBe('sent') })
+  it('busy when the agent was mid-task (CONFLICT)', () => {
+    expect(nudgeResult({ ok: false, error: { code: 'CONFLICT', message: 'session-not-ready' } })).toBe('busy')
+  })
+  it('error on any other failure', () => {
+    expect(nudgeResult({ ok: false, error: { code: 'INTERNAL', message: 'boom' } })).toBe('error')
+  })
+  it('error on a malformed body', () => { expect(nudgeResult(null)).toBe('error') })
 })

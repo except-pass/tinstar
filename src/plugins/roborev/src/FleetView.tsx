@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
-import { parseReviewList, pickFleetSessions, fleetRow, fleetOpenTotal, type FleetRow } from './reviews'
+import { parseReviewList, pickFleetSessions, fleetRow, fleetOpenTotal, nudgePrompt, nudgeResult, type FleetRow, type NudgeResult } from './reviews'
 
 const POLL_MS = 12_000
 
@@ -15,6 +15,7 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
   return function FleetView() {
     const [rows, setRows] = useState<FleetRow[] | null>(null)
     const [loading, setLoading] = useState(false)
+    const [nudges, setNudges] = useState<Record<string, NudgeState>>({})
     const busyRef = useRef(false)
 
     const load = useCallback(async () => {
@@ -49,6 +50,26 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
       }
     }, [])
 
+    // Nudge the session's agent to burn down its open roborev backlog. We never
+    // force (option 1): a busy agent is left alone and the row shows a 'busy'
+    // error so the user can retry when it goes idle.
+    const nudge = useCallback(async (r: FleetRow) => {
+      if (!r.open || nudges[r.sessionId] === 'sending') return
+      setNudges((m) => ({ ...m, [r.sessionId]: 'sending' }))
+      let result: NudgeState = 'error'
+      try {
+        const res = await api.http.fetch(`/api/sessions/${encodeURIComponent(r.sessionId)}/prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: nudgePrompt(r.open) }),
+        })
+        result = nudgeResult(await res.json())
+      } catch {
+        result = 'error'
+      }
+      setNudges((m) => ({ ...m, [r.sessionId]: result }))
+    }, [nudges])
+
     useEffect(() => {
       void load()
       const t = setInterval(() => void load(), POLL_MS)
@@ -75,16 +96,20 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {rows === null && <Muted>Scanning sessions…</Muted>}
           {rows && rows.length === 0 && <Muted>No agent sessions with a worktree.</Muted>}
-          {rows && rows.map((r) => <RowView key={r.sessionId} r={r} />)}
+          {rows && rows.map((r) => <RowView key={r.sessionId} r={r} nudge={nudges[r.sessionId]} onNudge={() => void nudge(r)} />)}
         </div>
       </Pane>
     )
   }
 }
 
-function RowView({ r }: { r: FleetRow }) {
+/** 'sending' is the in-flight state; the rest mirror NudgeResult. */
+type NudgeState = 'sending' | NudgeResult
+
+function RowView({ r, nudge, onNudge }: { r: FleetRow; nudge: NudgeState | undefined; onNudge: () => void }) {
   const wt = r.worktree.split('/').filter(Boolean).pop() ?? r.worktree
   const probeFailed = r.open === null
+  const hasOpen = !!r.open
   return (
     <div style={{ padding: '6px 10px', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', gap: 8 }}>
       <div style={{ minWidth: 0, flex: 1 }}>
@@ -92,16 +117,36 @@ function RowView({ r }: { r: FleetRow }) {
         <div style={{ fontSize: 10, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {r.project ? `${r.project} · ` : ''}{wt}
         </div>
+        {nudge && nudge !== 'sending' && <NudgeStatus state={nudge} />}
       </div>
       {probeFailed ? (
         <span style={{ fontSize: 10, color: '#64748b' }} title="roborev not available in this worktree">—</span>
       ) : (
-        <span style={{ fontSize: 11, color: r.open ? '#e2e8f0' : '#64748b', flexShrink: 0 }}>
+        <span style={{ fontSize: 11, color: hasOpen ? '#e2e8f0' : '#64748b', flexShrink: 0 }}>
           {r.open} open{r.failed ? <span style={{ color: '#f87171' }}> · {r.failed} failed</span> : null}
         </span>
       )}
+      {hasOpen && (
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={onNudge}
+          disabled={nudge === 'sending'}
+          title="Prompt this agent to burn down its open roborev backlog"
+          style={{ flexShrink: 0, fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(34,211,238,0.35)', background: nudge === 'sent' ? 'rgba(34,211,238,0.12)' : 'transparent', color: '#22d3ee', cursor: nudge === 'sending' ? 'default' : 'pointer', opacity: nudge === 'sending' ? 0.6 : 1 }}
+        >
+          {nudge === 'sending' ? '…' : nudge === 'sent' ? '✓ nudged' : 'Nudge'}
+        </button>
+      )}
     </div>
   )
+}
+
+/** Inline feedback under the session label. 'busy'/'error' render as a visible
+ *  red error so a nudge that didn't land (agent mid-task) is never silent. */
+function NudgeStatus({ state }: { state: Exclude<NudgeState, 'sending'> }) {
+  if (state === 'sent') return null
+  const msg = state === 'busy' ? 'agent busy — try again when idle' : 'nudge failed — check the session'
+  return <div style={{ fontSize: 10, color: '#f87171', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>⚠ {msg}</div>
 }
 
 function Pane({ children }: { children: ReactNode }) { return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0b1220', color: '#cbd5e1' }}>{children}</div> }
