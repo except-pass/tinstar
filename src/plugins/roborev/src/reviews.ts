@@ -139,22 +139,18 @@ export function fleetRow(session: FleetSession, openReviews: Review[] | null): F
   }
 }
 
-/** Total open findings across the fleet (probe failures count as 0). */
-export function fleetOpenTotal(rows: FleetRow[]): number {
-  return rows.reduce((n, r) => n + (r.open ?? 0), 0)
-}
-
 /** Header total: sum once per *distinct worktree*. Two sessions can share one
  *  worktree (a known condition here), so summing per-row would double-count the
- *  same findings. Per-row display still shows one row per session. */
+ *  same findings. Per-row display still shows one row per session. Takes the max
+ *  open count per worktree so the result is independent of row order (a
+ *  probe-failed null row can't shadow a successful sibling's real count). */
 export function fleetOpenTotalDistinct(rows: FleetRow[]): number {
-  const seen = new Set<string>()
-  let n = 0
+  const byWorktree = new Map<string, number>()
   for (const r of rows) {
-    if (seen.has(r.worktree)) continue
-    seen.add(r.worktree)
-    n += r.open ?? 0
+    byWorktree.set(r.worktree, Math.max(byWorktree.get(r.worktree) ?? 0, r.open ?? 0))
   }
+  let n = 0
+  for (const v of byWorktree.values()) n += v
   return n
 }
 

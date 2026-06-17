@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, cockpitState, pickFleetSessions, fleetRow, fleetOpenTotal, fleetOpenTotalDistinct, nudgePrompt, nudgeResult, type Review } from './reviews'
+import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, cockpitState, pickFleetSessions, fleetRow, fleetOpenTotalDistinct, nudgePrompt, nudgeResult, type Review } from './reviews'
 
 const row = (o: Partial<Review> & { id: number }): Review => ({ status: 'done', verdict: 'P', closed: false, commit_subject: 's', branch: 'b', ...o })
 
@@ -100,7 +100,7 @@ describe('pickFleetSessions', () => {
   })
 })
 
-describe('fleetRow / fleetOpenTotal', () => {
+describe('fleetRow', () => {
   const s = { sessionId: 'a', project: 'p', worktree: '/w/a' }
   it('counts open + failed from the open-review list', () => {
     const reviews = [row({ id: 1, status: 'failed' }), row({ id: 2, status: 'done' }), row({ id: 3, status: 'failed' })]
@@ -108,13 +108,6 @@ describe('fleetRow / fleetOpenTotal', () => {
   })
   it('marks open=null when the probe failed', () => {
     expect(fleetRow(s, null)).toEqual({ ...s, open: null, failed: 0 })
-  })
-  it('totals open across rows, treating probe failures as 0', () => {
-    expect(fleetOpenTotal([
-      { ...s, open: 3, failed: 1, worktree: '/w/a' },
-      { ...s, sessionId: 'b', open: null, failed: 0, worktree: '/w/b' },
-      { ...s, sessionId: 'c', open: 2, failed: 0, worktree: '/w/c' },
-    ])).toBe(5)
   })
 })
 
@@ -129,6 +122,14 @@ describe('fleetOpenTotalDistinct', () => {
   })
   it('treats probe failures as 0', () => {
     expect(fleetOpenTotalDistinct([{ ...s, worktree: '/w/a', open: null }])).toBe(0)
+  })
+  it('is order-independent: a null-open row cannot shadow a successful sibling', () => {
+    const nullFirst = [
+      { ...s, sessionId: 'a', worktree: '/w/shared', open: null },
+      { ...s, sessionId: 'b', worktree: '/w/shared', open: 5 },
+    ]
+    expect(fleetOpenTotalDistinct(nullFirst)).toBe(5)
+    expect(fleetOpenTotalDistinct([...nullFirst].reverse())).toBe(5)
   })
 })
 

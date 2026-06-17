@@ -18,6 +18,7 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
     const [failed, setFailed] = useState(false)
     const [nudges, setNudges] = useState<Record<string, NudgeState>>({})
     const busyRef = useRef(false)
+    const inFlightRef = useRef<Set<string>>(new Set())
 
     const load = useCallback(async () => {
       if (busyRef.current) return
@@ -44,6 +45,13 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
         next.sort((a, b) => (b.open ?? -1) - (a.open ?? -1) || a.sessionId.localeCompare(b.sessionId))
         setFailed(false)
         setRows(next)
+        // Drop nudge feedback for sessions that no longer exist so a stale
+        // '✓ nudged'/error can't linger on a recycled row.
+        const live = new Set(next.map((r) => r.sessionId))
+        setNudges((m) => {
+          const kept = Object.entries(m).filter(([id]) => live.has(id))
+          return kept.length === Object.keys(m).length ? m : Object.fromEntries(kept)
+        })
       } catch {
         // A state-fetch failure is distinct from an empty fleet — surface it as
         // an error rather than masquerading as "no sessions". Keep the last good
@@ -59,7 +67,10 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
     // force (option 1): a busy agent is left alone and the row shows a 'busy'
     // error so the user can retry when it goes idle.
     const nudge = useCallback(async (r: FleetRow) => {
-      if (!r.open || nudges[r.sessionId] === 'sending') return
+      // Race-free in-flight guard via a ref (not the nudges snapshot), so this
+      // callback's identity stays stable across nudge state transitions.
+      if (!r.open || inFlightRef.current.has(r.sessionId)) return
+      inFlightRef.current.add(r.sessionId)
       setNudges((m) => ({ ...m, [r.sessionId]: 'sending' }))
       let result: NudgeState = 'error'
       try {
@@ -72,8 +83,9 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
       } catch {
         result = 'error'
       }
+      inFlightRef.current.delete(r.sessionId)
       setNudges((m) => ({ ...m, [r.sessionId]: result }))
-    }, [nudges])
+    }, [])
 
     useEffect(() => {
       void load()
@@ -90,6 +102,9 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
         <div className="widget-drag-handle" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)', cursor: 'grab' }}>
           <span style={{ color: '#22d3ee', fontSize: 11, letterSpacing: 0.5 }}>ROBOREV FLEET</span>
           <span style={{ fontSize: 11, color: '#94a3b8' }}>● {total} open</span>
+          {failed && rows && rows.length > 0 && (
+            <span style={{ fontSize: 10, color: '#fbbf24' }} title="A refresh failed; showing the last good scan">stale</span>
+          )}
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => void load()}
