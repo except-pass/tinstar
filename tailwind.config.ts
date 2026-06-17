@@ -38,6 +38,13 @@ export default {
           '50%': { opacity: '0.8' },
           '100%': { opacity: '0.3' },
         },
+        // Gentle, infrequent breath for at-capacity warnings: holds full
+        // opacity most of the cycle, then a brief soft dip. Used by the
+        // context meter once it crosses the danger threshold.
+        'pulse-soft': {
+          '0%, 65%, 100%': { opacity: '1' },
+          '82%': { opacity: '0.55' },
+        },
         // ignite / scan-oneshot / ripple-ring are defined in index.css directly
         // so they are always bundled (Tailwind purges unused keyframes).
       },
@@ -45,6 +52,7 @@ export default {
         'pulse-glow': 'pulse-glow 2s ease-in-out infinite',
         'scan': 'scan 8s linear infinite',
         'shimmer': 'shimmer 1.5s ease-in-out infinite',
+        'pulse-soft': 'pulse-soft 3.5s ease-in-out infinite',
       },
     },
   },
