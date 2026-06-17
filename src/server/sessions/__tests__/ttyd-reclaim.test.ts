@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { ttydPidsToReclaim, ttydPidsForSession } from '../backends/tmux'
+import { ttydPidsToReclaim, ttydPidsForSession, tmuxTargetFromArgs } from '../backends/tmux'
+
+describe('tmuxTargetFromArgs — which tmux session a ttyd attaches', () => {
+  it('parses the exact form startTtyd spawns', () => {
+    // `ttyd -W -p <port> -t titleFixed=Tinstar -t theme={…} bash -c "tmux attach -t <name>"`
+    const args = 'ttyd -W -p 8681 -t titleFixed=Tinstar -t theme={"background":"#000000"} bash -c tmux attach -t tinstar-foo'
+    expect(tmuxTargetFromArgs(args)).toBe('tinstar-foo')
+  })
+  it('does not mistake ttyd\'s own -t option flags for the session token', () => {
+    // The session is tinstar-foo, NOT 'titleFixed=Tinstar' (ttyd's -t flag).
+    expect(tmuxTargetFromArgs('ttyd -t titleFixed=X bash -c tmux attach -t real-sess')).toBe('real-sess')
+  })
+  it('tolerates the attach-session alias and global flags (e.g. -L socket)', () => {
+    expect(tmuxTargetFromArgs('bash -c tmux attach-session -t sess-a')).toBe('sess-a')
+    expect(tmuxTargetFromArgs('bash -c tmux -L mysock attach -t sess-b')).toBe('sess-b')
+  })
+  it('returns null when there is no tmux attach in the args', () => {
+    expect(tmuxTargetFromArgs('ttyd -p 8681 bash -c htop')).toBeNull()
+    expect(tmuxTargetFromArgs('')).toBeNull()
+  })
+})
 
 describe('ttydPidsToReclaim — which ttyds we may kill to take a port', () => {
   it('reclaims our own previous ttyd on the port', () => {

@@ -631,6 +631,21 @@ export interface TtydIncumbent {
   tmuxTarget: string | null
 }
 
+/**
+ * Extract the tmux session a ttyd attaches from its full `ps -o args=` line.
+ * Anchors on the tmux client invocation (`tmux … attach[-session] … -t NAME`),
+ * so it tolerates global flags like `-L <socket>` and the `attach-session`
+ * alias, and never mistakes ttyd's own `-t` option flags (which precede `tmux`
+ * in the args, e.g. `-t titleFixed=Tinstar`) for the session token. Single
+ * source for both reclaim paths so the parser can't drift from how `startTtyd`
+ * spawns the client (`bash -c "tmux attach -t <name>"`). Returns null when no
+ * tmux target is present (e.g. the process vanished or runs a non-tmux command).
+ */
+export function tmuxTargetFromArgs(args: string): string | null {
+  const m = args.match(/\btmux\b.*?\battach(?:-session)?\b.*?\s-t\s+(\S+)/)
+  return m ? m[1]! : null
+}
+
 /** ttyd processes listening on `port`, each with the tmux session it attaches. */
 export function ttydIncumbentsOnPort(port: number): TtydIncumbent[] {
   const out: TtydIncumbent[] = []
@@ -650,8 +665,7 @@ export function ttydIncumbentsOnPort(port: number): TtydIncumbent[] {
     let tmuxTarget: string | null = null
     try {
       const args = execSync(`ps -o args= -p ${pid}`, { encoding: 'utf-8' })
-      const m = args.match(/tmux attach -t (\S+)/)
-      tmuxTarget = m ? m[1]! : null
+      tmuxTarget = tmuxTargetFromArgs(args)
     } catch { /* process vanished between lsof and ps */ }
     out.push({ pid, tmuxTarget })
   }
@@ -694,8 +708,7 @@ export function allTtydIncumbents(): TtydIncumbent[] {
     let tmuxTarget: string | null = null
     try {
       const args = execSync(`ps -o args= -p ${pid}`, { encoding: 'utf-8' })
-      const m = args.match(/tmux attach -t (\S+)/)
-      tmuxTarget = m ? m[1]! : null
+      tmuxTarget = tmuxTargetFromArgs(args)
     } catch { /* process vanished between pgrep and ps */ }
     out.push({ pid, tmuxTarget })
   }
