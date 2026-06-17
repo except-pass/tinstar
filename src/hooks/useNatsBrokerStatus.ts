@@ -17,9 +17,11 @@ export function useNatsBrokerStatus(): PluginServerStatus | null {
       if (cancelled) return
       try {
         const r = await apiFetch('/api/nats-traffic/status')
-        const j = (await r.json()) as { ok: boolean; data?: { connection: 'up' | 'down' | 'degraded' } }
+        // The route only ever emits 'up' | 'down' (NatsTrafficBridge.brokerConnection);
+        // don't type a 'degraded' state the producer can't send.
+        const j = (await r.json()) as { ok: boolean; data?: { connection: 'up' | 'down' } }
         if (!cancelled && j.ok && j.data) {
-          setStatus({ status: j.data.connection === 'up' ? 'up' : 'down', startable: false, kind: 'nats', checkedAt: 0 })
+          setStatus({ status: j.data.connection === 'up' ? 'up' : 'down', startable: false, kind: 'nats', checkedAt: Date.now() })
         }
       } catch { /* transient; next tick retries */ }
       if (!cancelled) timer = setTimeout(tick, POLL_MS)
