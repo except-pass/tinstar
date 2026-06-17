@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, cockpitState, pickFleetSessions, fleetRow, fleetOpenTotal, nudgePrompt, nudgeResult, type Review } from './reviews'
+import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, cockpitState, pickFleetSessions, fleetRow, fleetOpenTotal, fleetOpenTotalDistinct, nudgePrompt, nudgeResult, type Review } from './reviews'
 
 const row = (o: Partial<Review> & { id: number }): Review => ({ status: 'done', verdict: 'P', closed: false, commit_subject: 's', branch: 'b', ...o })
 
@@ -111,10 +111,24 @@ describe('fleetRow / fleetOpenTotal', () => {
   })
   it('totals open across rows, treating probe failures as 0', () => {
     expect(fleetOpenTotal([
-      { ...s, open: 3, failed: 1 },
-      { ...s, sessionId: 'b', open: null, failed: 0 },
-      { ...s, sessionId: 'c', open: 2, failed: 0 },
+      { ...s, open: 3, failed: 1, worktree: '/w/a' },
+      { ...s, sessionId: 'b', open: null, failed: 0, worktree: '/w/b' },
+      { ...s, sessionId: 'c', open: 2, failed: 0, worktree: '/w/c' },
     ])).toBe(5)
+  })
+})
+
+describe('fleetOpenTotalDistinct', () => {
+  const s = { sessionId: 'a', project: 'p', worktree: '/w/a', failed: 0 }
+  it('sums once per distinct worktree (no double-count for co-located sessions)', () => {
+    expect(fleetOpenTotalDistinct([
+      { ...s, sessionId: 'a', worktree: '/w/shared', open: 4 },
+      { ...s, sessionId: 'b', worktree: '/w/shared', open: 4 }, // same worktree, same findings
+      { ...s, sessionId: 'c', worktree: '/w/other', open: 2 },
+    ])).toBe(6) // 4 (shared, counted once) + 2 (other), not 10
+  })
+  it('treats probe failures as 0', () => {
+    expect(fleetOpenTotalDistinct([{ ...s, worktree: '/w/a', open: null }])).toBe(0)
   })
 })
 

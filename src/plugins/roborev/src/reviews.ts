@@ -144,6 +144,20 @@ export function fleetOpenTotal(rows: FleetRow[]): number {
   return rows.reduce((n, r) => n + (r.open ?? 0), 0)
 }
 
+/** Header total: sum once per *distinct worktree*. Two sessions can share one
+ *  worktree (a known condition here), so summing per-row would double-count the
+ *  same findings. Per-row display still shows one row per session. */
+export function fleetOpenTotalDistinct(rows: FleetRow[]): number {
+  const seen = new Set<string>()
+  let n = 0
+  for (const r of rows) {
+    if (seen.has(r.worktree)) continue
+    seen.add(r.worktree)
+    n += r.open ?? 0
+  }
+  return n
+}
+
 /** The prompt the fleet "nudge" button sends to a session's agent to make it
  *  burn down its open roborev backlog. Encodes Will's preferred workflow:
  *  one-at-a-time, verify-before-fixing (most findings are stale), commit + close,

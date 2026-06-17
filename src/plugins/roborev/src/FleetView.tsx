@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
-import { parseReviewList, pickFleetSessions, fleetRow, fleetOpenTotal, nudgePrompt, nudgeResult, type FleetRow, type NudgeResult } from './reviews'
+import { parseReviewList, pickFleetSessions, fleetRow, fleetOpenTotalDistinct, nudgePrompt, nudgeResult, type FleetRow, type NudgeResult } from './reviews'
 
 const POLL_MS = 12_000
 
@@ -15,6 +15,7 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
   return function FleetView() {
     const [rows, setRows] = useState<FleetRow[] | null>(null)
     const [loading, setLoading] = useState(false)
+    const [failed, setFailed] = useState(false)
     const [nudges, setNudges] = useState<Record<string, NudgeState>>({})
     const busyRef = useRef(false)
 
@@ -41,9 +42,13 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
         }))
         // Most backlog first; probe-failures (open=null) sink to the bottom.
         next.sort((a, b) => (b.open ?? -1) - (a.open ?? -1) || a.sessionId.localeCompare(b.sessionId))
+        setFailed(false)
         setRows(next)
       } catch {
-        setRows([])
+        // A state-fetch failure is distinct from an empty fleet — surface it as
+        // an error rather than masquerading as "no sessions". Keep the last good
+        // rows on screen so a transient blip doesn't blank the list.
+        setFailed(true)
       } finally {
         busyRef.current = false
         setLoading(false)
@@ -76,7 +81,9 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
       return () => clearInterval(t)
     }, [load])
 
-    const total = rows ? fleetOpenTotal(rows) : 0
+    // Count is unknown until the first scan resolves — render '--', not '0'
+    // (a zero would assert "nothing open" before anything has been probed).
+    const total = rows ? `${fleetOpenTotalDistinct(rows)}` : '--'
 
     return (
       <Pane>
@@ -94,8 +101,9 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
           </button>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
-          {rows === null && <Muted>Scanning sessions…</Muted>}
-          {rows && rows.length === 0 && <Muted>No agent sessions with a worktree.</Muted>}
+          {failed && rows === null && <Muted>Couldn't load sessions — retrying…</Muted>}
+          {!failed && rows === null && <Muted>Scanning sessions…</Muted>}
+          {rows && rows.length === 0 && <Muted>{failed ? "Couldn't load sessions — retrying…" : 'No agent sessions with a worktree.'}</Muted>}
           {rows && rows.map((r) => <RowView key={r.sessionId} r={r} nudge={nudges[r.sessionId]} onNudge={() => void nudge(r)} />)}
         </div>
       </Pane>
