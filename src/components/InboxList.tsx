@@ -78,7 +78,7 @@ export function InboxList({ activeSpaceId, searchQuery = '', onVisibleRunOrder }
   }
 
   return (
-    <div className="flex flex-col h-full" data-testid="inbox-list">
+    <div className="flex flex-col flex-1 min-h-0" data-testid="inbox-list">
       <div className="flex items-center gap-1 px-2 py-1 border-b border-white/5 text-2xs">
         {LEVELS.map(lvl => (
           <button
