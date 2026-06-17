@@ -134,6 +134,9 @@ describe('POST /api/sessions', () => {
     expect(run.natsSubscriptions!.length).toBeGreaterThan(0)
     // Two-tier: broadcast + direct, both rooted at the task token.
     expect(run.natsSubscriptions!.some(s => s.includes('make-widget'))).toBe(true)
+    // The advertised DM subject is the direct (second) subscription — not the
+    // broadcast channel at [0]. Guards that #998's fix didn't alter task agents.
+    expect(run.natsSubject).toBe(run.natsSubscriptions![1])
   })
 
   it('enables NATS by default for a standalone session (active space, no task)', async () => {
@@ -155,6 +158,12 @@ describe('POST /api/sessions', () => {
     // the space into an un-seated agent (the remote-control leak).
     expect(run.natsSubscriptions).toEqual(['tinstar.create-space._._._.lone-wolf'])
     expect(run.natsSubscriptions!.some(s => s.includes('>'))).toBe(false)
+    // #998: the advertised DM subject must be exactly what the agent subscribes
+    // to. It was recomputed by the space-blind buildNatsSubject, yielding a
+    // '_'-rooted 'tinstar._._._._.lone-wolf' the agent never listens on — so a
+    // sender reading run.natsSubject couldn't reach it. Now derived from the subs.
+    expect(run.natsSubject).toBe('tinstar.create-space._._._.lone-wolf')
+    expect(run.natsSubject).toBe(run.natsSubscriptions![0])
   })
 
   it('still honors an explicit nats:{enabled:false} opt-out', async () => {

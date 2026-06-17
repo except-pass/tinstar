@@ -548,9 +548,15 @@ async function createSessionInternal(
   const initialStatus = prompt ? 'running' : 'idle'
   const backendInfo = `tmux session: ${name}`
 
-  // Build NATS subject for this session
+  // Advertise the agent's DM inbox, derived from the computed subscriptions so
+  // it's exactly what the agent subscribes to: subscriptions[1] is the DM for a
+  // task-seated agent ([0] is the broadcast channel); for a task-less agent the
+  // list holds only the DM at [0]. This mirrors the reparent (newSubs[1] ?? [0])
+  // and restore paths. Recomputing via the space-blind buildNatsSubject diverged
+  // for task-less space-only sessions — it can't see activeSpaceId, so it
+  // advertised a '_'-rooted subject the agent never listens on (roborev #998).
   const natsSubject = resolvedNats?.enabled
-    ? buildNatsSubject(name, docStore, taskId, epicId, initiativeId)
+    ? (resolvedNats.subscriptions[1] ?? resolvedNats.subscriptions[0])
     : undefined
 
   docStore.upsertRun(runId, {
