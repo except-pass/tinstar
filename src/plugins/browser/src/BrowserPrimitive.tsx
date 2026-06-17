@@ -377,7 +377,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
           {url && (
             <button
               onPointerDown={e => e.stopPropagation()}
-              onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
+              onClick={() => window.open(/^https?:\/\//i.test(url) ? url : `http://${url}`, '_blank', 'noopener,noreferrer')}
               className="text-slate-500 hover:text-slate-300 flex-shrink-0"
               title="Open in system browser"
             >
