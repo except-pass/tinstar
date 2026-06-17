@@ -677,6 +677,49 @@ export function ttydPidsToReclaim(
   return { kill, foreign }
 }
 
+/** Every ttyd process on the machine, each with the tmux session it attaches. */
+export function allTtydIncumbents(): TtydIncumbent[] {
+  const out: TtydIncumbent[] = []
+  let pidLines: string
+  try {
+    // pgrep exits 1 (throws) when no ttyd is running — caught below.
+    pidLines = execSync('pgrep -x ttyd', { encoding: 'utf-8' }).trim()
+  } catch {
+    return out
+  }
+  if (!pidLines) return out
+  for (const line of pidLines.split('\n')) {
+    const pid = Number(line)
+    if (!pid) continue
+    let tmuxTarget: string | null = null
+    try {
+      const args = execSync(`ps -o args= -p ${pid}`, { encoding: 'utf-8' })
+      const m = args.match(/tmux attach -t (\S+)/)
+      tmuxTarget = m ? m[1]! : null
+    } catch { /* process vanished between pgrep and ps */ }
+    out.push({ pid, tmuxTarget })
+  }
+  return out
+}
+
+/**
+ * Pids of ttyds attached to EXACTLY our tmux session, regardless of which port
+ * they listen on. These are stale ttyds from a previous backend lifecycle that
+ * the port-scoped reclaim (ttydPidsToReclaim) misses: when a backend restart
+ * re-assigns this session a *different* port, the previous ttyd is orphaned on
+ * its old port still attached to the same tmux session, and accumulates one per
+ * restart. Multiple ttyds on one session double-attach it; with
+ * `window-size latest` that makes the terminal resize-churn between clients.
+ *
+ * Exact match (not prefix) is load-bearing: reclaiming "tinstar-foo" must never
+ * kill the ttyd for a child hand session "tinstar-foo-reviewer-ab12". Same-name
+ * matches are assumed to be ours — two backends serving the same tmux session
+ * name is the unsupported config collision that TINSTAR_CONFIG_HOME prevents.
+ */
+export function ttydPidsForSession(incumbents: TtydIncumbent[], ourTmuxName: string): number[] {
+  return incumbents.filter((inc) => inc.tmuxTarget === ourTmuxName).map((inc) => inc.pid)
+}
+
 export function startTtyd(opts: {
   tmuxName: string
   port: number
@@ -699,6 +742,19 @@ export function startTtyd(opts: {
   }
   if (foreign.length > 0) {
     log.warn('ttyd', `${opts.sessionName}: port ${opts.port} held by another session (${foreign.map(f => f.tmuxTarget).join(', ')}); not killing it`)
+  }
+
+  // Also reclaim across ALL ports: a backend restart can land this session on a
+  // different port, orphaning the previous ttyd (still attached to the same
+  // tmux session) on its old port. The port-scoped pass above only sees the new
+  // port, so those orphans pile up — one per restart — and double-attach the
+  // session. Exact session match so a child hand session is never swept in.
+  const staleSessionPids = ttydPidsForSession(allTtydIncumbents(), opts.tmuxName)
+  if (staleSessionPids.length > 0) {
+    log.info('ttyd', `${opts.sessionName}: reaping ${staleSessionPids.length} stale ttyd(s) on other ports for ${opts.tmuxName}`)
+    for (const pid of staleSessionPids) {
+      try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
+    }
   }
 
   return new Promise((resolve, reject) => {
