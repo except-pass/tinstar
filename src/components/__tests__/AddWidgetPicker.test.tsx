@@ -80,4 +80,13 @@ describe('AddWidgetPicker keyboard navigation', () => {
     expect(screen.getByText('No widgets match')).toBeInTheDocument()
     expect(screen.getByTestId('add-widget-move-existing')).toBeInTheDocument()
   })
+
+  it('does not show "No widgets match" before any query is typed (empty catalog)', () => {
+    // "No widgets match" is a search-result message — it should not appear on first
+    // open when the catalog is empty and the user hasn't searched. The pinned move
+    // row remains actionable.
+    setup({ entries: [] })
+    expect(screen.queryByText('No widgets match')).not.toBeInTheDocument()
+    expect(screen.getByTestId('add-widget-move-existing')).toBeInTheDocument()
+  })
 })
