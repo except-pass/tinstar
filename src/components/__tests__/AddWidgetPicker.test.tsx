@@ -52,3 +52,32 @@ describe('AddWidgetPicker move mode', () => {
     expect(screen.getByTestId('add-widget-option-terminal')).toBeInTheDocument()
   })
 })
+
+describe('AddWidgetPicker keyboard navigation', () => {
+  it('Enter on the pinned row (index 0) enters move mode', () => {
+    setup()
+    // active starts at 0 = pinned row
+    fireEvent.keyDown(window, { key: 'Enter' })
+    // move list should now be visible
+    expect(screen.getByTestId('add-widget-move-target-w-run42')).toBeInTheDocument()
+    // catalog options gone
+    expect(screen.queryByTestId('add-widget-option-terminal')).not.toBeInTheDocument()
+  })
+
+  it('ArrowDown past the pinned row then Enter fires onPick on the first catalog entry', () => {
+    const { onPick } = setup()
+    // active 0 → 1 (first catalog entry = terminal, since defaultType="terminal")
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    fireEvent.keyDown(window, { key: 'Enter' })
+    expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ type: 'terminal' }))
+  })
+
+  it('empty state shows even when the pinned row is visible', () => {
+    setup()
+    const search = screen.getByTestId('add-widget-search')
+    fireEvent.change(search, { target: { value: 'zzzznomatch' } })
+    // no catalog entries match, but pinned row should still be present
+    expect(screen.getByText('No widgets match')).toBeInTheDocument()
+    expect(screen.getByTestId('add-widget-move-existing')).toBeInTheDocument()
+  })
+})
