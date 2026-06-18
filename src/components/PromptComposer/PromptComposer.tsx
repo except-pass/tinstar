@@ -10,6 +10,9 @@
  * or marshal-specific lifecycle (ensure/restart). Those live in the callers.
  */
 import { useState, useRef, useEffect, useCallback } from 'react'
+import type { ComponentPropsWithoutRef } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
 import { hexToRgba } from '../runAccent'
 import { usePromptHistory } from '../../hooks/usePromptHistory'
@@ -38,8 +41,66 @@ const NAV_GLYPH: Record<'up' | 'down' | 'left' | 'right' | 'enter', string> = {
   up: '↑', down: '↓', left: '←', right: '→', enter: '⏎',
 }
 
+// Module-scoped so their identities stay stable — a fresh array/object each
+// render would make react-markdown rebuild its processor and reparse every time.
+const RECAP_REMARK_PLUGINS = [remarkGfm]
+
+// Compact markdown styling for the recap chat view. Block elements inherit the
+// surrounding text color/size (agent slate-400 / user slate-300, both text-xs
+// font-mono) so the two speakers stay visually distinct; only emphasis, code,
+// and links get their own treatment. Margins collapse on the last child so a
+// message doesn't end with trailing space.
+const RECAP_MD_COMPONENTS: ComponentPropsWithoutRef<typeof ReactMarkdown>['components'] = {
+  p: ({ children }) => <p className="mb-2 last:mb-0 break-words">{children}</p>,
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-words">
+      {children}
+    </a>
+  ),
+  strong: ({ children }) => <strong className="font-semibold text-slate-200">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  ul: ({ children }) => <ul className="list-disc pl-4 mb-2 last:mb-0 space-y-0.5">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 last:mb-0 space-y-0.5">{children}</ol>,
+  li: ({ children }) => <li className="break-words">{children}</li>,
+  h1: ({ children }) => <h1 className="text-sm font-semibold text-slate-200 mt-3 first:mt-0 mb-1">{children}</h1>,
+  h2: ({ children }) => <h2 className="text-sm font-semibold text-slate-200 mt-3 first:mt-0 mb-1">{children}</h2>,
+  h3: ({ children }) => <h3 className="font-semibold text-slate-200 mt-2 first:mt-0 mb-1">{children}</h3>,
+  h4: ({ children }) => <h4 className="font-semibold text-slate-200 mt-2 first:mt-0 mb-1">{children}</h4>,
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-2 border-slate-600 pl-2 italic text-slate-500 mb-2 last:mb-0">{children}</blockquote>
+  ),
+  code: ({ className, children }) => {
+    const isBlock = /language-/.test(className ?? '')
+    if (!isBlock) {
+      return <code className="bg-white/5 px-1 py-0.5 rounded text-[0.95em] text-primary-dim">{children}</code>
+    }
+    return (
+      <pre className="bg-surface-panel border border-white/10 rounded p-2 mb-2 last:mb-0 overflow-x-auto">
+        <code className="text-2xs leading-relaxed">{children}</code>
+      </pre>
+    )
+  },
+  pre: ({ children }) => <>{children}</>,
+  table: ({ children }) => (
+    <div className="overflow-x-auto mb-2 last:mb-0">
+      <table className="text-2xs border-collapse w-full">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="border-b border-white/10">{children}</thead>,
+  th: ({ children }) => <th className="px-2 py-1 text-left text-slate-200 font-medium">{children}</th>,
+  td: ({ children }) => <td className="px-2 py-1 border-t border-white/5">{children}</td>,
+  hr: () => <hr className="border-white/10 my-3" />,
+  input: ({ checked, ...props }) => <input {...props} checked={checked} disabled className="mr-1.5 accent-primary" />,
+}
+
 function MarkdownText({ content }: { content: string }) {
-  return <div className="whitespace-pre-wrap break-words">{content}</div>
+  return (
+    <div className="break-words">
+      <ReactMarkdown remarkPlugins={RECAP_REMARK_PLUGINS} components={RECAP_MD_COMPONENTS}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  )
 }
 
 function DiffView({ diff, accent }: { diff: DiffBlock; accent: string }) {
