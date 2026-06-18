@@ -4,6 +4,7 @@ import { findNodeLabel } from '../domain/view-models'
 import { CanvasContextMenu } from './CanvasContextMenu'
 import { buildMoveTargets } from '../domain/moveTargets'
 import { relocateWidgetTo } from '../domain/relocateWidget'
+import { moveSnapWidgetTo } from '../domain/moveSnapWidget'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts, preserveCohesion, MIN_WIDTH, MIN_HEIGHT } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
@@ -858,6 +859,11 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       slotsOf: (id) => constellations.slotsForNode(id).map(Number).filter((n) => !Number.isNaN(n)),
     }),
     [tree, layouts, nodeTypeById, constellations],
+  )
+
+  const moveTargetsForPicker = useMemo(
+    () => (addPicker ? moveTargets.filter(t => t.id !== addPicker.sourceNodeId) : []),
+    [moveTargets, addPicker],
   )
 
   const relocateWidget = useCallback((id: string) => {
@@ -2189,7 +2195,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             entries={catalog}
             defaultType={defaultType}
             anchor={addPicker.anchor}
+            moveTargets={moveTargetsForPicker}
             onPick={(entry) => { void addWidget(entry, addPicker.sourceNodeId, addPicker.edge); setAddPicker(null) }}
+            onMove={(id) => {
+              moveSnapWidgetTo(id, addPicker.sourceNodeId, addPicker.edge, {
+                getLayout, insertLayout, updateConstellation: constellations.update,
+              })
+              setAddPicker(null)
+            }}
             onClose={() => setAddPicker(null)}
           />
         )
