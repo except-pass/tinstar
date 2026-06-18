@@ -13,6 +13,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import type { ComponentPropsWithoutRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import type { RecapEntry, DiffBlock, SessionStatus } from '../../types'
 import { hexToRgba } from '../runAccent'
 import { usePromptHistory } from '../../hooks/usePromptHistory'
@@ -43,7 +44,11 @@ const NAV_GLYPH: Record<'up' | 'down' | 'left' | 'right' | 'enter', string> = {
 
 // Module-scoped so their identities stay stable — a fresh array/object each
 // render would make react-markdown rebuild its processor and reparse every time.
-const RECAP_REMARK_PLUGINS = [remarkGfm]
+// remark-breaks turns a single newline into a hard line break. The recap pane is
+// chat-like (user messages + plain-text agent output), and CommonMark's default
+// (collapse single newlines into spaces) would reflow those onto one line — this
+// preserves the old whitespace-pre-wrap line separation while keeping markdown.
+const RECAP_REMARK_PLUGINS = [remarkGfm, remarkBreaks]
 
 // Compact markdown styling for the recap chat view. Block elements inherit the
 // surrounding text color/size (agent slate-400 / user slate-300, both text-xs
@@ -70,7 +75,12 @@ const RECAP_MD_COMPONENTS: ComponentPropsWithoutRef<typeof ReactMarkdown>['compo
     <blockquote className="border-l-2 border-slate-600 pl-2 italic text-slate-500 mb-2 last:mb-0">{children}</blockquote>
   ),
   code: ({ className, children }) => {
-    const isBlock = /language-/.test(className ?? '')
+    // Block when react-markdown labels the fence (`language-*`) OR the content
+    // spans multiple lines — agents routinely emit unlabeled (```` ``` ````)
+    // fences that carry no className, and rendering those inline collapses every
+    // line onto one. The `pre` override is a passthrough, so this is the only
+    // place block-vs-inline gets decided.
+    const isBlock = /language-/.test(className ?? '') || String(children).includes('\n')
     if (!isBlock) {
       return <code className="bg-white/5 px-1 py-0.5 rounded text-[0.95em] text-primary-dim">{children}</code>
     }
@@ -90,7 +100,10 @@ const RECAP_MD_COMPONENTS: ComponentPropsWithoutRef<typeof ReactMarkdown>['compo
   th: ({ children }) => <th className="px-2 py-1 text-left text-slate-200 font-medium">{children}</th>,
   td: ({ children }) => <td className="px-2 py-1 border-t border-white/5">{children}</td>,
   hr: () => <hr className="border-white/10 my-3" />,
-  input: ({ checked, ...props }) => <input {...props} checked={checked} disabled className="mr-1.5 accent-primary" />,
+  // Drop `node` (react-markdown passes the hast node to every component); spreading
+  // it onto the DOM <input> triggers a "React does not recognize the `node` prop"
+  // warning for every GFM task-list checkbox.
+  input: ({ checked, node: _node, ...props }) => <input {...props} checked={checked} disabled className="mr-1.5 accent-primary" />,
 }
 
 function MarkdownText({ content }: { content: string }) {

@@ -72,4 +72,32 @@ describe('<PromptComposer> recap markdown rendering', () => {
     expect(pane.querySelector('pre')).toBeTruthy()
     expect(pane.textContent).toContain('const x = 1')
   })
+
+  it('preserves single newlines in plain text as hard line breaks (remark-breaks)', () => {
+    const { container } = renderComposer([
+      {
+        id: 'u2',
+        type: 'user',
+        content: 'line one\nline two',
+      },
+    ])
+    const pane = container.querySelector('[data-testid="recap-pane"]')!
+    expect(pane.querySelector('br')).toBeTruthy()
+    expect(pane.textContent).toContain('line one')
+    expect(pane.textContent).toContain('line two')
+  })
+
+  it('renders an UNLABELED multi-line fenced block as a pre (not collapsed inline)', () => {
+    const { container } = renderComposer([
+      {
+        id: 'a3',
+        type: 'agent',
+        content: '```\nline one\nline two\n```',
+      },
+    ])
+    const pane = container.querySelector('[data-testid="recap-pane"]')!
+    expect(pane.querySelector('pre')).toBeTruthy()
+    expect(pane.textContent).toContain('line one')
+    expect(pane.textContent).toContain('line two')
+  })
 })
