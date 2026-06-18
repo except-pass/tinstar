@@ -108,7 +108,7 @@ export function AddWidgetPicker({ entries, defaultType, anchor, moveTargets, onP
               <div className="my-1 border-t border-white/10" />
             </>
           )}
-          {filteredEntries.length === 0 && query.trim().length > 0 && (
+          {filteredEntries.length === 0 && q.length > 0 && (
             <div className="px-2 py-1.5 text-xs text-slate-500">No widgets match</div>
           )}
           {filteredEntries.map((e, i) => {
