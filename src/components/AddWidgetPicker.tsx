@@ -41,7 +41,8 @@ export function AddWidgetPicker({ entries, defaultType, anchor, moveTargets, onP
 
   // In create mode the pinned "move existing" row is index 0 when available.
   const showPinned = mode === 'create' && moveTargets.length > 0
-  const createRowCount = (showPinned ? 1 : 0) + filteredEntries.length
+  const pinnedOffset = showPinned ? 1 : 0
+  const createRowCount = pinnedOffset + filteredEntries.length
   const rowCount = mode === 'create' ? createRowCount : filteredTargets.length
 
   // Reset the active index whenever the visible list changes.
@@ -64,7 +65,7 @@ export function AddWidgetPicker({ entries, defaultType, anchor, moveTargets, onP
         e.preventDefault()
         if (mode === 'move') { const t = filteredTargets[active]; if (t) onMove(t.id); return }
         if (showPinned && active === 0) { enterMoveMode(); return }
-        const sel = filteredEntries[active - (showPinned ? 1 : 0)]
+        const sel = filteredEntries[active - pinnedOffset]
         if (sel) onPick(sel)
       }
     }
@@ -111,7 +112,7 @@ export function AddWidgetPicker({ entries, defaultType, anchor, moveTargets, onP
             <div className="px-2 py-1.5 text-xs text-slate-500">No widgets match</div>
           )}
           {filteredEntries.map((e, i) => {
-            const idx = i + (showPinned ? 1 : 0)
+            const idx = i + pinnedOffset
             return (
               <button
                 key={e.pluginId ? `${e.pluginId}/${e.type}` : e.type}

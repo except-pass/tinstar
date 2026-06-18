@@ -17,7 +17,10 @@ export interface MoveSnapOps {
  *  joining its constellation. Mirrors relocateWidgetTo's injected-ops style,
  *  but attaches (vs. detaches) and reuses the create path's flush + membership
  *  logic. Single widget moves; its old slot membership and snap seams are
- *  severed first so it leaves clean. */
+ *  severed first so it leaves clean. If `movedId` was a snap hub, severing its
+ *  seams may leave former co-slot members in a slot with no shared edge — this
+ *  is intentional; the orchestrator moves only the selected widget and does not
+ *  re-plan the vacated slot. */
 export function moveSnapWidgetTo(
   movedId: string,
   sourceNodeId: string,
