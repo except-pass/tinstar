@@ -14,6 +14,7 @@ The UI must be snappy and responsive. It should feel like playing a video game �
 - **Backend**: Vite plugin server (`src/server/`) — event bus, document store, SSE, session management
 - **Sessions**: `src/server/sessions/` — tmux backend, config at `~/.config/tinstar/`
 - **E2E tests**: Playwright (`e2e/`), run with `TINSTAR_FAST_SIM=1 npx playwright test`
+- **Documented solutions**: `docs/solutions/` — solutions to past problems (bugs, gotchas, workflow practices), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in a documented area.
 
 ## Key Commands
 
