@@ -39,6 +39,15 @@ const ALL_SLOTS: ConstellationSlot[] = ['1','2','3','4','5','6','7','8','9']
 // beyond that the placement covers the target's interior — an occlusion, not a snap.
 const OCCLUSION_TOLERANCE = 1
 
+/** Edge → canonical [sourceAnchor, newAnchor] corner pair, so a programmatic
+ *  edge-flush snap persists the same attachment a manual drag-snap would. */
+export const EDGE_ANCHORS: Record<SnapEdge, AnchorPair> = {
+  right:  ['top-right', 'top-left'],
+  left:   ['top-left', 'top-right'],
+  bottom: ['bottom-left', 'top-left'],
+  top:    ['top-left', 'bottom-left'],
+}
+
 export function rectDistance(a: Rect, b: Rect): number {
   const dx = Math.max(0, Math.max(a.x - (b.x + b.width), b.x - (a.x + a.width)))
   const dy = Math.max(0, Math.max(a.y - (b.y + b.height), b.y - (a.y + a.height)))
