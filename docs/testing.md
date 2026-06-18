@@ -104,6 +104,8 @@ npx vitest run src/server/__tests__/document-store-equality.test.ts -t "updateRu
 
 The `--exclude='e2e/**'` is mandatory. Vitest's auto-discovery globs `e2e/*.spec.ts` and the files use Playwright's `test.describe` which throws at module load — every run crashes 30+ "test files" before getting to the actual unit tests. There is currently no `npm test` script that wraps this.
 
+> **`NODE_ENV=production` trap:** if your shell exports `NODE_ENV=production`, vitest throws spurious `act(...) is not supported in production builds` failures, and any `npm install` silently prunes devDependencies (typescript/vite/vitest) — after which `npx tsc` hits a sham package and vitest can't find `vite`. Prefix toolchain commands with `env -u NODE_ENV` (or use the `npm run test:unit` / `npm run typecheck` aliases). Full writeup: [docs/solutions/developer-experience/node-env-production-prunes-devdependencies.md](solutions/developer-experience/node-env-production-prunes-devdependencies.md).
+
 ### Node 22 is required (`.nvmrc` → `22`)
 
 Run the suite on Node **>=22.12** (`engines` in `package.json`; `.nvmrc` pins `22`). The jsdom dependency chain (`jsdom` → `html-encoding-sniffer` → `@exodus/bytes`) is ESM-only and is `require()`d from CommonJS; only Node 22.12+'s default `require(esm)` support can load it. On Node 20 every jsdom (`.test.tsx`) test fails to even collect with `ERR_REQUIRE_ESM` (`require() of ES Module .../@exodus/bytes/encoding-lite.js not supported`). The prod server already runs on Node 22, so just `nvm use` in the repo before testing. (Backend `.test.ts` tests run fine on any Node version — see below.)
