@@ -48,6 +48,7 @@ import { planAttach } from './attachPlan'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
 import { resolveProxyTarget } from './proxyResolve'
+import { resolveLiveIpcSocket } from './editorIpc'
 import { rewriteProxyBody, proxyRuntimeShim } from './proxyRewrite'
 import { registerSaloonSubs, unregisterSaloonSubs, registerFirehose, unregisterFirehose } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
@@ -3285,7 +3286,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
     // POST /api/editor/open — open a file in the configured editor
     if (method === 'POST' && url === '/api/editor/open') {
-      readBody(req).then((body) => {
+      readBody(req).then(async (body) => {
         const { path: filePath, sessionId } = JSON.parse(body)
         if (!filePath) return fail(res, 'BAD_REQUEST', 'path is required')
 
@@ -3311,18 +3312,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         log.info('editor', `opening: ${bin} ${args.join(' ')}`)
 
-        // Resolve the latest VS Code / Cursor IPC socket so the CLI can
-        // connect even if the server was started before the current editor.
+        // Resolve a LIVE VS Code / Cursor IPC socket so the CLI can connect even
+        // if the server was started before the current editor. Picking the
+        // newest socket by mtime is wrong: a recently-closed window leaves a
+        // stale file that can out-rank the live window's, and `code -g` then
+        // fails silently with ECONNREFUSED. resolveLiveIpcSocket probes for one
+        // that actually accepts a connection. See editorIpc.ts.
         const env = { ...process.env }
-        try {
-          const socks = readdirSync('/run/user/1000')
-            .filter(f => f.startsWith('vscode-ipc-') && f.endsWith('.sock'))
-            .map(f => ({ name: f, mtime: statSync(`/run/user/1000/${f}`).mtimeMs }))
-            .sort((a, b) => b.mtime - a.mtime)
-          if (socks.length > 0) {
-            env.VSCODE_IPC_HOOK_CLI = `/run/user/1000/${socks[0]!.name}`
-          }
-        } catch { /* non-Linux or no sockets — use inherited env */ }
+        const liveSock = await resolveLiveIpcSocket()
+        if (liveSock) env.VSCODE_IPC_HOOK_CLI = liveSock
 
         // Discover Remote-SSH `code` binaries (VS Code / Cursor / Windsurf install
         // them under ~/.<flavor>-server/bin/<arch>/<commit>/bin/remote-cli/). The
