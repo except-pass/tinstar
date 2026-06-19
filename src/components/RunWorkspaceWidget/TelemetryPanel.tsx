@@ -299,6 +299,34 @@ function Treemap({ categories, accent, maxTokens }: TreemapProps) {
 /*  TelemetryPanel                                                     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Reconcile the /context breakdown with the session's real context window.
+ *
+ * The /context sidecar probes usage with `--model claude-haiku-4-5` (cheap +
+ * fast), so the `maxTokens` it returns is Haiku's 200k window — NOT the resumed
+ * session's real window (e.g. 1M for Opus 1M). That made the treemap's
+ * percentages and its "Free space" cell disagree with the live context meter
+ * rendered right above it. The per-category token counts are correct; only the
+ * denominator is wrong. So when we have the true window from the statusline
+ * push (useSessionContextWindow), trust it: rebuild "Free space" against it and
+ * use it as the treemap denominator.
+ */
+export function treemapInputs(
+  data: ContextData,
+  liveWindow: number | null | undefined,
+): { categories: ContextCategory[]; maxTokens: number } {
+  if (!liveWindow || liveWindow <= 0 || liveWindow === data.maxTokens) {
+    return { categories: data.categories, maxTokens: data.maxTokens }
+  }
+  const nonFree = data.categories.filter(c => c.name !== 'Free space')
+  const usedNonFree = nonFree.reduce((sum, c) => sum + c.tokens, 0)
+  const free = Math.max(0, liveWindow - usedNonFree)
+  return {
+    categories: [...nonFree, { name: 'Free space', tokens: free }],
+    maxTokens: liveWindow,
+  }
+}
+
 export function TelemetryPanel({ sessionId, runAccent }: Props) {
   const [data, setData] = useState<ContextData | null>(null)
   const [loading, setLoading] = useState(false)
@@ -404,12 +432,13 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
       </div>
     )
   } else if (data) {
+    const tm = treemapInputs(data, liveCtx?.windowSize)
     detail = (
       <div className="flex-1 min-h-0 flex flex-col px-1 pb-1">
         <Treemap
-          categories={data.categories}
+          categories={tm.categories}
           accent={runAccent}
-          maxTokens={data.maxTokens}
+          maxTokens={tm.maxTokens}
         />
       </div>
     )
