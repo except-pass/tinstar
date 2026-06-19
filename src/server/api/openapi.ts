@@ -569,6 +569,7 @@ export const spec = {
           properties: {
             sessionId: { type: 'string' },
             filePath: { type: 'string', description: 'Absolute or workspace-relative file path' },
+            snapToSession: { type: 'boolean', default: true, description: "When a sessionId is given, the editor auto-snaps into the session's constellation and tiles to its right. Set false to spawn free-floating (interactive drops do this and snap client-side from the drop point)." },
           },
         } } } },
         responses: { 200: { description: 'Created widget' } },

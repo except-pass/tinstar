@@ -60,6 +60,7 @@ import { AddWidgetPicker } from './AddWidgetPicker'
 import { useWidgetCatalog } from '../hooks/useWidgetCatalog'
 import { useAddWidget } from '../hooks/useAddWidget'
 import { composeAddWidgetMembership } from '../canvas/addWidgetMembership'
+import { planDropSnap } from '../canvas/dropLayout'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import { RunNodeCapabilities } from './RunNodeCapabilities'
 
@@ -972,6 +973,20 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return neighbors
   }, [layouts])
 
+  // Place a just-created widget (dropped from a sidebar) at its drop point and, best-effort,
+  // snap+join the nearest constellation member within range — the drop-time equivalent of
+  // releasing a manual drag. Membership is created only when the widget actually sits flush,
+  // so a file dropped onto its run snaps into that run's constellation while one dropped on
+  // empty canvas stays free. Shared by the editor and image drop paths.
+  const applyDropSnap = useCallback((nodeId: string, dropRect: Rect) => {
+    const plan = planDropSnap(
+      nodeId, dropRect, collectSnapNeighbors(nodeId), SNAP_DISTANCE,
+      constellations.graph, slotByNode, occupiedSlots,
+    )
+    insertLayout(nodeId, plan.layout)
+    if (plan.graph !== constellations.graph) constellations.applyGraph(plan.graph)
+  }, [collectSnapNeighbors, constellations, slotByNode, occupiedSlots, insertLayout])
+
   // Widget drag callbacks
   // Resize re-snap: snapshot the resized widget + its constellation co-members at resize-start,
   // then on resize-end shift members flush against the new size (push when grown, pull when
@@ -1732,25 +1747,26 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           const imageJson = await imageRes.json() as { ok: boolean; data?: ImageWidget }
           if (!imageJson.ok || !imageJson.data) return
           const { naturalWidth, naturalHeight } = imageJson.data
-          const spawnLayout = {
+          applyDropSnap(imageJson.data.id, {
             x: dropX, y: dropY,
             width: Math.min(naturalWidth, 1200),
             height: Math.min(naturalHeight, 900),
-          }
-          insertLayout(imageJson.data.id, spawnLayout)
+          })
           onImageWidgetCreated?.(imageJson.data)
           return
         }
 
-        const spawnLayout = { x: dropX, y: dropY, width: 640, height: 480 }
+        // Opt out of the server's auto-snap (which tiles to the session regardless of where
+        // the file was dropped) — an interactive drop lets the drop point drive placement,
+        // snapping to the run's constellation only when dropped near it (see applyDropSnap).
         const editorRes = await apiFetch('/api/editor-widgets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, filePath }),
+          body: JSON.stringify({ sessionId, filePath, snapToSession: false }),
         })
         const editorJson = await editorRes.json() as { ok: boolean; data?: EditorWidget }
         if (!editorJson.ok || !editorJson.data) return
-        insertLayout(editorJson.data.id, spawnLayout)
+        applyDropSnap(editorJson.data.id, { x: dropX, y: dropY, width: 640, height: 480 })
         onEditorWidgetCreated?.(editorJson.data)
         return
       }
@@ -1817,7 +1833,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return
       }
     },
-    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated],
+    [camera, insertLayout, applyDropSnap, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated],
   )
 
   // Viewport in canvas-space for preset size resolution (null until ResizeObserver fires).

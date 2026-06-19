@@ -1739,7 +1739,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/editor-widgets
   if (method === 'POST' && url === '/api/editor-widgets') {
     readBody(req).then(body => {
-      const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
+      const { sessionId, filePath, snapToSession } = JSON.parse(body) as { sessionId?: string; filePath?: string; snapToSession?: boolean }
       if (!sessionId || !filePath) {
         fail(res, 'INVALID_PARAMS', 'sessionId and filePath required')
         return
@@ -1769,10 +1769,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const widgetId = shortId('editor')
       const editorSpaceId = ctx.docStore.activeSpaceId || undefined
       // File-editors snap to their spawning session's constellation like browsers do:
-      // join the session's slot (+ snap edge) and seed a tiled position. The position
-      // is honored for a layout-less node (e.g. an API/agent-created editor); an
-      // interactive open that sets its own client layout ignores the seed.
-      const snapPos = maybeSnapOnCreate(ctx, { spaceId: editorSpaceId, sessionId, widgetId, slotProvided: false, snapToSession: undefined })
+      // join the session's slot (+ snap edge) and seed a tiled position. This is the
+      // default for API/agent-created editors that have no other placement context.
+      // Interactive drops pass `snapToSession: false` and run their own drop-point-driven
+      // snap client-side (see InfiniteCanvas applyDropSnap), so the seed isn't computed.
+      const snapPos = maybeSnapOnCreate(ctx, { spaceId: editorSpaceId, sessionId, widgetId, slotProvided: false, snapToSession })
       const widget: EditorWidget = {
         id: widgetId,
         spaceId: editorSpaceId,
