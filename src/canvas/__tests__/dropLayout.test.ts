@@ -21,7 +21,9 @@ describe('planDropSnap', () => {
     const plan = planDropSnap('editor-x', FAR_DROP, [RUN], SNAP_DISTANCE, graph, new Map(), new Set())
     expect(plan.snapped).toBe(false)
     expect(plan.graph).toBe(graph) // unchanged
-    expect(plan.layout).toEqual(FAR_DROP) // lands exactly where dropped
+    // Assert against a literal, not the shared FAR_DROP ref, so a mutation of the
+    // input rect would be caught rather than comparing the object against itself.
+    expect(plan.layout).toEqual({ x: 2000, y: 2000, width: 640, height: 480 })
   })
 
   it('forms a new constellation with the run when dropped near an ungrouped run', () => {
@@ -50,7 +52,9 @@ describe('planDropSnap', () => {
     const plan = planDropSnap('editor-x', NEAR_DROP, [RUN], SNAP_DISTANCE, graph, new Map(), new Set(allSlots))
     expect(plan.snapped).toBe(false)
     expect(plan.graph).toBe(graph) // unchanged
-    expect(plan.layout).toEqual(NEAR_DROP) // raw drop point, not flush
+    // Literal, not the shared NEAR_DROP ref (see free-case test) — verifies the
+    // value independent of object identity.
+    expect(plan.layout).toEqual({ x: 430, y: 0, width: 640, height: 480 })
   })
 
   it("joins the run's existing slot when the run is already grouped", () => {
