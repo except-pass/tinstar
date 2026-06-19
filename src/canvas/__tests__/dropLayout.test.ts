@@ -40,6 +40,19 @@ describe('planDropSnap', () => {
     expect(plan.layout.x).not.toBe(NEAR_DROP.x)
   })
 
+  it('stays free at the drop point when a target is in range but every slot is full', () => {
+    // The subtle rollback branch: resolveSnapTarget finds RUN within range, but all 9
+    // slots are occupied so the newcomer can't join — it must NOT snap geometry to a
+    // widget it won't be grouped with. Lands at the raw drop point, no membership.
+    let graph = emptyGraph('space-1')
+    const allSlots = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as ConstellationSlot[]
+    for (const s of allSlots) graph = addMember(graph, `filler-${s}`, s)
+    const plan = planDropSnap('editor-x', NEAR_DROP, [RUN], SNAP_DISTANCE, graph, new Map(), new Set(allSlots))
+    expect(plan.snapped).toBe(false)
+    expect(plan.graph).toBe(graph) // unchanged
+    expect(plan.layout).toEqual(NEAR_DROP) // raw drop point, not flush
+  })
+
   it("joins the run's existing slot when the run is already grouped", () => {
     const graph = addMember(emptyGraph('space-1'), 'run-1', '3')
     const store = { '3': ['run-1'] }
