@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, writeFileSync, utimesSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { resolveLiveIpcSocket } from '../editorIpc'
+import { createServer } from 'node:net'
+import { resolveLiveIpcSocket, probeSocket } from '../editorIpc'
 
 // Build a temp dir of fake vscode-ipc-*.sock files with controlled mtimes.
 // `entries` is newest-listed-first for readability; we stamp mtimes descending.
@@ -63,5 +64,31 @@ describe('resolveLiveIpcSocket', () => {
     // probe rejects the txt path if it were ever offered; it should not be
     const result = await resolveLiveIpcSocket({ dir, probe: async (p) => p.endsWith('.sock') })
     expect(result).toBe(join(dir, 'vscode-ipc-only.sock'))
+  })
+
+  it('treats a probe that throws/rejects as not-live instead of rejecting', async () => {
+    // A probe (incl. the real one, if createConnection throws synchronously on a
+    // file unlinked mid-scan) must not reject the whole Promise.all and escape the
+    // intended null fallback.
+    const dir = makeIpcDir(['vscode-ipc-a.sock', 'vscode-ipc-b.sock'])
+    dirs.push(dir)
+    const throwing = () => { throw new Error('boom') }
+    await expect(resolveLiveIpcSocket({ dir, probe: throwing })).resolves.toBeNull()
+  })
+})
+
+describe('probeSocket (real connection)', () => {
+  it('returns true for a live unix socket and false for a dead path', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ipc-probe-'))
+    dirs.push(dir)
+    const livePath = join(dir, 'live.sock')
+    const server = createServer()
+    await new Promise<void>((r) => server.listen(livePath, r))
+    try {
+      expect(await probeSocket(livePath)).toBe(true)
+      expect(await probeSocket(join(dir, 'nonexistent.sock'))).toBe(false)
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()))
+    }
   })
 })
