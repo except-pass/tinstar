@@ -294,6 +294,22 @@ export function loadSecrets(secretsDir: string): Record<string, string> {
   return secrets
 }
 
+/**
+ * Switchboard per-session token override. Returns the global secrets map UNCHANGED
+ * (same reference) when no override is supplied — so the launched env is byte-identical
+ * to pre-override behavior. When a per-session token is supplied, returns a shallow copy
+ * with `CLAUDE_CODE_OAUTH_TOKEN` overlaid on top. The override is applied at spawn time
+ * ONLY — callers must never persist the returned map (it is not written to session.json
+ * and not returned by /api/state). Never logs the token value.
+ */
+export function applyTokenOverride(
+  secrets: Record<string, string>,
+  token?: string | null,
+): Record<string, string> {
+  if (!token) return secrets
+  return { ...secrets, CLAUDE_CODE_OAUTH_TOKEN: token }
+}
+
 export function ensureDirs(config: TinstarConfig): void {
   mkdirSync(config.dirs.root, { recursive: true })
   mkdirSync(config.dirs.secrets, { recursive: true })

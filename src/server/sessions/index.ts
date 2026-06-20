@@ -1,4 +1,4 @@
-export { loadConfig, loadSecrets, ensureDirs, loadActiveSpaceId, saveActiveSpaceId, type TinstarConfig } from './config'
+export { loadConfig, loadSecrets, applyTokenOverride, ensureDirs, loadActiveSpaceId, saveActiveSpaceId, type TinstarConfig } from './config'
 export {
   createSession,
   getSession,

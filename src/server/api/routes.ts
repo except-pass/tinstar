@@ -36,6 +36,7 @@ import {
   listSessions,
   reconcileSessionStates,
   loadSecrets,
+  applyTokenOverride,
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
@@ -392,6 +393,14 @@ interface CreateSessionParams {
   view?: string
   /** Initial persisted state for a plugin session-view (run.viewData). */
   viewData?: unknown
+  /** Per-session model override (Switchboard). Launches the agent with
+   *  `--model <model>`; persisted on the session (modelOverride) so a later
+   *  `/start` re-applies it. Absent ⇒ template/global default (unchanged). */
+  model?: string
+  /** Per-session OAuth token override (Switchboard). Overlaid on the global
+   *  secrets map as CLAUDE_CODE_OAUTH_TOKEN at spawn time ONLY — never persisted
+   *  to session.json and never returned by /api/state. Absent ⇒ global token. */
+  token?: string
 }
 
 interface CreateSessionContext {
@@ -415,7 +424,7 @@ async function createSessionInternal(
     name, project, worktree = false, worktreePath,
     prompt, skipPermissions = true, cliTemplate: cliTemplateName,
     taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt,
-    view, viewData
+    view, viewData, model: modelOverride, token: tokenOverride
   } = params
 
   const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, natsTraffic, natsHealth } = ctx
@@ -511,12 +520,16 @@ async function createSessionInternal(
     nats: resolvedNats,
     appendSystemPrompt: appendSystemPrompt ?? null,
     agent: agent ?? null,
+    modelOverride: modelOverride ?? null,
   })
 
   const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
   enriched._stateDir = claudeStateDir(sessDir, name)
 
-  const sec = secrets()
+  // Switchboard token override: overlay the per-session OAuth token on top of the
+  // global secrets map for THIS launch only (spawn-time, never persisted). Inert
+  // when unset — the global secrets map is returned unchanged (byte-identical env).
+  const sec = applyTokenOverride(secrets(), tokenOverride)
   const port = await tmuxBackend.findPort(cfg.ports.hostStart)
   if (prompt) enriched.initialPrompt = prompt
 
@@ -3147,12 +3160,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!parentSession) return fail(res, 'NOT_FOUND', `Session '${parentName}' not found`)
 
       const body = await readBody(req)
-      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride } = JSON.parse(body) as {
+      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride, model: modelOverride, token: tokenOverride } = JSON.parse(body) as {
         hand: string
         prompt?: string
         orchestrator?: boolean
         repo?: string          // Override parent's project/repo
         worktreePath?: string  // Override parent's worktree path
+        model?: string         // Switchboard: per-session model override (persisted)
+        token?: string         // Switchboard: per-session OAuth token override (spawn-time only, never persisted)
       }
 
       if (!handName) {
@@ -3289,6 +3304,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         cliTemplate: cliTemplate ?? null,
         adapter: parentSession.adapter,
         nats: natsConfig,
+        modelOverride: modelOverride ?? null,
       })
 
       emitSessionEvent('managed_session.created', { name: spawnedSession.name, state: spawnedSession.state })
@@ -3296,7 +3312,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // Start the session with the combined prompt
       const enriched = spawnedSession as Session & { _stateDir?: string; initialPrompt?: string }
       enriched._stateDir = claudeStateDir(sessDir, spawnedName)
-      const sec = secrets()
+      // Switchboard token override: spawn-time-only OAuth overlay (never persisted).
+      // This is the quota-isolation use case — a spawned child can carry a distinct
+      // OAuth token so it draws from a separate quota pool. Inert when unset.
+      const sec = applyTokenOverride(secrets(), tokenOverride)
 
       const resolvedTemplate = cliTemplate
         ? cfg.cliTemplates.find(t => t.name === cliTemplate) ?? null
