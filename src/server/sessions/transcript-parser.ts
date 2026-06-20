@@ -202,6 +202,48 @@ export function readSessionStatusDetailAt(transcriptPath: string): SessionStatus
 }
 
 /**
+ * Read the model the latest assistant turn ran on, from `transcriptPath`.
+ *
+ * Sourced from the per-turn `message.model` sibling key that Claude Code writes
+ * on every `assistant` record (the same records `extractAssistantText` walks).
+ * This is a cheap tail read — no `claude` subprocess, no context-usage sidecar.
+ *
+ * Returns the most recent assistant record's `message.model`, or `null` when
+ * the file is missing, has no assistant turn yet (pre-first-response), or the
+ * model field is absent/non-string.
+ */
+export function readLatestModelAt(transcriptPath: string): string | null {
+  if (!existsSync(transcriptPath)) return null
+
+  // The model is stable across a session, so the latest assistant record in the
+  // tail is sufficient. 50 lines covers the trailing metadata flurry without a
+  // full-file read (mirrors readSessionStatusDetailAt).
+  const lines = readTail(transcriptPath, 50)
+  if (lines.length === 0) return null
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const obj = JSON.parse(lines[i]!) as Record<string, unknown>
+      if (obj.type !== 'assistant') continue
+      const message = obj.message as Record<string, unknown> | undefined
+      const model = message?.model
+      if (typeof model === 'string' && model) return model
+    } catch {
+      // Skip malformed lines
+    }
+  }
+  return null
+}
+
+/**
+ * Read the latest assistant turn's `message.model` for a session identified by
+ * its workdir + conversation id. Thin wrapper over `readLatestModelAt`.
+ */
+export function readLatestModel(workdir: string, conversationId: string, stateDir?: string): string | null {
+  return readLatestModelAt(getTranscriptPath(workdir, conversationId, stateDir))
+}
+
+/**
  * Scan `<base>/*\/<conversationId>.jsonl` for an existing transcript. Used by
  * the status watcher when a session has no recorded `workspace.path` (so we
  * can't compute the project dir directly). Returns the absolute transcript

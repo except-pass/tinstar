@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   findTranscriptByConvId,
   readSessionStatusDetailAt,
+  readLatestModelAt,
 } from '../transcript-parser'
 
 let scratch: string
@@ -114,5 +115,81 @@ describe('readSessionStatusDetailAt', () => {
       { type: 'user', message: { content: 'next prompt please' } },
     ])
     expect(readSessionStatusDetailAt(path)).toEqual({ state: 'running', toolPending: false })
+  })
+})
+
+describe('readLatestModelAt', () => {
+  it('returns null for a missing path', () => {
+    expect(readLatestModelAt(join(scratch, 'no-such.jsonl'))).toBeNull()
+  })
+
+  it('returns null for an empty transcript', () => {
+    const path = writeTranscript('-p', 'c', [])
+    expect(readLatestModelAt(path)).toBeNull()
+  })
+
+  it("reads the latest assistant turn's message.model", () => {
+    const path = writeTranscript('-p', 'c', [
+      { type: 'user', message: { content: 'hi' } },
+      {
+        type: 'assistant',
+        message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'hello' }] },
+      },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+  })
+
+  it('returns the model of the LATEST assistant turn when the model changes', () => {
+    const path = writeTranscript('-p', 'c', [
+      {
+        type: 'assistant',
+        message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'first' }] },
+      },
+      { type: 'user', message: { content: 'switch models' } },
+      {
+        type: 'assistant',
+        message: { model: 'claude-haiku-4-5', content: [{ type: 'text', text: 'second' }] },
+      },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-haiku-4-5')
+  })
+
+  it('reads the model even from an assistant turn carrying only tool_use blocks', () => {
+    const path = writeTranscript('-p', 'c', [
+      {
+        type: 'assistant',
+        message: {
+          model: 'claude-sonnet-4-5',
+          content: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }],
+        },
+      },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-sonnet-4-5')
+  })
+
+  it('returns null when there is no assistant turn yet (pre-first-response)', () => {
+    const path = writeTranscript('-p', 'c', [
+      { type: 'user', message: { content: 'first prompt, no response yet' } },
+    ])
+    expect(readLatestModelAt(path)).toBeNull()
+  })
+
+  it('returns null when an assistant turn carries no model field', () => {
+    const path = writeTranscript('-p', 'c', [
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'no model key' }] } },
+    ])
+    expect(readLatestModelAt(path)).toBeNull()
+  })
+
+  it('skips trailing non-assistant metadata to find the last assistant model', () => {
+    const path = writeTranscript('-p', 'c', [
+      {
+        type: 'assistant',
+        message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'done' }] },
+      },
+      { type: 'file-history-snapshot', snapshot: {} },
+      { type: 'user', message: { content: '<bash-input> ls</bash-input>' } },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
   })
 })

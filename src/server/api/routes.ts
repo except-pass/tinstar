@@ -20,6 +20,7 @@ import type { ErrorCode } from '../../domain/api'
 import type { TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
+import { readLatestModel, readLatestModelAt, findTranscriptByConvId } from '../sessions/transcript-parser'
 import {
   createSession,
   getSession,
@@ -909,6 +910,24 @@ function listAllSessions(ctx: RouteContext): Session[] {
   return out
 }
 
+/**
+ * Resolve a session's model from its transcript's latest-assistant
+ * `message.model` (cheap tail read; see transcript-parser.readLatestModel).
+ * Prefers computing the transcript path from `workspace.path` + convId;
+ * falls back to scanning `~/.claude/projects/*` by convId when the session
+ * has no recorded workspace (mirrors the status-watcher's path resolution).
+ * Returns null when no convId, no discoverable transcript, or no assistant
+ * turn yet (pre-first-response).
+ */
+function resolveSessionModel(session: Session): string | null {
+  const convId = session.conversation?.id
+  if (!convId) return null
+  const workdir = session.workspace?.path
+  if (workdir) return readLatestModel(workdir, convId)
+  const found = findTranscriptByConvId(convId)
+  return found ? readLatestModelAt(found) : null
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = []
@@ -1111,6 +1130,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   if (method === 'GET' && url === '/api/state') {
     const sessDir = ctx.sessionConfig?.dirs.sessions
     const sessions = sessDir ? await listSessions(sessDir) : []
+    // Additive, read-only enrichment: surface each session's latest-assistant
+    // model (cheap transcript tail read; null when no transcript/turn yet).
+    for (const session of sessions) {
+      session.model = resolveSessionModel(session)
+    }
     json(res, { ...ctx.docStore.snapshot(), sessions })
     return true
   }
@@ -2644,6 +2668,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
         } else {
           ok(res, session)
+        }
+        return true
+      }
+    }
+
+    // GET /api/sessions/:name/model — convenience single-session model pull.
+    // Sourced from the transcript's latest-assistant `message.model`, same as
+    // the /api/state enrichment. Returns { name, model } with model null when
+    // unavailable (no transcript, or no assistant turn yet).
+    if (method === 'GET' && url.startsWith('/api/sessions/') && (url.split('?')[0] ?? url).endsWith('/model')) {
+      const name = extractSessionName(url.split('?')[0] ?? url, '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session) {
+          fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
+        } else {
+          ok(res, { name, model: resolveSessionModel(session) })
         }
         return true
       }

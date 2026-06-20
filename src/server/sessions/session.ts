@@ -72,6 +72,14 @@ export interface Session {
   agent: { name: string; description: string; prompt: string } | null
   created: string
   lastActive: string
+  /**
+   * Model the session's latest assistant turn ran on (e.g. `claude-opus-4-8`),
+   * derived from the transcript's per-turn `message.model`. NOT persisted to
+   * `session.json` — it is enriched onto the snapshot the `/api/state` route
+   * returns (see routes.ts). `null` for a session with no assistant turn yet
+   * (pre-first-response) or no discoverable transcript.
+   */
+  model?: string | null
 }
 
 // --- Helpers ---
