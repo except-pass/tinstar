@@ -37,6 +37,7 @@ import {
   reconcileSessionStates,
   loadSecrets,
   applyTokenOverride,
+  validateSessionOverride,
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
@@ -433,6 +434,14 @@ async function createSessionInternal(
 
   if (getSession(sessDir, name)) {
     return { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }
+  }
+
+  // Switchboard Step 6: fail-closed launch-time guard for the per-session override.
+  // Reject a disallowed model / disabled-or-malformed token BEFORE creating the
+  // session dir or sending the tmux command. Inert when neither override is set.
+  const overrideCheck = validateSessionOverride({ model: modelOverride, token: tokenOverride }, cfg.switchboard)
+  if (!overrideCheck.ok) {
+    return { ok: false, error: { code: overrideCheck.code, message: overrideCheck.message } }
   }
 
   // Resolve project
@@ -3172,6 +3181,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       if (!handName) {
         return fail(res, 'BAD_REQUEST', 'hand field is required')
+      }
+
+      // Switchboard Step 6: fail-closed guard for a per-session override on spawn,
+      // before the child session is created or launched. Inert when unset.
+      const spawnOverrideCheck = validateSessionOverride({ model: modelOverride, token: tokenOverride }, cfg.switchboard)
+      if (!spawnOverrideCheck.ok) {
+        return fail(res, spawnOverrideCheck.code, spawnOverrideCheck.message)
       }
 
       const hand = getHandByName(handName)
