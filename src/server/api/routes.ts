@@ -439,7 +439,10 @@ async function createSessionInternal(
   // Switchboard Step 6: fail-closed launch-time guard for the per-session override.
   // Reject a disallowed model / disabled-or-malformed token BEFORE creating the
   // session dir or sending the tmux command. Inert when neither override is set.
-  const overrideCheck = validateSessionOverride({ model: modelOverride, token: tokenOverride }, cfg.switchboard)
+  const overrideCheck = validateSessionOverride(
+    { model: modelOverride, token: tokenOverride },
+    cfg.switchboard ?? { allowedModels: [], allowTokenOverride: false },
+  )
   if (!overrideCheck.ok) {
     return { ok: false, error: { code: overrideCheck.code, message: overrideCheck.message } }
   }
@@ -2753,7 +2756,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData } = JSON.parse(body)
+        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData, model, token } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         // Resolve a named hand here so the HTTP layer keeps ownership of the
@@ -2778,7 +2781,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             cliTemplate: cliTemplateName ?? resolvedHand?.cliTemplate,
             taskId, epicId, initiativeId, color: colorParam, nats,
             appendSystemPrompt: handSystemPrompt,
-            view, viewData,
+            view, viewData, model, token,
           }, createCtx)
 
           if (!result.ok) {
@@ -2786,6 +2789,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               case 'MISSING_NAME': return fail(res, 'BAD_REQUEST', result.error.message)
               case 'SESSION_EXISTS': return fail(res, 'CONFLICT', result.error.message)
               case 'PROJECT_NOT_FOUND': return fail(res, 'NOT_FOUND', result.error.message)
+              // Switchboard override guard — surface the stable code/status (not INTERNAL).
+              case 'OVERRIDE_MODEL_NOT_CONFIGURED':
+              case 'OVERRIDE_MODEL_NOT_ALLOWED':
+              case 'OVERRIDE_TOKEN_DISABLED':
+              case 'OVERRIDE_TOKEN_MALFORMED':
+                return fail(res, result.error.code as ErrorCode, result.error.message)
               default: return fail(res, 'INTERNAL', result.error.message)
             }
           }
@@ -3185,7 +3194,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       // Switchboard Step 6: fail-closed guard for a per-session override on spawn,
       // before the child session is created or launched. Inert when unset.
-      const spawnOverrideCheck = validateSessionOverride({ model: modelOverride, token: tokenOverride }, cfg.switchboard)
+      const spawnOverrideCheck = validateSessionOverride(
+        { model: modelOverride, token: tokenOverride },
+        cfg.switchboard ?? { allowedModels: [], allowTokenOverride: false },
+      )
       if (!spawnOverrideCheck.ok) {
         return fail(res, spawnOverrideCheck.code, spawnOverrideCheck.message)
       }
