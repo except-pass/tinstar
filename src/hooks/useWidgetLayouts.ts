@@ -558,7 +558,22 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string, seedLayouts
           if (seed?.has(id) || smart.has(id)) cascadeExpansion(patched, id, treeMapsRef.current)
         }
         layoutsRef.current = patched
-        queueMicrotask(() => setLayouts(patched))
+        // Apply as a FUNCTIONAL MERGE rather than a value-set. prevTreeRef has already
+        // advanced to this tree, so the missing-node detection above won't run again —
+        // if this state update were lost (clobbered by a concurrent setLayouts, e.g. a
+        // pending-run insert or a drag persist that built on an earlier snapshot), the
+        // new run would stay absent from the rendered `layouts` forever and render
+        // nothing on the canvas until Arrange regenerates everything (the reported bug:
+        // session shows in the hierarchy but not on the canvas). Merging only the newly
+        // placed ids into whatever the current state is can't be clobbered and never
+        // drops an existing entry.
+        const placed = new Map([...missing].map(id => [id, patched.get(id)!] as const))
+        queueMicrotask(() => setLayouts(prev => {
+          let changed = false
+          const next = new Map(prev)
+          for (const [id, layout] of placed) if (!next.has(id)) { next.set(id, layout); changed = true }
+          return changed ? next : prev
+        }))
       }
     }
   }
