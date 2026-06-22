@@ -59,6 +59,14 @@ describe('validateSessionOverride — token guard', () => {
     expect(validateSessionOverride({ token: PLAUSIBLE_TOKEN }, TOKEN_OK)).toEqual({ ok: true })
   })
 
+  it('rejects a non-string token as malformed without throwing (JSON can yield a number)', () => {
+    // The token comes from JSON.parse, so a caller could send {"token": 42}. It must
+    // reject cleanly, not throw on isPlausibleToken's .trim().
+    const r = validateSessionOverride({ token: 42 as unknown as string }, TOKEN_OK)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.code).toBe('OVERRIDE_TOKEN_MALFORMED')
+  })
+
   it('NEVER includes the token value in the rejection message', () => {
     const secret = 'sk-ant-oat01-SUPERSECRETVALUE' + 'z'.repeat(20)
     // malformed (contains whitespace) so it is rejected

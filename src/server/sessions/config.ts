@@ -394,8 +394,11 @@ export function validateSessionOverride(
         message: 'per-session token override is disabled (set switchboard.allowTokenOverride)',
       }
     }
-    if (!isPlausibleToken(token)) {
-      // Deliberately value-free message — never echo the token bytes.
+    // typeof guard first: the token arrives from JSON.parse, so a caller could send a
+    // non-string (e.g. {"token": 42}). Reject it as malformed rather than letting it
+    // reach isPlausibleToken's .trim() (which throws on a number → unhandled rejection
+    // in the route's async handler). Deliberately value-free message — never echo bytes.
+    if (typeof token !== 'string' || !isPlausibleToken(token)) {
       return { ok: false, code: 'OVERRIDE_TOKEN_MALFORMED', message: 'per-session token override is malformed' }
     }
   }
