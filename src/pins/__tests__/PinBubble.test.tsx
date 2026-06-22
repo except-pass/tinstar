@@ -112,16 +112,25 @@ describe('PinBubble canvas clipping', () => {
     const base = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) }
     el.getBoundingClientRect = () => ({ ...base, ...r }) as DOMRect
   }
-  function canvasWithAnchor(anchorRect: Partial<DOMRect>): HTMLElement {
+  // Append a mock canvas with an anchor inside it, tracking the canvas for teardown
+  // (RTL's cleanup() unmounts rendered components but not these hand-appended nodes).
+  const canvases: HTMLElement[] = []
+  function makeCanvas(rect: Partial<DOMRect>): HTMLElement {
     const canvas = document.createElement('div')
     canvas.setAttribute('data-testid', 'infinite-canvas')
-    mockRect(canvas, { left: 300, top: 0, right: 1000, bottom: 800, width: 700, height: 800 })
+    mockRect(canvas, rect)
     document.body.appendChild(canvas)
+    canvases.push(canvas)
+    return canvas
+  }
+  function canvasWithAnchor(anchorRect: Partial<DOMRect>): HTMLElement {
+    const canvas = makeCanvas({ left: 300, top: 0, right: 1000, bottom: 800, width: 700, height: 800 })
     const a = document.createElement('div')
     canvas.appendChild(a)
     mockRect(a, anchorRect)
     return a
   }
+  afterEach(() => { canvases.splice(0).forEach(c => c.remove()) })
 
   it('hides the bubble when its anchor is panned left of the canvas (onto the sidebar)', () => {
     // Marker center x ≈ 55, left of the canvas's left edge (300) — i.e. under the sidebar.
@@ -144,6 +153,28 @@ describe('PinBubble canvas clipping', () => {
         onReply={() => {}} onResolve={() => {}} onReopen={() => {}} />,
     )
     expect(screen.getByTestId('pin-bubble-in')).toBeTruthy()
+  })
+
+  it('clamps the bubble to the canvas rect, not the window viewport', () => {
+    // Canvas inset from the jsdom window (1024x768) on all sides, so canvas-vs-window
+    // clamping is distinguishable. Anchor near the canvas BOTTOM: the bubble must be
+    // shifted up to sit inside the CANVAS, not merely inside the window — this is the
+    // load-bearing behavior (bounds.bottom, not window.innerHeight).
+    const canvas = makeCanvas({ left: 300, top: 200, right: 700, bottom: 600, width: 400, height: 400 })
+    const a = document.createElement('div')
+    canvas.appendChild(a)
+    mockRect(a, { left: 400, top: 500, right: 410, bottom: 510, width: 10, height: 10 })
+    render(
+      <PinBubble id="clamp" comment="hi" sent canSubmit replies={[]} resolved={false}
+        anchorEl={a}
+        onCommentChange={() => {}} onDelete={() => {}} onSubmit={() => {}}
+        onReply={() => {}} onResolve={() => {}} onReopen={() => {}} />,
+    )
+    const bubble = screen.getByTestId('pin-bubble-clamp') as HTMLElement
+    // BUBBLE_H=140, MARGIN=8 → clamped to the canvas bottom: 600-140-8=452. A window
+    // clamp (innerHeight 768) would leave it at the anchor's top (500).
+    expect(bubble.style.top).toBe('452px')
+    expect(parseFloat(bubble.style.left)).toBeGreaterThanOrEqual(300) // within canvas
   })
 })
 

@@ -2101,6 +2101,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     <div
       ref={containerRef}
       tabIndex={-1}
+      // LOAD-BEARING testid: PinBubble (portaled to <body>, position:fixed) finds this
+      // element via closest('[data-testid="infinite-canvas"]') to clip/clamp the note
+      // to the canvas viewport. Renaming/removing it silently reverts the bubble to a
+      // window-viewport fallback, letting a panned-off note spill onto the sidebar.
       data-testid="infinite-canvas"
       data-dragging={draggingNodeId ? 'true' : undefined}
       data-pin-dragging={pinDragging ? 'true' : undefined}
