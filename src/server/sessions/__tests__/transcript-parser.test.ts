@@ -227,4 +227,32 @@ describe('readLatestModelAt — caching + sticky model', () => {
     // model is picked up rather than serving the stale cached value.
     expect(readLatestModelAt(path)).toBe('claude-haiku-4-5')
   })
+
+  it('surfaces a new model after a sticky-null window (stickiness never wrongly pins)', () => {
+    const path = writeTranscript('-p', 'unstick', [
+      { type: 'assistant', message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'a' }] } },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+
+    // Push the assistant out of the window → sticky 'opus'.
+    appendFileSync(path, Array.from({ length: 60 }, (_, i) =>
+      JSON.stringify({ type: 'user', message: { content: `n${i}` } })).join('\n') + '\n')
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+
+    // A new assistant turn lands at the tail with a different model — must surface
+    // the NEW model, not stay pinned to the sticky old one.
+    appendFileSync(path, JSON.stringify({
+      type: 'assistant', message: { model: 'claude-haiku-4-5', content: [{ type: 'text', text: 'b' }] },
+    }) + '\n')
+    expect(readLatestModelAt(path)).toBe('claude-haiku-4-5')
+  })
+
+  it('forgets the cached model when the transcript is deleted (ENOENT)', () => {
+    const path = writeTranscript('-p', 'gone', [
+      { type: 'assistant', message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'x' }] } },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+    rmSync(path)
+    expect(readLatestModelAt(path)).toBeNull()
+  })
 })

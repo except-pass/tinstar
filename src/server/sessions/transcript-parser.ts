@@ -230,9 +230,15 @@ export function readLatestModelAt(transcriptPath: string): string | null {
   let st: { mtimeMs: number; size: number }
   try {
     st = statSync(transcriptPath)
-  } catch {
-    modelCache.delete(transcriptPath) // file gone ⇒ forget any cached model
-    return null
+  } catch (err) {
+    // A genuinely missing file ⇒ forget any cached model and report null. A transient
+    // stat error (EACCES/EIO) must NOT evict a good cached model — that would flicker
+    // the UI to "—", the very thing the sticky cache exists to prevent — so keep it.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      modelCache.delete(transcriptPath)
+      return null
+    }
+    return modelCache.get(transcriptPath)?.model ?? null
   }
 
   const cached = modelCache.get(transcriptPath)

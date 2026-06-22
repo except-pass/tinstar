@@ -2705,10 +2705,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     {
       // Strict match on exactly /api/sessions/:name/model (one path segment for the
       // name) so a deeper path like /api/sessions/foo/files/model can't masquerade
-      // as a model pull. extractSessionName would have stopped at the first slash.
+      // as a model pull. The captured segment is used raw (no decode) to resolve the
+      // session identically to the sibling /api/sessions/:name/* routes, which use
+      // extractSessionName (a raw slice).
       const modelMatch = method === 'GET' && (url.split('?')[0] ?? url).match(/^\/api\/sessions\/([^/]+)\/model$/)
       if (modelMatch) {
-        const name = decodeURIComponent(modelMatch[1]!)
+        const name = modelMatch[1]!
         const session = getSession(sessDir, name)
         if (!session) {
           fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
