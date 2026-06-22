@@ -1,0 +1,16 @@
+{
+  "name": "model-attribution",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.tsx",
+  "tinstar": {
+    "apiVersion": "5",
+    "displayName": "Model Attribution",
+    "description": "Which model each session is running, cc-quota headroom, and fleet cost-by-model",
+    "contributes": {
+      "widgets": [
+        { "type": "model-attribution", "label": "Models", "defaultSize": { "width": 420, "height": 340 }, "spawn": "palette", "capabilities": ["spawnable"], "creator": "standalone" }
+      ]
+    }
+  }
+}
