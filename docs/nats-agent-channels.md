@@ -166,6 +166,27 @@ This enables both broadcast and private messaging:
 - Messages to the task channel → everyone on the task sees them
 - Messages to an agent's direct channel → only that agent sees them (DM)
 
+#### Task-less agents are DM-only
+
+Agents that aren't seated in a specific task — the marshal, the remote-control
+agent, ad-hoc standalone sessions — resolve only to a space (or epic/initiative).
+They get a **DM-only inbox**: their own exact direct subject with `_` filling the
+unresolved levels, e.g.
+
+```
+tinstar.my-space._._._.lone-wolf      ← a space-only agent's DM inbox
+```
+
+They deliberately do **not** get a level wildcard such as `tinstar.my-space.>`.
+That wildcard would funnel every task broadcast in the subtree into an un-seated
+agent — a scope leak. The DM subject above is byte-identical to what the
+publisher builds for that agent, so senders can still reach it directly, and if
+the agent is later reassigned to a task its subscriptions hot-swap to the
+two-tier task model. A supervisor that genuinely needs broad visibility must opt
+in explicitly by passing a `subscriptions` list at session-creation time
+(`computeNatsSubscriptions` only ever produces the safe default). See
+`src/server/sessions/nats-subscriptions.ts`.
+
 ### Publishing Patterns
 
 | Target | Publish to |

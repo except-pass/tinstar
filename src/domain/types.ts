@@ -210,6 +210,31 @@ export interface EditorWidget {
   size?: { width: number; height: number }
 }
 
+/** DOM context captured when a browser note is dropped (best-effort; absent ⇒ coords-only). */
+export interface BrowserNoteTarget {
+  tag: string                          // 'h2', 'img', 'button', …
+  selector?: string                    // best-effort CSS selector
+  text?: string                        // trimmed nearby text (≤120 chars)
+  imageSrc?: string                    // un-proxied src when the target is an <img>
+  imageAlt?: string
+  within?: { x: number; y: number }    // normalized 0..1 position inside the element
+}
+
+/** A positioned annotation on a page shown in a browser widget. Submitted to the
+ *  attached session via POST /api/sessions/:name/enter-prompt; sentAt marks delivery. */
+export interface BrowserNote {
+  id: string
+  url: string                          // page URL the note was placed on
+  comment: string
+  x: number                            // anchor in page-document CSS px
+  y: number
+  nx: number                           // normalized 0..1 against document size
+  ny: number
+  target?: BrowserNoteTarget
+  createdAt: number
+  sentAt?: number                      // undefined = unsent
+}
+
 export interface BrowserWidget {
   id: string
   spaceId?: string
@@ -218,6 +243,8 @@ export interface BrowserWidget {
   title?: string
   color?: string
   headers?: Record<string, string>
+  /** Positioned page annotations (see BrowserNote). Persisted via PATCH like url/headers. */
+  notes?: BrowserNote[]
   /** Optional initial canvas placement seed. Honored by the layout system only
    *  when the widget's node has no layout yet (first appearance / fresh hydration);
    *  once placed it flows into `config.ui.layouts` like every other widget, and

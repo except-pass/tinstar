@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, type Review } from './reviews'
+import { parseReviewList, parseReviewShow, sortReviews, applyOptimisticAction, actionArgv, pickBootstrapSource, sessionIdFromCreate, cockpitState, pickFleetSessions, fleetRow, fleetOpenTotalDistinct, nudgePrompt, nudgeResult, type Review } from './reviews'
 
 const row = (o: Partial<Review> & { id: number }): Review => ({ status: 'done', verdict: 'P', closed: false, commit_subject: 's', branch: 'b', ...o })
 
@@ -63,4 +63,95 @@ describe('sessionIdFromCreate', () => {
   it('returns null when no name/id', () => {
     expect(sessionIdFromCreate({ ok: true, data: {} })).toBeNull()
   })
+})
+
+describe('cockpitState', () => {
+  const base = { sessionId: 's', installed: true as boolean | null, error: null as string | null, reviews: [] as Review[] }
+  it('no-session before a session exists', () => {
+    expect(cockpitState({ ...base, sessionId: '' }).kind).toBe('no-session')
+  })
+  it('not-installed when the which probe failed (trumps a transient error)', () => {
+    expect(cockpitState({ ...base, installed: false, error: 'spawn roborev ENOENT' }).kind).toBe('not-installed')
+  })
+  it('probing while the install probe is unresolved and nothing else is known', () => {
+    expect(cockpitState({ ...base, installed: null }).kind).toBe('probing')
+  })
+  it('empty (not probing) once installed is confirmed with zero reviews', () => {
+    expect(cockpitState({ ...base, installed: true }).kind).toBe('empty')
+  })
+  it('error when installed but the list call failed and there are no reviews', () => {
+    expect(cockpitState({ ...base, error: 'roborev list failed' })).toEqual({ kind: 'error', message: 'roborev list failed' })
+  })
+  it('list (with open count) whenever reviews exist, even mid-probe or with a stale error', () => {
+    const reviews = [row({ id: 2, closed: false }), row({ id: 1, closed: true })]
+    expect(cockpitState({ ...base, installed: null, error: 'blip', reviews })).toEqual({ kind: 'list', reviews, open: 1 })
+  })
+})
+
+describe('pickFleetSessions', () => {
+  it('keeps real sessions with a worktree, drops shell/cockpit helpers', () => {
+    const state = { sessions: [
+      { name: 'a', project: 'p', cliTemplate: 'claude-code', workspace: { path: '/w/a' } },
+      { name: 'sh', project: 'p', cliTemplate: 'shell', workspace: { path: '/w/sh' } },
+      { name: 'tui', cliTemplate: 'roborev-tui', workspace: { path: '/w/tui' } },
+      { name: 'nows', project: 'p', cliTemplate: 'claude-code' },
+    ] }
+    expect(pickFleetSessions(state)).toEqual([{ sessionId: 'a', project: 'p', worktree: '/w/a' }])
+  })
+})
+
+describe('fleetRow', () => {
+  const s = { sessionId: 'a', project: 'p', worktree: '/w/a' }
+  it('counts open + failed from the open-review list', () => {
+    const reviews = [row({ id: 1, status: 'failed' }), row({ id: 2, status: 'done' }), row({ id: 3, status: 'failed' })]
+    expect(fleetRow(s, reviews)).toEqual({ ...s, open: 3, failed: 2 })
+  })
+  it('marks open=null when the probe failed', () => {
+    expect(fleetRow(s, null)).toEqual({ ...s, open: null, failed: 0 })
+  })
+})
+
+describe('fleetOpenTotalDistinct', () => {
+  const s = { sessionId: 'a', project: 'p', worktree: '/w/a', failed: 0 }
+  it('sums once per distinct worktree (no double-count for co-located sessions)', () => {
+    expect(fleetOpenTotalDistinct([
+      { ...s, sessionId: 'a', worktree: '/w/shared', open: 4 },
+      { ...s, sessionId: 'b', worktree: '/w/shared', open: 4 }, // same worktree, same findings
+      { ...s, sessionId: 'c', worktree: '/w/other', open: 2 },
+    ])).toBe(6) // 4 (shared, counted once) + 2 (other), not 10
+  })
+  it('treats probe failures as 0', () => {
+    expect(fleetOpenTotalDistinct([{ ...s, worktree: '/w/a', open: null }])).toBe(0)
+  })
+  it('is order-independent: a null-open row cannot shadow a successful sibling', () => {
+    const nullFirst = [
+      { ...s, sessionId: 'a', worktree: '/w/shared', open: null },
+      { ...s, sessionId: 'b', worktree: '/w/shared', open: 5 },
+    ]
+    expect(fleetOpenTotalDistinct(nullFirst)).toBe(5)
+    expect(fleetOpenTotalDistinct([...nullFirst].reverse())).toBe(5)
+  })
+})
+
+describe('nudgePrompt', () => {
+  it('personalizes the open count and encodes the one-at-a-time workflow', () => {
+    const p = nudgePrompt(7)
+    expect(p).toContain('(7 open)')
+    expect(p).toContain('one at a time')
+    expect(p).toContain('roborev close <job>')
+  })
+  it('steers away from `roborev refine` (Will fixes backlogs by hand)', () => {
+    expect(nudgePrompt(1)).toContain('Do not run `roborev refine`')
+  })
+})
+
+describe('nudgeResult', () => {
+  it('sent on an ok response', () => { expect(nudgeResult({ ok: true })).toBe('sent') })
+  it('busy when the agent was mid-task (CONFLICT)', () => {
+    expect(nudgeResult({ ok: false, error: { code: 'CONFLICT', message: 'session-not-ready' } })).toBe('busy')
+  })
+  it('error on any other failure', () => {
+    expect(nudgeResult({ ok: false, error: { code: 'INTERNAL', message: 'boom' } })).toBe('error')
+  })
+  it('error on a malformed body', () => { expect(nudgeResult(null)).toBe('error') })
 })

@@ -121,8 +121,92 @@ Each `widgets[]` entry accepts:
 | `singleton` | boolean | no | If `true`, the host rejects spawning a second instance per space. |
 | `spawn` | `'palette' \| 'palette+context'` | no | Default `'palette'`. `'palette+context'` is reserved for entity-drag shortcuts in V5.2+; entries currently render greyed and non-draggable in the palette. |
 | `snappable` | boolean | no | Whether the widget participates in canvas snapping (drag-to-snap, the `[+]` grow affordance, snap-on-create). Non-container leaf widgets snap by default; set `false` to opt out. Containers never snap. |
+| `anchors` | `Array<{ name: string; x: number; y: number }>` | no | Named attachment points used for anchor snapping. `x` and `y` are fractions of the widget's width/height in `[0, 1]`. Omit to use the 8 defaults. Only relevant when `snappable` is `true` (or implicitly true). See [Anchor points](#anchor-points) below. |
 
 If `activate()` registers a widget type not in the manifest, the host logs a warning and accepts it. If the manifest declares one not actually registered at runtime, the host quietly drops the stale entry.
+
+### Anchor points
+
+Anchor points are the named snap-attachment sites on a widget. When a user drags one snappable widget near another the host aligns the closest pair of anchor points; the `attach` spawn parameter (see [`Spawning with attach`](../agent-api.md#spawning-with-attach) in the agent API) lets agents name the exact pair to use.
+
+**Default anchors (used when `anchors` is omitted):**
+
+| Name | Position |
+|---|---|
+| `top-left` | top-left corner |
+| `top-center` | top edge, horizontal center |
+| `top-right` | top-right corner |
+| `middle-left` | left edge, vertical center |
+| `middle-right` | right edge, vertical center |
+| `bottom-left` | bottom-left corner |
+| `bottom-center` | bottom edge, horizontal center |
+| `bottom-right` | bottom-right corner |
+
+There is no center anchor by default.
+
+**Declaring a custom anchor set** lets you name the attachment points that make sense for your widget's geometry — e.g. a timeline widget that should snap to an exact tick mark, or a widget with an asymmetric header. Declare them in the manifest:
+
+```jsonc
+{
+  "tinstar": {
+    "contributes": {
+      "widgets": [
+        {
+          "type": "my-timeline",
+          "label": "Timeline",
+          "snappable": true,
+          "anchors": [
+            { "name": "header-right",  "x": 1.0, "y": 0.08 },
+            { "name": "header-left",   "x": 0.0, "y": 0.08 },
+            { "name": "bottom-center", "x": 0.5, "y": 1.0  }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+`x` and `y` are fractions of the widget's rendered width/height, both in `[0, 1]`. `(0, 0)` is the top-left corner; `(1, 1)` is the bottom-right.
+
+A declared `anchors` array replaces the full default set — the 8 defaults are not merged in. Anchor `name` values are arbitrary strings; they must be unique within the widget type and non-empty.
+
+> **Note:** Custom anchor sets are validated and stored by the host, but are **not yet honored** by drag-to-snap or the `attach` spawn parameter — both currently operate on the 8 default anchors. Custom declarations are forward-looking; this is reserved for a future release.
+
+### Plugin server (health + start)
+
+A plugin that ships its own backend (a server the plugin's browser widget points at —
+e.g. whoachart, stretchplan) can declare a `server` block in its `tinstar` manifest. The
+host then shows a **status light** on the plugin's WIDGETS-palette tile and can fire the
+start command when the backend is down.
+
+```jsonc
+"tinstar": {
+  "displayName": "Whoachart",
+  "server": {
+    "health": "curl -sf localhost:5180/healthz",  // required; exit 0 = up (like Docker HEALTHCHECK)
+    "start":  "bun run start",                      // optional; host fires it fire-and-forget
+    "cwd":    "..",                                 // optional; relative to this package.json's dir; default "."
+    "healthTimeoutMs": 3000                          // optional; default 3000
+  }
+}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `health` | yes | Shell command. Exit 0 = up; any non-zero exit or a timeout = down. Run host-side in `cwd`, cached ~4s. |
+| `start` | no | Shell command the host spawns detached. stdout/stderr → `<config>/plugin-servers/<id>.log`. Omit to make the dot status-only (no Start button). |
+| `cwd` | no | Working dir for `health`/`start`, relative to the plugin's package directory. Default `"."`. Use `".."` when the manifest lives in `<repo>/tinstar-plugin` but the server runs from `<repo>`. |
+| `healthTimeoutMs` | no | Health-command timeout in ms. Default `3000`. |
+
+**Status dot:** green = up · red = down · amber = checking/starting. Click it for a popover;
+when down with a `start` command it offers **Start server** and a **View log** link.
+
+**Trust note:** this is the first host-side **declared-shell execution** for plugins — a
+deliberate, modest extension of the otherwise frontend-only plugin model. It stays inside the
+existing trust boundary: only plugins already listed in `~/.config/tinstar/plugins.json` are
+eligible, the same trust level as plugin code that already runs in-realm with full DOM/network
+access. Server resolution is **external-plugins-only** in this release.
 
 ---
 

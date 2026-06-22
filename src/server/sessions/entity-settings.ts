@@ -55,13 +55,20 @@ function buildAncestorChain(
     if (!task) return []
     chain.push({ settings: task.settings, type: 'task', name: task.name })
 
+    // Resolve the initiative through the epic when the task is parented under
+    // one — a task seated in an epic usually carries no direct initiativeId, so
+    // fall back to the epic's initiative or the initiative tier is dropped.
+    let initiativeId = task.initiativeId
     if (task.epicId) {
       const epic = docStore.getEpic(task.epicId)
-      if (epic) chain.push({ settings: epic.settings, type: 'epic', name: epic.name })
+      if (epic) {
+        chain.push({ settings: epic.settings, type: 'epic', name: epic.name })
+        if (!initiativeId) initiativeId = epic.initiativeId
+      }
     }
 
-    if (task.initiativeId) {
-      const init = docStore.getInitiative(task.initiativeId)
+    if (initiativeId) {
+      const init = docStore.getInitiative(initiativeId)
       if (init) chain.push({ settings: init.settings, type: 'initiative', name: init.name })
     }
   } else if (entityType === 'epic') {

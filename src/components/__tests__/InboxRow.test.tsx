@@ -48,19 +48,19 @@ const runAttentionRow: InboxRowData = {
 
 describe('InboxRow', () => {
   it('shows the name as the headline, plus task path / worktree', () => {
-    render(<InboxRow row={baseRow} onClick={() => {}} onClear={() => {}} />)
+    render(<InboxRow row={baseRow} onClick={() => {}} onClose={() => {}} />)
     expect(screen.getByText('agent-build')).toBeInTheDocument()       // headline = name
     expect(screen.getByText(/canvas-v5/)).toBeInTheDocument()
     expect(screen.getByText(/plugin-widget-spawn/)).toBeInTheDocument()
   })
 
   it('surfaces the attention reason in the subline for plugin rows', () => {
-    render(<InboxRow row={baseRow} onClick={() => {}} onClear={() => {}} />)
+    render(<InboxRow row={baseRow} onClick={() => {}} onClose={() => {}} />)
     expect(screen.getByText('Build failed')).toBeInTheDocument()
   })
 
   it('shows the session status as an upper-right dot (not the headline)', () => {
-    render(<InboxRow row={runRow} onClick={() => {}} onClear={() => {}} />)
+    render(<InboxRow row={runRow} onClick={() => {}} onClose={() => {}} />)
     // The run NAME is the headline...
     expect(screen.getByText('tailscale')).toBeInTheDocument()
     // ...and the status is conveyed by the dot's label/color, not visible text.
@@ -71,20 +71,20 @@ describe('InboxRow', () => {
   })
 
   it('surfaces run attention text when a run is waiting on the user', () => {
-    render(<InboxRow row={runAttentionRow} onClick={() => {}} onClear={() => {}} />)
+    render(<InboxRow row={runAttentionRow} onClick={() => {}} onClose={() => {}} />)
     expect(screen.getByText('Ready for input')).toBeInTheDocument()
     expect(screen.getByTestId('inbox-row-dot-tailscale-ready')).toHaveAttribute('aria-label', 'Ready for input')
   })
 
   it('uses the attention level for the dot when there is no session status', () => {
-    render(<InboxRow row={baseRow} onClick={() => {}} onClear={() => {}} />)
+    render(<InboxRow row={baseRow} onClick={() => {}} onClose={() => {}} />)
     expect(screen.getByTestId('inbox-row-dot-agent-build').className).toMatch(/bg-red-500/)
-    render(<InboxRow row={{ ...baseRow, widgetId: 'x', attention: { ...baseRow.attention!, level: 'info' } }} onClick={() => {}} onClear={() => {}} />)
+    render(<InboxRow row={{ ...baseRow, widgetId: 'x', attention: { ...baseRow.attention!, level: 'info' } }} onClick={() => {}} onClose={() => {}} />)
     expect(screen.getByTestId('inbox-row-dot-x').className).toMatch(/bg-slate-400/)
   })
 
   it('renders an avatar for run rows', () => {
-    render(<InboxRow row={runRow} onClick={() => {}} onClear={() => {}} />)
+    render(<InboxRow row={runRow} onClick={() => {}} onClose={() => {}} />)
     // AgentIcon renders either an <img> or the procedural-avatar placeholder span.
     const placeholder = screen.queryByTestId('agent-icon-placeholder')
     const img = document.querySelector('img')
@@ -92,39 +92,44 @@ describe('InboxRow', () => {
   })
 
   it('unread rows render the name bolder than read rows', () => {
-    const { rerender } = render(<InboxRow row={baseRow} onClick={() => {}} onClear={() => {}} />)
+    const { rerender } = render(<InboxRow row={baseRow} onClick={() => {}} onClose={() => {}} />)
     expect(screen.getByText('agent-build').className).toMatch(/font-semibold/)
-    rerender(<InboxRow row={{ ...baseRow, unread: false }} onClick={() => {}} onClear={() => {}} />)
+    rerender(<InboxRow row={{ ...baseRow, unread: false }} onClick={() => {}} onClose={() => {}} />)
     expect(screen.getByText('agent-build').className).not.toMatch(/font-semibold/)
   })
 
   it('highlights when selected', () => {
-    const { rerender } = render(<InboxRow row={runRow} selected={false} onClick={() => {}} onClear={() => {}} />)
+    const { rerender } = render(<InboxRow row={runRow} selected={false} onClick={() => {}} onClose={() => {}} />)
     expect(screen.getByTestId('inbox-row-tailscale')).not.toHaveAttribute('data-selected')
-    rerender(<InboxRow row={runRow} selected onClick={() => {}} onClear={() => {}} />)
+    rerender(<InboxRow row={runRow} selected onClick={() => {}} onClose={() => {}} />)
     expect(screen.getByTestId('inbox-row-tailscale')).toHaveAttribute('data-selected', 'true')
   })
 
   it('clicking the row body calls onClick with widgetId', () => {
     const onClick = vi.fn()
-    render(<InboxRow row={baseRow} onClick={onClick} onClear={() => {}} />)
+    render(<InboxRow row={baseRow} onClick={onClick} onClose={() => {}} />)
     fireEvent.click(screen.getByTestId('inbox-row-agent-build'))
     expect(onClick).toHaveBeenCalledWith('agent-build')
   })
 
-  it('shows a clear button only for rows with attention', () => {
-    const { rerender } = render(<InboxRow row={baseRow} onClick={() => {}} onClear={() => {}} />)
-    expect(screen.getByTestId('inbox-row-clear-agent-build')).toBeInTheDocument()
-    rerender(<InboxRow row={runRow} onClick={() => {}} onClear={() => {}} />)
-    expect(screen.queryByTestId('inbox-row-clear-tailscale')).not.toBeInTheDocument()
+  it('shows a close button only for stopped run rows', () => {
+    const stoppedRun: InboxRowData = { ...runRow, widgetId: 'gone', sourceLabel: 'gone', status: 'stopped' }
+    const { rerender } = render(<InboxRow row={stoppedRun} onClick={() => {}} onClose={() => {}} />)
+    expect(screen.getByTestId('inbox-row-close-gone')).toBeInTheDocument()
+    // Running/idle runs and plugin rows never get the close ×.
+    rerender(<InboxRow row={runRow} onClick={() => {}} onClose={() => {}} />)
+    expect(screen.queryByTestId('inbox-row-close-tailscale')).not.toBeInTheDocument()
+    rerender(<InboxRow row={baseRow} onClick={() => {}} onClose={() => {}} />)
+    expect(screen.queryByTestId('inbox-row-close-agent-build')).not.toBeInTheDocument()
   })
 
-  it('clicking the × calls onClear (stops row click)', () => {
+  it('clicking the × calls onClose (stops row click)', () => {
     const onClick = vi.fn()
-    const onClear = vi.fn()
-    render(<InboxRow row={baseRow} onClick={onClick} onClear={onClear} />)
-    fireEvent.click(screen.getByTestId('inbox-row-clear-agent-build'))
-    expect(onClear).toHaveBeenCalledWith('agent-build')
+    const onClose = vi.fn()
+    const stoppedRun: InboxRowData = { ...runRow, widgetId: 'gone', sourceLabel: 'gone', status: 'stopped' }
+    render(<InboxRow row={stoppedRun} onClick={onClick} onClose={onClose} />)
+    fireEvent.click(screen.getByTestId('inbox-row-close-gone'))
+    expect(onClose).toHaveBeenCalledWith('gone')
     expect(onClick).not.toHaveBeenCalled()
   })
 })

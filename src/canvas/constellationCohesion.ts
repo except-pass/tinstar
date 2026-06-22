@@ -1,3 +1,5 @@
+import { ADJACENCY_TOL } from './snapConstants'
+
 export interface Point { x: number; y: number }
 export interface Rect { x: number; y: number; width: number; height: number }
 
@@ -87,7 +89,7 @@ function seamPoint(a: Rect, b: Rect, tolerance: number): { x: number; y: number 
  * "break the lock" affordance should sit. Each link carries the pair of widget ids it joins
  * so breaking it can split exactly that seam.
  */
-export function computeBreakLinks(items: IdRect[], tolerance = 20): BreakLink[] {
+export function computeBreakLinks(items: IdRect[], tolerance = ADJACENCY_TOL): BreakLink[] {
   const links: BreakLink[] = []
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
@@ -105,7 +107,7 @@ export function computeBreakLinks(items: IdRect[], tolerance = 20): BreakLink[] 
  * The blocked edge comes from the seam orientation (via seamInfo), so it stays correct even
  * when widgets are resized into very wide/tall shapes.
  */
-export function occupiedEdgesOf(target: IdRect, others: IdRect[], tolerance = 20): Set<CohesionEdge> {
+export function occupiedEdgesOf(target: IdRect, others: IdRect[], tolerance = ADJACENCY_TOL): Set<CohesionEdge> {
   const edges = new Set<CohesionEdge>()
   for (const o of others) {
     if (o.id === target.id) continue
@@ -129,7 +131,7 @@ export interface LinkBreakPlan {
  * widget left behind on the keep side is freed too (no 1-member constellations). Returns empty
  * arrays when the cut doesn't disconnect anything (still joined via other seams).
  */
-export function planLinkBreak(items: IdRect[], aId: string, bId: string, tolerance = 20): LinkBreakPlan {
+export function planLinkBreak(items: IdRect[], aId: string, bId: string, tolerance = ADJACENCY_TOL): LinkBreakPlan {
   const adj = new Map<string, Set<string>>()
   for (const it of items) adj.set(it.id, new Set())
   for (let i = 0; i < items.length; i++) {

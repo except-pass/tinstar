@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ComponentType, ReactNode } from 'react'
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
-import { parseReviewList, sortReviews, applyOptimisticAction, actionArgv, type Review, type ReviewAction } from './reviews'
+import { parseReviewList, sortReviews, applyOptimisticAction, actionArgv, cockpitState, type Review, type ReviewAction } from './reviews'
 
 interface WidgetData { launched?: boolean }
 const POLL_MS = 4000
@@ -15,6 +15,9 @@ export function makeCockpitAccessory(api: TinstarPluginAPI): ComponentType {
     const [data, setData] = api.widget.useData<WidgetData>()
     const [reviews, setReviews] = useState<Review[]>([])
     const [error, setError] = useState<string | null>(null)
+    // null = probe unresolved; gates a clear "roborev not installed" pane instead
+    // of a cryptic exec error or a blank list.
+    const [installed, setInstalled] = useState<boolean | null>(null)
     const sessionId = term.sessionId || ''
     const nodeId = api.constellations.useMyNodeId()
     const dataRef = useRef(data)
@@ -29,7 +32,18 @@ export function makeCockpitAccessory(api: TinstarPluginAPI): ComponentType {
         .catch((e) => { setError((e as Error).message); launchedSessions.delete(nodeId) })
     }, [sessionId, nodeId, setData, term])
 
-    // 2. Poll review data via exec (runs in the session's worktree → branch-scoped).
+    // 2. Probe once whether roborev is on PATH for this session, so a missing
+    //    binary shows an actionable pane instead of a cryptic exec error.
+    useEffect(() => {
+      if (!sessionId) return
+      let cancelled = false
+      term.exec(['which', 'roborev'])
+        .then(({ code }) => { if (!cancelled) setInstalled(code === 0) })
+        .catch(() => { if (!cancelled) setInstalled(false) })
+      return () => { cancelled = true }
+    }, [sessionId, term])
+
+    // 3. Poll review data via exec (runs in the session's worktree → branch-scoped).
     const refetch = useCallback(async () => {
       if (!sessionId) return
       try {
@@ -54,28 +68,66 @@ export function makeCockpitAccessory(api: TinstarPluginAPI): ComponentType {
       } catch (e) { setError((e as Error).message) } finally { void refetch() }
     }, [term, refetch])
 
-    if (!sessionId) return <Pane>{error ? <Err msg={error} /> : <Muted>Starting roborev…</Muted>}</Pane>
-    const open = reviews.filter((r) => !r.closed).length
-    return (
-      <Pane>
-        <div style={{ fontSize: 11, color: '#94a3b8', padding: '6px 8px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>● {open} open</div>
-        {error && <Err msg={error} />}
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {reviews.map((r) => (
-            <Row key={r.id} r={r}
-              onClose={() => act(r.id, r.closed ? 'reopen' : 'close')}
-              onComment={() => { const m = window.prompt('Comment:'); if (m) void act(r.id, 'comment', m) }} />
-          ))}
-          {reviews.length === 0 && <Muted>No reviews for this branch.</Muted>}
-        </div>
-      </Pane>
-    )
+    const view = cockpitState({ sessionId, installed, error, reviews })
+    switch (view.kind) {
+      case 'no-session':
+        return <Pane><Muted>Starting roborev…</Muted></Pane>
+      case 'probing':
+        return <Pane><Muted>Checking roborev…</Muted></Pane>
+      case 'not-installed':
+        return (
+          <Pane>
+            <Notice title="roborev not installed">
+              The <Code>roborev</Code> CLI isn’t on PATH for this session, so there’s nothing to
+              show. Install it, then reopen the cockpit.
+            </Notice>
+          </Pane>
+        )
+      case 'error':
+        return (
+          <Pane>
+            <Err msg={view.message} />
+            <Muted>roborev is installed but this command failed. Check the terminal pane for details.</Muted>
+          </Pane>
+        )
+      case 'empty':
+        return (
+          <Pane>
+            <Header open={0} />
+            <Muted>No reviews yet for this branch. Commits are reviewed automatically after you commit (needs the post-commit hook: <Code>roborev install-hook</Code>).</Muted>
+          </Pane>
+        )
+      case 'list':
+        return (
+          <Pane>
+            <Header open={view.open} />
+            {error && <Err msg={error} />}
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {view.reviews.map((r) => (
+                <Row key={r.id} r={r}
+                  onClose={() => act(r.id, r.closed ? 'reopen' : 'close')}
+                  onComment={() => { const m = window.prompt('Comment:'); if (m) void act(r.id, 'comment', m) }} />
+              ))}
+            </div>
+          </Pane>
+        )
+    }
   }
 }
 
 function Pane({ children }: { children: ReactNode }) { return <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0b1220' }}>{children}</div> }
 function Muted({ children }: { children: ReactNode }) { return <div style={{ padding: 8, fontSize: 12, color: '#64748b' }}>{children}</div> }
 function Err({ msg }: { msg: string }) { return <div style={{ padding: 8, fontSize: 11, color: '#f87171' }}>{msg}</div> }
+function Header({ open }: { open: number }) { return <div style={{ fontSize: 11, color: '#94a3b8', padding: '6px 8px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>● {open} open</div> }
+function Code({ children }: { children: ReactNode }) { return <code style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, color: '#cbd5e1', background: 'rgba(255,255,255,0.06)', padding: '1px 4px', borderRadius: 3 }}>{children}</code> }
+function Notice({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div style={{ padding: 10 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: '#fbbf24', marginBottom: 4 }}>⚠ {title}</div>
+      <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>{children}</div>
+    </div>
+  )
+}
 
 function Row({ r, onClose, onComment }: { r: Review; onClose: () => void; onComment: () => void }) {
   const dot = r.status === 'failed' ? '#f87171' : r.status === 'running' ? '#fbbf24' : r.status === 'queued' ? '#64748b' : '#34d399'

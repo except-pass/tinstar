@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   emptyGraph, addSnap, removeSnap, snapNeighbors,
   addMember, removeMember, slotsForNode, nodesInSlot,
-  planBreak,
+  planBreak, migrateSnapEdges,
 } from './constellationGraph'
 import { nextFreeSlot } from '../hooks/useConstellationGraph'
 
@@ -18,7 +18,7 @@ describe('constellationGraph', () => {
     let g = emptyGraph('s')
     g = addSnap(g, 'b', 'a')
     g = addSnap(g, 'a', 'b') // reverse + duplicate
-    expect(g.snapped).toEqual([['a', 'b']])
+    expect(g.snapped).toEqual([{ nodes: ['a', 'b'] }])
     expect(snapNeighbors(g, 'a')).toEqual(['b'])
     expect(snapNeighbors(g, 'b')).toEqual(['a'])
   })
@@ -29,6 +29,7 @@ describe('constellationGraph', () => {
     expect(g.snapped).toEqual([])
     expect(snapNeighbors(g, 'a')).toEqual([])
   })
+
 
   it('member edges drive slot derivation', () => {
     let g = emptyGraph('s')
@@ -84,5 +85,40 @@ describe('constellationGraph', () => {
     for (const id of plan.removeFromSlot) next = removeMember(next, id, '1')
     expect(nodesInSlot(next, '1')).toEqual([])
     expect(nextFreeSlot(next)).toBe('1')
+  })
+})
+
+describe('structured snap edges', () => {
+  it('addSnap stores canon-ordered nodes and aligns the anchor pair to canon order', () => {
+    const g = addSnap(emptyGraph('s'), 'b-node', 'a-node', ['top-left', 'top-right'])
+    expect(g.snapped[0]!.nodes).toEqual(['a-node', 'b-node'])
+    expect(g.snapped[0]!.anchors).toEqual(['top-right', 'top-left'])
+  })
+  it('addSnap without anchors leaves anchors undefined', () => {
+    const g = addSnap(emptyGraph('s'), 'x', 'y')
+    expect(g.snapped[0]).toEqual({ nodes: ['x', 'y'] })
+  })
+  it('addSnap is idempotent on nodes (ignores anchor differences)', () => {
+    let g = addSnap(emptyGraph('s'), 'x', 'y', ['top-left', 'top-left'])
+    g = addSnap(g, 'x', 'y', ['bottom-left', 'bottom-left'])
+    expect(g.snapped.length).toBe(1)
+  })
+  it('removeSnap and snapNeighbors work on structured edges', () => {
+    let g = addSnap(emptyGraph('s'), 'x', 'y', ['top-left', 'top-right'])
+    expect(snapNeighbors(g, 'x')).toEqual(['y'])
+    g = removeSnap(g, 'x', 'y')
+    expect(g.snapped).toEqual([])
+  })
+})
+
+describe('migrateSnapEdges', () => {
+  it('upgrades legacy [a,b] tuples to { nodes }', () => {
+    const legacy = { spaceId: 's', snapped: [['b', 'a']], members: [] } as any
+    const g = migrateSnapEdges(legacy)
+    expect(g.snapped[0]).toEqual({ nodes: ['a', 'b'] })
+  })
+  it('passes structured edges through unchanged', () => {
+    const g0 = addSnap(emptyGraph('s'), 'x', 'y', ['top-left', 'top-right'])
+    expect(migrateSnapEdges(g0).snapped).toEqual(g0.snapped)
   })
 })

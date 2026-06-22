@@ -13,7 +13,15 @@ describe('isSnappable', () => {
   it('snappable:false opts a non-container out', () => {
     expect(isSnappable({ isContainer: false, snappable: false })).toBe(false)
   })
-  it('an undefined registration is not snappable (defensive — call sites pass registry lookups)', () => {
-    expect(isSnappable(undefined)).toBe(false)
+})
+
+describe('isSnappable fail-open', () => {
+  it('treats an unknown/unregistered widget as snappable (closes the spawn race)', () => {
+    expect(isSnappable(undefined)).toBe(true)
+  })
+  it('still excludes containers and explicit opt-outs', () => {
+    expect(isSnappable({ isContainer: true })).toBe(false)
+    expect(isSnappable({ isContainer: false, snappable: false })).toBe(false)
+    expect(isSnappable({ isContainer: false })).toBe(true)
   })
 })

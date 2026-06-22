@@ -157,6 +157,20 @@ describe('file-editor snaps to session on create', () => {
       JSON.stringify({ ui: { layouts: { [`tinstar-layouts-v3-${SPACE_ID}`]: entries } } }))
   }
 
+  it('snapToSession:false opts out — editor created with no membership and no seeded position', async () => {
+    // Interactive drops pass this so the client owns drop-point-driven snapping.
+    const p = writeSource(t.tmpRoot, 'free.ts', 'export const free = 1')
+    const editor = (await (await t.fetch('/api/editor-widgets', { method: 'POST', body: JSON.stringify({ sessionId: SESSION_ID, filePath: p, snapToSession: false }) })).json()).data
+    expect(editor.id).toBeDefined()
+    expect(editor.position).toBeUndefined()
+    const graph = t.docStore.getConstellationGraph(SPACE_ID)
+    // No server-side snap means no graph was even written, or the editor isn't a member.
+    if (graph) {
+      expect(slotsForNode(graph, editor.id).length).toBe(0)
+      expect(snapNeighbors(graph, editor.id)).not.toContain(SESSION_NODE_ID)
+    }
+  })
+
   it('seeds a tiled position after the session right edge (full browser parity)', async () => {
     // Session occupies x:0..1000. The editor tiles right after it.
     writeLayouts({ [SESSION_NODE_ID]: { x: 0, y: 0, width: 1000, height: 600 } })

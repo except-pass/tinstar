@@ -1,6 +1,6 @@
 {
   "name": "tinstar",
-  "version": "5.1.0",
+  "version": "5.2.0",
   "workspaces": [
     "packages/*"
   ],
@@ -38,6 +38,7 @@
     "preview": "vite preview",
     "stable": "npm run build:all && node bin/tinstar.js --no-open",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.e2e.json && tsc --noEmit -p tsconfig.test.json",
+    "lint": "eslint .",
     "test:unit": "vitest run --exclude='e2e/**'",
     "test:e2e": "playwright test",
     "tauri": "tauri",
@@ -64,6 +65,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
+    "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "squarify": "^1.1.0"
   },

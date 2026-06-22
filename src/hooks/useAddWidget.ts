@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { apiFetch } from '../apiClient'
-import { flushPosition } from '../canvas/snapZoneResolver'
+import { flushPosition, EDGE_ANCHORS } from '../canvas/snapZoneResolver'
 import type { SnapEdge } from '../canvas/snapZoneResolver'
 import { composeAddWidgetMembership } from '../canvas/addWidgetMembership'
 import type { ConstellationGraph } from '../domain/constellationGraph'
@@ -40,7 +40,7 @@ export function useAddWidget(deps: AddWidgetDeps) {
     // Plan membership from the latest graph at apply time (not a render-time
     // snapshot captured before the create POST), and persist it atomically.
     const applyMembership = (newNodeId: string) =>
-      updateConstellation(g => composeAddWidgetMembership(g, sourceNodeId, newNodeId))
+      updateConstellation(g => composeAddWidgetMembership(g, sourceNodeId, newNodeId, EDGE_ANCHORS[edge]))
 
     if (entry.creator === 'session-backed') {
       // A session-backed PLUGIN entry is a session-view: the new run renders it

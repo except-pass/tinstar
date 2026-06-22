@@ -4,11 +4,21 @@ import { findNodeLabel } from '../domain/view-models'
 import { CanvasContextMenu } from './CanvasContextMenu'
 import { buildMoveTargets } from '../domain/moveTargets'
 import { relocateWidgetTo } from '../domain/relocateWidget'
+import { moveSnapWidgetTo } from '../domain/moveSnapWidget'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
-import { useWidgetLayouts } from '../hooks/useWidgetLayouts'
+import { useWidgetLayouts, preserveCohesion, MIN_WIDTH, MIN_HEIGHT } from '../hooks/useWidgetLayouts'
 import { useSelection } from './SelectionProvider'
 import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
 import { getWidgetComponent, toWidgetType, isSnappable } from '../widgets/widgetComponentRegistry'
+import { useConfig } from '../context/ConfigContext'
+import {
+  DEFAULT_WIDGET_SIZE_PRESETS,
+  computePresetSize,
+  resolveAspect,
+  resolvePresetSizes,
+  matchPreset,
+  type SizePreset,
+} from '../widgets/widgetSizePresets'
 import { resolveRunViewType } from '../domain/runView'
 import type { GroupWidgetData } from '../widgets/widgetComponentRegistry'
 import { useCanvasHotkeys } from '../hotkeys/useCanvasHotkeys'
@@ -22,23 +32,35 @@ import { PluginWidgetDisabledPlaceholder } from './PluginWidgetDisabledPlacehold
 import { getOrCreatePluginChromeWrapper } from './PluginWidgetChrome'
 import { CanvasSidebar } from './CanvasSidebar/CanvasSidebar'
 import { apiFetch } from '../apiClient'
+import { usePinSet } from '../hooks/usePinSet'
+import type { Pin } from '../domain/pinSet'
+import { resolveBackingSession } from '../canvas/resolveBackingSession'
 import { EV } from '../lib/windowEvents'
 import { ConstellationChrome } from '../canvas/ConstellationChrome'
 import type { Rect, IdRect } from '../canvas/constellationCohesion'
 import { applyGroupDrag, boundingBoxOf, fitToRect, occupiedEdgesOf } from '../canvas/constellationCohesion'
-import { tidyGrid } from '../canvas/tidyArrange'
+import { tidyGridClusters, mergeUnitsByConstellation, packBlocksRow } from '../canvas/tidyArrange'
+import { clusterGroups } from '../canvas/clusterize'
 import type { DragMember } from '../canvas/constellationCohesion'
 import { reflowOnResize, type ReflowRect, type ReflowMember } from '../canvas/resizeReflow'
+import { replyInstructions, threadSoFar } from '../pins/replyPrompt'
 
 /** Shared empty set so unsnapped widgets reuse one reference (all four [+] edges shown). */
 const EMPTY_EDGES: ReadonlySet<SnapEdge> = new Set()
+
+/** Unique pin id, mirroring the browser's note-id style (`note-<ts36>-<rand>`). */
+const makePinId = (): string => `pin-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 import { SnapZoneOverlay } from '../canvas/SnapZoneOverlay'
+import { ConstellationLinks } from '../canvas/ConstellationLinks'
+import { buildConstellationLinks } from '../canvas/constellationLinkGeometry'
+import { FreeDragHint } from './FreeDragHint'
 import { resolveSnapTarget, revalidateSnapTarget, resolveSnapCommit, snapMembership } from '../canvas/snapZoneResolver'
 import type { SnapWidget, SnapTarget, SnapEdge } from '../canvas/snapZoneResolver'
 import { AddWidgetPicker } from './AddWidgetPicker'
 import { useWidgetCatalog } from '../hooks/useWidgetCatalog'
 import { useAddWidget } from '../hooks/useAddWidget'
 import { composeAddWidgetMembership } from '../canvas/addWidgetMembership'
+import { planDropSnap } from '../canvas/dropLayout'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import { RunNodeCapabilities } from './RunNodeCapabilities'
 
@@ -72,6 +94,15 @@ interface Props {
   forceMarshalOpen?: boolean
 }
 
+/** Glyphs for built-in (non-plugin) leaf widgets in the "Move widget here" menu.
+ *  Mirrors HierarchySidebar's WORK_WIDGET_META so the iconography matches. Runs are
+ *  handled separately (procedural robot face); plugin widgets use their catalog icon. */
+const BUILTIN_WIDGET_GLYPH: Record<string, string> = {
+  'file-editor': '📄',
+  'browser-widget': '🌐',
+  'image-viewer': '🖼️',
+}
+
 /** Extract entity type and ID from a tree node ID like "initiative-abc123" */
 function parseNodeId(nodeId: string): { type: string; entityId: string } | null {
   const dash = nodeId.indexOf('-')
@@ -96,11 +127,19 @@ function buildParentMap(nodes: TreeNode[], parentId: string | null = null): Map<
 function collectSnappableLeafIds(nodes: TreeNode[]): string[] {
   const result: string[] = []
   for (const node of nodes) {
-    if (isSnappable(getWidgetComponent(toWidgetType(node.type)))) {
-      result.push(node.id)
-    } else {
+    const hasChildren = Array.isArray(node.children) && node.children.length > 0
+    if (hasChildren) {
       result.push(...collectSnappableLeafIds(node.children))
+      continue
     }
+    // Leaf node: snappable unless its (present) registration opts out / is a container.
+    // isSnappable fails open for a missing registration (the spawn race). Empty
+    // containers CAN reach here as leaves (filterEmptyNodes is conditional on
+    // showEmptyEntities, and hidden-run pruning can empty a container afterward) —
+    // but every host container type registers with isContainer:true, so isSnappable
+    // rejects them via the registration check. Fail-open therefore only admits
+    // genuinely unregistered (spawn-race) widget types, which are never host containers.
+    if (isSnappable(getWidgetComponent(toWidgetType(node.type)))) result.push(node.id)
   }
   return result
 }
@@ -118,64 +157,13 @@ function collectSelectedNodes(nodes: TreeNode[], selectedIds: Set<string>): Tree
   return result
 }
 
-const TREEMAP_HEADER_H = 32  // h-8 drag handle on all container widgets
-const TREEMAP_PAD = 8        // inner padding around children
-
-/**
- * Compute treemap layouts for a set of nodes within a bounding rect.
- * Places nodes in an aspect-ratio-aware grid, then recurses into containers.
- * Returns a flat Map<nodeId, layout> covering every node in the subtree.
- * Work widgets (non-containers) preserve their existing size; only position changes.
- */
-function computeTreemapLayouts(
-  nodes: TreeNode[],
-  x: number, y: number, w: number, h: number,
-  gap: number,
-  currentLayouts?: Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>,
-): Map<string, import('../hooks/useWidgetLayouts').WidgetLayout> {
-  const result = new Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>()
-  const n = nodes.length
-  if (n === 0 || w <= 0 || h <= 0) return result
-
-  // Aspect-ratio-aware column count: cells will be as square as possible
-  const R = Math.max(0.2, Math.min(5, w / h))
-  const cols = Math.max(1, Math.round(Math.sqrt(n * R)))
-  const rows = Math.ceil(n / cols)
-  const cellW = (w - gap * (cols + 1)) / cols
-  const cellH = (h - gap * (rows + 1)) / rows
-
-  for (let i = 0; i < n; i++) {
-    const node = nodes[i]!
-    const col = i % cols
-    const row = Math.floor(i / cols)
-    const nx = Math.round(x + gap + col * (cellW + gap))
-    const ny = Math.round(y + gap + row * (cellH + gap))
-
-    const isContainer = getWidgetComponent(toWidgetType(node.type))?.isContainer
-    if (isContainer) {
-      // Containers: resize to fit the grid cell
-      result.set(node.id, { x: nx, y: ny, width: Math.round(cellW), height: Math.round(cellH) })
-      if (node.children.length > 0 && cellW > 120 && cellH > 80) {
-        const childGap = Math.max(6, Math.floor(gap * 0.6))
-        const innerX = nx + TREEMAP_PAD
-        const innerY = ny + TREEMAP_HEADER_H
-        const innerW = cellW - TREEMAP_PAD * 2
-        const innerH = cellH - TREEMAP_HEADER_H - TREEMAP_PAD
-        const childLayouts = computeTreemapLayouts(node.children, innerX, innerY, innerW, innerH, childGap, currentLayouts)
-        for (const [id, layout] of childLayouts) result.set(id, layout)
-      }
-    } else {
-      // Work widgets: preserve existing size, only update position
-      const existing = currentLayouts?.get(node.id)
-      const width = existing?.width ?? 1560
-      const height = existing?.height ?? 1410
-      result.set(node.id, { x: nx, y: ny, width, height })
-    }
-  }
-
-  return result
+/** All ids in a subtree (self + every descendant), so a container and its runs
+ *  pack as one rigid block. */
+function collectSubtreeIds(node: TreeNode): string[] {
+  const ids = [node.id]
+  for (const child of node.children) ids.push(...collectSubtreeIds(child))
+  return ids
 }
-
 
 interface MarqueeRect {
   startX: number
@@ -187,6 +175,26 @@ interface MarqueeRect {
 const MARQUEE_THRESHOLD = 5
 // Snap-zone snap distance (canvas units)
 const SNAP_DISTANCE = 60
+
+// Build the richest available descriptor for any pin shape (native capture or
+// browser flat blob). Exported for unit testing; used in the batched send-all
+// prompt so each bullet carries meaningful context rather than bare coordinates.
+export function describePinSpot(p: Pin): string {
+  const c = p.context as { capture?: { label?: string }; url?: string; target?: { text?: string; imageAlt?: string; tag?: string } } | undefined
+  if (c?.capture?.label) return c.capture.label
+  if (c?.url) {
+    const el = c.target?.text || c.target?.imageAlt || c.target?.tag
+    return el ? `${el} — ${c.url}` : c.url
+  }
+  return `${Math.round(p.nx * 100)}%,${Math.round(p.ny * 100)}%`
+}
+
+/** Floor a widget's own minSize to the global layout floor that updateRunSize
+ *  actually enforces, so preset sizes (and the active-state match) agree with
+ *  what gets stored. */
+function effectiveMinSize(min: { width: number; height: number }) {
+  return { width: Math.max(MIN_WIDTH, min.width), height: Math.max(MIN_HEIGHT, min.height) }
+}
 
 export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), browserWidgetMap = new Map(), imageWidgetMap = new Map(), pluginWidgetMap = new Map(), focusRunId, activeSpaceId, onFocusHandled, onSelectRun, onFocusRun, onDeleteEntity, onMenuOpen, onRequestCreateSession, onTaskUpdate, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated, arrangeGridRef, arrangeResetRef, arrangeSwimlanesRef, zoomToFitRunsRef, panToRunsRef, forceMarshalOpen }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -232,7 +240,27 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     batchSetLayouts,
   } = useWidgetLayouts(tree, activeSpaceId, placementSeed)
   const { camera, setCamera, cursorStyle, spaceHeld, handleWheel, startPan, movePan, endPan, centerOn } = useCanvasCamera()
+  const appConfig = useConfig()
+  // Merge over defaults so a partial persisted config (missing aspectByType)
+  // can't crash resolveAspect in the canvas render path.
+  const sizePresets = { ...DEFAULT_WIDGET_SIZE_PRESETS, ...(appConfig?.ui.widgetSizePresets ?? {}) }
   const { select, toggleSelect, selectMany, deselect, isSelected, state: selectionState } = useSelection()
+
+  // Container size tracked via ResizeObserver — avoids getBoundingClientRect in the render body
+  // (which forces a layout flush on every render, including 60fps pan).
+  const [containerSize, setContainerSize] = useState<{ width: number; height: number } | null>(null)
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const measure = () => {
+      const r = el.getBoundingClientRect()
+      setContainerSize({ width: r.width, height: r.height })
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // Drag state
   const draggingRunRef = useRef<string | null>(null)
@@ -244,6 +272,24 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const snapPreviewRef = useRef<SnapTarget | null>(null)
   const draggedSnapRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
   const lastUnsnappedDragPositionRef = useRef<{ x: number; y: number } | null>(null)
+
+  // Safety net for the iframe-pointer guard ([data-dragging] in the CSS): the
+  // normal drag-end path clears draggingNodeId, but a shell Escape-cancel does
+  // NOT call onDragEnd, so without this the guard could stick and freeze iframes.
+  // Clear on Escape (immediately) and on any pointer release (idempotent on the
+  // normal path, which already nulled it). UI-only — never affects snap commit.
+  useEffect(() => {
+    const clear = () => setDraggingNodeId(prev => (prev === null ? prev : null))
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') clear() }
+    window.addEventListener('pointerup', clear)
+    window.addEventListener('pointercancel', clear)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerup', clear)
+      window.removeEventListener('pointercancel', clear)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [])
 
   // File-drag overlay: shows a full-canvas drop target when a tinstar-editor drag enters,
   // so the terminal iframe doesn't swallow the drop
@@ -623,14 +669,38 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // Track alt key state globally so drag-start can read it even though onDragStart
   // receives only nodeId (no pointer event). Use a ref so it doesn't cause re-renders.
   const altKeyRef = useRef(false)
+  // Reactive mirror of altKeyRef, used only to flip the free-drag hint label
+  // live as Alt is pressed/released mid-drag. Kept separate from the ref so the
+  // drag-start/snap logic stays render-independent.
+  const [altPressed, setAltPressed] = useState(false)
   useEffect(() => {
-    const onDown = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyRef.current = true }
-    const onUp = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyRef.current = false }
-    window.addEventListener('keydown', onDown)
-    window.addEventListener('keyup', onUp)
+    const sync = (alt: boolean) => {
+      altKeyRef.current = alt
+      // Functional bail-out: pointermove fires constantly, so only re-render when
+      // the value actually flips (React skips the render when the updater returns
+      // the same reference).
+      setAltPressed(prev => (prev === alt ? prev : alt))
+    }
+    // Keyboard gives the snappiest response while the pointer is still. But a lone
+    // Alt tap activates the browser menu bar, and after a couple taps the menu
+    // grabs focus and swallows further Alt keydowns before they reach window —
+    // leaving altKeyRef stuck and free-drag unresponsive. So we ALSO derive Alt
+    // from pointer events, whose `altKey` modifier is authoritative and always
+    // fires during a drag. Capture phase so the ref is fresh before the widget's
+    // bubble-phase onMove reads it; this self-heals any keyboard desync the moment
+    // the pointer moves (which, mid-drag, is always).
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Alt') sync(true) }
+    const onKeyUp = (e: KeyboardEvent) => { if (e.key === 'Alt') sync(false) }
+    const onPointer = (e: PointerEvent) => sync(e.altKey)
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('pointerdown', onPointer, true)
+    window.addEventListener('pointermove', onPointer, true)
     return () => {
-      window.removeEventListener('keydown', onDown)
-      window.removeEventListener('keyup', onUp)
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('pointerdown', onPointer, true)
+      window.removeEventListener('pointermove', onPointer, true)
     }
   }, [])
 
@@ -643,6 +713,118 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   // Constellation context — must be declared before widget drag callbacks that reference it
   const constellations = useConstellationContext()
 
+  // ── Pins ──────────────────────────────────────────────────────────────────
+  // Universal per-node canvas pins (one PinSet per space). The iframe pointer
+  // guard is raised during place/reposition drags so dragging over browser/
+  // terminal iframe widgets doesn't swallow the pointer stream.
+  const pinSet = usePinSet(activeSpaceId ?? '')
+  const [pinDragging, setPinDragging] = useState(false)
+  const pinCtx = useMemo(
+    () => ({ slotsForNode: constellations.slotsForNode, nodesInSlot: constellations.nodesInSlot }),
+    [constellations.slotsForNode, constellations.nodesInSlot],
+  )
+
+  const submitPin = useCallback(
+    async (pinId: string, nodeId: string, freshComment: string) => {
+      const pin = pinSet.set.pins.find(p => p.id === pinId)
+      if (!pin) return
+      const sessionId = resolveBackingSession(nodeId, pinCtx)
+      if (!sessionId) return // button is disabled in this state; guard anyway
+      const label = findNodeLabel(tree, nodeId) ?? nodeId
+      // Use the FRESH comment from the bubble draft, not pin.comment — the store
+      // update is async and pin.comment still holds the pre-edit value this tick.
+      const comment = freshComment || '(no comment)'
+      // Native-widget pins carry a semantic capture of what was under the marker
+      // (browser pins use their own richer format via formatBrowserPin instead).
+      const captureLabel = (pin.context?.capture as { label?: string } | undefined)?.label
+      const where = captureLabel ? `${label} — on "${captureLabel}"` : label
+      const prompt = `📍 New note on ${where} — ${comment}\n\n${replyInstructions(pinId, window.location.origin)}`
+      try {
+        const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        })
+        const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
+        if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
+        pinSet.update(pinId, p => ({ ...p, comment: freshComment, sentAt: Date.now() }))
+      } catch (err) {
+        console.warn('[pins] submit failed:', err)
+      }
+    },
+    [pinSet, pinCtx, tree],
+  )
+
+  // Batch-submit every UNSENT pin on a node as one prompt, then mark them all sent.
+  const sendAllPins = useCallback(
+    async (nodeId: string) => {
+      const sessionId = resolveBackingSession(nodeId, pinCtx)
+      if (!sessionId) return // button is disabled in this state; guard anyway
+      const widgetPins = pinSet.forNode(nodeId).filter(p => !p.sentAt)
+      if (widgetPins.length === 0) return
+      const label = findNodeLabel(tree, nodeId) ?? nodeId
+      const bullets = widgetPins.map(p =>
+        `• on "${describePinSpot(p)}" — ${p.comment || '(no comment)'}`
+      ).join('\n')
+      const prompt = `📍 ${widgetPins.length} pins on ${label}:\n${bullets}`
+      try {
+        const res = await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        })
+        const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
+        if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
+        for (const p of widgetPins) pinSet.update(p.id, x => ({ ...x, sentAt: Date.now() }))
+      } catch (err) {
+        console.warn('[pins] send-all failed:', err)
+      }
+    },
+    [pinSet, pinCtx, tree],
+  )
+
+  // Remove every pin on a node (no confirm — matches the original toolbar's clear-all).
+  const clearAllPins = useCallback(
+    (nodeId: string) => {
+      pinSet.clearNode(nodeId)
+    },
+    [pinSet],
+  )
+
+  // Append a user follow-up to a note's thread, then re-prompt the agent with the
+  // thread so far so it replies again (server owns the replies array).
+  const replyToPin = useCallback(
+    async (pinId: string, nodeId: string, text: string) => {
+      const sessionId = resolveBackingSession(nodeId, pinCtx)
+      if (!sessionId) return
+      try {
+        await apiFetch(`/api/notes/${encodeURIComponent(pinId)}/replies`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, author: 'user' }),
+        })
+      } catch (err) { console.warn('[pins] reply persist failed:', err); return }
+      const pin = pinSet.set.pins.find(p => p.id === pinId)
+      const label = findNodeLabel(tree, nodeId) ?? nodeId
+      const history = pin ? `${threadSoFar(pin)}\n[user] ${text}` : `[user] ${text}`
+      const prompt = `📍 Follow-up on note ${label}:\n\n${history}\n\n${replyInstructions(pinId, window.location.origin)}`
+      try {
+        await apiFetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        })
+      } catch (err) { console.warn('[pins] reply re-prompt failed:', err) }
+    },
+    [pinSet, pinCtx, tree],
+  )
+
+  const resolvePinCb = useCallback((pinId: string) => {
+    pinSet.update(pinId, p => ({ ...p, resolvedAt: Date.now() }))
+  }, [pinSet])
+
+  const reopenPinCb = useCallback((pinId: string) => {
+    pinSet.update(pinId, p => { const { resolvedAt: _d, ...rest } = p; return rest })
+  }, [pinSet])
+
   // ── Add-widget picker + orchestrator ──────────────────────────────────────
   const { entries: catalog } = useWidgetCatalog()
   const [addPicker, setAddPicker] = useState<{ sourceNodeId: string; edge: SnapEdge; anchor: { x: number; y: number } } | null>(null)
@@ -651,23 +833,40 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const DEFAULT_FOR: Record<string, string> = { 'saloon': 'run-workspace', 'run-workspace': 'browser-widget' }
   const GLOBAL_DEFAULT = 'run-workspace'
 
-  // nodeId → widget type, used to resolve the picker's smart default.
-  const nodeTypeById = useMemo(() => {
-    const map = new Map<string, string>()
+  // nodeId → node, used to resolve the picker's smart default and move-target icons.
+  const nodeById = useMemo(() => {
+    const map = new Map<string, TreeNode>()
     const walk = (nodes: TreeNode[]) => {
-      for (const n of nodes) { map.set(n.id, n.type); walk(n.children) }
+      for (const n of nodes) { map.set(n.id, n); walk(n.children) }
     }
     walk(tree)
     return map
   }, [tree])
+  // nodeId → widget type, used to resolve the picker's smart default.
+  const nodeTypeById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const [id, n] of nodeById) map.set(id, n.type)
+    return map
+  }, [nodeById])
+
+  // Plugin widget icons (URLs) keyed by widget type, for the move-target menu.
+  const pluginIconByType = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const e of catalog) if (e.pluginId && e.icon) map.set(e.type, e.icon)
+    return map
+  }, [catalog])
 
   // ── Right-click "Move widget here" context menu ───────────────────────────
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; canvasX: number; canvasY: number } | null>(null)
 
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    // Empty-space only: right-click on a widget falls through to the native /
-    // future per-widget menu (do NOT preventDefault before this guard).
-    if ((e.target as HTMLElement).closest('[data-widget-id]')) return
+    // Show the move-here menu on empty canvas AND on container entities
+    // (initiative/epic/task) — their box is a sensible "move a widget into this
+    // region" target. Leaf content widgets (runs, terminals, browsers, editors)
+    // keep their own/native right-click, so fall through for those. Don't
+    // preventDefault before this guard.
+    const widgetEl = (e.target as HTMLElement).closest('[data-widget-id]') as HTMLElement | null
+    if (widgetEl && !getWidgetComponent(widgetEl.getAttribute('data-widget-type') ?? '')?.isContainer) return
     e.preventDefault()
     // Screen→canvas conversion — verbatim from handleDrop's drop-point math.
     const rect = containerRef.current!.getBoundingClientRect()
@@ -681,8 +880,25 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       isContainer: (id) => !!getWidgetComponent(toWidgetType(nodeTypeById.get(id) ?? ''))?.isContainer,
       labelOf: (id) => findNodeLabel(tree, id) ?? id,
       slotsOf: (id) => constellations.slotsForNode(id).map(Number).filter((n) => !Number.isNaN(n)),
+      iconOf: (id) => {
+        const node = nodeById.get(id)
+        if (!node) return undefined
+        // Run workspaces → the procedural robot face (seeded by run id, tinted by
+        // status color) — matches the sidebar's run chip.
+        if (node.type === 'run') return { seed: node.entityId, color: node.color }
+        // Plugin widgets carry their own icon URL; built-in widgets use their glyph.
+        const pluginIcon = pluginIconByType.get(node.type)
+        if (pluginIcon) return { icon: pluginIcon }
+        const glyph = BUILTIN_WIDGET_GLYPH[node.type]
+        return glyph ? { icon: glyph } : undefined
+      },
     }),
-    [tree, layouts, nodeTypeById, constellations],
+    [tree, layouts, nodeTypeById, nodeById, pluginIconByType, constellations],
+  )
+
+  const moveTargetsForPicker = useMemo(
+    () => (addPicker ? moveTargets.filter(t => t.id !== addPicker.sourceNodeId) : []),
+    [moveTargets, addPicker],
   )
 
   const relocateWidget = useCallback((id: string) => {
@@ -791,6 +1007,20 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     return neighbors
   }, [layouts])
 
+  // Place a just-created widget (dropped from a sidebar) at its drop point and, best-effort,
+  // snap+join the nearest constellation member within range — the drop-time equivalent of
+  // releasing a manual drag. Membership is created only when the widget actually sits flush,
+  // so a file dropped onto its run snaps into that run's constellation while one dropped on
+  // empty canvas stays free. Shared by the editor and image drop paths.
+  const applyDropSnap = useCallback((nodeId: string, dropRect: Rect) => {
+    const plan = planDropSnap(
+      nodeId, dropRect, collectSnapNeighbors(nodeId), SNAP_DISTANCE,
+      constellations.graph, slotByNode, occupiedSlots,
+    )
+    insertLayout(nodeId, plan.layout)
+    if (plan.graph !== constellations.graph) constellations.applyGraph(plan.graph)
+  }, [collectSnapNeighbors, constellations, slotByNode, occupiedSlots, insertLayout])
+
   // Widget drag callbacks
   // Resize re-snap: snapshot the resized widget + its constellation co-members at resize-start,
   // then on resize-end shift members flush against the new size (push when grown, pull when
@@ -820,6 +1050,47 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     const moves = reflowOnResize({ start: snap.start, final: { width, height }, members: snap.members })
     for (const [id, pos] of moves) updateRunPosition(id, pos.x, pos.y)
   }, [updateRunPosition])
+
+  /** Resize a widget to an S/M/L preset: viewport-relative size, per-type aspect,
+   *  applied through the same resize path a drag uses (persist + cascade + re-snap). */
+  const applySizePreset = useCallback(
+    (nodeId: string, widgetType: string, preset: SizePreset) => {
+      const el = containerRef.current
+      const layout = getLayout(nodeId)
+      if (!el || !layout) return
+      const rect = el.getBoundingClientRect()
+      const viewport = { width: rect.width / camera.zoom, height: rect.height / camera.zoom }
+
+      const reg = getWidgetComponent(widgetType)
+      const minSize = effectiveMinSize(reg?.minSize ?? { width: MIN_WIDTH, height: MIN_HEIGHT })
+      const aspect = resolveAspect(sizePresets, widgetType)
+      const size = computePresetSize(viewport, sizePresets[preset], aspect, minSize)
+
+      const resize = reg?.isContainer ? resizeNode : updateRunSize
+      // Mirror a drag-resize gesture so the constellation re-settles identically.
+      handleResizeStart(nodeId)
+      resize(nodeId, size.width, size.height)
+      handleResizeEnd(nodeId, size.width, size.height)
+
+      // Keep the widget within the visible viewport (top-left anchored).
+      // Skip for constellation members: handleResizeEnd already reflowed them
+      // relative to the anchor's original position — nudging the anchor afterward
+      // would desync the other members.
+      const inConstellation = constellations.slotsForNode(nodeId).length > 0
+      if (!inConstellation) {
+        const vx = -camera.x / camera.zoom
+        const vy = -camera.y / camera.zoom
+        let nx = layout.x
+        let ny = layout.y
+        if (nx + size.width > vx + viewport.width) nx = Math.max(vx, vx + viewport.width - size.width)
+        if (ny + size.height > vy + viewport.height) ny = Math.max(vy, vy + viewport.height - size.height)
+        if (Math.round(nx) !== layout.x || Math.round(ny) !== layout.y) {
+          updateRunPosition(nodeId, Math.round(nx), Math.round(ny))
+        }
+      }
+    },
+    [camera, sizePresets, resizeNode, updateRunSize, updateRunPosition, getLayout, handleResizeStart, handleResizeEnd, constellations],
+  )
 
   const handleWidgetDragStart = useCallback((nodeId: string) => {
     draggingRunRef.current = nodeId
@@ -901,12 +1172,12 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       const commit = resolveSnapCommit(validatedPreview, slotByNode, occupiedSlots)
       if (commit.kind === 'join' && validatedPreview) {
         let next = applyAssign(constellations.graph, commit.slot, nodeId)
-        next = addSnap(next, nodeId, validatedPreview.targetId)
+        next = addSnap(next, nodeId, validatedPreview.targetId, validatedPreview.anchors)
         constellations.applyGraph(next)
       } else if (commit.kind === 'form') {
         let next = applyAssign(constellations.graph, commit.slot, nodeId)
         next = applyAssign(next, commit.slot, commit.withId)
-        next = addSnap(next, nodeId, commit.withId)
+        next = addSnap(next, nodeId, commit.withId, validatedPreview?.anchors)
         constellations.applyGraph(next)
       } else {
         const unsnapped = lastUnsnappedDragPositionRef.current
@@ -968,6 +1239,10 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     if (snapEligible && layout) {
       const neighbors = collectSnapNeighbors(nodeId)
       preview = resolveSnapTarget(nodeId, { x: newX, y: newY, width: layout.width, height: layout.height }, neighbors, SNAP_DISTANCE)
+      if (import.meta.env.DEV && !preview) {
+        // eslint-disable-next-line no-console
+        console.debug('[snap] no target', { nodeId, candidates: neighbors.length, snapDistance: SNAP_DISTANCE })
+      }
       const membership = preview ? snapMembership(preview.targetId, slotByNode, occupiedSlots) : null
       if (preview && membership?.kind !== 'full-slots') {
         finalX = preview.x
@@ -994,7 +1269,18 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     }
   }, [collectSnapNeighbors, updateRunPosition, layouts, constellations, slotByNode, occupiedSlots])
 
-  // Grid arrange: treemap-style nested layout filling the viewport
+  // Rigid snap-clusters derived from the current layouts + snap graph. Passed to
+  // preserveCohesion so each arrange path keeps snap-attached widgets as one block.
+  const computeClusterGroups = useCallback(() => {
+    const rects = Array.from(layouts, ([id, l]) => ({ id, x: l.x, y: l.y, width: l.width, height: l.height }))
+    return clusterGroups(rects, constellations.graph)
+  }, [layouts, constellations.graph])
+
+  // Grid arrange: pack every top-level block (a run, a browser, a snapped
+  // constellation, or a whole task container with its runs) into a tidy,
+  // non-overlapping row grid at its real size. Each block moves rigidly so
+  // snapped formations and container nesting are preserved and nothing lands on
+  // top of another widget.
   const arrangeGrid = useCallback(() => {
     const el = containerRef.current
     if (!el) return
@@ -1009,15 +1295,29 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     }
     if (rootNodes.length === 0) return
 
-    // Viewport in canvas coords
+    // Viewport top-left + width in canvas coords — pack within the current view,
+    // wrapping downward as it fills.
     const vx = -camera.x / camera.zoom
     const vy = -camera.y / camera.zoom
     const vw = rect.width / camera.zoom
-    const vh = rect.height / camera.zoom
 
-    const newLayouts = computeTreemapLayouts(rootNodes, vx, vy, vw, vh, 20, layouts)
-    batchSetLayouts(newLayouts)
-  }, [camera, selectionState, tree, batchSetLayouts])
+    // One unit per top-level subtree; snap edges and constellation-slot
+    // membership then fuse units that belong together (e.g. an orphan browser
+    // snapped to a run, or a session + widget sharing a constellation slot).
+    const units = rootNodes.map(n => collectSubtreeIds(n).filter(id => layouts.has(id)))
+    const rectById = new Map(
+      Array.from(layouts, ([id, l]) => [id, { x: l.x, y: l.y, width: l.width, height: l.height }]),
+    )
+    const blocks = mergeUnitsByConstellation(units, rectById, constellations.graph)
+    const positions = packBlocksRow(blocks, { x: vx, y: vy }, vw, 40)
+
+    const updates = new Map<string, import('../hooks/useWidgetLayouts').WidgetLayout>()
+    for (const [id, p] of positions) {
+      const l = layouts.get(id)
+      if (l) updates.set(id, { ...l, x: p.x, y: p.y })
+    }
+    if (updates.size > 0) batchSetLayouts(updates)
+  }, [camera, selectionState, tree, layouts, batchSetLayouts, constellations.graph])
 
   // Swim lanes: rows of runs grouped by task, stacked by epic/initiative
   const arrangeSwimlanes = useCallback(() => {
@@ -1143,8 +1443,8 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       cursorY += EMPTY_H + GAP
     }
 
-    if (updates.size > 0) batchSetLayouts(updates)
-  }, [camera, tree, layouts, batchSetLayouts])
+    if (updates.size > 0) batchSetLayouts(preserveCohesion(updates, layouts, computeClusterGroups()))
+  }, [camera, tree, layouts, batchSetLayouts, computeClusterGroups])
 
   // Expose arrange functions to parent via refs
   useEffect(() => {
@@ -1155,9 +1455,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   useEffect(() => {
     // Pass constellation slot members so reset keeps snapped groups (e.g. a
     // session and its attached browser) together instead of scattering them.
-    if (arrangeResetRef) arrangeResetRef.current = () => arrangeWorkspace(Object.values(constellations.store))
+    if (arrangeResetRef) arrangeResetRef.current = () => arrangeWorkspace(computeClusterGroups())
     return () => { if (arrangeResetRef) arrangeResetRef.current = null }
-  }, [arrangeResetRef, arrangeWorkspace, constellations.store])
+  }, [arrangeResetRef, arrangeWorkspace, computeClusterGroups])
 
   useEffect(() => {
     if (arrangeSwimlanesRef) arrangeSwimlanesRef.current = arrangeSwimlanes
@@ -1302,7 +1602,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         })
         .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
       if (memberRects.length === 0) return
-      const positions = tidyGrid(memberRects, 40)
+      const positions = tidyGridClusters(memberRects, constellations.graph, 40)
       for (const [id, p] of positions) updateRunPosition(id, p.x, p.y)
     },
     onConstellationLeave: () => {
@@ -1356,7 +1656,7 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         })
         .filter((r): r is { id: string; x: number; y: number; width: number; height: number } => r !== null)
       if (memberRects.length === 0) return
-      const positions = tidyGrid(memberRects, 40)
+      const positions = tidyGridClusters(memberRects, constellations.graph, 40)
       for (const [posId, p] of positions) updateRunPosition(posId, p.x, p.y)
     }
     const onAssign = (e: Event) => {
@@ -1481,25 +1781,26 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           const imageJson = await imageRes.json() as { ok: boolean; data?: ImageWidget }
           if (!imageJson.ok || !imageJson.data) return
           const { naturalWidth, naturalHeight } = imageJson.data
-          const spawnLayout = {
+          applyDropSnap(imageJson.data.id, {
             x: dropX, y: dropY,
             width: Math.min(naturalWidth, 1200),
             height: Math.min(naturalHeight, 900),
-          }
-          insertLayout(imageJson.data.id, spawnLayout)
+          })
           onImageWidgetCreated?.(imageJson.data)
           return
         }
 
-        const spawnLayout = { x: dropX, y: dropY, width: 640, height: 480 }
+        // Opt out of the server's auto-snap (which tiles to the session regardless of where
+        // the file was dropped) — an interactive drop lets the drop point drive placement,
+        // snapping to the run's constellation only when dropped near it (see applyDropSnap).
         const editorRes = await apiFetch('/api/editor-widgets', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, filePath }),
+          body: JSON.stringify({ sessionId, filePath, snapToSession: false }),
         })
         const editorJson = await editorRes.json() as { ok: boolean; data?: EditorWidget }
         if (!editorJson.ok || !editorJson.data) return
-        insertLayout(editorJson.data.id, spawnLayout)
+        applyDropSnap(editorJson.data.id, { x: dropX, y: dropY, width: 640, height: 480 })
         onEditorWidgetCreated?.(editorJson.data)
         return
       }
@@ -1566,8 +1867,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         return
       }
     },
-    [camera, insertLayout, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated],
+    [camera, insertLayout, applyDropSnap, onEditorWidgetCreated, onBrowserWidgetCreated, onImageWidgetCreated, onPluginWidgetCreated],
   )
+
+  // Viewport in canvas-space for preset size resolution (null until ResizeObserver fires).
+  const presetViewport = containerSize
+    ? { width: containerSize.width / camera.zoom, height: containerSize.height / camera.zoom }
+    : null
 
   // Recursive render: groups render behind their children (natural DOM order)
   function renderNode(node: TreeNode, _depth: number): React.ReactNode {
@@ -1657,6 +1963,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     // all behave the same in the snap pipeline.
     const isSnapLeaf = isSnappable(reg)
 
+    let activeSizePreset: SizePreset | null = null
+    if (isSnapLeaf && presetViewport) {
+      const aspect = resolveAspect(sizePresets, widgetType)
+      const sizes = resolvePresetSizes(presetViewport, sizePresets, aspect, effectiveMinSize(reg.minSize))
+      activeSizePreset = matchPreset({ width: layout.width, height: layout.height }, sizes)
+    }
+
     return (
       <Fragment key={node.id}>
         {run && <RunNodeCapabilities run={run} />}
@@ -1683,6 +1996,22 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           onDragEnd={isSnapLeaf ? handleWidgetDragEnd : undefined}
           onAddWidget={isSnapLeaf ? (nodeId, edge, anchor) => setAddPicker({ sourceNodeId: nodeId, edge, anchor }) : undefined}
           occupiedEdges={occupiedEdgesFor(node.id)}
+          onApplySizePreset={isSnapLeaf ? (preset) => applySizePreset(node.id, widgetType, preset) : undefined}
+          activeSizePreset={activeSizePreset}
+          pins={pinSet.forNode(node.id)}
+          pinAccent={run?.color}
+          pinCanSubmit={resolveBackingSession(node.id, pinCtx) !== null}
+          onCreatePin={(nodeId, nx, ny, context) => pinSet.create({ id: makePinId(), nodeId, nx, ny, comment: '', createdAt: Date.now(), ...(context ? { context } : {}) })}
+          onRepositionPin={(id, nx, ny) => pinSet.update(id, p => ({ ...p, nx, ny }))}
+          onPinCommentChange={(id, comment) => pinSet.update(id, p => ({ ...p, comment }))}
+          onDeletePin={(id) => pinSet.remove(id)}
+          onSubmitPin={(id, comment) => submitPin(id, node.id, comment)}
+          onPinDragActive={setPinDragging}
+          onSendAllPins={(nodeId) => sendAllPins(nodeId)}
+          onClearAllPins={(nodeId) => clearAllPins(nodeId)}
+          onReplyPin={(id, text) => replyToPin(id, node.id, text)}
+          onResolvePin={resolvePinCb}
+          onReopenPin={reopenPinCb}
         />
       </Fragment>
     )
@@ -1712,6 +2041,20 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const snapCanJoin = snapPreview
     ? (slotByNode.has(snapPreview.targetId) || occupiedSlots.size < 9)
     : true
+
+  // Constellation links: a star on each anchor point + a line between every
+  // snapped pair. Brighter when the constellation is focused (hotkey-active or a
+  // member selected). Recomputed from the live layouts so the line tracks drags.
+  const constellationLinks = useMemo(() => {
+    const rectById = new Map(
+      Array.from(layouts, ([id, l]) => [id, { x: l.x, y: l.y, width: l.width, height: l.height }]),
+    )
+    const isActive = (aId: string, bId: string) => {
+      const slot = slotByNode.get(aId)
+      return (!!slot && activeConstellationSlot === slot) || isSelected(aId) || isSelected(bId)
+    }
+    return buildConstellationLinks(constellations.graph, rectById, isActive)
+  }, [constellations.graph, layouts, slotByNode, activeConstellationSlot, isSelected])
 
   // Compute drag ghost: precise dashed outline at the widget's current drag position.
   // Sits behind the widget (z-index 50 < widget's 100) so the widget floats on top.
@@ -1758,7 +2101,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
     <div
       ref={containerRef}
       tabIndex={-1}
+      // LOAD-BEARING testid: PinBubble (portaled to <body>, position:fixed) finds this
+      // element via closest('[data-testid="infinite-canvas"]') to clip/clamp the note
+      // to the canvas viewport. Renaming/removing it silently reverts the bubble to a
+      // window-viewport fallback, letting a panned-off note spill onto the sidebar.
       data-testid="infinite-canvas"
+      data-dragging={draggingNodeId ? 'true' : undefined}
+      data-pin-dragging={pinDragging ? 'true' : undefined}
       className="w-full h-full overflow-clip relative outline-none"
       style={{
         cursor: cursorStyle,
@@ -1788,6 +2137,13 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
         }
       }}
     >
+      {/* Free-drag reminder — slides down while dragging a snap-eligible (ungrouped)
+          widget. Screen-fixed (outside the transform), pointer-events-none. */}
+      <FreeDragHint
+        visible={!!draggingNodeId && constellations.slotsForNode(draggingNodeId).length === 0}
+        altActive={altPressed}
+      />
+
       {/* File-editor drag overlay — covers iframes so the drop always lands on the canvas */}
       {editorDragActive && (
         <div
@@ -1810,6 +2166,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       >
         {renderedNodes}
         {dragGhost && <div style={dragGhost} />}
+        {/* Constellation links sit above widgets (visible across the gap) but below
+            the interactive break chips rendered by the chrome below. */}
+        <ConstellationLinks links={constellationLinks} zoom={camera.zoom} />
         {/* Chrome is inside the camera transform so it scales with canvas zoom — unlike the screen-space marquee. */}
         {(['1','2','3','4','5','6','7','8','9'] as const).map(slot => {
           const memberIds = constellations.nodesInSlot(slot)
@@ -1890,7 +2249,14 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
             entries={catalog}
             defaultType={defaultType}
             anchor={addPicker.anchor}
+            moveTargets={moveTargetsForPicker}
             onPick={(entry) => { void addWidget(entry, addPicker.sourceNodeId, addPicker.edge); setAddPicker(null) }}
+            onMove={(id) => {
+              moveSnapWidgetTo(id, addPicker.sourceNodeId, addPicker.edge, {
+                getLayout, insertLayout, updateConstellation: constellations.update,
+              })
+              setAddPicker(null)
+            }}
             onClose={() => setAddPicker(null)}
           />
         )

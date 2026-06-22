@@ -17,6 +17,12 @@ export interface NatsTrafficEvent {
   sender?: string  // Extracted from subject or known from publish
 }
 
+/** Broker reachability from a connection handle. 'up' iff we hold a live,
+ *  non-closed connection. Pure so it can be unit-tested without a real broker. */
+export function brokerConnection(nc: { isClosed(): boolean } | null): 'up' | 'down' {
+  return nc !== null && !nc.isClosed() ? 'up' : 'down'
+}
+
 export class NatsTrafficBridge {
   private nc: NatsConnection | null = null
   private sc = StringCodec()
@@ -31,6 +37,12 @@ export class NatsTrafficBridge {
     private sse: SSEBroadcaster,
     private natsUrl: string = 'nats://localhost:4222',
   ) {}
+
+  /** Host NATS broker reachability for the Saloon's palette health light.
+   *  Reflects the live observer connection (cleared on close, auto-reconnecting). */
+  status(): { connection: 'up' | 'down' } {
+    return { connection: brokerConnection(this.nc) }
+  }
 
   async start(): Promise<void> {
     try {

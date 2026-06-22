@@ -267,6 +267,28 @@ describe('POST /api/browser-widgets — spaceId validation', () => {
   })
 })
 
+describe('PATCH /api/browser-widgets/:id — notes', () => {
+  it('round-trips notes', async () => {
+    const created = await (await testCtx.fetch('/api/browser-widgets', {
+      method: 'POST',
+      body: JSON.stringify({ url: 'http://localhost:3000/', sessionId: SESSION_ID }),
+    })).json() as { data: BrowserWidget }
+    const id = created.data.id
+    const note = {
+      id: 'note-1', url: 'http://localhost:3000/', comment: 'make this bigger',
+      x: 420, y: 180, nx: 0.42, ny: 0.15,
+      target: { tag: 'h2', selector: '.pricing > h2:nth-child(1)', text: 'Pro plan — $29/mo' },
+      createdAt: 1718000000000,
+    }
+    const patched = await (await testCtx.fetch(`/api/browser-widgets/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ notes: [note] }),
+    })).json() as { data: BrowserWidget }
+    expect(patched.data.notes).toEqual([note])
+    expect(testCtx.docStore.getAllBrowserWidgets().find(w => w.id === id)?.notes).toEqual([note])
+  })
+})
+
 describe('POST /api/browser-widgets — sessionId validation', () => {
   it('rejects a present-but-empty sessionId instead of silently creating a standalone widget', async () => {
     const res = await testCtx.fetch('/api/browser-widgets', {

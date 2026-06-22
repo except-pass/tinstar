@@ -1,6 +1,6 @@
 [package]
 name = "tinstar-desktop"
-version = "5.1.0"
+version = "5.2.0"
 description = "Tinstar — Agent Orchestrator (desktop)"
 authors = ["Tinstar"]
 edition = "2021"

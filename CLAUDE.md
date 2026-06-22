@@ -14,6 +14,7 @@ The UI must be snappy and responsive. It should feel like playing a video game �
 - **Backend**: Vite plugin server (`src/server/`) — event bus, document store, SSE, session management
 - **Sessions**: `src/server/sessions/` — tmux backend, config at `~/.config/tinstar/`
 - **E2E tests**: Playwright (`e2e/`), run with `TINSTAR_FAST_SIM=1 npx playwright test`
+- **Documented solutions**: `docs/solutions/` — solutions to past problems (bugs, gotchas, workflow practices), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in a documented area.
 
 ## Key Commands
 
@@ -55,3 +56,7 @@ The four highest-leverage rules, restated here because they're rarely-violated-b
 - Simulator only auto-starts when `TINSTAR_FAST_SIM=1` is set.
 
 Session state changes emit to the event bus as `managed_session.*` events (see [docs/conventions.md](docs/conventions.md) for the "adding a BusEvent" recipe).
+
+## Releasing
+
+Cutting a release (dev branch → `main` → tag → npm) is documented step-by-step in **[docs/releasing.md](docs/releasing.md)**. The trap worth restating: **`@tinstar/plugin-api` is a separate npm publish, gated on `git diff vPREV vN.N.0 -- packages/plugin-api/src/index.ts`** — publish it only when that shipped surface actually changed, and run the diff rather than deciding from memory.

@@ -15,8 +15,10 @@ export type ReviewAction = 'close' | 'reopen' | 'comment'
 export function parseReviewList(stdout: string): Review[] {
   const trimmed = stdout.trim()
   if (!trimmed) return []
-  const raw = JSON.parse(trimmed) as Array<Record<string, unknown>>
-  return raw.map((j) => ({
+  const raw = JSON.parse(trimmed)
+  // `roborev list --json` emits `null` (not `[]`) for a repo with no reviews.
+  if (!Array.isArray(raw)) return []
+  return (raw as Array<Record<string, unknown>>).map((j) => ({
     id: Number(j.id),
     status: (j.status as Review['status']) ?? 'done',
     verdict: (j.verdict as string | undefined) ?? null,
@@ -37,6 +39,34 @@ export function parseReviewShow(stdout: string): string {
 /** Open reviews first, then by id descending. */
 export function sortReviews(reviews: Review[]): Review[] {
   return [...reviews].sort((a, b) => (a.closed !== b.closed ? (a.closed ? 1 : -1) : b.id - a.id))
+}
+
+/** What the cockpit accessory should render, resolved from the probe inputs.
+ *  Keeps the branchy "why is this pane empty?" logic pure and testable so the
+ *  accessory never falls back to a blank/ambiguous state. `installed` is the
+ *  result of a `which roborev` probe (null until it resolves). */
+export type CockpitView =
+  | { kind: 'no-session' }
+  | { kind: 'probing' }
+  | { kind: 'not-installed' }
+  | { kind: 'error'; message: string }
+  | { kind: 'empty' }
+  | { kind: 'list'; reviews: Review[]; open: number }
+
+export function cockpitState(input: {
+  sessionId: string
+  installed: boolean | null
+  error: string | null
+  reviews: Review[]
+}): CockpitView {
+  if (!input.sessionId) return { kind: 'no-session' }
+  if (input.installed === false) return { kind: 'not-installed' }
+  if (input.reviews.length > 0) {
+    return { kind: 'list', reviews: input.reviews, open: input.reviews.filter((r) => !r.closed).length }
+  }
+  if (input.error) return { kind: 'error', message: input.error }
+  if (input.installed === null) return { kind: 'probing' }
+  return { kind: 'empty' }
 }
 
 /** Optimistic local update before the next poll confirms. */
@@ -78,4 +108,74 @@ export function pickBootstrapSource(state: StateSlice): { project: string; workt
   const src = candidates[0]
   if (!src?.project || !src.workspace?.path) return null
   return { project: src.project, worktreePath: src.workspace.path }
+}
+
+// ── Fleet overview (standalone roborev-fleet widget) ───────────────────────────
+
+export interface FleetSession { sessionId: string; project: string; worktree: string }
+
+/** Real agent sessions with a worktree we can run `roborev list` in. Excludes the
+ *  shell/cockpit helper sessions, mirroring pickBootstrapSource's filter. */
+export function pickFleetSessions(state: StateSlice): FleetSession[] {
+  return (state.sessions ?? [])
+    .filter((s) => s.cliTemplate !== 'shell' && s.cliTemplate !== 'roborev-tui' && !!s.workspace?.path)
+    .map((s) => ({ sessionId: s.name, project: s.project ?? '', worktree: s.workspace!.path! }))
+}
+
+export interface FleetRow extends FleetSession {
+  /** null = the per-session probe failed (roborev missing / exec error). */
+  open: number | null
+  failed: number
+}
+
+/** One fleet row: open-finding counts for a session, from its `roborev list
+ *  --open --json` output. `open: null` signals the probe failed for that session. */
+export function fleetRow(session: FleetSession, openReviews: Review[] | null): FleetRow {
+  if (openReviews === null) return { ...session, open: null, failed: 0 }
+  return {
+    ...session,
+    open: openReviews.length,
+    failed: openReviews.filter((r) => r.status === 'failed').length,
+  }
+}
+
+/** Header total: sum once per *distinct worktree*. Two sessions can share one
+ *  worktree (a known condition here), so summing per-row would double-count the
+ *  same findings. Per-row display still shows one row per session. Takes the max
+ *  open count per worktree so the result is independent of row order (a
+ *  probe-failed null row can't shadow a successful sibling's real count). */
+export function fleetOpenTotalDistinct(rows: FleetRow[]): number {
+  const byWorktree = new Map<string, number>()
+  for (const r of rows) {
+    byWorktree.set(r.worktree, Math.max(byWorktree.get(r.worktree) ?? 0, r.open ?? 0))
+  }
+  let n = 0
+  for (const v of byWorktree.values()) n += v
+  return n
+}
+
+/** The prompt the fleet "nudge" button sends to a session's agent to make it
+ *  burn down its open roborev backlog. Encodes Will's preferred workflow:
+ *  one-at-a-time, verify-before-fixing (most findings are stale), commit + close,
+ *  and never `roborev refine` on a backlog. `open` personalizes the count. */
+export function nudgePrompt(open: number): string {
+  return [
+    `Burn down the open roborev review backlog in this worktree (${open} open).`,
+    'Work the findings one at a time: `roborev list --open`, then for each one `roborev show <job>`,',
+    'check the finding against the current code, and either fix it (make the change + commit) and',
+    '`roborev close <job>`, or — if it is already addressed or stale — `roborev close <job>` with a',
+    'comment citing the evidence. Many findings are stale, so verify before "fixing". Do not run',
+    '`roborev refine`. Stop to ask only on a genuine product/design fork.',
+  ].join(' ')
+}
+
+/** Outcome of a fleet nudge, derived from the POST /prompt response so the UI
+ *  layer stays dumb. 'busy' = the agent was mid-task (CONFLICT); we never force. */
+export type NudgeResult = 'sent' | 'busy' | 'error'
+
+/** Classify a POST /api/sessions/:id/prompt response into a NudgeResult. */
+export function nudgeResult(body: unknown): NudgeResult {
+  const b = body as { ok?: boolean; error?: { code?: string } }
+  if (b?.ok) return 'sent'
+  return b?.error?.code === 'CONFLICT' ? 'busy' : 'error'
 }

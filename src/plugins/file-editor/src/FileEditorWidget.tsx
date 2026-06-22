@@ -36,6 +36,9 @@ export function makeFileEditorWidget(api: TinstarPluginAPI) {
   return function FileEditorWidget({ data }: WidgetProps<EditorWidget>) {
   const widget = data
   const { content, connected, lastUpdatedAt } = api.watch.file(widget.sessionId, widget.filePath)
+  // Canonical node id — `widget.id` already carries the `editor-` prefix, so
+  // `editor-${widget.id}` would double it and resolve to no slot.
+  const myNodeId = api.constellations.useMyNodeId()
   const { slotsForNode } = api.constellations.useContext()
   const publishCapability = api.constellations.usePublishCapability()
 
@@ -203,7 +206,7 @@ export function makeFileEditorWidget(api: TinstarPluginAPI) {
         >
           ↗ Open in Editor
         </button>
-        <ConstellationBadge slots={slotsForNode(`editor-${widget.id}`)} />
+        <ConstellationBadge slots={slotsForNode(myNodeId)} />
         <button
           onPointerDown={e => e.stopPropagation()}
           onClick={handleClose}

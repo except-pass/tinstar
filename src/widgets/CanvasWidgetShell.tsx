@@ -1,8 +1,14 @@
 import { useRef, useState, useCallback, useEffect, type RefObject, type PointerEvent as ReactPointerEvent } from 'react'
+import { createPortal } from 'react-dom'
 import type { WidgetRegistration } from './widgetComponentRegistry'
 import { isSnappable } from './widgetComponentRegistry'
 import type { WidgetLayout } from '../hooks/useWidgetLayouts'
 import { WidgetIdProvider } from '../core/pluginApi/widgetIdContext'
+import { PinLayer } from '../pins/PinLayer'
+import { clamp01 } from '../pins/pinGestures'
+import { captureWidgetContext } from '../pins/captureWidgetContext'
+import { getPinCapture } from '../pins/captureRegistry'
+import type { Pin } from '../domain/pinSet'
 
 const DRAG_THRESHOLD = 5
 
@@ -61,6 +67,32 @@ interface CanvasWidgetShellProps {
   /** Edges that already have a snapped neighbor (a break-link sits there) — the add-widget
    *  [+] is suppressed on these so it only shows on exposed edges. */
   occupiedEdges?: ReadonlySet<'left' | 'right' | 'top' | 'bottom'>
+  /** Pins anchored to this node (normalized coords). When provided alongside the pin
+   *  callbacks the shell renders the default PinLayer (unless the widget renders its
+   *  own markers) plus the drag-to-place hover affordance. */
+  pins?: Pin[]
+  pinAccent?: string
+  pinCanSubmit?: boolean
+  onCreatePin?: (nodeId: string, nx: number, ny: number, context?: Record<string, unknown>) => void
+  onRepositionPin?: (id: string, nx: number, ny: number) => void
+  onPinCommentChange?: (id: string, comment: string) => void
+  onDeletePin?: (id: string) => void
+  onSubmitPin?: (id: string, comment: string) => void
+  onReplyPin?: (id: string, text: string) => void
+  onResolvePin?: (id: string) => void
+  onReopenPin?: (id: string) => void
+  /** Toggles the canvas-level iframe pointer guard during place/reposition drags so
+   *  the drag stream isn't swallowed by browser/terminal iframe widgets. */
+  onPinDragActive?: (active: boolean) => void
+  /** Batch-submit every unsent pin on this node to its backing session. */
+  onSendAllPins?: (nodeId: string) => void
+  /** Remove every pin on this node. */
+  onClearAllPins?: (nodeId: string) => void
+  /** Apply a size preset (S/M/L). Bound per-node by the canvas, which owns the
+   *  viewport + config needed to resolve the concrete dimensions. */
+  onApplySizePreset?: (preset: 'small' | 'medium' | 'large') => void
+  /** Which preset the current size matches — highlights that button, or null. */
+  activeSizePreset?: 'small' | 'medium' | 'large' | null
 }
 
 export function CanvasWidgetShell({
@@ -88,6 +120,22 @@ export function CanvasWidgetShell({
   onDragEnd,
   onAddWidget,
   occupiedEdges,
+  pins,
+  pinAccent,
+  pinCanSubmit,
+  onCreatePin,
+  onRepositionPin,
+  onPinCommentChange,
+  onDeletePin,
+  onSubmitPin,
+  onReplyPin,
+  onResolvePin,
+  onReopenPin,
+  onPinDragActive,
+  onSendAllPins,
+  onClearAllPins,
+  onApplySizePreset,
+  activeSizePreset,
 }: CanvasWidgetShellProps) {
   const {
     component: WidgetComponent,
@@ -99,6 +147,11 @@ export function CanvasWidgetShell({
   const containerRef = useRef<HTMLDivElement>(null)
   const [isHovered, setIsHovered] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
+  // Viewport (client) coords of the ghost note that trails the cursor during a
+  // pin place-drag. Non-null only while a placement drag is active. Rendered via
+  // a portal to document.body so it floats over iframes and escapes the canvas
+  // transform (a position:fixed element inside the transform gets re-rooted).
+  const [pinGhost, setPinGhost] = useState<{ x: number; y: number } | null>(null)
 
   const dragging = useRef(false)
   const resizing = useRef(false)
@@ -114,6 +167,12 @@ export function CanvasWidgetShell({
 
   const frameClass =
     getFrameClass?.({ isDragging, isSelected, isHovered, isDropTarget }) ?? ''
+
+  const pinnable = registration.pinnable !== false
+  // Active placement-drag pointer id; non-null while dragging the pin affordance
+  // onto the widget body. setPointerCapture keeps the stream on the affordance,
+  // but the iframe guard (onPinDragActive) is what makes it survive iframe widgets.
+  const pinPlacePointerId = useRef<number | null>(null)
 
   // Pointer down on shell: fire selection + start drag if on handle
   const handlePointerDown = useCallback(
@@ -225,6 +284,78 @@ export function CanvasWidgetShell({
     onDoubleClickZoom?.(nodeId)
   }, [nodeId, onDoubleClickZoom])
 
+  // Shared teardown for pin place-drag — clears the placing ref and lowers the
+  // iframe guard. Called from pointer-up, onPointerCancel, onLostPointerCapture,
+  // and the unmount effect. Does NOT do pin placement (that stays in pointer-up
+  // only, so lostpointercapture/cancel can't double-place).
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally stable; onPinDragActive identity change shouldn't retrigger unmount guard
+  const onPinDragActiveRef = useRef(onPinDragActive)
+  useEffect(() => { onPinDragActiveRef.current = onPinDragActive })
+
+  const endPinPlace = useCallback(() => {
+    setPinGhost(null)
+    if (pinPlacePointerId.current === null) return
+    pinPlacePointerId.current = null
+    onPinDragActiveRef.current?.(false)
+  }, [])
+
+  // Pin drag-to-place: capture the pointer on the affordance, raise the iframe
+  // guard, and on pointer-up drop a pin at the cursor's normalized position
+  // within the widget body (cancel if released outside the widget).
+  const handlePinPlaceDown = useCallback(
+    (e: ReactPointerEvent) => {
+      if (e.button !== 0) return
+      e.stopPropagation()
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+      pinPlacePointerId.current = e.pointerId
+      setPinGhost({ x: e.clientX, y: e.clientY })
+      onPinDragActive?.(true)
+    },
+    [onPinDragActive],
+  )
+
+  // While a place-drag is active, follow the cursor with the ghost note. Pointer
+  // capture routes moves to the affordance, so this fires from its onPointerMove.
+  const handlePinPlaceMove = useCallback((e: ReactPointerEvent) => {
+    if (pinPlacePointerId.current !== null) setPinGhost({ x: e.clientX, y: e.clientY })
+  }, [])
+
+  const handlePinPlaceUp = useCallback(
+    (e: ReactPointerEvent) => {
+      if (pinPlacePointerId.current === null) return
+      // Teardown first (clears ref + lowers guard + drops the ghost), then place.
+      endPinPlace()
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect || rect.width === 0 || rect.height === 0) return
+      const rawX = (e.clientX - rect.left) / rect.width
+      const rawY = (e.clientY - rect.top) / rect.height
+      // Only place when released over the widget body; otherwise treat as cancel.
+      if (rawX < 0 || rawX > 1 || rawY < 0 || rawY > 1) return
+      // Capture the context under the drop BEFORE the pin exists, via the front
+      // door: a plugin may register a per-node capture fn (browser maps the point
+      // into iframe-body-relative DOM context). Falls back to the generic native
+      // capture — pin layer is pointer-events:none and the util skips
+      // [data-testid^="pin-"], so elementFromPoint sees the real widget content
+      // (not the marker). The plugin blob is opaque/flat; the native one nests
+      // under `capture` so submit can distinguish the two formats.
+      const pluginCapture = getPinCapture(nodeId)
+      const context = pluginCapture
+        ? pluginCapture({ clientX: e.clientX, clientY: e.clientY })
+        : (() => {
+            const c = captureWidgetContext(e.clientX, e.clientY)
+            return c ? { capture: c } : undefined
+          })()
+      onCreatePin?.(nodeId, clamp01(rawX), clamp01(rawY), context)
+    },
+    [nodeId, onCreatePin, endPinPlace],
+  )
+
+  // Unmount guard: if the affordance button unmounts while a place-drag is active
+  // (hover-only button, hover drops before pointerup), clear the iframe guard so
+  // all iframes don't stay frozen. Deps are [] — pure unmount effect.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => { endPinPlace() }, [])
+
   // Escape cancels any in-progress drag or resize
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -302,6 +433,76 @@ export function CanvasWidgetShell({
         />
       </WidgetIdProvider>
 
+      {pinnable && !registration.rendersOwnPinMarkers && pins && onRepositionPin && (
+        <PinLayer
+          pins={pins}
+          accent={pinAccent ?? '#00f0ff'}
+          zoom={zoom}
+          canSubmit={!!pinCanSubmit}
+          onReposition={(id, nx, ny) => onRepositionPin(id, nx, ny)}
+          onCommentChange={(id, c) => onPinCommentChange?.(id, c)}
+          onDelete={(id) => onDeletePin?.(id)}
+          onSubmit={(id, comment) => onSubmitPin?.(id, comment)}
+          onReply={(id, text) => onReplyPin?.(id, text)}
+          onResolve={(id) => onResolvePin?.(id)}
+          onReopen={(id) => onReopenPin?.(id)}
+          onDragActiveChange={onPinDragActive}
+        />
+      )}
+
+      {pinnable && (isHovered || isSelected) && pins && pins.length > 0 && (() => {
+        const unsentCount = pins.filter(p => !p.sentAt).length
+        const sendDisabled = !pinCanSubmit || unsentCount === 0
+        const sendTitle = !pinCanSubmit
+          ? 'Snap into a run to send'
+          : unsentCount === 0
+            ? 'All pins already sent'
+            : 'Send all unsent pins to the session'
+        return (
+          <div
+            className="pointer-events-auto absolute left-1 bottom-8 z-20 flex items-center gap-1 rounded border border-primary/40 bg-slate-900/90 px-1 py-0.5 text-primary"
+            style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'bottom left' }}
+            onPointerDown={e => e.stopPropagation()}
+          >
+            <span data-testid="pin-count" className="text-2xs px-0.5">{pins.length}</span>
+            <button
+              data-testid="pin-send-all"
+              disabled={sendDisabled}
+              className="flex h-5 w-5 items-center justify-center rounded bg-primary/80 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              title={sendTitle}
+              onClick={e => { e.stopPropagation(); onSendAllPins?.(nodeId) }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>send</span>
+            </button>
+            <button
+              data-testid="pin-clear-all"
+              className="flex h-5 w-5 items-center justify-center rounded text-primary hover:text-red-400"
+              title="Delete all pins on this widget"
+              onClick={e => { e.stopPropagation(); onClearAllPins?.(nodeId) }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete_sweep</span>
+            </button>
+          </div>
+        )
+      })()}
+
+      {pinnable && (isHovered || isSelected) && onCreatePin && (
+        <button
+          data-testid="pin-drop-affordance"
+          className="pointer-events-auto absolute left-1 bottom-0 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-primary/40 bg-slate-900/90 text-primary opacity-70 transition-opacity hover:opacity-100"
+          style={{ transform: `translateY(100%) scale(${1 / zoom})`, transformOrigin: 'top left' }}
+          onPointerDown={handlePinPlaceDown}
+          onPointerMove={handlePinPlaceMove}
+          onPointerUp={handlePinPlaceUp}
+          onPointerCancel={endPinPlace}
+          onLostPointerCapture={endPinPlace}
+          onClick={e => e.stopPropagation()}
+          title="Drag a note onto this widget"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>sticky_note_2</span>
+        </button>
+      )}
+
       {onAddWidget && isSnappable(registration) && (isHovered || isSelected) && (
         <div className="pointer-events-none absolute inset-0">
           {(['left','right','top','bottom'] as const).filter(edge => !occupiedEdges?.has(edge)).map(edge => {
@@ -331,6 +532,32 @@ export function CanvasWidgetShell({
         </div>
       )}
 
+      {onApplySizePreset && (isHovered || isSelected) && (
+        <div
+          data-testid="size-preset-toolbar"
+          className="pointer-events-auto absolute right-1 top-0 z-20 flex items-center gap-0.5 rounded border border-primary/40 bg-slate-900/90 px-0.5 py-0.5"
+          style={{ transform: `translateY(-100%) scale(${1 / zoom})`, transformOrigin: 'bottom right' }}
+          onPointerDown={e => e.stopPropagation()}
+        >
+          {(['small', 'medium', 'large'] as const).map(preset => {
+            const label = preset === 'small' ? 'S' : preset === 'medium' ? 'M' : 'L'
+            const active = activeSizePreset === preset
+            return (
+              <button
+                key={preset}
+                data-testid={`size-preset-${preset}`}
+                aria-pressed={active}
+                className={`flex h-5 w-5 items-center justify-center rounded text-2xs font-mono ${active ? 'bg-primary/80 text-white' : 'text-primary hover:bg-primary/20'}`}
+                title={`Resize to ${preset}`}
+                onClick={e => { e.stopPropagation(); onApplySizePreset(preset) }}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {/* Resize handle — bottom-right corner */}
       <div
         className="absolute right-0 bottom-0 w-3 h-3 cursor-se-resize z-10"
@@ -343,6 +570,19 @@ export function CanvasWidgetShell({
         onPointerUp={handleResizeUp}
         onPointerCancel={handleResizeUp}
       />
+
+      {/* Ghost note trailing the cursor during a pin place-drag. Portaled to
+          document.body so it floats over iframes and escapes the canvas transform. */}
+      {pinGhost && createPortal(
+        <div
+          data-testid="pin-ghost"
+          style={{ position: 'fixed', left: pinGhost.x, top: pinGhost.y, transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 70, opacity: 0.7 }}
+          className="flex h-6 w-6 items-center justify-center rounded-full border border-primary/50 bg-slate-900/80 text-primary shadow-lg"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>sticky_note_2</span>
+        </div>,
+        document.body,
+      )}
     </div>
   )
 }

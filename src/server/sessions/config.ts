@@ -63,6 +63,14 @@ export interface TinstarConfig {
       duty: boolean
       turnLength: boolean
     }
+    /** S/M/L quick-resize presets. Shape mirrors widgetSizePresets.ts on the client. */
+    widgetSizePresets: {
+      small: number
+      medium: number
+      large: number
+      defaultAspect: number
+      aspectByType: Record<string, number>
+    }
   }
   /**
    * Switchboard per-session override guard (Phase 2 Step 6). Gates the per-session
@@ -213,6 +221,14 @@ export const BASE_CONFIG = {
       duty: true,
       turnLength: true,
     },
+    // Keep in sync with DEFAULT_WIDGET_SIZE_PRESETS in src/widgets/widgetSizePresets.ts
+    widgetSizePresets: {
+      small: 0.35,
+      medium: 0.6,
+      large: 0.85,
+      defaultAspect: 1.5,
+      aspectByType: {},
+    },
   },
   switchboard: {
     allowedModels: [] as string[],
@@ -328,13 +344,20 @@ export function loadSecrets(secretsDir: string): Record<string, string> {
  * with `CLAUDE_CODE_OAUTH_TOKEN` overlaid on top. The override is applied at spawn time
  * ONLY — callers must never persist the returned map (it is not written to session.json
  * and not returned by /api/state). Never logs the token value.
+ *
+ * The token is `trim()`med before overlay so the applied value matches what
+ * `isPlausibleToken` validated (it validates the trimmed form) — otherwise a
+ * space-padded token would pass the guard but be written to the env with its
+ * surrounding whitespace intact, failing auth with an opaque error. A token that
+ * is empty/whitespace-only after trimming leaves the map unchanged (same ref).
  */
 export function applyTokenOverride(
   secrets: Record<string, string>,
   token?: string | null,
 ): Record<string, string> {
-  if (!token) return secrets
-  return { ...secrets, CLAUDE_CODE_OAUTH_TOKEN: token }
+  const t = token?.trim()
+  if (!t) return secrets
+  return { ...secrets, CLAUDE_CODE_OAUTH_TOKEN: t }
 }
 
 export type OverrideValidationResult = { ok: true } | { ok: false; code: ErrorCode; message: string }
@@ -387,8 +410,11 @@ export function validateSessionOverride(
         message: 'per-session token override is disabled (set switchboard.allowTokenOverride)',
       }
     }
-    if (!isPlausibleToken(token)) {
-      // Deliberately value-free message — never echo the token bytes.
+    // typeof guard first: the token arrives from JSON.parse, so a caller could send a
+    // non-string (e.g. {"token": 42}). Reject it as malformed rather than letting it
+    // reach isPlausibleToken's .trim() (which throws on a number → unhandled rejection
+    // in the route's async handler). Deliberately value-free message — never echo bytes.
+    if (typeof token !== 'string' || !isPlausibleToken(token)) {
       return { ok: false, code: 'OVERRIDE_TOKEN_MALFORMED', message: 'per-session token override is malformed' }
     }
   }

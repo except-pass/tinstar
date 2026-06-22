@@ -27,7 +27,7 @@ describe('composeAddWidgetMembership', () => {
     const next = composeAddWidgetMembership(g, 'A', 'B')
     expect(slotsForNode(next, 'B')).toEqual(['3'])
     expect(slotsForNode(next, 'A')).toEqual(['3'])
-    expect(next.snapped).toContainEqual(['A', 'B'])
+    expect(next.snapped).toContainEqual({ nodes: ['A', 'B'] })
   })
 
   it('forms a new constellation in the next free slot when the source is unslotted', () => {
@@ -53,5 +53,16 @@ describe('composeAddWidgetMembership', () => {
     expect(slotsForNode(next, 'A')).toEqual([])
     expect(slotsForNode(next, 'B')).toEqual([])
     expect(next.snapped).toEqual([])
+  })
+})
+
+describe('composeAddWidgetMembership anchors', () => {
+  it('persists the anchor pair on the created snap edge', () => {
+    const g0 = addMember(emptyGraph('s'), 'src', '1')
+    const g = composeAddWidgetMembership(g0, 'src', 'new', ['top-left', 'top-right'])
+    const edge = g.snapped.find(e => e.nodes.includes('src') && e.nodes.includes('new'))!
+    // 'new' < 'src' so canon swaps the nodes — the anchor pair must swap with them.
+    expect(edge.nodes).toEqual(['new', 'src'])
+    expect(edge.anchors).toEqual(['top-right', 'top-left'])
   })
 })

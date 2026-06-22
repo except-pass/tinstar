@@ -56,6 +56,34 @@ describe('parseManifest', () => {
     expect(() => parseManifest({ ...validPkg, tinstar: [] })).toThrow(ManifestError)
   })
 
+  it('accepts a valid server block', () => {
+    const pkg = { ...validPkg, tinstar: { ...validPkg.tinstar, server: {
+      health: 'curl -sf localhost:5180/healthz', start: 'bun run start', cwd: '..', healthTimeoutMs: 2000,
+    } } }
+    const r = parseManifest(pkg)
+    expect(r.manifest.server?.health).toBe('curl -sf localhost:5180/healthz')
+    expect(r.manifest.server?.start).toBe('bun run start')
+  })
+
+  it('rejects a server block with missing or empty health', () => {
+    const noHealth = { ...validPkg, tinstar: { ...validPkg.tinstar, server: { start: 'x' } } }
+    expect(() => parseManifest(noHealth)).toThrow(/server\.health/)
+    const emptyHealth = { ...validPkg, tinstar: { ...validPkg.tinstar, server: { health: '' } } }
+    expect(() => parseManifest(emptyHealth)).toThrow(/server\.health/)
+  })
+
+  it('rejects a server block with bad start/cwd/healthTimeoutMs types', () => {
+    const base = (server: unknown) => ({ ...validPkg, tinstar: { ...validPkg.tinstar, server } })
+    expect(() => parseManifest(base({ health: 'h', start: 42 }))).toThrow(/server\.start/)
+    expect(() => parseManifest(base({ health: 'h', cwd: 42 }))).toThrow(/server\.cwd/)
+    expect(() => parseManifest(base({ health: 'h', healthTimeoutMs: 0 }))).toThrow(/server\.healthTimeoutMs/)
+    expect(() => parseManifest(base({ health: 'h', healthTimeoutMs: -5 }))).toThrow(/server\.healthTimeoutMs/)
+  })
+
+  it('rejects a non-object server block', () => {
+    expect(() => parseManifest({ ...validPkg, tinstar: { ...validPkg.tinstar, server: 'nope' } })).toThrow(/server must be an object/)
+  })
+
   it('accepts optional contributes and permissions', () => {
     const r = parseManifest({
       ...validPkg,
@@ -209,5 +237,28 @@ describe('parseManifest contributes.widgets new fields', () => {
     expect(() => parseManifest({
       name: 'p', version: '1', tinstar: { apiVersion: '5', displayName: 'P' },
     })).not.toThrow()
+  })
+})
+
+describe('manifest anchors validation', () => {
+  const base = (widget: object) => ({
+    name: 'p', version: '1.0.0',
+    tinstar: { apiVersion: '5', displayName: 'P', contributes: { widgets: [widget] } },
+  })
+
+  it('accepts a valid anchors array', () => {
+    const m = parseManifest(base({ type: 't', label: 'T', anchors: [{ name: 'a', x: 0, y: 0 }] }))
+    expect(m.manifest.contributes!.widgets![0]!.anchors).toEqual([{ name: 'a', x: 0, y: 0 }])
+  })
+  it('rejects anchors with out-of-range coords', () => {
+    expect(() => parseManifest(base({ type: 't', label: 'T', anchors: [{ name: 'a', x: 5, y: 0 }] })))
+      .toThrow(ManifestError)
+  })
+  it('rejects a non-array anchors', () => {
+    expect(() => parseManifest(base({ type: 't', label: 'T', anchors: 'nope' }))).toThrow(ManifestError)
+  })
+  it('rejects duplicate anchor names', () => {
+    expect(() => parseManifest(base({ type: 't', label: 'T', anchors: [{ name: 'a', x: 0, y: 0 }, { name: 'a', x: 1, y: 1 }] })))
+      .toThrow(ManifestError)
   })
 })

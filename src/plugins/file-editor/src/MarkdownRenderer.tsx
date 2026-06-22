@@ -48,6 +48,11 @@ function MermaidBlock({ source }: { source: string }) {
       const mermaid = mod.default
       mermaid.initialize({
         startOnLoad: false,
+        // Without this, a parse failure makes mermaid draw its "bomb" error
+        // graphic into document.body (we pass no container) and orphan it there —
+        // it floats over the canvas and piles up across re-renders. We catch the
+        // throw and render our own error <pre> below, so suppress mermaid's.
+        suppressErrorRendering: true,
         theme: 'dark',
         themeVariables: {
           primaryColor: '#0a0e12',

@@ -44,8 +44,8 @@ function row(overrides: Partial<any> = {}) {
   }
 }
 
-// Match the row container only — not nested elements like inbox-row-dot-* or inbox-row-clear-*.
-const ROW_RE = /^inbox-row-(?!dot-|clear-)/
+// Match the row container only — not nested elements like inbox-row-dot-* or inbox-row-close-*.
+const ROW_RE = /^inbox-row-(?!dot-|close-)/
 
 describe('InboxList', () => {
   it('renders all rows when filter is all', () => {
@@ -115,15 +115,23 @@ describe('InboxList', () => {
     expect(dispatchFlashFocus).toHaveBeenCalledWith({ widgetId: 'pw-1', source: 'plugin' })
   })
 
-  it('logs a clear failure when the server responds with a non-2xx status', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    vi.mocked(apiFetch).mockResolvedValueOnce({ ok: false, status: 404 } as Response)
-    fixtures.push(row({ widgetId: 'pw-1', source: 'plugin' }))
+  it('closing a stopped agent DELETEs the session', async () => {
+    fixtures.push(row({ widgetId: 'dead', source: 'run', status: 'stopped', attention: null, readKey: 'dead' }))
     render(<InboxList activeSpaceId="spc-1" />)
 
-    fireEvent.click(screen.getByTestId('inbox-row-clear-pw-1'))
+    fireEvent.click(screen.getByTestId('inbox-row-close-dead'))
+    expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/sessions/dead', { method: 'DELETE' })
+  })
+
+  it('logs a close failure when the server responds with a non-2xx status', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(apiFetch).mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+    fixtures.push(row({ widgetId: 'dead', source: 'run', status: 'stopped', attention: null, readKey: 'dead' }))
+    render(<InboxList activeSpaceId="spc-1" />)
+
+    fireEvent.click(screen.getByTestId('inbox-row-close-dead'))
     await Promise.resolve()
 
-    expect(errorSpy).toHaveBeenCalledWith('[inbox] clear failed: HTTP 404')
+    expect(errorSpy).toHaveBeenCalledWith('[inbox] close failed: HTTP 404')
   })
 })

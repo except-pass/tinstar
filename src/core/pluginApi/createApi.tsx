@@ -1,5 +1,5 @@
 import { useSyncExternalStore, useCallback, useRef, useMemo, useState, useEffect } from 'react'
-import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi, PluginPrimitivesApi, PrimitiveAccessory, RegisterBrowserWidgetOptions, RegisterTerminalWidgetOptions, BrowserHandle, TerminalHandle, WidgetProps } from '@tinstar/plugin-api'
+import type { TinstarPluginAPI, Disposable, WidgetRegistration, PluginLogger, ConstellationPeer, PluginWidgetApi, PluginPrimitivesApi, PrimitiveAccessory, RegisterBrowserWidgetOptions, RegisterTerminalWidgetOptions, BrowserHandle, TerminalHandle, WidgetProps, Pin } from '@tinstar/plugin-api'
 import { usePluginWidgetData } from './usePluginWidgetData'
 import { makeBrowserPrimitive } from '../../plugins/browser/src/BrowserPrimitive'
 import { TerminalPrimitive } from '../../widgets/primitives/TerminalPrimitive'
@@ -14,11 +14,16 @@ import { makeTerminalHandle } from './terminalHandle'
 import { registerActionHandler, deregisterActionHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
 import { useConstellationContext } from '../../hotkeys/ConstellationContext'
+import { resolveBackingSession } from '../../canvas/resolveBackingSession'
 import { ConstellationBadge } from '../../components/ConstellationBadge'
 import { useFileWatch } from '../../hooks/useFileWatch'
 import { useImageWatch } from '../../hooks/useImageWatch'
 import { resolveRunAccent, hexToRgba } from '../../components/runAccent'
 import { EventBridge } from './eventBridge'
+import { getPinsBridge } from './pinsBridge'
+import { registerPinCapture, unregisterPinCapture } from '../../pins/captureRegistry'
+import { usePinSet } from '../../hooks/usePinSet'
+import { useServerEvents } from '../../hooks/useServerEvents'
 import { useWidgetId } from './widgetIdContext'
 import { capabilityRegistry } from '../constellationCapabilities'
 
@@ -169,6 +174,11 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
       return slots.length > 0 ? Number(slots[0]) : null
     },
 
+    useBackingSession(nodeId: string): string | null {
+      const ctx = useConstellationContext()
+      return resolveBackingSession(nodeId, { slotsForNode: ctx.slotsForNode, nodesInSlot: ctx.nodesInSlot })
+    },
+
     usePeers(): ConstellationPeer[] {
       const widgetId = useWidgetId()
       const ctx = useConstellationContext()
@@ -252,6 +262,53 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
       return useCallback(() => {
         window.dispatchEvent(new CustomEvent('constellation:leave', { detail: { widgetId } }))
       }, [widgetId])
+    },
+  }
+
+  const pins = {
+    useNodePins(nodeId: string): Pin[] {
+      const { state } = useServerEvents()
+      const ps = usePinSet(state.activeSpaceId)
+      return ps.forNode(nodeId)
+    },
+    // Mutators are not hooks — they call through `getPinsBridge()`, a host-mounted
+    // ref published by the <PinsBridge> component (inside the active-space
+    // ConstellationProvider). Unlike the lazily-constructed events getBridge(),
+    // this ref is null whenever no space is active (or during teardown), so each
+    // mutator null-guards and warns rather than silently dropping the call.
+    //
+    // `_nodeId` is RESERVED / forward-looking: pins are keyed by pin id today
+    // (the pin carries its own nodeId for create; update/remove look up by id),
+    // so the param is unused. The slot pre-reserves multi-space / multi-node
+    // disambiguation so the public signature won't need a breaking change later.
+    create(_nodeId: string, pin: Pin): void {
+      const bridge = getPinsBridge()
+      if (!bridge) { console.warn('[pins] api.pins.create called with no active PinsBridge (no active space?) — dropping'); return }
+      bridge.create(pin)
+    },
+    update(_nodeId: string, id: string, fn: (p: Pin) => Pin): void {
+      const bridge = getPinsBridge()
+      if (!bridge) { console.warn('[pins] api.pins.update called with no active PinsBridge (no active space?) — dropping'); return }
+      bridge.update(id, fn)
+    },
+    remove(_nodeId: string, id: string): void {
+      const bridge = getPinsBridge()
+      if (!bridge) { console.warn('[pins] api.pins.remove called with no active PinsBridge (no active space?) — dropping'); return }
+      bridge.remove(id)
+    },
+    // Front door for pin context capture: the widget registers "what's under
+    // this point on me" keyed by its node id. The host shell invokes it at the
+    // drop point (handlePinPlaceUp) to enrich the new pin. The fn is kept fresh
+    // via a ref so the registration is stable (re-register only on nodeId change)
+    // while always calling the latest closure (current url/scroll/geometry).
+    useProvideCapture(fn: (point: { clientX: number; clientY: number }) => Record<string, unknown> | undefined): void {
+      const nodeId = useWidgetId()
+      const fnRef = useRef(fn)
+      fnRef.current = fn
+      useEffect(() => {
+        registerPinCapture(nodeId, (pt) => fnRef.current(pt))
+        return () => unregisterPinCapture(nodeId)
+      }, [nodeId])
     },
   }
 
@@ -411,6 +468,7 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
     hotkeys,
     canvas,
     constellations,
+    pins,
     watch,
     theme,
     logger,

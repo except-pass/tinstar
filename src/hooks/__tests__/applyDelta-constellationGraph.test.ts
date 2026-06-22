@@ -26,10 +26,11 @@ const baseState = (() => {
     readyQueue: [],
     pluginWidgets: [],
     constellationGraphs: [],
+    pinSets: [],
   } as Parameters<typeof applyDelta>[0]
 })()
 
-const graph1: ConstellationGraph = { spaceId: 'space-1', snapped: [['a', 'b']], members: [] }
+const graph1: ConstellationGraph = { spaceId: 'space-1', snapped: [{ nodes: ['a', 'b'] }], members: [] }
 const graph2: ConstellationGraph = { spaceId: 'space-2', snapped: [], members: [{ widget: 'w1', slot: '1' }] }
 
 describe('applyDelta — constellationGraph arm', () => {
@@ -41,10 +42,10 @@ describe('applyDelta — constellationGraph arm', () => {
 
   it('replaces an existing graph (upsert by spaceId)', () => {
     const stateWithOne = { ...baseState, constellationGraphs: [graph1] }
-    const updated: ConstellationGraph = { ...graph1, snapped: [['c', 'd']] }
+    const updated: ConstellationGraph = { ...graph1, snapped: [{ nodes: ['c', 'd'] }] }
     const next = applyDelta(stateWithOne, { entity: 'constellationGraph', id: 'space-1', data: updated })
     expect(next.constellationGraphs).toHaveLength(1)
-    expect(next.constellationGraphs[0]!.snapped).toEqual([['c', 'd']])
+    expect(next.constellationGraphs[0]!.snapped).toEqual([{ nodes: ['c', 'd'] }])
   })
 
   it('appends without touching other graphs', () => {

@@ -52,6 +52,74 @@ export interface WidgetRegistration {
   snappable?: boolean
   /** Free-form descriptive tags, reserved for future ordering/grouping. */
   tags?: string[]
+  /** Declares named attachment points in the widget's normalized coord space
+   *  (fractions of width/height, both in [0,1]). Validated and stored by the
+   *  host; the host currently snaps using the 8 default anchors, so custom sets
+   *  are reserved for future use. Omit to use the defaults. */
+  anchors?: Array<{ name: string; x: number; y: number }>
+  /** Pins are a built-in widget capability. Set false to opt a widget out of the
+   *  contextual-pin overlay entirely. Defaults to true. */
+  pinnable?: boolean
+  /** When true the host does NOT render default pin markers for this widget — the
+   *  widget renders its own (e.g. browser glues pins to scrolling page content).
+   *  Placement/gestures/store/bubble remain host-owned. Default false. */
+  rendersOwnPinMarkers?: boolean
+}
+
+/** DOM context captured when a pin is dropped on a browser widget (best-effort;
+ *  absent ⇒ coords-only). Other widgets leave this undefined. Structurally
+ *  mirrors the host's `BrowserNoteTarget`; duplicated here per the plugin-api
+ *  isolation convention (ADR-0002) — the package imports no host domain types. */
+export interface PinContext {
+  /** Browser fills url + target; other widgets leave these undefined. */
+  url?: string
+  target?: {
+    tag: string
+    selector?: string
+    text?: string
+    imageSrc?: string
+    imageAlt?: string
+    within?: { x: number; y: number }
+  }
+  [k: string]: unknown
+}
+
+/** A single thread message under a pin. Mirrors the host's `src/domain/pinSet.ts`
+ *  per the plugin-api isolation convention — keep the two structurally identical. */
+export interface Reply {
+  id: string
+  author: 'user' | 'agent'
+  text: string
+  createdAt: number
+}
+
+/** A positioned annotation pinned to a widget's content. Duplicated from the
+ *  host's `src/domain/pinSet.ts` per the plugin-api isolation convention — keep
+ *  the two structurally identical. */
+export interface Pin {
+  id: string
+  nodeId: string
+  /** Normalized 0..1 within the widget's content box (browser interprets these
+   *  as document-content coords when it self-renders). */
+  nx: number
+  ny: number
+  comment: string
+  createdAt: number
+  /** undefined = unsent; set when submitted to the backing session. */
+  sentAt?: number
+  context?: PinContext
+  /** Thread beneath the originating comment (message 0). */
+  replies?: Reply[]
+  /** Set when the user resolves the note. */
+  resolvedAt?: number
+}
+
+/** All pins for one space, revision-gated. Mirrors the host's `PinSet`. */
+export interface PinSet {
+  spaceId: string
+  pins: Pin[]
+  /** Monotonic write revision for conflict resolution. */
+  rev?: number
 }
 
 export interface PluginLogger {
@@ -177,6 +245,10 @@ export interface PluginConstellationsApi {
    *  number (1–9), or null if the widget is not assigned to any slot. */
   useMySlot(): number | null
 
+  /** The sessionId backing a node, resolved from constellation membership
+   *  (run node → its own session; else a run peer sharing a slot; else null). */
+  useBackingSession(nodeId: string): string | null
+
   /** React hook: returns the peers sharing my constellation, with their
    *  currently-published capabilities. Re-renders whenever the capability
    *  registry changes. */
@@ -219,6 +291,31 @@ export interface PluginConstellationsApi {
   /** React hook: returns a `leave()` function that removes this widget from
    *  its constellation. No-op if not in a constellation. */
   useLeave(): () => void
+}
+
+/** Per-node pin access: read a node's pins (reactively) and mutate the space's
+ *  pin set. Pins are host-owned, revision-gated, and stored off the entity (one
+ *  PinSet per space). Mutators publish optimistically and persist in the
+ *  background; failed persists roll back. */
+export interface PluginPinsApi {
+  /** React hook: returns the pins currently placed on `nodeId`. Re-renders on
+   *  any pin change (local optimistic or remote echo). Must be called from
+   *  inside the host shell. */
+  useNodePins(nodeId: string): Pin[]
+  /** Add a pin. Callers generate `pin.id`; no dedupe. */
+  create(nodeId: string, pin: Pin): void
+  /** Update a pin in place by id. No-op if the id isn't found. */
+  update(nodeId: string, id: string, fn: (p: Pin) => Pin): void
+  /** Remove a pin by id. No-op if the id isn't found. */
+  remove(nodeId: string, id: string): void
+  /** React hook: register a capture fn for THIS widget's node. The host invokes
+   *  it at pin placement (drag-drop of the pin affordance) to enrich the new
+   *  pin's `context`. Return the context blob — e.g. DOM/semantic info about
+   *  what's under the drop point — or undefined to leave the pin context-less.
+   *  Call once at the top of the widget component; the registration is bound to
+   *  the widget's node id and torn down on unmount. The host falls back to its
+   *  generic native capture for any node that hasn't registered one. */
+  useProvideCapture(fn: (point: { clientX: number; clientY: number }) => Record<string, unknown> | undefined): void
 }
 
 /** Urgency of a widget's "needs attention" signal. */
@@ -356,6 +453,7 @@ export interface TinstarPluginAPI {
   hotkeys: PluginHotkeysApi
   canvas: PluginCanvasApi
   constellations: PluginConstellationsApi
+  pins: PluginPinsApi
   watch: PluginWatchApi
   theme: PluginThemeApi
   logger: PluginLogger
@@ -371,6 +469,22 @@ export interface TinstarPluginAPI {
  */
 export interface Plugin {
   activate(api: TinstarPluginAPI): Disposable[] | void | Promise<Disposable[] | void>
+}
+
+/**
+ * Optional backend-server lifecycle declaration. When present, the host shows a
+ * status light on the plugin's WIDGETS-palette tile and can fire the start command.
+ * Both `health` and `start` are shell command strings run host-side in `cwd`.
+ */
+export interface PluginServerSpec {
+  /** Shell command; exit 0 = up, non-zero/timeout = down (like Docker HEALTHCHECK). Required. */
+  health: string
+  /** Optional shell command the host fires fire-and-forget to start the server. */
+  start?: string
+  /** Working dir for `health`/`start`, relative to the plugin's package.json dir. Default '.'. */
+  cwd?: string
+  /** Health-command timeout in ms. Default 3000. */
+  healthTimeoutMs?: number
 }
 
 /** Manifest stored under `tinstar` in a plugin's package.json. */
@@ -403,9 +517,16 @@ export interface PluginManifest {
       /** When set, this widget is primitive-backed: the plugin registers it via
        *  api.primitives.register{Browser,Terminal}Widget rather than api.widgets.register. */
       primitive?: 'browser' | 'terminal'
+      /** Declares named attachment points in the widget's normalized coord space
+       *  (fractions of width/height, both in [0,1]). Validated and stored by the
+       *  host; the host currently snaps using the 8 default anchors, so custom sets
+       *  are reserved for future use. Omit to use the defaults. */
+      anchors?: Array<{ name: string; x: number; y: number }>
     }>
   }
   permissions?: string[]
+  /** Optional backend-server lifecycle. See PluginServerSpec. */
+  server?: PluginServerSpec
 }
 
 /**

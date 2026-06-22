@@ -1,6 +1,6 @@
 // src/server/stores/__tests__/constellationGraph.docstore.test.ts
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { DocumentStore } from '../document-store'
@@ -56,7 +56,7 @@ describe('DocumentStore constellationGraph', () => {
 
     const after = store.getConstellationGraph('space-1')!
     expect(after.members.map(m => m.widget).sort()).toEqual(['pw-a', 'run-R1'])
-    expect(after.snapped).toEqual([['pw-a', 'run-R1']])
+    expect(after.snapped).toEqual([{ nodes: ['pw-a', 'run-R1'] }])
   })
 
   // Regression: persisted plugin-widget membership must survive a reload. The
@@ -78,7 +78,7 @@ describe('DocumentStore constellationGraph', () => {
       reloaded.enablePersistence(file)
       const after = reloaded.getConstellationGraph('space-1')!
       expect(after.members.map(m => m.widget).sort()).toEqual(['pw-a', 'run-R1'])
-      expect(after.snapped).toEqual([['pw-a', 'run-R1']])
+      expect(after.snapped).toEqual([{ nodes: ['pw-a', 'run-R1'] }])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -145,5 +145,24 @@ describe('DocumentStore constellationGraph', () => {
     store.activeSpaceId = 'space-1'
     const snap = store.snapshot() as { constellationGraphs: Array<{ spaceId: string }> }
     expect(snap.constellationGraphs.map(g => g.spaceId)).toEqual(['space-1'])
+  })
+
+  // Migration: legacy on-disk graphs carry [a,b] tuple snap edges; hydration must
+  // upgrade them to structured { nodes: [a,b] } edges so new code never sees tuples.
+  it('migrates legacy [a,b] tuple edges to structured edges on load', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'constellation-migrate-'))
+    const file = join(dir, 'snapshot.json')
+    try {
+      // Write a legacy docstore snapshot with tuple snap edges
+      writeFileSync(file, JSON.stringify({
+        constellationGraphs: [{ spaceId: 's', snapped: [['b', 'a']], members: [] }]
+      }))
+      const store = new DocumentStore()
+      store.enablePersistence(file)
+      const g = store.getConstellationGraph('s')!
+      expect(g.snapped[0]).toEqual({ nodes: ['a', 'b'] })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

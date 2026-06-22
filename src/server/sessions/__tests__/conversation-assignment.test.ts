@@ -9,14 +9,20 @@ describe('decideConversationId — single-session decision', () => {
     { convId: 'fresh', mtimeMs: 300, birthtimeMs: 200 },
   ]
 
-  it('adopts a newer unclaimed transcript (/clear created a fresh file)', () => {
+  it('keeps its own file even when a newer unclaimed transcript exists (orphan-safe)', () => {
+    // A newer unclaimed transcript in the dir is NOT adopted. In a shared workdir
+    // it is almost always an orphan (dead peer, or a headless `claude -p` review
+    // run), filesystem-indistinguishable from a legit in-place /clear successor.
+    // Adopting it caused live sessions to hop onto strangers' transcripts ->
+    // wrong status lights + telemetry misattribution. Attribution beats live
+    // /clear discovery; an in-place /clear re-tracks on relaunch/resume.
     const got = decideConversationId({
       currentConvId: 'mine',
       sessionCreatedMs: 0,
       transcripts,
       claimedByPeers: new Set(),
     })
-    expect(got).toBe('fresh')
+    expect(got).toBe('mine')
   })
 
   it('keeps the current convId when nothing newer is available', () => {
@@ -85,16 +91,25 @@ describe('planSharedDirAssignments — multi-session fixpoint (no oscillation)',
 
     // No two sessions may share a convId.
     expect(round1.get('A')).not.toBe(round1.get('B'))
+
+    // ...and each session keeps its OWN file — neither adopts the newer orphan.
+    // (Stable-but-misattributed is still misattributed: this is the real bug.)
+    expect(round1.get('A')).toBe('A-real')
+    expect(round1.get('B')).toBe('B-real')
   })
 
-  it('a lone session still adopts a newer transcript (/clear)', () => {
+  it('a lone session keeps its own file even when a newer unclaimed transcript exists', () => {
+    // Even a lone session does not chase the newest file: a shared workdir
+    // accumulates orphans (e.g. headless `claude -p` review runs) in the same
+    // dir, and the lone session was observed hopping onto one. In-place /clear
+    // is sacrificed for correct attribution; it re-tracks on relaunch/resume.
     const sessions = [{ name: 'A', convId: 'A-real', createdMs: 0 }]
     const tx: Tx[] = [
       { convId: 'A-real', mtimeMs: 100, birthtimeMs: 10 },
       { convId: 'A-cleared', mtimeMs: 400, birthtimeMs: 300 },
     ]
     const got = planSharedDirAssignments(sessions, tx)
-    expect(got.get('A')).toBe('A-cleared')
+    expect(got.get('A')).toBe('A-real')
   })
 
   it('two sessions with no orphan each keep their own file', () => {

@@ -7,6 +7,24 @@
     @apply border-primary/10;
   }
 
+  /* While a canvas widget is being dragged, iframes (browser widgets, terminals)
+     must not capture the pointer stream. setPointerCapture alone does NOT hold
+     over an <iframe> in Chromium — the iframe swallows pointermove/pointerup and
+     the drag dies mid-flight, so the widget never reaches snap range and won't
+     mate. Mirrors the file-drop overlay that already covers iframes for HTML5
+     drops (see InfiniteCanvas). The attribute is cleared on drag end. */
+  [data-testid='infinite-canvas'][data-dragging='true'] iframe {
+    pointer-events: none;
+  }
+
+  /* Same guard, but for pin place/reposition drags. A pin can be dragged onto or
+     across an iframe-backed widget (browser/terminal); setPointerCapture does not
+     hold over an <iframe>, so we must disable iframe pointer-events for the
+     duration of the pin drag too (data-pin-dragging is set by InfiniteCanvas). */
+  [data-testid='infinite-canvas'][data-pin-dragging='true'] iframe {
+    pointer-events: none;
+  }
+
   html, body, #root {
     @apply overflow-hidden;
   }
@@ -202,4 +220,61 @@
 }
 .widget-flash {
   animation: widget-flash 700ms ease-out;
+}
+
+/* ── Constellation links ─────────────────────────────────────────────────
+   A star on each anchor point + a line between two snapped widgets, drawn
+   constellation-chart style. Juice on form (draw in / pop) and break
+   (retract / fade). Cyan to match the hotkey-flourish palette. */
+
+@keyframes constellation-draw   { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes constellation-retract{ from { stroke-dashoffset: 0; } to { stroke-dashoffset: 1; } }
+@keyframes constellation-star-pop {
+  0%   { transform: scale(0)   rotate(-90deg); opacity: 0; }
+  60%  { transform: scale(1.4) rotate(8deg);   opacity: 1; }
+  100% { transform: scale(1)   rotate(0deg);   opacity: 1; }
+}
+@keyframes constellation-star-out {
+  0%   { transform: scale(1)   rotate(0deg);  opacity: 1; }
+  100% { transform: scale(0.1) rotate(60deg); opacity: 0; }
+}
+@keyframes constellation-twinkle {
+  0%, 100% { opacity: 0.9;  filter: drop-shadow(0 0 1px rgba(0,240,255,0.5)); }
+  50%      { opacity: 1;    filter: drop-shadow(0 0 4px rgba(0,240,255,0.95)); }
+}
+
+/* Connecting line */
+.constellation-link__glow {
+  stroke: rgba(0, 240, 255, 0.18);
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+.constellation-link__core {
+  stroke: rgba(0, 240, 255, 0.45);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  animation: constellation-draw 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.constellation-link.is-active .constellation-link__core { stroke: rgba(0, 240, 255, 0.95); stroke-width: 2; }
+.constellation-link.is-active .constellation-link__glow { stroke: rgba(0, 240, 255, 0.3); stroke-width: 8; }
+.constellation-link.is-exiting .constellation-link__core { animation: constellation-retract 300ms cubic-bezier(0.5, 0, 0.75, 0) both; }
+.constellation-link.is-exiting .constellation-link__glow { transition: opacity 200ms ease; opacity: 0; }
+
+/* Anchor stars */
+.constellation-star { will-change: transform; }
+.constellation-star__shape {
+  fill: rgba(0, 240, 255, 0.55);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: constellation-star-pop 360ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.constellation-star__core { fill: #ffffff; opacity: 0.9; }
+.constellation-star.is-active .constellation-star__shape {
+  fill: rgba(0, 240, 255, 0.95);
+  animation: constellation-star-pop 360ms cubic-bezier(0.34, 1.56, 0.64, 1) both,
+             constellation-twinkle 2.2s ease-in-out 400ms infinite;
+}
+.constellation-star.is-exiting .constellation-star__shape {
+  animation: constellation-star-out 280ms cubic-bezier(0.5, 0, 0.75, 0) both;
 }

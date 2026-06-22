@@ -1,6 +1,18 @@
 // Built-in plugin — consumes @tinstar/plugin-api only. Host imports forbidden (ADR-0002).
+// Exceptions: `import type` from src/domain/types for widget data shapes, and the
+// shared pin primitives (src/pins/PinMarker, PinBubble) so self-rendered browser
+// pins are visually identical to host-rendered pins on every other widget. These
+// are intentionally shared UI, not host internals; src/pins is not ESLint-fenced.
 import { useState, useCallback, useRef, useEffect } from 'react'
 import type { TinstarPluginAPI } from '@tinstar/plugin-api'
+import { unproxyPath } from './proxyPaths'
+import { BrowserPinLayer } from './notes/BrowserPinLayer'
+import { formatBrowserPin } from './notes/formatBrowserPin'
+import { captureTarget } from './notes/capture'
+import { replyInstructions, threadSoFar } from '../../../pins/replyPrompt'
+
+// Re-export: external importers/tests treat BrowserPrimitive as unproxyPath's home.
+export { unproxyPath }
 
 export interface BrowserPrimitiveProps {
   /** Host node id — used for the proxy path (`/api/proxy/:nodeId`). */
@@ -29,6 +41,8 @@ export interface BrowserPrimitiveProps {
   isHovered?: boolean
   /** Bump this number to force an iframe reload from the host/accessory. */
   reloadSignal?: number
+  /** Attached session id — enables submitting a pin to the backing session. */
+  sessionId?: string
 }
 
 interface ConsoleEntry {
@@ -67,6 +81,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
       isDragging,
       isHovered,
       reloadSignal,
+      sessionId,
     } = props
 
     const hasHeaders = headers && Object.keys(headers).length > 0
@@ -79,6 +94,98 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
     const [consoleEntries, setConsoleEntries] = useState<ConsoleEntry[]>([])
     const nextIdRef = useRef(0)
     const inputRef = useRef<HTMLInputElement>(null)
+    const iframeRef = useRef<HTMLIFrameElement>(null)
+
+    // Pins are host-owned (one PinSet per space); the browser reads its node's
+    // pins reactively and self-renders them so they glue to scrolling content.
+    const pins = api.pins.useNodePins(nodeId)
+    const [iframeScroll, setIframeScroll] = useState({ x: 0, y: 0 })
+    const [iframeSize, setIframeSize] = useState({ width: 0, height: 0 })
+    // True while a pin marker is being dragged to reposition. The markers sit OVER
+    // the iframe and setPointerCapture does NOT hold over iframes (repo memory
+    // canvas_iframe_drag_guard), so we disable the iframe's pointer-events during
+    // the drag locally — the plugin owns its iframe, no host coupling needed.
+    const [markerDragging, setMarkerDragging] = useState(false)
+    // The currently-bound scroll listener. The iframe's inner Window is replaced
+    // on every cross-document navigation (the WindowProxy identity is stable), so
+    // we re-bind on each load rather than dedupe by identity — see handleIframeLoad.
+    const scrollBindRef = useRef<{ win: Window; handler: () => void; raf: number } | null>(null)
+
+    // Tear down the iframe scroll listener (and any pending rAF) on unmount.
+    useEffect(() => () => {
+      const b = scrollBindRef.current
+      if (b) { try { b.win.removeEventListener('scroll', b.handler); if (b.raf) b.win.cancelAnimationFrame(b.raf) } catch { /* gone */ } }
+    }, [])
+
+    // Pin context capture FRONT DOOR. The host shell invokes this at the drop
+    // point (handlePinPlaceUp) — capture happens AT placement, not reactively.
+    // We turn the viewport drop point into a content-glued pin: DOM context at
+    // the point plus absolute document coords (docX/docY = iframe-body-relative
+    // pixel + scroll) so the marker tracks content as the page scrolls.
+    //
+    // The host passes real clientX/clientY; the iframe sits below the URL toolbar,
+    // so we offset by the iframe's live bounding box (ifr.left/top) to get
+    // iframe-body-relative viewport pixels, then add the current scroll. The fn
+    // closes over the latest `url`/`iframeScroll` — createApi keeps it fresh via a
+    // ref, so registration stays stable while the closure always sees live state.
+    //
+    // Returns undefined (pin stays context-less, BrowserPinLayer renders it at the
+    // nx fallback) when the iframe isn't laid out yet. Cross-origin documents yield
+    // no `target` but still carry `url` + docX/docY.
+    api.pins.useProvideCapture(({ clientX, clientY }) => {
+      const ifr = iframeRef.current?.getBoundingClientRect()
+      if (!ifr || ifr.width === 0 || ifr.height === 0) return undefined
+      const vx = clientX - ifr.left
+      const vy = clientY - ifr.top
+      let doc: Document | undefined
+      try { doc = iframeRef.current?.contentDocument ?? undefined } catch { /* opaque */ }
+      let target: ReturnType<typeof captureTarget>
+      try { if (doc) target = captureTarget(doc, vx, vy, nodeId, url) } catch { /* cross-origin */ }
+      const docX = vx + iframeScroll.x
+      const docY = vy + iframeScroll.y
+      return { url, ...(target ? { target } : {}), docX, docY }
+    })
+
+    const submitPin = useCallback(async (id: string, comment: string) => {
+      const pin = pins.find(p => p.id === id)
+      if (!pin || !sessionId) return
+      try {
+        // Use the FRESH comment from the bubble draft, not pin.comment — the store
+        // update is async and pin.comment still holds the pre-edit value this tick.
+        const res = await api.http.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: `${formatBrowserPin({ ...pin, comment })}\n\n${replyInstructions(id, window.location.origin)}` }),
+        })
+        const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
+        if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
+        api.pins.update(nodeId, id, p => ({ ...p, comment, sentAt: Date.now() }))
+      } catch (err) {
+        api.logger?.warn?.('[browser-pins] submit failed:', (err as Error).message)
+      }
+    }, [pins, sessionId, nodeId])
+
+    const replyToPin = useCallback(async (id: string, text: string) => {
+      if (!sessionId) return
+      const pin = pins.find(p => p.id === id)
+      try {
+        await api.http.fetch(`/api/notes/${encodeURIComponent(id)}/replies`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, author: 'user' }),
+        })
+      } catch (err) { api.logger?.warn?.('[browser-pins] reply failed:', (err as Error).message); return }
+      const history = pin ? `${threadSoFar(pin)}\n[user] ${text}` : `[user] ${text}`
+      const prompt = `📍 Follow-up on the note:\n\n${history}\n\n${replyInstructions(id, window.location.origin)}`
+      try {
+        await api.http.fetch(`/api/sessions/${encodeURIComponent(sessionId)}/enter-prompt`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        })
+      } catch (err) { api.logger?.warn?.('[browser-pins] re-prompt failed:', (err as Error).message) }
+    }, [pins, sessionId, nodeId])
+
+    const resolvePin = useCallback((id: string) => api.pins.update(nodeId, id, p => ({ ...p, resolvedAt: Date.now() })), [nodeId])
+    const reopenPin = useCallback((id: string) => api.pins.update(nodeId, id, p => { const { resolvedAt: _d, ...rest } = p; return rest }), [nodeId])
 
     // Listen for console messages from the proxied iframe
     useEffect(() => {
@@ -136,6 +243,59 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
       }
     }, [inputValue, url, navigate])
 
+    // Track navigations that happen INSIDE the iframe (link clicks / full-page
+    // loads the proxied app drives itself). The primitive otherwise only learns
+    // its URL from the address bar or an agent push, so an app that navigates on
+    // its own — e.g. the stretchplan plan picker hitting /p/<slug> — would leave
+    // _browser.url, and any plugin reading useBrowser().url, frozen on the spawn
+    // URL. The proxied page is served from Tinstar's own origin so
+    // contentWindow.location is readable (allow-same-origin); a genuinely
+    // cross-origin document throws on access and is skipped. We un-proxy the path
+    // (/api/proxy/<nodeId>/p/x → <origin>/p/x) so the persisted URL stays a real
+    // target the proxy can resolve, and round-trips through proxyUrl() unchanged
+    // (same iframeSrc key ⇒ no remount ⇒ no reload loop).
+    const handleIframeLoad = useCallback((e: React.SyntheticEvent<HTMLIFrameElement>) => {
+      // Track the proxied document's scroll so pins stay glued to content.
+      // Same-origin via the proxy ⇒ direct listener; opaque docs are skipped.
+      try {
+        const win = e.currentTarget.contentWindow
+        if (win) {
+          // Re-bind every load: a cross-document navigation (e.g. the stretchplan
+          // picker hitting /p/<slug>) replaces the inner Window, discarding its
+          // listener, while the WindowProxy identity stays the same — so a
+          // dedupe-by-identity skip would leave the new document untracked and
+          // pins would drift on scroll. Tear down the prior binding, bind the new.
+          const prev = scrollBindRef.current
+          if (prev) { try { prev.win.removeEventListener('scroll', prev.handler); if (prev.raf) prev.win.cancelAnimationFrame(prev.raf) } catch { /* gone */ } }
+          const binding = { win, handler: () => {}, raf: 0 }
+          binding.handler = () => {
+            if (!binding.raf) binding.raf = win.requestAnimationFrame(() => {
+              binding.raf = 0
+              setIframeScroll({ x: win.scrollX, y: win.scrollY })
+            })
+          }
+          win.addEventListener('scroll', binding.handler, { passive: true })
+          scrollBindRef.current = binding
+          setIframeScroll({ x: win.scrollX, y: win.scrollY })
+        }
+      } catch { /* cross-origin */ }
+      // Record the visible iframe box so the pin layer can place not-yet-enriched
+      // pins (whose only coords are nx/ny normalized to that box).
+      setIframeSize({ width: e.currentTarget.clientWidth, height: e.currentTarget.clientHeight })
+      let real: string | null
+      try {
+        const loc = e.currentTarget.contentWindow?.location
+        if (!loc) return
+        real = unproxyPath(loc.pathname, loc.search, nodeId, url)
+      } catch {
+        return // cross-origin document — location is opaque, nothing to track
+      }
+      if (real && real !== url) {
+        setUrl(real)
+        onNavigate(real)
+      }
+    }, [nodeId, url, onNavigate])
+
     const reload = useCallback(() => {
       const current = url
       setUrl('')
@@ -187,6 +347,7 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
               value={inputValue}
               onChange={e => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
+              onFocus={e => e.currentTarget.select()}
               onBlur={() => { setInputValue(url); setEditing(false) }}
               onPointerDown={e => e.stopPropagation()}
               placeholder="localhost:3000"
@@ -211,6 +372,16 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
               title="Reload"
             >
               <span className="material-symbols-outlined text-sm">refresh</span>
+            </button>
+          )}
+          {url && (
+            <button
+              onPointerDown={e => e.stopPropagation()}
+              onClick={() => window.open(/^https?:\/\//i.test(url) ? url : `http://${url}`, '_blank', 'noopener,noreferrer')}
+              className="text-slate-500 hover:text-slate-300 flex-shrink-0"
+              title="Open in system browser"
+            >
+              <span className="material-symbols-outlined text-sm">open_in_new</span>
             </button>
           )}
           {onHeadersChange && (
@@ -262,21 +433,45 @@ export function makeBrowserPrimitive(api: TinstarPluginAPI) {
         )}
 
         {/* Body */}
-        <div className="flex-1 min-h-0 relative">
-          {iframeSrc ? (
-            <iframe
-              key={iframeSrc}
-              src={iframeSrc}
-              className="w-full h-full border-0 bg-white"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-              title={title ?? url}
-            />
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: hexToRgba(accent, 0.3) }}>
-              <span className="material-symbols-outlined text-5xl">language</span>
-              <span className="text-xs font-mono text-slate-600">enter a URL above or wait for an agent to push one</span>
-            </div>
-          )}
+        <div className="flex-1 min-h-0 flex">
+          <div className="flex-1 min-w-0 relative">
+            {iframeSrc ? (
+              <>
+                <iframe
+                  ref={iframeRef}
+                  key={iframeSrc}
+                  src={iframeSrc}
+                  onLoad={handleIframeLoad}
+                  className="w-full h-full border-0 bg-white"
+                  style={{ pointerEvents: markerDragging ? 'none' : undefined }}
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                  title={title ?? url}
+                />
+                <BrowserPinLayer
+                  pins={pins}
+                  url={url}
+                  scroll={iframeScroll}
+                  iframeWidth={iframeSize.width}
+                  iframeHeight={iframeSize.height}
+                  accent={accent}
+                  canSubmit={!!sessionId}
+                  onCommentChange={(id, comment) => api.pins.update(nodeId, id, p => ({ ...p, comment }))}
+                  onDelete={(id) => api.pins.remove(nodeId, id)}
+                  onSubmit={submitPin}
+                  onReply={replyToPin}
+                  onResolve={resolvePin}
+                  onReopen={reopenPin}
+                  onReposition={(id, docX, docY) => api.pins.update(nodeId, id, p => ({ ...p, context: { ...(p.context ?? {}), url: p.context?.url ?? url, docX, docY } }))}
+                  onDragActiveChange={setMarkerDragging}
+                />
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: hexToRgba(accent, 0.3) }}>
+                <span className="material-symbols-outlined text-5xl">language</span>
+                <span className="text-xs font-mono text-slate-600">enter a URL above or wait for an agent to push one</span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Console panel */}

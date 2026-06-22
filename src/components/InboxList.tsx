@@ -61,31 +61,24 @@ export function InboxList({ activeSpaceId, searchQuery = '', onVisibleRunOrder }
     dispatchFlashFocus({ widgetId, source: row.source })
   }
 
-  function handleClear(widgetId: string) {
+  function handleClose(widgetId: string) {
     const row = rows.find(r => r.widgetId === widgetId)
-    if (!row) return
-    const endpoint = row.source === 'plugin'
-      ? `/api/plugin-widgets/${widgetId}`
-      : `/api/runs/${widgetId}`
-    // Clearing run attention is server-supported (PATCH /api/runs/:id with attention:null);
-    // for a run it stays cleared until the next status transition re-derives it.
-    apiFetch(endpoint, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ attention: null }),
-    }).then((res) => {
+    if (!row || row.source !== 'run') return
+    // The × only shows on a stopped agent (see InboxRow). Closing it deletes the
+    // dead session — same terminate-and-remove the canvas widget's Delete uses.
+    apiFetch(`/api/sessions/${widgetId}`, { method: 'DELETE' }).then((res) => {
       if (!res.ok) {
         // eslint-disable-next-line no-console
-        console.error(`[inbox] clear failed: HTTP ${res.status}`)
+        console.error(`[inbox] close failed: HTTP ${res.status}`)
       }
     }).catch((err: unknown) => {
       // eslint-disable-next-line no-console
-      console.error('[inbox] clear failed:', err)
+      console.error('[inbox] close failed:', err)
     })
   }
 
   return (
-    <div className="flex flex-col h-full" data-testid="inbox-list">
+    <div className="flex flex-col flex-1 min-h-0" data-testid="inbox-list">
       <div className="flex items-center gap-1 px-2 py-1 border-b border-white/5 text-2xs">
         {LEVELS.map(lvl => (
           <button
@@ -119,7 +112,7 @@ export function InboxList({ activeSpaceId, searchQuery = '', onVisibleRunOrder }
               row={row}
               selected={isSelected(selectionId(row))}
               onClick={handleClick}
-              onClear={handleClear}
+              onClose={handleClose}
             />
           ))
         )}

@@ -24,6 +24,9 @@ import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, Browse
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
+import { migrateSnapEdges } from '../../domain/constellationGraph'
+import { type PinSet, removePinsForNode } from '../../domain/pinSet'
+import { migrateAllBrowserNotes } from '../migrations/migrateAllBrowserNotes'
 
 /** Translate a run's status into a default attention signal.
  *  Returns null when the inbox shouldn't surface the run. */
@@ -123,6 +126,7 @@ export class DocumentStore {
   private topicMetadata = new Map<string, TopicMetadata>()
   private pluginWidgets = new Map<string, PluginWidgetInstance>()
   private constellationGraphs = new Map<string, ConstellationGraph>()
+  private pinSets = new Map<string, PinSet>()
 
   activeSpaceId: string = ''
 
@@ -161,7 +165,9 @@ export class DocumentStore {
       if (data.artifacts) for (const a of data.artifacts) this.artifacts.set(a.id, a)
       if (data.imageWidgets) for (const w of data.imageWidgets) this.imageWidgets.set(w.id, w)
       if (data.pluginWidgets) for (const w of data.pluginWidgets) this.pluginWidgets.set(w.id, w)
-      if (data.constellationGraphs) for (const g of data.constellationGraphs) this.constellationGraphs.set(g.spaceId, g)
+      if (data.constellationGraphs) for (const g of data.constellationGraphs) this.constellationGraphs.set(g.spaceId, migrateSnapEdges(g))
+      // Pins have no legacy schema, so no migrate hook — load straight.
+      if (data.pinSets) for (const set of data.pinSets) this.pinSets.set(set.spaceId, set)
       if (data.topicMetadata) for (const m of data.topicMetadata) this.topicMetadata.set(m.subject, m)
     } catch {
       // No file or corrupt — start fresh
@@ -169,6 +175,17 @@ export class DocumentStore {
 
     // Debounced save on every change
     this.changes.on('change', () => this.schedulePersist())
+
+    // One-time, idempotent: migrate legacy browser widget.notes → per-space pins.
+    // Runs after all entities (browserWidgets AND pinSets) are hydrated AND after
+    // the change→persist listener is attached, so each seed's change event actually
+    // schedules a disk persist — otherwise the "one-time" migration re-runs every
+    // boot until an unrelated mutation flushes. Only seeds spaces with NO PinSet.
+    try {
+      migrateAllBrowserNotes(this)
+    } catch (err) {
+      console.warn('[docstore] browser-notes → pins migration failed:', err)
+    }
   }
 
   private schedulePersist(): void {
@@ -320,7 +337,10 @@ export class DocumentStore {
     if (this.runs.has(id)) {
       this.runs.delete(id)
       this.changes.emit('change', { entity: 'run', id, data: null })
+      // Node-id convention: a run's canvas node is `run-${id}` (see grouping.ts
+      // and WorkspaceShell synthetic nodes); pins key off that prefixed id.
       this.pruneWidgetFromGraphs(`run-${id}`)
+      this.removePinsForNodeAcrossSpaces(`run-${id}`)
       return
     }
     // Simulator runs are keyed by run id (R-xxx) but deleted by session name (CLD-xxx)
@@ -329,6 +349,7 @@ export class DocumentStore {
         this.runs.delete(key)
         this.changes.emit('change', { entity: 'run', id: key, data: null })
         this.pruneWidgetFromGraphs(`run-${key}`)
+        this.removePinsForNodeAcrossSpaces(`run-${key}`)
         return
       }
     }
@@ -438,7 +459,11 @@ export class DocumentStore {
   deleteEditorWidget(id: string): void {
     this.editorWidgets.delete(id)
     this.changes.emit('change', { entity: 'editorWidget', id, data: null })
+    // Widget ids are already type-prefixed (shortId('editor') → `editor-...`) and
+    // the canvas node id is that same id (WorkspaceShell synthetic nodes use id: w.id),
+    // so the bare id is the pin nodeId — no extra prefix.
     this.pruneWidgetFromGraphs(id)
+    this.removePinsForNodeAcrossSpaces(id)
   }
 
   getAllEditorWidgets(): EditorWidget[] {
@@ -456,6 +481,7 @@ export class DocumentStore {
     this.browserWidgets.delete(id)
     this.changes.emit('change', { entity: 'browserWidget', id, data: null })
     this.pruneWidgetFromGraphs(id)
+    this.removePinsForNodeAcrossSpaces(id)
     // Cascade: an ephemeral artifact's lifecycle is tied to its browser widget.
     for (const [aid, a] of this.artifacts) {
       if (a.widgetId === id) this.deleteArtifact(aid)
@@ -541,6 +567,7 @@ export class DocumentStore {
     this.pluginWidgets.delete(id)
     this.changes.emit('change', { entity: 'pluginWidget', id, data: null })
     this.pruneWidgetFromGraphs(id)
+    this.removePinsForNodeAcrossSpaces(id)
   }
 
   getAllPluginWidgets(): PluginWidgetInstance[] {
@@ -551,7 +578,7 @@ export class DocumentStore {
 
   private pruneWidgetFromGraphs(widgetId: string): void {
     for (const [spaceId, g] of this.constellationGraphs) {
-      const snapped = g.snapped.filter(([a, b]) => a !== widgetId && b !== widgetId)
+      const snapped = g.snapped.filter(e => e.nodes[0] !== widgetId && e.nodes[1] !== widgetId)
       let members = g.members.filter(m => m.widget !== widgetId)
       // Free any slot left with a single member (no 1-member constellations).
       const countBySlot = new Map<string, number>()
@@ -588,6 +615,37 @@ export class DocumentStore {
     return [...this.constellationGraphs.values()]
   }
 
+  // --- Pins ---
+
+  /** Returns whether the write was applied. A stale/equal revision is rejected
+   *  (returns false), mirroring the constellation graph contract. */
+  upsertPinSet(spaceId: string, data: PinSet): boolean {
+    const existing = this.pinSets.get(spaceId)
+    if (existing && (data.rev ?? 0) <= (existing.rev ?? 0)) return false
+    this.pinSets.set(spaceId, data)
+    this.changes.emit('change', { entity: 'pinSet', id: spaceId, data })
+    return true
+  }
+
+  getPinSet(spaceId: string): PinSet | undefined {
+    return this.pinSets.get(spaceId)
+  }
+
+  getAllPinSets(): PinSet[] {
+    return [...this.pinSets.values()]
+  }
+
+  /** GC: drop a deleted node's pins from every space. Bumps rev so the write is
+   *  not rejected by the gate and so clients supersede any optimistic overlay. */
+  removePinsForNodeAcrossSpaces(nodeId: string): void {
+    for (const [spaceId, set] of this.pinSets) {
+      const next = removePinsForNode(set, nodeId)
+      if (next.pins.length !== set.pins.length) {
+        this.upsertPinSet(spaceId, { ...next, rev: (set.rev ?? 0) + 1 })
+      }
+    }
+  }
+
   // --- Image Widgets ---
 
   upsertImageWidget(id: string, data: ImageWidget): void {
@@ -599,6 +657,7 @@ export class DocumentStore {
     this.imageWidgets.delete(id)
     this.changes.emit('change', { entity: 'imageWidget', id, data: null })
     this.pruneWidgetFromGraphs(id)
+    this.removePinsForNodeAcrossSpaces(id)
   }
 
   getAllImageWidgets(): ImageWidget[] {
@@ -645,6 +704,7 @@ export class DocumentStore {
       imageWidgets: this.getAllImageWidgets().filter(inSpace),
       pluginWidgets: this.getAllPluginWidgets().filter(inSpace),
       constellationGraphs: this.getAllConstellationGraphs().filter(inSpace),
+      pinSets: this.getAllPinSets().filter(inSpace),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -666,6 +726,7 @@ export class DocumentStore {
       imageWidgets: this.getAllImageWidgets(),
       pluginWidgets: this.getAllPluginWidgets(),
       constellationGraphs: this.getAllConstellationGraphs(),
+      pinSets: this.getAllPinSets(),
       topicMetadata: this.getAllTopicMetadata(),
     }
   }
@@ -691,6 +752,7 @@ export class DocumentStore {
     for (const [id, e] of this.imageWidgets) if (e.spaceId === spaceId) this.imageWidgets.delete(id)
     for (const [id, e] of this.pluginWidgets) if (e.spaceId === spaceId) this.pluginWidgets.delete(id)
     this.constellationGraphs.delete(spaceId)
+    this.pinSets.delete(spaceId)
     this.changes.emit('change', { entity: 'all', id: '*', data: null })
   }
 
@@ -711,6 +773,7 @@ export class DocumentStore {
       this.artifacts.clear()
       this.imageWidgets.clear()
       this.constellationGraphs.clear()
+      this.pinSets.clear()
       // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
     }

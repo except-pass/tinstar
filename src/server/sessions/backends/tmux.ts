@@ -9,13 +9,35 @@ import { log } from '../../logger'
 // NATS channel server paths come from config (see config.ts)
 // Install: git clone https://github.com/except-pass/nats-channel-mcp && cd nats-channel-mcp && bun install
 
-const execFileAsync = promisify(execFile)
+const rawExecFileAsync = promisify(execFile)
+
+// Every tmux command runs through this. Session-write API endpoints (create, /prompt,
+// stop, …) `await` these, and a tmux server can wedge (a stuck client, a hung pane,
+// an unresponsive socket). WITHOUT a timeout a wedged `tmux` makes the awaiting HTTP
+// handler hang forever with no response (curl exit 28) — and a try/catch can't save a
+// hang, only a rejection. The timeout kills the child and REJECTS, which the routes'
+// existing try/catch turns into a clean 5xx instead of an infinite hang. GET endpoints
+// that run no tmux commands stay responsive throughout, which is exactly the reported
+// symptom. 10s is far above any healthy tmux command (<1s) so it never trips normally.
+const TMUX_EXEC_TIMEOUT_MS = 10_000
+function execFileAsync(
+  file: string,
+  args: readonly string[],
+  opts: { timeout?: number; maxBuffer?: number } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  // No encoding option ⇒ stdout/stderr are utf8 strings (matches the prior behavior).
+  return rawExecFileAsync(file, args as string[], { timeout: TMUX_EXEC_TIMEOUT_MS, ...opts }) as Promise<{ stdout: string; stderr: string }>
+}
 
 // --- OS clipboard integration ---
 
 // Candidate "stdin -> system clipboard" commands, in priority order. WSL
 // exposes the Windows clipboard via clip.exe; macOS and Linux use their
 // native tools. The first one present on PATH wins.
+// MUST stay hardcoded literals: getClipboardCommand() string-interpolates the
+// binary name into `command -v ${bin}` via execSync. With these constants that's
+// injection-safe (no external input reaches the shell); if this list ever becomes
+// config/env-derived, switch the probe to execFileSync('command', ['-v', bin]).
 const CLIPBOARD_CANDIDATES = [
   'clip.exe', // WSL -> Windows clipboard
   'pbcopy', // macOS
@@ -438,6 +460,14 @@ export async function createTmuxSession(
   // Enable set-clipboard (OSC-52, for terminals that honor it) and pipe
   // copy-mode selections through the host clipboard tool so drag-select and
   // Enter copy straight to the OS clipboard.
+  //
+  // SCOPE: tmux runs with no -L/-S socket (see the `new` invocation above), so all
+  // Tinstar sessions share the default server — `set -g` and these `bind-key -T`
+  // key-table entries are therefore SERVER-GLOBAL, not per-session, and re-applied
+  // (idempotently) on each create. This is intentional and matches the existing
+  // global `bind-key -n C-h` remap. SECURITY: `set-clipboard on` lets the program
+  // inside a pane (the agent CLI) write the host OS clipboard via OSC-52 — a
+  // deliberate, low-severity tradeoff for an agent runner.
   await execFileAsync('tmux', ['set', '-g', 'set-clipboard', 'on'])
   const clipboardCmd = getClipboardCommand()
   if (clipboardCmd) {
@@ -706,6 +736,21 @@ export interface TtydIncumbent {
   tmuxTarget: string | null
 }
 
+/**
+ * Extract the tmux session a ttyd attaches from its full `ps -o args=` line.
+ * Anchors on the tmux client invocation (`tmux … attach[-session] … -t NAME`),
+ * so it tolerates global flags like `-L <socket>` and the `attach-session`
+ * alias, and never mistakes ttyd's own `-t` option flags (which precede `tmux`
+ * in the args, e.g. `-t titleFixed=Tinstar`) for the session token. Single
+ * source for both reclaim paths so the parser can't drift from how `startTtyd`
+ * spawns the client (`bash -c "tmux attach -t <name>"`). Returns null when no
+ * tmux target is present (e.g. the process vanished or runs a non-tmux command).
+ */
+export function tmuxTargetFromArgs(args: string): string | null {
+  const m = args.match(/\btmux\b.*?\battach(?:-session)?\b.*?\s-t\s+(\S+)/)
+  return m ? m[1]! : null
+}
+
 /** ttyd processes listening on `port`, each with the tmux session it attaches. */
 export function ttydIncumbentsOnPort(port: number): TtydIncumbent[] {
   const out: TtydIncumbent[] = []
@@ -725,8 +770,7 @@ export function ttydIncumbentsOnPort(port: number): TtydIncumbent[] {
     let tmuxTarget: string | null = null
     try {
       const args = execSync(`ps -o args= -p ${pid}`, { encoding: 'utf-8' })
-      const m = args.match(/tmux attach -t (\S+)/)
-      tmuxTarget = m ? m[1]! : null
+      tmuxTarget = tmuxTargetFromArgs(args)
     } catch { /* process vanished between lsof and ps */ }
     out.push({ pid, tmuxTarget })
   }
@@ -752,6 +796,48 @@ export function ttydPidsToReclaim(
   return { kill, foreign }
 }
 
+/** Every ttyd process on the machine, each with the tmux session it attaches. */
+export function allTtydIncumbents(): TtydIncumbent[] {
+  const out: TtydIncumbent[] = []
+  let pidLines: string
+  try {
+    // pgrep exits 1 (throws) when no ttyd is running — caught below.
+    pidLines = execSync('pgrep -x ttyd', { encoding: 'utf-8' }).trim()
+  } catch {
+    return out
+  }
+  if (!pidLines) return out
+  for (const line of pidLines.split('\n')) {
+    const pid = Number(line)
+    if (!pid) continue
+    let tmuxTarget: string | null = null
+    try {
+      const args = execSync(`ps -o args= -p ${pid}`, { encoding: 'utf-8' })
+      tmuxTarget = tmuxTargetFromArgs(args)
+    } catch { /* process vanished between pgrep and ps */ }
+    out.push({ pid, tmuxTarget })
+  }
+  return out
+}
+
+/**
+ * Pids of ttyds attached to EXACTLY our tmux session, regardless of which port
+ * they listen on. These are stale ttyds from a previous backend lifecycle that
+ * the port-scoped reclaim (ttydPidsToReclaim) misses: when a backend restart
+ * re-assigns this session a *different* port, the previous ttyd is orphaned on
+ * its old port still attached to the same tmux session, and accumulates one per
+ * restart. Multiple ttyds on one session double-attach it; with
+ * `window-size latest` that makes the terminal resize-churn between clients.
+ *
+ * Exact match (not prefix) is load-bearing: reclaiming "tinstar-foo" must never
+ * kill the ttyd for a child hand session "tinstar-foo-reviewer-ab12". Same-name
+ * matches are assumed to be ours — two backends serving the same tmux session
+ * name is the unsupported config collision that TINSTAR_CONFIG_HOME prevents.
+ */
+export function ttydPidsForSession(incumbents: TtydIncumbent[], ourTmuxName: string): number[] {
+  return incumbents.filter((inc) => inc.tmuxTarget === ourTmuxName).map((inc) => inc.pid)
+}
+
 export function startTtyd(opts: {
   tmuxName: string
   port: number
@@ -774,6 +860,19 @@ export function startTtyd(opts: {
   }
   if (foreign.length > 0) {
     log.warn('ttyd', `${opts.sessionName}: port ${opts.port} held by another session (${foreign.map(f => f.tmuxTarget).join(', ')}); not killing it`)
+  }
+
+  // Also reclaim across ALL ports: a backend restart can land this session on a
+  // different port, orphaning the previous ttyd (still attached to the same
+  // tmux session) on its old port. The port-scoped pass above only sees the new
+  // port, so those orphans pile up — one per restart — and double-attach the
+  // session. Exact session match so a child hand session is never swept in.
+  const staleSessionPids = ttydPidsForSession(allTtydIncumbents(), opts.tmuxName)
+  if (staleSessionPids.length > 0) {
+    log.info('ttyd', `${opts.sessionName}: reaping ${staleSessionPids.length} stale ttyd(s) on other ports for ${opts.tmuxName}`)
+    for (const pid of staleSessionPids) {
+      try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
+    }
   }
 
   return new Promise((resolve, reject) => {

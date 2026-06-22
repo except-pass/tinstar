@@ -12,6 +12,7 @@
         {
           "type": "browser-widget",
           "label": "Browser",
+          "icon": "/widget-icons/browser-widget.svg",
           "defaultSize": { "width": 800, "height": 600 },
           "spawn": "palette",
           "capabilities": ["spawnable", "web-view"],

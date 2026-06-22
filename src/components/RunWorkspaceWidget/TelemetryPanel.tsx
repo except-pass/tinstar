@@ -299,6 +299,34 @@ function Treemap({ categories, accent, maxTokens }: TreemapProps) {
 /*  TelemetryPanel                                                     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Reconcile the /context breakdown with the session's real context window.
+ *
+ * The /context sidecar probes usage with `--model claude-haiku-4-5` (cheap +
+ * fast), so the `maxTokens` it returns is Haiku's 200k window — NOT the resumed
+ * session's real window (e.g. 1M for Opus 1M). That made the treemap's
+ * percentages and its "Free space" cell disagree with the live context meter
+ * rendered right above it. The per-category token counts are correct; only the
+ * denominator is wrong. So when we have the true window from the statusline
+ * push (useSessionContextWindow), trust it: rebuild "Free space" against it and
+ * use it as the treemap denominator.
+ */
+export function treemapInputs(
+  data: ContextData,
+  liveWindow: number | null | undefined,
+): { categories: ContextCategory[]; maxTokens: number } {
+  if (!liveWindow || liveWindow <= 0 || liveWindow === data.maxTokens) {
+    return { categories: data.categories, maxTokens: data.maxTokens }
+  }
+  const nonFree = data.categories.filter(c => c.name !== 'Free space')
+  const usedNonFree = nonFree.reduce((sum, c) => sum + c.tokens, 0)
+  const free = Math.max(0, liveWindow - usedNonFree)
+  return {
+    categories: [...nonFree, { name: 'Free space', tokens: free }],
+    maxTokens: liveWindow,
+  }
+}
+
 export function TelemetryPanel({ sessionId, runAccent }: Props) {
   const [data, setData] = useState<ContextData | null>(null)
   const [loading, setLoading] = useState(false)
@@ -336,7 +364,15 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
   const pct = liveCtx?.usedPercentage ?? null
   const pctLabel = pct == null ? '--' : `${pct.toFixed(0)}%`
   const fillPct = pct == null ? 0 : Math.max(0, Math.min(100, pct))
-  const fillBg = hexToRgba(runAccent, 0.35)
+
+  // Capacity-warning colors come from the approved palette (tailwind.theme.js):
+  // amber #ffaa00 once the window is filling up, red #ff3366 when near-full.
+  const WARN_PCT = 75
+  const DANGER_PCT = 85
+  const isWarn = pct != null && pct >= WARN_PCT && pct < DANGER_PCT
+  const isDanger = pct != null && pct >= DANGER_PCT
+  const meterColor = isDanger ? '#ff3366' : isWarn ? '#ffaa00' : runAccent
+  const fillBg = hexToRgba(meterColor, isDanger || isWarn ? 0.45 : 0.35)
 
   const meterTitle = loading
     ? 'Loading detailed context breakdown…'
@@ -352,7 +388,13 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
         onClick={fetchContext}
         disabled={loading}
         title={meterTitle}
-        className="group relative w-full max-w-[240px] mx-auto block overflow-hidden border border-slate-700 rounded hover:border-slate-500 transition-colors disabled:opacity-70"
+        className={`group relative w-full max-w-[240px] mx-auto block overflow-hidden border rounded transition-colors disabled:opacity-70 ${
+          isDanger
+            ? 'border-accent-red/60 animate-pulse-soft'
+            : isWarn
+              ? 'border-accent-amber/50'
+              : 'border-slate-700 hover:border-slate-500'
+        }`}
       >
         <div
           className="absolute inset-y-0 left-0 transition-all duration-500"
@@ -365,7 +407,12 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
             </span>
             Context
           </span>
-          <span className="text-slate-200 tabular-nums">{pctLabel}</span>
+          <span
+            className="text-slate-200 tabular-nums"
+            style={{ color: isDanger || isWarn ? meterColor : undefined }}
+          >
+            {pctLabel}
+          </span>
         </div>
       </button>
     </div>
@@ -385,12 +432,13 @@ export function TelemetryPanel({ sessionId, runAccent }: Props) {
       </div>
     )
   } else if (data) {
+    const tm = treemapInputs(data, liveCtx?.windowSize)
     detail = (
       <div className="flex-1 min-h-0 flex flex-col px-1 pb-1">
         <Treemap
-          categories={data.categories}
+          categories={tm.categories}
           accent={runAccent}
-          maxTokens={data.maxTokens}
+          maxTokens={tm.maxTokens}
         />
       </div>
     )

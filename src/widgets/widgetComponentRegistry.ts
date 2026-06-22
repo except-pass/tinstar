@@ -80,10 +80,12 @@ export function listWidgetRegistrations(): WidgetRegistration[] {
 
 /** The single source of truth for whether a widget participates in snapping.
  *  Non-container leaves snap by default; a widget opts out with `snappable:false`;
- *  containers never snap. Every snap path (drag-to-snap, the [+] affordance,
- *  snap-on-create) consults this — do not re-derive snappability elsewhere. */
+ *  containers never snap. FAILS OPEN: an absent registration (e.g. a freshly
+ *  spawned widget whose registration hasn't landed yet) is treated as snappable —
+ *  callers restrict the set to leaf nodes, so this can't make a container snap. */
 export function isSnappable(reg: { isContainer: boolean; snappable?: boolean } | undefined): boolean {
-  return !!reg && !reg.isContainer && reg.snappable !== false
+  if (!reg) return true
+  return !reg.isContainer && reg.snappable !== false
 }
 
 /**

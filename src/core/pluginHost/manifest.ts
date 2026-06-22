@@ -1,4 +1,5 @@
 import type { PluginManifest } from '@tinstar/plugin-api'
+import { validateAnchors, type Anchor } from '../../domain/anchors'
 
 export interface ParsedManifest {
   name: string
@@ -51,6 +52,30 @@ function validateWidgetContribution(w: Record<string, unknown>, pluginName: stri
   if (w.snappable !== undefined && typeof w.snappable !== 'boolean') {
     throw new ManifestError(`${where}: snappable must be a boolean if present`)
   }
+  if (w.anchors !== undefined) {
+    if (!Array.isArray(w.anchors)) {
+      throw new ManifestError(`${where}: anchors must be an array if present`)
+    }
+    const anchorErr = validateAnchors(w.anchors as Anchor[])
+    if (anchorErr) throw new ManifestError(`${where}: ${anchorErr}`)
+  }
+}
+
+function validateServerSpec(s: Record<string, unknown>, pluginName: string): void {
+  const where = `${pluginName}: tinstar.server`
+  if (typeof s.health !== 'string' || s.health === '') {
+    throw new ManifestError(`${where}.health must be a non-empty string`)
+  }
+  if (s.start !== undefined && (typeof s.start !== 'string' || s.start === '')) {
+    throw new ManifestError(`${where}.start must be a non-empty string if present`)
+  }
+  if (s.cwd !== undefined && typeof s.cwd !== 'string') {
+    throw new ManifestError(`${where}.cwd must be a string if present`)
+  }
+  if (s.healthTimeoutMs !== undefined &&
+      (typeof s.healthTimeoutMs !== 'number' || !Number.isFinite(s.healthTimeoutMs) || s.healthTimeoutMs <= 0)) {
+    throw new ManifestError(`${where}.healthTimeoutMs must be a positive number if present`)
+  }
 }
 
 function isStringArray(v: unknown): v is string[] {
@@ -94,6 +119,13 @@ export function parseManifest(pkgJson: unknown): ParsedManifest {
       }
       validateWidgetContribution(w as Record<string, unknown>, String(pkg.name), i)
     })
+  }
+
+  if (m.server !== undefined) {
+    if (!m.server || typeof m.server !== 'object') {
+      throw new ManifestError(`${pkg.name}: tinstar.server must be an object`)
+    }
+    validateServerSpec(m.server as Record<string, unknown>, String(pkg.name))
   }
 
   return {

@@ -12,11 +12,21 @@
         {
           "type": "roborev-cockpit",
           "label": "Roborev cockpit",
+          "icon": "/widget-icons/roborev-cockpit.svg",
           "description": "roborev tui + native review list & actions",
           "primitive": "terminal",
           "spawn": "palette",
           "creator": "session-backed",
           "defaultSize": { "width": 1100, "height": 720 }
+        },
+        {
+          "type": "roborev-fleet",
+          "label": "Roborev fleet",
+          "icon": "/widget-icons/roborev-cockpit.svg",
+          "description": "Open roborev findings across every session",
+          "spawn": "palette",
+          "creator": "standalone",
+          "defaultSize": { "width": 480, "height": 440 }
         }
       ]
     },

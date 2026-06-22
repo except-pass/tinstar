@@ -116,6 +116,7 @@ export function buildGroupTree(
       runCount: 1,
       activeCount: run.status === 'running' ? 1 : 0,
       color: STATUS_BORDER_COLORS[run.status],
+      status: run.status,
       backend: run.backend,
       agentIcon: run.agentIcon,
     }))
@@ -209,6 +210,7 @@ export function buildGroupTree(
           runCount: 1,
           activeCount: run.status === 'running' ? 1 : 0,
           color: STATUS_BORDER_COLORS[run.status],
+          status: run.status,
           backend: run.backend,
           agentIcon: run.agentIcon,
         })
@@ -286,6 +288,7 @@ export function buildGroupTree(
           runCount: 1,
           activeCount: run.status === 'running' ? 1 : 0,
           color: STATUS_BORDER_COLORS[run.status],
+          status: run.status,
           backend: run.backend,
           agentIcon: run.agentIcon,
           orphan: true,

@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, watch, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
@@ -42,12 +42,16 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import type { Run, EditorWidget, ImageWidget, TopicMetadata } from '../../domain/types'
+import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
-import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
+import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
+import { isPinSet, addReply, mergePreservingReplies } from '../../domain/pinSet'
+import { parseAttach, type ParsedAttach } from './anchorAttach'
+import { planAttach } from './attachPlan'
 import { spec as openapiSpec } from './openapi'
 import { bounceNatsTraffic } from './natsTrafficBounce'
 import { resolveProxyTarget } from './proxyResolve'
+import { resolveLiveIpcSocket } from './editorIpc'
 import { rewriteProxyBody, proxyRuntimeShim } from './proxyRewrite'
 import { registerSaloonSubs, unregisterSaloonSubs, registerFirehose, unregisterFirehose } from './saloonBridge'
 import { ReadyQueue } from '../sessions/ReadyQueue'
@@ -68,6 +72,7 @@ import { extractLeadingSlashName } from '../sessions/slashUsage'
 import type { OtlpExporter } from '../stores/otlp-exporter'
 import { resolveCorsHeaders, parseAllowlistFromEnv } from './cors'
 import { resolveWidgetRegistry } from './pluginWidgetRegistry'
+import { getStatuses, startServer, readServerLog, NoStartError } from './pluginServers'
 import type { PluginWidgetInstance } from '../../domain/types'
 
 function currentCorsAllowlist(): string[] {
@@ -78,8 +83,19 @@ function isConstellationGraph(v: unknown): v is ConstellationGraph {
   if (!v || typeof v !== 'object') return false
   const g = v as Record<string, unknown>
   if (!Array.isArray(g.snapped) || !Array.isArray(g.members)) return false
+  // anchors is optional, but when present clients treat it as an AnchorPair
+  // ([string, string]) in snap-placement math, so a malformed value persisted
+  // here would break layout for every viewer of the space — validate it.
+  const anchorsOk = (a: unknown) =>
+    a === undefined ||
+    (Array.isArray(a) && a.length === 2 && typeof a[0] === 'string' && typeof a[1] === 'string')
   const snappedOk = g.snapped.every(e =>
-    Array.isArray(e) && e.length === 2 && typeof e[0] === 'string' && typeof e[1] === 'string')
+    !!e && typeof e === 'object' && !Array.isArray(e) &&
+    Array.isArray((e as Record<string, unknown>).nodes) &&
+    ((e as { nodes: unknown[] }).nodes).length === 2 &&
+    typeof (e as { nodes: unknown[] }).nodes[0] === 'string' &&
+    typeof (e as { nodes: unknown[] }).nodes[1] === 'string' &&
+    anchorsOk((e as Record<string, unknown>).anchors))
   const validSlots = new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9'])
   const membersOk = g.members.every(m =>
     !!m && typeof m === 'object' &&
@@ -507,9 +523,10 @@ async function createSessionInternal(
     // including a bare space. Previously the gate omitted spaceId, so a
     // standalone session (created with just an active space and no explicit
     // `nats` arg — e.g. marshal, ad-hoc sessions) silently spawned with NATS
-    // off and never joined the bus. computeNatsSubscriptions already yields a
-    // space-level subject for the space-only case. Passing `nats:{enabled:false}`
-    // explicitly still opts out, since this branch only runs when `nats` is absent.
+    // off and never joined the bus. computeNatsSubscriptions yields a DM-only
+    // inbox for the task-less case (not a space wildcard — see that fn). Passing
+    // `nats:{enabled:false}` explicitly still opts out, since this branch only
+    // runs when `nats` is absent.
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
   } else if (nats?.enabled && !nats.subscriptions?.length) {
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
@@ -558,9 +575,15 @@ async function createSessionInternal(
   const initialStatus = prompt ? 'running' : 'idle'
   const backendInfo = `tmux session: ${name}`
 
-  // Build NATS subject for this session
+  // Advertise the agent's DM inbox, derived from the computed subscriptions so
+  // it's exactly what the agent subscribes to: subscriptions[1] is the DM for a
+  // task-seated agent ([0] is the broadcast channel); for a task-less agent the
+  // list holds only the DM at [0]. This mirrors the reparent (newSubs[1] ?? [0])
+  // and restore paths. Recomputing via the space-blind buildNatsSubject diverged
+  // for task-less space-only sessions — it can't see activeSpaceId, so it
+  // advertised a '_'-rooted subject the agent never listens on (roborev #998).
   const natsSubject = resolvedNats?.enabled
-    ? buildNatsSubject(name, docStore, taskId, epicId, initiativeId)
+    ? (resolvedNats.subscriptions[1] ?? resolvedNats.subscriptions[0])
     : undefined
 
   docStore.upsertRun(runId, {
@@ -679,7 +702,10 @@ function lookupNodeLayout(ctx: RouteContext, spaceId: string, nodeId: string): L
     const cfg = loadConfigMerged(ctx.sessionConfig?.dirs.root) as { ui?: { layouts?: Record<string, Record<string, LayoutEntry>> } }
     const byKey = cfg.ui?.layouts ?? {}
     const entry = byKey[`tinstar-layouts-v3-${spaceId}`]?.[nodeId]
-    if (entry && typeof entry.x === 'number' && typeof entry.y === 'number') return entry
+    // Require width/height too: anchor math does `x + a.x * width`, and a missing
+    // dimension yields `0 * undefined === NaN`, which would persist a NaN position.
+    if (entry && typeof entry.x === 'number' && typeof entry.y === 'number'
+      && typeof entry.width === 'number' && typeof entry.height === 'number') return entry
   } catch { /* fall through */ }
   return null
 }
@@ -792,6 +818,25 @@ function snapWidgetToSession(
   return { position: { x: maxRight + PLACEMENT_GAP, y: sessionLayout.y } }
 }
 
+/** Place `widgetId` (of `size`) anchored to the target per `attach`, write the
+ *  snap edge (carrying the anchor pair) into the space graph joining/forming the
+ *  target's slot, and return the computed top-left. Returns null when the target
+ *  layout can't be resolved. Mutates + persists the graph (rev-bumped). */
+function attachWidget(
+  ctx: RouteContext,
+  spaceId: string,
+  attach: ParsedAttach,
+  widgetId: string,
+  size: { width: number; height: number },
+): { x: number; y: number } | null {
+  const targetLayout = lookupNodeLayout(ctx, spaceId, attach.to)
+  if (!targetLayout) return null
+  const graph = ctx.docStore.getConstellationGraph(spaceId) ?? emptyGraph(spaceId)
+  const plan = planAttach(graph, targetLayout, attach, widgetId, size)
+  if (plan.graph !== graph) ctx.docStore.upsertConstellationGraph(spaceId, { ...plan.graph, rev: (graph.rev ?? 0) + 1 })
+  return plan.position
+}
+
 /** Snap a newly created widget to its spawning session's constellation slot
  *  (joining the session's slot + adding a snap edge) when a session context
  *  exists and snapping wasn't opted out. Returns the tiled position for callers
@@ -821,6 +866,7 @@ interface CreateBrowserWidgetParams {
   nearNodeId?: string
   slot?: number | string
   snapToSession?: boolean
+  attach?: { to: string; anchors: string }
 }
 
 type CreateBrowserWidgetResult =
@@ -860,11 +906,17 @@ function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParam
   const size = placement?.size ?? DEFAULT_BROWSER_SIZE
   const widgetId = shortId('browser')
 
-  // Auto-snap to the spawning session unless opted out or any slot was given.
-  const snapPosition = maybeSnapOnCreate(ctx, { spaceId, sessionId, widgetId, slotProvided, snapToSession: parsed.snapToSession })
+  const attach = parseAttach(parsed.attach)
+  if (attach === null) {
+    return { error: { code: 'INVALID_PARAMS', message: 'attach.anchors must be "<anchor>/<anchor>" with known anchor names, and attach.to a widget id' } }
+  }
+  const attachPosition = attach && spaceId ? attachWidget(ctx, spaceId, attach, widgetId, size) : null
 
-  // Explicit placement wins; otherwise use the tiled snap position if we got one.
-  const finalPosition = placement?.position ?? snapPosition ?? null
+  // Auto-snap to the spawning session unless opted out, any slot was given, or an explicit attach was provided.
+  const snapPosition = attach ? null : maybeSnapOnCreate(ctx, { spaceId, sessionId, widgetId, slotProvided, snapToSession: parsed.snapToSession })
+
+  // attach takes precedence; then explicit placement; then session-snap position.
+  const finalPosition = attachPosition ?? placement?.position ?? snapPosition ?? null
 
   const widget: import('../../domain/types').BrowserWidget = {
     id: widgetId,
@@ -1106,6 +1158,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     okEnvelope(res, data, { ...opts, headers: { ...corsHeaders, ...(opts.headers ?? {}) } })
   const fail = (res: ServerResponse, code: ErrorCode, message: string, opts: FailOpts = {}): true =>
     failEnvelope(res, code, message, { ...opts, headers: { ...corsHeaders, ...(opts.headers ?? {}) } })
+
+  // Read the body, run the handler, and GUARANTEE a response even if the handler
+  // throws before it calls ok()/fail() — e.g. JSON.parse on a malformed body, or any
+  // sync throw in the pre-`try` setup of a write endpoint. Without this the readBody
+  // promise rejects with nothing awaiting it, the socket is never written, and the
+  // client hangs forever (curl exit 28). A JSON parse failure is a client error (400);
+  // anything else is a server fault (500). Use this for every session-write endpoint.
+  const withBody = (req: IncomingMessage, res: ServerResponse, handler: (body: string) => unknown): void => {
+    readBody(req).then(handler).catch(err => {
+      if (res.headersSent) return
+      if (err instanceof SyntaxError) fail(res, 'BAD_REQUEST', 'Invalid JSON body')
+      else fail(res, 'INTERNAL', (err as Error).message)
+    })
+  }
 
   // CORS preflight
   if (method === 'OPTIONS' && url.startsWith('/api/')) {
@@ -1736,7 +1802,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // POST /api/editor-widgets
   if (method === 'POST' && url === '/api/editor-widgets') {
     readBody(req).then(body => {
-      const { sessionId, filePath } = JSON.parse(body) as { sessionId?: string; filePath?: string }
+      const { sessionId, filePath, snapToSession } = JSON.parse(body) as { sessionId?: string; filePath?: string; snapToSession?: boolean }
       if (!sessionId || !filePath) {
         fail(res, 'INVALID_PARAMS', 'sessionId and filePath required')
         return
@@ -1766,10 +1832,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const widgetId = shortId('editor')
       const editorSpaceId = ctx.docStore.activeSpaceId || undefined
       // File-editors snap to their spawning session's constellation like browsers do:
-      // join the session's slot (+ snap edge) and seed a tiled position. The position
-      // is honored for a layout-less node (e.g. an API/agent-created editor); an
-      // interactive open that sets its own client layout ignores the seed.
-      const snapPos = maybeSnapOnCreate(ctx, { spaceId: editorSpaceId, sessionId, widgetId, slotProvided: false, snapToSession: undefined })
+      // join the session's slot (+ snap edge) and seed a tiled position. This is the
+      // default for API/agent-created editors that have no other placement context.
+      // Interactive drops pass `snapToSession: false` and run their own drop-point-driven
+      // snap client-side (see InfiniteCanvas applyDropSnap), so the seed isn't computed.
+      const snapPos = maybeSnapOnCreate(ctx, { spaceId: editorSpaceId, sessionId, widgetId, slotProvided: false, snapToSession })
       const widget: EditorWidget = {
         id: widgetId,
         spaceId: editorSpaceId,
@@ -1928,6 +1995,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const stream = createReadStream(absolutePath)
     req.on('close', () => stream.destroy())
     stream.pipe(res)
+    return true
+  }
+
+  // GET /api/nats-traffic/status — host NATS broker reachability for the Saloon's
+  // palette health light. Reflects the live observer connection (undefined bridge
+  // = not started yet = down). Cheap; safe to poll.
+  if (method === 'GET' && url === '/api/nats-traffic/status') {
+    ok(res, ctx.natsTraffic ? ctx.natsTraffic.status() : { connection: 'down' })
     return true
   }
 
@@ -2096,8 +2171,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       ctx.docStore.getAllPluginWidgets(),
     )
     if (!proxyTarget) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' })
-      res.end('Browser target not found')
+      // A freshly spawned browser-backed widget races its first iframe load
+      // against the client's debounced persist of data._browser.url — the
+      // target typically resolves within a second. For iframe navigations
+      // (Accept: text/html) serve a self-refreshing page so the widget heals
+      // once the persist lands (or the target server comes back up), instead
+      // of a dead-end message that sticks until a manual reload.
+      if ((req.headers.accept ?? '').includes('text/html')) {
+        res.writeHead(404, { 'Content-Type': 'text/html' })
+        res.end('<!DOCTYPE html><html><head><meta http-equiv="refresh" content="2"></head>'
+          + '<body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;'
+          + 'background:#0f172a;color:#94a3b8;font:13px system-ui">Connecting to widget target…</body></html>')
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('Browser target not found')
+      }
       return true
     }
 
@@ -2211,6 +2299,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
       const patch = JSON.parse(body) as {
         url?: string; title?: string; headers?: Record<string, string>;
+        notes?: BrowserNote[];
         position?: { x: number; y: number }; size?: { width: number; height: number };
         nearNodeId?: string; slot?: number | string;
       }
@@ -2370,11 +2459,24 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         position?: { x: number; y: number };
         size?: { width: number; height: number };
         data?: unknown;
+        attach?: { to: string; anchors: string };
       }
       const { pluginId, widgetType, spaceId, position, size, data } = parsed
 
-      if (!pluginId || !widgetType || !spaceId || !position || !size) {
-        fail(res, 'INVALID_PARAMS', 'pluginId, widgetType, spaceId, position, size all required')
+      // Parse attach early so we can report malformed input before heavier checks.
+      const attach = parseAttach(parsed.attach)
+      if (attach === null) {
+        fail(res, 'INVALID_PARAMS', 'attach.anchors must be "<anchor>/<anchor>" with known anchor names, and attach.to a widget id')
+        return
+      }
+
+      if (!pluginId || !widgetType || !spaceId || !size) {
+        fail(res, 'INVALID_PARAMS', 'pluginId, widgetType, spaceId, size all required')
+        return
+      }
+      // position is required unless an attach was provided (attach computes the position).
+      if (!attach && !position) {
+        fail(res, 'INVALID_PARAMS', 'position is required when attach is not provided')
         return
       }
 
@@ -2415,13 +2517,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
       }
 
+      // Generate the id before calling attachWidget so it can record the snap edge.
+      const widgetId = shortId('pw')
+      const resolvedSize = size
+      const attachPosition = attach ? attachWidget(ctx, spaceId, attach, widgetId, resolvedSize) : null
+      const finalPosition = attachPosition ?? position ?? null
+      if (!finalPosition) {
+        fail(res, 'INVALID_PARAMS', 'could not resolve position: attach.to widget not found in layout')
+        return
+      }
+
       const now = new Date().toISOString()
       const instance: PluginWidgetInstance = {
-        id: shortId('pw'),
+        id: widgetId,
         pluginId,
         widgetType,
         spaceId,
-        position,
+        position: finalPosition,
         size,
         data: data ?? null,
         createdAt: now,
@@ -2521,13 +2633,72 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(body => {
       let parsed: unknown
       try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
-      if (!isConstellationGraph(parsed)) { fail(res, 'BAD_REQUEST', 'invalid constellation graph'); return }
+      // Migrate legacy tuple edges before validation — older clients still send [a,b] tuples.
+      // migrateSnapEdges is idempotent on already-structured graphs.
+      const migrated = parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>).snapped)
+        ? migrateSnapEdges(parsed as ConstellationGraph)
+        : parsed
+      if (!isConstellationGraph(migrated)) { fail(res, 'BAD_REQUEST', 'invalid constellation graph'); return }
       // Reject stale/equal-revision writes with a conflict rather than a false
       // success — the revision gate drops them, so the doc is not stored.
-      if (!ctx.docStore.upsertConstellationGraph(spaceId, { ...parsed, spaceId })) {
+      if (!ctx.docStore.upsertConstellationGraph(spaceId, { ...migrated, spaceId })) {
         fail(res, 'CONFLICT', 'stale constellation graph revision'); return
       }
       ok(res, null)
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
+    return true
+  }
+
+  // PUT /api/pins/:spaceId — replace a space's pin set (whole-doc, atomic)
+  if (method === 'PUT' && url.startsWith('/api/pins/')) {
+    const spaceId = decodeURIComponent(url.slice('/api/pins/'.length))
+    if (!ctx.docStore.getSpace(spaceId)) { fail(res, 'NOT_FOUND', 'space not found'); return true }
+    readBody(req).then(body => {
+      let parsed: unknown
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
+      if (!isPinSet(parsed)) { fail(res, 'BAD_REQUEST', 'invalid pin set'); return }
+      const merged = mergePreservingReplies({ ...parsed, spaceId }, ctx.docStore.getPinSet(spaceId))
+      // Reject stale/equal-revision writes with a conflict rather than a false
+      // success — the revision gate drops them, so the doc is not stored.
+      if (!ctx.docStore.upsertPinSet(spaceId, merged)) {
+        fail(res, 'CONFLICT', 'stale pin set revision'); return
+      }
+      ok(res, null)
+    }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
+    return true
+  }
+
+  // POST /api/notes/:noteId/replies — append a thread reply to a note. The agent
+  // runs this (curl baked into the pin prompt); the UI runs it for user follow-ups.
+  // spaceId-less on purpose: pin ids are globally unique and the browser plugin has
+  // no spaceId — the server resolves the owning space by scanning.
+  if (method === 'POST' && /^\/api\/notes\/[^/]+\/replies$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const noteId = decodeURIComponent(path.slice('/api/notes/'.length, -'/replies'.length))
+    readBody(req).then(body => {
+      let parsed: { text?: unknown; author?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'invalid JSON'); return }
+      const text = parsed.text
+      if (typeof text !== 'string' || text.trim() === '') {
+        fail(res, 'BAD_REQUEST', "missing 'text' in request body"); return
+      }
+      const author: 'user' | 'agent' = parsed.author === 'user' ? 'user' : 'agent'
+      // Pin ids are globally unique across spaces, so the first match owns the note.
+      const owning = ctx.docStore.getAllPinSets().find(s => s.pins.some(p => p.id === noteId))
+      if (!owning) { fail(res, 'NOT_FOUND', `no note found with id '${noteId}'`); return }
+      const replyId = shortId('reply')
+      const next = addReply(owning, noteId, { id: replyId, author, text, createdAt: Date.now() })
+      if (!ctx.docStore.upsertPinSet(owning.spaceId, { ...next, rev: (owning.rev ?? 0) + 1 })) {
+        // Defensive: the read-modify-write above is atomic under Node's single thread,
+        // so this is currently unreachable — but if a future concurrent writer makes it
+        // fire, the agent (caller) gets an actionable instruction rather than a bare 409.
+        fail(res, 'CONFLICT',
+          `Your reply to note '${noteId}' was not saved because the note's thread was updated concurrently. ` +
+          `This usually means another reply or edit landed at the same moment. ` +
+          `Wait ~1 second and retry the exact same POST — your reply was NOT stored, so retrying will not duplicate it.`)
+        return
+      }
+      ok(res, { replyId })
     }).catch(() => fail(res, 'BAD_REQUEST', 'invalid JSON'))
     return true
   }
@@ -2540,6 +2711,39 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       return true
     }
     ok(res, resolveWidgetRegistry(configRoot))
+    return true
+  }
+
+  // GET /api/plugin-servers/status — per-plugin backend health for the palette dots
+  if (method === 'GET' && url === '/api/plugin-servers/status') {
+    const configRoot = ctx.sessionConfig?.dirs.root
+    if (!configRoot) { ok(res, {}); return true }
+    getStatuses(configRoot)
+      .then((s) => ok(res, s))
+      .catch((e) => fail(res, 'INTERNAL', String((e as Error)?.message ?? e)))
+    return true
+  }
+
+  // POST /api/plugin-servers/:id/start — fire the plugin's start command
+  if (method === 'POST' && /^\/api\/plugin-servers\/[^/]+\/start$/.test(url)) {
+    const pluginId = decodeURIComponent(url.split('/')[3]!)
+    const configRoot = ctx.sessionConfig?.dirs.root
+    if (!configRoot) { fail(res, 'CONFIG_UNAVAILABLE', 'configRoot unavailable'); return true }
+    try {
+      ok(res, startServer(configRoot, pluginId))
+    } catch (e) {
+      if (e instanceof NoStartError) fail(res, 'BAD_REQUEST', e.message)
+      else fail(res, 'INTERNAL', String((e as Error)?.message ?? e))
+    }
+    return true
+  }
+
+  // GET /api/plugin-servers/:id/log — tail of a plugin's start log
+  if (method === 'GET' && /^\/api\/plugin-servers\/[^/]+\/log$/.test(url)) {
+    const pluginId = decodeURIComponent(url.split('/')[3]!)
+    const configRoot = ctx.sessionConfig?.dirs.root
+    if (!configRoot) { ok(res, { log: '' }); return true }
+    ok(res, { log: readServerLog(configRoot, pluginId) })
     return true
   }
 
@@ -2702,9 +2906,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // Sourced from the transcript's latest-assistant `message.model`, same as
     // the /api/state enrichment. Returns { name, model } with model null when
     // unavailable (no transcript, or no assistant turn yet).
-    if (method === 'GET' && url.startsWith('/api/sessions/') && (url.split('?')[0] ?? url).endsWith('/model')) {
-      const name = extractSessionName(url.split('?')[0] ?? url, '/api/sessions/')
-      if (name) {
+    {
+      // Strict match on exactly /api/sessions/:name/model (one path segment for the
+      // name) so a deeper path like /api/sessions/foo/files/model can't masquerade
+      // as a model pull. The captured segment is used raw (no decode) to resolve the
+      // session identically to the sibling /api/sessions/:name/* routes, which use
+      // extractSessionName (a raw slice).
+      const modelMatch = method === 'GET' && (url.split('?')[0] ?? url).match(/^\/api\/sessions\/([^/]+)\/model$/)
+      if (modelMatch) {
+        const name = modelMatch[1]!
         const session = getSession(sessDir, name)
         if (!session) {
           fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
@@ -2755,6 +2965,45 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
     }
 
+    // POST /api/sessions/:name/files/rename  body: { from, to } (workspace-relative)
+    if (method === 'POST' && url.startsWith('/api/sessions/') && url.endsWith('/files/rename')) {
+      const name = extractSessionName(url, '/api/sessions/')
+      if (name) {
+        const session = getSession(sessDir, name)
+        if (!session?.workspace?.path) {
+          fail(res, 'CONFLICT', 'Session has no workspace')
+          return true
+        }
+        const wsRoot = session.workspace.path
+        readBody(req).then(body => {
+          let from: unknown, to: unknown
+          try {
+            ({ from, to } = JSON.parse(body || '{}'))
+          } catch {
+            return fail(res, 'BAD_REQUEST', 'Invalid JSON body')
+          }
+          if (typeof from !== 'string' || typeof to !== 'string' || !from || !to) {
+            return fail(res, 'INVALID_PARAMS', 'from and to are required')
+          }
+          const absFrom = resolve(wsRoot, from)
+          const absTo = resolve(wsRoot, to)
+          if ((!absFrom.startsWith(wsRoot + '/') && absFrom !== wsRoot) ||
+              (!absTo.startsWith(wsRoot + '/') && absTo !== wsRoot)) {
+            return fail(res, 'PATH_OUTSIDE_WORKSPACE', 'Path escapes workspace')
+          }
+          if (!existsSync(absFrom)) return fail(res, 'NOT_FOUND', `'${from}' not found`)
+          if (existsSync(absTo)) return fail(res, 'CONFLICT', `'${to}' already exists`)
+          try {
+            renameSync(absFrom, absTo)
+            ok(res, { from: relative(wsRoot, absFrom), to: relative(wsRoot, absTo) })
+          } catch (err) {
+            fail(res, 'INTERNAL', (err as Error).message)
+          }
+        }).catch(err => fail(res, 'INTERNAL', (err as Error).message))
+        return true
+      }
+    }
+
     // GET /api/sessions/:name/context-window — live % from latest statusline push
     if (method === 'GET' && url.startsWith('/api/sessions/') && url.endsWith('/context-window')) {
       const name = extractSessionName(url, '/api/sessions/')
@@ -2796,7 +3045,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
-      readBody(req).then(async (body) => {
+      withBody(req, res, async (body) => {
         const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData, model, token } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
@@ -2943,7 +3192,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url.endsWith('/start') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
-        readBody(req).then(async () => {
+        withBody(req, res, async (body) => {
           const session = getSession(sessDir, name)
           if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
 
@@ -2958,8 +3207,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             return fail(res, 'BAD_REQUEST', `Session '${name}' has no conversation ID. Delete and recreate it.`)
           }
 
+          // Switchboard: a per-session token override is spawn-time-only and never
+          // persisted, so it does NOT survive a stop. Accept an optional `token` on
+          // /start to re-establish quota isolation on resume — validated fail-closed
+          // (same guard as create/spawn) and still never persisted. The model override
+          // IS persisted on the session and re-applied by startTmuxSession, so it
+          // survives a restart without being re-supplied. Absent ⇒ global token.
+          let tokenOverride: string | undefined
+          if (body) {
+            try { tokenOverride = (JSON.parse(body) as { token?: string }).token } catch { /* no body / not JSON ⇒ no override */ }
+          }
+          if (tokenOverride != null && tokenOverride !== '') {
+            const check = validateSessionOverride(
+              { token: tokenOverride },
+              cfg.switchboard ?? { allowedModels: [], allowTokenOverride: false },
+            )
+            if (!check.ok) return fail(res, check.code, check.message)
+          }
+
           try {
-            const sec = secrets()
+            const sec = applyTokenOverride(secrets(), tokenOverride)
 
             const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
             const resumeTemplate = session.cliTemplate
@@ -3007,7 +3274,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url.endsWith('/nats-reconnect') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
-        readBody(req).then(async () => {
+        withBody(req, res, async () => {
           const session = getSession(sessDir, name)
           if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
           if (!session.nats?.enabled) return fail(res, 'BRIDGE_UNAVAILABLE', `NATS is not enabled for session '${name}'`)
@@ -3130,7 +3397,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
     // POST /api/editor/open — open a file in the configured editor
     if (method === 'POST' && url === '/api/editor/open') {
-      readBody(req).then((body) => {
+      readBody(req).then(async (body) => {
         const { path: filePath, sessionId } = JSON.parse(body)
         if (!filePath) return fail(res, 'BAD_REQUEST', 'path is required')
 
@@ -3156,18 +3423,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         log.info('editor', `opening: ${bin} ${args.join(' ')}`)
 
-        // Resolve the latest VS Code / Cursor IPC socket so the CLI can
-        // connect even if the server was started before the current editor.
+        // Resolve a LIVE VS Code / Cursor IPC socket so the CLI can connect even
+        // if the server was started before the current editor. Picking the
+        // newest socket by mtime is wrong: a recently-closed window leaves a
+        // stale file that can out-rank the live window's, and `code -g` then
+        // fails silently with ECONNREFUSED. resolveLiveIpcSocket probes for one
+        // that actually accepts a connection. See editorIpc.ts.
         const env = { ...process.env }
-        try {
-          const socks = readdirSync('/run/user/1000')
-            .filter(f => f.startsWith('vscode-ipc-') && f.endsWith('.sock'))
-            .map(f => ({ name: f, mtime: statSync(`/run/user/1000/${f}`).mtimeMs }))
-            .sort((a, b) => b.mtime - a.mtime)
-          if (socks.length > 0) {
-            env.VSCODE_IPC_HOOK_CLI = `/run/user/1000/${socks[0]!.name}`
-          }
-        } catch { /* non-Linux or no sockets — use inherited env */ }
+        const liveSock = await resolveLiveIpcSocket()
+        if (liveSock) env.VSCODE_IPC_HOOK_CLI = liveSock
 
         // Discover Remote-SSH `code` binaries (VS Code / Cursor / Windsurf install
         // them under ~/.<flavor>-server/bin/<arch>/<commit>/bin/remote-cli/). The
@@ -3868,7 +4132,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'SESSION_NOT_FOUND', `Session '${sessionId}' not found`)
         return true
       }
-      readBody(req).then(async (body) => {
+      withBody(req, res, async (body) => {
         const { text, force } = JSON.parse(body) as { text: string; force?: boolean }
         if (!force && session.state !== 'idle') {
           fail(res, 'CONFLICT', 'session-not-ready')

@@ -6,6 +6,11 @@ import type { LevelLabel } from '../domain/types'
 import { AgentIcon } from './agentIcon'
 import { apiFetch } from '../apiClient'
 import { useConfig, useConfigPatch } from '../context/ConfigContext'
+import { AspectRatioField } from './Settings/AspectRatioField'
+import { PercentField } from './Settings/PercentField'
+import { DEFAULT_WIDGET_SIZE_PRESETS, type WidgetSizePresets } from '../widgets/widgetSizePresets'
+import { listWidgetRegistrations } from '../widgets/widgetComponentRegistry'
+import { usePluginWidgetRegistry } from '../hooks/usePluginWidgetRegistry'
 
 interface Project {
   name: string
@@ -41,6 +46,7 @@ export function SettingsDialog({ onClose }: Props) {
   const currentMeta = useDimensionMeta()
   const config = useConfig()
   const patchConfig = useConfigPatch()
+  const { entries: pluginWidgetEntries } = usePluginWidgetRegistry()
 
   const [labelLevels, setLabelLevels] = useState<LevelLabel[]>(() =>
     currentMeta.map(m => ({ icon: m.icon, label: m.label, plural: '' }))
@@ -872,6 +878,98 @@ export function SettingsDialog({ onClose }: Props) {
               <p className="text-2xs text-slate-600 mt-1">
                 Server-enforced cap for files uploaded via drag-and-drop onto the file tree.
               </p>
+            </div>
+
+            {/* Widget sizes (S/M/L quick-resize presets) */}
+            <div className="mb-4">
+              <h5 className="text-2xs font-mono uppercase tracking-wider text-slate-500 mb-2">
+                Widget sizes
+              </h5>
+              <p className="text-2xs text-slate-600 mb-2">
+                The S / M / L quick-resize buttons on each widget. Sizes are a
+                fraction of the visible canvas, so they adapt to whatever monitor
+                you're on.
+              </p>
+              {(() => {
+                // Merge over defaults (not whole-object fallback): a persisted
+                // config predating aspectByType/defaultAspect would otherwise
+                // leave those sub-fields undefined and crash the panel below.
+                const presets = { ...DEFAULT_WIDGET_SIZE_PRESETS, ...(config?.ui.widgetSizePresets ?? {}) } as WidgetSizePresets
+                const save = (next: WidgetSizePresets) =>
+                  patchConfig({ ui: { widgetSizePresets: next } }).catch(err =>
+                    console.warn('[settings] widget size presets patch failed:', err))
+
+                // All resizable widget types (host non-containers + every plugin widget,
+                // including palette+context ones like file-editor/image-viewer that the
+                // spawn catalog hides). Deduped by type.
+                const seen = new Set<string>()
+                const widgetTypes: { type: string; label: string }[] = []
+                for (const r of listWidgetRegistrations()) {
+                  if (r.isContainer || seen.has(r.type)) continue
+                  seen.add(r.type)
+                  widgetTypes.push({ type: r.type, label: r.type === 'run-workspace' ? 'Run workspace' : r.type })
+                }
+                for (const p of (pluginWidgetEntries ?? [])) {
+                  if (seen.has(p.widgetType)) continue
+                  seen.add(p.widgetType)
+                  widgetTypes.push({ type: p.widgetType, label: p.label })
+                }
+
+                return (
+                  <div className="space-y-2">
+                    {(['small', 'medium', 'large'] as const).map(key => (
+                      <label key={key} className="flex items-center gap-3">
+                        <span className="text-xs text-slate-300 w-16 capitalize">{key}</span>
+                        <PercentField
+                          value={Math.round(presets[key] * 100)}
+                          onCommit={pct => save({ ...presets, [key]: pct / 100 })}
+                        />
+                        <span className="text-2xs text-slate-500">% of viewport</span>
+                      </label>
+                    ))}
+
+                    <div className="flex items-center gap-3 pt-1">
+                      <span className="text-xs text-slate-300 w-16">Aspect</span>
+                      <AspectRatioField
+                        value={presets.defaultAspect}
+                        onChange={a => save({ ...presets, defaultAspect: a })}
+                      />
+                      <span className="text-2xs text-slate-500">default (W : H)</span>
+                    </div>
+
+                    <div className="pt-2">
+                      <p className="text-2xs text-slate-600 mb-1">Per-widget aspect overrides</p>
+                      <div className="space-y-1">
+                        {widgetTypes.map(({ type, label }) => {
+                          const has = Object.prototype.hasOwnProperty.call(presets.aspectByType, type)
+                          const eff = has ? presets.aspectByType[type]! : presets.defaultAspect
+                          return (
+                            <div key={type} className="flex items-center gap-3">
+                              <span className="text-xs text-slate-300 w-32 truncate" title={label}>{label}</span>
+                              <AspectRatioField
+                                value={eff}
+                                onChange={a => save({ ...presets, aspectByType: { ...presets.aspectByType, [type]: a } })}
+                              />
+                              {has ? (
+                                <button
+                                  className="text-2xs text-slate-500 hover:text-primary"
+                                  onClick={() => {
+                                    const nextAspectByType = { ...presets.aspectByType }
+                                    delete nextAspectByType[type]
+                                    save({ ...presets, aspectByType: nextAspectByType })
+                                  }}
+                                >reset</button>
+                              ) : (
+                                <span className="text-2xs text-slate-600">default</span>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
             </div>
           </div>
 

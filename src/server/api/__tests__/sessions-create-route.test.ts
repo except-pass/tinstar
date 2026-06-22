@@ -135,12 +135,15 @@ describe('POST /api/sessions', () => {
     expect(run.natsSubscriptions!.length).toBeGreaterThan(0)
     // Two-tier: broadcast + direct, both rooted at the task token.
     expect(run.natsSubscriptions!.some(s => s.includes('make-widget'))).toBe(true)
+    // The advertised DM subject is the direct (second) subscription — not the
+    // broadcast channel at [0]. Guards that #998's fix didn't alter task agents.
+    expect(run.natsSubject).toBe(run.natsSubscriptions![1])
   })
 
   it('enables NATS by default for a standalone session (active space, no task)', async () => {
     // Regression: standalone sessions (no taskId/epicId/initiativeId, no explicit
     // `nats` arg) used to spawn with NATS off because the auto-enable gate omitted
-    // spaceId. They now join the bus on the space-level subject.
+    // spaceId. They now join the bus.
     const res = await testCtx.fetch('/api/sessions', {
       method: 'POST',
       body: JSON.stringify({ name: 'lone-wolf' }),
@@ -150,9 +153,18 @@ describe('POST /api/sessions', () => {
     const run = testCtx.docStore.getRun('lone-wolf') as Run
     expect(run).toBeTruthy()
     expect(run.natsEnabled).toBe(true)
-    expect(run.natsSubscriptions!.length).toBeGreaterThan(0)
-    // Rooted at the active space's sanitized name.
-    expect(run.natsSubscriptions!.every(s => s.startsWith('tinstar.create-space'))).toBe(true)
+    // Scope leak guard: a task-less agent gets a DM-ONLY inbox — its own exact
+    // direct subject with '_' for the unresolved levels — and NOT a space
+    // wildcard. A `tinstar.<space>.>` sub would funnel every task broadcast in
+    // the space into an un-seated agent (the remote-control leak).
+    expect(run.natsSubscriptions).toEqual(['tinstar.create-space._._._.lone-wolf'])
+    expect(run.natsSubscriptions!.some(s => s.includes('>'))).toBe(false)
+    // #998: the advertised DM subject must be exactly what the agent subscribes
+    // to. It was recomputed by the space-blind buildNatsSubject, yielding a
+    // '_'-rooted 'tinstar._._._._.lone-wolf' the agent never listens on — so a
+    // sender reading run.natsSubject couldn't reach it. Now derived from the subs.
+    expect(run.natsSubject).toBe('tinstar.create-space._._._.lone-wolf')
+    expect(run.natsSubject).toBe(run.natsSubscriptions![0])
   })
 
   it('still honors an explicit nats:{enabled:false} opt-out', async () => {
@@ -255,5 +267,54 @@ describe('POST /api/sessions', () => {
     // Spawn-time only: the token is never written onto the persisted session.
     expect(opts.session).not.toHaveProperty('token')
     expect(opts.session.modelOverride ?? null).toBeNull()
+  })
+
+  it('re-applies a per-session token supplied on /start (trimmed, never persisted)', async () => {
+    // The token override is spawn-time-only, so it does not survive a stop/start.
+    // /start accepts an optional token to re-establish quota isolation on resume.
+    const created = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'restart-token' }),
+    })
+    expect(created.status).toBe(201)
+    startTmuxSessionMock.mockClear()
+
+    const token = 'sk-ant-oat01-' + 'z'.repeat(40)
+    const restarted = await testCtx.fetch('/api/sessions/restart-token/start', {
+      method: 'POST',
+      body: JSON.stringify({ token: `  ${token}  ` }), // padded → also asserts the trim-on-apply fix
+    })
+    expect(restarted.status).toBe(200)
+    expect(startTmuxSessionMock).toHaveBeenCalledTimes(1)
+    const opts = startTmuxSessionMock.mock.calls[0]![1] as unknown as { secrets: Record<string, string> }
+    expect(opts.secrets.CLAUDE_CODE_OAUTH_TOKEN).toBe(token)
+
+    // Still never persisted: the session file has no token field.
+    const persisted = await (await testCtx.fetch('/api/sessions/restart-token')).json() as Record<string, unknown>
+    expect(persisted).not.toHaveProperty('token')
+  })
+
+  it('returns 400 (never hangs) for a malformed JSON body', async () => {
+    // A throw before the create try/catch (JSON.parse on a bad body) must surface as a
+    // response via withBody's guard — not leave the socket open until curl times out.
+    // A parse failure is a client error, so 400 (not 500).
+    const res = await testCtx.fetch('/api/sessions', { method: 'POST', body: '{not valid json' })
+    expect(res.status).toBe(400)
+    expect(createTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('a plain /start with no body launches with the global token (no override)', async () => {
+    const created = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'restart-plain' }),
+    })
+    expect(created.status).toBe(201)
+    startTmuxSessionMock.mockClear()
+
+    const restarted = await testCtx.fetch('/api/sessions/restart-plain/start', { method: 'POST' })
+    expect(restarted.status).toBe(200)
+    const opts = startTmuxSessionMock.mock.calls[0]![1] as unknown as { secrets: Record<string, string> }
+    // No override supplied ⇒ untouched global secrets (empty secrets dir ⇒ no token key).
+    expect(opts.secrets).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN')
   })
 })

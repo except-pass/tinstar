@@ -92,15 +92,23 @@ export function computeNatsSubscriptions(
     subjects.push(basePath)
     // 2. Direct channel — only this agent sees messages here (DM inbox)
     subjects.push(`${basePath}.${sessionToken}`)
-  } else if (epic) {
-    // Epic-level: use wildcard since no specific task
-    subjects.push(`tinstar.${spaceName}.${initName}.${epicName}.>`)
-  } else if (initiative) {
-    // Initiative-level wildcard
-    subjects.push(`tinstar.${spaceName}.${initName}.>`)
-  } else if (space) {
-    // Space-level wildcard
-    subjects.push(`tinstar.${spaceName}.>`)
+  } else {
+    // Task-less agents (seated only at space/epic/initiative level — e.g. the
+    // marshal, the remote-control agent, ad-hoc standalone sessions) get a
+    // DM-ONLY inbox: their own exact direct subject, with '_' filling the
+    // unresolved levels (e.g. tinstar.<space>._._._.<session>).
+    //
+    // They deliberately do NOT get a level wildcard. A wildcard like
+    // `tinstar.<space>.>` funnels EVERY task broadcast in the subtree into an
+    // un-seated agent — a scope leak (the remote-control agent was silently
+    // receiving unrelated tasks' broadcasts this way). The exact DM subject
+    // below is byte-identical to what buildNatsSubject() publishes to for the
+    // same agent, so senders can still reach it directly.
+    //
+    // A supervisor that genuinely wants broad visibility must opt in explicitly
+    // by passing a `subscriptions` list at session-creation time; this function
+    // only computes the safe default.
+    subjects.push(`${basePath}.${sessionToken}`)
   }
 
   return subjects

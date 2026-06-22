@@ -1,5 +1,8 @@
 import type { ConstellationSlot } from '../domain/constellationGraph'
+import { DEFAULT_ANCHORS, type AnchorPair } from '../domain/anchors'
+import { anchorPoint, anchorPosition } from './anchors'
 import type { Rect } from './constellationCohesion'
+import { SNAP_GAP } from './snapConstants'
 
 export interface SnapWidget extends Rect {
   id: string
@@ -11,7 +14,9 @@ export type SnapEdge = 'left' | 'right' | 'top' | 'bottom'
 export interface SnapTarget {
   targetId: string
   edge: SnapEdge
-  /** Snapped top-left for the dragged widget: flush against `edge`, aligned on the perpendicular axis. */
+  /** Anchor pair [draggedAnchor, targetAnchor] that produced this snap. */
+  anchors: AnchorPair
+  /** Snapped top-left for the dragged widget so its anchor meets the target's. */
   x: number
   y: number
 }
@@ -29,13 +34,36 @@ export type SnapCommitResult =
 
 const ALL_SLOTS: ConstellationSlot[] = ['1','2','3','4','5','6','7','8','9']
 
-// Flush by default — widgets touch when joined. Bump for a gutter between snapped widgets.
-const SNAP_GAP = 0
+// A flush snap touches the target edge-to-edge (corner) so the placed rect overlaps the
+// target by ~0 on at least one axis. We allow a few px of two-axis overlap for rounding;
+// beyond that the placement covers the target's interior — an occlusion, not a snap.
+const OCCLUSION_TOLERANCE = 1
+
+/** Edge → canonical [sourceAnchor, newAnchor] corner pair, so a programmatic
+ *  edge-flush snap persists the same attachment a manual drag-snap would. */
+export const EDGE_ANCHORS: Record<SnapEdge, AnchorPair> = {
+  right:  ['top-right', 'top-left'],
+  left:   ['top-left', 'top-right'],
+  bottom: ['bottom-left', 'top-left'],
+  top:    ['top-left', 'bottom-left'],
+}
 
 export function rectDistance(a: Rect, b: Rect): number {
   const dx = Math.max(0, Math.max(a.x - (b.x + b.width), b.x - (a.x + a.width)))
   const dy = Math.max(0, Math.max(a.y - (b.y + b.height), b.y - (a.y + a.height)))
   return Math.hypot(dx, dy)
+}
+
+/**
+ * True when `placed` overlaps `target`'s interior on BOTH axes beyond the rounding
+ * tolerance — i.e. it stacks on top of the target rather than sitting flush against an
+ * edge or corner. Same-side anchor pairs (e.g. top-left↔top-left) produce exactly this
+ * occlusion, the same one the domain model excludes the center anchor for (anchors.ts).
+ */
+function placementOccludes(placed: Rect, target: Rect): boolean {
+  const ox = Math.min(placed.x + placed.width, target.x + target.width) - Math.max(placed.x, target.x)
+  const oy = Math.min(placed.y + placed.height, target.y + target.height) - Math.max(placed.y, target.y)
+  return Math.min(ox, oy) > OCCLUSION_TOLERANCE
 }
 
 /** Top-left for a widget of `size` placed flush against `edge` of `source`.
@@ -76,15 +104,49 @@ export function resolveSnapTarget(
   }
   if (!nearest) return null
 
-  const dx = (draggedRect.x + draggedRect.width / 2) - (nearest.x + nearest.width / 2)
-  const dy = (draggedRect.y + draggedRect.height / 2) - (nearest.y + nearest.height / 2)
-
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    const edge: SnapEdge = dx >= 0 ? 'right' : 'left'
-    return { targetId: nearest.id, edge, ...flushPosition(nearest, edge, draggedRect) }
+  // Pick the nearest (dragged-anchor, target-anchor) pair WHOSE placement does not occlude
+  // the target. Both use DEFAULT_ANCHORS here; per-widget custom anchors can be threaded in
+  // later via an overload — defaults cover every host widget. The unconstrained nearest pair
+  // is a same-side pair when the drag overlaps the target (rectDistance is 0 for overlapping
+  // rects), which stacks the dragged widget exactly on top — an occlusion, not a snap. We skip
+  // those and take the nearest pair that yields a flush/edge-adjacent placement instead.
+  let bestPair: AnchorPair | null = null
+  let bestPos: { x: number; y: number } | null = null
+  let bestDist = Infinity
+  for (const da of DEFAULT_ANCHORS) {
+    const dp = anchorPoint(draggedRect, da)
+    for (const ta of DEFAULT_ANCHORS) {
+      const tp = anchorPoint(nearest, ta)
+      const d = Math.hypot(dp.x - tp.x, dp.y - tp.y)
+      if (d >= bestDist) continue
+      const pos = anchorPosition(nearest, ta, da, draggedRect)
+      const placed = { x: pos.x, y: pos.y, width: draggedRect.width, height: draggedRect.height }
+      if (placementOccludes(placed, nearest)) continue
+      bestDist = d
+      bestPair = [da.name, ta.name]
+      bestPos = pos
+    }
   }
-  const edge: SnapEdge = dy >= 0 ? 'bottom' : 'top'
-  return { targetId: nearest.id, edge, ...flushPosition(nearest, edge, draggedRect) }
+  // Every overlap admits at least one flush (non-occluding) placement, so this is effectively
+  // unreachable — but if no non-occluding pair exists, don't force an occlusion: report no snap.
+  if (!bestPair || !bestPos) return null
+
+  // Derive `edge` FROM the winning placement (not the pre-snap center offset) so the preview
+  // chrome highlights the side the widget actually snaps to. For a corner-to-corner adjacency
+  // the dominant axis of the placed-vs-target center offset breaks the tie.
+  const dx = (bestPos.x + draggedRect.width / 2) - (nearest.x + nearest.width / 2)
+  const dy = (bestPos.y + draggedRect.height / 2) - (nearest.y + nearest.height / 2)
+  const edge: SnapEdge = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'right' : 'left') : (dy >= 0 ? 'bottom' : 'top')
+
+  // Push the dragged widget off the target edge by SNAP_GAP so the pair settles
+  // with a small gutter (room for the constellation link), rather than flush.
+  let { x, y } = bestPos
+  if (edge === 'right') x += SNAP_GAP
+  else if (edge === 'left') x -= SNAP_GAP
+  else if (edge === 'bottom') y += SNAP_GAP
+  else y -= SNAP_GAP
+
+  return { targetId: nearest.id, edge, anchors: bestPair, x, y }
 }
 
 /**

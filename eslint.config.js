@@ -8,6 +8,7 @@
 // See docs/adrs/0002-plugin-api-boundary.md.
 
 import tsParser from '@typescript-eslint/parser'
+import { validThemeClassnames } from './eslint-rules/valid-theme-classnames.js'
 
 // Stub plugin so inline `eslint-disable react-hooks/...` directives in the
 // plugin source files don't error out — we don't run the react-hooks rules
@@ -21,6 +22,37 @@ const reactHooksStub = {
 }
 
 export default [
+  {
+    // Global ignores — build output, native bundles, deps. (A config object with
+    // only `ignores` sets ignores for the whole run.)
+    ignores: ['dist/**', 'dist-*/**', 'src-tauri/target/**', 'node_modules/**'],
+  },
+  {
+    // Catch className typos that target the custom palette but emit no CSS
+    // (e.g. `bg-surface-2`, `border-border`) — they render invisibly.
+    files: ['src/**/*.{ts,tsx}'],
+    // Broadening past the plugin tree means we now parse files that carry inline
+    // `eslint-disable react-hooks/...` and `no-console` directives. We don't run
+    // those rules, so: register the react-hooks stub (same reference the plugin
+    // block uses, to avoid a redefine conflict) and silence unused-directive
+    // noise — this block enforces only the className rule.
+    linterOptions: { reportUnusedDisableDirectives: 'off' },
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+        ecmaFeatures: { jsx: true },
+      },
+    },
+    plugins: {
+      tinstar: { rules: { 'valid-theme-classnames': validThemeClassnames } },
+      'react-hooks': reactHooksStub,
+    },
+    rules: {
+      'tinstar/valid-theme-classnames': 'error',
+    },
+  },
   {
     files: ['src/plugins/*/src/**/*.{ts,tsx}'],
     languageOptions: {
