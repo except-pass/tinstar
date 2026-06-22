@@ -1,6 +1,6 @@
 {
   "name": "tinstar",
-  "version": "5.2.0-dev.0",
+  "version": "5.2.0",
   "workspaces": [
     "packages/*"
   ],
