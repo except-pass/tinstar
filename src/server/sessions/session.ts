@@ -70,6 +70,16 @@ export interface Session {
    * sessions without a persona.
    */
   agent: { name: string; description: string; prompt: string } | null
+  /**
+   * Per-session model override (Switchboard). When non-null, the agent launches
+   * with `--model <modelOverride>` appended to the resolved command, overriding
+   * the CLI template's baked model. Persisted so a later `/start` (which recreates
+   * the tmux process) re-applies it. `null` = use the template/global default —
+   * byte-identical to pre-override behavior. NOTE: the companion per-session *token*
+   * override is deliberately NOT persisted here (it is applied as a spawn-time-only
+   * secret overlay in routes.ts and never written to disk or returned by /api/state).
+   */
+  modelOverride: string | null
   created: string
   lastActive: string
   /**
@@ -150,6 +160,7 @@ export interface CreateSessionOpts {
   nats?: SessionNats | null
   appendSystemPrompt?: string | null
   agent?: { name: string; description: string; prompt: string } | null
+  modelOverride?: string | null
 }
 
 export function createSession(sessionsDir: string, opts: CreateSessionOpts): Session {
@@ -181,6 +192,7 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
     natsControlOrphanedAt: null,
     appendSystemPrompt: opts.appendSystemPrompt ?? null,
     agent: opts.agent ?? null,
+    modelOverride: opts.modelOverride ?? null,
     created: now,
     lastActive: now,
   }
@@ -197,6 +209,7 @@ export function getSession(sessionsDir: string, name: string): Session | null {
     if (raw.natsControlOrphanedAt === undefined) raw.natsControlOrphanedAt = null
     if (raw.appendSystemPrompt === undefined) raw.appendSystemPrompt = null
     if (raw.agent === undefined) raw.agent = null
+    if (raw.modelOverride === undefined) raw.modelOverride = null
     return raw
   } catch {
     return null

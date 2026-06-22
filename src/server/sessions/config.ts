@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { getConfigRoot } from '../configRoot'
+import type { ErrorCode } from '../../domain/api'
 
 // --- Types ---
 
@@ -62,6 +63,20 @@ export interface TinstarConfig {
       duty: boolean
       turnLength: boolean
     }
+  }
+  /**
+   * Switchboard per-session override guard (Phase 2 Step 6). Gates the per-session
+   * model/token override behind explicit configuration — the override is FAIL-CLOSED
+   * unless permitted here. Absent ⇒ defaults (no models allowed, token override off),
+   * so a stray override is rejected at launch rather than silently honored.
+   */
+  switchboard: {
+    /** Models permitted for a per-session `--model` override. A model override not
+     *  in this list is rejected at launch. Empty ⇒ model override disabled. */
+    allowedModels: string[]
+    /** Master switch for the per-session OAuth token override. False ⇒ any token
+     *  override is rejected at launch (the auth-sensitive default). */
+    allowTokenOverride: boolean
   }
 }
 
@@ -199,6 +214,10 @@ export const BASE_CONFIG = {
       turnLength: true,
     },
   },
+  switchboard: {
+    allowedModels: [] as string[],
+    allowTokenOverride: false,
+  },
 }
 
 // --- Public API ---
@@ -271,6 +290,14 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
     },
     uploadMaxBytes: merged.uploadMaxBytes,
     ui: merged.ui,
+    switchboard: {
+      allowedModels: Array.isArray((userConfig.switchboard as Record<string, unknown>)?.allowedModels)
+        ? (userConfig.switchboard as Record<string, string[]>).allowedModels!
+        : merged.switchboard.allowedModels,
+      allowTokenOverride: typeof (userConfig.switchboard as Record<string, unknown>)?.allowTokenOverride === 'boolean'
+        ? (userConfig.switchboard as Record<string, boolean>).allowTokenOverride!
+        : merged.switchboard.allowTokenOverride,
+    },
   }
 
   return deepFreeze(config)
@@ -292,6 +319,80 @@ export function loadSecrets(secretsDir: string): Record<string, string> {
     }
   }
   return secrets
+}
+
+/**
+ * Switchboard per-session token override. Returns the global secrets map UNCHANGED
+ * (same reference) when no override is supplied — so the launched env is byte-identical
+ * to pre-override behavior. When a per-session token is supplied, returns a shallow copy
+ * with `CLAUDE_CODE_OAUTH_TOKEN` overlaid on top. The override is applied at spawn time
+ * ONLY — callers must never persist the returned map (it is not written to session.json
+ * and not returned by /api/state). Never logs the token value.
+ */
+export function applyTokenOverride(
+  secrets: Record<string, string>,
+  token?: string | null,
+): Record<string, string> {
+  if (!token) return secrets
+  return { ...secrets, CLAUDE_CODE_OAUTH_TOKEN: token }
+}
+
+export type OverrideValidationResult = { ok: true } | { ok: false; code: ErrorCode; message: string }
+
+/** Plausible-token shape check. Deliberately coarse and VALUE-FREE: asserts a
+ *  trimmed, whitespace-free string within a sane length band without inspecting,
+ *  returning, or logging the token bytes. */
+function isPlausibleToken(token: string): boolean {
+  const t = token.trim()
+  return t.length >= 20 && t.length <= 4096 && !/\s/.test(t)
+}
+
+/**
+ * Switchboard launch-time guard for the per-session model/token override (Phase 2
+ * Step 6). Pairs the auth-sensitive override with a startup invariant: the override
+ * is FAIL-CLOSED — rejected with a stable error code unless explicitly permitted by
+ * config (an allowed-model list + a token-override master switch). The returned
+ * message NEVER contains the token value (callers log the code/message, not bytes).
+ *
+ * Returns ok when neither override is present (the common path) — so normal session
+ * launches are unaffected (byte-identical behavior).
+ */
+export function validateSessionOverride(
+  override: { model?: string | null; token?: string | null },
+  guard: { allowedModels: string[]; allowTokenOverride: boolean },
+): OverrideValidationResult {
+  const model = override.model
+  if (model != null && model !== '') {
+    if (guard.allowedModels.length === 0) {
+      return {
+        ok: false,
+        code: 'OVERRIDE_MODEL_NOT_CONFIGURED',
+        message: 'per-session model override requires switchboard.allowedModels to be configured',
+      }
+    }
+    if (!guard.allowedModels.includes(model)) {
+      return {
+        ok: false,
+        code: 'OVERRIDE_MODEL_NOT_ALLOWED',
+        message: `model '${model}' is not in switchboard.allowedModels`,
+      }
+    }
+  }
+  const token = override.token
+  if (token != null && token !== '') {
+    if (!guard.allowTokenOverride) {
+      return {
+        ok: false,
+        code: 'OVERRIDE_TOKEN_DISABLED',
+        message: 'per-session token override is disabled (set switchboard.allowTokenOverride)',
+      }
+    }
+    if (!isPlausibleToken(token)) {
+      // Deliberately value-free message — never echo the token bytes.
+      return { ok: false, code: 'OVERRIDE_TOKEN_MALFORMED', message: 'per-session token override is malformed' }
+    }
+  }
+  return { ok: true }
 }
 
 export function ensureDirs(config: TinstarConfig): void {

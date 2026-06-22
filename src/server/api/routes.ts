@@ -37,6 +37,8 @@ import {
   listSessions,
   reconcileSessionStates,
   loadSecrets,
+  applyTokenOverride,
+  validateSessionOverride,
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
@@ -393,6 +395,14 @@ interface CreateSessionParams {
   view?: string
   /** Initial persisted state for a plugin session-view (run.viewData). */
   viewData?: unknown
+  /** Per-session model override (Switchboard). Launches the agent with
+   *  `--model <model>`; persisted on the session (modelOverride) so a later
+   *  `/start` re-applies it. Absent ⇒ template/global default (unchanged). */
+  model?: string
+  /** Per-session OAuth token override (Switchboard). Overlaid on the global
+   *  secrets map as CLAUDE_CODE_OAUTH_TOKEN at spawn time ONLY — never persisted
+   *  to session.json and never returned by /api/state. Absent ⇒ global token. */
+  token?: string
 }
 
 interface CreateSessionContext {
@@ -416,7 +426,7 @@ async function createSessionInternal(
     name, project, worktree = false, worktreePath,
     prompt, skipPermissions = true, cliTemplate: cliTemplateName,
     taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt,
-    view, viewData
+    view, viewData, model: modelOverride, token: tokenOverride
   } = params
 
   const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, natsTraffic, natsHealth } = ctx
@@ -425,6 +435,17 @@ async function createSessionInternal(
 
   if (getSession(sessDir, name)) {
     return { ok: false, error: { code: 'SESSION_EXISTS', message: `Session '${name}' already exists` } }
+  }
+
+  // Switchboard Step 6: fail-closed launch-time guard for the per-session override.
+  // Reject a disallowed model / disabled-or-malformed token BEFORE creating the
+  // session dir or sending the tmux command. Inert when neither override is set.
+  const overrideCheck = validateSessionOverride(
+    { model: modelOverride, token: tokenOverride },
+    cfg.switchboard ?? { allowedModels: [], allowTokenOverride: false },
+  )
+  if (!overrideCheck.ok) {
+    return { ok: false, error: { code: overrideCheck.code, message: overrideCheck.message } }
   }
 
   // Resolve project
@@ -512,12 +533,16 @@ async function createSessionInternal(
     nats: resolvedNats,
     appendSystemPrompt: appendSystemPrompt ?? null,
     agent: agent ?? null,
+    modelOverride: modelOverride ?? null,
   })
 
   const enriched = session as Session & { _stateDir?: string; initialPrompt?: string }
   enriched._stateDir = claudeStateDir(sessDir, name)
 
-  const sec = secrets()
+  // Switchboard token override: overlay the per-session OAuth token on top of the
+  // global secrets map for THIS launch only (spawn-time, never persisted). Inert
+  // when unset — the global secrets map is returned unchanged (byte-identical env).
+  const sec = applyTokenOverride(secrets(), tokenOverride)
   const port = await tmuxBackend.findPort(cfg.ports.hostStart)
   if (prompt) enriched.initialPrompt = prompt
 
@@ -2772,7 +2797,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       readBody(req).then(async (body) => {
-        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData } = JSON.parse(body)
+        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData, model, token } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         // Resolve a named hand here so the HTTP layer keeps ownership of the
@@ -2797,7 +2822,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             cliTemplate: cliTemplateName ?? resolvedHand?.cliTemplate,
             taskId, epicId, initiativeId, color: colorParam, nats,
             appendSystemPrompt: handSystemPrompt,
-            view, viewData,
+            view, viewData, model, token,
           }, createCtx)
 
           if (!result.ok) {
@@ -2805,6 +2830,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               case 'MISSING_NAME': return fail(res, 'BAD_REQUEST', result.error.message)
               case 'SESSION_EXISTS': return fail(res, 'CONFLICT', result.error.message)
               case 'PROJECT_NOT_FOUND': return fail(res, 'NOT_FOUND', result.error.message)
+              // Switchboard override guard — surface the stable code/status (not INTERNAL).
+              case 'OVERRIDE_MODEL_NOT_CONFIGURED':
+              case 'OVERRIDE_MODEL_NOT_ALLOWED':
+              case 'OVERRIDE_TOKEN_DISABLED':
+              case 'OVERRIDE_TOKEN_MALFORMED':
+                return fail(res, result.error.code as ErrorCode, result.error.message)
               default: return fail(res, 'INTERNAL', result.error.message)
             }
           }
@@ -3188,16 +3219,28 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!parentSession) return fail(res, 'NOT_FOUND', `Session '${parentName}' not found`)
 
       const body = await readBody(req)
-      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride } = JSON.parse(body) as {
+      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride, model: modelOverride, token: tokenOverride } = JSON.parse(body) as {
         hand: string
         prompt?: string
         orchestrator?: boolean
         repo?: string          // Override parent's project/repo
         worktreePath?: string  // Override parent's worktree path
+        model?: string         // Switchboard: per-session model override (persisted)
+        token?: string         // Switchboard: per-session OAuth token override (spawn-time only, never persisted)
       }
 
       if (!handName) {
         return fail(res, 'BAD_REQUEST', 'hand field is required')
+      }
+
+      // Switchboard Step 6: fail-closed guard for a per-session override on spawn,
+      // before the child session is created or launched. Inert when unset.
+      const spawnOverrideCheck = validateSessionOverride(
+        { model: modelOverride, token: tokenOverride },
+        cfg.switchboard ?? { allowedModels: [], allowTokenOverride: false },
+      )
+      if (!spawnOverrideCheck.ok) {
+        return fail(res, spawnOverrideCheck.code, spawnOverrideCheck.message)
       }
 
       const hand = getHandByName(handName)
@@ -3330,6 +3373,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         cliTemplate: cliTemplate ?? null,
         adapter: parentSession.adapter,
         nats: natsConfig,
+        modelOverride: modelOverride ?? null,
       })
 
       emitSessionEvent('managed_session.created', { name: spawnedSession.name, state: spawnedSession.state })
@@ -3337,7 +3381,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // Start the session with the combined prompt
       const enriched = spawnedSession as Session & { _stateDir?: string; initialPrompt?: string }
       enriched._stateDir = claudeStateDir(sessDir, spawnedName)
-      const sec = secrets()
+      // Switchboard token override: spawn-time-only OAuth overlay (never persisted).
+      // This is the quota-isolation use case — a spawned child can carry a distinct
+      // OAuth token so it draws from a separate quota pool. Inert when unset.
+      const sec = applyTokenOverride(secrets(), tokenOverride)
 
       const resolvedTemplate = cliTemplate
         ? cfg.cliTemplates.find(t => t.name === cliTemplate) ?? null

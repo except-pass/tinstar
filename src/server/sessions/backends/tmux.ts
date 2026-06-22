@@ -338,6 +338,10 @@ export function buildAgentCommand(opts: {
   nats?: { enabled: boolean } | null
   appendSystemPrompt?: string | null
   agent?: AgentDef | null
+  /** Per-session model override (Switchboard). Appends `--model <modelOverride>`
+   * to the resolved command, overriding the template's baked model. Null/absent
+   * leaves the command byte-identical to pre-override behavior. */
+  modelOverride?: string | null
 }): string {
   let cmd: string
 
@@ -380,6 +384,20 @@ export function buildAgentCommand(opts: {
     if (opts.initialPrompt) {
       // Use single quotes — they don't expand !, `, $, or anything else
       cmd += ` -- ${bashSingleQuote(opts.initialPrompt)}`
+    }
+  }
+
+  // Per-session model override (Switchboard): append `--model <model>` so the
+  // CLI's last-wins flag parsing overrides any model baked into the template.
+  // Insert before the ` -- ` prompt separator (so it stays an option, not part
+  // of the prompt), mirroring the --append-system-prompt insertion above.
+  if (opts.modelOverride) {
+    const modelFlag = ` --model ${bashSingleQuote(opts.modelOverride)}`
+    const dashDashIdx = cmd.indexOf(' -- ')
+    if (dashDashIdx !== -1) {
+      cmd = cmd.slice(0, dashDashIdx) + modelFlag + cmd.slice(dashDashIdx)
+    } else {
+      cmd += modelFlag
     }
   }
 
@@ -486,6 +504,7 @@ export async function createTmuxSession(
     nats: natsOpts,
     appendSystemPrompt: opts.appendSystemPrompt,
     agent: opts.agent,
+    modelOverride: opts.session.modelOverride,
   })
   parts.push(agentCmd)
 
@@ -550,6 +569,7 @@ export async function startTmuxSession(
     nats: natsOpts,
     appendSystemPrompt: opts.appendSystemPrompt,
     agent: opts.agent,
+    modelOverride: opts.session.modelOverride,
   })
   parts.push(agentCmd)
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])

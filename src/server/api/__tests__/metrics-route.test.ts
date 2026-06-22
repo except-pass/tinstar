@@ -17,6 +17,7 @@ function fakeSession(name: string): Session {
     profile: null, oneshot: false, skipPermissions: false,
     cliTemplate: null, adapter: 'claude', nats: null,
     port: null, ttydPid: null, natsControlOrphanedAt: null, appendSystemPrompt: null, agent: null,
+    modelOverride: null,
     created: '2026-05-17T00:00:00.000Z',
     lastActive: '2026-05-17T00:00:00.000Z',
   }
