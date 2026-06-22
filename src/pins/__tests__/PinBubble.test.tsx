@@ -102,6 +102,51 @@ describe('PinBubble', () => {
   })
 })
 
+// ── Canvas clipping ───────────────────────────────────────────────────────────
+// The bubble is portaled to <body> (position:fixed) so the canvas's overflow-clip
+// can't clip it. It must clip itself to the canvas viewport, or a marker that the
+// canvas pans off-screen (e.g. clicking inbox sessions → flash-focus → centerOn)
+// leaves its note floating over the sidebar/inbox. See [data-testid="infinite-canvas"].
+describe('PinBubble canvas clipping', () => {
+  function mockRect(el: Element, r: Partial<DOMRect>) {
+    const base = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) }
+    el.getBoundingClientRect = () => ({ ...base, ...r }) as DOMRect
+  }
+  function canvasWithAnchor(anchorRect: Partial<DOMRect>): HTMLElement {
+    const canvas = document.createElement('div')
+    canvas.setAttribute('data-testid', 'infinite-canvas')
+    mockRect(canvas, { left: 300, top: 0, right: 1000, bottom: 800, width: 700, height: 800 })
+    document.body.appendChild(canvas)
+    const a = document.createElement('div')
+    canvas.appendChild(a)
+    mockRect(a, anchorRect)
+    return a
+  }
+
+  it('hides the bubble when its anchor is panned left of the canvas (onto the sidebar)', () => {
+    // Marker center x ≈ 55, left of the canvas's left edge (300) — i.e. under the sidebar.
+    const a = canvasWithAnchor({ left: 50, top: 100, right: 60, bottom: 110, width: 10, height: 10 })
+    render(
+      <PinBubble id="off" comment="hi" sent canSubmit replies={[]} resolved={false}
+        anchorEl={a}
+        onCommentChange={() => {}} onDelete={() => {}} onSubmit={() => {}}
+        onReply={() => {}} onResolve={() => {}} onReopen={() => {}} />,
+    )
+    expect(screen.queryByTestId('pin-bubble-off')).toBeNull()
+  })
+
+  it('renders the bubble when its anchor is inside the canvas viewport', () => {
+    const a = canvasWithAnchor({ left: 500, top: 100, right: 510, bottom: 110, width: 10, height: 10 })
+    render(
+      <PinBubble id="in" comment="hi" sent canSubmit replies={[]} resolved={false}
+        anchorEl={a}
+        onCommentChange={() => {}} onDelete={() => {}} onSubmit={() => {}}
+        onReply={() => {}} onResolve={() => {}} onReopen={() => {}} />,
+    )
+    expect(screen.getByTestId('pin-bubble-in')).toBeTruthy()
+  })
+})
+
 // ── Thread / reply tests ──────────────────────────────────────────────────────
 
 const reply = (over: Partial<Reply> = {}): Reply => ({

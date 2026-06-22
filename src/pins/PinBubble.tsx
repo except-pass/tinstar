@@ -32,27 +32,53 @@ const BUBBLE_H = 140
 const GAP = 6
 const MARGIN = 8
 
-function placement(anchorEl: HTMLElement): { left: number; top: number } {
+type Bounds = { left: number; top: number; right: number; bottom: number }
+
+// The visible canvas region — the bubble clamps/clips to this rather than the full
+// window. The marker lives inside the canvas's `overflow-clip` container, but the
+// bubble is portaled to <body> (position:fixed) so that container can't clip it.
+// Without this the bubble keeps rendering at the marker's screen position even after
+// the canvas pans the marker off-screen (e.g. clicking inbox sessions → centerOn),
+// spilling the note over the sidebar/inbox. Falls back to the viewport when no canvas
+// ancestor exists (e.g. unit tests, other mounts).
+function canvasBounds(anchorEl: HTMLElement): Bounds {
+  const canvas = anchorEl.closest('[data-testid="infinite-canvas"]')
+  if (canvas) {
+    const r = canvas.getBoundingClientRect()
+    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+  }
+  return { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
+}
+
+function placement(anchorEl: HTMLElement, bounds: Bounds): { left: number; top: number } {
   const rect = anchorEl.getBoundingClientRect()
   // Default: just right of + level with the marker (mirrors the old left-3/top-3 offset).
   let left = rect.right + GAP
   let top = rect.top
-  // Flip to the LEFT of the marker if the bubble would spill off the right edge.
-  if (left + BUBBLE_W > window.innerWidth - MARGIN) {
+  // Flip to the LEFT of the marker if the bubble would spill off the canvas's right edge.
+  if (left + BUBBLE_W > bounds.right - MARGIN) {
     left = rect.left - BUBBLE_W - GAP
   }
-  // Shift up if it would spill off the bottom edge.
-  if (top + BUBBLE_H > window.innerHeight - MARGIN) {
-    top = window.innerHeight - BUBBLE_H - MARGIN
+  // Shift up if it would spill off the canvas's bottom edge.
+  if (top + BUBBLE_H > bounds.bottom - MARGIN) {
+    top = bounds.bottom - BUBBLE_H - MARGIN
   }
-  return { left: Math.max(MARGIN, left), top: Math.max(MARGIN, top) }
+  // Never let the bubble cross the canvas's top/left edges onto the sidebar/chrome.
+  return { left: Math.max(bounds.left + MARGIN, left), top: Math.max(bounds.top + MARGIN, top) }
 }
 
 export function PinBubble(p: PinBubbleProps) {
   const [draft, setDraft] = useState(p.comment)
   const [reply, setReply] = useState('')
   if (!p.anchorEl) return null
-  const { left, top } = placement(p.anchorEl)
+  const bounds = canvasBounds(p.anchorEl)
+  // Mirror the marker's clipping: when the canvas pans the anchor off its viewport,
+  // hide the note too instead of letting it float over the sidebar/inbox.
+  const rect = p.anchorEl.getBoundingClientRect()
+  const cx = (rect.left + rect.right) / 2
+  const cy = (rect.top + rect.bottom) / 2
+  if (cx < bounds.left || cx > bounds.right || cy < bounds.top || cy > bounds.bottom) return null
+  const { left, top } = placement(p.anchorEl, bounds)
   // PinBubble renders author/text/key only — it does not read createdAt — so we pass
   // just the fields threadMessages needs for display (the bubble has no full Pin here).
   const msgs = threadMessages({ id: p.id, comment: p.comment, replies: p.replies } as Parameters<typeof threadMessages>[0])
