@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PinBubble } from '../PinBubble'
+import { PinBubble, BUBBLE_W, BUBBLE_H, GAP, MARGIN } from '../PinBubble'
 import type { Reply } from '../../domain/pinSet'
 
 afterEach(() => cleanup())
@@ -155,15 +155,19 @@ describe('PinBubble canvas clipping', () => {
     expect(screen.getByTestId('pin-bubble-in')).toBeTruthy()
   })
 
-  it('clamps the bubble to the canvas rect, not the window viewport', () => {
+  it('clamps the bubble to the canvas rect, not the window viewport (both axes)', () => {
     // Canvas inset from the jsdom window (1024x768) on all sides, so canvas-vs-window
-    // clamping is distinguishable. Anchor near the canvas BOTTOM: the bubble must be
-    // shifted up to sit inside the CANVAS, not merely inside the window — this is the
-    // load-bearing behavior (bounds.bottom, not window.innerHeight).
-    const canvas = makeCanvas({ left: 300, top: 200, right: 700, bottom: 600, width: 400, height: 400 })
+    // clamping is distinguishable. Anchor near the canvas BOTTOM-RIGHT corner: the
+    // bubble must flip LEFT of the marker (against bounds.right, not window.innerWidth)
+    // AND shift UP (against bounds.bottom, not window.innerHeight) — the load-bearing
+    // behavior. Expected values derive from PinBubble's exported constants so they
+    // track the source of truth rather than hard-coded magic numbers.
+    const canvas = { left: 300, top: 200, right: 700, bottom: 600 }
+    const anchor = { left: 650, top: 500, right: 660, bottom: 510, width: 10, height: 10 }
+    const el = makeCanvas({ ...canvas, width: 400, height: 400 })
     const a = document.createElement('div')
-    canvas.appendChild(a)
-    mockRect(a, { left: 400, top: 500, right: 410, bottom: 510, width: 10, height: 10 })
+    el.appendChild(a)
+    mockRect(a, anchor)
     render(
       <PinBubble id="clamp" comment="hi" sent canSubmit replies={[]} resolved={false}
         anchorEl={a}
@@ -171,10 +175,12 @@ describe('PinBubble canvas clipping', () => {
         onReply={() => {}} onResolve={() => {}} onReopen={() => {}} />,
     )
     const bubble = screen.getByTestId('pin-bubble-clamp') as HTMLElement
-    // BUBBLE_H=140, MARGIN=8 → clamped to the canvas bottom: 600-140-8=452. A window
-    // clamp (innerHeight 768) would leave it at the anchor's top (500).
-    expect(bubble.style.top).toBe('452px')
-    expect(parseFloat(bubble.style.left)).toBeGreaterThanOrEqual(300) // within canvas
+    // Horizontal: spills past the canvas right edge → flips to the left of the marker.
+    // (A window clamp wouldn't flip — 1024px is wide enough — leaving it to the right.)
+    expect(bubble.style.left).toBe(`${anchor.left - BUBBLE_W - GAP}px`)
+    // Vertical: spills past the canvas bottom edge → shifts up into the canvas.
+    // (A window clamp would leave it at the anchor top, 500.)
+    expect(bubble.style.top).toBe(`${canvas.bottom - BUBBLE_H - MARGIN}px`)
   })
 })
 

@@ -27,10 +27,12 @@ interface PinBubbleProps {
 
 // Bubble dimensions used only for viewport-edge flipping (w-52 = 208px; height varies
 // ~120-140px). The popup itself sizes to content; these are conservative estimates.
-const BUBBLE_W = 208
-const BUBBLE_H = 140
-const GAP = 6
-const MARGIN = 8
+// Exported so PinBubble.test can assert the canvas-clamp math against the source of
+// truth instead of duplicating magic numbers.
+export const BUBBLE_W = 208
+export const BUBBLE_H = 140
+export const GAP = 6
+export const MARGIN = 8
 
 type Bounds = { left: number; top: number; right: number; bottom: number }
 
