@@ -9,7 +9,25 @@ import { log } from '../../logger'
 // NATS channel server paths come from config (see config.ts)
 // Install: git clone https://github.com/except-pass/nats-channel-mcp && cd nats-channel-mcp && bun install
 
-const execFileAsync = promisify(execFile)
+const rawExecFileAsync = promisify(execFile)
+
+// Every tmux command runs through this. Session-write API endpoints (create, /prompt,
+// stop, …) `await` these, and a tmux server can wedge (a stuck client, a hung pane,
+// an unresponsive socket). WITHOUT a timeout a wedged `tmux` makes the awaiting HTTP
+// handler hang forever with no response (curl exit 28) — and a try/catch can't save a
+// hang, only a rejection. The timeout kills the child and REJECTS, which the routes'
+// existing try/catch turns into a clean 5xx instead of an infinite hang. GET endpoints
+// that run no tmux commands stay responsive throughout, which is exactly the reported
+// symptom. 10s is far above any healthy tmux command (<1s) so it never trips normally.
+const TMUX_EXEC_TIMEOUT_MS = 10_000
+function execFileAsync(
+  file: string,
+  args: readonly string[],
+  opts: { timeout?: number; maxBuffer?: number } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  // No encoding option ⇒ stdout/stderr are utf8 strings (matches the prior behavior).
+  return rawExecFileAsync(file, args as string[], { timeout: TMUX_EXEC_TIMEOUT_MS, ...opts }) as Promise<{ stdout: string; stderr: string }>
+}
 
 // --- OS clipboard integration ---
 

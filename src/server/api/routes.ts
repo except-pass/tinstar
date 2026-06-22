@@ -3079,6 +3079,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           log.error('sessions', `session creation failed: ${name}`, { error: (err as Error).message })
           fail(res, 'INTERNAL', (err as Error).message)
         }
+      }).catch(err => {
+        // Belt-and-suspenders: a throw BEFORE the try (e.g. JSON.parse on a malformed
+        // body) would otherwise leave the response open and hang the client forever.
+        if (!res.headersSent) fail(res, 'INTERNAL', (err as Error).message)
       })
       return true
     }
@@ -4143,7 +4147,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         } catch (err) {
           fail(res, 'INTERNAL', (err as Error).message)
         }
-      })
+      }).catch(err => { if (!res.headersSent) fail(res, 'INTERNAL', (err as Error).message) })
       return true
     }
 

@@ -294,6 +294,14 @@ describe('POST /api/sessions', () => {
     expect(persisted).not.toHaveProperty('token')
   })
 
+  it('returns an error (never hangs) for a malformed JSON body', async () => {
+    // A throw before the create try/catch (JSON.parse on a bad body) must surface as a
+    // response via the readBody .catch — not leave the socket open until curl times out.
+    const res = await testCtx.fetch('/api/sessions', { method: 'POST', body: '{not valid json' })
+    expect(res.status).toBe(500)
+    expect(createTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
   it('a plain /start with no body launches with the global token (no override)', async () => {
     const created = await testCtx.fetch('/api/sessions', {
       method: 'POST',
