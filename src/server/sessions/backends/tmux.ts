@@ -16,6 +16,10 @@ const execFileAsync = promisify(execFile)
 // Candidate "stdin -> system clipboard" commands, in priority order. WSL
 // exposes the Windows clipboard via clip.exe; macOS and Linux use their
 // native tools. The first one present on PATH wins.
+// MUST stay hardcoded literals: getClipboardCommand() string-interpolates the
+// binary name into `command -v ${bin}` via execSync. With these constants that's
+// injection-safe (no external input reaches the shell); if this list ever becomes
+// config/env-derived, switch the probe to execFileSync('command', ['-v', bin]).
 const CLIPBOARD_CANDIDATES = [
   'clip.exe', // WSL -> Windows clipboard
   'pbcopy', // macOS
@@ -438,6 +442,14 @@ export async function createTmuxSession(
   // Enable set-clipboard (OSC-52, for terminals that honor it) and pipe
   // copy-mode selections through the host clipboard tool so drag-select and
   // Enter copy straight to the OS clipboard.
+  //
+  // SCOPE: tmux runs with no -L/-S socket (see the `new` invocation above), so all
+  // Tinstar sessions share the default server — `set -g` and these `bind-key -T`
+  // key-table entries are therefore SERVER-GLOBAL, not per-session, and re-applied
+  // (idempotently) on each create. This is intentional and matches the existing
+  // global `bind-key -n C-h` remap. SECURITY: `set-clipboard on` lets the program
+  // inside a pane (the agent CLI) write the host OS clipboard via OSC-52 — a
+  // deliberate, low-severity tradeoff for an agent runner.
   await execFileAsync('tmux', ['set', '-g', 'set-clipboard', 'on'])
   const clipboardCmd = getClipboardCommand()
   if (clipboardCmd) {
