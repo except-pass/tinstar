@@ -256,4 +256,44 @@ describe('POST /api/sessions', () => {
     expect(opts.session).not.toHaveProperty('token')
     expect(opts.session.modelOverride ?? null).toBeNull()
   })
+
+  it('re-applies a per-session token supplied on /start (trimmed, never persisted)', async () => {
+    // The token override is spawn-time-only, so it does not survive a stop/start.
+    // /start accepts an optional token to re-establish quota isolation on resume.
+    const created = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'restart-token' }),
+    })
+    expect(created.status).toBe(201)
+    startTmuxSessionMock.mockClear()
+
+    const token = 'sk-ant-oat01-' + 'z'.repeat(40)
+    const restarted = await testCtx.fetch('/api/sessions/restart-token/start', {
+      method: 'POST',
+      body: JSON.stringify({ token: `  ${token}  ` }), // padded → also asserts the trim-on-apply fix
+    })
+    expect(restarted.status).toBe(200)
+    expect(startTmuxSessionMock).toHaveBeenCalledTimes(1)
+    const opts = startTmuxSessionMock.mock.calls[0]![1] as unknown as { secrets: Record<string, string> }
+    expect(opts.secrets.CLAUDE_CODE_OAUTH_TOKEN).toBe(token)
+
+    // Still never persisted: the session file has no token field.
+    const persisted = await (await testCtx.fetch('/api/sessions/restart-token')).json() as Record<string, unknown>
+    expect(persisted).not.toHaveProperty('token')
+  })
+
+  it('a plain /start with no body launches with the global token (no override)', async () => {
+    const created = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'restart-plain' }),
+    })
+    expect(created.status).toBe(201)
+    startTmuxSessionMock.mockClear()
+
+    const restarted = await testCtx.fetch('/api/sessions/restart-plain/start', { method: 'POST' })
+    expect(restarted.status).toBe(200)
+    const opts = startTmuxSessionMock.mock.calls[0]![1] as unknown as { secrets: Record<string, string> }
+    // No override supplied ⇒ untouched global secrets (empty secrets dir ⇒ no token key).
+    expect(opts.secrets).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN')
+  })
 })

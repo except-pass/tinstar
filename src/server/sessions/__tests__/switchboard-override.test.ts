@@ -68,6 +68,21 @@ describe('applyTokenOverride — secret overlay', () => {
     // input untouched
     expect(secrets.CLAUDE_CODE_OAUTH_TOKEN).toBe('global')
   })
+
+  it('trims surrounding whitespace before overlaying (matches the validated form)', () => {
+    // isPlausibleToken validates token.trim(); applying the raw value would write a
+    // space-padded CLAUDE_CODE_OAUTH_TOKEN that fails auth opaquely. The overlay must
+    // use the trimmed value so validate-and-apply agree.
+    const secrets = { FOO: 'bar' }
+    const out = applyTokenOverride(secrets, '  padded-token  ')
+    expect(out).not.toBe(secrets)
+    expect(out.CLAUDE_CODE_OAUTH_TOKEN).toBe('padded-token')
+  })
+
+  it('returns the SAME reference for a whitespace-only token (nothing to overlay)', () => {
+    const secrets = { FOO: 'bar' }
+    expect(applyTokenOverride(secrets, '   ')).toBe(secrets)
+  })
 })
 
 describe('createSession / getSession — modelOverride persistence', () => {

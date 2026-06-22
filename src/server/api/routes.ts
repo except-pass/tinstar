@@ -2943,7 +2943,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url.endsWith('/start') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
-        readBody(req).then(async () => {
+        readBody(req).then(async (body) => {
           const session = getSession(sessDir, name)
           if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
 
@@ -2958,8 +2958,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             return fail(res, 'BAD_REQUEST', `Session '${name}' has no conversation ID. Delete and recreate it.`)
           }
 
+          // Switchboard: a per-session token override is spawn-time-only and never
+          // persisted, so it does NOT survive a stop. Accept an optional `token` on
+          // /start to re-establish quota isolation on resume — validated fail-closed
+          // (same guard as create/spawn) and still never persisted. The model override
+          // IS persisted on the session and re-applied by startTmuxSession, so it
+          // survives a restart without being re-supplied. Absent ⇒ global token.
+          let tokenOverride: string | undefined
+          if (body) {
+            try { tokenOverride = (JSON.parse(body) as { token?: string }).token } catch { /* no body / not JSON ⇒ no override */ }
+          }
+          if (tokenOverride != null && tokenOverride !== '') {
+            const check = validateSessionOverride(
+              { token: tokenOverride },
+              cfg.switchboard ?? { allowedModels: [], allowTokenOverride: false },
+            )
+            if (!check.ok) return fail(res, check.code, check.message)
+          }
+
           try {
-            const sec = secrets()
+            const sec = applyTokenOverride(secrets(), tokenOverride)
 
             const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
             const resumeTemplate = session.cliTemplate

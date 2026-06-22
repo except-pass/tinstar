@@ -328,13 +328,20 @@ export function loadSecrets(secretsDir: string): Record<string, string> {
  * with `CLAUDE_CODE_OAUTH_TOKEN` overlaid on top. The override is applied at spawn time
  * ONLY — callers must never persist the returned map (it is not written to session.json
  * and not returned by /api/state). Never logs the token value.
+ *
+ * The token is `trim()`med before overlay so the applied value matches what
+ * `isPlausibleToken` validated (it validates the trimmed form) — otherwise a
+ * space-padded token would pass the guard but be written to the env with its
+ * surrounding whitespace intact, failing auth with an opaque error. A token that
+ * is empty/whitespace-only after trimming leaves the map unchanged (same ref).
  */
 export function applyTokenOverride(
   secrets: Record<string, string>,
   token?: string | null,
 ): Record<string, string> {
-  if (!token) return secrets
-  return { ...secrets, CLAUDE_CODE_OAUTH_TOKEN: token }
+  const t = token?.trim()
+  if (!t) return secrets
+  return { ...secrets, CLAUDE_CODE_OAUTH_TOKEN: t }
 }
 
 export type OverrideValidationResult = { ok: true } | { ok: false; code: ErrorCode; message: string }
