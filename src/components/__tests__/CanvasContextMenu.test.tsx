@@ -5,8 +5,9 @@ import { CanvasContextMenu } from '../CanvasContextMenu'
 import type { MoveTarget } from '../../domain/moveTargets'
 
 const targets: MoveTarget[] = [
-  { id: 'run-A', label: 'Run A', slots: [3] },
-  { id: 'browser-1', label: 'Browser', slots: [] },
+  { id: 'run-A', label: 'Run A', slots: [3], icon: { seed: 'run-A', color: '#abc' } },
+  { id: 'browser-1', label: 'Browser', slots: [], icon: { icon: '/widget-icons/browser-widget.svg' } },
+  { id: 'plain', label: 'Plain', slots: [] },
 ]
 
 describe('CanvasContextMenu', () => {
@@ -16,6 +17,17 @@ describe('CanvasContextMenu', () => {
     expect(screen.getByText('Run A')).toBeTruthy()
     expect(screen.getByText('Browser')).toBeTruthy()
     expect(screen.getByText('3')).toBeTruthy() // slot chip for run-A
+  })
+  it('renders each target icon: image for widgets, robot-face placeholder for runs, monogram fallback otherwise', () => {
+    render(<CanvasContextMenu anchor={{ x: 0, y: 0 }} targets={targets} onPick={vi.fn()} onClose={vi.fn()} />)
+    fireEvent.click(screen.getByText('Move widget here'))
+    // browser widget → <img> from its icon URL
+    const img = document.querySelector('img[src="/widget-icons/browser-widget.svg"]')
+    expect(img).toBeTruthy()
+    // run → procedural robot face (placeholder until the avatar cache fills)
+    expect(screen.getByTestId('agent-icon-placeholder')).toBeTruthy()
+    // no icon → first-letter monogram
+    expect(screen.getByText('P')).toBeTruthy()
   })
   it('picking a widget calls onPick with its id', () => {
     const onPick = vi.fn()

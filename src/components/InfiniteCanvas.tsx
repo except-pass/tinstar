@@ -94,6 +94,15 @@ interface Props {
   forceMarshalOpen?: boolean
 }
 
+/** Glyphs for built-in (non-plugin) leaf widgets in the "Move widget here" menu.
+ *  Mirrors HierarchySidebar's WORK_WIDGET_META so the iconography matches. Runs are
+ *  handled separately (procedural robot face); plugin widgets use their catalog icon. */
+const BUILTIN_WIDGET_GLYPH: Record<string, string> = {
+  'file-editor': '📄',
+  'browser-widget': '🌐',
+  'image-viewer': '🖼️',
+}
+
 /** Extract entity type and ID from a tree node ID like "initiative-abc123" */
 function parseNodeId(nodeId: string): { type: string; entityId: string } | null {
   const dash = nodeId.indexOf('-')
@@ -824,15 +833,28 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
   const DEFAULT_FOR: Record<string, string> = { 'saloon': 'run-workspace', 'run-workspace': 'browser-widget' }
   const GLOBAL_DEFAULT = 'run-workspace'
 
-  // nodeId → widget type, used to resolve the picker's smart default.
-  const nodeTypeById = useMemo(() => {
-    const map = new Map<string, string>()
+  // nodeId → node, used to resolve the picker's smart default and move-target icons.
+  const nodeById = useMemo(() => {
+    const map = new Map<string, TreeNode>()
     const walk = (nodes: TreeNode[]) => {
-      for (const n of nodes) { map.set(n.id, n.type); walk(n.children) }
+      for (const n of nodes) { map.set(n.id, n); walk(n.children) }
     }
     walk(tree)
     return map
   }, [tree])
+  // nodeId → widget type, used to resolve the picker's smart default.
+  const nodeTypeById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const [id, n] of nodeById) map.set(id, n.type)
+    return map
+  }, [nodeById])
+
+  // Plugin widget icons (URLs) keyed by widget type, for the move-target menu.
+  const pluginIconByType = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const e of catalog) if (e.pluginId && e.icon) map.set(e.type, e.icon)
+    return map
+  }, [catalog])
 
   // ── Right-click "Move widget here" context menu ───────────────────────────
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; canvasX: number; canvasY: number } | null>(null)
@@ -858,8 +880,20 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
       isContainer: (id) => !!getWidgetComponent(toWidgetType(nodeTypeById.get(id) ?? ''))?.isContainer,
       labelOf: (id) => findNodeLabel(tree, id) ?? id,
       slotsOf: (id) => constellations.slotsForNode(id).map(Number).filter((n) => !Number.isNaN(n)),
+      iconOf: (id) => {
+        const node = nodeById.get(id)
+        if (!node) return undefined
+        // Run workspaces → the procedural robot face (seeded by run id, tinted by
+        // status color) — matches the sidebar's run chip.
+        if (node.type === 'run') return { seed: node.entityId, color: node.color }
+        // Plugin widgets carry their own icon URL; built-in widgets use their glyph.
+        const pluginIcon = pluginIconByType.get(node.type)
+        if (pluginIcon) return { icon: pluginIcon }
+        const glyph = BUILTIN_WIDGET_GLYPH[node.type]
+        return glyph ? { icon: glyph } : undefined
+      },
     }),
-    [tree, layouts, nodeTypeById, constellations],
+    [tree, layouts, nodeTypeById, nodeById, pluginIconByType, constellations],
   )
 
   const moveTargetsForPicker = useMemo(

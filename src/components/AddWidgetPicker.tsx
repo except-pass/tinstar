@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CatalogEntry } from '../hooks/useWidgetCatalog'
 import type { MoveTarget } from '../domain/moveTargets'
-import { isIconUrl } from './agentIcon'
+import { AgentIcon, isIconUrl } from './agentIcon'
 
 export interface AddWidgetPickerProps {
   entries: CatalogEntry[]
@@ -147,7 +147,13 @@ export function AddWidgetPicker({ entries, defaultType, anchor, moveTargets, onP
               onMouseEnter={() => setActive(i)}
               onClick={() => onMove(t.id)}
             >
-              <span className="inline-flex h-4 w-4 items-center justify-center text-2xs font-mono text-slate-400">{t.label[0]}</span>
+              <AgentIcon
+                icon={t.icon?.icon}
+                seed={t.icon?.seed}
+                color={t.icon?.color}
+                className="h-4 w-4 shrink-0"
+                fallback={<span className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-2xs font-mono text-slate-400">{t.label[0]}</span>}
+              />
               <span className="truncate">{t.label}</span>
               {t.slots.length > 0 && <span className="ml-auto text-2xs text-slate-500">slot {t.slots.join(',')}</span>}
             </button>

@@ -37,4 +37,20 @@ describe('buildMoveTargets', () => {
     const out = buildMoveTargets(tree, noLayout, { isContainer, labelOf, slotsOf })
     expect(out.map((t) => t.id)).toEqual(['run-A'])
   })
+
+  it('attaches icon descriptors from iconOf when provided', () => {
+    const iconOf = (id: string) =>
+      id === 'run-A' ? { seed: 'run-A', color: '#abc' } : { icon: '🌐' }
+    const out = buildMoveTargets(tree, layouts, { isContainer, labelOf, slotsOf, iconOf })
+    expect(out).toEqual([
+      { id: 'run-A', label: 'Run A', slots: [3], icon: { seed: 'run-A', color: '#abc' } },
+      { id: 'browser-1', label: 'Browser', slots: [], icon: { icon: '🌐' } },
+    ])
+  })
+
+  it('omits icon when iconOf returns undefined', () => {
+    const iconOf = () => undefined
+    const out = buildMoveTargets(tree, layouts, { isContainer, labelOf, slotsOf, iconOf })
+    expect(out.every((t) => t.icon === undefined)).toBe(true)
+  })
 })
