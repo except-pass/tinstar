@@ -1,17 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   findTranscriptByConvId,
   readSessionStatusDetailAt,
   readLatestModelAt,
+  __resetModelCache,
 } from '../transcript-parser'
 
 let scratch: string
 
 beforeEach(() => {
   scratch = mkdtempSync(join(tmpdir(), 'tinstar-parser-'))
+  __resetModelCache() // module-global cache is keyed by path; reset so cases don't bleed
 })
 
 afterEach(() => {
@@ -191,5 +193,38 @@ describe('readLatestModelAt', () => {
       { type: 'user', message: { content: '<bash-input> ls</bash-input>' } },
     ])
     expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+  })
+})
+
+describe('readLatestModelAt — caching + sticky model', () => {
+  it('keeps the last-known model when a busy tail pushes the assistant turn out of the window', () => {
+    const path = writeTranscript('-p', 'sticky', [
+      { type: 'assistant', message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'hi' }] } },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+
+    // Append > 50 trailing non-assistant records, shoving the assistant turn past
+    // the 50-line tail window. A fresh read would now find no model — the bug that
+    // would flicker a busy session's model to "—".
+    const noise = Array.from({ length: 60 }, (_, i) =>
+      JSON.stringify({ type: 'user', message: { content: `noise ${i}` } })).join('\n') + '\n'
+    appendFileSync(path, noise)
+
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8') // sticky, not null
+  })
+
+  it('re-reads and returns the new model when the model actually changes', () => {
+    const path = writeTranscript('-p', 'change', [
+      { type: 'assistant', message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'a' }] } },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+
+    appendFileSync(path, JSON.stringify({
+      type: 'assistant', message: { model: 'claude-haiku-4-5', content: [{ type: 'text', text: 'b' }] },
+    }) + '\n')
+
+    // The append grows the file, invalidating the (mtime,size) cache key — the new
+    // model is picked up rather than serving the stale cached value.
+    expect(readLatestModelAt(path)).toBe('claude-haiku-4-5')
   })
 })

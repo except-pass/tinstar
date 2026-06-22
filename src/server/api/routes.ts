@@ -2702,9 +2702,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // Sourced from the transcript's latest-assistant `message.model`, same as
     // the /api/state enrichment. Returns { name, model } with model null when
     // unavailable (no transcript, or no assistant turn yet).
-    if (method === 'GET' && url.startsWith('/api/sessions/') && (url.split('?')[0] ?? url).endsWith('/model')) {
-      const name = extractSessionName(url.split('?')[0] ?? url, '/api/sessions/')
-      if (name) {
+    {
+      // Strict match on exactly /api/sessions/:name/model (one path segment for the
+      // name) so a deeper path like /api/sessions/foo/files/model can't masquerade
+      // as a model pull. extractSessionName would have stopped at the first slash.
+      const modelMatch = method === 'GET' && (url.split('?')[0] ?? url).match(/^\/api\/sessions\/([^/]+)\/model$/)
+      if (modelMatch) {
+        const name = decodeURIComponent(modelMatch[1]!)
         const session = getSession(sessDir, name)
         if (!session) {
           fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)

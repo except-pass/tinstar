@@ -190,4 +190,17 @@ describe('GET /api/sessions/:name/model', () => {
     const res = await testCtx.fetch('/api/sessions/ghost/model')
     expect(res.status).toBe(404)
   })
+
+  it('does not treat a deeper path ending in /model as a model pull', async () => {
+    // The matcher is strict (exactly one name segment before /model), so a multi-
+    // segment path can't masquerade as a model pull the way endsWith("/model") let it.
+    readLatestModelMock.mockReturnValue('claude-opus-4-8')
+    createSession(testCtx.sessionsDir, {
+      name: 'deep',
+      backend: 'tmux',
+      workspace: { path: '/tmp/x', worktree: false, branch: null, basePath: null },
+    })
+    const res = await testCtx.fetch('/api/sessions/deep/extra/model')
+    expect(res.status).toBe(404)
+  })
 })
