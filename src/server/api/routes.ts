@@ -1159,6 +1159,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   const fail = (res: ServerResponse, code: ErrorCode, message: string, opts: FailOpts = {}): true =>
     failEnvelope(res, code, message, { ...opts, headers: { ...corsHeaders, ...(opts.headers ?? {}) } })
 
+  // Read the body, run the handler, and GUARANTEE a response even if the handler
+  // throws before it calls ok()/fail() — e.g. JSON.parse on a malformed body, or any
+  // sync throw in the pre-`try` setup of a write endpoint. Without this the readBody
+  // promise rejects with nothing awaiting it, the socket is never written, and the
+  // client hangs forever (curl exit 28). A JSON parse failure is a client error (400);
+  // anything else is a server fault (500). Use this for every session-write endpoint.
+  const withBody = (req: IncomingMessage, res: ServerResponse, handler: (body: string) => unknown): void => {
+    readBody(req).then(handler).catch(err => {
+      if (res.headersSent) return
+      if (err instanceof SyntaxError) fail(res, 'BAD_REQUEST', 'Invalid JSON body')
+      else fail(res, 'INTERNAL', (err as Error).message)
+    })
+  }
+
   // CORS preflight
   if (method === 'OPTIONS' && url.startsWith('/api/')) {
     res.writeHead(204, corsHeaders)
@@ -3031,7 +3045,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
-      readBody(req).then(async (body) => {
+      withBody(req, res, async (body) => {
         const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData, model, token } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
@@ -3079,10 +3093,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           log.error('sessions', `session creation failed: ${name}`, { error: (err as Error).message })
           fail(res, 'INTERNAL', (err as Error).message)
         }
-      }).catch(err => {
-        // Belt-and-suspenders: a throw BEFORE the try (e.g. JSON.parse on a malformed
-        // body) would otherwise leave the response open and hang the client forever.
-        if (!res.headersSent) fail(res, 'INTERNAL', (err as Error).message)
       })
       return true
     }
@@ -3182,7 +3192,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url.endsWith('/start') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
-        readBody(req).then(async (body) => {
+        withBody(req, res, async (body) => {
           const session = getSession(sessDir, name)
           if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
 
@@ -3264,7 +3274,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (method === 'POST' && url.endsWith('/nats-reconnect') && url.startsWith('/api/sessions/')) {
       const name = extractSessionName(url, '/api/sessions/')
       if (name) {
-        readBody(req).then(async () => {
+        withBody(req, res, async () => {
           const session = getSession(sessDir, name)
           if (!session) return fail(res, 'SESSION_NOT_FOUND', `Session '${name}' not found`)
           if (!session.nats?.enabled) return fail(res, 'BRIDGE_UNAVAILABLE', `NATS is not enabled for session '${name}'`)
@@ -4122,7 +4132,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'SESSION_NOT_FOUND', `Session '${sessionId}' not found`)
         return true
       }
-      readBody(req).then(async (body) => {
+      withBody(req, res, async (body) => {
         const { text, force } = JSON.parse(body) as { text: string; force?: boolean }
         if (!force && session.state !== 'idle') {
           fail(res, 'CONFLICT', 'session-not-ready')
@@ -4147,7 +4157,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         } catch (err) {
           fail(res, 'INTERNAL', (err as Error).message)
         }
-      }).catch(err => { if (!res.headersSent) fail(res, 'INTERNAL', (err as Error).message) })
+      })
       return true
     }
 

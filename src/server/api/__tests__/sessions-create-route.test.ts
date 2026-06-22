@@ -294,11 +294,12 @@ describe('POST /api/sessions', () => {
     expect(persisted).not.toHaveProperty('token')
   })
 
-  it('returns an error (never hangs) for a malformed JSON body', async () => {
+  it('returns 400 (never hangs) for a malformed JSON body', async () => {
     // A throw before the create try/catch (JSON.parse on a bad body) must surface as a
-    // response via the readBody .catch — not leave the socket open until curl times out.
+    // response via withBody's guard — not leave the socket open until curl times out.
+    // A parse failure is a client error, so 400 (not 500).
     const res = await testCtx.fetch('/api/sessions', { method: 'POST', body: '{not valid json' })
-    expect(res.status).toBe(500)
+    expect(res.status).toBe(400)
     expect(createTmuxSessionMock).not.toHaveBeenCalled()
   })
 
