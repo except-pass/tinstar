@@ -16,6 +16,11 @@ export type ErrorCode =
   | 'CONFLICT'                // would violate uniqueness / state precondition
   | 'PATH_OUTSIDE_WORKSPACE'  // path-traversal guard hit
   | 'FORBIDDEN'               // permission/safety guard
+  // Switchboard per-session override guard (fail-closed launch-time checks)
+  | 'OVERRIDE_MODEL_NOT_CONFIGURED'  // model override attempted but switchboard.allowedModels is empty
+  | 'OVERRIDE_MODEL_NOT_ALLOWED'     // requested model is not in switchboard.allowedModels
+  | 'OVERRIDE_TOKEN_DISABLED'        // token override attempted while switchboard.allowTokenOverride is off
+  | 'OVERRIDE_TOKEN_MALFORMED'       // token override failed the value-free shape check
   // Server errors (5xx)
   | 'INTERNAL'                // unexpected throw, last-resort catch-all
   | 'BACKEND_UNAVAILABLE'     // tmux / external service not reachable

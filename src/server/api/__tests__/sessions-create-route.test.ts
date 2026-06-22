@@ -45,6 +45,7 @@ function makeCtx(root: string): RouteContext {
     nats: { channelServerPackage: '', bunPath: '', jetstream: false },
     uploadMaxBytes: 100 * 1024 * 1024,
     ui: { promptComposerDefault: false, showEmptyEntities: true, layouts: {}, telemetryPanels: { cost: true, tokens: true, cacheHit: false, duty: true, turnLength: true } },
+    switchboard: { allowedModels: ['opus', 'sonnet'], allowTokenOverride: true },
   }
   const docStore = new DocumentStore()
   docStore.upsertSpace(SPACE_ID, { id: SPACE_ID, name: 'Create Space', createdAt: new Date().toISOString() })
@@ -220,5 +221,91 @@ describe('POST /api/sessions', () => {
       body: JSON.stringify({ name: 'ghost-worker', hand: 'does-not-exist' }),
     })
     expect(res.status).toBe(404)
+  })
+
+  // --- Switchboard per-session override (Phase 2 Steps 5-6) ---
+  // These exercise the override through the REAL POST /api/sessions route, not the
+  // helpers in isolation — the wiring gap (route not passing model/token into
+  // createSessionInternal) is only visible end-to-end.
+
+  it('threads a per-session model override through to the launch', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'model-worker', model: 'opus' }),
+    })
+    expect(res.status).toBe(201)
+    expect(createTmuxSessionMock).toHaveBeenCalledTimes(1)
+    const opts = createTmuxSessionMock.mock.calls[0]![1] as unknown as { session: { modelOverride?: string | null } }
+    // Regression: the route MUST pass `model` into createSessionInternal so the
+    // session launches with it. A wiring gap makes the override a silent no-op.
+    expect(opts.session.modelOverride).toBe('opus')
+  })
+
+  it('rejects a model not in switchboard.allowedModels with a stable 403, before launch', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'bad-model', model: 'haiku' }),
+    })
+    expect(res.status).toBe(403)
+    const body = await res.json() as { ok: boolean; error: { code: string } }
+    expect(body.error.code).toBe('OVERRIDE_MODEL_NOT_ALLOWED')
+    expect(createTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('overlays a per-session token onto the launch secrets without persisting it', async () => {
+    const token = 'sk-ant-oat01-' + 'y'.repeat(40)
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'token-worker', token }),
+    })
+    expect(res.status).toBe(201)
+    const opts = createTmuxSessionMock.mock.calls[0]![1] as unknown as {
+      secrets: Record<string, string>
+      session: Record<string, unknown>
+    }
+    expect(opts.secrets.CLAUDE_CODE_OAUTH_TOKEN).toBe(token)
+    // Spawn-time only: the token is never written onto the persisted session.
+    expect(opts.session).not.toHaveProperty('token')
+    expect(opts.session.modelOverride ?? null).toBeNull()
+  })
+
+  it('re-applies a per-session token supplied on /start (trimmed, never persisted)', async () => {
+    // The token override is spawn-time-only, so it does not survive a stop/start.
+    // /start accepts an optional token to re-establish quota isolation on resume.
+    const created = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'restart-token' }),
+    })
+    expect(created.status).toBe(201)
+    startTmuxSessionMock.mockClear()
+
+    const token = 'sk-ant-oat01-' + 'z'.repeat(40)
+    const restarted = await testCtx.fetch('/api/sessions/restart-token/start', {
+      method: 'POST',
+      body: JSON.stringify({ token: `  ${token}  ` }), // padded → also asserts the trim-on-apply fix
+    })
+    expect(restarted.status).toBe(200)
+    expect(startTmuxSessionMock).toHaveBeenCalledTimes(1)
+    const opts = startTmuxSessionMock.mock.calls[0]![1] as unknown as { secrets: Record<string, string> }
+    expect(opts.secrets.CLAUDE_CODE_OAUTH_TOKEN).toBe(token)
+
+    // Still never persisted: the session file has no token field.
+    const persisted = await (await testCtx.fetch('/api/sessions/restart-token')).json() as Record<string, unknown>
+    expect(persisted).not.toHaveProperty('token')
+  })
+
+  it('a plain /start with no body launches with the global token (no override)', async () => {
+    const created = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'restart-plain' }),
+    })
+    expect(created.status).toBe(201)
+    startTmuxSessionMock.mockClear()
+
+    const restarted = await testCtx.fetch('/api/sessions/restart-plain/start', { method: 'POST' })
+    expect(restarted.status).toBe(200)
+    const opts = startTmuxSessionMock.mock.calls[0]![1] as unknown as { secrets: Record<string, string> }
+    // No override supplied ⇒ untouched global secrets (empty secrets dir ⇒ no token key).
+    expect(opts.secrets).not.toHaveProperty('CLAUDE_CODE_OAUTH_TOKEN')
   })
 })

@@ -11,6 +11,50 @@ import { log } from '../../logger'
 
 const execFileAsync = promisify(execFile)
 
+// --- OS clipboard integration ---
+
+// Candidate "stdin -> system clipboard" commands, in priority order. WSL
+// exposes the Windows clipboard via clip.exe; macOS and Linux use their
+// native tools. The first one present on PATH wins.
+// MUST stay hardcoded literals: getClipboardCommand() string-interpolates the
+// binary name into `command -v ${bin}` via execSync. With these constants that's
+// injection-safe (no external input reaches the shell); if this list ever becomes
+// config/env-derived, switch the probe to execFileSync('command', ['-v', bin]).
+const CLIPBOARD_CANDIDATES = [
+  'clip.exe', // WSL -> Windows clipboard
+  'pbcopy', // macOS
+  'wl-copy', // Linux (Wayland)
+  'xclip -selection clipboard -in', // Linux (X11)
+  'xsel --clipboard --input', // Linux (X11, alternate)
+] as const
+
+/**
+ * Pick the first clipboard command whose binary is available, per `exists`.
+ * Pure (the host probe is injected) so it can be unit-tested without spawning.
+ */
+export function resolveClipboardCommand(exists: (bin: string) => boolean): string | null {
+  for (const cmd of CLIPBOARD_CANDIDATES) {
+    if (exists(cmd.split(' ', 1)[0]!)) return cmd
+  }
+  return null
+}
+
+// Memoized: the available clipboard tool doesn't change at runtime.
+let memoizedClipboardCmd: string | null | undefined
+function getClipboardCommand(): string | null {
+  if (memoizedClipboardCmd === undefined) {
+    memoizedClipboardCmd = resolveClipboardCommand((bin) => {
+      try {
+        execSync(`command -v ${bin}`, { stdio: 'ignore' })
+        return true
+      } catch {
+        return false
+      }
+    })
+  }
+  return memoizedClipboardCmd
+}
+
 // --- NATS control socket ---
 
 /**
@@ -298,6 +342,10 @@ export function buildAgentCommand(opts: {
   nats?: { enabled: boolean } | null
   appendSystemPrompt?: string | null
   agent?: AgentDef | null
+  /** Per-session model override (Switchboard). Appends `--model <modelOverride>`
+   * to the resolved command, overriding the template's baked model. Null/absent
+   * leaves the command byte-identical to pre-override behavior. */
+  modelOverride?: string | null
 }): string {
   let cmd: string
 
@@ -343,6 +391,20 @@ export function buildAgentCommand(opts: {
     }
   }
 
+  // Per-session model override (Switchboard): append `--model <model>` so the
+  // CLI's last-wins flag parsing overrides any model baked into the template.
+  // Insert before the ` -- ` prompt separator (so it stays an option, not part
+  // of the prompt), mirroring the --append-system-prompt insertion above.
+  if (opts.modelOverride) {
+    const modelFlag = ` --model ${bashSingleQuote(opts.modelOverride)}`
+    const dashDashIdx = cmd.indexOf(' -- ')
+    if (dashDashIdx !== -1) {
+      cmd = cmd.slice(0, dashDashIdx) + modelFlag + cmd.slice(dashDashIdx)
+    } else {
+      cmd += modelFlag
+    }
+  }
+
   return cmd
 }
 
@@ -373,6 +435,29 @@ export async function createTmuxSession(
   await execFileAsync('tmux', ['set', '-t', tmuxName, 'mouse', 'on'])
   // Ctrl+Backspace: xterm.js sends 0x08 (C-h) — remap to word-erase (C-w)
   await execFileAsync('tmux', ['bind-key', '-n', 'C-h', 'send-keys', 'C-w'])
+
+  // OS-clipboard integration. With `mouse on`, a drag-selection lands only in
+  // tmux's internal paste buffer — which never reaches the host clipboard when
+  // the terminal is rendered remotely (ttyd in a browser, e.g. over WSL).
+  // Enable set-clipboard (OSC-52, for terminals that honor it) and pipe
+  // copy-mode selections through the host clipboard tool so drag-select and
+  // Enter copy straight to the OS clipboard.
+  //
+  // SCOPE: tmux runs with no -L/-S socket (see the `new` invocation above), so all
+  // Tinstar sessions share the default server — `set -g` and these `bind-key -T`
+  // key-table entries are therefore SERVER-GLOBAL, not per-session, and re-applied
+  // (idempotently) on each create. This is intentional and matches the existing
+  // global `bind-key -n C-h` remap. SECURITY: `set-clipboard on` lets the program
+  // inside a pane (the agent CLI) write the host OS clipboard via OSC-52 — a
+  // deliberate, low-severity tradeoff for an agent runner.
+  await execFileAsync('tmux', ['set', '-g', 'set-clipboard', 'on'])
+  const clipboardCmd = getClipboardCommand()
+  if (clipboardCmd) {
+    for (const table of ['copy-mode', 'copy-mode-vi']) {
+      await execFileAsync('tmux', ['bind-key', '-T', table, 'MouseDragEnd1Pane', 'send-keys', '-X', 'copy-pipe-and-cancel', clipboardCmd])
+      await execFileAsync('tmux', ['bind-key', '-T', table, 'Enter', 'send-keys', '-X', 'copy-pipe-and-cancel', clipboardCmd])
+    }
+  }
 
   // Inject session identity + secrets into tmux environment
   await execFileAsync('tmux', ['set-environment', '-t', tmuxName, 'TINSTAR_SESSION_NAME', opts.session.name])
@@ -431,6 +516,7 @@ export async function createTmuxSession(
     nats: natsOpts,
     appendSystemPrompt: opts.appendSystemPrompt,
     agent: opts.agent,
+    modelOverride: opts.session.modelOverride,
   })
   parts.push(agentCmd)
 
@@ -495,6 +581,7 @@ export async function startTmuxSession(
     nats: natsOpts,
     appendSystemPrompt: opts.appendSystemPrompt,
     agent: opts.agent,
+    modelOverride: opts.session.modelOverride,
   })
   parts.push(agentCmd)
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])

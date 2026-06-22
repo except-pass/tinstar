@@ -1,16 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   findTranscriptByConvId,
   readSessionStatusDetailAt,
+  readLatestModelAt,
+  __resetModelCache,
 } from '../transcript-parser'
 
 let scratch: string
 
 beforeEach(() => {
   scratch = mkdtempSync(join(tmpdir(), 'tinstar-parser-'))
+  __resetModelCache() // module-global cache is keyed by path; reset so cases don't bleed
 })
 
 afterEach(() => {
@@ -114,5 +117,142 @@ describe('readSessionStatusDetailAt', () => {
       { type: 'user', message: { content: 'next prompt please' } },
     ])
     expect(readSessionStatusDetailAt(path)).toEqual({ state: 'running', toolPending: false })
+  })
+})
+
+describe('readLatestModelAt', () => {
+  it('returns null for a missing path', () => {
+    expect(readLatestModelAt(join(scratch, 'no-such.jsonl'))).toBeNull()
+  })
+
+  it('returns null for an empty transcript', () => {
+    const path = writeTranscript('-p', 'c', [])
+    expect(readLatestModelAt(path)).toBeNull()
+  })
+
+  it("reads the latest assistant turn's message.model", () => {
+    const path = writeTranscript('-p', 'c', [
+      { type: 'user', message: { content: 'hi' } },
+      {
+        type: 'assistant',
+        message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'hello' }] },
+      },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+  })
+
+  it('returns the model of the LATEST assistant turn when the model changes', () => {
+    const path = writeTranscript('-p', 'c', [
+      {
+        type: 'assistant',
+        message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'first' }] },
+      },
+      { type: 'user', message: { content: 'switch models' } },
+      {
+        type: 'assistant',
+        message: { model: 'claude-haiku-4-5', content: [{ type: 'text', text: 'second' }] },
+      },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-haiku-4-5')
+  })
+
+  it('reads the model even from an assistant turn carrying only tool_use blocks', () => {
+    const path = writeTranscript('-p', 'c', [
+      {
+        type: 'assistant',
+        message: {
+          model: 'claude-sonnet-4-5',
+          content: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }],
+        },
+      },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-sonnet-4-5')
+  })
+
+  it('returns null when there is no assistant turn yet (pre-first-response)', () => {
+    const path = writeTranscript('-p', 'c', [
+      { type: 'user', message: { content: 'first prompt, no response yet' } },
+    ])
+    expect(readLatestModelAt(path)).toBeNull()
+  })
+
+  it('returns null when an assistant turn carries no model field', () => {
+    const path = writeTranscript('-p', 'c', [
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'no model key' }] } },
+    ])
+    expect(readLatestModelAt(path)).toBeNull()
+  })
+
+  it('skips trailing non-assistant metadata to find the last assistant model', () => {
+    const path = writeTranscript('-p', 'c', [
+      {
+        type: 'assistant',
+        message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'done' }] },
+      },
+      { type: 'file-history-snapshot', snapshot: {} },
+      { type: 'user', message: { content: '<bash-input> ls</bash-input>' } },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+  })
+})
+
+describe('readLatestModelAt — caching + sticky model', () => {
+  it('keeps the last-known model when a busy tail pushes the assistant turn out of the window', () => {
+    const path = writeTranscript('-p', 'sticky', [
+      { type: 'assistant', message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'hi' }] } },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+
+    // Append > 50 trailing non-assistant records, shoving the assistant turn past
+    // the 50-line tail window. A fresh read would now find no model — the bug that
+    // would flicker a busy session's model to "—".
+    const noise = Array.from({ length: 60 }, (_, i) =>
+      JSON.stringify({ type: 'user', message: { content: `noise ${i}` } })).join('\n') + '\n'
+    appendFileSync(path, noise)
+
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8') // sticky, not null
+  })
+
+  it('re-reads and returns the new model when the model actually changes', () => {
+    const path = writeTranscript('-p', 'change', [
+      { type: 'assistant', message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'a' }] } },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+
+    appendFileSync(path, JSON.stringify({
+      type: 'assistant', message: { model: 'claude-haiku-4-5', content: [{ type: 'text', text: 'b' }] },
+    }) + '\n')
+
+    // The append grows the file, invalidating the (mtime,size) cache key — the new
+    // model is picked up rather than serving the stale cached value.
+    expect(readLatestModelAt(path)).toBe('claude-haiku-4-5')
+  })
+
+  it('surfaces a new model after a sticky-null window (stickiness never wrongly pins)', () => {
+    const path = writeTranscript('-p', 'unstick', [
+      { type: 'assistant', message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'a' }] } },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+
+    // Push the assistant out of the window → sticky 'opus'.
+    appendFileSync(path, Array.from({ length: 60 }, (_, i) =>
+      JSON.stringify({ type: 'user', message: { content: `n${i}` } })).join('\n') + '\n')
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+
+    // A new assistant turn lands at the tail with a different model — must surface
+    // the NEW model, not stay pinned to the sticky old one.
+    appendFileSync(path, JSON.stringify({
+      type: 'assistant', message: { model: 'claude-haiku-4-5', content: [{ type: 'text', text: 'b' }] },
+    }) + '\n')
+    expect(readLatestModelAt(path)).toBe('claude-haiku-4-5')
+  })
+
+  it('forgets the cached model when the transcript is deleted (ENOENT)', () => {
+    const path = writeTranscript('-p', 'gone', [
+      { type: 'assistant', message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'x' }] } },
+    ])
+    expect(readLatestModelAt(path)).toBe('claude-opus-4-8')
+    rmSync(path)
+    expect(readLatestModelAt(path)).toBeNull()
   })
 })

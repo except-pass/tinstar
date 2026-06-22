@@ -202,6 +202,91 @@ export function readSessionStatusDetailAt(transcriptPath: string): SessionStatus
 }
 
 /**
+ * Read the model the latest assistant turn ran on, from `transcriptPath`.
+ *
+ * Sourced from the per-turn `message.model` sibling key that Claude Code writes
+ * on every `assistant` record (the same records `extractAssistantText` walks).
+ * This is a cheap tail read — no `claude` subprocess, no context-usage sidecar.
+ *
+ * Returns the most recent assistant record's `message.model`, or `null` when
+ * the file is missing, has no assistant turn yet (pre-first-response), or the
+ * model field is absent/non-string.
+ */
+// Per-transcript model cache, keyed by absolute path. Invalidated by (mtimeMs, size)
+// so a model change — which appends a new assistant record, growing the file — is
+// always re-read, while an unchanged transcript skips the open+read+parse entirely.
+// This matters because /api/state resolves every session's model on each request and
+// the model viewer polls it; without this, a large fleet pays N tail-reads per poll.
+type ModelCacheEntry = { mtimeMs: number; size: number; model: string | null }
+const modelCache = new Map<string, ModelCacheEntry>()
+
+/** Test-only: drop the model cache so a reused transcript path can't return a stale
+ *  value across cases that write different content to the same path. */
+export function __resetModelCache(): void {
+  modelCache.clear()
+}
+
+export function readLatestModelAt(transcriptPath: string): string | null {
+  let st: { mtimeMs: number; size: number }
+  try {
+    st = statSync(transcriptPath)
+  } catch (err) {
+    // A genuinely missing file ⇒ forget any cached model and report null. A transient
+    // stat error (EACCES/EIO) must NOT evict a good cached model — that would flicker
+    // the UI to "—", the very thing the sticky cache exists to prevent — so keep it.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      modelCache.delete(transcriptPath)
+      return null
+    }
+    return modelCache.get(transcriptPath)?.model ?? null
+  }
+
+  const cached = modelCache.get(transcriptPath)
+  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.model
+
+  const fresh = readLatestModelFresh(transcriptPath)
+  // Sticky last-known: a busy session can append >50 lines / >16 KB of trailing
+  // non-assistant records after its last assistant turn, pushing `message.model`
+  // out of the bounded tail window → a transient null. Keep the last KNOWN non-null
+  // model rather than flickering the UI to "—"; a real model change writes a fresh
+  // assistant record at the very tail, which this read picks up on the next epoch.
+  const model = fresh ?? cached?.model ?? null
+  modelCache.set(transcriptPath, { mtimeMs: st.mtimeMs, size: st.size, model })
+  return model
+}
+
+/** Uncached tail read of the latest assistant turn's `message.model`. */
+function readLatestModelFresh(transcriptPath: string): string | null {
+  // The model is stable across a session, so the latest assistant record in the
+  // tail is sufficient. 50 lines covers the trailing metadata flurry without a
+  // full-file read (mirrors readSessionStatusDetailAt). See readLatestModelAt for
+  // how an unusually long trailing non-assistant flurry is handled (sticky cache).
+  const lines = readTail(transcriptPath, 50)
+  if (lines.length === 0) return null
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const obj = JSON.parse(lines[i]!) as Record<string, unknown>
+      if (obj.type !== 'assistant') continue
+      const message = obj.message as Record<string, unknown> | undefined
+      const model = message?.model
+      if (typeof model === 'string' && model) return model
+    } catch {
+      // Skip malformed lines
+    }
+  }
+  return null
+}
+
+/**
+ * Read the latest assistant turn's `message.model` for a session identified by
+ * its workdir + conversation id. Thin wrapper over `readLatestModelAt`.
+ */
+export function readLatestModel(workdir: string, conversationId: string, stateDir?: string): string | null {
+  return readLatestModelAt(getTranscriptPath(workdir, conversationId, stateDir))
+}
+
+/**
  * Scan `<base>/*\/<conversationId>.jsonl` for an existing transcript. Used by
  * the status watcher when a session has no recorded `workspace.path` (so we
  * can't compute the project dir directly). Returns the absolute transcript
