@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { usePinSet } from '../../hooks/usePinSet'
-import { setPinsBridge } from './pinsBridge'
+import { setPinsBridge } from './pinsBridgeStore'
 
 /** Host-mounted bridge that publishes the active space's usePinSet mutators into
  *  the module-level pins ref, so api.pins.create/update/remove (non-hook
