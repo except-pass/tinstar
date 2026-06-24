@@ -22,6 +22,7 @@ export interface UiPrefs {
   hotkeysSidebarWidth?: number
   hotkeysSidebarCollapsed?: boolean
   hotkeysHeight?: number
+  widgetsPaletteHeight?: number
   minimapVisible?: boolean
   hudVisible?: boolean
   canvasSidebarCollapsed?: boolean
