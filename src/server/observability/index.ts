@@ -129,7 +129,15 @@ export class ObservabilityStack {
       this.alloy = new Supervisor({
         name: 'alloy',
         binaryPath: alloyInstall.binaryPath,
-        args: ['run', alloyCfgPath, `--server.http.listen-addr=127.0.0.1:${ALLOY_ADMIN_PORT}`],
+        // Pin the storage (WAL) path under obsRoot. Default is `<CWD>/data-alloy`,
+        // which is CWD-dependent (breaks if the backend is launched elsewhere) and
+        // NOT config-isolated — two backends sharing a launch dir would share one
+        // WAL. obsRoot honors TINSTAR_CONFIG_HOME, so this keeps it per-instance.
+        args: [
+          'run', alloyCfgPath,
+          `--server.http.listen-addr=127.0.0.1:${ALLOY_ADMIN_PORT}`,
+          `--storage.path=${join(this.obsRoot, 'alloy-data')}`,
+        ],
         stateDir: this.obsRoot,
         port: ALLOY_OTLP_PORT,
         probe: async () => {

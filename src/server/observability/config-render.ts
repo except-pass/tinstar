@@ -41,6 +41,18 @@ prometheus.remote_write "default" {
   endpoint {
     url = "{{PROMETHEUS_URL}}"
   }
+  // Bound the WAL so undeliverable samples can't accumulate without limit while
+  // the stack is down. Without this, a long outage bloats the WAL (we saw 30MB),
+  // and Alloy replays the whole WAL before binding its ports on the next start —
+  // so a big WAL wedges startup, which extends the outage, which grows the WAL:
+  // a chicken-and-egg loop. Capping max_keepalive_time keeps replay fast and
+  // costs nothing — samples older than this are stale for the live HUD and
+  // Prometheus would reject them as out-of-bounds anyway.
+  wal {
+    truncate_frequency = "15m"
+    min_keepalive_time = "5m"
+    max_keepalive_time = "1h"
+  }
 }
 `
 

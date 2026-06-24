@@ -168,6 +168,53 @@ describe('Supervisor health loop', () => {
     await sup.stop()
   })
 
+  it('respawns and recovers even after going degraded with a dead process (wedge fix)', async () => {
+    // Repro of the wedge: a supervisor that reaches 'degraded' (probe failing)
+    // and THEN loses its process used to sit forever — the health loop returned
+    // on a dead pid without respawning. It must now respawn from degraded.
+    const waitFor = async (pred: () => boolean, ms = 2000) => {
+      const deadline = Date.now() + ms
+      while (Date.now() < deadline) {
+        if (pred()) return
+        await new Promise((r) => setTimeout(r, 25))
+      }
+    }
+    let probeOk = true
+    const bin = join(tmp, 'wedge.sh')
+    writeFileSync(bin, '#!/bin/sh\nwhile true; do sleep 10; done\n')
+    chmodSync(bin, 0o755)
+    const sup = new Supervisor({
+      name: 'wedge',
+      binaryPath: bin,
+      args: [],
+      stateDir: tmp,
+      port: 9998,
+      probe: async () => probeOk,
+      healthIntervalMs: 40,
+      healthFailureThreshold: 1,
+      restartBackoffMs: 10,
+      maxRestartsPerMinute: 10,
+    })
+    await sup.start()
+    expect(sup.state).toBe('ready')
+    const firstPid = sup.pid
+
+    // Drive to degraded while the process is still alive.
+    probeOk = false
+    await waitFor(() => sup.state === 'degraded')
+    expect(sup.state).toBe('degraded')
+
+    // Kill the process: now pid is dead AND state is degraded — the old wedge.
+    process.kill(sup.pid, 'SIGKILL')
+    probeOk = true
+
+    // New behavior: health loop respawns from degraded and recovers to ready.
+    await waitFor(() => sup.state === 'ready' && sup.pid !== firstPid)
+    expect(sup.state).toBe('ready')
+    expect(sup.pid).not.toBe(firstPid)
+    await sup.stop()
+  })
+
   it('recovers from degraded when probe passes again', async () => {
     let probeResult = true
     const stateChanges: string[] = []

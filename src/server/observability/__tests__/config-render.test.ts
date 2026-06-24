@@ -15,6 +15,10 @@ describe('config-render', () => {
     expect(out).toContain('4318')
     expect(out).toContain('http://127.0.0.1:9090/api/v1/write')
     expect(out).toContain('tinstar_session')
+    // The remote_write WAL must be bounded so a long outage can't bloat it and
+    // wedge Alloy startup on replay (the telemetry chicken-and-egg).
+    expect(out).toContain('wal {')
+    expect(out).toContain('max_keepalive_time')
     // All placeholders must be fully substituted.
     expect(out).not.toMatch(/\{\{\w+\}\}/)
   })

@@ -87,6 +87,12 @@ export class Supervisor {
   }
 
   private spawnOnce(): void {
+    // Clear any orphan still holding our port before binding a fresh child.
+    // Without this, a process that survived a crash/stop (e.g. stop() killed a
+    // stale tracked pid while the real listener lived on) makes every spawn hit
+    // EADDRINUSE and die immediately — leaving a dead tracked pid + a live
+    // orphan, the exact loop that wedges restarts.
+    this.reapPortOrphan()
     this.child = spawn(this.opts.binaryPath, this.opts.args, {
       detached: true,
       stdio: 'ignore',
@@ -134,6 +140,11 @@ export class Supervisor {
   }
 
   private setState(s: ServiceState): void {
+    // Reaching ready clears the crash budget: a service that has been healthy
+    // shouldn't stay permanently disabled because of an old restart storm.
+    // Without this, once restartCount exceeds maxRestartsPerMinute the supervisor
+    // gives up forever (onChildCrash → setState('degraded'); return).
+    if (s === 'ready') { this.restartCount = 0; this.restartWindowStart = 0 }
     if (this.state === s) return
     this.state = s
     this.opts.onStateChange?.(this.opts.name, s)
@@ -144,6 +155,24 @@ export class Supervisor {
     try { process.kill(this.pid, 0); return true } catch { return false }
   }
 
+  /**
+   * Best-effort: SIGKILL any process (other than our own tracked child) listening
+   * on our port, so a fresh spawn can bind cleanly. Linux-only via `ss`; on other
+   * platforms or if `ss` is absent this is a no-op (execFileSync throws → caught).
+   */
+  private reapPortOrphan(): void {
+    if (process.platform !== 'linux') return
+    try {
+      const out = execFileSync('ss', ['-H', '-ltnp', `sport = :${this.opts.port}`], { encoding: 'utf-8' })
+      for (const m of out.matchAll(/pid=(\d+)/g)) {
+        const pid = Number(m[1])
+        if (pid && pid !== this.pid) {
+          try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
+        }
+      }
+    } catch { /* ss missing or nothing on the port — nothing to reap */ }
+  }
+
   private startHealthLoop(): void {
     this.stopHealthLoop()
     const interval = this.opts.healthIntervalMs ?? 30_000
@@ -152,9 +181,12 @@ export class Supervisor {
       if (this.state === 'idle') return
 
       if (!this.isProcessAlive()) {
-        if (this.state === 'ready' || this.state === 'starting') {
-          this.onChildCrash()
-        }
+        // Attempt recovery from any live state (idle already returned above).
+        // Previously this only fired from ready/starting, so a supervisor that
+        // hit 'degraded' with a dead pid would wedge forever — the loop returned
+        // without respawning or probing. onChildCrash still rate-limits, and the
+        // 60s window plus the restartCount reset on ready make this self-healing.
+        this.onChildCrash()
         return
       }
 
