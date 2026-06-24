@@ -6,7 +6,7 @@ Single-source reference for every feature shipped in v5.2. Organized by subsyste
 >
 > No new ADRs this release — v5.2 builds on the two from v5.0 (`docs/adrs/0001-response-envelope.md`, `docs/adrs/0002-plugin-api-boundary.md`). Every API added below returns the ADR-0001 envelope and lives behind the ADR-0002 boundary.
 
-> **Shipped as v5.2.1.** The original `v5.2.0` tag never produced a release: the new `PinsBridge.tsx` component collided by case with the pre-existing `pinsBridge.ts` store, which builds on case-sensitive Linux but breaks `vite build` on the macOS/Windows release runners (`"PinsBridge" is not exported by …`), so `release.yml` failed and no desktop binaries or GitHub Release were ever published. **v5.2.1** renames the store to `pinsBridgeStore.ts` to remove the collision and is the first published build of the 5.2 line. It also folds in the two commits that had landed on `main` after the `v5.2.0` tag — the self-healing telemetry stack (#77) and the main-based git-flow docs (#78).
+> **Shipped as v5.2.1.** The original `v5.2.0` tag never produced a release: the new `PinsBridge.tsx` component collided by case with the pre-existing `pinsBridge.ts` store, which builds on case-sensitive Linux but breaks `vite build` on the macOS/Windows release runners (`"PinsBridge" is not exported by …`), so `release.yml` failed and no desktop binaries or GitHub Release were ever published. **v5.2.1** renames the store to `pinsBridgeStore.ts` to remove the collision and is the first published build of the 5.2 line. It also folds in the commits that had landed on `main` after the `v5.2.0` tag — the self-healing telemetry stack (#77), the main-based git-flow docs (#78), and the file-editor scroll-aware pin fix (#83).
 
 ---
 
