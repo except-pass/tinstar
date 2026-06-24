@@ -2,7 +2,7 @@
 
 How a `tinstar` release is cut. The steps are gated, in order — each one has a *why* so it survives without tribal memory. The headline trap is at the bottom: **the plugin API is a separate npm package and ships on its own gate.**
 
-A release is one accumulating PR (`V5.x` dev branch → `main`), merged as a **merge commit**, tagged `vN.N.0`, then published to npm. `main` only ever receives release merges; feature PRs target the dev branch.
+A release is **cut directly from `main`**: a version-bump commit, tagged `vN.N.0`, then published to npm. `main` is the primary development branch — features land continuously as their own squashed PRs (see [contributing.md](contributing.md)), and a release bundles whatever has accumulated on `main` since the last tag. There is no longer a long-lived `V5.x` dev branch.
 
 ---
 
@@ -29,7 +29,7 @@ Bump every version stamp to `N.N.0` in one commit and regenerate lockfiles:
 - `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`
 - `npm install --package-lock-only` (root `package-lock.json`) + `cargo` regen of `Cargo.lock`
 
-During dev the branch sits at `N.N.0-dev.0` — the `-dev.0` suffix is deliberate: it keeps an accidental `npm publish` off the `latest` tag. The bump to plain `N.N.0` *is* the act of cutting the release.
+Between releases `main` sits at `N.N.0-dev.0` — the `-dev.0` suffix is deliberate: it keeps an accidental `npm publish` off the `latest` tag. The bump to plain `N.N.0` *is* the act of cutting the release. Right after tagging, bump `main` to the next `(N.N+1).0-dev.0` so it's back to a dev version.
 
 ## Release notes
 
@@ -37,8 +37,8 @@ Write `docs/release-notes-vN-N.md` — a pointer-map of *why* each theme exists,
 
 ## Merge & tag
 
-1. Mark the PR ready, merge to `main` as a **merge commit** (`gh pr merge N --merge`, NOT squash — squash flattens the feature history the notes reference).
-2. Tag the merge commit and push:
+1. Land the version bump on `main` as its own small PR (`chore(release): vN.N.0`), squash-merged like any other PR. The feature PRs that make up the release already landed individually — there's no accumulating branch to preserve, so the release PR squashes like the rest.
+2. Tag the resulting `main` commit and push:
    ```bash
    git fetch origin
    git tag -a vN.N.0 origin/main -m "Release vN.N.0"
@@ -91,7 +91,8 @@ The `tinstar` org must already exist on npm (scoped name → "Scope not found" o
 - [ ] Pre-flight green: npm run typecheck (0) + build:all + vitest
 - [ ] Versions → N.N.0 (package.json, plugin-api, tauri.conf.json, Cargo.toml) + lockfiles
 - [ ] docs/release-notes-vN-N.md written
-- [ ] PR ready, merged to main (merge commit)
+- [ ] Version-bump PR (chore(release): vN.N.0) squash-merged to main
+- [ ] main bumped to next (N.N+1).0-dev.0 after tagging
 - [ ] Tag vN.N.0 pushed → desktop CI + GitHub Release
 - [ ] npm publish tinstar@N.N.0 (OTP)
 - [ ] Gate: git diff vPREV vN.N.0 -- packages/plugin-api/src/index.ts

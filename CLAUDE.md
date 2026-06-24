@@ -2,7 +2,7 @@
 
 ## Repository
 
-- **Main branch:** `main` — use this for PRs, not `master`
+- **Main branch:** `main` — the primary development branch. Branch off it, ship one feature per PR, squash-merge back. Full flow in **[docs/contributing.md](docs/contributing.md)**.
 
 ## UI Philosophy
 
@@ -59,4 +59,4 @@ Session state changes emit to the event bus as `managed_session.*` events (see [
 
 ## Releasing
 
-Cutting a release (dev branch → `main` → tag → npm) is documented step-by-step in **[docs/releasing.md](docs/releasing.md)**. The trap worth restating: **`@tinstar/plugin-api` is a separate npm publish, gated on `git diff vPREV vN.N.0 -- packages/plugin-api/src/index.ts`** — publish it only when that shipped surface actually changed, and run the diff rather than deciding from memory.
+Cutting a release (tag `main` → npm) is documented step-by-step in **[docs/releasing.md](docs/releasing.md)** — releases are now cut directly from `main` (the dev branch), not from an accumulating release branch. The trap worth restating: **`@tinstar/plugin-api` is a separate npm publish, gated on `git diff vPREV vN.N.0 -- packages/plugin-api/src/index.ts`** — publish it only when that shipped surface actually changed, and run the diff rather than deciding from memory.
