@@ -2,6 +2,8 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import type { TreeNode } from '../domain/types'
 import { getWidgetComponent, toWidgetType } from '../widgets/widgetComponentRegistry'
 import { useConfig, useDebouncedConfigPatch } from '../context/ConfigContext'
+import { packBlocksRow, type RigidBlock } from '../canvas/tidyArrange'
+import { boundingBoxOf } from '../canvas/constellationCohesion'
 
 export interface WidgetLayout {
   x: number
@@ -217,6 +219,132 @@ export function preserveCohesion(
     }
   }
   return fresh
+}
+
+/**
+ * Step 3 of the Reset/Arrange pipeline: re-pack the root grid by rigid block so
+ * each constellation reserves its full bounding box and nothing else is placed
+ * inside it. Without this, `preserveCohesion` collapses a snapped member (e.g. a
+ * browser) toward its anchor into a cell the grid handed to a *different* root,
+ * landing the formation on top of that neighbour.
+ *
+ * Blocks are formed from `cohesionGroups` alone (no constellation graph needed):
+ * each group's member ids are mapped up to their top-level root via
+ * `treeMaps.parentMap`, and the top-level subtrees that share a group are unioned
+ * into one block. Every other top-level subtree is a singleton block. A block's
+ * members are all layout-bearing ids in its subtree(s); its bbox is the union of
+ * their current (post-`preserveCohesion`) rects.
+ *
+ * The block bounding boxes are packed on the default grid shape (≈`ceil(sqrt(n))`
+ * columns) reserving each block's real footprint, then every member is shifted
+ * rigidly by its block delta — so formations stay snapped and no block overlaps
+ * another. When no group spans more than one top-level root there is nothing to
+ * reserve and the input is returned unchanged (the common path).
+ */
+export function blockRepack(
+  layouts: Map<string, WidgetLayout>,
+  treeMaps: TreeMaps,
+  cohesionGroups: string[][],
+): Map<string, WidgetLayout> {
+  // Map any layout id up to its top-level root id.
+  const rootOf = (id: string): string => {
+    let cur = id
+    for (;;) {
+      const p = treeMaps.parentMap.get(cur)
+      if (p === undefined) return cur
+      cur = p
+    }
+  }
+
+  // Bucket every layout-bearing id under its top-level root.
+  const idsByRoot = new Map<string, string[]>()
+  for (const id of layouts.keys()) {
+    const root = rootOf(id)
+    const list = idsByRoot.get(root)
+    if (list) list.push(id)
+    else idsByRoot.set(root, [id])
+  }
+  const roots = [...idsByRoot.keys()]
+  const rootIndex = new Map(roots.map((r, i) => [r, i]))
+
+  // Union-find over top-level roots: fuse roots that share a cohesion group.
+  const parent = roots.map((_, i) => i)
+  const find = (i: number): number => {
+    while (parent[i] !== i) { parent[i] = parent[parent[i]!]!; i = parent[i]! }
+    return i
+  }
+  let merged = false
+  for (const group of cohesionGroups) {
+    const groupRoots = group
+      .filter(id => layouts.has(id))
+      .map(id => rootIndex.get(rootOf(id)))
+      .filter((i): i is number => i !== undefined)
+    for (let k = 1; k < groupRoots.length; k++) {
+      const a = find(groupRoots[0]!), b = find(groupRoots[k]!)
+      if (a !== b) { parent[a] = b; merged = true }
+    }
+  }
+  // No constellation spans more than one top-level root → footprints already
+  // reserved by the default grid; nothing to do.
+  if (!merged) return layouts
+
+  // Assemble rigid blocks: members + union bbox.
+  const blockMembers = new Map<number, RigidBlock['members']>()
+  for (const root of roots) {
+    const b = find(rootIndex.get(root)!)
+    const list = blockMembers.get(b) ?? []
+    for (const id of idsByRoot.get(root)!) {
+      const l = layouts.get(id)!
+      list.push({ id, x: l.x, y: l.y, width: l.width, height: l.height })
+    }
+    blockMembers.set(b, list)
+  }
+  const blocks: RigidBlock[] = [...blockMembers.values()].map(members => ({
+    members,
+    bbox: boundingBoxOf(members)!,
+  }))
+  // Stable reading order (top-to-bottom, left-to-right) so the grid is deterministic.
+  blocks.sort((a, b) => a.bbox.y - b.bbox.y || a.bbox.x - b.bbox.x)
+
+  // Pack block footprints into a roughly-square grid: aim for ceil(sqrt(n))
+  // columns of the widest block, and let packBlocksRow row-wrap at that width.
+  const cols = Math.max(1, Math.ceil(Math.sqrt(blocks.length)))
+  const maxBlockWidth = Math.max(...blocks.map(b => b.bbox.width))
+  const targetWidth = cols * (maxBlockWidth + CONTAINER_GAP)
+  const positions = packBlocksRow(blocks, { x: 50, y: 50 }, targetWidth, CONTAINER_GAP)
+
+  // Apply the rigid per-member shift, preserving each widget's size.
+  const out = new Map(layouts)
+  for (const [id, p] of positions) {
+    const l = out.get(id)!
+    out.set(id, snap({ ...l, x: p.x, y: p.y }))
+  }
+  return out
+}
+
+/**
+ * Pure layout pipeline behind the Reset/Arrange-workspace action. Kept exported
+ * and DOM-free so the placement logic can be unit-tested directly.
+ *
+ *   1. `generateDefaultLayouts(tree, prev)` — tidy default grid at current sizes.
+ *   2. `preserveCohesion(...)`              — re-snap each constellation as a rigid
+ *                                             block (anchor-relative offsets).
+ *   3. `blockRepack(...)`                   — re-pack the *root grid by rigid block*
+ *                                             so each formation reserves its full
+ *                                             bounding box and nothing overlaps.
+ *
+ * With no cohesion groups the result is exactly `generateDefaultLayouts(tree, prev)`.
+ */
+export function arrangeLayouts(
+  tree: TreeNode[],
+  prev: Map<string, WidgetLayout>,
+  treeMaps: TreeMaps,
+  cohesionGroups?: string[][],
+): Map<string, WidgetLayout> {
+  const fresh = generateDefaultLayouts(tree, prev)
+  if (!cohesionGroups?.length) return fresh
+  preserveCohesion(fresh, prev, cohesionGroups)
+  return blockRepack(fresh, treeMaps, cohesionGroups)
 }
 
 // --- Smart placement for new nodes ---
@@ -751,10 +879,7 @@ export function useWidgetLayouts(tree: TreeNode[], spaceId?: string, seedLayouts
   // each widget at its current size (this is a tidy-positions arrange, not a
   // size reset), so a hand-sized browser isn't shrunk back to its default.
   const arrangeWorkspace = useCallback((cohesionGroups?: string[][]) => {
-    setLayouts(prev => {
-      const fresh = generateDefaultLayouts(tree, prev)
-      return cohesionGroups?.length ? preserveCohesion(fresh, prev, cohesionGroups) : fresh
-    })
+    setLayouts(prev => arrangeLayouts(tree, prev, treeMapsRef.current, cohesionGroups))
   }, [tree])
 
   const insertLayout = useCallback((id: string, layout: WidgetLayout) => {
