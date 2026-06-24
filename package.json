@@ -39,6 +39,7 @@
     "stable": "npm run build:all && node bin/tinstar.js --no-open",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.e2e.json && tsc --noEmit -p tsconfig.test.json",
     "lint": "eslint .",
+  "check:case": "node scripts/check-case-collisions.mjs",
     "test:unit": "vitest run --exclude='e2e/**'",
     "test:e2e": "playwright test",
     "tauri": "tauri",
