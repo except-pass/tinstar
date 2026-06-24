@@ -3,6 +3,19 @@ import type { HudSnapshot, ModelBreakdown } from './types.js'
 /** Trailing window for the duty-cycle gauge. Read as "how many of the last N minutes was the agent busy". */
 const DUTY_CYCLE_WINDOW_MINUTES = 5
 
+/**
+ * Cap a windowed `increase()` value at a ceiling it cannot legitimately exceed.
+ * Guards against increase()/rate() over-extrapolating when a counter churns
+ * (many short-lived series + restarts/resets), which can otherwise report wildly
+ * inflated totals. Returns `value` unchanged when there's no usable ceiling, so
+ * a missing ceiling never blanks out a real reading.
+ */
+function clampToCeiling(value: number | null, ceiling: number | null): number | null {
+  if (value === null || !isFinite(value)) return value
+  if (ceiling === null || !isFinite(ceiling)) return value
+  return Math.min(value, ceiling)
+}
+
 interface PromResult {
   metric: Record<string, string>
   value: [number, string]
@@ -88,10 +101,27 @@ export class TelemetryQuery {
       : `sum(increase(${tokenMetric}${inputFilter}[${windowSec}s]))`
 
     const cliActiveFilter = this.mergeFilter(filter, 'type="cli"')
-    const [costTotal, costByModel, tokensTotal, rateMin, rateHour, cacheHit, dutyCycle] = await Promise.all([
-      this.instant(`sum(increase(claude_code_cost_usage_USD_total${filter}[${windowSec}s]))`),
-      this.instantVec(`sum by (model) (increase(claude_code_cost_usage_USD_total${filter}[${windowSec}s]))`),
+    const costMetric = `claude_code_cost_usage_USD_total${filter}`
+    // `increase()` / `max_over_time()` over the day window can report nonsense:
+    // a flapping stack and WAL replay can write a single poisoned counter sample
+    // (we saw one session spike to $113M while its real value was $35), and
+    // increase() also over-extrapolates across the dozens of resets that churn
+    // produces. Both functions read those bad historical samples, so neither is
+    // a safe number. The CURRENT cumulative total — sum() of the live counter
+    // values — is spike-robust (a transient bad sample isn't the current value)
+    // and is a sound upper bound: you can't have spent more in the window than
+    // the counters currently total. Clamp each windowed value to it. In the
+    // healthy case windowed <= current, so the clamp is a no-op.
+    const tokensCeilQuery = isSession
+      ? tokensQuery
+      : `sum(${tokenMetric}${tokenFilter})`
+    const [costWindow, costCeil, costByModelWin, costByModelCeil, tokensWindow, tokensCeil, rateMin, rateHour, cacheHit, dutyCycle] = await Promise.all([
+      this.instant(`sum(increase(${costMetric}[${windowSec}s]))`),
+      this.instant(`sum(${costMetric})`),
+      this.instantVec(`sum by (model) (increase(${costMetric}[${windowSec}s]))`),
+      this.instantVec(`sum by (model) (${costMetric})`),
       this.instant(tokensQuery),
+      this.instant(tokensCeilQuery),
       this.instant(`sum(rate(${tokenMetric}${tokenFilter}[1m])) * 60`),
       this.instant(`sum(rate(${tokenMetric}${tokenFilter}[1h])) * 3600`),
       this.instant(`${cacheReadQuery} / (${cacheReadQuery} + ${inputQuery})`),
@@ -101,10 +131,15 @@ export class TelemetryQuery {
       this.instant(`sum(rate(claude_code_active_time_seconds_total${cliActiveFilter}[${DUTY_CYCLE_WINDOW_MINUTES}m]))`),
     ])
 
+    const costTotal = clampToCeiling(costWindow, costCeil)
+    const tokensTotal = clampToCeiling(tokensWindow, tokensCeil)
+
+    const ceilByModel: Record<string, number> = {}
+    for (const r of costByModelCeil) ceilByModel[r.metric.model ?? 'unknown'] = Number(r.value[1])
     const byModel: ModelBreakdown = {}
-    for (const r of costByModel) {
+    for (const r of costByModelWin) {
       const model = r.metric.model ?? 'unknown'
-      byModel[model] = Number(r.value[1])
+      byModel[model] = clampToCeiling(Number(r.value[1]), ceilByModel[model] ?? null) ?? 0
     }
 
     const cacheHitPct = (cacheHit !== null && isFinite(cacheHit)) ? cacheHit : null

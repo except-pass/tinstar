@@ -68,6 +68,27 @@ describe('TelemetryQuery.todayHud', () => {
     expect(snap.state).toBe('ready')
   })
 
+  it('clamps an over-extrapolated cost increase() to the max_over_time ceiling', async () => {
+    // Counter-churn scenario: increase() over the day extrapolates to a wildly
+    // inflated number, but max_over_time (the ceiling) reflects the true total.
+    const v = (n: number) => ({
+      ok: true,
+      json: async () => ({ status: 'success', data: { resultType: 'vector', result: [{ metric: {}, value: [100, String(n)] }] } }),
+    })
+    const fetchMock = vi.fn(async (url: string) => {
+      const q = decodeURIComponent(new URL(url).searchParams.get('query') ?? '')
+      if (q.includes('cost_usage_USD_total') && !q.includes('sum by')) {
+        return q.includes('increase(') ? v(119_000_000) : v(292.59) // huge increase, sane ceiling
+      }
+      return v(0)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const q = new TelemetryQuery('http://prom:9090')
+    const snap = await q.todayHud({ userEmail: 'x', tzOffsetMinutes: 0 })
+    expect(snap.cost.total).toBeCloseTo(292.59)
+  })
+
   it('returns stale snapshot with staleSeconds when Prometheus fails after prior success', async () => {
     const q = new TelemetryQuery(`http://127.0.0.1:${port}`)
     const first = await q.todayHud({ userEmail: 'test@example.com', tzOffsetMinutes: 0 })
