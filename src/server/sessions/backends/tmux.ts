@@ -838,6 +838,78 @@ export function ttydPidsForSession(incumbents: TtydIncumbent[], ourTmuxName: str
   return incumbents.filter((inc) => inc.tmuxTarget === ourTmuxName).map((inc) => inc.pid)
 }
 
+/**
+ * Global GC: pids of ttyds that are squatting a port for a tmux session that no
+ * longer exists. These accumulate one-per-restart — when the backend dies its
+ * ttyds reparent to `systemd --user` and keep listening forever, eventually
+ * exhausting the 100-port pool (`No available port found`). The per-session
+ * reclaim in `startTtyd` never sees them because they belong to no session the
+ * backend is (re)starting.
+ *
+ * The predicate is "tmux session is DEAD", never "not in my tracked set":
+ *  - A live tmux is in use — keep it regardless of which backend spawned it. A
+ *    second backend on a different TINSTAR_CONFIG_HOME serves live tmux sessions
+ *    this backend never tracked; reaping those is the cross-backend kill-war.
+ *  - Only `prefix`-matched (our `tinstar-*`) targets are eligible, so the user's
+ *    own unrelated ttyd (`ttyd … tmux attach -t my-notes`, or `ttyd htop` with a
+ *    null target) is never touched.
+ *
+ * Pure so it can be unit-tested without spawning ttyd; `reapOrphanTtyds` wires
+ * it to live process/tmux enumeration.
+ */
+export function orphanTtydPidsToReap(
+  incumbents: TtydIncumbent[],
+  liveTmuxNames: Set<string>,
+  prefix: string,
+): number[] {
+  return incumbents
+    .filter((inc) =>
+      inc.tmuxTarget !== null &&
+      inc.tmuxTarget.startsWith(prefix) &&
+      !liveTmuxNames.has(inc.tmuxTarget),
+    )
+    .map((inc) => inc.pid)
+}
+
+/**
+ * All live tmux session names, or `null` if liveness couldn't be established.
+ *
+ * The `null` is load-bearing: an *empty* set means "tmux has no sessions" (a
+ * real signal — every tinstar ttyd is then a squatter), but a *failed* tmux
+ * call must NOT be read as "everything is dead" or the sweep would kill every
+ * live session's ttyd. `tmux list-sessions` exits 1 with "no server running"
+ * when there genuinely are zero sessions — that case alone maps to the empty
+ * set; any other failure returns null so the caller skips the sweep.
+ */
+async function listLiveTmuxSessionNames(): Promise<Set<string> | null> {
+  try {
+    const { stdout } = await execFileAsync('tmux', ['list-sessions', '-F', '#{session_name}'])
+    return new Set(stdout.split('\n').map((s) => s.trim()).filter(Boolean))
+  } catch (err) {
+    const msg = (err as { stderr?: string }).stderr ?? (err as Error).message ?? ''
+    return /no server running/i.test(msg) ? new Set() : null
+  }
+}
+
+/**
+ * One pass of the orphan-ttyd GC: SIGTERM every ttyd squatting a port for a
+ * dead `prefix`-matched tmux session. Returns how many were reaped. Wired to
+ * run at startup (after reattach) and on the periodic reconcile tick so the
+ * port pool drains continuously and the user never hits "No available port".
+ */
+export async function reapOrphanTtyds(prefix: string): Promise<number> {
+  const live = await listLiveTmuxSessionNames()
+  if (live === null) return 0 // liveness unknown — never risk killing live ttyds
+  const pids = orphanTtydPidsToReap(allTtydIncumbents(), live, prefix)
+  for (const pid of pids) {
+    try { process.kill(pid, 'SIGTERM') } catch { /* already dead */ }
+  }
+  if (pids.length > 0) {
+    log.info('ttyd', `orphan sweep: reaped ${pids.length} port-squatting ttyd(s) with no live tmux session`)
+  }
+  return pids.length
+}
+
 export function startTtyd(opts: {
   tmuxName: string
   port: number
