@@ -11,10 +11,13 @@ A release is **cut directly from `main`**: a version-bump commit, tagged `vN.N.0
 Run from the release branch before marking the PR ready:
 
 ```bash
+npm run check:case    # case-only filename collisions — see note below
 npm run typecheck     # app + e2e + test tsconfigs — must be 0 errors
 npm run build:all     # vite client + esbuild server — this is what actually ships
 npx vitest run --exclude='e2e/**'
 ```
+
+- **`npm run check:case` — the v5.2.0 lesson.** v5.2.0 shipped `PinsBridge.tsx` next to `pinsBridge.ts` in one directory. The extensionless import resolved fine on the Linux CI runner but matched the wrong file on the macOS/Windows *release* runners, so `vite build` failed there, the release-build matrix failed, and **no GitHub Release was ever published — silently**, because Linux-only CI stayed green. This guard (now also a step in `ci.yml` on every PR, and a pre-build step in `release.yml`) fails loudly on any case-only collision before it can reach a tag. `scripts/check-case-collisions.mjs`.
 
 - **`npm run typecheck`, not `tsc -p tsconfig.app.json`.** The script runs *three* projects (`tsconfig.app.json` + `tsconfig.e2e.json` + `tsconfig.test.json`). App-only `tsc` is green while a type error in a `*.test.tsx` file still fails CI — the test project is part of the zero baseline. *Caught a release once:* a non-null index-access error in a new test passed local app-tsc and red-lit the PR.
 - `build:all` is the ship gate, not `tsc` — releases ship the `vite build` output, not `tsc` emit.
@@ -45,6 +48,12 @@ Write `docs/release-notes-vN-N.md` — a pointer-map of *why* each theme exists,
    git push origin vN.N.0
    ```
    Tagging on `origin/main` lets you tag without checking out `main` — leaves a live `:5273` dev tree on its branch undisturbed. The tag triggers `release.yml` → desktop binaries + the GitHub Release.
+3. **Watch the release run — do not assume it passed.** `release.yml` runs a 3-OS build matrix (macOS/Windows/Linux) and the GitHub Release is only published if *all three* pass (`release` is `needs: build`). A green `main` CI does **not** prove the macOS/Windows Tauri build passed — that asymmetry is exactly how v5.2.0 failed unnoticed. Block on it:
+   ```bash
+   gh run watch "$(gh run list --workflow=release.yml -L1 --json databaseId -q '.[0].databaseId')" --exit-status
+   gh release view vN.N.0   # confirm it exists and has the 5 binaries attached
+   ```
+   If the run fails, **no release was created** — fix forward and cut the next patch (`vN.N.1`); don't leave a tag with no release behind it.
 
 ## Publish to npm — TWO packages, each gated
 
@@ -88,12 +97,13 @@ The `tinstar` org must already exist on npm (scoped name → "Scope not found" o
 ## Checklist
 
 ```
-- [ ] Pre-flight green: npm run typecheck (0) + build:all + vitest
+- [ ] Pre-flight green: npm run check:case + typecheck (0) + build:all + vitest
 - [ ] Versions → N.N.0 (package.json, plugin-api, tauri.conf.json, Cargo.toml) + lockfiles
 - [ ] docs/release-notes-vN-N.md written
 - [ ] Version-bump PR (chore(release): vN.N.0) squash-merged to main
 - [ ] main bumped to next (N.N+1).0-dev.0 after tagging
 - [ ] Tag vN.N.0 pushed → desktop CI + GitHub Release
+- [ ] Watched release.yml to green (all 3 OS) + confirmed `gh release view vN.N.0` has 5 binaries
 - [ ] npm publish tinstar@N.N.0 (OTP)
 - [ ] Gate: git diff vPREV vN.N.0 -- packages/plugin-api/src/index.ts
       → non-empty? npm publish @tinstar/plugin-api@N.N.0 (OTP)   empty? skip, note why
