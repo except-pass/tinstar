@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState, type ComponentPropsWithoutRef } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState, type ComponentPropsWithoutRef, type Ref } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -7,6 +7,13 @@ interface Props {
   filePath: string
   sessionId: string
   widgetId: string
+  /** Ref to the scrollable container so the widget can render scroll-aware pins
+   *  (positioned in content coords minus this element's scrollTop). Optional so
+   *  the renderer stays usable standalone. */
+  scrollRef?: Ref<HTMLDivElement>
+  /** Fires on scroll with the live { x: scrollLeft, y: scrollTop } so the pin
+   *  layer can keep markers glued to the scrolling text. */
+  onScrollChange?: (offset: { x: number; y: number }) => void
 }
 
 function slugify(text: string): string {
@@ -98,7 +105,7 @@ function MermaidBlock({ source }: { source: string }) {
   return <div className="my-3 flex justify-center [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
-export function MarkdownRenderer({ content, filePath, sessionId, widgetId }: Props) {
+export function MarkdownRenderer({ content, filePath, sessionId, widgetId, scrollRef, onScrollChange }: Props) {
   const scrollId = useId()
 
   const handleLinkClick = useCallback(
@@ -205,7 +212,12 @@ export function MarkdownRenderer({ content, filePath, sessionId, widgetId }: Pro
   }), [handleLinkClick, scrollId])
 
   return (
-    <div data-scrollable className="h-full overflow-y-auto px-4 py-3 font-mono">
+    <div
+      ref={scrollRef}
+      data-scrollable
+      className="h-full overflow-y-auto px-4 py-3 font-mono"
+      onScroll={onScrollChange ? (e) => onScrollChange({ x: e.currentTarget.scrollLeft, y: e.currentTarget.scrollTop }) : undefined}
+    >
       <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components}>
         {content}
       </ReactMarkdown>

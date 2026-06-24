@@ -16,6 +16,11 @@ export function activate(api: TinstarPluginAPI) {
       minSize: { width: 300, height: 200 },
       dragHandleSelector: '.widget-drag-handle',
       supportsMinimize: false,
+      // Pins glue to the scrolling rendered-markdown body, so the file-editor
+      // self-renders its pin markers/bubbles (positioned in content coords minus
+      // scroll). The host still owns placement (corner affordance → onCreatePin)
+      // and the pin store.
+      rendersOwnPinMarkers: true,
     }),
   ]
 }

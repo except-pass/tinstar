@@ -1,9 +1,15 @@
 // Built-in plugin — consumes @tinstar/plugin-api only.
 // Host imports are forbidden by ESLint (see docs/adrs/0002-plugin-api-boundary.md).
-// Lone exception: `import type` from src/domain/types for widget data shapes.
-import { useRef, useEffect, useCallback, useState } from 'react'
+// Exceptions: `import type` from src/domain/types for widget data shapes, and the
+// shared pin primitives (src/pins/* + FileEditorPinLayer, which itself wraps them)
+// so self-rendered editor pins are visually identical to host-rendered pins on
+// every other widget. These are intentionally shared UI, not host internals;
+// src/pins is not ESLint-fenced (the browser plugin does exactly this).
+import { useRef, useEffect, useCallback, useState, useLayoutEffect } from 'react'
 import Editor, { DiffEditor } from '@monaco-editor/react'
 import { MarkdownRenderer } from './MarkdownRenderer'
+import { FileEditorPinLayer } from './FileEditorPinLayer'
+import { replyInstructions, threadSoFar } from '../../../pins/replyPrompt'
 import type { editor as MonacoEditor } from 'monaco-editor'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { EditorWidget } from '../../../domain/types'
@@ -159,6 +165,98 @@ export function makeFileEditorWidget(api: TinstarPluginAPI) {
 
   const showBinaryMessage = content !== null && isBinaryOrLarge(content)
 
+  // ── Pins ────────────────────────────────────────────────────────────────
+  // The file-editor sets rendersOwnPinMarkers, so the host shell no longer draws
+  // the generic frame-anchored PinLayer for this widget — we render our own over
+  // the body. In rendered-markdown mode the markers track the scroll container's
+  // offset so they stay glued to the text (the reported bug). In Monaco code/diff
+  // modes scroll is pinned to {0,0} (markers stay frame-anchored, matching today's
+  // behavior — Monaco-mode scroll-tracking is a known follow-up, out of scope here).
+  const pins = api.pins.useNodePins(widget.id)
+  const scrollElRef = useRef<HTMLDivElement>(null)  // markdown scroll container (rendered mode only)
+  const bodyRef = useRef<HTMLDivElement>(null)      // body wrapper — the box the pin overlay covers
+  const [scroll, setScroll] = useState({ x: 0, y: 0 })
+  const [bodySize, setBodySize] = useState({ width: 0, height: 0 })
+
+  // rAF-throttle scroll updates (one setState per frame) like the browser primitive.
+  const scrollRafRef = useRef(0)
+  const pendingScrollRef = useRef({ x: 0, y: 0 })
+  const handleScrollChange = useCallback((o: { x: number; y: number }) => {
+    pendingScrollRef.current = o
+    if (!scrollRafRef.current) {
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = 0
+        setScroll(pendingScrollRef.current)
+      })
+    }
+  }, [])
+  useEffect(() => () => { if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current) }, [])
+
+  // Track the body box so fresh (un-enriched) pins fall back to nx*width / ny*height.
+  // ResizeObserver keeps it correct when the widget is resized on the canvas.
+  useLayoutEffect(() => {
+    const el = bodyRef.current
+    if (!el) return
+    const measure = () => setBodySize({ width: el.clientWidth, height: el.clientHeight })
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  // Leaving rendered mode resets the offset so Monaco-mode markers render at {0,0}.
+  useEffect(() => { if (!rendered) setScroll({ x: 0, y: 0 }) }, [rendered])
+
+  // Pin context capture FRONT DOOR — the host shell invokes this at the drop point
+  // to enrich the new pin. Turn the viewport point into a content-glued pin: body-
+  // relative pixel + the scroll container's scroll, so the marker tracks the text.
+  // Returns undefined (pin stays at the nx/ny fallback) when the body isn't laid out.
+  api.pins.useProvideCapture(({ clientX, clientY }) => {
+    const scroller = scrollElRef.current
+    const rectEl = scroller ?? bodyRef.current
+    if (!rectEl) return undefined
+    const rect = rectEl.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return undefined
+    const sx = scroller ? scroller.scrollLeft : 0
+    const sy = scroller ? scroller.scrollTop : 0
+    return { docX: clientX - rect.left + sx, docY: clientY - rect.top + sy }
+  })
+
+  const submitPin = useCallback(async (id: string, comment: string) => {
+    const pin = pins.find(p => p.id === id)
+    if (!pin || !widget.sessionId) return
+    // Use the FRESH comment from the bubble draft, not pin.comment — the store
+    // update is async and pin.comment still holds the pre-edit value this tick.
+    const prompt = `📍 New note on ${filename} — ${comment || '(no comment)'}\n\n${replyInstructions(id, window.location.origin)}`
+    try {
+      const res = await api.http.fetch(`/api/sessions/${encodeURIComponent(widget.sessionId)}/enter-prompt`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }),
+      })
+      const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
+      if (!res.ok || body?.ok === false) throw new Error(body?.error?.message || `HTTP ${res.status}`)
+      api.pins.update(widget.id, id, p => ({ ...p, comment, sentAt: Date.now() }))
+    } catch (err) {
+      api.logger?.warn?.('[file-editor-pins] submit failed:', (err as Error).message)
+    }
+  }, [pins, widget.sessionId, widget.id, filename])
+
+  const replyToPin = useCallback(async (id: string, text: string) => {
+    if (!widget.sessionId) return
+    const pin = pins.find(p => p.id === id)
+    try {
+      await api.http.fetch(`/api/notes/${encodeURIComponent(id)}/replies`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, author: 'user' }),
+      })
+    } catch (err) { api.logger?.warn?.('[file-editor-pins] reply failed:', (err as Error).message); return }
+    const history = pin ? `${threadSoFar(pin)}\n[user] ${text}` : `[user] ${text}`
+    const prompt = `📍 Follow-up on the note:\n\n${history}\n\n${replyInstructions(id, window.location.origin)}`
+    try {
+      await api.http.fetch(`/api/sessions/${encodeURIComponent(widget.sessionId)}/enter-prompt`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }),
+      })
+    } catch (err) { api.logger?.warn?.('[file-editor-pins] re-prompt failed:', (err as Error).message) }
+  }, [pins, widget.sessionId])
+
   return (
     <div className="flex flex-col h-full bg-surface-base text-slate-300 overflow-hidden">
       {/* Header */}
@@ -218,13 +316,15 @@ export function makeFileEditorWidget(api: TinstarPluginAPI) {
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0">
+      <div ref={bodyRef} className="flex-1 min-h-0 relative">
         {content !== null && rendered ? (
           <MarkdownRenderer
             content={content}
             filePath={widget.filePath}
             sessionId={widget.sessionId}
             widgetId={widget.id}
+            scrollRef={scrollElRef}
+            onScrollChange={handleScrollChange}
           />
         ) : content === null ? (
           <div className="flex items-center justify-center h-full text-slate-500 text-xs font-mono">
@@ -267,6 +367,27 @@ export function makeFileEditorWidget(api: TinstarPluginAPI) {
               wordWrap: wordWrap ? 'on' : 'off',
             }}
             onMount={handleEditorMount}
+          />
+        )}
+
+        {/* Self-rendered pins (rendersOwnPinMarkers). Skipped while loading or for
+            binary files — there's no content to anchor a note to. In rendered mode
+            they glue to the scrolling markdown; in Monaco modes scroll is {0,0}. */}
+        {content !== null && !showBinaryMessage && (
+          <FileEditorPinLayer
+            pins={pins}
+            scroll={rendered ? scroll : { x: 0, y: 0 }}
+            contentWidth={bodySize.width}
+            contentHeight={bodySize.height}
+            accent="#00f0ff"
+            canSubmit={!!widget.sessionId}
+            onCommentChange={(id, comment) => api.pins.update(widget.id, id, p => ({ ...p, comment }))}
+            onDelete={(id) => api.pins.remove(widget.id, id)}
+            onSubmit={submitPin}
+            onReply={replyToPin}
+            onResolve={(id) => api.pins.update(widget.id, id, p => ({ ...p, resolvedAt: Date.now() }))}
+            onReopen={(id) => api.pins.update(widget.id, id, p => { const { resolvedAt: _d, ...rest } = p; return rest })}
+            onReposition={(id, docX, docY) => api.pins.update(widget.id, id, p => ({ ...p, context: { ...(p.context ?? {}), docX, docY } }))}
           />
         )}
       </div>
