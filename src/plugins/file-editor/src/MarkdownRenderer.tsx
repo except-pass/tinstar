@@ -30,6 +30,18 @@ function resolveRelativePath(base: string, relative: string): string {
   return parts.join('/')
 }
 
+// Markdown image `src`es are relative to the .md file on disk, but a bare
+// `<img src="images/x.png">` resolves against the *page* URL (localhost:5273/…),
+// which 404s. Resolve the path against the file's directory and serve it from
+// disk through the host's image-file endpoint — the same one the image-viewer
+// widget uses. Absolute URLs and inline data/blob URIs are left untouched.
+function resolveImageSrc(src: string | undefined, base: string, sessionId: string): string | undefined {
+  if (!src) return src
+  if (/^(https?:|data:|blob:)/i.test(src)) return src
+  const resolved = resolveRelativePath(base, src)
+  return `/api/image-file?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(resolved)}`
+}
+
 // Module-scoped so its identity is stable — a fresh array each render would make
 // react-markdown rebuild its processor and reparse on every re-render.
 const REMARK_PLUGINS = [remarkGfm]
@@ -200,7 +212,7 @@ export function MarkdownRenderer({ content, filePath, sessionId, widgetId, scrol
     th: ({ children }) => <th className="px-2 py-1 text-left text-slate-200 font-medium">{children}</th>,
     td: ({ children }) => <td className="px-2 py-1 border-t border-white/5">{children}</td>,
     hr: () => <hr className="border-white/10 my-4" />,
-    img: ({ src, alt }) => <img src={src} alt={alt ?? ''} className="max-w-full rounded border border-white/10 my-2" />,
+    img: ({ src, alt }) => <img src={resolveImageSrc(src, filePath, sessionId)} alt={alt ?? ''} className="max-w-full rounded border border-white/10 my-2" />,
     input: ({ checked, ...props }) => (
       <input
         {...props}
@@ -209,7 +221,7 @@ export function MarkdownRenderer({ content, filePath, sessionId, widgetId, scrol
         className="mr-1.5 accent-primary"
       />
     ),
-  }), [handleLinkClick, scrollId])
+  }), [handleLinkClick, scrollId, filePath, sessionId])
 
   return (
     <div

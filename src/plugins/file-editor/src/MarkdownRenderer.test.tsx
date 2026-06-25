@@ -23,6 +23,41 @@ function renderDoc() {
   )
 }
 
+describe('MarkdownRenderer images', () => {
+  it('resolves a relative image path against the file dir and serves it via /api/image-file', () => {
+    const { container } = render(
+      <MarkdownRenderer
+        content={'![swatch](images/swatch.png)'}
+        filePath="/repo/docs/essays/note.md"
+        sessionId="s1"
+        widgetId="editor-1"
+      />,
+    )
+    const img = container.querySelector('img')
+    expect(img).not.toBeNull()
+    expect(img!.getAttribute('src')).toBe(
+      `/api/image-file?session=s1&path=${encodeURIComponent('/repo/docs/essays/images/swatch.png')}`,
+    )
+    expect(img!.getAttribute('alt')).toBe('swatch')
+  })
+
+  it('honors ../ in a relative image path', () => {
+    const { container } = render(
+      <MarkdownRenderer content={'![x](../assets/x.png)'} filePath="/repo/docs/note.md" sessionId="s1" widgetId="e1" />,
+    )
+    expect(container.querySelector('img')!.getAttribute('src')).toBe(
+      `/api/image-file?session=s1&path=${encodeURIComponent('/repo/assets/x.png')}`,
+    )
+  })
+
+  it('leaves an absolute http(s) URL untouched (not routed through image-file)', () => {
+    const { container } = render(
+      <MarkdownRenderer content={'![a](https://example.com/a.png)'} filePath="/repo/note.md" sessionId="s1" widgetId="e1" />,
+    )
+    expect(container.querySelector('img')!.getAttribute('src')).toBe('https://example.com/a.png')
+  })
+})
+
 describe('MarkdownRenderer MermaidBlock', () => {
   beforeEach(() => {
     renderMock.mockReset()
