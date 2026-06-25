@@ -23,7 +23,7 @@ export function useNatsBrokerStatus(): PluginServerStatus | null {
         if (!cancelled && j.ok && j.data) {
           setStatus({ status: j.data.connection === 'up' ? 'up' : 'down', startable: false, kind: 'nats', checkedAt: Date.now() })
         }
-      } catch { /* transient; next tick retries */ }
+      } catch (err) { console.warn('[nats-broker] status poll failed:', (err as Error).message) }
       if (!cancelled) timer = setTimeout(tick, POLL_MS)
     }
     void tick()

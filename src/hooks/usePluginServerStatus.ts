@@ -30,7 +30,7 @@ export function usePluginServerStatus(): {
       const r = await apiFetch('/api/plugin-servers/status')
       const j = (await r.json()) as { ok: boolean; data?: StatusMap }
       if (j.ok && j.data) setStatuses(j.data)
-    } catch { /* transient; next tick retries */ }
+    } catch (err) { console.warn('[plugin-server] status poll failed:', (err as Error).message) }
   }, [])
 
   useEffect(() => {
@@ -53,7 +53,7 @@ export function usePluginServerStatus(): {
       [pluginId]: { ...(prev[pluginId] ?? { startable: true, checkedAt: 0 }), status: 'unknown' },
     }))
     fastUntilRef.current = Date.now() + FAST_WINDOW_MS
-    try { await apiFetch(`/api/plugin-servers/${pluginId}/start`, { method: 'POST' }) } catch { /* surfaced via log */ }
+    try { await apiFetch(`/api/plugin-servers/${pluginId}/start`, { method: 'POST' }) } catch (err) { console.warn(`[plugin-server] failed to start ${pluginId}:`, (err as Error).message) }
     await refetch()
   }, [refetch])
 

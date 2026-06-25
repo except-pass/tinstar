@@ -543,8 +543,8 @@ export async function createTmuxSession(
   // Auto-accept dev channel warning by polling for the prompt and sending Enter
   // More robust than fixed timeout - waits for actual prompt to appear
   if (natsOpts?.enabled) {
-    autoAcceptDevChannelWarning(tmuxName).catch(() => {
-      // Session may have been killed or prompt not shown, ignore
+    autoAcceptDevChannelWarning(tmuxName).catch((err) => {
+      log.debug('tmux', `dev-channel auto-accept failed: ${(err as Error).message}`)
     })
   }
 
@@ -608,8 +608,8 @@ export async function startTmuxSession(
   // agent re-shows Claude's NATS warning prompt and must also be accepted.
   if (natsOpts?.enabled) {
     log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured (restart)`)
-    autoAcceptDevChannelWarning(tmuxName).catch(() => {
-      // Session may have been killed or prompt not shown, ignore
+    autoAcceptDevChannelWarning(tmuxName).catch((err) => {
+      log.debug('tmux', `dev-channel auto-accept failed (restart): ${(err as Error).message}`)
     })
   }
 

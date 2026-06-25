@@ -77,7 +77,10 @@ export function createTelemetryRoutes(deps: TelemetryApiDeps) {
           tzOffsetMinutes,
           sessionId,
         }),
-        deps.query.burningSessions({ userEmail: deps.getDefaultUserEmail() }).catch(() => [] as string[]),
+        deps.query.burningSessions({ userEmail: deps.getDefaultUserEmail() }).catch((err) => {
+          log.warn('telemetry', `burningSessions query failed: ${(err as Error).message}`)
+          return [] as string[]
+        }),
       ])
       const burningRunIds = deps.getRunIdsForConversationIds(burningConvIds)
       return { ...hud, burningRunIds }

@@ -45,7 +45,7 @@ export function useImageWatch(sessionId: string, filePath: string): ImageWatchSt
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ absolutePath: absPath, subscriberId }),
-        }).catch(() => {})
+        }).catch((err) => { console.warn('[image-watch] unsubscribe failed:', (err as Error).message) })
       }
     }
   }, [sessionId, filePath])

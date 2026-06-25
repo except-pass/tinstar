@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { TouchedFile, FileKind } from '../../types'
+import { log } from '../logger'
 
 const execFileAsync = promisify(execFile)
 
@@ -28,16 +29,16 @@ export async function getGitDiffFiles(workdir: string): Promise<TouchedFile[]> {
   // Get unstaged changes
   const [unstaged, staged] = await Promise.all([
     execFileAsync('git', ['diff', '--numstat'], { cwd: workdir, timeout: 5000 })
-      .catch(() => ({ stdout: '' })),
+      .catch((err) => { log.debug('git-diff', `unstaged diff failed: ${(err as Error).message}`); return { stdout: '' } }),
     execFileAsync('git', ['diff', '--cached', '--numstat'], { cwd: workdir, timeout: 5000 })
-      .catch(() => ({ stdout: '' })),
+      .catch((err) => { log.debug('git-diff', `staged diff failed: ${(err as Error).message}`); return { stdout: '' } }),
   ])
 
   // Also get untracked files
   const untracked = await execFileAsync(
     'git', ['ls-files', '--others', '--exclude-standard'],
     { cwd: workdir, timeout: 5000 },
-  ).catch(() => ({ stdout: '' }))
+  ).catch((err) => { log.debug('git-diff', `ls-files failed: ${(err as Error).message}`); return { stdout: '' } })
 
   // Merge staged + unstaged numstat lines (file may appear in both)
   const fileMap = new Map<string, { additions: number; deletions: number }>()
@@ -67,7 +68,7 @@ export async function getGitDiffFiles(workdir: string): Promise<TouchedFile[]> {
     const wc = await execFileAsync(
       'xargs', ['wc', '-l'],
       { cwd: workdir, timeout: 5000, input: untrackedPaths.join('\n') } as Parameters<typeof execFileAsync>[2],
-    ).catch(() => ({ stdout: '' }))
+    ).catch((err) => { log.debug('git-diff', `wc -l failed: ${(err as Error).message}`); return { stdout: '' } })
     const lineCounts = new Map<string, number>()
     for (const wcLine of (wc.stdout as string).trim().split('\n')) {
       const match = wcLine.trim().match(/^(\d+)\s+(.+)$/)

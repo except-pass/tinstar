@@ -182,7 +182,7 @@ export class NatsTrafficBridge {
       }
     } catch (err) {
       // Subscription ended (possibly due to unsubscribe or disconnect)
-      log.info('nats-traffic', `subscription ${subject} ended`)
+      log.info('nats-traffic', `subscription ${subject} ended: ${(err as Error).message}`)
     }
   }
 

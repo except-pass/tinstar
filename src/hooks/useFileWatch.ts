@@ -50,7 +50,7 @@ export function useFileWatch(sessionId: string, filePath: string): FileWatchStat
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ absolutePath: absPath, subscriberId }),
-        }).catch(() => {})
+        }).catch((err) => { console.warn('[file-watch] unsubscribe failed:', (err as Error).message) })
       }
     }
   }, [sessionId, filePath])
