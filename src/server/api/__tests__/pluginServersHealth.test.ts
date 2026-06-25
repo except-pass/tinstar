@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Mock child_process.exec: the 3rd arg is the callback (err) => void.
-const execMock = vi.fn()
+// Mock child_process.execFile: signature is (file, args, opts, cb).
+const execFileMock = vi.fn()
 vi.mock('node:child_process', () => ({
-  exec: (cmd: string, opts: unknown, cb: (err: Error | null) => void) => execMock(cmd, opts, cb),
+  execFile: (file: string, args: string[], opts: unknown, cb: (err: Error | null) => void) => execFileMock(file, args, opts, cb),
   spawn: vi.fn(),
 }))
 // Mock the config reader so getStatuses resolves a known entry set.
@@ -20,33 +20,33 @@ vi.mock('node:fs', async (orig) => ({
 
 import { getStatuses, __resetStatusCacheForTests } from '../pluginServers'
 
-beforeEach(() => { execMock.mockReset(); __resetStatusCacheForTests() })
+beforeEach(() => { execFileMock.mockReset(); __resetStatusCacheForTests() })
 
 describe('getStatuses', () => {
   it('reports up when the health command exits 0', async () => {
-    execMock.mockImplementation((_c, _o, cb) => cb(null))
+    execFileMock.mockImplementation((_f, _a, _o, cb) => cb(null))
     const s = await getStatuses('/cfg', 1000)
     expect(s['who']!).toEqual({ status: 'up', startable: true, checkedAt: 1000 })
-    expect(execMock).toHaveBeenCalledTimes(1)
+    expect(execFileMock).toHaveBeenCalledTimes(1)
   })
 
   it('reports down when the health command errors (non-zero or timeout)', async () => {
-    execMock.mockImplementation((_c, _o, cb) => cb(new Error('exit 1')))
+    execFileMock.mockImplementation((_f, _a, _o, cb) => cb(new Error('exit 1')))
     const s = await getStatuses('/cfg', 1000)
     expect(s['who']!.status).toBe('down')
   })
 
   it('serves cached status within the TTL without re-running the command', async () => {
-    execMock.mockImplementation((_c, _o, cb) => cb(null))
+    execFileMock.mockImplementation((_f, _a, _o, cb) => cb(null))
     await getStatuses('/cfg', 1000)
     await getStatuses('/cfg', 1500) // 500ms later, < 4000ms TTL
-    expect(execMock).toHaveBeenCalledTimes(1)
+    expect(execFileMock).toHaveBeenCalledTimes(1)
   })
 
   it('re-checks after the TTL expires', async () => {
-    execMock.mockImplementation((_c, _o, cb) => cb(null))
+    execFileMock.mockImplementation((_f, _a, _o, cb) => cb(null))
     await getStatuses('/cfg', 1000)
     await getStatuses('/cfg', 6000) // > TTL
-    expect(execMock).toHaveBeenCalledTimes(2)
+    expect(execFileMock).toHaveBeenCalledTimes(2)
   })
 })
