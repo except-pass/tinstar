@@ -2,23 +2,26 @@
   <img src="logo.png" alt="Tinstar" width="400" />
 </p>
 
-<h3 align="center">The IDE for human/AI collaboration</h3>
+<h3 align="center">Text is for robots. Pictures are for humans.</h3>
 
 <p align="center">
-  You and your agents share one spatial workspace — an infinite canvas of live sessions, editors, browsers, and tools.
+  Tinstar turns a fleet of AI coding agents — and the endless text they spew — into a canvas you can read at a glance.
 </p>
 
 ---
 
-IDEs were built for one human typing into one file. But the work has changed: now it's you *plus* a fleet of agents, each on a different task, in a different codebase, at a different stage. The bottleneck is no longer compute — it's **you**. Your attention. The finite amount of state you can hold about what every agent is doing, what needs a nudge, what's done and waiting, what quietly died an hour ago.
+IDEs were built for one human typing into one file. But the work has changed: you're not writing code so much as steering a fleet of agents that are — each on a different task, in a different codebase, at a different stage. The bottleneck is no longer compute. It's **you**. Your attention. The finite amount of state you can hold about what every agent is doing, what needs a nudge, what's done and waiting, what quietly died an hour ago.
 
-Tinstar is an IDE built for that reality. Every session and artifact gets a place, a face, and a status on one canvas — a live memory palace where you can see what's running, what's idle, what needs your eyes. Arrangement is meaningful: cluster sessions by project, by urgency, by phase. The canvas remembers so you don't have to.
+Tinstar is built for that reality. Everything in it follows from two convictions:
 
-**Out of your brain and onto the pane (of glass).**
+- **Text is for robots, pictures are for humans.** An agent reads and writes text natively — that's its whole world. A human does not; a human reconstructs meaning from a wall of scrollback, line by line, every time. So Tinstar lets the agent keep operating in text and translates that text into structured visual surfaces for you. Same underlying state, two audiences, two representations: the agent gets its stream, you get a status light, a diff, a meter, a badge.
+- **Get it out of your brain and onto the pane (of glass).** When you run a fleet, every fact you have to keep in your head is a tax you pay on every glance. So the rule is relentless: anything you'd otherwise have to remember should be visible on screen instead.
 
-![Tinstar screenshot](screenshot.png)
+![Tinstar screenshot](docs/essays/images/fullcanvas.png)
 
 The goal is **doneness at a glance** — look at the canvas and immediately know the shape of the work: what's burning, what's waiting, what's done. No context-switching tax. No mental inventory. Just the work, laid out in space.
+
+> For the long-form flyover of the ideas and features below, read the essay: [*Out of Your Brain, Onto the Pane*](docs/essays/out-of-your-brain-onto-the-pane.md).
 
 ## Quick Start
 
@@ -45,20 +48,19 @@ Everything in Tinstar lives in space. The canvas is an infinite, Figma-style sur
 - **Spaces** — isolate work into separate canvases, each with its own terminology and layout.
 - **It remembers.** Your arrangement persists, so the canvas is a stable map you build intuition around.
 
-## Run Sessions
+## The run workspace
 
-Sessions are real AI agents running as live, interactive widgets — not headless terminals hidden behind tabs.
+A *run* — one agent doing one task — gets a single card on the canvas, carrying its identity color and a status light you can read from across the room, so a blocked agent and a busy one no longer look identical. Inside, a three-panel workspace:
 
-- **Live embedded terminals** — every session is a real Claude Code (or Codex) terminal on the canvas, with real-time status and crisp sub-pixel rendering.
-- **Multi-agent** — run Claude Code and Codex side-by-side. Define reusable launch configs for any agent CLI with **CLI Templates**, all surfaced through a unified agent dropdown.
-- **Real-time state** — SSE-powered status (`running`, `idle`, `needs_attention`) tells you at a glance which agents need you.
-- **Full lifecycle** — create, stop, resume, and delete tmux-backed sessions. Configurable per-agent icons in the sidebar. `tinstar doctor` validates dependencies and reports actionable errors.
+- **Changed files** — a live diff panel with +/- counters and a file tree: the work the agent is doing, as it does it. Hide viewed-only files to cut clutter.
+- **Terminal / recap** — the center toggles between a distilled recap and the raw ttyd scrollback (honesty preserved, not hidden — one click away). Every session is a real Claude Code or Codex terminal on the canvas, with crisp sub-pixel rendering, not a headless process behind a tab.
+- **Telemetry** — cost, tokens, and cache-hit sparklines, plus a **context-fullness meter**: a treemap of how the agent's context window is allocated (messages, system prompt, tools, memory, skills) that goes amber at 75% and red at 85%. "How close is this agent to running out of room to think?" used to live in your head, or nowhere until it bit you. Now it's a colored bar.
 
-Fire off a prompt, see the state change, move on. Switching between ten sessions costs you no context, because the context is on the screen.
+Run Claude Code and Codex side by side; define reusable launch configs for any agent CLI with **CLI Templates**, surfaced through a unified agent dropdown. Real-time SSE status (`running`, `idle`, `needs_attention`) tells you which agents need you. Full lifecycle — create, stop, resume, delete tmux-backed sessions; `tinstar doctor` validates dependencies. Fire off a prompt, see the state change, move on — switching between ten sessions costs no context, because the context is on the screen.
 
 ## Organize Your Work
 
-By default, work nests as **Initiative → Epic → Task → Session**. This is flexible — rename the three tiers per space (e.g. Project / Feature / Story) in the **Entity Labels** tab of Space Settings.
+By default, work nests as **Initiative → Epic → Task → Run**. The left sidebar shows that nesting as a live tree, always in sync with the canvas — click a card and its ancestors expand and highlight; double-click and the canvas flies to it. This is flexible — rename the three upper tiers per space (e.g. Project / Feature / Story) in the **Entity Labels** tab of Space Settings.
 
 The hierarchy isn't bureaucracy — it's the backbone that keeps a growing fleet legible:
 
@@ -68,6 +70,16 @@ The hierarchy isn't bureaucracy — it's the backbone that keeps a growing fleet
 
 Beyond the default tiers: nest sessions into recursive **group** containers, attach an **external URL** to any entity, and use **Quick Draw** hotgroups (assign with Ctrl+1–9, jump with 1–9) to bounce around the canvas at speed. Toggle empty containers off with `H` to cut clutter.
 
+## The inbox
+
+The same sidebar flips from the hierarchy tree to an **inbox**: a flat, triaged list of every session in the space, sorted so the ones needing you float to the top. Each row is an avatar, a name, a breadcrumb back up the hierarchy, a color-coded status dot, and how long ago it last moved. Filter by urgency, hide what you've read, click a row to fly the canvas to it. Instead of scanning four walls of output to reconstruct *where was I*, you read a list that already did the reconstruction for you.
+
+## The saloon
+
+Agents talk to each other over NATS pub/sub, and the **Saloon** widget puts that conversation on screen. Snap it to a session to watch that session's subscribed subjects and live inbound/outbound traffic; leave it floating for the whole `tinstar.>` firehose. Each row is a timestamped from/subject/payload you can click open.
+
+This is where orchestration stops being a black box. When a coordinator fans work out to a team of agents and they report back, that chatter is normally invisible — you infer it from results. The Saloon makes the message-passing *legible*: you watch which agent pinged which, and catch a stalled handoff in the traffic instead of in the silence afterward.
+
 ## Everything Is a Plugin
 
 The widgets that make Tinstar an IDE — the browser, the editor, the image viewer, the file tree — are **plugins**. The same public API that ships the built-ins is the API third parties build against. You can disable any built-in from **Settings → Plugins**.
@@ -76,8 +88,10 @@ What the plugin system already gives you out of the box:
 
 - **Browser widget** — embed live browser views on the canvas, with a header-injection proxy (inject auth headers, cookies, or custom headers — no extension needed) and a built-in dev console that captures logs without opening DevTools.
 - **File editor widget** — drag files onto the canvas to view and edit; double-click to zoom full-screen; `E`/`W` hotkeys.
-- **Image viewer widget** — live-updating image display that watches files via SSE and refreshes automatically.
+- **Image viewer widget** — live-updating image display that watches files on disk via SSE and refreshes the instant the agent regenerates them.
 - **File tree explorer** — track touched files with live git-diff; hide viewed-only files.
+
+Because the API has no second-class tier, *any* domain can become a native, snappable surface on the canvas. Two sibling-project plugins show the range: **Stretchplan**, a Gantt-style roadmap you drag task bars across — dock a run beside it, point at a task, and tell the agent to start working on it, turning the plan into a control surface; and **Whoachart**, a declarative flow-chart engine for loop engineering, where concurrent units of work flow as "marbles" through a graph of states, sessions linked to the nodes they're working.
 
 ### Build your own
 
@@ -88,6 +102,12 @@ Plugins live in your own repo and build against [`@tinstar/plugin-api`](https://
 - Full reference and author guides live in [`docs/plugins/`](docs/plugins/).
 
 Any plugin that fails to load surfaces as a top-right banner with the error — so you always know what broke without digging through DevTools.
+
+## Constellations
+
+Snap 2–9 widgets together and they move as one, sharing a numbered slot you jump to with a digit key. Drag a file viewer near a session, a snap-halo appears; drop it and they're bound, with a slot badge to prove it. Alt-drag pops one back out.
+
+Snapping is more than tidy arrangement — it's a **capability bus**. Constellated widgets discover and invoke each other's capabilities without knowing about each other: a task-picker publishes a selection, a detail pane consumes it, all because they're in the same slot. And the gesture language isn't only for you — an agent can spawn a widget and ask for it snapped beside the session that created it. The spatial layout becomes a shared coordinate system for human and agent alike.
 
 ## Telemetry & Cost HUD
 

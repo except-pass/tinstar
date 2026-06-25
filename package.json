@@ -4,7 +4,7 @@
   "workspaces": [
     "packages/*"
   ],
-  "description": "Agent orchestrator — manage multiple Claude Code sessions from a visual canvas",
+  "description": "Tinstar turns a fleet of AI coding agents — and the endless text they spew — into a canvas you can read at a glance.",
   "type": "module",
   "bin": {
     "tinstar": "bin/tinstar.js"
