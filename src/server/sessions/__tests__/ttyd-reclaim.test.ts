@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ttydPidsToReclaim, ttydPidsForSession, tmuxTargetFromArgs } from '../backends/tmux'
+import { ttydPidsToReclaim, ttydPidsForSession, tmuxTargetFromArgs, orphanTtydPidsToReap } from '../backends/tmux'
 
 describe('tmuxTargetFromArgs — which tmux session a ttyd attaches', () => {
   it('parses the exact form startTtyd spawns', () => {
@@ -94,5 +94,84 @@ describe('ttydPidsForSession — cross-port reaping of stale ttyds for one sessi
       'tinstar-foo',
     )
     expect(pids).toEqual([])
+  })
+})
+
+describe('orphanTtydPidsToReap — global GC sweep of port-squatting ttyds', () => {
+  it('reaps a tinstar ttyd whose tmux session is dead (the squatter)', () => {
+    // The whole leak: tmux is gone but ttyd still holds the port.
+    const pids = orphanTtydPidsToReap(
+      [{ pid: 100, tmuxTarget: 'tinstar-dead' }],
+      new Set<string>(), // no live tmux sessions
+      'tinstar-',
+    )
+    expect(pids).toEqual([100])
+  })
+
+  it('never reaps a ttyd whose tmux session is alive', () => {
+    // Live tmux = in use, no matter who spawned it. This is the load-bearing
+    // invariant that avoids the cross-backend kill-war.
+    const pids = orphanTtydPidsToReap(
+      [{ pid: 100, tmuxTarget: 'tinstar-alive' }],
+      new Set(['tinstar-alive']),
+      'tinstar-',
+    )
+    expect(pids).toEqual([])
+  })
+
+  it('leaves a foreign live session belonging to another backend untouched', () => {
+    // A second backend (different TINSTAR_CONFIG_HOME) serves a live tmux this
+    // backend never tracked. We must not kill it — predicate keys off liveness,
+    // not "is it in my tracked set".
+    const pids = orphanTtydPidsToReap(
+      [{ pid: 200, tmuxTarget: 'tinstar-otherbackend' }],
+      new Set(['tinstar-otherbackend']),
+      'tinstar-',
+    )
+    expect(pids).toEqual([])
+  })
+
+  it('does not touch non-tinstar ttyds even when their target is dead', () => {
+    // The user's own `ttyd -p X bash -c "tmux attach -t my-notes"` must survive.
+    const pids = orphanTtydPidsToReap(
+      [{ pid: 300, tmuxTarget: 'my-notes' }],
+      new Set<string>(),
+      'tinstar-',
+    )
+    expect(pids).toEqual([])
+  })
+
+  it('ignores ttyds with no tmux target (e.g. `ttyd htop`)', () => {
+    const pids = orphanTtydPidsToReap(
+      [{ pid: 400, tmuxTarget: null }],
+      new Set<string>(),
+      'tinstar-',
+    )
+    expect(pids).toEqual([])
+  })
+
+  it('reaps orphaned hand sessions too (they carry the prefix)', () => {
+    // A dead child-hand session is just as much a squatter as a top-level one.
+    const pids = orphanTtydPidsToReap(
+      [{ pid: 500, tmuxTarget: 'tinstar-foo-reviewer-ab12' }],
+      new Set(['tinstar-foo']), // parent alive, hand dead
+      'tinstar-',
+    )
+    expect(pids).toEqual([500])
+  })
+
+  it('partitions a realistic mixed fleet', () => {
+    const pids = orphanTtydPidsToReap(
+      [
+        { pid: 1, tmuxTarget: 'tinstar-live' },     // alive   → keep
+        { pid: 2, tmuxTarget: 'tinstar-ghost' },    // dead    → reap
+        { pid: 3, tmuxTarget: 'tinstar-ghost2' },   // dead    → reap
+        { pid: 4, tmuxTarget: 'someones-tmux' },    // foreign → keep
+        { pid: 5, tmuxTarget: null },               // unknown → keep
+      ],
+      new Set(['tinstar-live']),
+      'tinstar-',
+    )
+    expect(pids.sort((a, b) => a - b)).toEqual([2, 3])
   })
 })

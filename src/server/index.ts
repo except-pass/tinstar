@@ -386,6 +386,13 @@ export function initBackend(): RouteContext {
           }
         }
 
+        // GC ttyds left squatting ports by prior backend lifecycles (their tmux
+        // session is gone but ttyd survived the restart). Runs after reattach so
+        // a session we just adopted is never mistaken for an orphan.
+        tmuxBackend.reapOrphanTtyds(cfg.sessions.prefix)
+          .then(n => { if (n > 0) log.info('reconcile', `startup orphan sweep reaped ${n} ttyd(s)`) })
+          .catch(err => log.warn('reconcile', `startup orphan sweep failed: ${(err as Error).message}`))
+
         // Seed the ready queue from all current session states so '[' works immediately after restart
         for (const session of sessions) {
           readyQueue.onStatusChange(session.name, session.state)
@@ -423,6 +430,10 @@ export function initBackend(): RouteContext {
             log.info('reconcile', `${name}: state corrected to ${state}`)
           },
         }).catch(err => console.error('[reconcile] error:', (err as Error).message))
+        // Drain any ttyds whose tmux session has since died, so the port pool
+        // can't slowly fill with squatters between restarts.
+        tmuxBackend.reapOrphanTtyds(cfg.sessions.prefix)
+          .catch(err => console.error('[orphan-sweep] error:', (err as Error).message))
       }, 30_000)
 
       // Periodic git diff reconciliation (10s — balances freshness vs git load when many runs are active)
