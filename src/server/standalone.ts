@@ -300,9 +300,9 @@ export function startServer(opts: ServerOptions) {
     log.info('server', `Tinstar running at ${url}${bindNote}`)
     console.log(`\n  Tinstar running at ${url}${bindNote}\n`)
     if (opts.open) {
-      import('node:child_process').then(({ exec }) => {
+      import('node:child_process').then(({ execFile }) => {
         const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
-        exec(`${cmd} ${url}`)
+        execFile(cmd, [url])
       })
     }
   }

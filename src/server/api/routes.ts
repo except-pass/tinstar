@@ -3417,9 +3417,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (typeof raw.editor === 'string') editorCmd = raw.editor
         } catch { /* use default */ }
 
-        const cmd = editorCmd.replace(/\{\{path\}\}/g, resolvedPath)
-        const parts = cmd.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [cmd]
-        const [bin, ...args] = parts.map(p => p.replace(/^["']|["']$/g, ''))
+        // Tokenize the template BEFORE substitution so {{path}} stays as one
+        // argument even when the resolved path contains spaces or quotes.
+        const templateParts = editorCmd.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [editorCmd]
+        const expanded = templateParts.map(p => {
+          const stripped = p.replace(/^["']|["']$/g, '')
+          return stripped.replace(/\{\{path\}\}/g, resolvedPath)
+        })
+        const [bin, ...args] = expanded
 
         log.info('editor', `opening: ${bin} ${args.join(' ')}`)
 
