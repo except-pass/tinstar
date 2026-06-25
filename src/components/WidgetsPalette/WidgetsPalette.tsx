@@ -1,13 +1,20 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { usePluginWidgetRegistry, type PaletteWidgetEntry } from '../../hooks/usePluginWidgetRegistry'
 import { isIconUrl } from '../agentIcon'
 import { usePluginServerStatus } from '../../hooks/usePluginServerStatus'
 import { useNatsBrokerStatus } from '../../hooks/useNatsBrokerStatus'
+import { getPref, setPref } from '../../lib/uiPrefs'
 import { ServerStatusDot } from './ServerStatusDot'
 
 // The Saloon (plugin id 'nats-traffic') shows host NATS broker health rather than
 // a server-block status; it's merged into the same per-tile status map by id.
 const NATS_PLUGIN_ID = 'nats-traffic'
+
+// The widgets palette content area is user-resizable (drag the top edge). The
+// palette itself is flex-shrink-0, so growing it shrinks the hierarchy region above.
+const DEFAULT_WIDGETS_HEIGHT = 240
+const MIN_WIDGETS_HEIGHT = 80
+const MAX_WIDGETS_HEIGHT = 640
 
 export function WidgetsPalette() {
   const { entries, error } = usePluginWidgetRegistry()
@@ -21,8 +28,47 @@ export function WidgetsPalette() {
 
   const total = entries?.length ?? 0
 
+  const [height, setHeight] = useState(() => {
+    const saved = getPref('widgetsPaletteHeight')
+    return saved !== undefined
+      ? Math.max(MIN_WIDGETS_HEIGHT, Math.min(MAX_WIDGETS_HEIGHT, saved))
+      : DEFAULT_WIDGETS_HEIGHT
+  })
+  const heightRef = useRef(height)
+  heightRef.current = height
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
+
+  const onResizePointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    dragRef.current = { startY: e.clientY, startH: heightRef.current }
+  }, [])
+
+  const onResizePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return
+    // Drag up (clientY decreases) grows the palette.
+    const delta = dragRef.current.startY - e.clientY
+    const next = Math.max(MIN_WIDGETS_HEIGHT, Math.min(MAX_WIDGETS_HEIGHT, dragRef.current.startH + delta))
+    setHeight(next)
+    setPref('widgetsPaletteHeight', next)
+  }, [])
+
+  const onResizePointerUp = useCallback(() => {
+    dragRef.current = null
+  }, [])
+
   return (
     <div className="border-t border-white/5 pt-2 pb-2 flex-shrink-0 flex flex-col min-h-0" data-testid="widgets-palette">
+      {expanded && (
+        <div
+          className="h-1 -mt-2 mb-1 flex-shrink-0 cursor-row-resize hover:bg-primary/20 active:bg-primary/40 transition-colors"
+          onPointerDown={onResizePointerDown}
+          onPointerMove={onResizePointerMove}
+          onPointerUp={onResizePointerUp}
+          data-testid="widgets-palette-resize-handle"
+          title="Drag to resize widgets"
+        />
+      )}
       <button
         className="group w-full flex items-center gap-1.5 px-3 py-1 text-2xs font-mono uppercase tracking-wider text-slate-500 hover:text-primary flex-shrink-0 transition-colors"
         onClick={() => setExpanded(v => !v)}
@@ -37,9 +83,10 @@ export function WidgetsPalette() {
         )}
       </button>
 
-      {/* Bounded so a long widget list scrolls within the palette instead of pushing it off-screen. */}
+      {/* Bounded so a long widget list scrolls within the palette instead of pushing it off-screen.
+          Height is user-resizable via the top-edge handle and persisted in uiPrefs. */}
       {expanded && (
-        <div className="overflow-y-auto scrollbar-thin min-h-0 px-2 pt-1.5" style={{ maxHeight: '40vh' }}>
+        <div className="overflow-y-auto scrollbar-thin min-h-0 px-2 pt-1.5" style={{ height }}>
           {error && (
             <div className="px-1 py-2 text-xs text-red-300" data-testid="widgets-palette-error">
               Failed to load widgets: {error}
