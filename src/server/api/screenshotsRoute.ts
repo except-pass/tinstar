@@ -1,9 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { createWriteStream, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import Busboy from 'busboy'
-import { ok, fail } from './envelope'
+import { fail } from './envelope'
+import { createUploadResponder } from './uploadHelpers'
 
 interface Ctx { configRoot: string }
 
@@ -58,27 +59,10 @@ export async function handleScreenshotUpload(
 
     let tempPath: string | null = null
     let finalPath: string | null = null
-    let responded = false
     let receivedFile = false
     let aborted = false
-
-    function sendOk(data: unknown) {
-      if (responded) return
-      responded = true
-      ok(res, data)
-      resolve(true)
-    }
-    function sendFail(code: Parameters<typeof fail>[1], message: string, opts: Parameters<typeof fail>[3] = {}) {
-      if (responded) return
-      responded = true
-      fail(res, code, message, opts)
-      resolve(true)
-    }
-    function cleanup() {
-      if (tempPath && existsSync(tempPath)) {
-        try { unlinkSync(tempPath) } catch { /* ignore */ }
-      }
-    }
+    const responder = createUploadResponder(res, resolve, () => tempPath)
+    const { sendOk, sendFail, cleanup } = responder
 
     bb.on('file', (_name, fileStream, info) => {
       receivedFile = true
@@ -104,7 +88,7 @@ export async function handleScreenshotUpload(
         sendFail('INTERNAL', `Write failed: ${err.message}`)
       })
       ws.on('close', () => {
-        if (responded) return
+        if (responder.responded) return
         if (aborted) {
           cleanup()
           return

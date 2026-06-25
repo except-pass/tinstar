@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef } from 'react'
-import { apiFetch } from '../apiClient'
+import { useState, useCallback } from 'react'
 import { useWindowEvent } from '../lib/windowEvents'
+import { useResourceWatch } from './useResourceWatch'
 
 interface FileWatchState {
   content: string | null
@@ -8,52 +8,25 @@ interface FileWatchState {
   lastUpdatedAt: Date | null
 }
 
-let nextId = 0
-
 export function useFileWatch(sessionId: string, filePath: string): FileWatchState {
   const [content, setContent] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null)
-  const absolutePathRef = useRef<string | null>(null)
-  const subscriberIdRef = useRef(`file-watch-${nextId++}`)
 
-  useEffect(() => {
-    const subscriberId = subscriberIdRef.current
-    let cancelled = false
-
-    apiFetch('/api/file-watch/subscribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, filePath, subscriberId, mode: 'content' }),
-    })
-      .then(r => r.json())
-      .then((body: { ok?: boolean; data?: { absolutePath?: string; content?: string } }) => {
-        if (cancelled) return
-        if (body.ok && body.data?.absolutePath) {
-          absolutePathRef.current = body.data.absolutePath
-          setConnected(true)
-          if (body.data.content !== undefined) {
-            setContent(body.data.content)
-            setLastUpdatedAt(new Date())
-          }
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setConnected(false)
-      })
-
-    return () => {
-      cancelled = true
-      const absPath = absolutePathRef.current
-      if (absPath) {
-        apiFetch('/api/file-watch/unsubscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ absolutePath: absPath, subscriberId }),
-        }).catch((err) => { console.warn('[file-watch] unsubscribe failed:', (err as Error).message) })
-      }
+  const onSubscribed = useCallback((_absPath: string, data: Record<string, unknown>) => {
+    setConnected(true)
+    if (data.content !== undefined) {
+      setContent(data.content as string)
+      setLastUpdatedAt(new Date())
     }
-  }, [sessionId, filePath])
+  }, [])
+
+  const onSubscribeFailed = useCallback(() => { setConnected(false) }, [])
+
+  const { absolutePathRef } = useResourceWatch(sessionId, filePath, 'content', 'file-watch', {
+    onSubscribed,
+    onSubscribeFailed,
+  })
 
   useWindowEvent('tinstar:file_watch', (detail) => {
     const d = detail as { path: string; type: string; data?: string } | undefined

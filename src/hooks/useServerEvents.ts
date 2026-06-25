@@ -9,6 +9,13 @@ import { isSystemSession, extractMarshal } from '../domain/system-sessions'
 import { apiUrl } from '../apiClient'
 import { dispatchWindowEvent } from '../lib/windowEvents'
 
+/** Upsert-or-remove an item in an array by a key field. */
+function upsertById<T>(arr: T[], item: T | null, id: string, key: keyof T & string): T[] {
+  if (item === null) return arr.filter(x => x[key] !== id)
+  const idx = arr.findIndex(x => x[key] === (item as T)[key])
+  return idx >= 0 ? arr.map((x, i) => (i === idx ? item : x)) : [...arr, item]
+}
+
 interface ServerState {
   activeSpaceId: string
   spaces: Space[]
@@ -228,25 +235,12 @@ function startSSE() {
     pushState()
   })
 
-  es.addEventListener('file_watch', (e: MessageEvent) => {
-    try { dispatchWindowEvent('tinstar:file_watch', JSON.parse(e.data)) } catch (err) { console.warn('[sse] malformed file_watch event:', (err as Error).message) }
-  })
-
-  es.addEventListener('nats_traffic', (e: MessageEvent) => {
-    try { dispatchWindowEvent('tinstar:nats_traffic', JSON.parse(e.data)) } catch (err) { console.warn('[sse] malformed nats_traffic event:', (err as Error).message) }
-  })
-
-  es.addEventListener('telemetry:hud', (e: MessageEvent) => {
-    try { dispatchWindowEvent('tinstar:telemetry:hud', JSON.parse(e.data)) } catch (err) { console.warn('[sse] malformed telemetry:hud event:', (err as Error).message) }
-  })
-
-  es.addEventListener('canvas:viewport', (e: MessageEvent) => {
-    try { dispatchWindowEvent('tinstar:canvas:viewport', JSON.parse(e.data)) } catch (err) { console.warn('[sse] malformed canvas:viewport event:', (err as Error).message) }
-  })
-
-  es.addEventListener('projects_changed', (e: MessageEvent) => {
-    try { dispatchWindowEvent('tinstar:projects_changed', JSON.parse(e.data)) } catch (err) { console.warn('[sse] malformed projects_changed event:', (err as Error).message) }
-  })
+  const forwardedEvents = ['file_watch', 'nats_traffic', 'telemetry:hud', 'canvas:viewport', 'projects_changed'] as const
+  for (const evt of forwardedEvents) {
+    es.addEventListener(evt, (e: MessageEvent) => {
+      try { dispatchWindowEvent(`tinstar:${evt}`, JSON.parse(e.data)) } catch (err) { console.warn(`[sse] malformed ${evt} event:`, (err as Error).message) }
+    })
+  }
 
   es.addEventListener('heartbeat', () => {
     // Keep-alive, no action needed
@@ -281,38 +275,23 @@ export function applyDelta(prev: ServerState, delta: { entity: string; id: strin
   }
 
   if (delta.entity === 'space') {
-    if (delta.data === null) return { ...prev, spaces: prev.spaces.filter(s => s.id !== delta.id) }
-    const space = delta.data as Space
-    const exists = prev.spaces.some(s => s.id === space.id)
-    return { ...prev, spaces: exists ? prev.spaces.map(s => s.id === space.id ? space : s) : [...prev.spaces, space] }
+    return { ...prev, spaces: upsertById(prev.spaces, delta.data as Space | null, delta.id, 'id') }
   }
 
   if (delta.entity === 'initiative') {
-    if (delta.data === null) return { ...prev, initiatives: prev.initiatives.filter(i => i.id !== delta.id) }
-    const init = delta.data as Initiative
-    const exists = prev.initiatives.some(i => i.id === init.id)
-    return { ...prev, initiatives: exists ? prev.initiatives.map(i => i.id === init.id ? init : i) : [...prev.initiatives, init] }
+    return { ...prev, initiatives: upsertById(prev.initiatives, delta.data as Initiative | null, delta.id, 'id') }
   }
 
   if (delta.entity === 'epic') {
-    if (delta.data === null) return { ...prev, epics: prev.epics.filter(e => e.id !== delta.id) }
-    const epic = delta.data as Epic
-    const exists = prev.epics.some(e => e.id === epic.id)
-    return { ...prev, epics: exists ? prev.epics.map(e => e.id === epic.id ? epic : e) : [...prev.epics, epic] }
+    return { ...prev, epics: upsertById(prev.epics, delta.data as Epic | null, delta.id, 'id') }
   }
 
   if (delta.entity === 'task') {
-    if (delta.data === null) return { ...prev, tasks: prev.tasks.filter(t => t.id !== delta.id) }
-    const task = delta.data as Task
-    const exists = prev.tasks.some(t => t.id === task.id)
-    return { ...prev, tasks: exists ? prev.tasks.map(t => t.id === task.id ? task : t) : [...prev.tasks, task] }
+    return { ...prev, tasks: upsertById(prev.tasks, delta.data as Task | null, delta.id, 'id') }
   }
 
   if (delta.entity === 'worktree') {
-    if (delta.data === null) return { ...prev, worktrees: prev.worktrees.filter(w => w.id !== delta.id) }
-    const wt = delta.data as Worktree
-    const exists = prev.worktrees.some(w => w.id === wt.id)
-    return { ...prev, worktrees: exists ? prev.worktrees.map(w => w.id === wt.id ? wt : w) : [...prev.worktrees, wt] }
+    return { ...prev, worktrees: upsertById(prev.worktrees, delta.data as Worktree | null, delta.id, 'id') }
   }
 
   if (delta.entity === 'run') {
@@ -343,61 +322,31 @@ export function applyDelta(prev: ServerState, delta: { entity: string; id: strin
   }
 
   if (delta.entity === 'editorWidget') {
-    const ews = prev.editorWidgets
-    if (delta.data === null) return { ...prev, editorWidgets: ews.filter(w => w.id !== delta.id) }
-    const w = delta.data as EditorWidget
-    const idx = ews.findIndex(x => x.id === w.id)
-    return { ...prev, editorWidgets: idx >= 0 ? ews.map((x, i) => (i === idx ? w : x)) : [...ews, w] }
+    return { ...prev, editorWidgets: upsertById(prev.editorWidgets, delta.data as EditorWidget | null, delta.id, 'id') }
   }
 
   if (delta.entity === 'browserWidget') {
-    const bws = prev.browserWidgets
-    if (delta.data === null) return { ...prev, browserWidgets: bws.filter(w => w.id !== delta.id) }
-    const w = delta.data as BrowserWidget
-    const idx = bws.findIndex(x => x.id === w.id)
-    return { ...prev, browserWidgets: idx >= 0 ? bws.map((x, i) => (i === idx ? w : x)) : [...bws, w] }
+    return { ...prev, browserWidgets: upsertById(prev.browserWidgets, delta.data as BrowserWidget | null, delta.id, 'id') }
   }
 
   if (delta.entity === 'imageWidget') {
-    const iws = prev.imageWidgets
-    if (delta.data === null) return { ...prev, imageWidgets: iws.filter(w => w.id !== delta.id) }
-    const w = delta.data as ImageWidget
-    const idx = iws.findIndex(x => x.id === w.id)
-    return { ...prev, imageWidgets: idx >= 0 ? iws.map((x, i) => (i === idx ? w : x)) : [...iws, w] }
+    return { ...prev, imageWidgets: upsertById(prev.imageWidgets, delta.data as ImageWidget | null, delta.id, 'id') }
   }
 
   if (delta.entity === 'topicMetadata') {
-    const tms = prev.topicMetadata
-    if (delta.data === null) return { ...prev, topicMetadata: tms.filter(m => m.subject !== delta.id) }
-    const m = delta.data as TopicMetadata
-    const idx = tms.findIndex(x => x.subject === m.subject)
-    return { ...prev, topicMetadata: idx >= 0 ? tms.map((x, i) => (i === idx ? m : x)) : [...tms, m] }
+    return { ...prev, topicMetadata: upsertById(prev.topicMetadata, delta.data as TopicMetadata | null, delta.id, 'subject') }
   }
 
   if (delta.entity === 'pluginWidget') {
-    const pws = prev.pluginWidgets
-    if (delta.data === null) return { ...prev, pluginWidgets: pws.filter(w => w.id !== delta.id) }
-    const w = delta.data as PluginWidgetInstance
-    const idx = pws.findIndex(x => x.id === w.id)
-    return { ...prev, pluginWidgets: idx >= 0 ? pws.map((x, i) => (i === idx ? w : x)) : [...pws, w] }
+    return { ...prev, pluginWidgets: upsertById(prev.pluginWidgets, delta.data as PluginWidgetInstance | null, delta.id, 'id') }
   }
 
   if (delta.entity === 'constellationGraph') {
-    const graphs = prev.constellationGraphs
-    const id = delta.id // spaceId
-    if (delta.data === null) return { ...prev, constellationGraphs: graphs.filter(g => g.spaceId !== id) }
-    const g = delta.data as ConstellationGraph
-    const idx = graphs.findIndex(x => x.spaceId === g.spaceId)
-    return { ...prev, constellationGraphs: idx >= 0 ? graphs.map((x, i) => (i === idx ? g : x)) : [...graphs, g] }
+    return { ...prev, constellationGraphs: upsertById(prev.constellationGraphs, delta.data as ConstellationGraph | null, delta.id, 'spaceId') }
   }
 
   if (delta.entity === 'pinSet') {
-    const sets = prev.pinSets
-    const id = delta.id // spaceId
-    if (delta.data === null) return { ...prev, pinSets: sets.filter(s => s.spaceId !== id) }
-    const set = delta.data as PinSet
-    const idx = sets.findIndex(x => x.spaceId === set.spaceId)
-    return { ...prev, pinSets: idx >= 0 ? sets.map((x, i) => (i === idx ? set : x)) : [...sets, set] }
+    return { ...prev, pinSets: upsertById(prev.pinSets, delta.data as PinSet | null, delta.id, 'spaceId') }
   }
 
   if (delta.entity === 'commit') {
@@ -411,41 +360,21 @@ export function applyDelta(prev: ServerState, delta: { entity: string; id: strin
 /** Apply an optimistic update to the shared state */
 export function applyOptimistic(entity: string, data: unknown): void {
   const prev = currentState
-  if (entity === 'initiative') {
-    const init = data as Initiative
-    const exists = prev.initiatives.some(i => i.id === init.id)
-    currentState = { ...prev, initiatives: exists ? prev.initiatives.map(i => i.id === init.id ? init : i) : [...prev.initiatives, init] }
-  } else if (entity === 'epic') {
-    const epic = data as Epic
-    const exists = prev.epics.some(e => e.id === epic.id)
-    currentState = { ...prev, epics: exists ? prev.epics.map(e => e.id === epic.id ? epic : e) : [...prev.epics, epic] }
-  } else if (entity === 'task') {
-    const task = data as Task
-    const exists = prev.tasks.some(t => t.id === task.id)
-    currentState = { ...prev, tasks: exists ? prev.tasks.map(t => t.id === task.id ? task : t) : [...prev.tasks, task] }
-  } else if (entity === 'editorWidget') {
-    const w = data as EditorWidget
-    const exists = prev.editorWidgets.some(x => x.id === w.id)
-    currentState = { ...prev, editorWidgets: exists ? prev.editorWidgets.map(x => x.id === w.id ? w : x) : [...prev.editorWidgets, w] }
-  } else if (entity === 'browserWidget') {
-    const w = data as BrowserWidget
-    const exists = prev.browserWidgets.some(x => x.id === w.id)
-    currentState = { ...prev, browserWidgets: exists ? prev.browserWidgets.map(x => x.id === w.id ? w : x) : [...prev.browserWidgets, w] }
-  } else if (entity === 'imageWidget') {
-    const w = data as ImageWidget
-    const exists = prev.imageWidgets.some(x => x.id === w.id)
-    currentState = { ...prev, imageWidgets: exists ? prev.imageWidgets.map(x => x.id === w.id ? w : x) : [...prev.imageWidgets, w] }
-  } else if (entity === 'pluginWidget') {
-    const w = data as PluginWidgetInstance
-    const exists = prev.pluginWidgets.some(x => x.id === w.id)
-    currentState = { ...prev, pluginWidgets: exists ? prev.pluginWidgets.map(x => x.id === w.id ? w : x) : [...prev.pluginWidgets, w] }
-  } else if (entity === 'run') {
-    const run = data as Run
-    const exists = prev.runs.some(r => r.id === run.id)
-    currentState = { ...prev, runs: exists ? prev.runs.map(r => r.id === run.id ? run : r) : [...prev.runs, run] }
-  } else {
-    return
+  const entityMap: Record<string, { stateKey: keyof ServerState; key: string }> = {
+    initiative: { stateKey: 'initiatives', key: 'id' },
+    epic: { stateKey: 'epics', key: 'id' },
+    task: { stateKey: 'tasks', key: 'id' },
+    editorWidget: { stateKey: 'editorWidgets', key: 'id' },
+    browserWidget: { stateKey: 'browserWidgets', key: 'id' },
+    imageWidget: { stateKey: 'imageWidgets', key: 'id' },
+    pluginWidget: { stateKey: 'pluginWidgets', key: 'id' },
+    run: { stateKey: 'runs', key: 'id' },
   }
+  const mapping = entityMap[entity]
+  if (!mapping) return
+  const arr = prev[mapping.stateKey] as unknown as Array<{ id: string }>
+  const item = data as { id: string }
+  currentState = { ...prev, [mapping.stateKey]: upsertById(arr, item, item[mapping.key as keyof typeof item] as string, mapping.key as keyof typeof item) }
   pushState()
 }
 

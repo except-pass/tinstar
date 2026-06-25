@@ -46,6 +46,7 @@ import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote } from 
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { isPinSet, addReply, mergePreservingReplies } from '../../domain/pinSet'
+import { readBody } from './readBody'
 import { parseAttach, type ParsedAttach } from './anchorAttach'
 import { planAttach } from './attachPlan'
 import { spec as openapiSpec } from './openapi'
@@ -1003,14 +1004,6 @@ function resolveSessionModel(session: Session): string | null {
   if (workdir) return readLatestModel(workdir, convId)
   const found = findTranscriptByConvId(convId)
   return found ? readLatestModelAt(found) : null
-}
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => chunks.push(c))
-    req.on('end', () => resolve(Buffer.concat(chunks).toString()))
-  })
 }
 
 const MARSHAL_NAME = 'marshal'
