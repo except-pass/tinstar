@@ -1,4 +1,4 @@
-import { exec, spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { appendFileSync, closeSync, mkdirSync, openSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PluginServerSpec } from '@tinstar/plugin-api'
@@ -59,10 +59,11 @@ const CACHE_TTL_MS = 4000
 const statusCache = new Map<string, PluginServerStatus>()
 const inFlight = new Map<string, Promise<'up' | 'down'>>()
 
-/** Run the health command once; exit 0 → 'up', any error (non-zero/timeout) → 'down'. */
+/** Run the health command once; exit 0 → 'up', any error (non-zero/timeout) → 'down'.
+ *  Uses execFile to avoid shell meta-character interpretation of the command string. */
 export function checkHealthOnce(entry: PluginServerEntry): Promise<'up' | 'down'> {
   return new Promise((resolve) => {
-    exec(entry.spec.health, {
+    execFile('/bin/sh', ['-c', entry.spec.health], {
       cwd: entry.cwd,
       timeout: entry.spec.healthTimeoutMs ?? 3000,
       windowsHide: true,
