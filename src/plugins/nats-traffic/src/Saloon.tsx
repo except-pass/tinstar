@@ -9,6 +9,7 @@ import { subjectMatchesAny } from './subjectMatches'
 import { resolveBinding } from './resolveBinding'
 import { subscribedLabel } from './subscribedLabel'
 import { reconnectIntent, reconnectTooltip } from './reconnectIntent'
+import { canClear } from './canClear'
 import type { TrafficEvent } from './types'
 
 const MAX_EVENTS = 200
@@ -179,6 +180,17 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
               placeholder="Filter…"
               className="w-32 bg-surface-base text-2xs font-mono px-2 py-0.5 rounded border border-white/10 focus:border-primary/50 focus:outline-none"
             />
+          )}
+          {binding.mode !== 'empty' && (
+            <button
+              onPointerDown={e => e.stopPropagation()}
+              onClick={() => setEvents([])}
+              disabled={!canClear(events)}
+              className="text-slate-500 hover:text-slate-300 disabled:opacity-30 disabled:hover:text-slate-500 flex-shrink-0"
+              title="Clear"
+            >
+              <span className="material-symbols-outlined text-sm">delete_outline</span>
+            </button>
           )}
           {binding.mode !== 'empty' && (
             <button
