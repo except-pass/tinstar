@@ -229,23 +229,23 @@ function startSSE() {
   })
 
   es.addEventListener('file_watch', (e: MessageEvent) => {
-    try { dispatchWindowEvent('tinstar:file_watch', JSON.parse(e.data)) } catch { /* malformed — drop */ }
+    try { dispatchWindowEvent('tinstar:file_watch', JSON.parse(e.data)) } catch (err) { console.warn('[sse] malformed file_watch event:', (err as Error).message) }
   })
 
   es.addEventListener('nats_traffic', (e: MessageEvent) => {
-    try { dispatchWindowEvent('tinstar:nats_traffic', JSON.parse(e.data)) } catch { /* malformed — drop */ }
+    try { dispatchWindowEvent('tinstar:nats_traffic', JSON.parse(e.data)) } catch (err) { console.warn('[sse] malformed nats_traffic event:', (err as Error).message) }
   })
 
   es.addEventListener('telemetry:hud', (e: MessageEvent) => {
-    try { dispatchWindowEvent('tinstar:telemetry:hud', JSON.parse(e.data)) } catch { /* malformed — drop */ }
+    try { dispatchWindowEvent('tinstar:telemetry:hud', JSON.parse(e.data)) } catch (err) { console.warn('[sse] malformed telemetry:hud event:', (err as Error).message) }
   })
 
   es.addEventListener('canvas:viewport', (e: MessageEvent) => {
-    try { dispatchWindowEvent('tinstar:canvas:viewport', JSON.parse(e.data)) } catch { /* malformed — drop */ }
+    try { dispatchWindowEvent('tinstar:canvas:viewport', JSON.parse(e.data)) } catch (err) { console.warn('[sse] malformed canvas:viewport event:', (err as Error).message) }
   })
 
   es.addEventListener('projects_changed', (e: MessageEvent) => {
-    try { dispatchWindowEvent('tinstar:projects_changed', JSON.parse(e.data)) } catch { /* malformed — drop */ }
+    try { dispatchWindowEvent('tinstar:projects_changed', JSON.parse(e.data)) } catch (err) { console.warn('[sse] malformed projects_changed event:', (err as Error).message) }
   })
 
   es.addEventListener('heartbeat', () => {

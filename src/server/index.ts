@@ -112,13 +112,13 @@ export function initBackend(): RouteContext {
   if (!shutdownRegistered) {
     shutdownRegistered = true
     const shutdown = async () => {
-      try { natsHealth?.stop() } catch { /* ignore */ }
-      try { await natsTraffic?.stop() } catch { /* ignore */ }
-      try { await natsManager?.stop() } catch { /* ignore */ }
-      try { await observability.stop() } catch { /* ignore */ }
-      try { telemetryRoutes.stopPolling() } catch { /* ignore */ }
-      try { docStore.flush() } catch { /* ignore */ }
-      try { await slashUsage.flush() } catch { /* ignore */ }
+      try { natsHealth?.stop() } catch (e) { log.debug('shutdown', `natsHealth: ${(e as Error).message}`) }
+      try { await natsTraffic?.stop() } catch (e) { log.debug('shutdown', `natsTraffic: ${(e as Error).message}`) }
+      try { await natsManager?.stop() } catch (e) { log.debug('shutdown', `natsManager: ${(e as Error).message}`) }
+      try { await observability.stop() } catch (e) { log.debug('shutdown', `observability: ${(e as Error).message}`) }
+      try { telemetryRoutes.stopPolling() } catch (e) { log.debug('shutdown', `telemetry: ${(e as Error).message}`) }
+      try { docStore.flush() } catch (e) { log.debug('shutdown', `docStore: ${(e as Error).message}`) }
+      try { await slashUsage.flush() } catch (e) { log.debug('shutdown', `slashUsage: ${(e as Error).message}`) }
       process.exit(0)
     }
     process.once('SIGINT', shutdown)
@@ -138,14 +138,14 @@ export function initBackend(): RouteContext {
         rmSync(join(bunCacheDir, entry), { recursive: true, force: true })
       }
     }
-  } catch { /* ignore */ }
+  } catch (e) { log.debug('init', `bun cache cleanup: ${(e as Error).message}`) }
   try {
     for (const entry of readdirSync('/tmp')) {
       if (entry.startsWith('bunx-') && entry.includes('nats-channel-mcp')) {
         rmSync(join('/tmp', entry), { recursive: true, force: true })
       }
     }
-  } catch { /* ignore */ }
+  } catch (e) { log.debug('init', `bunx tmp cleanup: ${(e as Error).message}`) }
 
   // Start managed NATS server (installs binary if needed, spawns, probes)
   natsManager = new NatsManager()
@@ -445,7 +445,9 @@ export function initBackend(): RouteContext {
           if (!workdir) continue
           getGitDiffFiles(workdir).then(files => {
             docStore.reconcileFiles(run.id, files)
-          }).catch(() => {})
+          }).catch(err => {
+            log.warn('reconcile', `git-diff failed for ${run.id}: ${(err as Error).message}`)
+          })
         }
       }, 10_000)
     } catch (err) {
