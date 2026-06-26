@@ -1,54 +1,25 @@
-import { useEffect, useState, useRef } from 'react'
-import { apiFetch } from '../apiClient'
+import { useState, useCallback } from 'react'
 import { useWindowEvent } from '../lib/windowEvents'
+import { useResourceWatch } from './useResourceWatch'
 
 interface ImageWatchState {
   connected: boolean
   lastUpdatedAt: Date | null
 }
 
-let nextId = 0
-
 export function useImageWatch(sessionId: string, filePath: string): ImageWatchState {
   const [connected, setConnected] = useState(false)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null)
-  const absolutePathRef = useRef<string | null>(null)
-  const subscriberIdRef = useRef(`image-watch-${nextId++}`)
 
-  useEffect(() => {
-    const subscriberId = subscriberIdRef.current
-    let cancelled = false
+  const onSubscribed = useCallback(() => { setConnected(true) }, [])
+  const onSubscribeFailed = useCallback(() => { setConnected(false) }, [])
+  const onCleanup = useCallback(() => { setConnected(false) }, [])
 
-    apiFetch('/api/file-watch/subscribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, filePath, subscriberId, mode: 'notify' }),
-    })
-      .then(r => r.json())
-      .then((body: { ok?: boolean; data?: { absolutePath?: string } }) => {
-        if (cancelled) return
-        if (body.ok && body.data?.absolutePath) {
-          absolutePathRef.current = body.data.absolutePath
-          setConnected(true)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setConnected(false)
-      })
-
-    return () => {
-      cancelled = true
-      setConnected(false)
-      const absPath = absolutePathRef.current
-      if (absPath) {
-        apiFetch('/api/file-watch/unsubscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ absolutePath: absPath, subscriberId }),
-        }).catch((err) => { console.warn('[image-watch] unsubscribe failed:', (err as Error).message) })
-      }
-    }
-  }, [sessionId, filePath])
+  const { absolutePathRef } = useResourceWatch(sessionId, filePath, 'notify', 'image-watch', {
+    onSubscribed,
+    onSubscribeFailed,
+    onCleanup,
+  })
 
   useWindowEvent('tinstar:file_watch', (detail) => {
     const d = detail as { path: string; type: string; timestamp?: number } | undefined

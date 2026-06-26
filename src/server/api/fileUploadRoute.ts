@@ -1,11 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { createWriteStream, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs'
+import { createWriteStream, mkdirSync, renameSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import Busboy from 'busboy'
 import { loadConfigMerged } from '../sessions/config'
 import { getSession } from '../sessions/session'
-import { ok, fail } from './envelope'
+import { fail } from './envelope'
+import { createUploadResponder } from './uploadHelpers'
 
 interface Ctx { sessDir: string; configRoot: string }
 
@@ -53,25 +54,8 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
     let finalPath: string | null = null
     let bytesWritten = 0
     let aborted = false
-    let responded = false
-
-    function sendOk(data: unknown) {
-      if (responded) return
-      responded = true
-      ok(res, data)
-      resolve(true)
-    }
-    function sendFail(code: Parameters<typeof fail>[1], message: string, opts: Parameters<typeof fail>[3] = {}) {
-      if (responded) return
-      responded = true
-      fail(res, code, message, opts)
-      resolve(true)
-    }
-    function cleanup() {
-      if (tempPath && existsSync(tempPath)) {
-        try { unlinkSync(tempPath) } catch { /* ignore */ }
-      }
-    }
+    const responder = createUploadResponder(res, resolve, () => tempPath)
+    const { sendOk, sendFail, cleanup } = responder
 
     bb.on('field', (name, value) => {
       if (name === 'path') targetPath = value
@@ -108,7 +92,7 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
         sendFail('INTERNAL', 'Failed writing file')
       })
       out.on('finish', () => {
-        if (aborted || responded) return
+        if (aborted || responder.responded) return
         if (!tempPath || !finalPath || !targetPath) {
           sendFail('BAD_REQUEST', 'No file part received')
           return
@@ -130,7 +114,7 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
     })
 
     bb.on('close', () => {
-      if (aborted || responded) return
+      if (aborted || responder.responded) return
       // If no file was received (e.g. no file part in body), report missing file
       if (!tempPath && !finalPath) {
         sendFail('BAD_REQUEST', 'No file part received')
