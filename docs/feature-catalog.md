@@ -192,6 +192,22 @@ Each run is rendered as a CanvasWidget containing a full RunWorkspaceWidget.
 
 ---
 
+## Saloon (NATS Firehose)
+
+Session-bindable widget that streams live NATS traffic. Snap it to a session to monitor that session's subjects; unbound, it shows the full `tinstar.>` firehose. Bundled plugin (`src/plugins/nats-traffic/`).
+
+### Header Controls
+- **Title + session**: `SALOON` label; when bound to a single session, shows the session name with a colored status dot (matches run `SessionStatus` colors) and status label
+- **Filter input**: Free-text filter over streamed rows
+- **Clear button**: `delete_outline` icon — empties the firehose event list. Disabled when the list is already empty
+- **Reconnect button**: `sync` icon — re-establishes the NATS observer; turns amber when the bound session is orphaned, spins while reconnecting
+- **Close button**: `close` icon — removes the widget
+
+### Subscribed Subjects
+- Sub-header line (`subscribed: …`) showing the active subjects; hover reveals the full list (or "all subjects" in firehose mode)
+
+---
+
 ## Hierarchy Sidebar
 
 ### Tree Display
