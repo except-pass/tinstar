@@ -173,6 +173,8 @@ export function makeFileEditorWidget(api: TinstarPluginAPI) {
   // modes scroll is pinned to {0,0} (markers stay frame-anchored, matching today's
   // behavior — Monaco-mode scroll-tracking is a known follow-up, out of scope here).
   const pins = api.pins.useNodePins(widget.id)
+  const pinsRef = useRef(pins)
+  pinsRef.current = pins
   const scrollElRef = useRef<HTMLDivElement>(null)  // markdown scroll container (rendered mode only)
   const bodyRef = useRef<HTMLDivElement>(null)      // body wrapper — the box the pin overlay covers
   const [scroll, setScroll] = useState({ x: 0, y: 0 })
@@ -223,7 +225,7 @@ export function makeFileEditorWidget(api: TinstarPluginAPI) {
   })
 
   const submitPin = useCallback(async (id: string, comment: string) => {
-    const pin = pins.find(p => p.id === id)
+    const pin = pinsRef.current.find(p => p.id === id)
     if (!pin || !widget.sessionId) return
     // Use the FRESH comment from the bubble draft, not pin.comment — the store
     // update is async and pin.comment still holds the pre-edit value this tick.
@@ -238,11 +240,11 @@ export function makeFileEditorWidget(api: TinstarPluginAPI) {
     } catch (err) {
       api.logger?.warn?.('[file-editor-pins] submit failed:', (err as Error).message)
     }
-  }, [pins, widget.sessionId, widget.id, filename])
+  }, [widget.sessionId, widget.id, filename])
 
   const replyToPin = useCallback(async (id: string, text: string) => {
     if (!widget.sessionId) return
-    const pin = pins.find(p => p.id === id)
+    const pin = pinsRef.current.find(p => p.id === id)
     try {
       await api.http.fetch(`/api/notes/${encodeURIComponent(id)}/replies`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, author: 'user' }),
@@ -255,7 +257,7 @@ export function makeFileEditorWidget(api: TinstarPluginAPI) {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }),
       })
     } catch (err) { api.logger?.warn?.('[file-editor-pins] re-prompt failed:', (err as Error).message) }
-  }, [pins, widget.sessionId])
+  }, [widget.sessionId])
 
   return (
     <div className="flex flex-col h-full bg-surface-base text-slate-300 overflow-hidden">
