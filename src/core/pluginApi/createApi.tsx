@@ -418,6 +418,10 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
         minSize: opts.minSize ?? { width: 360, height: 280 },
         dragHandleSelector: '.widget-drag-handle',
         capabilities: ['web-view'],
+        // The embedded BrowserPrimitive renders its own BrowserPinLayer, so the
+        // host shell must NOT also draw the generic PinLayer — otherwise pins
+        // (notes) double-render. Mirrors the built-in browser plugin's registration.
+        rendersOwnPinMarkers: true,
       })
     }
 
