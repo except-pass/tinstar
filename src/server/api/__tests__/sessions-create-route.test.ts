@@ -177,6 +177,41 @@ describe('POST /api/sessions', () => {
     expect(run.natsEnabled).toBe(false)
   })
 
+  // --- Passive spawn (focus opt-out) ---
+
+  it('persists focusOnCreate:false on the run when created with focus:false', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'passive-worker', focus: false }),
+    })
+    expect(res.status).toBe(201)
+    const run = testCtx.docStore.getRun('passive-worker') as Run
+    // The flag rides on the run projection so the client skips its auto-pan for
+    // exactly this session — the viewport stays put on a passive spawn.
+    expect(run.focusOnCreate).toBe(false)
+  })
+
+  it('leaves focusOnCreate unset by default so the canvas auto-focuses the new run', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'eager-worker' }),
+    })
+    expect(res.status).toBe(201)
+    const run = testCtx.docStore.getRun('eager-worker') as Run
+    // No opt-out → field absent → default focus behavior (backward compatible).
+    expect(run.focusOnCreate).toBeUndefined()
+  })
+
+  it('treats focus:true the same as omitting it (still auto-focuses)', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'eager-explicit', focus: true }),
+    })
+    expect(res.status).toBe(201)
+    const run = testCtx.docStore.getRun('eager-explicit') as Run
+    expect(run.focusOnCreate).toBeUndefined()
+  })
+
   it('uses the marshal hand\'s persona as appendSystemPrompt and its intro as the one-shot prompt', async () => {
     const res = await testCtx.fetch('/api/sessions', {
       method: 'POST',

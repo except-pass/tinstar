@@ -272,6 +272,7 @@ export const spec = {
               epicId: { type: 'string' },
               initiativeId: { type: 'string' },
               color: { type: 'string' },
+              focus: { type: 'boolean', default: true, description: 'Passive spawn: when false, the session is created but the canvas does NOT pan/zoom to it (the viewport stays put). Omitted/true auto-focuses the new run.' },
             },
           } } },
         },

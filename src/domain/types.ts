@@ -83,6 +83,11 @@ export interface RunData {
   /** Persistent state for a plugin session-view (its api.widget.useData blob).
    *  Unused by the default run-workspace view. */
   viewData?: unknown
+  /** When false, the client must NOT pan/zoom the viewport to this run when it
+   *  first appears (passive spawn). Set from `focus:false` on POST /api/sessions
+   *  so background/supervisor callers can create a session without yanking the
+   *  user's camera. Absent/true ⇒ the canvas auto-focuses the new run as usual. */
+  focusOnCreate?: boolean
 }
 
 

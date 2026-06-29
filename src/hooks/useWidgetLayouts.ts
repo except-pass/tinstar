@@ -354,7 +354,11 @@ export function arrangeLayouts(
  * full grid-from-scratch position. For each missing run:
  *   1. Find the rightmost sibling that already has a position → place to its right.
  *   2. No siblings yet → place inside the parent container (top-left corner).
- *   3. No parent positioned either → return nothing (caller falls back to defaults).
+ *   3. No positioned parent (a root-level / standalone run — e.g. a passively
+ *      spawned session with no task or worktree) → place it in guaranteed-empty
+ *      space to the right of ALL existing content, so a fresh session never
+ *      lands on top of another session's constellation or a widget. Falls back
+ *      to defaults only when the canvas is empty (nothing to sit beside).
  *
  * Container nodes are not handled here; callers should cascadeExpansion after
  * placing runs so parent containers expand to contain them.
@@ -383,7 +387,25 @@ function placeNewRuns(
 
     const parentId = treeMaps.parentMap.get(id)
     const parent = parentId ? nodeMap.get(parentId) : null
-    if (!parent) continue
+    if (!parent) {
+      // Root-level / standalone run. Drop it into open canvas to the right of
+      // everything already placed (existing persisted layouts + anything placed
+      // earlier in this pass) so it can't overlap an existing constellation or
+      // widget. Top-align to the highest existing node for a tidy row.
+      let contentRight = -Infinity
+      let contentTop = Infinity
+      const consider = (l: WidgetLayout) => {
+        if (l.x + l.width > contentRight) contentRight = l.x + l.width
+        if (l.y < contentTop) contentTop = l.y
+      }
+      for (const l of existing.values()) consider(l)
+      for (const l of placed.values()) consider(l)
+      if (contentRight > -Infinity) {
+        placed.set(id, snap({ x: contentRight + RUN_GAP, y: contentTop, width: w, height: h }))
+      }
+      // else: empty canvas — let the caller fall back to generateDefaultLayouts.
+      continue
+    }
 
     // Find rightmost positioned sibling
     let maxRight = -Infinity

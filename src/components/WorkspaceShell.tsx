@@ -836,6 +836,32 @@ function WorkspaceShellInner() {
     handleSelectRun(runId)
   }, [handleSelectRun])
 
+  // Auto-focus a freshly created run when it first appears, panning the canvas
+  // to it — UNLESS it was spawned passively (focusOnCreate === false), the
+  // opt-out wired through POST /api/sessions `focus:false`. Guarded like the pin
+  // auto-open: runs present on mount are seeded as "seen" so a reload/space-switch
+  // doesn't fling the camera, each run is focused at most once, and a recency
+  // check rejects runs that arrive via late hydration/SSE with an old createdAt.
+  const autoFocusSeen = useRef<Set<string>>(new Set())
+  const autoFocusSeeded = useRef(false)
+  useEffect(() => {
+    const now = Date.now()
+    if (!autoFocusSeeded.current) {
+      autoFocusSeeded.current = true
+      for (const run of runMap.values()) autoFocusSeen.current.add(run.id)
+      return
+    }
+    for (const run of runMap.values()) {
+      if (autoFocusSeen.current.has(run.id)) continue
+      autoFocusSeen.current.add(run.id)
+      if (run.focusOnCreate === false) continue // passive spawn — leave the viewport put
+      const createdMs = run.createdAt ? Date.parse(run.createdAt) : NaN
+      if (Number.isFinite(createdMs) && now - createdMs < 30_000) {
+        setFocusRunId(`run-${run.id}`)
+      }
+    }
+  }, [runMap])
+
   return (
     <>
       <PluginFailedBanner />
