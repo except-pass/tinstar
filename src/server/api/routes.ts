@@ -420,6 +420,10 @@ interface CreateSessionParams {
    *  secrets map as CLAUDE_CODE_OAUTH_TOKEN at spawn time ONLY — never persisted
    *  to session.json and never returned by /api/state. Absent ⇒ global token. */
   token?: string
+  /** Passive-spawn control. When false, the new run is created with
+   *  `focusOnCreate:false` so the client leaves the viewport put instead of
+   *  panning to it. Omitted/true ⇒ the canvas auto-focuses the new run. */
+  focus?: boolean
 }
 
 interface CreateSessionContext {
@@ -443,7 +447,7 @@ async function createSessionInternal(
     name, project, worktree = false, worktreePath,
     prompt, skipPermissions = true, cliTemplate: cliTemplateName,
     taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt,
-    view, viewData, model: modelOverride, token: tokenOverride
+    view, viewData, model: modelOverride, token: tokenOverride, focus
   } = params
 
   const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, natsTraffic, natsHealth } = ctx
@@ -614,6 +618,10 @@ async function createSessionInternal(
     spaceId: docStore.activeSpaceId,
     view,
     viewData,
+    // Passive spawn: only persist the flag when the caller explicitly opts out
+    // (focus:false). Absent/true keeps the field off the projection so the
+    // client applies its default auto-focus behavior.
+    ...(focus === false ? { focusOnCreate: false } : {}),
   })
 
   registerSaloonSubs(natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
@@ -3039,7 +3047,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       withBody(req, res, async (body) => {
-        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData, model, token } = JSON.parse(body)
+        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData, model, token, focus } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         // Resolve a named hand here so the HTTP layer keeps ownership of the
@@ -3064,7 +3072,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             cliTemplate: cliTemplateName ?? resolvedHand?.cliTemplate,
             taskId, epicId, initiativeId, color: colorParam, nats,
             appendSystemPrompt: handSystemPrompt,
-            view, viewData, model, token,
+            view, viewData, model, token, focus,
           }, createCtx)
 
           if (!result.ok) {
