@@ -235,7 +235,7 @@ function startSSE() {
     pushState()
   })
 
-  const forwardedEvents = ['file_watch', 'nats_traffic', 'telemetry:hud', 'canvas:viewport', 'projects_changed'] as const
+  const forwardedEvents = ['file_watch', 'nats_traffic', 'telemetry:hud', 'canvas:viewport', 'projects_changed', 'download:push'] as const
   for (const evt of forwardedEvents) {
     es.addEventListener(evt, (e: MessageEvent) => {
       try { dispatchWindowEvent(`tinstar:${evt}`, JSON.parse(e.data)) } catch (err) { console.warn(`[sse] malformed ${evt} event:`, (err as Error).message) }
