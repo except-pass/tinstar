@@ -20,6 +20,7 @@ import { handlePluginRuntime } from './api/pluginRuntime'
 import { handlePluginsConfig } from './api/pluginsConfigRoute'
 import { handleFileUpload } from './api/fileUploadRoute'
 import { handleFileDownload } from './api/fileDownloadRoute'
+import { handleFilePush } from './api/filePushRoute'
 import { handleScreenshotUpload } from './api/screenshotsRoute'
 import { log } from './logger'
 import { getConfigRoot } from './configRoot'
@@ -131,6 +132,7 @@ export function startServer(opts: ServerOptions) {
       if (await handlePluginsConfig(req, res, { configRoot: configDir })) return
       if (await handleFileUpload(req, res, { sessDir: ctx.sessionConfig?.dirs.sessions ?? '', configRoot: configDir })) return
       if (await handleFileDownload(req, res, { sessDir: ctx.sessionConfig?.dirs.sessions ?? '' })) return
+      if (await handleFilePush(req, res, { sessDir: ctx.sessionConfig?.dirs.sessions ?? '', sse: ctx.sse })) return
       if (await handleScreenshotUpload(req, res, { configRoot: configDir })) return
       const handled = await handleRequest(ctx, req, res)
       if (handled) return
