@@ -1,32 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { SSEBroadcaster } from './sse'
 import { resolveWorkspaceFile } from './workspaceFile'
+import { readBody } from './readBody'
 import { ok, fail } from './envelope'
 
 interface Ctx { sessDir: string; sse: SSEBroadcaster }
 
 const URL_RE = /^\/api\/sessions\/([^/]+)\/files\/push-download\/?$/
-
-// Cap the JSON body — this endpoint only ever carries a short { path } object.
-const MAX_BODY_BYTES = 64 * 1024
-
-function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    let data = ''
-    req.on('data', (chunk: Buffer) => {
-      data += chunk
-      if (data.length > MAX_BODY_BYTES) reject(new Error('body too large'))
-    })
-    req.on('end', () => {
-      try {
-        resolve(data ? JSON.parse(data) : {})
-      } catch (err) {
-        reject(err)
-      }
-    })
-    req.on('error', reject)
-  })
-}
 
 /**
  * POST /api/sessions/:name/files/push-download   body: { path }
@@ -48,9 +28,12 @@ export async function handleFilePush(req: IncomingMessage, res: ServerResponse, 
 
   const sessionName = decodeURIComponent(m[1])
 
+  // Reuse the shared readBody helper (5s read timeout + 1MB cap + decode-once)
+  // rather than hand-rolling body reading.
   let body: unknown
   try {
-    body = await readJsonBody(req)
+    const raw = await readBody(req)
+    body = raw ? JSON.parse(raw) : {}
   } catch {
     fail(res, 'BAD_REQUEST', 'Invalid or oversized JSON body')
     return true

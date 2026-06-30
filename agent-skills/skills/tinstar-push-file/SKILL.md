@@ -19,8 +19,9 @@ call just triggers it.
 ## Do it
 
 ```bash
+TINSTAR_URL="${TINSTAR_DASHBOARD_URL:-http://localhost:5273}"
 curl -sS -X POST \
-  "http://localhost:${TINSTAR_BACKEND_PORT:-5273}/api/sessions/${TINSTAR_SESSION_NAME}/files/push-download" \
+  "$TINSTAR_URL/api/sessions/${TINSTAR_SESSION_NAME}/files/push-download" \
   -H 'content-type: application/json' \
   -d '{"path":"report.csv"}'
 ```
@@ -30,8 +31,9 @@ curl -sS -X POST \
 - `path` is **relative to your session workspace** (the directory you're working
   in), e.g. `report.csv` or `out/build.zip`. Absolute paths and anything that
   escapes the workspace are rejected.
-- Base URL defaults to `http://localhost:5273` (the standalone dashboard). If
-  `$TINSTAR_BACKEND_PORT` is set, the snippet uses it.
+- `$TINSTAR_DASHBOARD_URL` is the managed-session backend URL (the dev server may
+  run on 5280, or a second backend elsewhere); always use the variable, falling
+  back to `http://localhost:5273`. Same convention as every other Tinstar skill.
 
 ## Report the result
 
@@ -41,8 +43,9 @@ The endpoint answers synchronously — relay it:
   user it's downloading.
 - Failure → `{"ok":false,"error":{"code":"...","message":"..."}}`. Common codes:
   `SESSION_NOT_FOUND`, `INVALID_PARAMS` (path missing or not a file),
-  `PATH_OUTSIDE_WORKSPACE`, `NOT_FOUND`. Surface the message — it tells you what
-  to fix (usually a wrong relative path).
+  `PATH_OUTSIDE_WORKSPACE`, `NOT_FOUND`, `BAD_REQUEST` (malformed/oversized JSON
+  body). Surface the message — it tells you what to fix (usually a wrong relative
+  path).
 
 ## Gotchas
 
