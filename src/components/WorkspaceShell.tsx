@@ -23,6 +23,7 @@ import { useContextRouter } from '../hotkeys/contextRouter'
 import { triggerWidgetFlourish, registerActionHandler, deregisterActionHandler } from '../hotkeys/actionHandlerRegistry'
 import type { FocusNode } from '../hotkeys/FocusPathContext'
 import { NoTasksToast } from './NoTasksToast'
+import { DownloadPushToast } from './DownloadPushToast'
 import { HotkeyPalette } from './HotkeyPalette'
 import { OnboardingCanvas } from './OnboardingCanvas'
 import { apiFetch } from '../apiClient'
@@ -1081,6 +1082,7 @@ function WorkspaceShellInner() {
         taskCount={taxRepo.getTasks().length}
         runCount={runRepo.getAll().length}
       />
+      <DownloadPushToast />
       <HotkeyPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </>
   )

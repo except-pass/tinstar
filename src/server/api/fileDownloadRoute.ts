@@ -1,16 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { createReadStream, statSync } from 'node:fs'
-import { basename, resolve } from 'node:path'
-import { getSession } from '../sessions/session'
+import { createReadStream } from 'node:fs'
+import { resolveWorkspaceFile } from './workspaceFile'
 import { fail } from './envelope'
 
 interface Ctx { sessDir: string }
 
 const URL_RE = /^\/api\/sessions\/([^/]+)\/files\/download\/?$/
-
-function getSessionWorkspace(sessDir: string, name: string): string | null {
-  return getSession(sessDir, name)?.workspace?.path ?? null
-}
 
 /**
  * GET /api/sessions/:name/files/download?path=<workspace-relative-file>
@@ -19,6 +14,9 @@ function getSessionWorkspace(sessDir: string, name: string): string | null {
  * of handleRequest in standalone.ts) because the JSON GET /files listing route
  * matches any url containing '/files' — routing here first avoids that shadow,
  * and a raw stream can't use the ok()/fail() JSON envelope anyway.
+ *
+ * Path resolution + the workspace-containment guard are shared with the
+ * file-push route via resolveWorkspaceFile().
  */
 export async function handleFileDownload(req: IncomingMessage, res: ServerResponse, ctx: Ctx): Promise<boolean> {
   if (!req.url || req.method !== 'GET') return false
@@ -26,50 +24,24 @@ export async function handleFileDownload(req: IncomingMessage, res: ServerRespon
   if (!m || m[1] === undefined) return false
 
   const sessionName = decodeURIComponent(m[1])
-  const rawWsRoot = getSessionWorkspace(ctx.sessDir, sessionName)
-  if (!rawWsRoot) {
-    fail(res, 'SESSION_NOT_FOUND', `Session '${sessionName}' not found`)
-    return true
-  }
-  // Normalize once so a trailing slash on the workspace path doesn't turn the
-  // `wsRoot + '/'` containment check into `…//` and 403 every request.
-  const wsRoot = resolve(rawWsRoot)
+  const rel = new URL(req.url, 'http://localhost').searchParams.get('path')
 
-  const params = new URL(req.url, 'http://localhost').searchParams
-  const rel = params.get('path')
-  if (!rel) {
-    fail(res, 'INVALID_PARAMS', 'path is required')
-    return true
-  }
-
-  const abs = resolve(wsRoot, rel)
-  if (!abs.startsWith(wsRoot + '/') && abs !== wsRoot) {
-    fail(res, 'PATH_OUTSIDE_WORKSPACE', 'Path escapes workspace')
-    return true
-  }
-
-  let stat
-  try {
-    stat = statSync(abs)
-  } catch {
-    fail(res, 'NOT_FOUND', `'${rel}' not found`)
-    return true
-  }
-  if (!stat.isFile()) {
-    fail(res, 'INVALID_PARAMS', 'Path is not a file')
+  const resolved = resolveWorkspaceFile(ctx.sessDir, sessionName, rel)
+  if (!resolved.ok) {
+    fail(res, resolved.code, resolved.message)
     return true
   }
 
   // Quote the filename and strip CR/LF to keep the header well-formed.
-  const safeName = basename(abs).replace(/["\r\n]/g, '')
+  const safeName = resolved.filename.replace(/["\r\n]/g, '')
   res.writeHead(200, {
     'Content-Type': 'application/octet-stream',
-    'Content-Length': stat.size,
+    'Content-Length': resolved.size,
     'Content-Disposition': `attachment; filename="${safeName}"`,
   })
   // pipe() doesn't forward source errors; without this an open/read failure
   // after writeHead (file deleted between stat and open, or EACCES) escalates to
   // uncaughtException and leaves the client hanging on already-sent 200 headers.
-  createReadStream(abs).on('error', () => res.destroy()).pipe(res)
+  createReadStream(resolved.abs).on('error', () => res.destroy()).pipe(res)
   return true
 }

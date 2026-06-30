@@ -20,6 +20,8 @@ export interface TinstarWindowEventMap {
   'tinstar:canvas:viewport': unknown
   /** Projects-on-disk changed re-dispatched from the SSE bridge. */
   'tinstar:projects_changed': unknown
+  /** Agent pushed a workspace file — the dashboard auto-downloads it. */
+  'tinstar:download:push': { url: string; filename: string }
   /** Commit delta — no payload, just a notification. */
   'tinstar:commit-delta': undefined
 }
@@ -36,6 +38,7 @@ export const EV = {
   telemetryHud: 'tinstar:telemetry:hud',
   canvasViewport: 'tinstar:canvas:viewport',
   projectsChanged: 'tinstar:projects_changed',
+  downloadPush: 'tinstar:download:push',
   commitDelta: 'tinstar:commit-delta',
 } as const satisfies Record<string, TinstarWindowEventName>
 
