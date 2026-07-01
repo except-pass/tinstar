@@ -95,6 +95,36 @@ export interface RunData {
 }
 
 
+/**
+ * A retired session's durable record in the Graveyard. Written when a session
+ * is deleted (see DELETE /api/sessions/:name) and survives removal of the
+ * per-session dir and worktree, because it lives in the config-root docstore.
+ * Keyed by `convId` — the Claude Code `conversation.id` — which is the
+ * ground-truth handle used to necro (revive) the session later. Resolve the
+ * transcript by this id, never by newest-mtime.
+ */
+export interface Tombstone {
+  /** Claude Code conversation.id — the resume handle and the map key. */
+  convId: string
+  /** The session's name at retire-time (for display + re-materialize). */
+  sessionName: string
+  /** Deterministic roll-up of what the session covered (searchable). */
+  coversSummary: string
+  /** Task hierarchy at retire-time, for display + search + revive project resolution. */
+  taskId?: string
+  task?: string
+  epic?: string
+  initiative?: string
+  /** Workspace path the session ran in; may no longer exist at revive-time. */
+  workspacePath?: string
+  /** Model the session last ran with, if known. */
+  model?: string
+  /** ISO timestamp the session was originally created. */
+  created?: string
+  /** ISO timestamp the session was retired (tombstoned). */
+  retiredAt: string
+}
+
 export interface CommitRecord {
   sha: string
   subject: string
