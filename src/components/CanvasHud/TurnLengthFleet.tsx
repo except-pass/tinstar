@@ -11,7 +11,7 @@ export function TurnLengthFleet() {
 }
 
 function TurnLengthFleetInner() {
-  const { cells, p50, p95, n } = useTurnLengthObservations(null, 3600)  // null = fleet
+  const { cells, p50, p95, n, toolStats, toolP50, toolP90 } = useTurnLengthObservations(null, 3600)  // null = fleet
 
   return (
     <div data-testid="turn-length-fleet" style={{ padding: '4px 8px' }}>
@@ -26,9 +26,13 @@ function TurnLengthFleetInner() {
         cells={cells}
         accent={TURN_LENGTH_ACCENT}
         bucketBounds={TURN_LENGTH_BUCKETS}
+        toolStats={toolStats}
       />
       <div style={{ fontSize: 8, opacity: 0.65, fontFamily: 'JetBrains Mono, monospace' }}>
-        {n === 0 ? '—' : `p50:${fmtSec(p50!)} p95:${fmtSec(p95!)} n:${n}`}
+        {n === 0
+          ? '—'
+          : `p50:${fmtSec(p50!)} p95:${fmtSec(p95!)} n:${n}` +
+            (toolP50 !== undefined ? ` tools:${toolP50}/${toolP90}` : '')}
       </div>
     </div>
   )

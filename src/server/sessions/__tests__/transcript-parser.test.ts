@@ -6,6 +6,8 @@ import {
   findTranscriptByConvId,
   readSessionStatusDetailAt,
   readLatestModelAt,
+  parseNewEntriesAt,
+  resetOffset,
   __resetModelCache,
 } from '../transcript-parser'
 
@@ -117,6 +119,58 @@ describe('readSessionStatusDetailAt', () => {
       { type: 'user', message: { content: 'next prompt please' } },
     ])
     expect(readSessionStatusDetailAt(path)).toEqual({ state: 'running', toolPending: false })
+  })
+})
+
+describe('parseNewEntriesAt — tool_use counting', () => {
+  it('sums tool_use blocks across a turn onto the closing agent entry', () => {
+    const session = 'tool-count-1'
+    resetOffset(session)
+    const path = writeTranscript('-p', 'tc1', [
+      { type: 'user', message: { content: 'do a thing' } },
+      { type: 'assistant', message: { content: [
+        { type: 'tool_use', id: 'a', name: 'Read', input: {} },
+        { type: 'tool_use', id: 'b', name: 'Grep', input: {} },
+      ] } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c', name: 'Bash', input: {} }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'all done' }] } },
+    ])
+    const entries = parseNewEntriesAt(session, path)
+    const agent = entries.find(e => e.type === 'agent')
+    expect(agent?.content).toBe('all done')
+    expect(agent?.toolUses).toBe(3)
+  })
+
+  it('reports 0 tool uses for a text-only turn', () => {
+    const session = 'tool-count-2'
+    resetOffset(session)
+    const path = writeTranscript('-p', 'tc2', [
+      { type: 'user', message: { content: 'hi' } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'hello' }] } },
+    ])
+    const agent = parseNewEntriesAt(session, path).find(e => e.type === 'agent')
+    expect(agent?.toolUses).toBe(0)
+  })
+
+  it('counts tool uses independently per turn', () => {
+    const session = 'tool-count-3'
+    resetOffset(session)
+    const path = writeTranscript('-p', 'tc3', [
+      { type: 'user', message: { content: 'first' } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'a', name: 'Read', input: {} }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'r1' }] } },
+      { type: 'user', message: { content: 'second' } },
+      { type: 'assistant', message: { content: [
+        { type: 'tool_use', id: 'b', name: 'Read', input: {} },
+        { type: 'tool_use', id: 'c', name: 'Edit', input: {} },
+      ] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'r2' }] } },
+    ])
+    const agents = parseNewEntriesAt(session, path).filter(e => e.type === 'agent')
+    expect(agents.map(a => ({ text: a.content, tools: a.toolUses }))).toEqual([
+      { text: 'r1', tools: 1 },
+      { text: 'r2', tools: 2 },
+    ])
   })
 })
 

@@ -3,8 +3,8 @@ import { deriveData, TURN_LENGTH_BUCKETS } from '../useTurnLengthObservations'
 
 const now = Math.floor(Date.now() / 1000)
 
-function ob(tsSec: number, sec: number, session = 's') {
-  return { tsSec, sec, session, ccConvId: 'c' }
+function ob(tsSec: number, sec: number, session = 's', toolUses = 0) {
+  return { tsSec, sec, session, ccConvId: 'c', toolUses }
 }
 
 describe('deriveData', () => {
@@ -69,5 +69,54 @@ describe('deriveData', () => {
 
   it('TURN_LENGTH_BUCKETS matches Prom histogram bucket boundaries', () => {
     expect(TURN_LENGTH_BUCKETS).toEqual([1, 3, 10, 30, 60, 120, 300, 600, 1800, 3600])
+  })
+
+  it('returns null toolStats for every bucket and undefined overall percentiles when n=0', () => {
+    const d = deriveData([], 3600)
+    expect(d.toolStats).toHaveLength(10)
+    expect(d.toolStats.every(s => s === null)).toBe(true)
+    expect(d.toolP50).toBeUndefined()
+    expect(d.toolP90).toBeUndefined()
+  })
+
+  it('computes per-bucket tool percentiles from turns in that duration bucket', () => {
+    // All 10 turns land in bucket 3 (<=30s), tool counts 1..10.
+    const obs = Array.from({ length: 10 }, (_, i) => ob(now, 11, 's', i + 1))
+    const d = deriveData(obs, 3600)
+    const stats = d.toolStats[3]
+    expect(stats).not.toBeNull()
+    expect(stats!.n).toBe(10)
+    expect(stats!.p10).toBe(2)   // floor(10*0.1)=1 → sorted[1] = 2
+    expect(stats!.p50).toBe(6)   // floor(10*0.5)=5 → sorted[5] = 6
+    expect(stats!.p90).toBe(10)  // floor(10*0.9)=9 → sorted[9] = 10
+    // Buckets with no turns stay null.
+    expect(d.toolStats[0]).toBeNull()
+    expect(d.toolStats[9]).toBeNull()
+  })
+
+  it('keeps tool distributions separate per duration bucket', () => {
+    const obs = [
+      ob(now, 0.5, 's', 0),   // bucket 0, no tools
+      ob(now, 0.5, 's', 0),
+      ob(now, 300, 's', 8),   // bucket 6 (<=300), tool-heavy
+      ob(now, 300, 's', 12),
+    ]
+    const d = deriveData(obs, 3600)
+    expect(d.toolStats[0]!.p90).toBe(0)
+    expect(d.toolStats[6]!.p50).toBeGreaterThanOrEqual(8)
+  })
+
+  it('computes overall tool p50/p90 across the window', () => {
+    const obs = Array.from({ length: 100 }, (_, i) => ob(now, 5, 's', i + 1))  // tools 1..100
+    const d = deriveData(obs, 3600)
+    expect(d.toolP50).toBe(51)  // floor(100*0.5)=50 → sorted[50]=51
+    expect(d.toolP90).toBe(91)  // floor(100*0.9)=90 → sorted[90]=91
+  })
+
+  it('treats missing toolUses as 0', () => {
+    const obs = [{ tsSec: now, sec: 5, session: 's', ccConvId: 'c' }]  // no toolUses field
+    const d = deriveData(obs, 3600)
+    expect(d.toolStats[2]!.p50).toBe(0)
+    expect(d.toolP50).toBe(0)
   })
 })

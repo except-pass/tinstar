@@ -11,7 +11,7 @@ export function TurnLengthPanel({ sessionId }: { sessionId: string }) {
 }
 
 function TurnLengthPanelInner({ sessionId }: { sessionId: string }) {
-  const { cells, p50, p95, n } = useTurnLengthObservations(sessionId, 3600)
+  const { cells, p50, p95, n, toolStats, toolP50, toolP90 } = useTurnLengthObservations(sessionId, 3600)
   return (
     <div data-testid="turn-length-panel" style={{ padding: '6px 0' }}>
       <div style={{
@@ -25,6 +25,7 @@ function TurnLengthPanelInner({ sessionId }: { sessionId: string }) {
         cells={cells}
         accent={TURN_LENGTH_ACCENT}
         bucketBounds={TURN_LENGTH_BUCKETS}
+        toolStats={toolStats}
       />
       <div style={{
         fontSize: 9, opacity: 0.65, marginTop: 4,
@@ -32,7 +33,8 @@ function TurnLengthPanelInner({ sessionId }: { sessionId: string }) {
       }}>
         {n === 0
           ? '— no turns —'
-          : `p50: ${fmtSec(p50!)} · p95: ${fmtSec(p95!)} · n: ${n}`}
+          : `p50: ${fmtSec(p50!)} · p95: ${fmtSec(p95!)} · n: ${n}` +
+            (toolP50 !== undefined ? ` · tools p50/p90: ${toolP50}/${toolP90}` : '')}
       </div>
     </div>
   )

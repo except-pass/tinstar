@@ -32,6 +32,10 @@ export interface RecapEntry {
   content: string
   diff?: DiffBlock
   timestamp?: string
+  /** For an `agent` entry: number of tool_use blocks the agent emitted during
+   *  that turn (summed across all assistant messages in the turn, including the
+   *  tool-only intermediate ones that carry no text). Absent on user/status. */
+  toolUses?: number
 }
 
 export interface TouchedFile {

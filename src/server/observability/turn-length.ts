@@ -8,6 +8,8 @@ export interface Observation {
   sec: number
   session: string
   ccConvId: string
+  /** Total tool_use blocks the agent emitted during the turn. */
+  toolUses: number
 }
 
 export const register = new Registry()
@@ -24,6 +26,7 @@ interface PendingTurn {
   userTs: string
   lastAssistantTs: string | null
   ccConvId: string
+  toolUses: number
 }
 
 const pending = new Map<string, PendingTurn>()
@@ -63,10 +66,15 @@ export function observeFromRecapEntries(name: string, entries: RecapEntry[], ses
         userTs: e.timestamp,
         lastAssistantTs: null,
         ccConvId: session.conversation.id ?? 'unknown',
+        toolUses: 0,
       })
     } else if (e.type === 'agent') {
       const p = pending.get(name)
       if (p && e.timestamp) p.lastAssistantTs = e.timestamp
+      // Accumulate across every agent entry in the turn: a single turn can emit
+      // multiple agent entries across successive incremental parse batches, each
+      // carrying only the tool_use count from its own new records.
+      if (p) p.toolUses += e.toolUses ?? 0
     }
   }
 }
@@ -102,6 +110,7 @@ function flush(name: string): void {
     sec: seconds,
     session: name,
     ccConvId: p.ccConvId,
+    toolUses: p.toolUses,
   })
 }
 
