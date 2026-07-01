@@ -11,6 +11,8 @@ import roborevPkg from '../../plugins/roborev/package.json'
 import * as roborev from '../../plugins/roborev/src/index'
 import modelAttributionPkg from '../../plugins/model-attribution/package.json'
 import * as modelAttribution from '../../plugins/model-attribution/src/index'
+import graveyardPkg from '../../plugins/graveyard/package.json'
+import * as graveyard from '../../plugins/graveyard/src/index'
 
 /**
  * Static index of bundled plugins. Each entry is an ES module whose package
@@ -32,4 +34,5 @@ export const BUNDLED_PLUGINS: Record<string, BundledEntry> = {
   'image-viewer': { pkg: imageViewerPkg, module: imageViewer as Plugin },
   roborev: { pkg: roborevPkg, module: roborev as Plugin },
   'model-attribution': { pkg: modelAttributionPkg, module: modelAttribution as Plugin },
+  graveyard: { pkg: graveyardPkg, module: graveyard as Plugin },
 }

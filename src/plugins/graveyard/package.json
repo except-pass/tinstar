@@ -1,0 +1,16 @@
+{
+  "name": "graveyard",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.tsx",
+  "tinstar": {
+    "apiVersion": "5",
+    "displayName": "Graveyard",
+    "description": "Search and revive retired sessions",
+    "contributes": {
+      "widgets": [
+        { "type": "graveyard", "label": "Graveyard", "icon": "/widget-icons/graveyard.svg", "defaultSize": { "width": 900, "height": 640 }, "spawn": "palette", "capabilities": ["spawnable"], "creator": "standalone" }
+      ]
+    }
+  }
+}
