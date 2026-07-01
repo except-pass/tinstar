@@ -191,6 +191,21 @@ describe('GET/POST /api/graveyard', () => {
     }
   })
 
+  it('rejects a traversal/non-token convId before any lookup (BAD_REQUEST)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      // %2F decodes to '/', %2E to '.' — a '../..' style convId must be refused.
+      const res = await srv.fetch('/api/graveyard/..%2F..%2Fetc/purge', { method: 'POST' })
+      expect(res.status).toBe(400)
+      const body = await res.json() as { ok: boolean }
+      expect(body.ok).toBe(false)
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('revive on an unknown convId returns NOT_FOUND', async () => {
     const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
     const srv = createTestServer(root)

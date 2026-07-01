@@ -60,6 +60,18 @@ describe('DocumentStore graveyard', () => {
     expect(store.getTombstone('conv-abc')!.coversSummary).toBe('regenerated summary')
   })
 
+  it('emits a change when only the snapshotted flag differs', () => {
+    const store = new DocumentStore()
+    store.upsertTombstone(makeTombstone({ snapshotted: false }))
+    const events: unknown[] = []
+    store.changes.on('change', e => events.push(e))
+
+    store.upsertTombstone(makeTombstone({ snapshotted: true }))
+
+    expect(events).toHaveLength(1)
+    expect(store.getTombstone('conv-abc')!.snapshotted).toBe(true)
+  })
+
   it('purges a tombstone and reports whether one was removed', () => {
     const store = new DocumentStore()
     store.upsertTombstone(makeTombstone())

@@ -46,8 +46,9 @@ check whether a past session already covered the same ground — then dig it up 
 curl -s "$TINSTAR_URL/api/graveyard?q=influx%20backfill" | jq '.data[] | {convId, sessionName, coversSummary}'
 
 # 2. Necro one — revives the REAL agent (best-effort: works while Claude Code still
-#    has the transcript). Returns {revivable, sessionName} or {revivable:false, reason}.
-curl -s -X POST "$TINSTAR_URL/api/graveyard/<convId>/revive" | jq .
+#    has the transcript, or always for snapshotted graves). Responses are enveloped
+#    as {ok, data}; data is {revivable, sessionName} or {revivable:false, reason}.
+curl -s -X POST "$TINSTAR_URL/api/graveyard/<convId>/revive" | jq '.data'
 
 # 3. Ask it something (once revived, steer via the prompt endpoint — NOT tmux send-keys).
 curl -s -X POST "$TINSTAR_URL/api/sessions/<sessionName>/prompt" -d '{"text":"What did you conclude about X?"}'

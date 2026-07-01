@@ -9,8 +9,18 @@
 // All paths are built from the caller-supplied root dir (dirs.root / config
 // root) — never homedir() — so the store survives per-session-dir removal.
 
-import { existsSync, mkdirSync, copyFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, copyFileSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+
+/** Copy src → dest atomically: write to a sibling temp then rename, so a crash
+ *  or disk-full mid-copy never leaves a truncated file that existsSync reports
+ *  as a valid transcript. */
+function atomicCopy(src: string, dest: string): void {
+  mkdirSync(dirname(dest), { recursive: true })
+  const tmp = `${dest}.tmp`
+  copyFileSync(src, tmp)
+  renameSync(tmp, dest)
+}
 
 /** Where a convId's snapshot lives, under <rootDir>/graveyard-transcripts/. */
 export function graveyardSnapshotPath(rootDir: string, convId: string): string {
@@ -23,9 +33,7 @@ export function graveyardSnapshotPath(rootDir: string, convId: string): string {
 export function snapshotTranscript(rootDir: string, convId: string, sourcePath: string | null): boolean {
   if (!sourcePath || !existsSync(sourcePath)) return false
   try {
-    const dest = graveyardSnapshotPath(rootDir, convId)
-    mkdirSync(dirname(dest), { recursive: true })
-    copyFileSync(sourcePath, dest)
+    atomicCopy(sourcePath, graveyardSnapshotPath(rootDir, convId))
     return true
   } catch {
     return false
@@ -52,8 +60,7 @@ export function placeTranscriptAt(destPath: string, sourcePath: string | null): 
   if (existsSync(destPath)) return true
   if (!sourcePath || !existsSync(sourcePath)) return false
   try {
-    mkdirSync(dirname(destPath), { recursive: true })
-    copyFileSync(sourcePath, destPath)
+    atomicCopy(sourcePath, destPath)
     return true
   } catch {
     return false

@@ -3453,6 +3453,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (method === 'POST' && graveyardAction) {
         const convId = decodeURIComponent(graveyardAction[1]!)
         const action = graveyardAction[2]!
+        // Defense-in-depth: convId is only ever a Claude Code conversation id
+        // (UUID-ish token). Reject anything else before it can reach a filesystem
+        // path or the `--resume <convId>` command, independent of the tombstone guard.
+        if (!/^[A-Za-z0-9_-]+$/.test(convId)) return fail(res, 'BAD_REQUEST', `Invalid convId '${convId}'`)
         const tombstone = ctx.docStore.getTombstone(convId)
         if (!tombstone) return fail(res, 'NOT_FOUND', `No graveyard entry for '${convId}'`)
 
@@ -3466,17 +3470,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // revive — re-materialize the session from the tombstone and resume it.
         withBody(req, res, async () => {
           try {
-            // Resolved once the revived name is known (inside materialize), read
-            // again in resume — so a revived session gets the SAME NATS + ready-queue
-            // + Run wiring a fresh session does (first-class citizen).
-            let reviveNats: { enabled: boolean; subscriptions: string[] } | null = null
-            let reviveColor: string | undefined
             const result = await reviveFromTombstone(tombstone, {
               findTranscript: (id) => findTranscriptByConvId(id),
               hasSnapshot: (id) => hasGraveyardSnapshot(cfg.dirs.root, id),
               sessionExists: (n) => getSession(sessDir, n) !== null,
               pathExists: (p) => existsSync(p),
-              materialize: ({ name, convId: cid, workspacePath }) => {
+              // One launch closure: place the transcript, create + resume the session,
+              // and wire it as a first-class citizen (NATS + ready queue + full Run).
+              launch: async ({ name, convId: cid, workspacePath }) => {
                 // The revive cwd is the original worktree when it still exists, else
                 // a deterministic fallback under the config root. `--resume` reads
                 // the transcript from the cwd-derived path, so place it there first
@@ -3491,22 +3492,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 // the dead session's old subject tree is gone). computeNatsSubscriptions
                 // degrades to a DM-only inbox if the task no longer exists.
                 const natsCtx = { sessionName: name, spaceId: ctx.docStore.activeSpaceId || null, taskId: tombstone.taskId || null, epicId: null, initiativeId: null }
-                if (tombstone.taskId || natsCtx.spaceId) {
-                  reviveNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, ctx.docStore) }
-                }
-                reviveColor = tombstone.taskId ? ctx.docStore.getTask(tombstone.taskId)?.settings?.defaultRunColor : undefined
+                const nats: { enabled: boolean; subscriptions: string[] } | null =
+                  (tombstone.taskId || natsCtx.spaceId)
+                    ? { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, ctx.docStore) }
+                    : null
+                const color = tombstone.taskId ? ctx.docStore.getTask(tombstone.taskId)?.settings?.defaultRunColor : undefined
                 createSession(sessDir, {
                   name,
                   backend: 'tmux',
                   workspace: { path: reviveCwd },
                   // Persist NATS on the session so startTmuxSession injects the bus env.
-                  nats: reviveNats,
+                  nats,
                   agent: tombstone.task ? { name, description: tombstone.coversSummary, prompt: '' } : null,
                 })
                 // Bind the ORIGINAL conversation so --resume targets it.
                 setConversationId(sessDir, name, cid)
-              },
-              resume: async (name) => {
                 const session = getSession(sessDir, name)
                 if (!session) throw new Error(`revived session '${name}' vanished before resume`)
                 const port = await tmuxBackend.findPort(cfg.ports.hostStart)
@@ -3517,10 +3517,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 updateSession(sessDir, name, { port: startResult.port, ttydPid: startResult.ttydPid ?? null })
                 tmuxBackend.onTtydRestart(name, (pid) => updateSession(sessDir, name, { ttydPid: pid }))
                 setState(sessDir, name, 'running')
-                const nats: { enabled: boolean; subscriptions: string[] } | null = reviveNats
                 const natsSubject = nats?.enabled ? (nats.subscriptions[1] ?? nats.subscriptions[0]) : undefined
                 ctx.docStore.upsertRun(name, {
-                  id: name, color: reviveColor, status: 'running', sessionId: name,
+                  id: name, color, status: 'running', sessionId: name,
                   initiative: tombstone.initiative ?? '', epic: tombstone.epic ?? '', task: tombstone.task ?? '',
                   repo: tombstone.workspacePath ?? '', worktree: '',
                   taskId: tombstone.taskId ?? '', worktreeId: '',
@@ -3537,9 +3536,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                   name, nats, 'running',
                 )
               },
+              // Roll back a half-created session so failed revives don't orphan a
+              // 'creating' dir that climbs the -necro suffix on retry.
+              onLaunchFailed: (name) => {
+                try { ctx.docStore.deleteRun(name) } catch { /* best-effort */ }
+                try { deleteSession(sessDir, name) } catch { /* best-effort */ }
+              },
+              // A raised grave leaves Boot Hill — consume the tombstone + snapshot.
+              onRevived: (cid) => {
+                ctx.docStore.deleteTombstone(cid)
+                deleteGraveyardSnapshot(cfg.dirs.root, cid)
+              },
             })
             ok(res, result)
           } catch (err) {
+            log.warn('graveyard', `revive ${convId} failed: ${(err as Error).message}`)
             fail(res, 'INTERNAL', (err as Error).message)
           }
         })

@@ -13,30 +13,37 @@ function tomb(overrides: Partial<Tombstone> = {}): Tombstone {
   }
 }
 
-function deps(overrides: Partial<NecroDeps> = {}): NecroDeps & { materialized: unknown[]; resumed: string[] } {
-  const materialized: unknown[] = []
-  const resumed: string[] = []
+function deps(overrides: Partial<NecroDeps> = {}): NecroDeps & {
+  launched: Array<{ name: string; convId: string; workspacePath: string | null }>
+  revived: string[]
+  rolledBack: string[]
+} {
+  const launched: Array<{ name: string; convId: string; workspacePath: string | null }> = []
+  const revived: string[] = []
+  const rolledBack: string[] = []
   return {
     findTranscript: () => '/home/u/.claude/projects/x/conv-xyz.jsonl',
     hasSnapshot: () => false,
     sessionExists: () => false,
     pathExists: () => true,
-    materialize: opts => { materialized.push(opts) },
-    resume: name => { resumed.push(name) },
-    materialized,
-    resumed,
+    launch: opts => { launched.push(opts) },
+    onRevived: id => { revived.push(id) },
+    onLaunchFailed: name => { rolledBack.push(name) },
+    launched,
+    revived,
+    rolledBack,
     ...overrides,
   }
 }
 
 describe('reviveFromTombstone', () => {
-  it('refuses revive when the transcript is gone (AE2)', async () => {
-    const d = deps({ findTranscript: () => null })
+  it('refuses revive when neither transcript nor snapshot exists (AE2)', async () => {
+    const d = deps({ findTranscript: () => null, hasSnapshot: () => false })
     const res = await reviveFromTombstone(tomb(), d)
     expect(res.revivable).toBe(false)
     expect(res.reason).toBe('transcript-unavailable')
-    expect(d.materialized).toHaveLength(0)
-    expect(d.resumed).toHaveLength(0)
+    expect(d.launched).toHaveLength(0)
+    expect(d.revived).toHaveLength(0)
   })
 
   it('revives from a durable snapshot when the live transcript is gone', async () => {
@@ -44,32 +51,25 @@ describe('reviveFromTombstone', () => {
     const res = await reviveFromTombstone(tomb(), d)
     expect(res.revivable).toBe(true)
     expect(res.restoredFromSnapshot).toBe(true)
-    expect(d.materialized).toHaveLength(1)
+    expect(d.launched).toHaveLength(1)
   })
 
-  it('refuses when neither live transcript nor snapshot exists', async () => {
-    const d = deps({ findTranscript: () => null, hasSnapshot: () => false })
-    const res = await reviveFromTombstone(tomb(), d)
-    expect(res.revivable).toBe(false)
-    expect(res.reason).toBe('transcript-unavailable')
-  })
-
-  it('materializes with the stored convId and resumes (happy path + fidelity)', async () => {
+  it('launches with the stored convId and consumes the grave on success', async () => {
     const d = deps()
     const res = await reviveFromTombstone(tomb(), d)
     expect(res.revivable).toBe(true)
     expect(res.sessionName).toBe('askviktor-necro')
-    expect(d.materialized[0]).toMatchObject({ convId: 'conv-xyz', workspacePath: '/tmp/wt/askviktor' })
-    expect(d.resumed).toEqual(['askviktor-necro'])
+    expect(d.launched[0]).toMatchObject({ convId: 'conv-xyz', workspacePath: '/tmp/wt/askviktor' })
+    expect(d.revived).toEqual(['conv-xyz']) // grave consumed
+    expect(d.rolledBack).toEqual([])
   })
 
-  it('resumes against the stored convId even when newer transcripts exist (no mtime scan)', async () => {
-    // findTranscript is keyed on the exact convId; assert the id threaded through is the tombstone's.
+  it('resolves against the stored convId even when newer transcripts exist (no mtime scan)', async () => {
     let queried = ''
     const d = deps({ findTranscript: (c) => { queried = c; return '/x/conv-xyz.jsonl' } })
     await reviveFromTombstone(tomb({ convId: 'conv-xyz' }), d)
     expect(queried).toBe('conv-xyz')
-    expect(d.materialized[0]).toMatchObject({ convId: 'conv-xyz' })
+    expect(d.launched[0]).toMatchObject({ convId: 'conv-xyz' })
   })
 
   it('falls back to no cwd when the worktree is gone (AE1)', async () => {
@@ -77,7 +77,14 @@ describe('reviveFromTombstone', () => {
     const res = await reviveFromTombstone(tomb(), d)
     expect(res.revivable).toBe(true)
     expect(res.workspaceMissing).toBe(true)
-    expect(d.materialized[0]).toMatchObject({ workspacePath: null })
+    expect(d.launched[0]).toMatchObject({ workspacePath: null })
+  })
+
+  it('rolls back and does NOT consume the grave when launch throws', async () => {
+    const d = deps({ launch: () => { throw new Error('tmux boom') } })
+    await expect(reviveFromTombstone(tomb(), d)).rejects.toThrow('tmux boom')
+    expect(d.rolledBack).toEqual(['askviktor-necro']) // half-created session cleaned up
+    expect(d.revived).toEqual([]) // grave intact for retry
   })
 
   it('picks a non-colliding name when a session already exists (idempotency)', async () => {

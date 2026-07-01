@@ -1,23 +1,10 @@
-// Local mirror of the host Tombstone shape. Plugins consume @tinstar/plugin-api
-// only and must not import host domain types (ADR 0002 plugin-api boundary), so
-// the fields the widget reads are duplicated here. Kept in sync with
-// src/domain/types.ts `Tombstone`.
-export interface Tombstone {
-  convId: string
-  sessionName: string
-  coversSummary: string
-  taskId?: string
-  task?: string
-  epic?: string
-  initiative?: string
-  workspacePath?: string
-  model?: string
-  created?: string
-  retiredAt: string
-  /** True when the transcript was snapshotted into Tinstar's store at retire —
-   *  the grave is durably revivable even after Claude Code prunes the original. */
-  snapshotted?: boolean
-}
+// ADR 0002 permits built-in plugins to `import type` host domain types (a
+// type-only import erases at build time and doesn't breach the runtime boundary),
+// which sibling plugins (browser, image-viewer, file-editor) already do. Import
+// Tombstone directly rather than hand-copying it, so the widget can't drift from
+// the server shape. ReviveResult stays local — its source (NecroResult) lives in
+// server-only code plugins can't import.
+export type { Tombstone } from '../../../domain/types'
 
 /** Result shape of POST /api/graveyard/:convId/revive. */
 export interface ReviveResult {

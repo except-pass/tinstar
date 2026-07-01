@@ -39,11 +39,16 @@ export interface NecroDeps {
   sessionExists: (name: string) => boolean
   /** Whether a filesystem path still exists (used to test the worktree). */
   pathExists: (path: string) => boolean
-  /** Create a fresh session bound to `convId`, rooted at `workspacePath`
-   *  (null ⇒ caller picks a fallback cwd). */
-  materialize: (opts: { name: string; convId: string; workspacePath: string | null }) => void | Promise<void>
-  /** Start the materialized session in resume mode against its convId. */
-  resume: (name: string) => void | Promise<void>
+  /** Fully launch the revived session: place the transcript at the resume path,
+   *  create the session bound to `convId` (rooted at `workspacePath`, null ⇒
+   *  caller picks a fallback cwd), and resume it. Throws on failure. */
+  launch: (opts: { name: string; convId: string; workspacePath: string | null }) => void | Promise<void>
+  /** Consume the grave once revive succeeds — a raised session leaves the
+   *  graveyard (removes the tombstone + its snapshot). Called with the convId. */
+  onRevived: (convId: string) => void
+  /** Roll back a half-materialized session when `launch` throws, so a failed
+   *  revive doesn't leave an orphan that later name-collision probes skip over. */
+  onLaunchFailed?: (name: string) => void
 }
 
 /** Pick a session name for the revived agent that doesn't collide with a live one. */
@@ -74,10 +79,18 @@ export async function reviveFromTombstone(tombstone: Tombstone, deps: NecroDeps)
   const workspacePath = hasWorkspace ? tombstone.workspacePath! : null
 
   // Bind the stored convId (fidelity) — resume against exactly this conversation.
-  // The caller's materialize places the transcript (live or snapshot) at the
-  // revive cwd's --resume path.
-  await deps.materialize({ name, convId: tombstone.convId, workspacePath })
-  await deps.resume(name)
+  // On failure, roll back the half-created session and leave the grave intact
+  // (not consumed) so a retry can try again.
+  try {
+    await deps.launch({ name, convId: tombstone.convId, workspacePath })
+  } catch (err) {
+    deps.onLaunchFailed?.(name)
+    throw err
+  }
+
+  // Raised — the grave leaves the graveyard. Re-deleting the live session will
+  // mint a fresh tombstone, so an old grave is never overwritten in place.
+  deps.onRevived(tombstone.convId)
 
   return {
     revivable: true,

@@ -123,7 +123,8 @@ function tombstoneEqual(a: Tombstone, b: Tombstone): boolean {
     a.workspacePath === b.workspacePath &&
     a.model === b.model &&
     a.created === b.created &&
-    a.retiredAt === b.retiredAt
+    a.retiredAt === b.retiredAt &&
+    (a.snapshotted ?? false) === (b.snapshotted ?? false)
   )
 }
 
