@@ -3466,7 +3466,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                   port: startResult.port ?? null, backend: 'tmux',
                   backendInfo: `tmux session: ${name}`,
                   createdAt: new Date().toISOString(), spaceId: ctx.docStore.activeSpaceId,
-                } as unknown as Run)
+                })
                 emitSessionEvent('managed_session.created', { name, state: 'running' })
               },
             })
