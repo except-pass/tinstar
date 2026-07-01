@@ -88,6 +88,32 @@ describe('GraveyardWidget', () => {
     expect(screen.queryByText(/No retired sessions yet/i)).not.toBeInTheDocument()
   })
 
+  it('keeps stale rows (no error li) when a refresh fails after a successful load', async () => {
+    const dispose = vi.fn()
+    let deltaHandler: ((m: { eventType?: string }) => void) | null = null
+    let call = 0
+    const api = {
+      pluginId: 'graveyard', version: '1.0.0',
+      http: { fetch: vi.fn(async () => {
+        call += 1
+        if (call === 1) return jsonResponse({ ok: true, data: GRAVES })
+        throw new Error('refresh failed')
+      }) },
+      events: { subscribe: vi.fn((_ch: string, h: (m: { eventType?: string }) => void) => { deltaHandler = h; return { dispose } }) },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    } as unknown as TinstarPluginAPI
+    const Widget = makeGraveyardWidget(api)
+    render(<Widget {...props} />)
+
+    await waitFor(() => expect(screen.getByText(/Here lies askviktor/)).toBeInTheDocument())
+    // A tombstone.updated delta triggers a refresh that now fails.
+    deltaHandler!({ eventType: 'tombstone.updated' })
+    await waitFor(() => expect(screen.getByText(/couldn.t reach the graveyard/i)).toBeInTheDocument())
+    // Stale rows persist; the prominent error li + retry button do not appear.
+    expect(screen.getByText(/Here lies askviktor/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /try again/i })).not.toBeInTheDocument()
+  })
+
   it('subscribes to the delta channel and disposes on unmount', () => {
     const { api, dispose } = makeMockApi({ ok: true, data: { revivable: true } })
     const Widget = makeGraveyardWidget(api)

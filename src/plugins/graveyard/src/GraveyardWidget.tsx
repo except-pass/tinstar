@@ -133,7 +133,10 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
 
         <div className="flex-1 flex min-h-0">
           <ul className="w-1/2 overflow-y-auto border-r-2 border-amber-900/50 text-sm">
-            {loadError && (
+            {/* Prominent error only when there's no data to fall back on. On a
+                refresh failure with stale rows, keep the rows and let the header
+                pill signal the outage — the error li and rows never co-render. */}
+            {loadError && (graves === null || graves.length === 0) && (
               <li className="px-3 py-4 text-red-300/80 italic">
                 Couldn’t reach the graveyard.{' '}
                 <button onClick={() => void load()} className="underline hover:text-red-200">Try again</button>
