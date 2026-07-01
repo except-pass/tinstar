@@ -1,5 +1,9 @@
 // Built-in plugin — consumes @tinstar/plugin-api only.
 // Host imports are forbidden by ESLint (see docs/adrs/0002-plugin-api-boundary.md).
+//
+// Theming: Boot Hill — a dusty frontier cemetery. Warm parchment + weathered
+// wood, tombstone cards, and western copy ("Here lies…", "Raise", "Bury forever"),
+// matching the Saloon's old-west vibe.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Fuse from 'fuse.js'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
@@ -14,7 +18,6 @@ function orDash(v: string | undefined | null): string {
 
 function shortWhen(iso: string | undefined): string {
   if (!iso) return '—'
-  // Keep it deterministic and locale-light: YYYY-MM-DD HH:MM.
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : iso
 }
@@ -71,27 +74,27 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
       try {
         const res = await api.http.fetch(`/api/graveyard/${encodeURIComponent(convId)}/revive`, { method: 'POST' })
         const body = await res.json() as { ok: boolean; data?: ReviveResult; error?: { message?: string } }
-        if (!body.ok) { setNotice(body.error?.message ?? 'Revive failed.'); return }
+        if (!body.ok) { setNotice(body.error?.message ?? 'The séance failed.'); return }
         const r = body.data
         if (!r?.revivable) {
-          setNotice('The transcript is no longer available — this grave is summary-only.')
+          setNotice('This soul has passed beyond reach — the transcript is gone, so only its epitaph (summary) remains.')
           return
         }
         setNotice(
           r.workspaceMissing
-            ? `Revived as “${r.sessionName}” — its worktree is gone, so it remembers the conversation but not the files.`
-            : `Revived as “${r.sessionName}”. Steer it from its canvas card.`,
+            ? `Raised as “${r.sessionName}” — its old workshop is dust, so it recalls the conversation but not the files.`
+            : `Raised as “${r.sessionName}”. Find it walkin' the canvas.`,
         )
       } catch (err) {
         api.logger.error('graveyard: revive failed', err)
-        setNotice('Revive failed.')
+        setNotice('The séance failed.')
       } finally {
         setBusy(null)
       }
     }, [])
 
     const purge = useCallback(async (convId: string) => {
-      if (!window.confirm('Forget this session forever? This cannot be undone.')) return
+      if (!window.confirm('Bury this soul forever? There is no digging it back up.')) return
       setBusy(convId); setNotice(null)
       try {
         await api.http.fetch(`/api/graveyard/${encodeURIComponent(convId)}/purge`, { method: 'POST' })
@@ -99,82 +102,93 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
         await load()
       } catch (err) {
         api.logger.error('graveyard: purge failed', err)
-        setNotice('Purge failed.')
+        setNotice('Could not bury it.')
       } finally {
         setBusy(null)
       }
     }, [selected, load])
 
     return (
-      <div className="w-full h-full flex flex-col bg-slate-900 text-slate-200 rounded-lg overflow-hidden">
-        <div className="widget-drag-handle flex items-center gap-2 px-3 py-2 bg-slate-800 border-b border-slate-700 cursor-grab">
-          <span className="text-sm font-semibold tracking-wide">⚰️ Graveyard</span>
-          <span className="text-xs text-slate-400">
-            {graves === null ? 'loading…' : `${graves.length} retired`}
+      <div className="w-full h-full flex flex-col rounded-lg overflow-hidden font-serif text-amber-100"
+           style={{ background: 'linear-gradient(180deg, #3a2b1a 0%, #241a10 100%)' }}>
+        <div className="widget-drag-handle flex items-center gap-2 px-3 py-2 border-b-2 border-amber-900/70 cursor-grab"
+             style={{ background: 'linear-gradient(180deg, #5b3f24 0%, #4a3319 100%)' }}>
+          <span className="text-sm font-bold tracking-widest uppercase">🪦 Boot Hill</span>
+          <span className="text-xs text-amber-300/80 italic">
+            {graves === null ? 'countin’ the graves…' : `${graves.length} buried here`}
           </span>
         </div>
 
         <input
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Search what past sessions covered…"
-          className="m-2 px-2 py-1 text-sm bg-slate-800 border border-slate-700 rounded outline-none focus:border-slate-500"
+          placeholder="Search the dearly departed…"
+          className="m-2 px-2 py-1 text-sm rounded outline-none bg-amber-50/90 text-stone-800 placeholder-stone-500 border border-amber-900/40 focus:border-amber-700"
         />
 
         <div className="flex-1 flex min-h-0">
-          <ul className="w-1/2 overflow-y-auto border-r border-slate-800 text-sm">
-            {graves === null && <li className="px-3 py-2 text-slate-500">Loading…</li>}
+          <ul className="w-1/2 overflow-y-auto border-r-2 border-amber-900/50 text-sm">
+            {graves === null && <li className="px-3 py-2 text-amber-300/70 italic">Countin’ the graves…</li>}
             {graves !== null && shown.length === 0 && (
-              <li className="px-3 py-4 text-slate-500">
-                {graves.length === 0 ? 'No retired sessions yet.' : 'No graves match.'}
+              <li className="px-3 py-4 text-amber-300/70 italic">
+                {graves.length === 0 ? 'Boot Hill stands empty — no souls buried yet.' : 'No graves match that name.'}
               </li>
             )}
             {shown.map(g => (
               <li
                 key={g.convId}
                 onClick={() => setSelected(g.convId)}
-                className={`px-3 py-2 cursor-pointer border-b border-slate-800/60 hover:bg-slate-800/60 ${
-                  selected === g.convId ? 'bg-slate-800' : ''
+                className={`px-3 py-2 cursor-pointer border-b border-amber-900/30 hover:bg-amber-900/30 ${
+                  selected === g.convId ? 'bg-amber-900/40' : ''
                 }`}
               >
-                <div className="font-medium truncate">{orDash(g.sessionName)}</div>
-                <div className="text-xs text-slate-400 truncate">{orDash(g.coversSummary)}</div>
-                <div className="text-[10px] text-slate-500">{shortWhen(g.retiredAt)}</div>
+                <div className="font-bold truncate flex items-center gap-1">
+                  <span>Here lies {orDash(g.sessionName)}</span>
+                  {g.snapshotted && <span title="Embalmed — revivable even after Claude Code forgets">⚱️</span>}
+                </div>
+                <div className="text-xs text-amber-200/70 truncate italic">{orDash(g.coversSummary)}</div>
+                <div className="text-[10px] text-amber-400/60">buried {shortWhen(g.retiredAt)}</div>
               </li>
             ))}
           </ul>
 
           <div className="w-1/2 overflow-y-auto p-3 text-sm">
-            {!active && <div className="text-slate-500">Select a grave to inspect or revive.</div>}
+            {!active && <div className="text-amber-300/60 italic">Pick a grave to read its epitaph — or raise the dead.</div>}
             {active && (
               <div className="flex flex-col gap-2">
-                <div className="text-base font-semibold">{orDash(active.sessionName)}</div>
-                <div className="text-slate-300 whitespace-pre-wrap">{orDash(active.coversSummary)}</div>
-                <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-xs text-slate-400 mt-1">
-                  <dt>Task</dt><dd className="text-slate-300">{orDash(active.task)}</dd>
-                  <dt>Retired</dt><dd className="text-slate-300">{shortWhen(active.retiredAt)}</dd>
-                  <dt>Workspace</dt><dd className="text-slate-300 break-all">{orDash(active.workspacePath)}</dd>
-                  <dt>Model</dt><dd className="text-slate-300">{orDash(active.model)}</dd>
+                <div className="text-base font-bold border-b border-amber-900/40 pb-1">⚰️ Here lies {orDash(active.sessionName)}</div>
+                <div className="text-amber-100/90 italic whitespace-pre-wrap">“{orDash(active.coversSummary)}”</div>
+                <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-xs text-amber-300/70 mt-1">
+                  <dt>Task</dt><dd className="text-amber-100/90">{orDash(active.task)}</dd>
+                  <dt>Buried</dt><dd className="text-amber-100/90">{shortWhen(active.retiredAt)}</dd>
+                  <dt>Last workshop</dt><dd className="text-amber-100/90 break-all">{orDash(active.workspacePath)}</dd>
+                  <dt>Model</dt><dd className="text-amber-100/90">{orDash(active.model)}</dd>
                 </dl>
+
+                <div className={`text-xs mt-1 ${active.snapshotted ? 'text-emerald-300/90' : 'text-amber-400/80'}`}>
+                  {active.snapshotted
+                    ? '⚱️ Embalmed — raises even after Claude Code forgets the transcript.'
+                    : '⚠️ Best-effort — may be summary-only if the transcript is gone.'}
+                </div>
 
                 <div className="flex gap-2 mt-2">
                   <button
                     onClick={() => necro(active.convId)}
                     disabled={busy === active.convId}
-                    className="px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs"
+                    className="px-3 py-1 rounded border border-amber-500/40 bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-amber-50 text-xs font-bold tracking-wide"
                   >
-                    {busy === active.convId ? 'Necro…' : 'Necro'}
+                    {busy === active.convId ? 'Raising…' : '🔮 Raise'}
                   </button>
                   <button
                     onClick={() => purge(active.convId)}
                     disabled={busy === active.convId}
-                    className="px-3 py-1 rounded bg-slate-700 hover:bg-red-800 disabled:opacity-50 text-slate-200 text-xs"
+                    className="px-3 py-1 rounded border border-stone-600 bg-stone-800 hover:bg-red-900 disabled:opacity-50 text-amber-100 text-xs"
                   >
-                    Purge
+                    ⚰️ Bury forever
                   </button>
                 </div>
 
-                {notice && <div className="mt-2 text-xs text-amber-300">{notice}</div>}
+                {notice && <div className="mt-2 text-xs text-amber-200 bg-amber-900/40 rounded px-2 py-1">{notice}</div>}
               </div>
             )}
           </div>

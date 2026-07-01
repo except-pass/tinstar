@@ -60,7 +60,9 @@ Notes:
 - A revived session whose worktree was deleted remembers the **conversation** but not the
   files — fine for "what did you find?", not for "go change that code."
 - If revive returns `revivable:false`, the transcript is gone; use the `coversSummary` from
-  the search result instead.
+  the search result instead. Graves with `snapshotted:true` are durable — Tinstar snapshotted
+  the transcript at retire, so they revive even after Claude Code prunes the original; graves
+  without it are best-effort.
 - Always build the URL from `TINSTAR_DASHBOARD_URL` (top of this skill) — never a raw port.
 
 ## Creating a standalone session (not a child hand)

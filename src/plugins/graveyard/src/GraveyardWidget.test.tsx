@@ -10,8 +10,8 @@ function jsonResponse(body: unknown): Response {
 }
 
 const GRAVES: Tombstone[] = [
-  { convId: 'c1', sessionName: 'askviktor', coversSummary: 'Explored influx backfill strategy', task: 'Telemetry', retiredAt: '2026-06-30T09:00:00Z' },
-  { convId: 'c2', sessionName: 'graveyard-hand', coversSummary: 'Designed the necro flow', task: 'Graveyard', retiredAt: '2026-07-01T12:00:00Z' },
+  { convId: 'c1', sessionName: 'askviktor', coversSummary: 'Explored influx backfill strategy', task: 'Telemetry', retiredAt: '2026-06-30T09:00:00Z', snapshotted: true },
+  { convId: 'c2', sessionName: 'graveyard-hand', coversSummary: 'Designed the necro flow', task: 'Graveyard', retiredAt: '2026-07-01T12:00:00Z', snapshotted: false },
 ]
 
 function makeMockApi(reviveBody: unknown) {
@@ -39,12 +39,12 @@ describe('GraveyardWidget', () => {
     const Widget = makeGraveyardWidget(api)
     render(<Widget {...props} />)
 
-    await waitFor(() => expect(screen.getByText('askviktor')).toBeInTheDocument())
-    expect(screen.getByText('graveyard-hand')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/Here lies askviktor/)).toBeInTheDocument())
+    expect(screen.getByText(/Here lies graveyard-hand/)).toBeInTheDocument()
 
-    fireEvent.change(screen.getByPlaceholderText(/Search what past sessions/i), { target: { value: 'necro' } })
-    await waitFor(() => expect(screen.queryByText('askviktor')).not.toBeInTheDocument())
-    expect(screen.getByText('graveyard-hand')).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText(/Search the dearly departed/i), { target: { value: 'necro' } })
+    await waitFor(() => expect(screen.queryByText(/Here lies askviktor/)).not.toBeInTheDocument())
+    expect(screen.getByText(/Here lies graveyard-hand/)).toBeInTheDocument()
   })
 
   it('shows the summary-only notice when revive reports not-revivable (AE2)', async () => {
@@ -52,11 +52,25 @@ describe('GraveyardWidget', () => {
     const Widget = makeGraveyardWidget(api)
     render(<Widget {...props} />)
 
-    await waitFor(() => expect(screen.getByText('askviktor')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('askviktor'))
-    fireEvent.click(screen.getByRole('button', { name: /necro/i }))
+    await waitFor(() => expect(screen.getByText(/Here lies askviktor/)).toBeInTheDocument())
+    fireEvent.click(screen.getByText(/Here lies askviktor/))
+    fireEvent.click(screen.getByRole('button', { name: /raise/i }))
 
-    await waitFor(() => expect(screen.getByText(/summary-only/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/summary\)? remains|only its epitaph/i)).toBeInTheDocument())
+  })
+
+  it('marks durable (snapshotted) graves distinctly from best-effort ones', async () => {
+    const { api } = makeMockApi({ ok: true, data: { revivable: true } })
+    const Widget = makeGraveyardWidget(api)
+    render(<Widget {...props} />)
+
+    await waitFor(() => expect(screen.getByText(/Here lies askviktor/)).toBeInTheDocument())
+    // c1 is snapshotted → durable "Embalmed" affordance in the detail pane.
+    fireEvent.click(screen.getByText(/Here lies askviktor/))
+    expect(screen.getByText(/Embalmed/i)).toBeInTheDocument()
+    // c2 is not snapshotted → best-effort note.
+    fireEvent.click(screen.getByText(/Here lies graveyard-hand/))
+    expect(screen.getByText(/Best-effort/i)).toBeInTheDocument()
   })
 
   it('subscribes to the delta channel and disposes on unmount', () => {

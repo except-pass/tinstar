@@ -14,6 +14,9 @@ export interface Tombstone {
   model?: string
   created?: string
   retiredAt: string
+  /** True when the transcript was snapshotted into Tinstar's store at retire —
+   *  the grave is durably revivable even after Claude Code prunes the original. */
+  snapshotted?: boolean
 }
 
 /** Result shape of POST /api/graveyard/:convId/revive. */
@@ -22,4 +25,5 @@ export interface ReviveResult {
   sessionName?: string
   reason?: string
   workspaceMissing?: boolean
+  restoredFromSnapshot?: boolean
 }
