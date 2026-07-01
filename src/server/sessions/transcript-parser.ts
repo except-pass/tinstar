@@ -71,7 +71,7 @@ export function parseNewEntriesAt(sessionName: string, path: string): RecapEntry
   if (size === state.byteOffset) return []
 
   // Parse all new lines into typed records
-  const records: Array<{ type: 'user' | 'agent'; text: string; timestamp: string }> = []
+  const records: Array<{ type: 'user' | 'agent'; text: string; timestamp: string; toolUses: number }> = []
   const fd = openSync(path, 'r')
   try {
     const CHUNK = 256 * 1024 // 256KB
@@ -105,27 +105,36 @@ export function parseNewEntriesAt(sessionName: string, path: string): RecapEntry
   }
 
   // Group into turns: each user message starts a new turn.
-  // Keep the user prompt and only the LAST assistant text before the next user message.
+  // Keep the user prompt and only the LAST assistant text before the next user
+  // message. Tool-call intensity is aggregated separately: sum tool_use blocks
+  // across ALL assistant records in the turn (including tool-only ones that carry
+  // no text and so don't become `lastAgent`), and attach the total to the
+  // turn-closing agent entry.
   const entries: RecapEntry[] = []
   let lastAgent: { text: string; timestamp: string } | null = null
+  let turnToolUses = 0
 
   for (const rec of records) {
     if (rec.type === 'user') {
       // Flush previous turn's last agent response
       if (lastAgent) {
-        entries.push({ id: randomUUID(), type: 'agent', content: lastAgent.text, timestamp: lastAgent.timestamp })
+        entries.push({ id: randomUUID(), type: 'agent', content: lastAgent.text, timestamp: lastAgent.timestamp, toolUses: turnToolUses })
         lastAgent = null
       }
+      turnToolUses = 0
       entries.push({ id: randomUUID(), type: 'user', content: rec.text, timestamp: rec.timestamp })
     } else {
-      // Keep overwriting — we only want the last one
-      lastAgent = { text: rec.text, timestamp: rec.timestamp }
+      turnToolUses += rec.toolUses
+      // Only records that carry text can become the turn's final response; a
+      // tool-only record contributes its count above but must not blank out the
+      // last real assistant text.
+      if (rec.text) lastAgent = { text: rec.text, timestamp: rec.timestamp }
     }
   }
 
   // Flush trailing agent response
   if (lastAgent) {
-    entries.push({ id: randomUUID(), type: 'agent', content: lastAgent.text, timestamp: lastAgent.timestamp })
+    entries.push({ id: randomUUID(), type: 'agent', content: lastAgent.text, timestamp: lastAgent.timestamp, toolUses: turnToolUses })
   }
 
   return entries
@@ -329,7 +338,7 @@ function isLocalCommandArtifact(obj: Record<string, unknown>): boolean {
 
 // --- Record extraction ---
 
-function extractRecord(obj: Record<string, unknown>): { type: 'user' | 'agent'; text: string; timestamp: string } | null {
+function extractRecord(obj: Record<string, unknown>): { type: 'user' | 'agent'; text: string; timestamp: string; toolUses: number } | null {
   const type = obj.type as string
   if (!type) return null
 
@@ -337,13 +346,25 @@ function extractRecord(obj: Record<string, unknown>): { type: 'user' | 'agent'; 
 
   if (type === 'user') {
     const text = extractUserText(obj)
-    return text ? { type: 'user', text, timestamp } : null
+    return text ? { type: 'user', text, timestamp, toolUses: 0 } : null
   }
   if (type === 'assistant') {
     const text = extractAssistantText(obj)
-    return text ? { type: 'agent', text, timestamp } : null
+    const toolUses = countToolUses(obj)
+    // Keep tool-only assistant records (no text) so their tool_use blocks are
+    // counted toward the turn; drop records that have neither text nor tools.
+    if (!text && toolUses === 0) return null
+    return { type: 'agent', text: text ?? '', timestamp, toolUses }
   }
   return null
+}
+
+/** Count `tool_use` content blocks in an assistant record's message. */
+function countToolUses(obj: Record<string, unknown>): number {
+  const message = obj.message as Record<string, unknown> | undefined
+  const content = message?.content
+  if (!Array.isArray(content)) return 0
+  return (content as Array<Record<string, unknown>>).filter(b => b.type === 'tool_use').length
 }
 
 function extractUserText(obj: Record<string, unknown>): string | null {

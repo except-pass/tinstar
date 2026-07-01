@@ -13,6 +13,10 @@ function entry(type: 'user' | 'agent', timestamp: string): RecapEntry {
   return { id: `${type}-${timestamp}`, type, content: '', timestamp }
 }
 
+function agentEntry(timestamp: string, toolUses: number): RecapEntry {
+  return { id: `agent-${timestamp}`, type: 'agent', content: '', timestamp, toolUses }
+}
+
 function fakeSession(name: string, ccConvId: string | null = 'conv-1'): Session {
   return {
     name,
@@ -251,6 +255,43 @@ describe('turn-length: ring buffer', () => {
     expect(obs[0]!.sec).toBe(5)
     expect(obs[0]!.session).toBe('rb-1')
     expect(obs[0]!.ccConvId).toBe('conv-rb1')
+  })
+
+  it('records toolUses on the observation', async () => {
+    const s = fakeSession('tu-1', 'conv-tu1')
+    observeFromRecapEntries('tu-1', [
+      entry('user',  '2026-05-18T12:00:00.000Z'),
+      agentEntry('2026-05-18T12:00:05.000Z', 4),
+      entry('user',  '2026-05-18T12:01:00.000Z'),
+    ], s)
+    const obs = getRecentObservations({ windowSec: 3600, session: 'tu-1' })
+    expect(obs).toHaveLength(1)
+    expect(obs[0]!.toolUses).toBe(4)
+  })
+
+  it('accumulates toolUses across multiple agent entries in one turn', async () => {
+    // A single turn can emit several agent entries across incremental parse
+    // batches; each carries only its own new tool_use count.
+    const s = fakeSession('tu-2', 'conv-tu2')
+    observeFromRecapEntries('tu-2', [entry('user', '2026-05-18T12:00:00.000Z')], s)
+    observeFromRecapEntries('tu-2', [agentEntry('2026-05-18T12:00:03.000Z', 2)], s)
+    observeFromRecapEntries('tu-2', [agentEntry('2026-05-18T12:00:06.000Z', 3)], s)
+    observeFromRecapEntries('tu-2', [entry('user', '2026-05-18T12:01:00.000Z')], s)
+    const obs = getRecentObservations({ windowSec: 3600, session: 'tu-2' })
+    expect(obs).toHaveLength(1)
+    expect(obs[0]!.toolUses).toBe(5)
+    expect(obs[0]!.sec).toBe(6)  // duration still uses the LAST assistant ts
+  })
+
+  it('defaults toolUses to 0 when agent entries omit it', async () => {
+    const s = fakeSession('tu-3', 'conv-tu3')
+    observeFromRecapEntries('tu-3', [
+      entry('user',  '2026-05-18T12:00:00.000Z'),
+      entry('agent', '2026-05-18T12:00:05.000Z'),
+      entry('user',  '2026-05-18T12:01:00.000Z'),
+    ], s)
+    const obs = getRecentObservations({ windowSec: 3600, session: 'tu-3' })
+    expect(obs[0]!.toolUses).toBe(0)
   })
 
   it('filters by session', async () => {

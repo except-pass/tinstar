@@ -485,6 +485,7 @@ export const spec = {
                           sec: { type: 'number' },
                           session: { type: 'string' },
                           ccConvId: { type: 'string' },
+                          toolUses: { type: 'integer' },
                         },
                       },
                     },

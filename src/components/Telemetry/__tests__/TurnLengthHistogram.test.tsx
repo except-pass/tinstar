@@ -51,4 +51,57 @@ describe('TurnLengthHistogram', () => {
     // 10 X labels + 2 Y labels (0, max) = 12
     expect(texts.length).toBeGreaterThanOrEqual(10)
   })
+
+  it('draws no whisker when toolStats is omitted', () => {
+    const cells = emptyCells()
+    cells[2]![5] = 3
+    const { container } = render(
+      <TurnLengthHistogram cells={cells} accent="255, 132, 100" bucketBounds={BUCKETS} />
+    )
+    expect(container.querySelectorAll('[data-tool-whisker]')).toHaveLength(0)
+  })
+
+  it('draws a whisker glyph only for buckets that have both turns and tool stats', () => {
+    const cells = emptyCells()
+    cells[2]![5] = 3   // bucket 2 has turns
+    cells[7]![0] = 1   // bucket 7 has turns but no tool stats
+    const toolStats = Array.from({ length: 10 }, () => null) as (
+      | { p10: number; p50: number; p90: number; n: number }
+      | null
+    )[]
+    toolStats[2] = { p10: 1, p50: 4, p90: 9, n: 3 }
+    const { container } = render(
+      <TurnLengthHistogram cells={cells} accent="255, 132, 100" bucketBounds={BUCKETS} toolStats={toolStats} />
+    )
+    const whiskers = container.querySelectorAll('[data-tool-whisker]')
+    expect(whiskers).toHaveLength(1)
+    const w = whiskers[0]!
+    expect(w.getAttribute('data-tool-whisker')).toBe('2')
+    expect(w.getAttribute('data-tool-p90')).toBe('9')
+    // range line + 2 caps + p50 dot
+    expect(w.querySelectorAll('line')).toHaveLength(3)
+    expect(w.querySelectorAll('circle')).toHaveLength(1)
+  })
+
+  it('places a higher p90 whisker cap above a lower one (shared tool scale)', () => {
+    const cells = emptyCells()
+    cells[1]![0] = 2
+    cells[5]![0] = 2
+    const toolStats = Array.from({ length: 10 }, () => null) as (
+      | { p10: number; p50: number; p90: number; n: number }
+      | null
+    )[]
+    toolStats[1] = { p10: 0, p50: 1, p90: 2, n: 2 }    // few tools
+    toolStats[5] = { p10: 4, p50: 8, p90: 10, n: 2 }   // many tools → whisker reaches top
+    const { container } = render(
+      <TurnLengthHistogram cells={cells} accent="255, 132, 100" bucketBounds={BUCKETS} toolStats={toolStats} />
+    )
+    const cap = (bucket: string) => {
+      const g = container.querySelector(`[data-tool-whisker="${bucket}"]`)!
+      // first <line> is the range line from p10 to p90; its y2 is the p90 cap height
+      return Number(g.querySelector('line')!.getAttribute('y2'))
+    }
+    // Higher tool count → smaller y (SVG y grows downward). toolMax=10, so bucket 5's p90 sits at the top.
+    expect(cap('5')).toBeLessThan(cap('1'))
+  })
 })
