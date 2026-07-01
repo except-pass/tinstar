@@ -45,7 +45,7 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote } from '../../domain/types'
+import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { isPinSet, addReply, mergePreservingReplies } from '../../domain/pinSet'
@@ -429,7 +429,7 @@ interface CreateSessionParams {
   focus?: boolean
 }
 
-interface CreateSessionContext {
+export interface CreateSessionContext {
   cfg: TinstarConfig
   sessDir: string
   docStore: DocumentStore
@@ -440,6 +440,29 @@ interface CreateSessionContext {
   dashboardUrl: string
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
   natsHealth?: import('../nats-health').NatsHealthMonitor
+}
+
+/**
+ * Shared post-launch registration for a session that has just been started
+ * (created fresh OR revived from the graveyard). Registers NATS subscriptions,
+ * seeds topic metadata, tracks broker health, enters the ready queue, and emits
+ * managed_session.created. The caller owns building/upserting the Run (the shape
+ * differs between a fresh create and a revive), then calls this so both paths
+ * wire the same session-lifecycle plumbing and cannot silently diverge.
+ */
+export function registerLaunchedSession(
+  deps: Pick<CreateSessionContext, 'docStore' | 'natsTraffic' | 'natsHealth' | 'readyQueue' | 'sse' | 'emitSessionEvent'>,
+  name: string,
+  resolvedNats: { enabled: boolean; subscriptions: string[] } | null,
+  status: SessionStatus,
+): void {
+  registerSaloonSubs(deps.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+  bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, deps.docStore)
+  if (resolvedNats?.enabled) deps.natsHealth?.trackSession(name)
+  deps.readyQueue.onStatusChange(name, status)
+  deps.sse.setReadyQueue(deps.readyQueue.getQueue())
+  deps.sse.broadcastReadyQueueUpdate()
+  deps.emitSessionEvent('managed_session.created', { name, state: 'running' })
 }
 
 async function createSessionInternal(
@@ -627,14 +650,12 @@ async function createSessionInternal(
     ...(focus === false ? { focusOnCreate: false } : {}),
   })
 
-  registerSaloonSubs(natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
-  bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, docStore)
-  if (resolvedNats?.enabled) natsHealth?.trackSession(name)
-
-  readyQueue.onStatusChange(name, initialStatus)
-  sse.setReadyQueue(readyQueue.getQueue())
-  sse.broadcastReadyQueueUpdate()
-  emitSessionEvent('managed_session.created', { name, state: 'running' })
+  registerLaunchedSession(
+    { docStore, natsTraffic, natsHealth, readyQueue, sse, emitSessionEvent },
+    name,
+    resolvedNats,
+    initialStatus,
+  )
 
   const updated = getSession(sessDir, name)!
   return { ok: true, session: updated }
@@ -3432,15 +3453,30 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // revive — re-materialize the session from the tombstone and resume it.
         withBody(req, res, async () => {
           try {
+            // Resolved once the revived name is known (inside materialize), read
+            // again in resume — so a revived session gets the SAME NATS + ready-queue
+            // + Run wiring a fresh session does (first-class citizen).
+            let reviveNats: { enabled: boolean; subscriptions: string[] } | null = null
+            let reviveColor: string | undefined
             const result = await reviveFromTombstone(tombstone, {
               findTranscript: (id) => findTranscriptByConvId(id),
               sessionExists: (n) => getSession(sessDir, n) !== null,
               pathExists: (p) => existsSync(p),
               materialize: ({ name, convId: cid, workspacePath }) => {
+                // Resolve NATS from the tombstone's task context (fresh epoch —
+                // the dead session's old subject tree is gone). computeNatsSubscriptions
+                // degrades to a DM-only inbox if the task no longer exists.
+                const natsCtx = { sessionName: name, spaceId: ctx.docStore.activeSpaceId || null, taskId: tombstone.taskId || null, epicId: null, initiativeId: null }
+                if (tombstone.taskId || natsCtx.spaceId) {
+                  reviveNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, ctx.docStore) }
+                }
+                reviveColor = tombstone.taskId ? ctx.docStore.getTask(tombstone.taskId)?.settings?.defaultRunColor : undefined
                 createSession(sessDir, {
                   name,
                   backend: 'tmux',
                   workspace: workspacePath ? { path: workspacePath } : undefined,
+                  // Persist NATS on the session so startTmuxSession injects the bus env.
+                  nats: reviveNats,
                   agent: tombstone.task ? { name, description: tombstone.coversSummary, prompt: '' } : null,
                 })
                 // Bind the ORIGINAL conversation so --resume targets it.
@@ -3457,17 +3493,25 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 updateSession(sessDir, name, { port: startResult.port, ttydPid: startResult.ttydPid ?? null })
                 tmuxBackend.onTtydRestart(name, (pid) => updateSession(sessDir, name, { ttydPid: pid }))
                 setState(sessDir, name, 'running')
+                const nats: { enabled: boolean; subscriptions: string[] } | null = reviveNats
+                const natsSubject = nats?.enabled ? (nats.subscriptions[1] ?? nats.subscriptions[0]) : undefined
                 ctx.docStore.upsertRun(name, {
-                  id: name, status: 'running', sessionId: name,
+                  id: name, color: reviveColor, status: 'running', sessionId: name,
                   initiative: tombstone.initiative ?? '', epic: tombstone.epic ?? '', task: tombstone.task ?? '',
                   repo: tombstone.workspacePath ?? '', worktree: '',
                   taskId: tombstone.taskId ?? '', worktreeId: '',
                   touchedFiles: [], recapEntries: [], rawLogs: '',
                   port: startResult.port ?? null, backend: 'tmux',
                   backendInfo: `tmux session: ${name}`,
+                  natsEnabled: nats?.enabled ?? false,
+                  natsSubject,
+                  natsSubscriptions: nats?.enabled ? nats.subscriptions : undefined,
                   createdAt: new Date().toISOString(), spaceId: ctx.docStore.activeSpaceId,
                 })
-                emitSessionEvent('managed_session.created', { name, state: 'running' })
+                registerLaunchedSession(
+                  { docStore: ctx.docStore, natsTraffic: ctx.natsTraffic, natsHealth: ctx.natsHealth, readyQueue: ctx.readyQueue, sse: ctx.sse, emitSessionEvent },
+                  name, nats, 'running',
+                )
               },
             })
             ok(res, result)
