@@ -23,12 +23,18 @@ export interface NecroResult {
    *  substitute cwd — the agent remembers the conversation but its code context
    *  is absent (AE1). */
   workspaceMissing?: boolean
+  /** True when the live Claude Code transcript was gone and revive was served
+   *  from Tinstar's own snapshot (durable revive). */
+  restoredFromSnapshot?: boolean
 }
 
 export interface NecroDeps {
   /** Resolve the Claude Code transcript path for a convId, or null if gone.
    *  Back this with findTranscriptByConvId — never a newest-mtime walk. */
   findTranscript: (convId: string) => string | null
+  /** Whether Tinstar holds a durable snapshot for this convId (revivable even
+   *  when the live transcript is gone). */
+  hasSnapshot: (convId: string) => boolean
   /** Whether a session dir with this name currently exists (live or stopped). */
   sessionExists: (name: string) => boolean
   /** Whether a filesystem path still exists (used to test the worktree). */
@@ -52,8 +58,12 @@ export function reviveName(base: string, exists: (name: string) => boolean): str
 }
 
 export async function reviveFromTombstone(tombstone: Tombstone, deps: NecroDeps): Promise<NecroResult> {
-  // AE2: transcript gone → not revivable; caller surfaces the covers-summary.
-  if (!deps.findTranscript(tombstone.convId)) {
+  const live = deps.findTranscript(tombstone.convId)
+  const snapshot = deps.hasSnapshot(tombstone.convId)
+  // Revivable when the live transcript is present OR a durable snapshot exists.
+  // Only when neither exists (AE2, pre-snapshot graves) do we refuse and let the
+  // caller surface the covers-summary.
+  if (!live && !snapshot) {
     return { revivable: false, reason: 'transcript-unavailable' }
   }
 
@@ -64,6 +74,8 @@ export async function reviveFromTombstone(tombstone: Tombstone, deps: NecroDeps)
   const workspacePath = hasWorkspace ? tombstone.workspacePath! : null
 
   // Bind the stored convId (fidelity) — resume against exactly this conversation.
+  // The caller's materialize places the transcript (live or snapshot) at the
+  // revive cwd's --resume path.
   await deps.materialize({ name, convId: tombstone.convId, workspacePath })
   await deps.resume(name)
 
@@ -71,5 +83,6 @@ export async function reviveFromTombstone(tombstone: Tombstone, deps: NecroDeps)
     revivable: true,
     sessionName: name,
     workspaceMissing: !!tombstone.workspacePath && !hasWorkspace,
+    restoredFromSnapshot: !live && snapshot,
   }
 }

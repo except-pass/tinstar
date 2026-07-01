@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, watch, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, watch, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
@@ -20,9 +20,10 @@ import type { ErrorCode } from '../../domain/api'
 import type { TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
-import { readLatestModel, readLatestModelAt, findTranscriptByConvId } from '../sessions/transcript-parser'
+import { readLatestModel, readLatestModelAt, findTranscriptByConvId, getTranscriptPath } from '../sessions/transcript-parser'
 import { buildCoversSummary } from '../sessions/covers-summary'
 import { reviveFromTombstone } from '../sessions/necro'
+import { snapshotTranscript, hasGraveyardSnapshot, deleteGraveyardSnapshot, graveyardSnapshotPath, placeTranscriptAt } from '../sessions/graveyard-snapshot'
 import {
   createSession,
   getSession,
@@ -3337,6 +3338,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         if (convId) {
           try {
             const retiredRun = ctx.docStore.getRun(name)
+            // Durable snapshot: copy the transcript into Tinstar's own store so
+            // revive survives Claude Code pruning the original. Prefer the direct
+            // cwd-derived path, falling back to a convId scan; best-effort.
+            let snapSource: string | null = null
+            if (session?.workspace.path) {
+              const p = getTranscriptPath(session.workspace.path, convId)
+              if (existsSync(p)) snapSource = p
+            }
+            if (!snapSource) snapSource = findTranscriptByConvId(convId)
+            const snapshotted = snapshotTranscript(cfg.dirs.root, convId, snapSource)
             ctx.docStore.upsertTombstone({
               convId,
               sessionName: name,
@@ -3355,6 +3366,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               model: session?.model ?? session?.modelOverride ?? undefined,
               created: session?.created,
               retiredAt: new Date().toISOString(),
+              snapshotted,
             })
             emitSessionEvent('managed_session.retired', { name, convId })
           } catch (err) {
@@ -3446,6 +3458,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         if (action === 'purge') {
           ctx.docStore.deleteTombstone(convId)
+          deleteGraveyardSnapshot(cfg.dirs.root, convId)
           ok(res, null)
           return true
         }
@@ -3460,9 +3473,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             let reviveColor: string | undefined
             const result = await reviveFromTombstone(tombstone, {
               findTranscript: (id) => findTranscriptByConvId(id),
+              hasSnapshot: (id) => hasGraveyardSnapshot(cfg.dirs.root, id),
               sessionExists: (n) => getSession(sessDir, n) !== null,
               pathExists: (p) => existsSync(p),
               materialize: ({ name, convId: cid, workspacePath }) => {
+                // The revive cwd is the original worktree when it still exists, else
+                // a deterministic fallback under the config root. `--resume` reads
+                // the transcript from the cwd-derived path, so place it there first
+                // (from the live transcript or our durable snapshot).
+                const reviveCwd = workspacePath ?? join(cfg.dirs.root, 'graveyard-revives', name)
+                mkdirSync(reviveCwd, { recursive: true })
+                placeTranscriptAt(
+                  getTranscriptPath(reviveCwd, cid),
+                  findTranscriptByConvId(cid) ?? graveyardSnapshotPath(cfg.dirs.root, cid),
+                )
                 // Resolve NATS from the tombstone's task context (fresh epoch —
                 // the dead session's old subject tree is gone). computeNatsSubscriptions
                 // degrades to a DM-only inbox if the task no longer exists.
@@ -3474,7 +3498,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 createSession(sessDir, {
                   name,
                   backend: 'tmux',
-                  workspace: workspacePath ? { path: workspacePath } : undefined,
+                  workspace: { path: reviveCwd },
                   // Persist NATS on the session so startTmuxSession injects the bus env.
                   nats: reviveNats,
                   agent: tombstone.task ? { name, description: tombstone.coversSummary, prompt: '' } : null,

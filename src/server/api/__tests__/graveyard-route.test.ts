@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { handleRequest, type RouteContext } from '../routes'
 import { DocumentStore } from '../../stores/document-store'
 import { createSession, getSession } from '../../sessions/session'
+import { graveyardSnapshotPath } from '../../sessions/graveyard-snapshot'
 import type { Run, RecapEntry, Tombstone } from '../../../domain/types'
 import type { BusEvent } from '../../types'
 
@@ -169,14 +170,21 @@ describe('GET/POST /api/graveyard', () => {
     }
   })
 
-  it('purge removes a tombstone; search no longer returns it (AE3)', async () => {
+  it('purge removes a tombstone AND its durable snapshot (AE3, R5)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
     const srv = createTestServer(root)
     try {
       srv.docStore.upsertTombstone(makeTomb('doomed', 'to be forgotten'))
+      // Seed a snapshot file the way retire-time would.
+      const snap = graveyardSnapshotPath(root, 'doomed')
+      mkdirSync(dirname(snap), { recursive: true })
+      writeFileSync(snap, '{"turn":1}\n')
+      expect(existsSync(snap)).toBe(true)
+
       const res = await srv.fetch('/api/graveyard/doomed/purge', { method: 'POST' })
       expect(res.status).toBe(200)
       expect(srv.docStore.getTombstone('doomed')).toBeUndefined()
+      expect(existsSync(snap)).toBe(false) // snapshot forgotten too
     } finally {
       await srv.close()
       rmSync(root, { recursive: true, force: true })

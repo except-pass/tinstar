@@ -123,6 +123,9 @@ export interface Tombstone {
   created?: string
   /** ISO timestamp the session was retired (tombstoned). */
   retiredAt: string
+  /** True when Tinstar snapshotted the transcript into its own store at
+   *  retire-time, so revive survives Claude Code pruning the original. */
+  snapshotted?: boolean
 }
 
 export interface CommitRecord {

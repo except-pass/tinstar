@@ -18,6 +18,7 @@ function deps(overrides: Partial<NecroDeps> = {}): NecroDeps & { materialized: u
   const resumed: string[] = []
   return {
     findTranscript: () => '/home/u/.claude/projects/x/conv-xyz.jsonl',
+    hasSnapshot: () => false,
     sessionExists: () => false,
     pathExists: () => true,
     materialize: opts => { materialized.push(opts) },
@@ -36,6 +37,21 @@ describe('reviveFromTombstone', () => {
     expect(res.reason).toBe('transcript-unavailable')
     expect(d.materialized).toHaveLength(0)
     expect(d.resumed).toHaveLength(0)
+  })
+
+  it('revives from a durable snapshot when the live transcript is gone', async () => {
+    const d = deps({ findTranscript: () => null, hasSnapshot: () => true })
+    const res = await reviveFromTombstone(tomb(), d)
+    expect(res.revivable).toBe(true)
+    expect(res.restoredFromSnapshot).toBe(true)
+    expect(d.materialized).toHaveLength(1)
+  })
+
+  it('refuses when neither live transcript nor snapshot exists', async () => {
+    const d = deps({ findTranscript: () => null, hasSnapshot: () => false })
+    const res = await reviveFromTombstone(tomb(), d)
+    expect(res.revivable).toBe(false)
+    expect(res.reason).toBe('transcript-unavailable')
   })
 
   it('materializes with the stored convId and resumes (happy path + fidelity)', async () => {
