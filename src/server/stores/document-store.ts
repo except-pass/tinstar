@@ -715,6 +715,10 @@ export class DocumentStore {
   // --- Graveyard (retired sessions) ---
 
   upsertTombstone(data: Tombstone): void {
+    // A convId-less tombstone can't be revived or purged by key and is dropped
+    // on the next reload — reject it here so it never enters the store (symmetric
+    // with the load-path skip).
+    if (!data.convId) return
     const prev = this.graveyard.get(data.convId)
     if (prev && tombstoneEqual(prev, data)) return
     this.graveyard.set(data.convId, data)

@@ -8,6 +8,8 @@ import {
   hasGraveyardSnapshot,
   deleteGraveyardSnapshot,
   placeTranscriptAt,
+  reviveWorkdir,
+  deleteReviveWorkdir,
 } from '../graveyard-snapshot'
 
 function withTmp<T>(fn: (root: string) => T): T {
@@ -72,6 +74,18 @@ describe('graveyard-snapshot', () => {
     withTmp(root => {
       expect(placeTranscriptAt(join(root, 'x.jsonl'), null)).toBe(false)
       expect(placeTranscriptAt(join(root, 'x.jsonl'), join(root, 'missing.jsonl'))).toBe(false)
+    })
+  })
+
+  it('deleteReviveWorkdir removes the revived-session fallback cwd; absent is a no-op', () => {
+    withTmp(root => {
+      const wd = reviveWorkdir(root, 'askviktor-necro')
+      mkdirSync(wd, { recursive: true })
+      writeFileSync(join(wd, 'transcript.jsonl'), 'x')
+      expect(existsSync(wd)).toBe(true)
+      deleteReviveWorkdir(root, 'askviktor-necro')
+      expect(existsSync(wd)).toBe(false)
+      expect(() => deleteReviveWorkdir(root, 'askviktor-necro')).not.toThrow()
     })
   })
 })

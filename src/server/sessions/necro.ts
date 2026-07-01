@@ -47,19 +47,22 @@ export interface NecroDeps {
    *  graveyard (removes the tombstone + its snapshot). Called with the convId. */
   onRevived: (convId: string) => void
   /** Roll back a half-materialized session when `launch` throws, so a failed
-   *  revive doesn't leave an orphan that later name-collision probes skip over. */
-  onLaunchFailed?: (name: string) => void
+   *  revive doesn't leave an orphan that later name-collision probes skip over.
+   *  Async so the caller can tear down the tmux/ttyd backend and release the port
+   *  before removing the session dir. */
+  onLaunchFailed?: (name: string) => void | Promise<void>
 }
 
-/** Pick a session name for the revived agent that doesn't collide with a live one. */
+/** Pick a session name for the revived agent that doesn't collide with a live one.
+ *  Unbounded: the `exists` predicate guarantees termination, and there's no clean
+ *  non-deterministic fallback to switch to. */
 export function reviveName(base: string, exists: (name: string) => boolean): string {
   const first = `${base}-necro`
   if (!exists(first)) return first
-  for (let i = 2; i < 100; i++) {
+  for (let i = 2; ; i++) {
     const candidate = `${first}-${i}`
     if (!exists(candidate)) return candidate
   }
-  return `${first}-${Date.now()}`
 }
 
 export async function reviveFromTombstone(tombstone: Tombstone, deps: NecroDeps): Promise<NecroResult> {
@@ -84,7 +87,7 @@ export async function reviveFromTombstone(tombstone: Tombstone, deps: NecroDeps)
   try {
     await deps.launch({ name, convId: tombstone.convId, workspacePath })
   } catch (err) {
-    deps.onLaunchFailed?.(name)
+    await deps.onLaunchFailed?.(name)
     throw err
   }
 

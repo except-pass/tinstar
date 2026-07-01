@@ -23,7 +23,7 @@ import { detectBranch } from '../sessions/session'
 import { readLatestModel, readLatestModelAt, findTranscriptByConvId, getTranscriptPath } from '../sessions/transcript-parser'
 import { buildCoversSummary } from '../sessions/covers-summary'
 import { reviveFromTombstone } from '../sessions/necro'
-import { snapshotTranscript, hasGraveyardSnapshot, deleteGraveyardSnapshot, graveyardSnapshotPath, placeTranscriptAt } from '../sessions/graveyard-snapshot'
+import { snapshotTranscript, hasGraveyardSnapshot, deleteGraveyardSnapshot, graveyardSnapshotPath, placeTranscriptAt, reviveWorkdir, deleteReviveWorkdir } from '../sessions/graveyard-snapshot'
 import {
   createSession,
   getSession,
@@ -442,6 +442,12 @@ export interface CreateSessionContext {
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
   natsHealth?: import('../nats-health').NatsHealthMonitor
 }
+
+/** convIds with a revive in progress — a single-writer guard so two concurrent
+ *  POST /revive for the same grave can't both materialize a session resuming the
+ *  same conversation and race on the shared transcript. Module-scoped so it
+ *  persists across requests. */
+const revivesInFlight = new Set<string>()
 
 /**
  * Shared post-launch registration for a session that has just been started
@@ -3348,6 +3354,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             }
             if (!snapSource) snapSource = findTranscriptByConvId(convId)
             const snapshotted = snapshotTranscript(cfg.dirs.root, convId, snapSource)
+            // Session.model is a derived, non-persisted field (empty on a disk
+            // read), so capture the real last-run model from the transcript.
+            const lastModel = snapSource ? readLatestModelAt(snapSource) : null
             ctx.docStore.upsertTombstone({
               convId,
               sessionName: name,
@@ -3363,7 +3372,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               epic: retiredRun?.epic || undefined,
               initiative: retiredRun?.initiative || undefined,
               workspacePath: session?.workspace.path ?? undefined,
-              model: session?.model ?? session?.modelOverride ?? undefined,
+              model: lastModel ?? session?.modelOverride ?? undefined,
               created: session?.created,
               retiredAt: new Date().toISOString(),
               snapshotted,
@@ -3425,6 +3434,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             log.warn('delete', `failed to remove session dir for ${name}, retrying...`)
             setTimeout(() => deleteSession(sessDir, name), 2000)
           }
+          // If this was a necro'd session with a fallback cwd, remove its
+          // graveyard-revives workdir so revive-then-delete cycles don't leak.
+          deleteReviveWorkdir(cfg.dirs.root, name)
         })()
 
         return true
@@ -3468,6 +3480,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
 
         // revive — re-materialize the session from the tombstone and resume it.
+        // Single-writer guard: reject a second concurrent revive of the same grave.
+        if (revivesInFlight.has(convId)) return fail(res, 'CONFLICT', `Revive already in progress for '${convId}'`)
+        revivesInFlight.add(convId)
         withBody(req, res, async () => {
           try {
             const result = await reviveFromTombstone(tombstone, {
@@ -3482,7 +3497,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 // a deterministic fallback under the config root. `--resume` reads
                 // the transcript from the cwd-derived path, so place it there first
                 // (from the live transcript or our durable snapshot).
-                const reviveCwd = workspacePath ?? join(cfg.dirs.root, 'graveyard-revives', name)
+                const reviveCwd = workspacePath ?? reviveWorkdir(cfg.dirs.root, name)
                 mkdirSync(reviveCwd, { recursive: true })
                 placeTranscriptAt(
                   getTranscriptPath(reviveCwd, cid),
@@ -3537,10 +3552,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 )
               },
               // Roll back a half-created session so failed revives don't orphan a
-              // 'creating' dir that climbs the -necro suffix on retry.
-              onLaunchFailed: (name) => {
+              // 'creating' dir that climbs the -necro suffix on retry. Mirror the
+              // normal delete path: stop the tmux/ttyd backend and release the port
+              // (which startTmuxSession may have already bound) BEFORE removing the
+              // dir — otherwise the record is deleted while tmux/ttyd/port leak.
+              onLaunchFailed: async (name) => {
+                const stale = getSession(sessDir, name)
+                if (stale) {
+                  try { await tmuxBackend.deleteTmuxSession(cfg, stale) } catch { /* best-effort */ }
+                  if (stale.port) { try { tmuxBackend.releasePort(stale.port) } catch { /* best-effort */ } }
+                }
                 try { ctx.docStore.deleteRun(name) } catch { /* best-effort */ }
                 try { deleteSession(sessDir, name) } catch { /* best-effort */ }
+                deleteReviveWorkdir(cfg.dirs.root, name)
               },
               // A raised grave leaves Boot Hill — consume the tombstone + snapshot.
               onRevived: (cid) => {
@@ -3552,6 +3576,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           } catch (err) {
             log.warn('graveyard', `revive ${convId} failed: ${(err as Error).message}`)
             fail(res, 'INTERNAL', (err as Error).message)
+          } finally {
+            revivesInFlight.delete(convId)
           }
         })
         return true

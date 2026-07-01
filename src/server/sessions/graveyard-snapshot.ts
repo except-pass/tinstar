@@ -53,6 +53,22 @@ export function deleteGraveyardSnapshot(rootDir: string, convId: string): void {
   }
 }
 
+/** Where a worktree-missing revive runs (its cwd holds the restored transcript). */
+export function reviveWorkdir(rootDir: string, name: string): string {
+  return join(rootDir, 'graveyard-revives', name)
+}
+
+/** Remove a revived session's fallback workdir on teardown, so revive-then-delete
+ *  cycles don't leave orphaned transcript copies accumulating under the config
+ *  root. Best-effort no-op when the session used a real worktree instead. */
+export function deleteReviveWorkdir(rootDir: string, name: string): void {
+  try {
+    rmSync(reviveWorkdir(rootDir, name), { recursive: true, force: true })
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** Ensure a transcript exists at `destPath` (the cwd-derived path `--resume`
  *  reads), copying from `sourcePath` when it isn't already there. Returns true
  *  when the destination ends up populated. */

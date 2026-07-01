@@ -72,6 +72,17 @@ describe('DocumentStore graveyard', () => {
     expect(store.getTombstone('conv-abc')!.snapshotted).toBe(true)
   })
 
+  it('refuses to store a convId-less tombstone (symmetric with the load skip)', () => {
+    const store = new DocumentStore()
+    const events: unknown[] = []
+    store.changes.on('change', e => events.push(e))
+
+    store.upsertTombstone(makeTombstone({ convId: '' }))
+
+    expect(store.getAllTombstones()).toHaveLength(0)
+    expect(events).toHaveLength(0)
+  })
+
   it('purges a tombstone and reports whether one was removed', () => {
     const store = new DocumentStore()
     store.upsertTombstone(makeTombstone())
