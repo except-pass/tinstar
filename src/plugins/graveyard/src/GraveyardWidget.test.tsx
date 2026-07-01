@@ -73,6 +73,21 @@ describe('GraveyardWidget', () => {
     expect(screen.getByText(/Best-effort/i)).toBeInTheDocument()
   })
 
+  it('shows a distinct error (not the empty state) when the load fails', async () => {
+    const dispose = vi.fn()
+    const api = {
+      pluginId: 'graveyard', version: '1.0.0',
+      http: { fetch: vi.fn(async () => { throw new Error('backend down') }) },
+      events: { subscribe: vi.fn(() => ({ dispose })) },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    } as unknown as TinstarPluginAPI
+    const Widget = makeGraveyardWidget(api)
+    render(<Widget {...props} />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument())
+    expect(screen.queryByText(/No retired sessions yet/i)).not.toBeInTheDocument()
+  })
+
   it('subscribes to the delta channel and disposes on unmount', () => {
     const { api, dispose } = makeMockApi({ ok: true, data: { revivable: true } })
     const Widget = makeGraveyardWidget(api)

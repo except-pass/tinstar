@@ -29,15 +29,20 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
     const [selected, setSelected] = useState<string | null>(null)
     const [busy, setBusy] = useState<string | null>(null)
     const [notice, setNotice] = useState<string | null>(null)
+    const [loadError, setLoadError] = useState(false)
 
     const load = useCallback(async () => {
       try {
         const res = await api.http.fetch('/api/graveyard')
         const body = await res.json() as { ok: boolean; data?: Tombstone[] }
-        setGraves(body.ok && body.data ? body.data : [])
+        if (!body.ok || !body.data) { setLoadError(true); return }
+        setLoadError(false)
+        setGraves(body.data)
       } catch (err) {
+        // Distinct from an empty graveyard — a backend outage must not read as
+        // "nothing retired".
         api.logger.error('graveyard: load failed', err)
-        setGraves([])
+        setLoadError(true)
       }
     }, [])
 
@@ -82,8 +87,8 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
         }
         setNotice(
           r.workspaceMissing
-            ? `Raised as “${r.sessionName}” — its old workshop is dust, so it recalls the conversation but not the files.`
-            : `Raised as “${r.sessionName}”. Find it walkin' the canvas.`,
+            ? `Raised as “${orDash(r.sessionName)}” — its old workshop is dust, so it recalls the conversation but not the files.`
+            : `Raised as “${orDash(r.sessionName)}”. Find it walkin' the canvas.`,
         )
       } catch (err) {
         api.logger.error('graveyard: revive failed', err)
@@ -115,7 +120,7 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
              style={{ background: 'linear-gradient(180deg, #5b3f24 0%, #4a3319 100%)' }}>
           <span className="text-sm font-bold tracking-widest uppercase">🪦 Boot Hill</span>
           <span className="text-xs text-amber-300/80 italic">
-            {graves === null ? 'countin’ the graves…' : `${graves.length} buried here`}
+            {loadError ? 'couldn’t reach the graveyard' : graves === null ? 'countin’ the graves…' : `${graves.length} buried here`}
           </span>
         </div>
 
@@ -128,8 +133,14 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
 
         <div className="flex-1 flex min-h-0">
           <ul className="w-1/2 overflow-y-auto border-r-2 border-amber-900/50 text-sm">
-            {graves === null && <li className="px-3 py-2 text-amber-300/70 italic">Countin’ the graves…</li>}
-            {graves !== null && shown.length === 0 && (
+            {loadError && (
+              <li className="px-3 py-4 text-red-300/80 italic">
+                Couldn’t reach the graveyard.{' '}
+                <button onClick={() => void load()} className="underline hover:text-red-200">Try again</button>
+              </li>
+            )}
+            {!loadError && graves === null && <li className="px-3 py-2 text-amber-300/70 italic">Countin’ the graves…</li>}
+            {!loadError && graves !== null && shown.length === 0 && (
               <li className="px-3 py-4 text-amber-300/70 italic">
                 {graves.length === 0 ? 'Boot Hill stands empty — no souls buried yet.' : 'No graves match that name.'}
               </li>

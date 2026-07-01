@@ -128,7 +128,7 @@ The sharper edge is discoverability across time. When you (or an agent) are work
 - `src/server/sessions/reconcile.ts` — tmux-liveness death detection; `running|idle|needs_attention → stopped`. No `dead`/`archived` status exists (`src/domain/types.ts:10`).
 - `src/server/sessions/backends/tmux.ts` — `buildAgentCommand` resume path appends `--resume <conversation.id>`; `startTmuxSession` / `reattachTmuxSession`.
 - `src/server/sessions/resume.ts` — `ensureResumeReady`, `detectConversationId` recovery from `claude-state/`.
-- `src/server/routes.ts` — `POST /api/sessions/:name/start` (revive path, ~`:3192`); `DELETE /api/sessions/:name` (purges the whole dir, ~`:3298`).
+- `src/server/api/routes.ts` — `POST /api/sessions/:name/start` (revive path); `DELETE /api/sessions/:name` (purges the whole dir; emits `managed_session.deleted`).
 - `src/server/sessions/transcript-parser.ts` — transcript path is *derived* from workspace path + convId; `findTranscriptByConvId` scans `~/.claude/projects/*/` for `<convId>.jsonl` (~`:295`).
 - No stored per-session title/summary/topic exists today — "what it covers" is implicit in task hierarchy + recap entries (`src/server/stores/document-store.ts`).
 - Prior art: the "rehydrate from history" experiment (feed a dead session's transcript to a fresh agent and ask a context-dependent question) — the ephemeral alternative deliberately not chosen here in favor of true revive.

@@ -64,7 +64,7 @@ Notes:
   the search result instead. Graves with `snapshotted:true` are durable — Tinstar snapshotted
   the transcript at retire, so they revive even after Claude Code prunes the original; graves
   without it are best-effort.
-- Always build the URL from `TINSTAR_DASHBOARD_URL` (top of this skill) — never a raw port.
+- Use `$TINSTAR_URL` in commands (it defaults from `TINSTAR_DASHBOARD_URL`, top of this skill) — never hardcode a raw port.
 
 ## Creating a standalone session (not a child hand)
 
