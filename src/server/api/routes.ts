@@ -22,9 +22,11 @@ import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
 import { readLatestModel, readLatestModelAt, findTranscriptByConvId } from '../sessions/transcript-parser'
 import { buildCoversSummary } from '../sessions/covers-summary'
+import { reviveFromTombstone } from '../sessions/necro'
 import {
   createSession,
   getSession,
+  setConversationId,
   updateSession,
   deleteSession,
   setState,
@@ -3329,7 +3331,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               epic: retiredRun?.epic || undefined,
               initiative: retiredRun?.initiative || undefined,
               workspacePath: session?.workspace.path ?? undefined,
-              model: retiredRun?.model ?? session?.modelOverride ?? undefined,
+              model: session?.model ?? session?.modelOverride ?? undefined,
               created: session?.created,
               retiredAt: new Date().toISOString(),
             })
@@ -3392,6 +3394,87 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           }
         })()
 
+        return true
+      }
+    }
+
+    // GET /api/graveyard?q=<query> — search retired-session tombstones.
+    if (method === 'GET' && (url === '/api/graveyard' || url.startsWith('/api/graveyard?'))) {
+      const q = (new URL(url, 'http://localhost').searchParams.get('q') ?? '').trim().toLowerCase()
+      const all = ctx.docStore.getAllTombstones()
+      const matched = q
+        ? all.filter(t =>
+            [t.coversSummary, t.sessionName, t.task, t.epic, t.initiative]
+              .some(f => f?.toLowerCase().includes(q)))
+        : all
+      // Newest graves first.
+      matched.sort((a, b) => (a.retiredAt < b.retiredAt ? 1 : a.retiredAt > b.retiredAt ? -1 : 0))
+      ok(res, matched)
+      return true
+    }
+
+    // POST /api/graveyard/:convId/revive — necro a tombstone (best-effort).
+    // POST /api/graveyard/:convId/purge  — forget a tombstone forever.
+    {
+      const graveyardAction = (url.split('?')[0] ?? url).match(/^\/api\/graveyard\/([^/]+)\/(revive|purge)$/)
+      if (method === 'POST' && graveyardAction) {
+        const convId = decodeURIComponent(graveyardAction[1]!)
+        const action = graveyardAction[2]!
+        const tombstone = ctx.docStore.getTombstone(convId)
+        if (!tombstone) return fail(res, 'NOT_FOUND', `No graveyard entry for '${convId}'`)
+
+        if (action === 'purge') {
+          ctx.docStore.deleteTombstone(convId)
+          ok(res, null)
+          return true
+        }
+
+        // revive — re-materialize the session from the tombstone and resume it.
+        withBody(req, res, async () => {
+          try {
+            const result = await reviveFromTombstone(tombstone, {
+              findTranscript: (id) => findTranscriptByConvId(id),
+              sessionExists: (n) => getSession(sessDir, n) !== null,
+              pathExists: (p) => existsSync(p),
+              materialize: ({ name, convId: cid, workspacePath }) => {
+                createSession(sessDir, {
+                  name,
+                  backend: 'tmux',
+                  workspace: workspacePath ? { path: workspacePath } : undefined,
+                  agent: tombstone.task ? { name, description: tombstone.coversSummary, prompt: '' } : null,
+                })
+                // Bind the ORIGINAL conversation so --resume targets it.
+                setConversationId(sessDir, name, cid)
+              },
+              resume: async (name) => {
+                const session = getSession(sessDir, name)
+                if (!session) throw new Error(`revived session '${name}' vanished before resume`)
+                const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+                const startResult = await tmuxBackend.startTmuxSession(cfg, {
+                  session, secrets: secrets(), port, template: null,
+                  appendSystemPrompt: session.appendSystemPrompt, agent: session.agent,
+                })
+                updateSession(sessDir, name, { port: startResult.port, ttydPid: startResult.ttydPid ?? null })
+                tmuxBackend.onTtydRestart(name, (pid) => updateSession(sessDir, name, { ttydPid: pid }))
+                setState(sessDir, name, 'running')
+                ctx.docStore.upsertRun(name, {
+                  id: name, status: 'running', sessionId: name,
+                  initiative: tombstone.initiative ?? '', epic: tombstone.epic ?? '', task: tombstone.task ?? '',
+                  repo: tombstone.workspacePath ?? '', worktree: '',
+                  taskId: tombstone.taskId ?? '', worktreeId: '',
+                  touchedFiles: [], recapEntries: [], rawLogs: '',
+                  port: startResult.port ?? null, backend: 'tmux',
+                  backendInfo: `tmux session: ${name}`,
+                  createdAt: new Date().toISOString(), spaceId: ctx.docStore.activeSpaceId,
+                } as unknown as Run)
+                emitSessionEvent('managed_session.created', { name, state: 'running' })
+              },
+            })
+            ok(res, result)
+          } catch (err) {
+            fail(res, 'INTERNAL', (err as Error).message)
+          }
+        })
         return true
       }
     }

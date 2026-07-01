@@ -128,3 +128,89 @@ describe('DELETE /api/sessions/:name — entomb to graveyard', () => {
     }
   })
 })
+
+function makeTomb(convId: string, summary: string): Tombstone {
+  return { convId, sessionName: convId, coversSummary: summary, retiredAt: `2026-07-01T00:00:0${convId.length % 10}Z` }
+}
+
+describe('GET/POST /api/graveyard', () => {
+  it('search filters tombstones by query (case-insensitive)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      srv.docStore.upsertTombstone(makeTomb('c1', 'Redis caching layer'))
+      srv.docStore.upsertTombstone(makeTomb('c2', 'Graveyard necro design'))
+      srv.docStore.upsertTombstone(makeTomb('c3', 'auth refactor'))
+
+      const res = await srv.fetch('/api/graveyard?q=NECRO')
+      expect(res.status).toBe(200)
+      const body = await res.json() as { ok: boolean; data: Tombstone[] }
+      expect(body.ok).toBe(true)
+      expect(body.data.map(t => t.convId)).toEqual(['c2'])
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('search with no query returns all tombstones, newest first', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      srv.docStore.upsertTombstone({ convId: 'old', sessionName: 'old', coversSummary: 'x', retiredAt: '2026-06-01T00:00:00Z' })
+      srv.docStore.upsertTombstone({ convId: 'new', sessionName: 'new', coversSummary: 'y', retiredAt: '2026-06-30T00:00:00Z' })
+
+      const res = await srv.fetch('/api/graveyard')
+      const body = await res.json() as { data: Tombstone[] }
+      expect(body.data.map(t => t.convId)).toEqual(['new', 'old'])
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('purge removes a tombstone; search no longer returns it (AE3)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      srv.docStore.upsertTombstone(makeTomb('doomed', 'to be forgotten'))
+      const res = await srv.fetch('/api/graveyard/doomed/purge', { method: 'POST' })
+      expect(res.status).toBe(200)
+      expect(srv.docStore.getTombstone('doomed')).toBeUndefined()
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('revive on an unknown convId returns NOT_FOUND', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      const res = await srv.fetch('/api/graveyard/nope/revive', { method: 'POST' })
+      expect(res.status).toBe(404)
+      const body = await res.json() as { ok: boolean }
+      expect(body.ok).toBe(false)
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('revive reports not-revivable when the transcript is gone (AE2, no tmux)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      // A convId with no Claude Code transcript on disk → best-effort revive refuses.
+      srv.docStore.upsertTombstone(makeTomb('conv-no-transcript-xyz', 'stale ghost'))
+      const res = await srv.fetch('/api/graveyard/conv-no-transcript-xyz/revive', { method: 'POST' })
+      expect(res.status).toBe(200)
+      const body = await res.json() as { data: { revivable: boolean; reason?: string } }
+      expect(body.data.revivable).toBe(false)
+      expect(body.data.reason).toBe('transcript-unavailable')
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
