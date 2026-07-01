@@ -73,6 +73,12 @@ export interface ManagedSessionNatsOrphanedPayload {
   restartRecommended: boolean
 }
 
+export interface ManagedSessionRetiredPayload {
+  name: string
+  /** convId of the tombstone written to the graveyard — the necro handle. */
+  convId: string
+}
+
 export interface SessionDeletedPayload {
   sessionId: string
 }
@@ -175,6 +181,7 @@ export type BusEvent =
   | { type: 'managed_session.state_changed'; timestamp: string; payload: ManagedSessionStateChangedPayload }
   | { type: 'managed_session.deleted'; timestamp: string; payload: ManagedSessionDeletedPayload }
   | { type: 'managed_session.nats_orphaned'; timestamp: string; payload: ManagedSessionNatsOrphanedPayload }
+  | { type: 'managed_session.retired'; timestamp: string; payload: ManagedSessionRetiredPayload }
   | { type: 'ready_queue.update'; timestamp: string; payload: { queue: string[] } }
   | { type: 'pluginWidget.updated'; timestamp: string; payload: PluginWidgetUpdatedPayload }
 

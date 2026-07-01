@@ -20,7 +20,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
@@ -111,6 +111,23 @@ function touchedFilesEqual(a: TouchedFile[], b: TouchedFile[]): boolean {
   return true
 }
 
+function tombstoneEqual(a: Tombstone, b: Tombstone): boolean {
+  return (
+    a.convId === b.convId &&
+    a.sessionName === b.sessionName &&
+    a.coversSummary === b.coversSummary &&
+    a.taskId === b.taskId &&
+    a.task === b.task &&
+    a.epic === b.epic &&
+    a.initiative === b.initiative &&
+    a.workspacePath === b.workspacePath &&
+    a.model === b.model &&
+    a.created === b.created &&
+    a.retiredAt === b.retiredAt &&
+    (a.snapshotted ?? false) === (b.snapshotted ?? false)
+  )
+}
+
 export class DocumentStore {
   private initiatives = new Map<string, Initiative>()
   private epics = new Map<string, Epic>()
@@ -127,6 +144,9 @@ export class DocumentStore {
   private pluginWidgets = new Map<string, PluginWidgetInstance>()
   private constellationGraphs = new Map<string, ConstellationGraph>()
   private pinSets = new Map<string, PinSet>()
+  /** Retired-session graveyard, keyed by convId. Global (not space-scoped) and
+   *  intentionally excluded from clear()/clearSpace() — purge is the only removal. */
+  private graveyard = new Map<string, Tombstone>()
 
   activeSpaceId: string = ''
 
@@ -169,6 +189,14 @@ export class DocumentStore {
       // Pins have no legacy schema, so no migrate hook — load straight.
       if (data.pinSets) for (const set of data.pinSets) this.pinSets.set(set.spaceId, set)
       if (data.topicMetadata) for (const m of data.topicMetadata) this.topicMetadata.set(m.subject, m)
+      if (data.graveyard) for (const t of data.graveyard) {
+        // A tombstone without a convId can't be revived or purged — skip it.
+        if (!t || !t.convId) {
+          console.warn('[docstore] skipping corrupt tombstone entry on load:', t)
+          continue
+        }
+        this.graveyard.set(t.convId, t)
+      }
     } catch {
       // No file or corrupt — start fresh
     }
@@ -684,6 +712,34 @@ export class DocumentStore {
     return [...this.topicMetadata.values()]
   }
 
+  // --- Graveyard (retired sessions) ---
+
+  upsertTombstone(data: Tombstone): void {
+    // A convId-less tombstone can't be revived or purged by key and is dropped
+    // on the next reload — reject it here so it never enters the store (symmetric
+    // with the load-path skip).
+    if (!data.convId) return
+    const prev = this.graveyard.get(data.convId)
+    if (prev && tombstoneEqual(prev, data)) return
+    this.graveyard.set(data.convId, data)
+    this.changes.emit('change', { entity: 'tombstone', id: data.convId, data })
+  }
+
+  getTombstone(convId: string): Tombstone | undefined {
+    return this.graveyard.get(convId)
+  }
+
+  getAllTombstones(): Tombstone[] {
+    return [...this.graveyard.values()]
+  }
+
+  deleteTombstone(convId: string): boolean {
+    if (!this.graveyard.has(convId)) return false
+    this.graveyard.delete(convId)
+    this.changes.emit('change', { entity: 'tombstone', id: convId, data: null })
+    return true
+  }
+
   // --- Snapshot (filtered by active space) ---
   // Include entities that match the active space OR have no spaceId (homeless).
   // This ensures nothing silently vanishes from the UI.
@@ -728,6 +784,7 @@ export class DocumentStore {
       constellationGraphs: this.getAllConstellationGraphs(),
       pinSets: this.getAllPinSets(),
       topicMetadata: this.getAllTopicMetadata(),
+      graveyard: this.getAllTombstones(),
     }
   }
 

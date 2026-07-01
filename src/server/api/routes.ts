@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, watch, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, watch, writeFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
@@ -20,10 +20,14 @@ import type { ErrorCode } from '../../domain/api'
 import type { TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
-import { readLatestModel, readLatestModelAt, findTranscriptByConvId } from '../sessions/transcript-parser'
+import { readLatestModel, readLatestModelAt, findTranscriptByConvId, getTranscriptPath } from '../sessions/transcript-parser'
+import { buildCoversSummary } from '../sessions/covers-summary'
+import { reviveFromTombstone } from '../sessions/necro'
+import { snapshotTranscript, hasGraveyardSnapshot, deleteGraveyardSnapshot, graveyardSnapshotPath, placeTranscriptAt, reviveWorkdir, deleteReviveWorkdir } from '../sessions/graveyard-snapshot'
 import {
   createSession,
   getSession,
+  setConversationId,
   updateSession,
   deleteSession,
   setState,
@@ -42,7 +46,7 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote } from '../../domain/types'
+import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus } from '../../domain/types'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { isPinSet, addReply, mergePreservingReplies } from '../../domain/pinSet'
@@ -426,7 +430,7 @@ interface CreateSessionParams {
   focus?: boolean
 }
 
-interface CreateSessionContext {
+export interface CreateSessionContext {
   cfg: TinstarConfig
   sessDir: string
   docStore: DocumentStore
@@ -437,6 +441,35 @@ interface CreateSessionContext {
   dashboardUrl: string
   natsTraffic?: import('../nats-traffic').NatsTrafficBridge
   natsHealth?: import('../nats-health').NatsHealthMonitor
+}
+
+/** convIds with a revive in progress — a single-writer guard so two concurrent
+ *  POST /revive for the same grave can't both materialize a session resuming the
+ *  same conversation and race on the shared transcript. Module-scoped so it
+ *  persists across requests. */
+const revivesInFlight = new Set<string>()
+
+/**
+ * Shared post-launch registration for a session that has just been started
+ * (created fresh OR revived from the graveyard). Registers NATS subscriptions,
+ * seeds topic metadata, tracks broker health, enters the ready queue, and emits
+ * managed_session.created. The caller owns building/upserting the Run (the shape
+ * differs between a fresh create and a revive), then calls this so both paths
+ * wire the same session-lifecycle plumbing and cannot silently diverge.
+ */
+export function registerLaunchedSession(
+  deps: Pick<CreateSessionContext, 'docStore' | 'natsTraffic' | 'natsHealth' | 'readyQueue' | 'sse' | 'emitSessionEvent'>,
+  name: string,
+  resolvedNats: { enabled: boolean; subscriptions: string[] } | null,
+  status: SessionStatus,
+): void {
+  registerSaloonSubs(deps.natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
+  bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, deps.docStore)
+  if (resolvedNats?.enabled) deps.natsHealth?.trackSession(name)
+  deps.readyQueue.onStatusChange(name, status)
+  deps.sse.setReadyQueue(deps.readyQueue.getQueue())
+  deps.sse.broadcastReadyQueueUpdate()
+  deps.emitSessionEvent('managed_session.created', { name, state: 'running' })
 }
 
 async function createSessionInternal(
@@ -624,14 +657,12 @@ async function createSessionInternal(
     ...(focus === false ? { focusOnCreate: false } : {}),
   })
 
-  registerSaloonSubs(natsTraffic, name, resolvedNats?.enabled ? resolvedNats.subscriptions : [])
-  bootstrapHierarchicalTopicMetadata(resolvedNats?.subscriptions ?? [], name, docStore)
-  if (resolvedNats?.enabled) natsHealth?.trackSession(name)
-
-  readyQueue.onStatusChange(name, initialStatus)
-  sse.setReadyQueue(readyQueue.getQueue())
-  sse.broadcastReadyQueueUpdate()
-  emitSessionEvent('managed_session.created', { name, state: 'running' })
+  registerLaunchedSession(
+    { docStore, natsTraffic, natsHealth, readyQueue, sse, emitSessionEvent },
+    name,
+    resolvedNats,
+    initialStatus,
+  )
 
   const updated = getSession(sessDir, name)!
   return { ok: true, session: updated }
@@ -3304,6 +3335,54 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // Mark the session dir as mid-deletion so a server restart doesn't rehydrate it
         try { writeFileSync(join(sessDir, name, '.deleting'), '') } catch { /* dir may already be gone */ }
 
+        // Retire to the Graveyard BEFORE any teardown: capture the convId + recap
+        // while the run and session dir still exist. This write is synchronous and
+        // ordered ahead of deleteRun and the async cleanup below, so a crash
+        // mid-teardown cannot leave a deleted-but-unindexed session. A session
+        // with no convId has nothing to necro, so it is not tombstoned.
+        const convId = session?.conversation.id
+        if (convId) {
+          try {
+            const retiredRun = ctx.docStore.getRun(name)
+            // Durable snapshot: copy the transcript into Tinstar's own store so
+            // revive survives Claude Code pruning the original. Prefer the direct
+            // cwd-derived path, falling back to a convId scan; best-effort.
+            let snapSource: string | null = null
+            if (session?.workspace.path) {
+              const p = getTranscriptPath(session.workspace.path, convId)
+              if (existsSync(p)) snapSource = p
+            }
+            if (!snapSource) snapSource = findTranscriptByConvId(convId)
+            const snapshotted = snapshotTranscript(cfg.dirs.root, convId, snapSource)
+            // Session.model is a derived, non-persisted field (empty on a disk
+            // read), so capture the real last-run model from the transcript.
+            const lastModel = snapSource ? readLatestModelAt(snapSource) : null
+            ctx.docStore.upsertTombstone({
+              convId,
+              sessionName: name,
+              coversSummary: buildCoversSummary(retiredRun?.recapEntries ?? [], {
+                sessionName: name,
+                task: retiredRun?.task,
+                epic: retiredRun?.epic,
+                initiative: retiredRun?.initiative,
+                persona: session?.agent?.description || session?.agent?.prompt,
+              }),
+              taskId: retiredRun?.taskId || undefined,
+              task: retiredRun?.task || undefined,
+              epic: retiredRun?.epic || undefined,
+              initiative: retiredRun?.initiative || undefined,
+              workspacePath: session?.workspace.path ?? undefined,
+              model: lastModel ?? session?.modelOverride ?? undefined,
+              created: session?.created,
+              retiredAt: new Date().toISOString(),
+              snapshotted,
+            })
+            emitSessionEvent('managed_session.retired', { name, convId })
+          } catch (err) {
+            log.warn('delete', `graveyard entomb for ${name}: ${(err as Error).message}`)
+          }
+        }
+
         // Respond immediately — UI removal is instant
         ctx.docStore.deleteRun(name)
         unregisterSaloonSubs(ctx.natsTraffic, name)
@@ -3355,8 +3434,155 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             log.warn('delete', `failed to remove session dir for ${name}, retrying...`)
             setTimeout(() => deleteSession(sessDir, name), 2000)
           }
+          // If this was a necro'd session with a fallback cwd, remove its
+          // graveyard-revives workdir so revive-then-delete cycles don't leak.
+          deleteReviveWorkdir(cfg.dirs.root, name)
         })()
 
+        return true
+      }
+    }
+
+    // GET /api/graveyard?q=<query> — search retired-session tombstones.
+    if (method === 'GET' && (url === '/api/graveyard' || url.startsWith('/api/graveyard?'))) {
+      const q = (new URL(url, 'http://localhost').searchParams.get('q') ?? '').trim().toLowerCase()
+      const all = ctx.docStore.getAllTombstones()
+      const matched = q
+        ? all.filter(t =>
+            [t.coversSummary, t.sessionName, t.task, t.epic, t.initiative]
+              .some(f => f?.toLowerCase().includes(q)))
+        : all
+      // Newest graves first.
+      matched.sort((a, b) => (a.retiredAt < b.retiredAt ? 1 : a.retiredAt > b.retiredAt ? -1 : 0))
+      ok(res, matched)
+      return true
+    }
+
+    // POST /api/graveyard/:convId/revive — necro a tombstone (best-effort).
+    // POST /api/graveyard/:convId/purge  — forget a tombstone forever.
+    {
+      const graveyardAction = (url.split('?')[0] ?? url).match(/^\/api\/graveyard\/([^/]+)\/(revive|purge)$/)
+      if (method === 'POST' && graveyardAction) {
+        const convId = decodeURIComponent(graveyardAction[1]!)
+        const action = graveyardAction[2]!
+        // Defense-in-depth: convId is only ever a Claude Code conversation id
+        // (UUID-ish token). Reject anything else before it can reach a filesystem
+        // path or the `--resume <convId>` command, independent of the tombstone guard.
+        if (!/^[A-Za-z0-9_-]+$/.test(convId)) return fail(res, 'BAD_REQUEST', `Invalid convId '${convId}'`)
+        const tombstone = ctx.docStore.getTombstone(convId)
+        if (!tombstone) return fail(res, 'NOT_FOUND', `No graveyard entry for '${convId}'`)
+
+        if (action === 'purge') {
+          ctx.docStore.deleteTombstone(convId)
+          deleteGraveyardSnapshot(cfg.dirs.root, convId)
+          ok(res, null)
+          return true
+        }
+
+        // revive — re-materialize the session from the tombstone and resume it.
+        // Single-writer guard: reject a second concurrent revive of the same grave.
+        if (revivesInFlight.has(convId)) return fail(res, 'CONFLICT', `Revive already in progress for '${convId}'`)
+        revivesInFlight.add(convId)
+        // No withBody: the revive ignores the request body, and running the work
+        // directly keeps the guard-release `finally` on the same promise — a
+        // readBody timeout/abort must never strand the convId at 409 forever.
+        void (async () => {
+          try {
+            const result = await reviveFromTombstone(tombstone, {
+              findTranscript: (id) => findTranscriptByConvId(id),
+              hasSnapshot: (id) => hasGraveyardSnapshot(cfg.dirs.root, id),
+              sessionExists: (n) => getSession(sessDir, n) !== null,
+              pathExists: (p) => existsSync(p),
+              // One launch closure: place the transcript, create + resume the session,
+              // and wire it as a first-class citizen (NATS + ready queue + full Run).
+              launch: async ({ name, convId: cid, workspacePath }) => {
+                // The revive cwd is the original worktree when it still exists, else
+                // a deterministic fallback under the config root. `--resume` reads
+                // the transcript from the cwd-derived path, so place it there first
+                // (from the live transcript or our durable snapshot).
+                const reviveCwd = workspacePath ?? reviveWorkdir(cfg.dirs.root, name)
+                mkdirSync(reviveCwd, { recursive: true })
+                placeTranscriptAt(
+                  getTranscriptPath(reviveCwd, cid),
+                  findTranscriptByConvId(cid) ?? graveyardSnapshotPath(cfg.dirs.root, cid),
+                )
+                // Resolve NATS from the tombstone's task context (fresh epoch —
+                // the dead session's old subject tree is gone). computeNatsSubscriptions
+                // degrades to a DM-only inbox if the task no longer exists.
+                const natsCtx = { sessionName: name, spaceId: ctx.docStore.activeSpaceId || null, taskId: tombstone.taskId || null, epicId: null, initiativeId: null }
+                const nats: { enabled: boolean; subscriptions: string[] } | null =
+                  (tombstone.taskId || natsCtx.spaceId)
+                    ? { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, ctx.docStore) }
+                    : null
+                const color = tombstone.taskId ? ctx.docStore.getTask(tombstone.taskId)?.settings?.defaultRunColor : undefined
+                createSession(sessDir, {
+                  name,
+                  backend: 'tmux',
+                  workspace: { path: reviveCwd },
+                  // Persist NATS on the session so startTmuxSession injects the bus env.
+                  nats,
+                  agent: tombstone.task ? { name, description: tombstone.coversSummary, prompt: '' } : null,
+                })
+                // Bind the ORIGINAL conversation so --resume targets it.
+                setConversationId(sessDir, name, cid)
+                const session = getSession(sessDir, name)
+                if (!session) throw new Error(`revived session '${name}' vanished before resume`)
+                const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+                const startResult = await tmuxBackend.startTmuxSession(cfg, {
+                  session, secrets: secrets(), port, template: null,
+                  appendSystemPrompt: session.appendSystemPrompt, agent: session.agent,
+                })
+                updateSession(sessDir, name, { port: startResult.port, ttydPid: startResult.ttydPid ?? null })
+                tmuxBackend.onTtydRestart(name, (pid) => updateSession(sessDir, name, { ttydPid: pid }))
+                setState(sessDir, name, 'running')
+                const natsSubject = nats?.enabled ? (nats.subscriptions[1] ?? nats.subscriptions[0]) : undefined
+                ctx.docStore.upsertRun(name, {
+                  id: name, color, status: 'running', sessionId: name,
+                  initiative: tombstone.initiative ?? '', epic: tombstone.epic ?? '', task: tombstone.task ?? '',
+                  repo: tombstone.workspacePath ?? '', worktree: '',
+                  taskId: tombstone.taskId ?? '', worktreeId: '',
+                  touchedFiles: [], recapEntries: [], rawLogs: '',
+                  port: startResult.port ?? null, backend: 'tmux',
+                  backendInfo: `tmux session: ${name}`,
+                  natsEnabled: nats?.enabled ?? false,
+                  natsSubject,
+                  natsSubscriptions: nats?.enabled ? nats.subscriptions : undefined,
+                  createdAt: new Date().toISOString(), spaceId: ctx.docStore.activeSpaceId,
+                })
+                registerLaunchedSession(
+                  { docStore: ctx.docStore, natsTraffic: ctx.natsTraffic, natsHealth: ctx.natsHealth, readyQueue: ctx.readyQueue, sse: ctx.sse, emitSessionEvent },
+                  name, nats, 'running',
+                )
+              },
+              // Roll back a half-created session so failed revives don't orphan a
+              // 'creating' dir that climbs the -necro suffix on retry. Mirror the
+              // normal delete path: stop the tmux/ttyd backend and release the port
+              // (which startTmuxSession may have already bound) BEFORE removing the
+              // dir — otherwise the record is deleted while tmux/ttyd/port leak.
+              onLaunchFailed: async (name) => {
+                const stale = getSession(sessDir, name)
+                if (stale) {
+                  try { await tmuxBackend.deleteTmuxSession(cfg, stale) } catch { /* best-effort */ }
+                  if (stale.port) { try { tmuxBackend.releasePort(stale.port) } catch { /* best-effort */ } }
+                }
+                try { ctx.docStore.deleteRun(name) } catch { /* best-effort */ }
+                try { deleteSession(sessDir, name) } catch { /* best-effort */ }
+                deleteReviveWorkdir(cfg.dirs.root, name)
+              },
+              // A raised grave leaves Boot Hill — consume the tombstone + snapshot.
+              onRevived: (cid) => {
+                ctx.docStore.deleteTombstone(cid)
+                deleteGraveyardSnapshot(cfg.dirs.root, cid)
+              },
+            })
+            ok(res, result)
+          } catch (err) {
+            log.warn('graveyard', `revive ${convId} failed: ${(err as Error).message}`)
+            fail(res, 'INTERNAL', (err as Error).message)
+          } finally {
+            revivesInFlight.delete(convId)
+          }
+        })()
         return true
       }
     }
