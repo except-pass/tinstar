@@ -3483,7 +3483,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // Single-writer guard: reject a second concurrent revive of the same grave.
         if (revivesInFlight.has(convId)) return fail(res, 'CONFLICT', `Revive already in progress for '${convId}'`)
         revivesInFlight.add(convId)
-        withBody(req, res, async () => {
+        // No withBody: the revive ignores the request body, and running the work
+        // directly keeps the guard-release `finally` on the same promise — a
+        // readBody timeout/abort must never strand the convId at 409 forever.
+        void (async () => {
           try {
             const result = await reviveFromTombstone(tombstone, {
               findTranscript: (id) => findTranscriptByConvId(id),
@@ -3579,7 +3582,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           } finally {
             revivesInFlight.delete(convId)
           }
-        })
+        })()
         return true
       }
     }

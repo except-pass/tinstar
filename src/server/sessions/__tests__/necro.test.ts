@@ -87,6 +87,21 @@ describe('reviveFromTombstone', () => {
     expect(d.revived).toEqual([]) // grave intact for retry
   })
 
+  it('awaits an async onLaunchFailed (backend teardown) before propagating the throw', async () => {
+    const order: string[] = []
+    const d = deps({
+      launch: () => { throw new Error('boom') },
+      onLaunchFailed: async () => {
+        await Promise.resolve()
+        order.push('rolled-back')
+      },
+    })
+    await expect(reviveFromTombstone(tomb(), d)).rejects.toThrow('boom')
+    order.push('threw')
+    // Rollback completed before the error surfaced to the caller.
+    expect(order).toEqual(['rolled-back', 'threw'])
+  })
+
   it('picks a non-colliding name when a session already exists (idempotency)', async () => {
     const existing = new Set(['askviktor-necro'])
     const d = deps({ sessionExists: (n) => existing.has(n) })
