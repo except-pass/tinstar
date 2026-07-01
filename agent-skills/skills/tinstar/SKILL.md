@@ -35,6 +35,34 @@ curl -s "$TINSTAR_URL/api/cli-templates" | jq .                      # Agent tem
 curl -s -X POST "$TINSTAR_URL/api/sessions/NAME/prompt" -d '{"text":"…"}'   # Non-NATS prompt
 ```
 
+## Recall a dead session — the Graveyard
+
+When a session is deleted it isn't gone: it's retired into the **Graveyard** with a
+summary of what it covered and the handle needed to revive it. Before starting work,
+check whether a past session already covered the same ground — then dig it up and ask it.
+
+```bash
+# 1. Search the graveyard by topic (matches the covers-summary, name, task).
+curl -s "$TINSTAR_URL/api/graveyard?q=influx%20backfill" | jq '.data[] | {convId, sessionName, coversSummary}'
+
+# 2. Necro one — revives the REAL agent (best-effort: works while Claude Code still
+#    has the transcript). Returns {revivable, sessionName} or {revivable:false, reason}.
+curl -s -X POST "$TINSTAR_URL/api/graveyard/<convId>/revive" | jq .
+
+# 3. Ask it something (once revived, steer via the prompt endpoint — NOT tmux send-keys).
+curl -s -X POST "$TINSTAR_URL/api/sessions/<sessionName>/prompt" -d '{"text":"What did you conclude about X?"}'
+
+# Forget one forever (removes it from the graveyard):
+curl -s -X POST "$TINSTAR_URL/api/graveyard/<convId>/purge"
+```
+
+Notes:
+- A revived session whose worktree was deleted remembers the **conversation** but not the
+  files — fine for "what did you find?", not for "go change that code."
+- If revive returns `revivable:false`, the transcript is gone; use the `coversSummary` from
+  the search result instead.
+- Always build the URL from `TINSTAR_DASHBOARD_URL` (top of this skill) — never a raw port.
+
 ## Creating a standalone session (not a child hand)
 
 Use this only when the session is genuinely standalone — a new line of work, not a helper for your current task. **If it's a helper, use the `tinstar-hand` skill** (spawns under `/api/sessions/<parent>/spawn`).
