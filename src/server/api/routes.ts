@@ -21,6 +21,7 @@ import type { TinstarConfig } from '../sessions/config'
 import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
 import { readLatestModel, readLatestModelAt, findTranscriptByConvId } from '../sessions/transcript-parser'
+import { buildCoversSummary } from '../sessions/covers-summary'
 import {
   createSession,
   getSession,
@@ -3303,6 +3304,40 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         // Mark the session dir as mid-deletion so a server restart doesn't rehydrate it
         try { writeFileSync(join(sessDir, name, '.deleting'), '') } catch { /* dir may already be gone */ }
+
+        // Retire to the Graveyard BEFORE any teardown: capture the convId + recap
+        // while the run and session dir still exist. This write is synchronous and
+        // ordered ahead of deleteRun and the async cleanup below, so a crash
+        // mid-teardown cannot leave a deleted-but-unindexed session. A session
+        // with no convId has nothing to necro, so it is not tombstoned.
+        const convId = session?.conversation.id
+        if (convId) {
+          try {
+            const retiredRun = ctx.docStore.getRun(name)
+            ctx.docStore.upsertTombstone({
+              convId,
+              sessionName: name,
+              coversSummary: buildCoversSummary(retiredRun?.recapEntries ?? [], {
+                sessionName: name,
+                task: retiredRun?.task,
+                epic: retiredRun?.epic,
+                initiative: retiredRun?.initiative,
+                persona: session?.agent?.description || session?.agent?.prompt,
+              }),
+              taskId: retiredRun?.taskId || undefined,
+              task: retiredRun?.task || undefined,
+              epic: retiredRun?.epic || undefined,
+              initiative: retiredRun?.initiative || undefined,
+              workspacePath: session?.workspace.path ?? undefined,
+              model: retiredRun?.model ?? session?.modelOverride ?? undefined,
+              created: session?.created,
+              retiredAt: new Date().toISOString(),
+            })
+            emitSessionEvent('managed_session.retired', { name, convId })
+          } catch (err) {
+            log.warn('delete', `graveyard entomb for ${name}: ${(err as Error).message}`)
+          }
+        }
 
         // Respond immediately — UI removal is instant
         ctx.docStore.deleteRun(name)
