@@ -8,7 +8,7 @@ import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
 import { cycleNext, cyclePrev, visibleCycleQueue } from '../hooks/useReadyQueue'
 import { useHiddenRuns } from '../hooks/useHiddenRuns'
 import { isBackgroundHidden, backgroundHiddenRunIds, pruneRunNodes } from '../domain/background-visibility'
-import { getPref, setPref } from '../lib/uiPrefs'
+import { getPref, setPref, PREFS_STORAGE_KEY } from '../lib/uiPrefs'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
 import { SettingsDialog } from './SettingsDialog'
@@ -147,6 +147,16 @@ function WorkspaceShellInner() {
   useEffect(() => {
     setPref('showBackgroundSessions', showBackgroundSessions)
   }, [showBackgroundSessions])
+  // Cross-tab sync (mirrors useHiddenRuns): another tab's toggle fires a
+  // storage event; same-tab writes don't, so this cannot loop.
+  useEffect(() => {
+    function onStorage(e: StorageEvent) {
+      if (e.key !== PREFS_STORAGE_KEY) return
+      setShowBackgroundSessions(getPref('showBackgroundSessions') ?? false)
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
 
   // Background pruning (R4–R5): drop background-hidden runs from the tree
   // BEFORE it forks to the sidebar and canvas — both surfaces lose the run.

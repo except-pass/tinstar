@@ -18,6 +18,10 @@
 
 const PREFS_KEY = 'tinstar-ui-prefs'
 
+/** localStorage key for the singleton prefs blob — exported for cross-tab
+ *  `storage`-event listeners (mirrors familyKeys for the per-id families). */
+export const PREFS_STORAGE_KEY = PREFS_KEY
+
 export interface UiPrefs {
   hotkeysSidebarWidth?: number
   hotkeysSidebarCollapsed?: boolean

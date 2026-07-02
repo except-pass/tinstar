@@ -2816,6 +2816,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         [key: string]: unknown
       }
       const { attention: attentionPatch, ...patchWithoutAttention } = patch
+      // `blocked` is a derived-attention input owned by the StatusWatcher and
+      // rehydrate paths (R13) — never client-settable. Strip it so the
+      // catch-all spread below cannot fabricate or suppress a "Waiting on
+      // permission" breakthrough.
+      delete patchWithoutAttention.blocked
 
       // Background flip (promote/demote, R3): validate before any mutation so
       // an invalid value cannot leave a half-applied patch.

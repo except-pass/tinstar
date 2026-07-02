@@ -210,6 +210,22 @@ describe('PATCH /api/runs/:id', () => {
       expect(testCtx.docStore.getRun('r1')?.attention?.reason).toBe('Ready for input')
     })
 
+    it('strips client-supplied blocked from the patch (derivation input, not settable)', async () => {
+      testCtx.docStore.upsertRun('r1', makeRun())
+
+      const res = await testCtx.fetch('/api/runs/r1', {
+        method: 'PATCH',
+        body: JSON.stringify({ blocked: true, background: true }),
+      })
+
+      expect(res.status).toBe(200)
+      const run = testCtx.docStore.getRun('r1')
+      // blocked stays watcher-owned; no phantom "Waiting on permission".
+      expect(run?.blocked).toBe(false)
+      expect(run?.background).toBe(true)
+      expect(run?.attention).toBeUndefined()
+    })
+
     it('flips background on a run with no session.json and emits a change event', async () => {
       // Docstore-only run (simulator/plugin): no backing session record —
       // updateSession returning null is expected and tolerated.
