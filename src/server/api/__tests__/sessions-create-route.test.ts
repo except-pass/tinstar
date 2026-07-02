@@ -27,6 +27,7 @@ vi.mock('../../sessions', async (importActual) => {
 })
 
 import { handleRequest, type RouteContext } from '../routes'
+import { getSession } from '../../sessions'
 import { DocumentStore } from '../../stores/document-store'
 import type { Run } from '../../../domain/types'
 
@@ -212,6 +213,57 @@ describe('POST /api/sessions', () => {
     expect(run.focusOnCreate).toBeUndefined()
   })
 
+  // --- Background sessions (born hidden) ---
+
+  it('persists background:true on the run and session.json, forcing focusOnCreate:false (AE1)', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'bg-worker', background: true }),
+    })
+    expect(res.status).toBe(201)
+
+    const run = testCtx.docStore.getRun('bg-worker') as Run
+    expect(run).toBeTruthy()
+    expect(run.background).toBe(true)
+    // R14: a background session never steals camera focus — the server forces
+    // the passive-spawn opt-out rather than trusting callers to pass focus:false.
+    expect(run.focusOnCreate).toBe(false)
+
+    // The flag persists on session.json so it survives a restart rehydrate.
+    const session = getSession(join(tmpRoot, 'sessions'), 'bg-worker')
+    expect(session?.background).toBe(true)
+  })
+
+  it('defaults background:false with focus behavior unchanged when the param is omitted', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'fg-worker' }),
+    })
+    expect(res.status).toBe(201)
+
+    const run = testCtx.docStore.getRun('fg-worker') as Run
+    expect(run.background).toBe(false)
+    // No opt-out → field absent → default auto-focus (backward compatible).
+    expect(run.focusOnCreate).toBeUndefined()
+
+    const session = getSession(join(tmpRoot, 'sessions'), 'fg-worker')
+    expect(session?.background).toBe(false)
+  })
+
+  it('forces focusOnCreate:false even when background:true is paired with focus:true', async () => {
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'bg-eager', background: true, focus: true }),
+    })
+    expect(res.status).toBe(201)
+
+    const run = testCtx.docStore.getRun('bg-eager') as Run
+    expect(run.background).toBe(true)
+    // background wins over an explicit focus:true — hidden cards can't be
+    // pan targets, so honoring focus here would aim the camera at nothing.
+    expect(run.focusOnCreate).toBe(false)
+  })
+
   it('uses the marshal hand\'s persona as appendSystemPrompt and its intro as the one-shot prompt', async () => {
     const res = await testCtx.fetch('/api/sessions', {
       method: 'POST',
@@ -336,6 +388,34 @@ describe('POST /api/sessions', () => {
     const res = await testCtx.fetch('/api/sessions', { method: 'POST', body: '{not valid json' })
     expect(res.status).toBe(400)
     expect(createTmuxSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('spawn from a background parent does NOT inherit background (child born visible)', async () => {
+    // Explicit opt-in only: surprise-hidden sessions are worse than
+    // surprise-visible ones, so `background` never flows parent → child.
+    // nats disabled on the parent keeps the spawn path off the breakout-room
+    // socket machinery (irrelevant here).
+    const created = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'bg-parent', background: true, nats: { enabled: false } }),
+    })
+    expect(created.status).toBe(201)
+    expect((testCtx.docStore.getRun('bg-parent') as Run).background).toBe(true)
+
+    const res = await testCtx.fetch('/api/sessions/bg-parent/spawn', {
+      method: 'POST',
+      body: JSON.stringify({ hand: 'marshal' }),
+    })
+    expect(res.status).toBe(201)
+    const body = await res.json() as { ok: boolean; data: { session: string } }
+    const childName = body.data.session
+
+    const childRun = testCtx.docStore.getRun(childName) as Run
+    expect(childRun).toBeTruthy()
+    expect(childRun.background).toBe(false)
+    // Visible spawn keeps default focus behavior (no forced opt-out).
+    expect(childRun.focusOnCreate).toBeUndefined()
+    expect(getSession(join(tmpRoot, 'sessions'), childName)?.background).toBe(false)
   })
 
   it('a plain /start with no body launches with the global token (no override)', async () => {
