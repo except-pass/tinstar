@@ -5,7 +5,7 @@ import type { RunData } from '../../types'
 describe('RunData.natsControlOrphanedAt', () => {
   it('is optional and nullable on RunData', () => {
     const run: RunData = {
-      id: 'r1', status: 'idle', sessionId: 's1', taskId: 't1',
+      id: 'r1', status: 'idle', background: false, blocked: false, sessionId: 's1', taskId: 't1',
       initiative: '', epic: '', task: '', repo: '', worktree: '',
       touchedFiles: [], recapEntries: [], rawLogs: '', port: null,
       backend: null,
@@ -16,7 +16,7 @@ describe('RunData.natsControlOrphanedAt', () => {
 
   it('accepts null', () => {
     const run: RunData = {
-      id: 'r1', status: 'idle', sessionId: 's1', taskId: 't1',
+      id: 'r1', status: 'idle', background: false, blocked: false, sessionId: 's1', taskId: 't1',
       initiative: '', epic: '', task: '', repo: '', worktree: '',
       touchedFiles: [], recapEntries: [], rawLogs: '', port: null,
       backend: null,

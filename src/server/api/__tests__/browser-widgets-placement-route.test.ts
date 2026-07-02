@@ -43,7 +43,7 @@ function makeCtx(root: string): RouteContext {
   docStore.upsertSpace(SPACE_ID, { id: SPACE_ID, name: 'Test Space', createdAt: new Date().toISOString() })
   docStore.activeSpaceId = SPACE_ID
   const run: Run = {
-    id: 'run-R1', status: 'idle', sessionId: SESSION_ID, taskId: 'task-1',
+    id: 'run-R1', status: 'idle', background: false, blocked: false, sessionId: SESSION_ID, taskId: 'task-1',
     initiative: 'init', epic: 'epic', task: 'task', repo: 'repo', worktree: 'wt',
     touchedFiles: [], recapEntries: [], rawLogs: '', port: null, backend: null,
     worktreeId: 'wt-1', createdAt: new Date().toISOString(), spaceId: SPACE_ID, color: '#abc',

@@ -1,6 +1,6 @@
 import { existsSync, statSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { listSessions, setState, setConversationId, type Session, type SessionState } from './session'
+import { listSessions, setState, setConversationId, updateSession, type Session, type SessionState } from './session'
 import { readSessionStatusDetailAt, parseNewEntriesAt, getProjectDir, getTranscriptPath, resetOffset, findTranscriptByConvId } from './transcript-parser'
 import { discoverTranscript, readCodexStatus, parseCodexRecapEntries } from './codex-transcript'
 import { log } from '../logger'
@@ -9,8 +9,15 @@ import type { RecapEntry } from '../../types'
 
 export interface StatusWatcherOpts {
   sessionsDir: string
-  /** Called when a session's status changes based on JSONL evidence */
-  onStatusChanged: (name: string, state: SessionState) => void
+  /**
+   * Called when a session's status changes based on JSONL evidence, and ALSO
+   * when the blocked signal flips while the state string is unchanged (a
+   * permission block beginning or resolving on an already-idle session) —
+   * attention is derived from `(status, blocked, background)` downstream, so
+   * every input change must be observable. `blocked` = the agent is stuck on
+   * a pending tool_use with no child processes (the process-tree override).
+   */
+  onStatusChanged: (name: string, state: SessionState, blocked: boolean) => void
   /** Called with new recap entries parsed from the transcript */
   onRecapEntries?: (name: string, entries: RecapEntry[]) => void
   /** Called once per tick with the set of session names currently on disk */
@@ -140,6 +147,13 @@ export class StatusWatcher {
       log.info('status-watcher', `${session.name}: tool_use resolved, clearing process-tree override`)
       this.processTreeOverride.delete(session.name)
       this.idleStreak.delete(session.name)
+      this.persistBlocked(session, false)
+      if (detail.state === session.state) {
+        // No state-string change coming below — notify explicitly so stale
+        // "Waiting on permission" attention re-derives away. (When the state
+        // did change, the transition below carries blocked: false itself.)
+        this.opts.onStatusChanged(session.name, session.state, false)
+      }
     }
 
     if (detail.state !== session.state) {
@@ -306,7 +320,9 @@ export class StatusWatcher {
       if (err) {
         log.debug('status-watcher', `${session.name}: tmux pane lookup failed: ${err.message}`)
         this.idleStreak.delete(session.name)
-        // Tmux session is gone — mark as stopped
+        // Tmux session is gone — drop any blocked override with it (a dead
+        // session can't be waiting on a permission prompt) and mark stopped.
+        this.processTreeOverride.delete(session.name)
         if (session.state === 'running' || session.state === 'idle') {
           this.transitionState(session, 'stopped')
         }
@@ -337,9 +353,14 @@ export class StatusWatcher {
               log.info('status-watcher', `${session.name}: children found (pids ${childPids.join(',')}), agent is working`)
             }
             this.idleStreak.delete(session.name)
-            this.processTreeOverride.delete(session.name)
+            const hadOverride = this.processTreeOverride.delete(session.name)
+            if (hadOverride) this.persistBlocked(session, false)
             if (session.state !== 'running') {
               this.transitionState(session, 'running')
+            } else if (hadOverride) {
+              // State string unchanged but the blocked input flipped —
+              // notify so downstream attention re-derives.
+              this.opts.onStatusChanged(session.name, 'running', false)
             }
           } else {
             // No children — agent may be waiting for input
@@ -349,8 +370,14 @@ export class StatusWatcher {
             if (streak >= 2 && !this.processTreeOverride.has(session.name)) {
               log.info('status-watcher', `${session.name}: tool_use pending but no children (agent pid ${agentPid}), streak=${streak} — blocked on input`)
               this.processTreeOverride.add(session.name)
+              this.persistBlocked(session, true)
               if (session.state !== 'idle') {
                 this.transitionState(session, 'idle')
+              } else {
+                // Block began while already idle: no state-string change, but
+                // blocked flipped — notify so attention derives urgent instead
+                // of wedging silently (the verified silent-failure path).
+                this.opts.onStatusChanged(session.name, 'idle', true)
               }
             }
           }
@@ -359,9 +386,24 @@ export class StatusWatcher {
     })
   }
 
+  /**
+   * Persist a blocked flip to session.json so restarts re-derive attention
+   * from disk instead of losing the in-memory override. Mirrors onto the
+   * in-memory Session so the rest of this tick reads the new value.
+   */
+  private persistBlocked(session: Session, blocked: boolean): void {
+    if ((session.blocked ?? false) === blocked) return
+    updateSession(this.opts.sessionsDir, session.name, { blocked })
+    session.blocked = blocked
+  }
+
   private transitionState(session: Session, newState: SessionState): void {
+    // The blocked signal rides along on every transition: true only while the
+    // process-tree override stands (and never for a stopped session — setState
+    // clears the persisted flag on stop).
+    const blocked = newState !== 'stopped' && this.processTreeOverride.has(session.name)
     setState(this.opts.sessionsDir, session.name, newState)
-    this.opts.onStatusChanged(session.name, newState)
+    this.opts.onStatusChanged(session.name, newState, blocked)
     log.info('status-watcher', `${session.name}: ${session.state} → ${newState}`)
 
     // Parse transcript for recap entries on idle transitions

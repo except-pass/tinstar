@@ -119,6 +119,48 @@ describe('useInbox', () => {
     expect(result.current.unreadCount).toBe(0)
   })
 
+  it('produces no passive row for a background run without attention (R6)', () => {
+    mockState = {
+      pluginWidgets: [],
+      runs: [
+        { id: 'r-bg', spaceId: 'spc-1', status: 'idle', background: true, sessionId: 's1', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-07-02T00:00:00.000Z' },
+        { id: 'r-fg', spaceId: 'spc-1', status: 'idle', background: false, sessionId: 's2', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-07-02T00:01:00.000Z' },
+      ],
+    }
+    const { result } = renderHook(() => useInbox('spc-1'))
+    // Non-background runs are unaffected; the background run is skipped.
+    expect(result.current.rows.map(r => r.widgetId)).toEqual(['r-fg'])
+  })
+
+  it('breaks a background run through when attention is pending, sorted by level (R11/R16)', () => {
+    mockState = {
+      pluginWidgets: [],
+      runs: [
+        { id: 'r-bg-urgent', spaceId: 'spc-1', status: 'idle', background: true, sessionId: 's1', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-07-02T00:00:00.000Z', attention: attn('urgent', 'Waiting on permission', '2026-07-02T00:02:00.000Z') },
+        { id: 'r-fg-info', spaceId: 'spc-1', status: 'stopped', background: false, sessionId: 's2', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-07-02T00:01:00.000Z', attention: attn('info', 'Run stopped', '2026-07-02T00:03:00.000Z') },
+        { id: 'r-fg-idle', spaceId: 'spc-1', status: 'idle', background: false, sessionId: 's3', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-07-02T00:04:00.000Z' },
+      ],
+    }
+    const { result } = renderHook(() => useInbox('spc-1'))
+    // Urgent background breakthrough sorts above the info row; the passive
+    // non-background row lists below both.
+    expect(result.current.rows.map(r => r.widgetId)).toEqual(['r-bg-urgent', 'r-fg-info', 'r-fg-idle'])
+    expect(result.current.rows[0]?.attention?.level).toBe('urgent')
+    expect(result.current.rows[0]?.unread).toBe(true)
+  })
+
+  it('drops the background run row again once attention clears (R16)', () => {
+    const bgRun = { id: 'r-bg', spaceId: 'spc-1', status: 'idle', background: true, sessionId: 's1', initiative: 'i', epic: 'e', task: 't', worktree: 'wt', createdAt: '2026-07-02T00:00:00.000Z' }
+    mockState = { pluginWidgets: [], runs: [{ ...bgRun, attention: attn('urgent', 'Waiting on permission', '2026-07-02T00:02:00.000Z') }] }
+    const { result, rerender } = renderHook(() => useInbox('spc-1'))
+    expect(result.current.rows).toHaveLength(1)
+
+    mockState = { pluginWidgets: [], runs: [{ ...bgRun }] } // attention cleared
+    rerender()
+    expect(result.current.rows).toHaveLength(0)
+    expect(result.current.unreadCount).toBe(0)
+  })
+
   it('merges plugin-widget + run attention', () => {
     mockState = {
       pluginWidgets: [{ id: 'pw-1', spaceId: 'spc-1', widgetType: 'w', attention: attn('attention', 'r', '2026-05-27T00:00:00.000Z') }],

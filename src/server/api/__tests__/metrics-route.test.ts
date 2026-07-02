@@ -15,6 +15,7 @@ function fakeSession(name: string): Session {
     workspace: { path: null, branch: null } as Session['workspace'],
     conversation: { id: 'conv-X' },
     profile: null, oneshot: false, skipPermissions: false,
+    background: false, blocked: false,
     cliTemplate: null, adapter: 'claude', nats: null,
     port: null, ttydPid: null, natsControlOrphanedAt: null, appendSystemPrompt: null, agent: null,
     modelOverride: null,

@@ -28,6 +28,8 @@ function fakeSession(name: string, ccConvId: string | null = 'conv-1'): Session 
     profile: null,
     oneshot: false,
     skipPermissions: false,
+    background: false,
+    blocked: false,
     cliTemplate: null,
     adapter: 'claude',
     nats: null,
