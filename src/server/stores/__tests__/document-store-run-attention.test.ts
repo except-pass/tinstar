@@ -10,6 +10,8 @@ function seedRun(store: DocumentStore): Run {
     taskId: 't1',
     worktreeId: 'wt1',
     status: 'running',
+    background: false,
+    blocked: false,
     initiative: 'i', epic: 'e', task: 't',
     repo: 'r', worktree: 'w',
     touchedFiles: [], recapEntries: [], rawLogs: '',

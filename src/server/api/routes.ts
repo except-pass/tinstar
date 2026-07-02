@@ -628,6 +628,8 @@ async function createSessionInternal(
     id: runId,
     color,
     status: initialStatus,
+    background: false,
+    blocked: false,
     sessionId: name,
     initiative: initiativeId ?? '',
     epic: epicId ?? '',
@@ -3376,6 +3378,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               created: session?.created,
               retiredAt: new Date().toISOString(),
               snapshotted,
+              background: retiredRun?.background ?? session?.background ?? false,
             })
             emitSessionEvent('managed_session.retired', { name, convId })
           } catch (err) {
@@ -3538,6 +3541,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 const natsSubject = nats?.enabled ? (nats.subscriptions[1] ?? nats.subscriptions[0]) : undefined
                 ctx.docStore.upsertRun(name, {
                   id: name, color, status: 'running', sessionId: name,
+                  // Revive always creates visible (graveyard requirement) and unblocked.
+                  background: false, blocked: false,
                   initiative: tombstone.initiative ?? '', epic: tombstone.epic ?? '', task: tombstone.task ?? '',
                   repo: tombstone.workspacePath ?? '', worktree: '',
                   taskId: tombstone.taskId ?? '', worktreeId: '',
@@ -3924,6 +3929,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           id: runId,
           color: parentRun?.color,
           status: 'running',
+          // Spawned hands are always born visible — no inheritance from the parent.
+          background: false,
+          blocked: false,
           sessionId: spawnedName,
           initiative: parentRun?.initiative ?? '',
           epic: parentRun?.epic ?? '',

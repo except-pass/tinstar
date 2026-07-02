@@ -277,6 +277,8 @@ export function initBackend(): RouteContext {
           docStore.upsertRun(sess.name, {
             id: sess.name,
             status: sess.state,
+            background: sess.background ?? false,
+            blocked: sess.blocked ?? false,
             sessionId: sess.name,
             initiative: '',
             epic: '',
@@ -308,6 +310,8 @@ export function initBackend(): RouteContext {
           // restarts. agentIcon picks up template-icon changes too.
           const refreshed = {
             ...existingRun,
+            background: sess.background ?? false,
+            blocked: sess.blocked ?? false,
             natsEnabled: sess.nats?.enabled ?? false,
             natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
             natsSubscriptions: sess.nats?.subscriptions,

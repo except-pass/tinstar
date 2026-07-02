@@ -61,6 +61,8 @@ function runShallowEqual(a: Run, b: Run): boolean {
   if (a.id !== b.id) return false
   if (a.color !== b.color) return false
   if (a.status !== b.status) return false
+  if (a.background !== b.background) return false
+  if (a.blocked !== b.blocked) return false
   if (a.sessionId !== b.sessionId) return false
   if (a.taskId !== b.taskId) return false
   if (a.initiative !== b.initiative) return false
@@ -124,7 +126,8 @@ function tombstoneEqual(a: Tombstone, b: Tombstone): boolean {
     a.model === b.model &&
     a.created === b.created &&
     a.retiredAt === b.retiredAt &&
-    (a.snapshotted ?? false) === (b.snapshotted ?? false)
+    (a.snapshotted ?? false) === (b.snapshotted ?? false) &&
+    (a.background ?? false) === (b.background ?? false)
   )
 }
 

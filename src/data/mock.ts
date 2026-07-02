@@ -3,6 +3,8 @@ import type { RunData } from '../types'
 export const mockRun: RunData = {
   id: 'R-241',
   status: 'running',
+  background: false,
+  blocked: false,
   sessionId: 'CLD-4092',
   taskId: '',
   initiative: 'AI Dev Platform',

@@ -114,6 +114,45 @@ describe('DELETE /api/sessions/:name — entomb to graveyard', () => {
     }
   })
 
+  it('carries background: true onto the tombstone when deleting a background session', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      createSession(srv.sessionsDir, { name: 'machinery', backend: 'tmux', background: true })
+      const convId = getSession(srv.sessionsDir, 'machinery')!.conversation.id!
+      // Run seeded without the field — the handler falls back to the session record.
+      seedRun(srv.docStore, 'machinery', recap())
+
+      const res = await srv.fetch('/api/sessions/machinery', { method: 'DELETE' })
+      expect(res.status).toBe(200)
+
+      const tomb = srv.docStore.getTombstone(convId) as Tombstone
+      expect(tomb).toBeDefined()
+      expect(tomb.background).toBe(true)
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('writes background: false on the tombstone for an ordinary (visible) session', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      createSession(srv.sessionsDir, { name: 'plain', backend: 'tmux' })
+      const convId = getSession(srv.sessionsDir, 'plain')!.conversation.id!
+      seedRun(srv.docStore, 'plain', recap())
+
+      const res = await srv.fetch('/api/sessions/plain', { method: 'DELETE' })
+      expect(res.status).toBe(200)
+
+      expect((srv.docStore.getTombstone(convId) as Tombstone).background).toBe(false)
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('does not tombstone a session with no convId', async () => {
     const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
     const srv = createTestServer(root)

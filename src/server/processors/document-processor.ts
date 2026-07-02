@@ -25,6 +25,8 @@ export class DocumentProcessor {
       const run: Run = {
         id: p.id,
         status: p.status,
+        background: false,
+        blocked: false,
         sessionId: p.sessionId,
         initiative: p.initiative,
         epic: p.epic,

@@ -37,6 +37,20 @@ export interface Session {
   profile: string | null
   oneshot: boolean
   skipPermissions: boolean
+  /**
+   * Background session: fully alive and commandable (NATS + prompt endpoint)
+   * but hidden from the canvas, hierarchy sidebar, inbox, and session cycling
+   * by default. Server-persisted truth — consumers filter on the Run
+   * projection's mirror of this flag.
+   */
+  background: boolean
+  /**
+   * Agent is stuck on a pending tool_use (permission prompt) with no child
+   * processes running. Persisted so attention can be re-derived from
+   * `(status, blocked, background)` across restarts and flag flips instead of
+   * relying on the StatusWatcher's in-memory override state.
+   */
+  blocked: boolean
   /** CLI template name (from config.cliTemplates). Overrides skipPermissions/backend for command building. */
   cliTemplate: string | null
   /** Transcript adapter type — determines how to find and parse agent logs */
@@ -155,6 +169,8 @@ export interface CreateSessionOpts {
   profile?: string | null
   oneshot?: boolean
   skipPermissions?: boolean
+  background?: boolean
+  blocked?: boolean
   cliTemplate?: string | null
   adapter?: string | null
   nats?: SessionNats | null
@@ -184,6 +200,8 @@ export function createSession(sessionsDir: string, opts: CreateSessionOpts): Ses
     profile: opts.profile ?? null,
     oneshot: opts.oneshot ?? false,
     skipPermissions: opts.skipPermissions ?? false,
+    background: opts.background ?? false,
+    blocked: opts.blocked ?? false,
     cliTemplate: opts.cliTemplate ?? null,
     adapter: opts.adapter ?? null,
     nats: opts.nats ?? null,
@@ -210,6 +228,8 @@ export function getSession(sessionsDir: string, name: string): Session | null {
     if (raw.appendSystemPrompt === undefined) raw.appendSystemPrompt = null
     if (raw.agent === undefined) raw.agent = null
     if (raw.modelOverride === undefined) raw.modelOverride = null
+    if (raw.background === undefined) raw.background = false
+    if (raw.blocked === undefined) raw.blocked = false
     return raw
   } catch {
     return null

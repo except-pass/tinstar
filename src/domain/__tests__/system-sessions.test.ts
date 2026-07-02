@@ -9,6 +9,8 @@ const baseRun = (overrides: Partial<Run>): Run => ({
   worktreeId: 'wt-1',
   createdAt: '2026-05-08T00:00:00Z',
   status: 'running',
+  background: false,
+  blocked: false,
   initiative: '',
   epic: '',
   task: '',

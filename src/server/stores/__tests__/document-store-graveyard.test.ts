@@ -72,6 +72,29 @@ describe('DocumentStore graveyard', () => {
     expect(store.getTombstone('conv-abc')!.snapshotted).toBe(true)
   })
 
+  it('emits a change when only the background flag differs (not short-circuited)', () => {
+    const store = new DocumentStore()
+    store.upsertTombstone(makeTombstone({ background: false }))
+    const events: unknown[] = []
+    store.changes.on('change', e => events.push(e))
+
+    store.upsertTombstone(makeTombstone({ background: true }))
+
+    expect(events).toHaveLength(1)
+    expect(store.getTombstone('conv-abc')!.background).toBe(true)
+  })
+
+  it('treats absent background as false (no change event for undefined → false)', () => {
+    const store = new DocumentStore()
+    store.upsertTombstone(makeTombstone()) // background absent
+    const events: unknown[] = []
+    store.changes.on('change', e => events.push(e))
+
+    store.upsertTombstone(makeTombstone({ background: false }))
+
+    expect(events).toHaveLength(0)
+  })
+
   it('refuses to store a convId-less tombstone (symmetric with the load skip)', () => {
     const store = new DocumentStore()
     const events: unknown[] = []

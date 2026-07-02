@@ -70,6 +70,8 @@ function makeRun(): Run {
   return {
     id: 'r1',
     status: 'idle',
+    background: false,
+    blocked: false,
     sessionId: 's1',
     initiative: 'i',
     epic: 'e',
