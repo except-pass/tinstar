@@ -13,6 +13,10 @@ A managed session can only rely on the environment values the backend explicitly
 A managed session spawned as the child of another, inheriting the parent's worktree, task assignment, and NATS subscriptions. A hand is a persistent, conversational collaborator that talks back to its spawner over NATS rather than the prompt API.
 *Avoid:* subagent (a subagent is a lighter, one-shot helper that is not a managed session).
 
+### Background session
+A managed session flagged at creation (or by later demotion) to stay off the canvas, hierarchy, and inbox while remaining fully alive and commandable over NATS and the prompt endpoint. Machinery, not a collaborator: it idles, acts on commands, and typically ends its own session. A needs-attention state (permission prompt, error) breaks through to the inbox despite the flag; a reveal toggle in the hierarchy shows background sessions on demand.
+*Avoid:* hidden run (the client-side eyeball-hide, a per-browser view preference on normal sessions).
+
 ### Agent skill
 A documented capability — a `SKILL.md` with name/description frontmatter — installed into a harness's skills directory to teach an agent how to perform a Tinstar workflow. Skills are instructions only (no slash commands), and are symlinked or copied into any harness directory that has a skills folder.
 
