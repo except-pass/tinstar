@@ -301,10 +301,15 @@ export function setConversationId(sessionsDir: string, name: string, conversatio
 }
 
 export function setState(sessionsDir: string, name: string, state: SessionState): Session | null {
-  const result = updateSession(sessionsDir, name, {
+  const updates: Partial<Session> = {
     state,
     lastActive: new Date().toISOString(),
-  })
+  }
+  // A stopped session cannot be waiting on a permission prompt — clear the
+  // persisted blocked flag so it can't dangle across a restart (every path
+  // that stops a session — watcher, reconcile, /stop route — funnels here).
+  if (state === 'stopped') updates.blocked = false
+  const result = updateSession(sessionsDir, name, updates)
   if (result && state === 'stopped') {
     flushOnStateChange(name, state)
   }

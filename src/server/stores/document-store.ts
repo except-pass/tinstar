@@ -28,8 +28,11 @@ import { migrateSnapEdges } from '../../domain/constellationGraph'
 import { type PinSet, removePinsForNode } from '../../domain/pinSet'
 import { migrateAllBrowserNotes } from '../migrations/migrateAllBrowserNotes'
 
-/** Translate a run's status into a default attention signal.
- *  Returns null when the inbox shouldn't surface the run. */
+/** Translate a non-background run's status into a default attention signal.
+ *  Returns null when the inbox shouldn't surface the run. This is the
+ *  legacy pre-`blocked` mapping — non-background sessions keep it exactly
+ *  (blocked-aware attention for them is a deliberate follow-up, not v1).
+ *  Prefer deriveRunAttention, which routes here for non-background runs. */
 function attentionForRunStatus(status: SessionStatus): AttentionState | null {
   const now = new Date().toISOString()
   switch (status) {
@@ -47,7 +50,45 @@ function attentionForRunStatus(status: SessionStatus): AttentionState | null {
   }
 }
 
-export { attentionForRunStatus }
+/** Attention is a pure derivation of `(status, blocked, background)`,
+ *  re-derived whenever any input changes (status watcher flips, blocked
+ *  add/remove, background PATCH, boot rehydrate/reconcile).
+ *
+ *  Background mapping: a background agent idles by design, so plain idle
+ *  surfaces nothing — but a permission block (idle + blocked) is urgent, and
+ *  stopped breaks through as info so machinery death is never silent.
+ *  Non-background runs keep today's mapping exactly; `blocked` is ignored. */
+function deriveRunAttention(status: SessionStatus, blocked: boolean, background: boolean): AttentionState | null {
+  if (!background) return attentionForRunStatus(status)
+  const now = new Date().toISOString()
+  switch (status) {
+    case 'needs_attention':
+      return { level: 'urgent', reason: 'Needs your attention', setAt: now }
+    case 'idle':
+      return blocked
+        ? { level: 'urgent', reason: 'Waiting on permission', setAt: now }
+        : null
+    case 'stopped':
+      return { level: 'info', reason: 'Run stopped', setAt: now }
+    case 'creating':
+    case 'running':
+      return null
+  }
+}
+
+/** Boot-rehydrate correction guard: should `updateRunStatus` fire to sync the
+ *  run projection to the persisted session and re-derive attention? Widened
+ *  from status-only so a `blocked` flip persisted before a restart re-derives
+ *  (AE4) instead of waiting on the watcher's in-memory re-detection. */
+function runNeedsStatusCorrection(
+  run: Pick<Run, 'status' | 'blocked'>,
+  sessionState: SessionStatus,
+  sessionBlocked: boolean,
+): boolean {
+  return run.status !== sessionState || run.blocked !== sessionBlocked
+}
+
+export { attentionForRunStatus, deriveRunAttention, runNeedsStatusCorrection }
 
 function attentionShallowEqual(a?: AttentionState, b?: AttentionState): boolean {
   if (a === b) return true
@@ -438,17 +479,36 @@ export class DocumentStore {
    * object reference flows out via SSE deltas) but easy to miss from the
    * signature.
    */
-  updateRunStatus(runId: string, status: RunStatus): void {
+  updateRunStatus(runId: string, status: RunStatus, blocked?: boolean): void {
     const run = this.runs.get(runId)
     if (!run) return
-    if (run.status === status) return
+    // A stopped session cannot be waiting on a permission prompt — force
+    // blocked off so the flag can't dangle on a dead run. When the caller
+    // omits `blocked` (simulator/document-processor, legacy call sites), the
+    // run's current value is kept.
+    const nextBlocked = status === 'stopped' ? false : (blocked ?? run.blocked)
+    if (run.status === status && run.blocked === nextBlocked) return
     run.status = status
+    run.blocked = nextBlocked
     this.changes.emit('change', { entity: 'run', id: runId, data: run })
-    // Derive attention from the new status. Skip the setRunAttention call
-    // when both prior attention and mapped attention are absent — otherwise
-    // setRunAttention would emit a redundant change event (its dedupe guard
-    // only fires when both sides are non-null).
-    const mapped = attentionForRunStatus(status)
+    // Re-derive attention from (status, blocked, background). Skip the
+    // setRunAttention call when both prior attention and mapped attention are
+    // absent — otherwise setRunAttention would emit a redundant change event
+    // (its dedupe guard only fires when both sides are non-null).
+    const mapped = deriveRunAttention(status, nextBlocked, run.background)
+    if (mapped !== null || run.attention !== undefined) {
+      this.setRunAttention(runId, mapped)
+    }
+  }
+
+  /** Re-derive a run's attention from its current `(status, blocked,
+   *  background)` triple without changing any of them. For callers that
+   *  mutate a derivation input outside updateRunStatus — e.g. the PATCH
+   *  `background` flip (U4). */
+  rederiveRunAttention(runId: string): void {
+    const run = this.runs.get(runId)
+    if (!run) return
+    const mapped = deriveRunAttention(run.status, run.blocked, run.background)
     if (mapped !== null || run.attention !== undefined) {
       this.setRunAttention(runId, mapped)
     }

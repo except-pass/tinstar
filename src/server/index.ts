@@ -1,6 +1,6 @@
 import type { Plugin } from 'vite'
 import { EventBus } from './event-bus'
-import { DocumentStore } from './stores/document-store'
+import { DocumentStore, runNeedsStatusCorrection } from './stores/document-store'
 import { OTelStore } from './stores/otel-store'
 import { DocumentProcessor } from './processors/document-processor'
 import { OTelProcessor } from './processors/otel-processor'
@@ -302,16 +302,24 @@ export function initBackend(): RouteContext {
             createdAt: sess.created ?? new Date().toISOString(),
             spaceId: docStore.activeSpaceId,
           })
+          // A session persisted as blocked must re-derive attention right away
+          // (AE4) — upsertRun only projects fields, it never derives, and the
+          // watcher's in-memory override starts empty after a restart. Guarded
+          // on `blocked` so the ordinary boot path derives nothing (unchanged).
+          if (sess.blocked) docStore.rederiveRunAttention(sess.name)
           log.info('rehydrate', `created run for session ${sess.name} (${sess.state})`)
         } else {
           // Refresh fields that mirror live session state. NATS fields are SSOT on
           // the session (subscriptions mutate on breakout joins, orphan flag flips
           // on control-socket loss) and the run projection must track them across
           // restarts. agentIcon picks up template-icon changes too.
+          // `blocked` is deliberately NOT in this spread: updateRunStatus owns
+          // the (status, blocked) pair so a persisted blocked flip re-derives
+          // attention (AE4) — mirroring it here first would trip the mutator's
+          // equality short-circuit and leave attention stale.
           const refreshed = {
             ...existingRun,
             background: sess.background ?? false,
-            blocked: sess.blocked ?? false,
             natsEnabled: sess.nats?.enabled ?? false,
             natsSubject: sess.nats?.subscriptions?.[1] ?? sess.nats?.subscriptions?.[0],
             natsSubscriptions: sess.nats?.subscriptions,
@@ -319,9 +327,10 @@ export function initBackend(): RouteContext {
             agentIcon: tpl?.icon ?? existingRun.agentIcon,
           }
           docStore.upsertRun(sess.name, refreshed)
-          if (existingRun.status !== sess.state) {
-            log.info('rehydrate', `${sess.name}: correcting status ${existingRun.status} → ${sess.state}`)
-            docStore.updateRunStatus(sess.name, sess.state)
+          const persistedBlocked = sess.blocked ?? false
+          if (runNeedsStatusCorrection(existingRun, sess.state, persistedBlocked)) {
+            log.info('rehydrate', `${sess.name}: correcting status ${existingRun.status}${existingRun.blocked ? ' (blocked)' : ''} → ${sess.state}${persistedBlocked ? ' (blocked)' : ''}`)
+            docStore.updateRunStatus(sess.name, sess.state, persistedBlocked)
           }
         }
         // Backfill TopicMetadata for sessions that pre-existed the topic-metadata
@@ -351,8 +360,12 @@ export function initBackend(): RouteContext {
       reconcileGitHistory(docStore, sessionConfig)
 
       const cfg = sessionConfig
-      const onStateChanged = (name: string, state: SessionStatus) => {
-        docStore.updateRunStatus(name, state)
+      // `blocked` rides along from the StatusWatcher (which passes it on every
+      // callback). Reconcile paths omit it: updateRunStatus keeps the run's
+      // current value, and forces it false on `stopped` — the only state
+      // reconcile emits — so a dead session can't keep a blocked flag.
+      const onStateChanged = (name: string, state: SessionStatus, blocked?: boolean) => {
+        docStore.updateRunStatus(name, state, blocked)
         readyQueue.onStatusChange(name, state)
         sse.setReadyQueue(readyQueue.getQueue())
         sse.broadcastReadyQueueUpdate()
