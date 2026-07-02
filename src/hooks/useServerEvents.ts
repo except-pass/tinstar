@@ -306,6 +306,13 @@ export function applyDelta(prev: ServerState, delta: { entity: string; id: strin
     const mergeRun = (prevRun: Run | undefined, next: Run): Run => ({
       ...prevRun,
       ...next,
+      // Run deltas carry the full run object, but a cleared attention is
+      // stored server-side as `attention: undefined`, which JSON.stringify
+      // drops from the SSE payload entirely. The spread-merge above would
+      // then inherit the stale attention from prevRun forever (a background
+      // run's breakthrough card would never return to invisibility), so take
+      // attention from the incoming run explicitly: absent key = cleared.
+      attention: next.attention,
       touchedFiles: next.touchedFiles ?? prevRun?.touchedFiles ?? [],
       recapEntries: next.recapEntries ?? prevRun?.recapEntries ?? [],
     })
