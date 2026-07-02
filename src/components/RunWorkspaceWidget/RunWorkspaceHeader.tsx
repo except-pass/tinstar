@@ -141,6 +141,19 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
               <span className={`w-1.5 h-1.5 rounded-full ${status.dot} ${status.pulse ? 'animate-pulse-glow' : ''}`} />
               <span className="text-2xs font-bold tracking-[0.1em] font-mono uppercase">{status.label}</span>
             </div>
+            {/* Background chip — subtle/gray, no pulse (R8). Rendered whenever the
+                run is background: toggle-revealed cards and attention-breakthrough
+                cards both carry the mark. */}
+            {run.background && (
+              <div
+                className="flex items-center gap-1 text-slate-500 shrink-0"
+                data-testid={`background-chip-${run.id}`}
+                title="Background session — hidden from the canvas and sidebar by default"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                <span className="text-2xs font-bold tracking-[0.1em] font-mono uppercase">Background</span>
+              </div>
+            )}
           </div>
           {!compact && breadcrumb.length > 0 && (
             <nav className="flex items-center gap-1 mt-0.5">

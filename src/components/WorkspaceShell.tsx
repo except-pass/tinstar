@@ -163,6 +163,22 @@ function WorkspaceShellInner() {
     [sidebarTree, backgroundHiddenIds],
   )
 
+  // U6 (R8/R9): background marking + count for the sidebar header toggle.
+  // backgroundRunIds marks every background run — only rows that survive the
+  // prune (toggle-revealed or attention breakthrough) actually render, and
+  // those get the dim + badge treatment. backgroundCount is scoped to the
+  // active space and feeds the toggle's "(N)" even while the toggle is off.
+  const backgroundRunIds = useMemo(() => {
+    const out = new Set<string>()
+    for (const run of runRepo.getAll()) if (run.background) out.add(run.id)
+    return out
+  }, [runRepo])
+  const backgroundCount = useMemo(() => {
+    let n = 0
+    for (const run of runRepo.getAll()) if (run.background && run.spaceId === activeSpaceId) n++
+    return n
+  }, [runRepo, activeSpaceId])
+
   // Build runs map for InfiniteCanvas
   const runMap = useMemo(() => {
     const map = new Map<string, Run>()
@@ -989,6 +1005,8 @@ function WorkspaceShellInner() {
                         showEmptyEntities={showEmptyEntities}
                         showBackgroundSessions={showBackgroundSessions}
                         onToggleShowBackground={() => setShowBackgroundSessions(v => !v)}
+                        backgroundCount={backgroundCount}
+                        backgroundRunIds={backgroundRunIds}
                         onToggleShowEmpty={() => {
                           const next = !showEmptyEntities
                           setShowEmptyEntities(next)
