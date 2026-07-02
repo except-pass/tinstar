@@ -7,6 +7,8 @@ import { DEFAULT_LEVELS } from '../domain/dimension-meta'
 import { useGlobalHotkeys } from '../hotkeys/useGlobalHotkeys'
 import { cycleNext, cyclePrev, visibleCycleQueue } from '../hooks/useReadyQueue'
 import { useHiddenRuns } from '../hooks/useHiddenRuns'
+import { isBackgroundHidden, backgroundHiddenRunIds, pruneRunNodes } from '../domain/background-visibility'
+import { getPref, setPref } from '../lib/uiPrefs'
 import { CreateEntityDialog, type CreateDialogState } from './CreateEntityDialog'
 import { CreateSessionDialog } from './CreateSessionDialog'
 import { SettingsDialog } from './SettingsDialog'
@@ -138,6 +140,29 @@ function WorkspaceShellInner() {
     [rawSidebarTree, showEmptyEntities, filterEmptyNodes],
   )
 
+  // Background-session reveal toggle (R8–R10). U5 wires the pref + state; U6
+  // builds the sidebar button that flips it. Same uiPrefs-backed state pattern
+  // as minimapVisible/hudVisible (CanvasMinimap/CanvasHud).
+  const [showBackgroundSessions, setShowBackgroundSessions] = useState(() => getPref('showBackgroundSessions') ?? false)
+  useEffect(() => {
+    setPref('showBackgroundSessions', showBackgroundSessions)
+  }, [showBackgroundSessions])
+
+  // Background pruning (R4–R5): drop background-hidden runs from the tree
+  // BEFORE it forks to the sidebar and canvas — both surfaces lose the run.
+  // This is a separate mechanism from the hidden-runs eyeball below, which
+  // dims runs in the sidebar and prunes them only from the canvas; the two
+  // coexist and must not be merged. Attention exempts a run from this prune
+  // (breakthrough, R16) so its inbox row always targets a real card.
+  const backgroundHiddenIds = useMemo(
+    () => backgroundHiddenRunIds(runRepo.getAll(), showBackgroundSessions),
+    [runRepo, showBackgroundSessions],
+  )
+  const backgroundPrunedTree = useMemo(
+    () => backgroundHiddenIds.size === 0 ? sidebarTree : pruneRunNodes(sidebarTree, backgroundHiddenIds),
+    [sidebarTree, backgroundHiddenIds],
+  )
+
   // Build runs map for InfiniteCanvas
   const runMap = useMemo(() => {
     const map = new Map<string, Run>()
@@ -235,7 +260,7 @@ function WorkspaceShellInner() {
 
   const canvasTree = useMemo(() => {
     const allSynthetic = [...syntheticEditorNodes, ...syntheticBrowserNodes, ...syntheticImageNodes, ...syntheticPluginWidgetNodes]
-    if (allSynthetic.length === 0) return sidebarTree
+    if (allSynthetic.length === 0) return backgroundPrunedTree
 
     // Map taskNodeId → synthetic nodes to nest inside it
     const byTaskNode = new Map<string, TreeNode[]>()
@@ -284,7 +309,7 @@ function WorkspaceShellInner() {
       orphans.push(node)
     }
 
-    if (byTaskNode.size === 0) return [...sidebarTree, ...orphans]
+    if (byTaskNode.size === 0) return [...backgroundPrunedTree, ...orphans]
 
     function inject(nodes: TreeNode[]): TreeNode[] {
       return nodes.map(node => {
@@ -295,8 +320,8 @@ function WorkspaceShellInner() {
       })
     }
 
-    return [...inject(sidebarTree), ...orphans]
-  }, [sidebarTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticPluginWidgetNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
+    return [...inject(backgroundPrunedTree), ...orphans]
+  }, [backgroundPrunedTree, syntheticEditorNodes, syntheticBrowserNodes, syntheticImageNodes, syntheticPluginWidgetNodes, editorWidgets, browserWidgets, imageWidgets, runMap])
 
   // Canvas view: drop run nodes the user has hidden via the eyeball. The sidebar
   // still shows them (dimmed) so the user can re-show them.
@@ -348,7 +373,7 @@ function WorkspaceShellInner() {
   // run with the created sessionId so the canvas can place the resulting run.
   const [pendingSessionOnCreated, setPendingSessionOnCreated] = useState<((sessionId: string) => void) | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const { select, toggleSelect, expandAll, selectedCount: _selectedCount, state: selectionState } = useSelection()
+  const { select, toggleSelect, deselect, expandAll, selectedCount: _selectedCount, state: selectionState } = useSelection()
   const arrangeGridRef = useRef<(() => void) | null>(null)
   const arrangeResetRef = useRef<(() => void) | null>(null)
   const arrangeSwimlanesRef = useRef<(() => void) | null>(null)
@@ -592,6 +617,23 @@ function WorkspaceShellInner() {
     return firstNodeId.startsWith('run-') ? firstNodeId.slice(4) : firstNodeId
   }, [selectionState.selectedIds, selectionState.selectedType])
 
+  // R15/R16: when the currently selected run transitions from prune-exempt to
+  // prune-eligible — demoted to background via a delta, or attention clearing
+  // on an already-background run whose breakthrough card was selected — clear
+  // selection and any pending camera focus so no UI state dangles on the
+  // unmounted card. The focus path clears via the selectedFocusNode sync
+  // effect below once selection empties.
+  const selectedRunPruneEligible = useMemo(() => {
+    if (!selectedRunId) return false
+    const run = runMap.get(selectedRunId)
+    return run ? isBackgroundHidden(run, showBackgroundSessions) : false
+  }, [selectedRunId, runMap, showBackgroundSessions])
+  useEffect(() => {
+    if (!selectedRunPruneEligible) return
+    deselect()
+    setFocusRunId(null)
+  }, [selectedRunPruneEligible, deselect])
+
   // Derive focus node for any selected entity (run, task, epic, initiative)
   const selectedFocusNode = useMemo<FocusNode | null>(() => {
     const { selectedType, selectedIds } = selectionState
@@ -682,6 +724,19 @@ function WorkspaceShellInner() {
     return out
   }, [allRuns, isRunHidden])
 
+  // sessionIds of background runs currently pruned (toggle off, no attention) —
+  // cycling must never land on an invisible card (R7). Filtering candidates
+  // here also covers visibleCycleQueue's pre-report fallback, which bypasses
+  // the sidebar's visible order. Revealed background runs (toggle on) and
+  // breakthrough runs (attention pending) stay cyclable.
+  const backgroundHiddenSessionIds = useMemo(() => {
+    const out = new Set<string>()
+    for (const run of allRuns) {
+      if (isBackgroundHidden(run, showBackgroundSessions) && run.sessionId) out.add(run.sessionId)
+    }
+    return out
+  }, [allRuns, showBackgroundSessions])
+
   // The sidebar reports the run ids it's currently showing, top-to-bottom, in
   // the exact order it renders them — after collapse, search pruning, and inbox
   // filters. Cycling reads this so `[` / `]` walk exactly what the operator
@@ -707,23 +762,23 @@ function WorkspaceShellInner() {
 
   useGlobalHotkeys({
     onCycleReadyNext: () => {
-      const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name)))
+      const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name) && !backgroundHiddenSessionIds.has(name)))
       const run = cycleNext(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleReadyPrev: () => {
-      const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name)))
+      const queue = visibleQueue(readyQueue.filter(name => !hiddenSessionIds.has(name) && !backgroundHiddenSessionIds.has(name)))
       const run = cyclePrev(allRuns, queue, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllNext: () => {
-      const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id) && !isBackgroundHidden(r, showBackgroundSessions)).map(r => r.sessionId).filter(Boolean) as string[]
       const activeNames = visibleQueue(active)
       const run = cycleNext(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
     },
     onCycleAllPrev: () => {
-      const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id)).map(r => r.sessionId).filter(Boolean) as string[]
+      const active = allRuns.filter(r => r.status !== 'stopped' && !isRunHidden(r.id) && !isBackgroundHidden(r, showBackgroundSessions)).map(r => r.sessionId).filter(Boolean) as string[]
       const activeNames = visibleQueue(active)
       const run = cyclePrev(allRuns, activeNames, selectedRunId)
       if (run) { handleSelectRun(run.id); setFocusRunId(`run-${run.id}`) }
@@ -932,6 +987,8 @@ function WorkspaceShellInner() {
                         spaces={spaces}
                         activeSpaceId={activeSpaceId}
                         showEmptyEntities={showEmptyEntities}
+                        showBackgroundSessions={showBackgroundSessions}
+                        onToggleShowBackground={() => setShowBackgroundSessions(v => !v)}
                         onToggleShowEmpty={() => {
                           const next = !showEmptyEntities
                           setShowEmptyEntities(next)

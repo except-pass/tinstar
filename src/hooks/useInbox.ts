@@ -71,6 +71,10 @@ export function useInbox(activeSpaceId: string | null | undefined): UseInboxResu
     // the rest list below by recency so you can see everything at a glance.
     for (const run of state.runs as Run[]) {
       if (run.spaceId !== activeSpaceId) continue
+      // Background sessions never produce passive listing rows — even when the
+      // reveal toggle is on (R6). A run with pending attention flows through
+      // unchanged: that's the breakthrough row (R11/R16).
+      if (run.background && !run.attention) continue
       const taskPath = [run.initiative, run.epic, run.task].filter(s => typeof s === 'string' && s.length > 0)
       const readKey = run.attention ? `${run.id}:${run.attention.setAt}` : run.id
       rows.push({

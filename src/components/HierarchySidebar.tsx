@@ -125,6 +125,11 @@ interface HierarchySidebarProps {
   activeSpaceId: string
   showEmptyEntities?: boolean
   onToggleShowEmpty?: () => void
+  /** Background-session reveal toggle (uiPrefs `showBackgroundSessions`, R8–R10).
+   *  Wired by WorkspaceShell in U5; U6 builds the header button that reads the
+   *  flag and calls the toggle. */
+  showBackgroundSessions?: boolean
+  onToggleShowBackground?: () => void
   onActivateSpace: (id: string) => void
   onCreateSpace: (name: string) => void
   onRenameSpace: (id: string, name: string) => void
