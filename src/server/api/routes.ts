@@ -2812,9 +2812,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const patch = JSON.parse(body) as {
         taskId?: string
         attention?: { level: string; reason: string } | null
+        background?: boolean
         [key: string]: unknown
       }
       const { attention: attentionPatch, ...patchWithoutAttention } = patch
+
+      // Background flip (promote/demote, R3): validate before any mutation so
+      // an invalid value cannot leave a half-applied patch.
+      if ('background' in patch && typeof patch.background !== 'boolean') {
+        return fail(res, 'BAD_REQUEST', 'invalid_background: must be a boolean')
+      }
+      const backgroundChanged = typeof patch.background === 'boolean' && patch.background !== existing.background
 
       // Attention handling mirrors plugin widgets so clearing a run does not
       // leave a lingering null payload in the stored run state.
@@ -2840,9 +2848,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
       }
 
+      const sessDir = ctx.sessionConfig?.dirs.sessions
+
+      // Persist the background flip to session.json so it survives restarts
+      // (R13). A null return is expected for runs with no backing session
+      // record (simulator and plugin-created runs) — the run projection below
+      // is still the truth those runs live by, so proceed regardless.
+      if (typeof patch.background === 'boolean' && sessDir) {
+        updateSession(sessDir, existing.sessionId, { background: patch.background })
+      }
+
       // Check if taskId changed and NATS is enabled — need to update subscriptions
       const taskIdChanged = patchWithoutAttention.taskId !== undefined && patchWithoutAttention.taskId !== existing.taskId
-      const sessDir = ctx.sessionConfig?.dirs.sessions
       if (taskIdChanged && existing.natsEnabled && sessDir) {
         const session = getSession(sessDir, existing.sessionId)
         if (session?.nats?.enabled) {
@@ -2886,6 +2903,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (natsWarnings.length > 0) {
             const baseline = attentionApplied ? ctx.docStore.getRun(id)! : existing
             ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention })
+            if (backgroundChanged) ctx.docStore.rederiveRunAttention(id)
             return ok(res, ctx.docStore.getRun(id), { warnings: { nats: natsWarnings } })
           }
         }
@@ -2893,6 +2911,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       const baseline = attentionApplied ? ctx.docStore.getRun(id)! : existing
       ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention })
+      // Re-derive attention from the persisted (status, blocked, background)
+      // triple in the same mutation (R13): demote clears "Ready for input",
+      // promote restores it, a blocked demote surfaces urgent. Guarded on an
+      // actual flip so a no-op re-assert of `background` cannot clobber an
+      // explicitly set attention.
+      if (backgroundChanged) ctx.docStore.rederiveRunAttention(id)
       ok(res, ctx.docStore.getRun(id))
     })
     return true
