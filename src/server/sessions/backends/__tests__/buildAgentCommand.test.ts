@@ -50,3 +50,120 @@ describe('buildAgentCommand persona handling', () => {
     expect(cmd).toContain('BE THE MARSHAL')
   })
 })
+
+describe('buildAgentCommand NATS dev-channel coupling', () => {
+  // The default multi-agent template bakes in the dev-channels flag; NATS is
+  // only actually provisioned (a .mcp.json is written) for some sessions.
+  const NATS_TMPL = tmpl(
+    'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --session-id {sessionId} -- {prompt}',
+    'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --resume {sessionId}',
+  )
+
+  it('strips the dev-channels flag when NATS was not provisioned (blank project)', () => {
+    const cmd = buildAgentCommand({
+      template: NATS_TMPL, sessionId: 'sid', resume: false, initialPrompt: 'my prompt', nats: null,
+    })
+    expect(cmd).not.toContain('--dangerously-load-development-channels')
+    expect(cmd).not.toContain('server:nats')
+    expect(cmd).not.toContain('--mcp-config')
+    // The prompt (and every other flag) survives intact.
+    expect(cmd).toContain('-- ')
+    expect(cmd).toContain('my prompt')
+    expect(cmd).toContain('--dangerously-skip-permissions')
+    expect(cmd).toContain('--session-id sid')
+    // No double spaces left behind by the removal.
+    expect(cmd).not.toMatch(/ {2,}/)
+  })
+
+  it('strips the dev-channels flag on resume when NATS was not provisioned', () => {
+    const cmd = buildAgentCommand({
+      template: NATS_TMPL, sessionId: 'sid', resume: true, nats: { enabled: false },
+    })
+    expect(cmd).not.toContain('server:nats')
+    expect(cmd).not.toContain('--mcp-config')
+    expect(cmd).toContain('--resume sid')
+  })
+
+  it('injects --mcp-config (before the -- separator) when NATS is provisioned', () => {
+    const cmd = buildAgentCommand({
+      template: NATS_TMPL, sessionId: 'sid', resume: false, initialPrompt: 'my prompt',
+      nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
+    })
+    expect(cmd).toContain('--dangerously-load-development-channels server:nats')
+    expect(cmd).toContain("--mcp-config '/cfg/nats-mcp.json'")
+    // --mcp-config stays an option, before the prompt separator.
+    expect(cmd.indexOf('--mcp-config')).toBeLessThan(cmd.indexOf(' -- '))
+    expect(cmd).toContain('my prompt')
+    expect(cmd).not.toMatch(/ {2,}/)
+  })
+
+  it('injects --mcp-config on resume (no -- separator) when NATS is provisioned', () => {
+    const cmd = buildAgentCommand({
+      template: NATS_TMPL, sessionId: 'sid', resume: true,
+      nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
+    })
+    expect(cmd).toContain('--dangerously-load-development-channels server:nats')
+    expect(cmd).toContain("--mcp-config '/cfg/nats-mcp.json'")
+    expect(cmd).toContain('--resume sid')
+  })
+
+  it('keeps the dev-channels flag but emits no --mcp-config when the path is absent', () => {
+    const cmd = buildAgentCommand({
+      template: NATS_TMPL, sessionId: 'sid', resume: false, initialPrompt: 'my prompt', nats: { enabled: true },
+    })
+    expect(cmd).toContain('--dangerously-load-development-channels server:nats')
+    expect(cmd).not.toContain('--mcp-config')
+    expect(cmd).toContain('my prompt')
+  })
+
+  it('legacy fallback (no template) includes both flags when NATS is provisioned', () => {
+    const cmd = buildAgentCommand({
+      skipPermissions: true, sessionId: 'sid', resume: false, initialPrompt: 'hi',
+      nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
+    })
+    expect(cmd).toContain('--dangerously-load-development-channels server:nats')
+    expect(cmd).toContain("--mcp-config '/cfg/nats-mcp.json'")
+  })
+})
+
+describe('buildAgentCommand flag-insertion robustness', () => {
+  const PLAIN = tmpl('claude --session-id {sessionId} -- {prompt}', 'claude --resume {sessionId}')
+
+  it("a ' -- ' inside the --mcp-config path does not corrupt the command", () => {
+    // A session name with a literal ' -- ' flows into the per-session config path.
+    // The real prompt separator must stay the last ` -- `, with append/model as
+    // options before it and the path spliced in intact.
+    const cmd = buildAgentCommand({
+      template: PLAIN, sessionId: 'sid', resume: false, initialPrompt: 'do it',
+      nats: { enabled: true, mcpConfigPath: "/sessions/weird -- name/nats-mcp.json" },
+      appendSystemPrompt: 'BE X', modelOverride: 'haiku',
+    })
+    // The path (including its ' -- ') survives as one quoted token.
+    expect(cmd).toContain("--mcp-config '/sessions/weird -- name/nats-mcp.json'")
+    // The real separator + prompt is intact and last.
+    expect(cmd.endsWith("-- 'do it'")).toBe(true)
+    // append-system-prompt and model landed as options, before the real separator.
+    const sepIdx = cmd.lastIndexOf(" -- ")
+    expect(cmd.indexOf('--append-system-prompt')).toBeGreaterThan(-1)
+    expect(cmd.indexOf('--append-system-prompt')).toBeLessThan(sepIdx)
+    expect(cmd.indexOf('--model')).toBeLessThan(sepIdx)
+  })
+
+  it('single-quotes (escapes) shell metacharacters in the --mcp-config path', () => {
+    const cmd = buildAgentCommand({
+      template: PLAIN, sessionId: 'sid', resume: false, initialPrompt: 'p',
+      nats: { enabled: true, mcpConfigPath: "/a/o'brien/nats-mcp.json" },
+    })
+    // bashSingleQuote turns ' into '\'' — a regression that dropped quoting would fail this.
+    expect(cmd).toContain("--mcp-config '/a/o'\\''brien/nats-mcp.json'")
+  })
+
+  it('strips the dev-channels flag cleanly when it is the last token (no trailing space)', () => {
+    const cmd = buildAgentCommand({
+      template: tmpl('claude --session-id {sessionId} --dangerously-load-development-channels server:nats', 'claude --resume {sessionId}'),
+      sessionId: 'sid', resume: false, nats: null,
+    })
+    expect(cmd).toBe('claude --session-id sid')
+    expect(cmd).not.toMatch(/ $/)
+  })
+})

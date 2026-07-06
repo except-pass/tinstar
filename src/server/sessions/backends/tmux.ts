@@ -89,11 +89,10 @@ export function natsControlSocketPath(sessionName: string): string {
 }
 
 /**
- * Path to the session's NATS topics file (one subject per line). The static
- * .mcp.json passes this to the channel server via --topics-file, keeping the
- * variable-length subscription list out of the (otherwise byte-identical)
- * .mcp.json so that file never churns. Lives in the per-session config dir,
- * not the git workspace.
+ * Path to the session's NATS topics file (one subject per line). The per-session
+ * nats-mcp.json passes this to the channel server via --topics-file, keeping the
+ * variable-length subscription list out of the config file itself. Lives in the
+ * per-session config dir, not the git workspace.
  */
 export function natsTopicsFilePath(sessionsDir: string, sessionName: string): string {
   return join(sessionsDir, sessionName, 'nats-topics.txt')
@@ -274,45 +273,44 @@ function interpolateTemplate(
 }
 
 /**
- * Write the NATS channel config Claude needs at launch. Returns the .mcp.json path.
+ * Write the NATS channel config Claude needs at launch. Returns the config path,
+ * which the caller passes to `claude --mcp-config <path>`.
  *
- * The channel must live in the workspace CWD .mcp.json: Claude's
- * --dangerously-load-development-channels server:nats resolver only sees MCP
- * servers from project/user scope, NOT from --mcp-config (verified — that path
- * reports "no MCP server configured with that name"). So we can't move the file
- * out of the repo. Instead we make it STOP CHURNING by making it byte-identical
- * across every session: the per-session bits (--name, --control-socket, and the
- * variable-length subscription list) come from env vars Claude expands at launch
- * (${TINSTAR_SESSION_NAME} etc., injected via tmux set-environment) plus a
- * --topics-file written to the per-session dir. The .mcp.json then depends only
- * on per-machine config (bun path, package), so concurrent sessions sharing one
- * repo all want the same bytes. Both files are written idempotently — unchanged
- * content means no write, so mtime is stable and there is nothing to churn.
+ * The file lives in the session's own config dir (next to nats-topics.txt), NOT
+ * in the git workspace. Claude Code's --dangerously-load-development-channels
+ * server:nats resolver reads the named server straight from --mcp-config as of
+ * CC 2.1.201 (verified empirically 2026-07-06; older builds only saw a CWD
+ * .mcp.json, which is why this used to be written into the repo). Because the
+ * file is now per-session and private, it carries the per-session values as
+ * literals — no ${VAR} env-token indirection, no byte-identical churn dance, and
+ * nothing written into the user's repo. --mcp-config loads non-strict, so a
+ * project's own CWD .mcp.json still loads alongside it.
  */
 export function generateNatsMcpConfig(opts: {
   sessionsDir: string
   sessionName: string
-  workspacePath: string
   nats: SessionNats
   channelServerPackage: string  // npm package or github:user/repo
   bunPath: string
   jetstream?: boolean
 }): string {
   // Per-session topics file (one subject per line) — keeps the variable-length
-  // subscription list out of the static .mcp.json. Lives outside the git tree.
+  // subscription list out of the mcp config. Lives outside the git tree.
   const topicsPath = natsTopicsFilePath(opts.sessionsDir, opts.sessionName)
+  const controlSocket = natsControlSocketPath(opts.sessionName)
   mkdirSync(join(opts.sessionsDir, opts.sessionName), { recursive: true })
   writeIfChanged(topicsPath, opts.nats.subscriptions.join('\n') + '\n')
 
-  // Build args from env tokens so the file is identical for every session.
-  // --control-socket wires up the hot subscription management path used by
-  // POST/DELETE /api/sessions/:name/subscriptions. Requires nats-channel-mcp
-  // >= the commit that introduced the flag (except-pass/nats-channel-mcp#1).
+  // Literal per-session args — the file is per-session, so there is no reason to
+  // route these through env tokens. --control-socket wires up the hot
+  // subscription management path used by POST/DELETE
+  // /api/sessions/:name/subscriptions. Requires nats-channel-mcp >= the commit
+  // that introduced the flag (except-pass/nats-channel-mcp#1).
   const args: string[] = [
     'x', opts.channelServerPackage,
-    '--name', '${TINSTAR_SESSION_NAME}',
-    '--topics-file', '${TINSTAR_NATS_TOPICS_FILE}',
-    '--control-socket', '${TINSTAR_NATS_CONTROL_SOCKET}',
+    '--name', opts.sessionName,
+    '--topics-file', topicsPath,
+    '--control-socket', controlSocket,
   ]
   if (opts.jetstream) args.push('--jetstream')
 
@@ -325,10 +323,9 @@ export function generateNatsMcpConfig(opts: {
     },
   }
 
-  // Claude looks for .mcp.json in the working directory; the channels resolver
-  // requires it there (see header comment). Written idempotently so it churns
-  // only when per-machine config actually changes, never per session.
-  const mcpConfigPath = join(opts.workspacePath, '.mcp.json')
+  // Per-session config dir, outside any git tree. Passed to Claude via
+  // --mcp-config so it never has to live in the workspace. Written idempotently.
+  const mcpConfigPath = join(opts.sessionsDir, opts.sessionName, 'nats-mcp.json')
   writeIfChanged(mcpConfigPath, JSON.stringify(mcpConfig, null, 2))
   return mcpConfigPath
 }
@@ -339,17 +336,6 @@ function writeIfChanged(path: string, content: string): void {
   writeFileSync(path, content)
 }
 
-/**
- * Inject the per-session NATS env vars the static .mcp.json expands at launch.
- * TINSTAR_SESSION_NAME is already set by createTmuxSession; these two carry the
- * paths that vary per session. The launch command's `eval "$(tmux
- * show-environment -s)"` loads them into the shell before `claude` runs.
- */
-async function setNatsEnv(tmuxName: string, sessionsDir: string, sessionName: string): Promise<void> {
-  await execFileAsync('tmux', ['set-environment', '-t', tmuxName, 'TINSTAR_NATS_TOPICS_FILE', natsTopicsFilePath(sessionsDir, sessionName)])
-  await execFileAsync('tmux', ['set-environment', '-t', tmuxName, 'TINSTAR_NATS_CONTROL_SOCKET', natsControlSocketPath(sessionName)])
-}
-
 /** Build the agent CLI command from a template or legacy skipPermissions flag. */
 export function buildAgentCommand(opts: {
   template?: CliTemplate | null
@@ -357,7 +343,10 @@ export function buildAgentCommand(opts: {
   sessionId?: string | null
   resume?: boolean
   initialPrompt?: string | null
-  nats?: { enabled: boolean } | null
+  /** NATS channel provisioning. When enabled, `mcpConfigPath` is the per-session
+   * nats-mcp.json to load via `--mcp-config`; when disabled, the dev-channels
+   * flag is stripped from the resolved command (see coupling note below). */
+  nats?: { enabled: boolean; mcpConfigPath?: string | null } | null
   appendSystemPrompt?: string | null
   agent?: AgentDef | null
   /** Per-session model override (Switchboard). Appends `--model <modelOverride>`
@@ -365,65 +354,75 @@ export function buildAgentCommand(opts: {
    * leaves the command byte-identical to pre-override behavior. */
   modelOverride?: string | null
 }): string {
-  let cmd: string
+  // Option flags that must sit before the ` -- {prompt}` separator. Collected
+  // here and spliced in exactly once during assembly below, so a ` -- ` inside
+  // any flag *value* — a session-name-derived --mcp-config path, or a prompt /
+  // persona that itself contains ' -- ' — can never be mistaken for the real
+  // separator (which a per-flag indexOf(' -- ') re-scan would latch onto).
+  const preFlags: string[] = []
+  let head: string       // command up to (not including) the prompt separator
+  let promptTail = ''    // ` -- '<prompt>'` when a one-shot prompt is present
 
   if (opts.template) {
     const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
-    cmd = interpolateTemplate(tmpl, {
+    let cmd = interpolateTemplate(tmpl, {
       sessionId: opts.sessionId,
       prompt: opts.resume ? null : opts.initialPrompt,
       agent: opts.agent,
     })
-    // Only append --append-system-prompt when *this* command didn't already
+    // Couple the dev-channels flag to the nats-mcp.json that defines the server
+    // it names. Templates bake in `--dangerously-load-development-channels
+    // server:nats` unconditionally, but the config is only written when NATS is
+    // actually provisioned (enabled + subscriptions — see generateNatsMcpConfig
+    // callsite). For a blank/standalone session that doesn't hold, so the file is
+    // absent and Claude aborts at launch resolving a server that doesn't exist —
+    // taking the trailing `-- {prompt}` down with it. Strip the flag whenever
+    // NATS wasn't provisioned so the command stays internally consistent, and
+    // inject `--mcp-config <path>` when it was so Claude can find the server.
+    if (opts.nats?.enabled) {
+      if (opts.nats.mcpConfigPath) preFlags.push(`--mcp-config ${bashSingleQuote(opts.nats.mcpConfigPath)}`)
+    } else {
+      cmd = cmd.replace(/\s*--dangerously-load-development-channels\s+server:nats/g, '')
+    }
+    // Split the prompt separator off once, before any flag text (which may itself
+    // contain ' -- ') is spliced in.
+    const idx = cmd.indexOf(' -- ')
+    if (idx !== -1) { head = cmd.slice(0, idx); promptTail = cmd.slice(idx) }
+    else head = cmd
+    // Only add --append-system-prompt when *this* command didn't already
     // interpolate the persona via an {agent...} placeholder. Decided per-command
     // so asymmetric templates (placeholder in only one of startCmd/resumeCmd)
     // still get the persona exactly once on both create and resume.
     const interpolatedPersona = opts.agent != null && /\{agent(Name|Description|Prompt|Json)\}/.test(tmpl)
-    // Insert --append-system-prompt before the -- prompt separator if present
     if (opts.appendSystemPrompt && !interpolatedPersona) {
-      const promptFlag = ` --append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`
-      const dashDashIdx = cmd.indexOf(' -- ')
-      if (dashDashIdx !== -1) {
-        cmd = cmd.slice(0, dashDashIdx) + promptFlag + cmd.slice(dashDashIdx)
-      } else {
-        cmd += promptFlag
-      }
+      preFlags.push(`--append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`)
     }
   } else {
     // Legacy fallback: build claude command from flags
-    cmd = 'claude'
+    let cmd = 'claude'
     if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
     if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
     else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
-    // Add NATS channel support — .mcp.json is in CWD, no --mcp-config needed
+    // Add NATS channel support — the dev-channels resolver reads the server from
+    // the per-session nats-mcp.json passed via --mcp-config.
     if (opts.nats?.enabled) {
       cmd += ' --dangerously-load-development-channels server:nats'
+      if (opts.nats.mcpConfigPath) preFlags.push(`--mcp-config ${bashSingleQuote(opts.nats.mcpConfigPath)}`)
     }
-    // Add hand system prompt if specified
     if (opts.appendSystemPrompt) {
-      cmd += ` --append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`
+      preFlags.push(`--append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`)
     }
-    if (opts.initialPrompt) {
-      // Use single quotes — they don't expand !, `, $, or anything else
-      cmd += ` -- ${bashSingleQuote(opts.initialPrompt)}`
-    }
+    head = cmd
+    // Single quotes — they don't expand !, `, $, or anything else.
+    if (opts.initialPrompt) promptTail = ` -- ${bashSingleQuote(opts.initialPrompt)}`
   }
 
   // Per-session model override (Switchboard): append `--model <model>` so the
   // CLI's last-wins flag parsing overrides any model baked into the template.
-  // Insert before the ` -- ` prompt separator (so it stays an option, not part
-  // of the prompt), mirroring the --append-system-prompt insertion above.
-  if (opts.modelOverride) {
-    const modelFlag = ` --model ${bashSingleQuote(opts.modelOverride)}`
-    const dashDashIdx = cmd.indexOf(' -- ')
-    if (dashDashIdx !== -1) {
-      cmd = cmd.slice(0, dashDashIdx) + modelFlag + cmd.slice(dashDashIdx)
-    } else {
-      cmd += modelFlag
-    }
-  }
+  if (opts.modelOverride) preFlags.push(`--model ${bashSingleQuote(opts.modelOverride)}`)
 
-  return cmd
+  const flags = preFlags.length > 0 ? ' ' + preFlags.join(' ') : ''
+  return head + flags + promptTail
 }
 
 // --- Tmux operations ---
@@ -506,22 +505,20 @@ export async function createTmuxSession(
   // Build and send agent command
   const parts = ['eval "$(tmux show-environment -s)"']
 
-  // Generate NATS channel config if enabled — static .mcp.json in the workspace
-  // CWD + per-session topics file. Per-session values come from the env vars set
-  // below, which Claude expands when it reads .mcp.json.
-  let natsOpts: { enabled: boolean } | null = null
-  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0 && opts.session.workspace?.path) {
-    generateNatsMcpConfig({
+  // Generate NATS channel config if enabled — a per-session nats-mcp.json in the
+  // session config dir (outside any repo) + per-session topics file, passed to
+  // Claude via --mcp-config below. No workspace path required.
+  let natsOpts: { enabled: boolean; mcpConfigPath: string } | null = null
+  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
+    const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
       sessionName: opts.session.name,
-      workspacePath: opts.session.workspace.path,
       nats: opts.session.nats,
       channelServerPackage: config.nats.channelServerPackage,
       bunPath: config.nats.bunPath,
       jetstream: config.nats.jetstream,
     })
-    await setNatsEnv(tmuxName, config.dirs.sessions, opts.session.name)
-    natsOpts = { enabled: true }
+    natsOpts = { enabled: true, mcpConfigPath }
     log.info('tmux', `${opts.session.name}: NATS enabled, dev channel auto-accept configured`)
   }
 
@@ -576,19 +573,17 @@ export async function startTmuxSession(
   const parts = ['eval "$(tmux show-environment -s)"']
 
   // Generate NATS channel config if enabled — see createTmuxSession for details.
-  let natsOpts: { enabled: boolean } | null = null
-  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0 && opts.session.workspace?.path) {
-    generateNatsMcpConfig({
+  let natsOpts: { enabled: boolean; mcpConfigPath: string } | null = null
+  if (opts.session.nats?.enabled && opts.session.nats.subscriptions.length > 0) {
+    const mcpConfigPath = generateNatsMcpConfig({
       sessionsDir: config.dirs.sessions,
       sessionName: opts.session.name,
-      workspacePath: opts.session.workspace.path,
       nats: opts.session.nats,
       channelServerPackage: config.nats.channelServerPackage,
       bunPath: config.nats.bunPath,
       jetstream: config.nats.jetstream,
     })
-    await setNatsEnv(tmuxName, config.dirs.sessions, opts.session.name)
-    natsOpts = { enabled: true }
+    natsOpts = { enabled: true, mcpConfigPath }
   }
 
   const agentCmd = buildAgentCommand({

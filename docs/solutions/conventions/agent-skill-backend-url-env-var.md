@@ -52,10 +52,11 @@ curl -sS "$TINSTAR_URL/api/sessions/${TINSTAR_SESSION_NAME}/..."
   it's the agent's own session name, so don't guess it.
 
 What `tmux set-environment` actually injects into a session (see
-`src/server/sessions/backends/tmux.ts`): `TINSTAR_SESSION_NAME`, the NATS vars
-(`TINSTAR_NATS_TOPICS_FILE`, `TINSTAR_NATS_CONTROL_SOCKET`), secrets, and OTEL
-telemetry vars. Nothing else from the server's own env is propagated — so an
-agent snippet may only rely on those.
+`src/server/sessions/backends/tmux.ts`): `TINSTAR_SESSION_NAME`, secrets, and
+OTEL telemetry vars. Nothing else from the server's own env is propagated — so
+an agent snippet may only rely on those. (The NATS topics-file and control-socket
+paths are no longer injected as env vars — they're baked as literals into the
+per-session `nats-mcp.json` the channel server reads via `--mcp-config`.)
 
 ## Why This Matters
 
