@@ -284,7 +284,7 @@ export class NatsHealthMonitor {
  * This is the single source of truth for "does this session have NATS": it
  * reflects the live connection and the subjects the server is *actually*
  * subscribed to — independent of session.nats config, CLI flags, or which
- * .mcp.json happens to be on disk.
+ * channel config happens to be on disk.
  *
  *   open      socket answered, natsState in {'OPEN','connected'}
  *   degraded  socket answered but connection isn't up (DRAINING/CLOSED/garbage)

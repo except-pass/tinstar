@@ -125,3 +125,45 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
     expect(cmd).toContain("--mcp-config '/cfg/nats-mcp.json'")
   })
 })
+
+describe('buildAgentCommand flag-insertion robustness', () => {
+  const PLAIN = tmpl('claude --session-id {sessionId} -- {prompt}', 'claude --resume {sessionId}')
+
+  it("a ' -- ' inside the --mcp-config path does not corrupt the command", () => {
+    // A session name with a literal ' -- ' flows into the per-session config path.
+    // The real prompt separator must stay the last ` -- `, with append/model as
+    // options before it and the path spliced in intact.
+    const cmd = buildAgentCommand({
+      template: PLAIN, sessionId: 'sid', resume: false, initialPrompt: 'do it',
+      nats: { enabled: true, mcpConfigPath: "/sessions/weird -- name/nats-mcp.json" },
+      appendSystemPrompt: 'BE X', modelOverride: 'haiku',
+    })
+    // The path (including its ' -- ') survives as one quoted token.
+    expect(cmd).toContain("--mcp-config '/sessions/weird -- name/nats-mcp.json'")
+    // The real separator + prompt is intact and last.
+    expect(cmd.endsWith("-- 'do it'")).toBe(true)
+    // append-system-prompt and model landed as options, before the real separator.
+    const sepIdx = cmd.lastIndexOf(" -- ")
+    expect(cmd.indexOf('--append-system-prompt')).toBeGreaterThan(-1)
+    expect(cmd.indexOf('--append-system-prompt')).toBeLessThan(sepIdx)
+    expect(cmd.indexOf('--model')).toBeLessThan(sepIdx)
+  })
+
+  it('single-quotes (escapes) shell metacharacters in the --mcp-config path', () => {
+    const cmd = buildAgentCommand({
+      template: PLAIN, sessionId: 'sid', resume: false, initialPrompt: 'p',
+      nats: { enabled: true, mcpConfigPath: "/a/o'brien/nats-mcp.json" },
+    })
+    // bashSingleQuote turns ' into '\'' — a regression that dropped quoting would fail this.
+    expect(cmd).toContain("--mcp-config '/a/o'\\''brien/nats-mcp.json'")
+  })
+
+  it('strips the dev-channels flag cleanly when it is the last token (no trailing space)', () => {
+    const cmd = buildAgentCommand({
+      template: tmpl('claude --session-id {sessionId} --dangerously-load-development-channels server:nats', 'claude --resume {sessionId}'),
+      sessionId: 'sid', resume: false, nats: null,
+    })
+    expect(cmd).toBe('claude --session-id sid')
+    expect(cmd).not.toMatch(/ $/)
+  })
+})

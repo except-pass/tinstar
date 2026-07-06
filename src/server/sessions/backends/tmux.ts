@@ -354,11 +354,18 @@ export function buildAgentCommand(opts: {
    * leaves the command byte-identical to pre-override behavior. */
   modelOverride?: string | null
 }): string {
-  let cmd: string
+  // Option flags that must sit before the ` -- {prompt}` separator. Collected
+  // here and spliced in exactly once during assembly below, so a ` -- ` inside
+  // any flag *value* — a session-name-derived --mcp-config path, or a prompt /
+  // persona that itself contains ' -- ' — can never be mistaken for the real
+  // separator (which a per-flag indexOf(' -- ') re-scan would latch onto).
+  const preFlags: string[] = []
+  let head: string       // command up to (not including) the prompt separator
+  let promptTail = ''    // ` -- '<prompt>'` when a one-shot prompt is present
 
   if (opts.template) {
     const tmpl = opts.resume ? opts.template.resumeCmd : opts.template.startCmd
-    cmd = interpolateTemplate(tmpl, {
+    let cmd = interpolateTemplate(tmpl, {
       sessionId: opts.sessionId,
       prompt: opts.resume ? null : opts.initialPrompt,
       agent: opts.agent,
@@ -373,23 +380,26 @@ export function buildAgentCommand(opts: {
     // NATS wasn't provisioned so the command stays internally consistent, and
     // inject `--mcp-config <path>` when it was so Claude can find the server.
     if (opts.nats?.enabled) {
-      if (opts.nats.mcpConfigPath) {
-        cmd = insertBeforePromptSeparator(cmd, ` --mcp-config ${bashSingleQuote(opts.nats.mcpConfigPath)}`)
-      }
+      if (opts.nats.mcpConfigPath) preFlags.push(`--mcp-config ${bashSingleQuote(opts.nats.mcpConfigPath)}`)
     } else {
       cmd = cmd.replace(/\s*--dangerously-load-development-channels\s+server:nats/g, '')
     }
-    // Only append --append-system-prompt when *this* command didn't already
+    // Split the prompt separator off once, before any flag text (which may itself
+    // contain ' -- ') is spliced in.
+    const idx = cmd.indexOf(' -- ')
+    if (idx !== -1) { head = cmd.slice(0, idx); promptTail = cmd.slice(idx) }
+    else head = cmd
+    // Only add --append-system-prompt when *this* command didn't already
     // interpolate the persona via an {agent...} placeholder. Decided per-command
     // so asymmetric templates (placeholder in only one of startCmd/resumeCmd)
     // still get the persona exactly once on both create and resume.
     const interpolatedPersona = opts.agent != null && /\{agent(Name|Description|Prompt|Json)\}/.test(tmpl)
     if (opts.appendSystemPrompt && !interpolatedPersona) {
-      cmd = insertBeforePromptSeparator(cmd, ` --append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`)
+      preFlags.push(`--append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`)
     }
   } else {
     // Legacy fallback: build claude command from flags
-    cmd = 'claude'
+    let cmd = 'claude'
     if (opts.skipPermissions) cmd += ' --dangerously-skip-permissions'
     if (opts.resume && opts.sessionId) cmd += ` --resume ${opts.sessionId}`
     else if (opts.sessionId) cmd += ` --session-id ${opts.sessionId}`
@@ -397,39 +407,22 @@ export function buildAgentCommand(opts: {
     // the per-session nats-mcp.json passed via --mcp-config.
     if (opts.nats?.enabled) {
       cmd += ' --dangerously-load-development-channels server:nats'
-      if (opts.nats.mcpConfigPath) cmd += ` --mcp-config ${bashSingleQuote(opts.nats.mcpConfigPath)}`
+      if (opts.nats.mcpConfigPath) preFlags.push(`--mcp-config ${bashSingleQuote(opts.nats.mcpConfigPath)}`)
     }
-    // Add hand system prompt if specified
     if (opts.appendSystemPrompt) {
-      cmd += ` --append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`
+      preFlags.push(`--append-system-prompt ${bashSingleQuote(opts.appendSystemPrompt)}`)
     }
-    if (opts.initialPrompt) {
-      // Use single quotes — they don't expand !, `, $, or anything else
-      cmd += ` -- ${bashSingleQuote(opts.initialPrompt)}`
-    }
+    head = cmd
+    // Single quotes — they don't expand !, `, $, or anything else.
+    if (opts.initialPrompt) promptTail = ` -- ${bashSingleQuote(opts.initialPrompt)}`
   }
 
   // Per-session model override (Switchboard): append `--model <model>` so the
   // CLI's last-wins flag parsing overrides any model baked into the template.
-  if (opts.modelOverride) {
-    cmd = insertBeforePromptSeparator(cmd, ` --model ${bashSingleQuote(opts.modelOverride)}`)
-  }
+  if (opts.modelOverride) preFlags.push(`--model ${bashSingleQuote(opts.modelOverride)}`)
 
-  return cmd
-}
-
-/**
- * Insert an option `flag` (leading space included) so it stays an option rather
- * than becoming part of the prompt: before the ` -- ` prompt separator when the
- * command has one, appended otherwise. Used for the flags that must land after a
- * template has already interpolated its `-- {prompt}` (model, mcp-config,
- * append-system-prompt).
- */
-function insertBeforePromptSeparator(cmd: string, flag: string): string {
-  const dashDashIdx = cmd.indexOf(' -- ')
-  return dashDashIdx !== -1
-    ? cmd.slice(0, dashDashIdx) + flag + cmd.slice(dashDashIdx)
-    : cmd + flag
+  const flags = preFlags.length > 0 ? ' ' + preFlags.join(' ') : ''
+  return head + flags + promptTail
 }
 
 // --- Tmux operations ---

@@ -369,6 +369,14 @@ Clawson publishes "introduce yourself" to tinstar.agent.a1
 
 ### `.mcp.json` for Each Agent
 
+> **Shipped implementation note:** the PoC below writes a `.mcp.json` into each
+> agent's working directory. The production code instead writes a per-session
+> `nats-mcp.json` into the session's own config dir (outside any git tree) and
+> passes it via `claude --mcp-config <path>` — so nothing lands in the user's
+> repo. Per-session values (`--name`, `--topics-file`, `--control-socket`) are
+> baked in as literals. See `generateNatsMcpConfig` in
+> `src/server/sessions/backends/tmux.ts`.
+
 ```json
 {
   "mcpServers": {
