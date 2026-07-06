@@ -1,6 +1,30 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { ServerStatusDot } from '../ServerStatusDot'
+import { ServerStatusDot, placePopover } from '../ServerStatusDot'
+
+describe('placePopover', () => {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+
+  it('clamps the left edge so a 208px popover never overflows the right of the viewport', () => {
+    // Dot near the right edge (like the right column of the palette) — left must pull in.
+    const p = placePopover({ left: vw - 20, top: 40, bottom: 50 })
+    expect(p.left).toBeLessThanOrEqual(vw - 208 - 8)
+    expect(p.left).toBeGreaterThanOrEqual(8)
+  })
+
+  it('opens below when there is more room below the dot', () => {
+    const p = placePopover({ left: 100, top: 10, bottom: 20 })
+    expect(p.top).toBe(26) // bottom + GAP
+    expect(p.bottom).toBeUndefined()
+  })
+
+  it('flips above when the dot sits low in the viewport', () => {
+    const p = placePopover({ left: 100, top: vh - 20, bottom: vh - 10 })
+    expect(p.bottom).toBe(vh - (vh - 20) + 6) // vh - rect.top + GAP
+    expect(p.top).toBeUndefined()
+  })
+})
 
 describe('ServerStatusDot', () => {
   it('renders a labelled dot reflecting status', () => {
