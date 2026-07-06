@@ -7,7 +7,7 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 ### Managed session
 An agent session that Tinstar spawns, tracks, and renders on the dashboard — backed by a terminal multiplexer, with its own workspace directory, a stable session name, and a lifecycle the control plane observes and steers. "Managed" distinguishes it from an arbitrary shell: the backend injects a known set of identity and connectivity values into its environment and watches its status.
 
-A managed session can only rely on the environment values the backend explicitly injects (its own session name, the dashboard URL, NATS connection vars, secrets, telemetry vars) — not on the server's own startup configuration.
+A managed session can only rely on the environment values the backend explicitly injects (its own session name, the dashboard URL, secrets, telemetry vars) — not on the server's own startup configuration. Its NATS channel connectivity is provisioned per-session as config the backend generates, not as injected environment variables.
 
 ### Hand
 A managed session spawned as the child of another, inheriting the parent's worktree, task assignment, and NATS subscriptions. A hand is a persistent, conversational collaborator that talks back to its spawner over NATS rather than the prompt API.
