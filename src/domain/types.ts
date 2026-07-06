@@ -54,6 +54,19 @@ export interface RunData {
   id: string
   color?: string
   status: SessionStatus
+  /**
+   * Background session: fully alive and commandable but hidden from the
+   * canvas, hierarchy sidebar, inbox, and session cycling by default.
+   * Mirrors Session.background (session record is SSOT); consumers filter
+   * on this projection.
+   */
+  background: boolean
+  /**
+   * Agent is stuck on a pending tool_use (permission prompt) with no child
+   * processes running. Mirrors Session.blocked; an input to attention
+   * derivation alongside `status` and `background`.
+   */
+  blocked: boolean
   sessionId: string
   taskId: string
   initiative: string
@@ -126,6 +139,10 @@ export interface Tombstone {
   /** True when Tinstar snapshotted the transcript into its own store at
    *  retire-time, so revive survives Claude Code pruning the original. */
   snapshotted?: boolean
+  /** True when the session was a background (machinery) session at
+   *  retire-time. The graveyard UI ignores it in v1; carried so machinery
+   *  tombstones stay distinguishable later without a migration. */
+  background?: boolean
 }
 
 export interface CommitRecord {

@@ -125,6 +125,20 @@ interface HierarchySidebarProps {
   activeSpaceId: string
   showEmptyEntities?: boolean
   onToggleShowEmpty?: () => void
+  /** Background-session reveal toggle (uiPrefs `showBackgroundSessions`, R8–R10).
+   *  Wired by WorkspaceShell in U5; the header button reads the flag and calls
+   *  the toggle. Pure client state — flips are optimistic, no server round-trip. */
+  showBackgroundSessions?: boolean
+  onToggleShowBackground?: () => void
+  /** Number of background runs in the ACTIVE space, computed by WorkspaceShell.
+   *  Shown on the toggle even while it's off (R9); "(0)" is informational —
+   *  the button is never disabled. */
+  backgroundCount?: number
+  /** Ids of ALL background runs (any space). Rows in the tree whose entityId
+   *  is in this set render dimmed with a background badge — only revealed
+   *  (toggle on) or attention-breakthrough rows survive the prune upstream,
+   *  so membership here means "background run currently visible". */
+  backgroundRunIds?: Set<string>
   onActivateSpace: (id: string) => void
   onCreateSpace: (name: string) => void
   onRenameSpace: (id: string, name: string) => void
@@ -188,6 +202,7 @@ function SidebarNode({
   onRenameComplete,
   hiddenRunIds,
   onToggleRunHidden,
+  backgroundRunIds,
   matchIds,
   cursorId,
   pluginWidgetIds,
@@ -208,6 +223,7 @@ function SidebarNode({
   onRenameComplete?: () => void
   hiddenRunIds?: Set<string>
   onToggleRunHidden?: (runId: string) => void
+  backgroundRunIds?: Set<string>
   matchIds?: Set<string> | null
   cursorId?: string | null
   pluginWidgetIds?: Set<string>
@@ -249,6 +265,10 @@ function SidebarNode({
   const isPluginWidget = pluginWidgetIds?.has(node.entityId) === true
   const isWorkWidget = (node.type in WORK_WIDGET_META) || isPluginWidget
   const runHidden = isRun && hiddenRunIds?.has(node.entityId) === true
+  // Background run rendered in the tree ⇒ toggle-revealed or attention
+  // breakthrough (pruned otherwise, upstream in WorkspaceShell). Marked with
+  // the dim treatment + a badge so it reads as machinery (R8).
+  const runBackground = isRun && backgroundRunIds?.has(node.entityId) === true
   const isDragging = dragNodeId === node.id
   const isMatch = matchIds?.has(node.id) === true
   const isCursor = cursorId === node.id
@@ -302,7 +322,7 @@ function SidebarNode({
           hovered && !isDragging ? 'bg-surface-hover' : '',
           isDragging ? 'opacity-40' : '',
           isDropInside ? 'bg-primary/10 ring-1 ring-primary/40' : '',
-          runHidden ? 'opacity-50' : '',
+          runHidden || runBackground ? 'opacity-50' : '',
           isMatch && !selected ? 'text-primary' : '',
           isCursor ? 'ring-1 ring-primary/60 bg-primary/10' : '',
           isFlourishy ? 'animate-pulse' : '',
@@ -407,6 +427,17 @@ function SidebarNode({
           <span className="truncate flex-1">
             {node.type === 'task' && node.status === 'completed' && <span className="mr-1">✅</span>}
             {node.label}
+          </span>
+        )}
+
+        {/* Background badge — marks revealed background (machinery) runs */}
+        {runBackground && !editing && (
+          <span
+            className="text-2xs bg-surface-raised px-1.5 py-0.5 rounded-full text-slate-500 select-none shrink-0"
+            data-testid={`sidebar-background-badge-${node.id}`}
+            title="Background session"
+          >
+            BG
           </span>
         )}
 
@@ -580,6 +611,7 @@ function SidebarNode({
               onRenameComplete={onRenameComplete}
               hiddenRunIds={hiddenRunIds}
               onToggleRunHidden={onToggleRunHidden}
+              backgroundRunIds={backgroundRunIds}
               matchIds={matchIds}
               cursorId={cursorId}
               pluginWidgetIds={pluginWidgetIds}
@@ -627,6 +659,7 @@ function TreeWithOrphanSeparators({
   onRenameComplete,
   hiddenRunIds,
   onToggleRunHidden,
+  backgroundRunIds,
   matchIds,
   cursorId,
   pluginWidgetIds,
@@ -647,6 +680,7 @@ function TreeWithOrphanSeparators({
   onRenameComplete?: () => void
   hiddenRunIds?: Set<string>
   onToggleRunHidden?: (runId: string) => void
+  backgroundRunIds?: Set<string>
   matchIds?: Set<string> | null
   cursorId?: string | null
   pluginWidgetIds?: Set<string>
@@ -675,6 +709,7 @@ function TreeWithOrphanSeparators({
           onRenameComplete={onRenameComplete}
           hiddenRunIds={hiddenRunIds}
           onToggleRunHidden={onToggleRunHidden}
+          backgroundRunIds={backgroundRunIds}
           matchIds={matchIds}
           cursorId={cursorId}
           pluginWidgetIds={pluginWidgetIds}
@@ -700,6 +735,7 @@ function TreeWithOrphanSeparators({
           onRenameComplete={onRenameComplete}
           hiddenRunIds={hiddenRunIds}
           onToggleRunHidden={onToggleRunHidden}
+          backgroundRunIds={backgroundRunIds}
           matchIds={matchIds}
           cursorId={cursorId}
           pluginWidgetIds={pluginWidgetIds}
@@ -709,7 +745,7 @@ function TreeWithOrphanSeparators({
   )
 }
 
-export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden, pluginWidgetIds, onVisibleRunOrder }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
+export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spaces, activeSpaceId, showEmptyEntities, onToggleShowEmpty, showBackgroundSessions, onToggleShowBackground, backgroundCount, backgroundRunIds, onActivateSpace, onCreateSpace, onRenameSpace, onDeleteSpace, onAdd, onRename, onDelete, onFocusRun, onMenuOpen, onReparent, onArrangeGrid, onArrangeReset, onArrangeSwimlanes, onCollapse, renamingNodeId, onRenameComplete, hiddenRunIds, onToggleRunHidden, pluginWidgetIds, onVisibleRunOrder }: HierarchySidebarProps & { onArrangeGrid?: () => void; onArrangeReset?: () => void; onArrangeSwimlanes?: () => void }) {
   const { isExpanded, expandAll, select } = useSelection()
   const showEmpty = showEmptyEntities ?? true
 
@@ -977,6 +1013,19 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
             </span>
           ))}
         </div>
+        {onToggleShowBackground && (
+          <button
+            className={`flex items-center gap-0.5 text-xs shrink-0 mr-1 transition-colors ${showBackgroundSessions ? 'text-primary' : 'text-slate-500 hover:text-primary'}`}
+            onClick={onToggleShowBackground}
+            title={showBackgroundSessions ? `Hide background sessions (${backgroundCount ?? 0})` : `Show background sessions (${backgroundCount ?? 0})`}
+            aria-label="Toggle background sessions"
+            aria-pressed={showBackgroundSessions === true}
+            data-testid="sidebar-background-toggle"
+          >
+            <span className="material-symbols-outlined text-sm">dark_mode</span>
+            <span className="text-2xs font-mono leading-none" data-testid="sidebar-background-toggle-count">{backgroundCount ?? 0}</span>
+          </button>
+        )}
         {onToggleShowEmpty && (
           <button
             className={`text-xs shrink-0 mr-1 transition-colors ${showEmpty ? 'text-slate-500 hover:text-primary' : 'text-slate-600 opacity-40 hover:opacity-100'}`}
@@ -1083,6 +1132,7 @@ export default function HierarchySidebar({ tree, unfilteredTree, dimensions, spa
               onRenameComplete={onRenameComplete}
               hiddenRunIds={hiddenRunIds}
               onToggleRunHidden={onToggleRunHidden}
+              backgroundRunIds={backgroundRunIds}
               matchIds={matchIds}
               cursorId={cursorId}
               pluginWidgetIds={pluginWidgetIds}

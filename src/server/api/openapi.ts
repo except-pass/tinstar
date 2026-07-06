@@ -239,8 +239,15 @@ export const spec = {
         tags: ['Runs'],
         summary: 'Update a run',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
-        requestBody: { content: { 'application/json': { schema: { type: 'object' } } } },
-        responses: { 200: { description: 'Updated' } },
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          properties: {
+            taskId: { type: 'string', description: 'Reparent the run to another task (updates NATS subscriptions when enabled).' },
+            attention: { type: 'object', nullable: true, description: 'Explicit attention: { level: urgent|attention|info, reason: string }, or null to clear.' },
+            background: { type: 'boolean', description: 'Promote (false) or demote (true) the session to/from background. Persisted to the session record and mirrored onto the run; attention re-derives from (status, blocked, background) in the same mutation, so demoting an idle run clears its "Ready for input" row and promoting restores it.' },
+          },
+        } } } },
+        responses: { 200: { description: 'Updated' }, 400: { description: 'Invalid attention shape or non-boolean background' }, 404: { description: 'Run not found' } },
       },
     },
 
@@ -273,6 +280,7 @@ export const spec = {
               initiativeId: { type: 'string' },
               color: { type: 'string' },
               focus: { type: 'boolean', default: true, description: 'Passive spawn: when false, the session is created but the canvas does NOT pan/zoom to it (the viewport stays put). Omitted/true auto-focuses the new run.' },
+              background: { type: 'boolean', default: false, description: 'Create as a background session: hidden from the canvas, hierarchy sidebar, and passive inbox rows by default, while staying fully alive and commandable (NATS + prompt endpoint). Forces focus:false — a background session never steals camera focus. Needs-attention states (permission-blocked, dead harness) still break through to the inbox. Background agents that want zero inbox residue should DELETE their own session when done; a bare exit leaves a "Run stopped" info row.' },
             },
           } } },
         },

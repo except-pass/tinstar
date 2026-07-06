@@ -1984,7 +1984,15 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
           isFocused={focusedWidgetId === node.id}
           isSpawning={spawnedNodeIds.has(node.id)}
           spawnColor={node.type === 'run' ? runMap.get(node.entityId)?.color : undefined}
-          isDimmed={selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id)}
+          // Dim: (a) other run cards while a run selection is active, (b)
+          // toggle-revealed background cards. A background run node without
+          // attention only renders while the reveal toggle is on (pruned from
+          // the tree otherwise), so no toggle prop is needed here; attention-
+          // pending background cards keep full opacity (breakthrough, R16).
+          isDimmed={
+            (selectionState.selectedIds.size > 0 && selectionState.selectedType === 'run' && !isSelected(node.id))
+            || (run?.background === true && !run.attention)
+          }
           spaceHeldRef={spaceHeld}
           onSelect={handleSelect}
           onDoubleClickZoom={reg.isContainer ? handleDoubleClickShrink : (isSnapLeaf ? handleDoubleClickZoom : undefined)}

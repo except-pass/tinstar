@@ -12,6 +12,8 @@ function makeRun(sessionId: string): Run {
   return {
     id: sessionId,
     status: 'idle',
+    background: false,
+    blocked: false,
     sessionId,
     taskId: 't1',
     worktreeId: 'wt1',

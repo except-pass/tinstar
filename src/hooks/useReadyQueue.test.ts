@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { orderByHierarchy, orderedVisibleRunIds, visibleCycleQueue, cycleNext, cyclePrev } from './useReadyQueue'
+import { isBackgroundHidden } from '../domain/background-visibility'
 import type { Run, TreeNode } from '../domain/types'
 
 function node(id: string, type: string, children: TreeNode[] = []): TreeNode {
@@ -93,5 +94,55 @@ describe('visibleCycleQueue', () => {
     expect(cycleNext(runs, queue, 'bravo')?.id).toBe('alpha')
     expect(cyclePrev(runs, queue, 'alpha')?.id).toBe('bravo')
     expect(queue).not.toContain('hidden')
+  })
+})
+
+// Background sessions (R7): WorkspaceShell filters cycle candidates through
+// `isBackgroundHidden` BEFORE they reach visibleCycleQueue, so background-
+// hidden runs can't leak even on the pre-report fallback path (which returns
+// candidates as-is). These tests pin that composition.
+describe('cycle queue × background sessions', () => {
+  const run = (id: string, background: boolean, attention?: Run['attention']): Run =>
+    ({ id, sessionId: id, background, attention } as Run)
+
+  const filterCandidates = (runs: Run[], showBackground: boolean): string[] =>
+    runs.filter(r => !isBackgroundHidden(r, showBackground)).map(r => r.sessionId)
+
+  const runs = [run('alpha', false), run('machinery', true), run('bravo', false)]
+
+  it('excludes background-hidden runs from cycle candidates while hidden', () => {
+    const candidates = filterCandidates(runs, false)
+    const queue = visibleCycleQueue(candidates, ['alpha', 'bravo'], true)
+    expect(queue).toEqual(['alpha', 'bravo'])
+    // Cycling wraps across the visible runs, never landing on machinery.
+    expect(cycleNext(runs, queue, 'bravo')?.id).toBe('alpha')
+    expect(cyclePrev(runs, queue, 'alpha')?.id).toBe('bravo')
+  })
+
+  it('cannot leak background-hidden runs through the no-sidebar-report fallback', () => {
+    const candidates = filterCandidates(runs, false)
+    // hasReported=false → visibleCycleQueue returns the candidates untouched,
+    // so the background run must already be gone from them.
+    const queue = visibleCycleQueue(candidates, [], false)
+    expect(queue).toEqual(['alpha', 'bravo'])
+    expect(queue).not.toContain('machinery')
+  })
+
+  it('includes revealed background runs when the toggle is on', () => {
+    const candidates = filterCandidates(runs, true)
+    const queue = visibleCycleQueue(candidates, ['alpha', 'machinery', 'bravo'], true)
+    expect(queue).toEqual(['alpha', 'machinery', 'bravo'])
+    expect(cycleNext(runs, queue, 'alpha')?.id).toBe('machinery')
+  })
+
+  it('keeps a breakthrough background run cyclable while attention is pending (R16)', () => {
+    const withAttention = [
+      run('alpha', false),
+      run('machinery', true, { level: 'urgent', reason: 'Waiting on permission', setAt: '2026-07-02T00:00:00.000Z' }),
+    ]
+    const candidates = filterCandidates(withAttention, false)
+    expect(candidates).toContain('machinery')
+    const queue = visibleCycleQueue(candidates, ['alpha', 'machinery'], true)
+    expect(cycleNext(withAttention, queue, 'alpha')?.id).toBe('machinery')
   })
 })

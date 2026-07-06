@@ -10,6 +10,8 @@ function makeRun(overrides: Partial<RunData> = {}): RunData {
     id: 'r1',
     color: '#ff7700',
     status: 'idle',
+    background: false,
+    blocked: false,
     sessionId: 'sess-1',
     taskId: 't1',
     initiative: 'init',

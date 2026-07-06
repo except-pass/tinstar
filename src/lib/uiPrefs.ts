@@ -18,6 +18,10 @@
 
 const PREFS_KEY = 'tinstar-ui-prefs'
 
+/** localStorage key for the singleton prefs blob — exported for cross-tab
+ *  `storage`-event listeners (mirrors familyKeys for the per-id families). */
+export const PREFS_STORAGE_KEY = PREFS_KEY
+
 export interface UiPrefs {
   hotkeysSidebarWidth?: number
   hotkeysSidebarCollapsed?: boolean
@@ -28,6 +32,10 @@ export interface UiPrefs {
   canvasSidebarCollapsed?: boolean
   marshalVisible?: boolean
   noTasksNudgeDismissed?: boolean
+  /** Reveal background sessions on the canvas/sidebar/cycling (R8–R10).
+   *  Per-browser view preference — never changes a session's `background`
+   *  property. Default false (background sessions hidden). */
+  showBackgroundSessions?: boolean
   sidebarViewBySpace?: Record<string, 'hierarchy' | 'inbox'>
   inboxReadKeys?: string[]
 }

@@ -8,7 +8,7 @@ const sess = (name: string, subs: string[] | null): Session => ({
   name, backend: 'tmux', state: 'running', project: null,
   workspace: { path: null, worktree: false, branch: null, basePath: null },
   conversation: { id: null }, profile: null, oneshot: false,
-  skipPermissions: false, cliTemplate: null, adapter: null,
+  skipPermissions: false, background: false, blocked: false, cliTemplate: null, adapter: null,
   nats: subs ? { enabled: true, subscriptions: subs } : null,
   port: null, ttydPid: null, natsControlOrphanedAt: null, appendSystemPrompt: null, agent: null,
   modelOverride: null,

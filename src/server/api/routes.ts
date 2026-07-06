@@ -428,6 +428,11 @@ interface CreateSessionParams {
    *  `focusOnCreate:false` so the client leaves the viewport put instead of
    *  panning to it. Omitted/true ⇒ the canvas auto-focuses the new run. */
   focus?: boolean
+  /** Background session. When true, the run is hidden from the canvas,
+   *  hierarchy sidebar, and passive inbox rows by default while staying fully
+   *  commandable (NATS + prompt endpoint). Implies focus:false — a background
+   *  session never steals camera focus. Omitted/false ⇒ visible. */
+  background?: boolean
 }
 
 export interface CreateSessionContext {
@@ -480,7 +485,8 @@ async function createSessionInternal(
     name, project, worktree = false, worktreePath,
     prompt, skipPermissions = true, cliTemplate: cliTemplateName,
     taskId, epicId, initiativeId, color: colorParam, nats, agent, appendSystemPrompt,
-    view, viewData, model: modelOverride, token: tokenOverride, focus
+    view, viewData, model: modelOverride, token: tokenOverride, focus,
+    background = false
   } = params
 
   const { cfg, sessDir, docStore, readyQueue, sse, emitSessionEvent, secrets, natsTraffic, natsHealth } = ctx
@@ -583,6 +589,7 @@ async function createSessionInternal(
     profile: null,
     oneshot: false,
     skipPermissions,
+    background,
     cliTemplate: cliTemplateName ?? null,
     adapter: resolvedTemplate?.adapter ?? null,
     nats: resolvedNats,
@@ -628,6 +635,8 @@ async function createSessionInternal(
     id: runId,
     color,
     status: initialStatus,
+    background,
+    blocked: false,
     sessionId: name,
     initiative: initiativeId ?? '',
     epic: epicId ?? '',
@@ -653,8 +662,10 @@ async function createSessionInternal(
     viewData,
     // Passive spawn: only persist the flag when the caller explicitly opts out
     // (focus:false). Absent/true keeps the field off the projection so the
-    // client applies its default auto-focus behavior.
-    ...(focus === false ? { focusOnCreate: false } : {}),
+    // client applies its default auto-focus behavior. background:true forces
+    // the opt-out regardless of `focus` — a background session never steals
+    // camera focus (R14), server-side rather than trusting callers.
+    ...(focus === false || background ? { focusOnCreate: false } : {}),
   })
 
   registerLaunchedSession(
@@ -2801,9 +2812,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const patch = JSON.parse(body) as {
         taskId?: string
         attention?: { level: string; reason: string } | null
+        background?: boolean
         [key: string]: unknown
       }
       const { attention: attentionPatch, ...patchWithoutAttention } = patch
+      // `blocked` is a derived-attention input owned by the StatusWatcher and
+      // rehydrate paths (R13) — never client-settable. Strip it so the
+      // catch-all spread below cannot fabricate or suppress a "Waiting on
+      // permission" breakthrough.
+      delete patchWithoutAttention.blocked
+
+      // Background flip (promote/demote, R3): validate before any mutation so
+      // an invalid value cannot leave a half-applied patch.
+      if ('background' in patch && typeof patch.background !== 'boolean') {
+        return fail(res, 'BAD_REQUEST', 'invalid_background: must be a boolean')
+      }
+      const backgroundChanged = typeof patch.background === 'boolean' && patch.background !== existing.background
 
       // Attention handling mirrors plugin widgets so clearing a run does not
       // leave a lingering null payload in the stored run state.
@@ -2829,9 +2853,18 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
       }
 
+      const sessDir = ctx.sessionConfig?.dirs.sessions
+
+      // Persist the background flip to session.json so it survives restarts
+      // (R13). A null return is expected for runs with no backing session
+      // record (simulator and plugin-created runs) — the run projection below
+      // is still the truth those runs live by, so proceed regardless.
+      if (typeof patch.background === 'boolean' && sessDir) {
+        updateSession(sessDir, existing.sessionId, { background: patch.background })
+      }
+
       // Check if taskId changed and NATS is enabled — need to update subscriptions
       const taskIdChanged = patchWithoutAttention.taskId !== undefined && patchWithoutAttention.taskId !== existing.taskId
-      const sessDir = ctx.sessionConfig?.dirs.sessions
       if (taskIdChanged && existing.natsEnabled && sessDir) {
         const session = getSession(sessDir, existing.sessionId)
         if (session?.nats?.enabled) {
@@ -2875,6 +2908,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           if (natsWarnings.length > 0) {
             const baseline = attentionApplied ? ctx.docStore.getRun(id)! : existing
             ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention })
+            if (backgroundChanged) ctx.docStore.rederiveRunAttention(id)
             return ok(res, ctx.docStore.getRun(id), { warnings: { nats: natsWarnings } })
           }
         }
@@ -2882,6 +2916,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
       const baseline = attentionApplied ? ctx.docStore.getRun(id)! : existing
       ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention })
+      // Re-derive attention from the persisted (status, blocked, background)
+      // triple in the same mutation (R13): demote clears "Ready for input",
+      // promote restores it, a blocked demote surfaces urgent. Guarded on an
+      // actual flip so a no-op re-assert of `background` cannot clobber an
+      // explicitly set attention.
+      if (backgroundChanged) ctx.docStore.rederiveRunAttention(id)
       ok(res, ctx.docStore.getRun(id))
     })
     return true
@@ -3078,7 +3118,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // POST /api/sessions
     if (method === 'POST' && url === '/api/sessions') {
       withBody(req, res, async (body) => {
-        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData, model, token, focus } = JSON.parse(body)
+        const { name, project, worktree = false, worktreePath, prompt, skipPermissions = true, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam, nats, hand: handName, view, viewData, model, token, focus, background = false } = JSON.parse(body)
         log.info('sessions', `creating session: ${name}`, { project, worktree, cliTemplate: cliTemplateName, taskId, epicId, initiativeId, color: colorParam })
 
         // Resolve a named hand here so the HTTP layer keeps ownership of the
@@ -3103,7 +3143,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             cliTemplate: cliTemplateName ?? resolvedHand?.cliTemplate,
             taskId, epicId, initiativeId, color: colorParam, nats,
             appendSystemPrompt: handSystemPrompt,
-            view, viewData, model, token, focus,
+            view, viewData, model, token, focus, background,
           }, createCtx)
 
           if (!result.ok) {
@@ -3376,6 +3416,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               created: session?.created,
               retiredAt: new Date().toISOString(),
               snapshotted,
+              background: retiredRun?.background ?? session?.background ?? false,
             })
             emitSessionEvent('managed_session.retired', { name, convId })
           } catch (err) {
@@ -3538,6 +3579,8 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 const natsSubject = nats?.enabled ? (nats.subscriptions[1] ?? nats.subscriptions[0]) : undefined
                 ctx.docStore.upsertRun(name, {
                   id: name, color, status: 'running', sessionId: name,
+                  // Revive always creates visible (graveyard requirement) and unblocked.
+                  background: false, blocked: false,
                   initiative: tombstone.initiative ?? '', epic: tombstone.epic ?? '', task: tombstone.task ?? '',
                   repo: tombstone.workspacePath ?? '', worktree: '',
                   taskId: tombstone.taskId ?? '', worktreeId: '',
@@ -3715,7 +3758,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!parentSession) return fail(res, 'NOT_FOUND', `Session '${parentName}' not found`)
 
       const body = await readBody(req)
-      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride, model: modelOverride, token: tokenOverride } = JSON.parse(body) as {
+      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride, model: modelOverride, token: tokenOverride, background = false } = JSON.parse(body) as {
         hand: string
         prompt?: string
         orchestrator?: boolean
@@ -3723,6 +3766,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         worktreePath?: string  // Override parent's worktree path
         model?: string         // Switchboard: per-session model override (persisted)
         token?: string         // Switchboard: per-session OAuth token override (spawn-time only, never persisted)
+        background?: boolean   // Explicit opt-in only — NEVER inherited from the parent session
       }
 
       if (!handName) {
@@ -3866,6 +3910,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         },
         profile: parentSession.profile,
         skipPermissions: parentSession.skipPermissions,
+        background,
         cliTemplate: cliTemplate ?? null,
         adapter: parentSession.adapter,
         nats: natsConfig,
@@ -3924,6 +3969,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           id: runId,
           color: parentRun?.color,
           status: 'running',
+          // Explicit spawn param only (default visible) — a spawned hand NEVER
+          // inherits `background` from its parent session.
+          background,
+          blocked: false,
           sessionId: spawnedName,
           initiative: parentRun?.initiative ?? '',
           epic: parentRun?.epic ?? '',
@@ -3949,6 +3998,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           createdAt: new Date().toISOString(),
           spaceId: ctx.docStore.activeSpaceId,
           parentId: parentRun?.id,  // Track who spawned this hand
+          // background:true implies focusOnCreate:false (R14) — same server-side
+          // forcing as the create path; a background hand never steals focus.
+          ...(background ? { focusOnCreate: false } : {}),
         })
 
         // Mirror the child's subscription list into the traffic bridge so the

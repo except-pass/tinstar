@@ -198,6 +198,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-242',
     status: 'idle',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4093',
     initiative: 'AI Dev Platform',
     epic: 'Codebase Hygiene',
@@ -221,6 +223,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-243',
     status: 'stopped',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4094',
     initiative: 'AI Dev Platform',
     epic: 'Agent Orchestration',
@@ -245,6 +249,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-244',
     status: 'running',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4095',
     initiative: 'AI Dev Platform',
     epic: 'Agent Orchestration',
@@ -269,6 +275,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-245',
     status: 'running',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4096',
     initiative: 'Observability Stack',
     epic: 'Trace Pipeline',
@@ -293,6 +301,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-246',
     status: 'idle',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4097',
     initiative: 'Observability Stack',
     epic: 'Trace Pipeline',
@@ -311,6 +321,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-247',
     status: 'running',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4098',
     initiative: 'Observability Stack',
     epic: 'Alert Engine',
@@ -335,6 +347,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-248',
     status: 'stopped',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4099',
     initiative: 'Observability Stack',
     epic: 'Alert Engine',
@@ -358,6 +372,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-249',
     status: 'idle',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4100',
     initiative: 'Developer Portal',
     epic: 'API Gateway',
@@ -380,6 +396,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-250',
     status: 'running',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4101',
     initiative: 'Developer Portal',
     epic: 'Doc Generator',
@@ -404,6 +422,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-251',
     status: 'stopped',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4102',
     initiative: 'AI Dev Platform',
     epic: 'Codebase Hygiene',
@@ -427,6 +447,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-252',
     status: 'running',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4103',
     initiative: 'AI Dev Platform',
     epic: 'Agent Orchestration',
@@ -450,6 +472,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-253',
     status: 'running',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4104',
     initiative: 'Observability Stack',
     epic: 'Trace Pipeline',
@@ -472,6 +496,8 @@ export const mockRuns: Run[] = [
   {
     id: 'R-254',
     status: 'stopped',
+    background: false,
+    blocked: false,
     sessionId: 'CLD-4105',
     initiative: 'Developer Portal',
     epic: 'Doc Generator',

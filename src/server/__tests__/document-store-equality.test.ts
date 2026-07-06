@@ -8,6 +8,8 @@ import type { TouchedFile } from '../../types'
 const makeRun = (): Run => ({
   id: 'r1',
   status: 'running',
+  background: false,
+  blocked: false,
   sessionId: 's1',
   initiative: 'i',
   epic: 'e',
@@ -83,6 +85,38 @@ describe('DocumentStore equality short-circuits', () => {
     changes.length = 0
     store.upsertRun('r1', { ...run, status: 'idle' })
     expect(changes).toHaveLength(1)
+  })
+
+  it('upsertRun: DOES emit exactly once when only background flips', () => {
+    const run = makeRun()
+    store.upsertRun('r1', run)
+    changes.length = 0
+    store.upsertRun('r1', { ...run, background: true })
+    expect(changes).toHaveLength(1)
+  })
+
+  it('upsertRun: does NOT emit when background is re-asserted at the same value', () => {
+    const run = { ...makeRun(), background: true }
+    store.upsertRun('r1', run)
+    changes.length = 0
+    store.upsertRun('r1', { ...run, background: true })
+    expect(changes).toHaveLength(0)
+  })
+
+  it('upsertRun: DOES emit exactly once when only blocked flips', () => {
+    const run = makeRun()
+    store.upsertRun('r1', run)
+    changes.length = 0
+    store.upsertRun('r1', { ...run, blocked: true })
+    expect(changes).toHaveLength(1)
+  })
+
+  it('upsertRun: does NOT emit when blocked is re-asserted at the same value', () => {
+    const run = { ...makeRun(), blocked: true }
+    store.upsertRun('r1', run)
+    changes.length = 0
+    store.upsertRun('r1', { ...run, blocked: true })
+    expect(changes).toHaveLength(0)
   })
 
   it('upsertRun: DOES emit when only attention changes', () => {
