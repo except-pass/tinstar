@@ -3,8 +3,8 @@
 //
 // The lever: SIGTERM the session's channel-server process. With the upstream
 // clean-exit-on-transport-close fix, it unlinks its socket and exits; Claude
-// Code then relaunches the MCP from the session's .mcp.json, binding a fresh
-// socket. A permanent orphan becomes a brief gap.
+// Code then relaunches the MCP from the session's nats-mcp.json (loaded via
+// --mcp-config), binding a fresh socket. A permanent orphan becomes a brief gap.
 //
 // We match the process by its unique --control-socket path (one per session),
 // so we never touch another session's channel-server or the tinstar host.

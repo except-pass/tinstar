@@ -4022,9 +4022,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
         // Persist the breakout subscription on the parent's session record so
         // it survives stop/resume. The hot socket-subscribe above only lives
-        // in the running channel-server's memory; on resume we regenerate
-        // .mcp.json from session.nats.subscriptions, so without this the
-        // resumed parent goes deaf on every breakout room it was in.
+        // in the running channel-server's memory; on resume we regenerate the
+        // NATS channel config from session.nats.subscriptions, so without this
+        // the resumed parent goes deaf on every breakout room it was in.
         if (breakoutRoom && !breakoutFallback) {
           const latest = getSession(sessDir, parentName)
           if (latest?.nats?.enabled) {
@@ -4166,7 +4166,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // from the channel-server control socket: the actual connection state plus
     // the subjects it's actually subscribed to. This is the SSOT the Saloon
     // dot/topics read — independent of session.nats config, CLI flags, or which
-    // .mcp.json is on disk. Cheap (one socket round-trip); safe to call on
+    // channel config is on disk. Cheap (one socket round-trip); safe to call on
     // panel-open and on dot-click. A session with no live channel-server
     // resolves to { connection: 'down' } — that's the truth, not an error.
     if (method === 'GET' && url.endsWith('/nats-status') && url.startsWith('/api/sessions/')) {
