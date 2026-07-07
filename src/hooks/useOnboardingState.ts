@@ -55,7 +55,9 @@ export function useOnboardingState() {
     let cancelled = false
     fetch(apiUrl('/api/projects'))
       .then(r => r.json())
-      .then((resp: { ok: boolean; data?: Record<string, string> }) => {
+      // Values are ProjectMeta objects now; this gate only needs the keys
+      // (existence check), so the value type is intentionally unspecified.
+      .then((resp: { ok: boolean; data?: Record<string, unknown> }) => {
         if (!cancelled) setProjects(Object.keys(resp.data ?? {}))
       })
       .catch(() => { /* ignore — predicate just stays empty */ })

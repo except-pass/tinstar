@@ -3,6 +3,8 @@ import { DEFAULT_RUN_ACCENT } from './runAccent'
 import type { GroupingDimension, EntitySettings, ResolvedSettings } from '../domain/types'
 import { ColorPalette } from './ColorPalette'
 import { apiFetch } from '../apiClient'
+import { type Project, parseProjects } from '../lib/projects'
+import { ProjectPickerOptions } from './ProjectPickerOptions'
 
 interface Props {
   entityId: string
@@ -71,7 +73,7 @@ function SettingRow({ label, settingKey, resolved, draft, children, onToggle, on
 
 export function EntitySettingsDialog({ entityId, entityType, entityName, onClose }: Props) {
   const [settings, setSettings] = useState<ResolvedSettings | null>(null)
-  const [projects, setProjects] = useState<{ name: string; path: string }[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [cliTemplateOptions, setCliTemplateOptions] = useState<{ name: string; icon?: string }[]>([])
   const [worktrees, setWorktrees] = useState<{ path: string; branch?: string }[]>([])
   const [loading, setLoading] = useState(true)
@@ -93,7 +95,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
     ]).then(([settingsRes, projectsRes, templatesRes, stateRes]) => {
       if (settingsRes.ok) setSettings(settingsRes.data)
       if (projectsRes?.ok && projectsRes.data && typeof projectsRes.data === 'object') {
-        setProjects(Object.entries(projectsRes.data).map(([name, path]) => ({ name, path: path as string })))
+        setProjects(parseProjects(projectsRes.data))
       }
       if (templatesRes?.ok && Array.isArray(templatesRes.data)) {
         setCliTemplateOptions(templatesRes.data)
@@ -259,9 +261,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                     onChange={(e) => onChange(e.target.value || undefined)}
                   >
                     <option value="">Select project...</option>
-                    {projects.map(p => (
-                      <option key={p.name} value={p.name}>{p.name}</option>
-                    ))}
+                    <ProjectPickerOptions projects={projects} selectedValue={String(value ?? '')} />
                   </select>
                 )}
               </SettingRow>

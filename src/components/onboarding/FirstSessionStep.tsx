@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { apiUrl } from '../../apiClient'
+import { type Project, parseProjects, groupForPicker } from '../../lib/projects'
+import { ProjectPickerOptions } from '../ProjectPickerOptions'
 
 export function FirstSessionStep() {
-  const [projects, setProjects] = useState<string[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [project, setProject] = useState('')
   const [name, setName] = useState('first')
   const [busy, setBusy] = useState(false)
@@ -12,11 +14,12 @@ export function FirstSessionStep() {
     let cancelled = false
     fetch(apiUrl('/api/projects'))
       .then(r => r.json())
-      .then((resp: { ok: boolean; data?: Record<string, string> }) => {
+      .then((resp: { ok: boolean; data?: Record<string, unknown> }) => {
         if (cancelled) return
-        const names = Object.keys(resp.data ?? {})
-        setProjects(names)
-        const first = names[0]
+        const parsed = parseProjects(resp.data as never)
+        setProjects(parsed)
+        const { favorites, others } = groupForPicker(parsed)
+        const first = (favorites[0] ?? others[0])?.name
         if (first) setProject(prev => prev || first)
       })
       .catch(() => { /* upstream onboarding state will reflect */ })
@@ -59,7 +62,7 @@ export function FirstSessionStep() {
           onChange={e => setProject(e.target.value)}
           className="bg-surface-base border border-white/10 rounded px-2 py-1 text-sm"
         >
-          {projects.map(p => <option key={p} value={p}>{p}</option>)}
+          <ProjectPickerOptions projects={projects} selectedValue={project} />
         </select>
         <input
           data-testid="session-name-input"

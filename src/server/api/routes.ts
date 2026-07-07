@@ -36,6 +36,8 @@ import {
   listProjects,
   registerProject,
   unregisterProject,
+  setProjectFlag,
+  reorderProjects,
   createWorktree,
   listWorktrees,
   listSessions,
@@ -4372,6 +4374,52 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ok(res, null, { status: 201 })
       })
       return true
+    }
+
+    // PUT /api/projects/order — reassign project ordering
+    if (method === 'PUT' && url === '/api/projects/order') {
+      withBody(req, res, (body) => {
+        const parsed = JSON.parse(body)
+        const order = parsed?.order
+        if (!Array.isArray(order) || order.some((n: unknown) => typeof n !== 'string')) {
+          return fail(res, 'BAD_REQUEST', 'order must be an array of project names')
+        }
+        const result = reorderProjects(cfg.files.projects, order as string[])
+        if (!result.ok) {
+          const msg = result.unknown
+            ? `Unknown project(s): ${result.unknown.join(', ')}`
+            : `Duplicate project(s): ${result.duplicate!.join(', ')}`
+          return fail(res, 'BAD_REQUEST', msg)
+        }
+        ctx.sse.broadcastEvent('projects_changed', { action: 'reorder' })
+        return ok(res, null)
+      })
+      return true
+    }
+
+    // PATCH /api/projects/:name — toggle starred / hidden flags
+    if (method === 'PATCH' && url.startsWith('/api/projects/')) {
+      const rawName = url.slice('/api/projects/'.length)
+      const name = decodeURIComponent(rawName)
+      if (name) {
+        withBody(req, res, (body) => {
+          const { starred, hidden } = JSON.parse(body) ?? {}
+          if (starred === undefined && hidden === undefined) {
+            return fail(res, 'BAD_REQUEST', 'starred or hidden required')
+          }
+          if (
+            (starred !== undefined && typeof starred !== 'boolean') ||
+            (hidden !== undefined && typeof hidden !== 'boolean')
+          ) {
+            return fail(res, 'BAD_REQUEST', 'starred and hidden must be booleans')
+          }
+          const updated = setProjectFlag(cfg.files.projects, name, { starred, hidden })
+          if (!updated) return fail(res, 'NOT_FOUND', `Project '${name}' not found`)
+          ctx.sse.broadcastEvent('projects_changed', { action: 'update', name })
+          return ok(res, updated)
+        })
+        return true
+      }
     }
 
     // GET /api/projects/:name/worktrees

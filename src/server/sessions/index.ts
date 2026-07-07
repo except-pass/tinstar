@@ -23,7 +23,10 @@ export {
   getProject,
   registerProject,
   unregisterProject,
+  setProjectFlag,
+  reorderProjects,
   type WorktreeInfo,
+  type ProjectMeta,
 } from './workspace'
 export { detectConversationId, ensureResumeReady } from './resume'
 export { reconcileSessionStates, type ReconcileOpts } from './reconcile'
