@@ -11,11 +11,7 @@ import { PercentField } from './Settings/PercentField'
 import { DEFAULT_WIDGET_SIZE_PRESETS, type WidgetSizePresets } from '../widgets/widgetSizePresets'
 import { listWidgetRegistrations } from '../widgets/widgetComponentRegistry'
 import { usePluginWidgetRegistry } from '../hooks/usePluginWidgetRegistry'
-
-interface Project {
-  name: string
-  path: string
-}
+import { type Project, parseProjects, sortByOrder } from '../lib/projects'
 
 interface CliTemplate {
   name: string
@@ -60,6 +56,7 @@ export function SettingsDialog({ onClose }: Props) {
   const [newName, setNewName] = useState('')
   const [newPath, setNewPath] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [dragName, setDragName] = useState<string | null>(null)
   const nameRef = useRef<HTMLInputElement>(null)
 
   // Editor
@@ -98,9 +95,7 @@ export function SettingsDialog({ onClose }: Props) {
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.ok && d.data && typeof d.data === 'object') {
-          setProjects(
-            Object.entries(d.data).map(([name, path]) => ({ name, path: path as string })),
-          )
+          setProjects(sortByOrder(parseProjects(d.data)))
         } else {
           setProjects([])
         }
@@ -153,6 +148,59 @@ export function SettingsDialog({ onClose }: Props) {
     await apiFetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' })
     fetchProjects()
   }, [fetchProjects])
+
+  // Optimistically flip a starred/hidden flag, then PATCH; revert on failure.
+  const handleToggleFlag = useCallback(async (name: string, flag: 'starred' | 'hidden') => {
+    let next = false
+    setProjects(prev => prev.map(p => {
+      if (p.name !== name) return p
+      next = !p[flag]
+      return { ...p, [flag]: next }
+    }))
+    setError(null)
+    try {
+      const res = await apiFetch(`/api/projects/${encodeURIComponent(name)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [flag]: next }),
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error?.message ?? 'Update failed')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update project')
+      fetchProjects() // revert to server truth
+    }
+  }, [fetchProjects])
+
+  // Reorder by dropping dragName onto targetName. Optimistically reorder, then
+  // PUT the new name sequence; revert on failure.
+  const handleDrop = useCallback(async (targetName: string) => {
+    const source = dragName
+    setDragName(null)
+    if (!source || source === targetName) return
+
+    const prevOrder = projects.map(p => p.name)
+    const without = projects.filter(p => p.name !== source)
+    const targetIdx = without.findIndex(p => p.name === targetName)
+    const dragged = projects.find(p => p.name === source)
+    if (targetIdx < 0 || !dragged) return
+    const reordered = [...without.slice(0, targetIdx), dragged, ...without.slice(targetIdx)]
+    setProjects(reordered)
+    setError(null)
+    try {
+      const res = await apiFetch('/api/projects/order', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order: reordered.map(p => p.name) }),
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error?.message ?? 'Reorder failed')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to reorder projects')
+      setProjects(prev => sortByOrder(prev.filter(p => prevOrder.includes(p.name))))
+      fetchProjects() // revert to server truth
+    }
+  }, [dragName, projects, fetchProjects])
 
   const handleAddTemplate = useCallback(async () => {
     const trimName = newTplName.trim()
@@ -309,14 +357,48 @@ export function SettingsDialog({ onClose }: Props) {
                   projects.map(p => (
                     <div
                       key={p.name}
-                      className="flex items-center gap-2 px-3 py-2 bg-surface-base rounded border border-white/5 group"
+                      draggable
+                      onDragStart={() => setDragName(p.name)}
+                      onDragEnd={() => setDragName(null)}
+                      onDragOver={e => e.preventDefault()}
+                      onDrop={e => { e.preventDefault(); handleDrop(p.name) }}
+                      className={`flex items-center gap-2 px-3 py-2 bg-surface-base rounded border group transition-opacity ${
+                        dragName === p.name ? 'border-primary/50 opacity-60' : 'border-white/5'
+                      } ${p.hidden ? 'opacity-40' : ''}`}
                     >
+                      <span
+                        className="text-slate-600 hover:text-slate-400 cursor-grab active:cursor-grabbing flex-shrink-0 select-none"
+                        aria-hidden
+                        title="Drag to reorder"
+                      >
+                        ☰
+                      </span>
+                      <button
+                        className={`text-xs flex-shrink-0 transition-colors ${
+                          p.starred ? 'text-amber-400 hover:text-amber-300' : 'text-slate-600 hover:text-amber-400'
+                        }`}
+                        onClick={() => handleToggleFlag(p.name, 'starred')}
+                        aria-label={p.starred ? `Unstar ${p.name}` : `Star ${p.name}`}
+                        aria-pressed={p.starred}
+                        title={p.starred ? 'Unstar' : 'Star'}
+                      >
+                        {p.starred ? '★' : '☆'}
+                      </button>
                       <span className="text-xs text-primary font-display uppercase tracking-wider flex-shrink-0">
                         {p.name}
                       </span>
                       <span className="text-2xs text-slate-500 truncate flex-1" title={p.path}>
                         {p.path}
                       </span>
+                      <button
+                        className="text-xs text-slate-500 hover:text-slate-300 flex-shrink-0 transition-colors"
+                        onClick={() => handleToggleFlag(p.name, 'hidden')}
+                        aria-label={p.hidden ? `Unhide ${p.name}` : `Hide ${p.name}`}
+                        aria-pressed={p.hidden}
+                        title={p.hidden ? 'Hidden — click to show' : 'Visible — click to hide'}
+                      >
+                        {p.hidden ? '🕶' : '👁'}
+                      </button>
                       <button
                         className="text-xs text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
                         onClick={() => handleDelete(p.name)}
