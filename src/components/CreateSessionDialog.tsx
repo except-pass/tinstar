@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { ColorPalette, pickRandomPaletteColor } from './ColorPalette'
 import { isIconUrl } from './agentIcon'
 import { apiFetch } from '../apiClient'
-import { type Project, parseProjects, groupForPicker } from '../lib/projects'
+import { type Project, parseProjects } from '../lib/projects'
+import { ProjectPickerOptions } from './ProjectPickerOptions'
 
 export interface SessionPrefill {
   project?: string
@@ -264,33 +265,12 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
               }}
               className="w-full px-3 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
             >
-              {(() => {
-                const { favorites, others } = groupForPicker(projects)
-                const hasVisible = favorites.length + others.length > 0
-                return (
-                  <>
-                    {!hasVisible ? (
-                      <option value="" disabled>No projects yet — add one to get started</option>
-                    ) : (
-                      <option value="">None</option>
-                    )}
-                    {favorites.length > 0 && (
-                      <optgroup label="★ Favorites">
-                        {favorites.map(p => (
-                          <option key={p.name} value={p.name}>{p.name}</option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {others.length > 0 && (
-                      <optgroup label="Projects">
-                        {others.map(p => (
-                          <option key={p.name} value={p.name}>{p.name}</option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </>
-                )
-              })()}
+              {projects.some(p => !p.hidden) ? (
+                <option value="">None</option>
+              ) : (
+                <option value="" disabled>No projects yet — add one to get started</option>
+              )}
+              <ProjectPickerOptions projects={projects} selectedValue={project} />
               <option value="__add__">+ Add project</option>
             </select>
             {addingProject && (

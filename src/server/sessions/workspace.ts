@@ -155,7 +155,9 @@ export function listProjects(projectsFile: string): Record<string, ProjectMeta> 
 /** The filesystem path for a project, or null if unknown. Callers creating sessions rely on this. */
 export function getProject(projectsFile: string, name: string): string | null {
   const projects = normalizeProjects(readRawProjects(projectsFile))
-  return projects[name]?.path ?? null
+  // Object.hasOwn guards against inherited names like "toString"/"constructor"
+  // being mistaken for registered projects.
+  return Object.hasOwn(projects, name) ? projects[name]!.path : null
 }
 
 /**
@@ -166,9 +168,8 @@ export function getProject(projectsFile: string, name: string): string | null {
  */
 export function registerProject(projectsFile: string, name: string, path: string): void {
   const projects = normalizeProjects(readRawProjects(projectsFile))
-  const existing = projects[name]
-  if (existing) {
-    projects[name] = { ...existing, path }
+  if (Object.hasOwn(projects, name)) {
+    projects[name] = { ...projects[name]!, path }
   } else {
     const maxOrder = Object.values(projects).reduce((m, p) => Math.max(m, p.order), -1)
     projects[name] = { path, starred: false, hidden: false, order: maxOrder + 1 }
@@ -178,7 +179,7 @@ export function registerProject(projectsFile: string, name: string, path: string
 
 export function unregisterProject(projectsFile: string, name: string): boolean {
   const projects = normalizeProjects(readRawProjects(projectsFile))
-  if (!(name in projects)) return false
+  if (!Object.hasOwn(projects, name)) return false
   delete projects[name]
   writeProjects(projectsFile, projects)
   return true
@@ -194,8 +195,8 @@ export function setProjectFlag(
   flags: { starred?: boolean; hidden?: boolean },
 ): ProjectMeta | null {
   const projects = normalizeProjects(readRawProjects(projectsFile))
-  const existing = projects[name]
-  if (!existing) return null
+  if (!Object.hasOwn(projects, name)) return null
+  const existing = projects[name]!
   const updated: ProjectMeta = {
     ...existing,
     ...(flags.starred !== undefined ? { starred: flags.starred } : {}),
@@ -208,17 +209,20 @@ export function setProjectFlag(
 
 /**
  * Reassign project `order` to match the given name sequence. Rejects (without
- * writing) if any name is not a registered project. Registered projects omitted
- * from `names` are appended after the listed ones, preserving their prior
- * relative order.
+ * writing) if any name is not a registered project, or if `names` contains
+ * duplicates. Registered projects omitted from `names` are appended after the
+ * listed ones, preserving their prior relative order.
  */
 export function reorderProjects(
   projectsFile: string,
   names: string[],
-): { ok: true } | { ok: false; unknown: string[] } {
+): { ok: true } | { ok: false; unknown?: string[]; duplicate?: string[] } {
   const projects = normalizeProjects(readRawProjects(projectsFile))
-  const unknown = names.filter(n => !(n in projects))
+  const unknown = names.filter(n => !Object.hasOwn(projects, n))
   if (unknown.length > 0) return { ok: false, unknown }
+
+  const duplicate = names.filter((n, i) => names.indexOf(n) !== i)
+  if (duplicate.length > 0) return { ok: false, duplicate: [...new Set(duplicate)] }
 
   const listed = new Set(names)
   const omitted = Object.keys(projects)

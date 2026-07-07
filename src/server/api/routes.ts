@@ -4386,7 +4386,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         const result = reorderProjects(cfg.files.projects, order as string[])
         if (!result.ok) {
-          return fail(res, 'BAD_REQUEST', `Unknown project(s): ${result.unknown.join(', ')}`)
+          const msg = result.unknown
+            ? `Unknown project(s): ${result.unknown.join(', ')}`
+            : `Duplicate project(s): ${result.duplicate!.join(', ')}`
+          return fail(res, 'BAD_REQUEST', msg)
         }
         ctx.sse.broadcastEvent('projects_changed', { action: 'reorder' })
         return ok(res, null)
@@ -4403,6 +4406,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           const { starred, hidden } = JSON.parse(body) ?? {}
           if (starred === undefined && hidden === undefined) {
             return fail(res, 'BAD_REQUEST', 'starred or hidden required')
+          }
+          if (
+            (starred !== undefined && typeof starred !== 'boolean') ||
+            (hidden !== undefined && typeof hidden !== 'boolean')
+          ) {
+            return fail(res, 'BAD_REQUEST', 'starred and hidden must be booleans')
           }
           const updated = setProjectFlag(cfg.files.projects, name, { starred, hidden })
           if (!updated) return fail(res, 'NOT_FOUND', `Project '${name}' not found`)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { apiUrl } from '../../apiClient'
 import { type Project, parseProjects, groupForPicker } from '../../lib/projects'
+import { ProjectPickerOptions } from '../ProjectPickerOptions'
 
 export function FirstSessionStep() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -24,8 +25,6 @@ export function FirstSessionStep() {
       .catch(() => { /* upstream onboarding state will reflect */ })
     return () => { cancelled = true }
   }, [])
-
-  const { favorites, others } = groupForPicker(projects)
 
   const onStart = async () => {
     if (!name.trim() || !project) return
@@ -63,16 +62,7 @@ export function FirstSessionStep() {
           onChange={e => setProject(e.target.value)}
           className="bg-surface-base border border-white/10 rounded px-2 py-1 text-sm"
         >
-          {favorites.length > 0 && (
-            <optgroup label="★ Favorites">
-              {favorites.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-            </optgroup>
-          )}
-          {others.length > 0 && (
-            <optgroup label="Projects">
-              {others.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-            </optgroup>
-          )}
+          <ProjectPickerOptions projects={projects} selectedValue={project} />
         </select>
         <input
           data-testid="session-name-input"

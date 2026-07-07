@@ -3,7 +3,8 @@ import { DEFAULT_RUN_ACCENT } from './runAccent'
 import type { GroupingDimension, EntitySettings, ResolvedSettings } from '../domain/types'
 import { ColorPalette } from './ColorPalette'
 import { apiFetch } from '../apiClient'
-import { type Project, parseProjects, groupForPicker } from '../lib/projects'
+import { type Project, parseProjects } from '../lib/projects'
+import { ProjectPickerOptions } from './ProjectPickerOptions'
 
 interface Props {
   entityId: string
@@ -260,27 +261,7 @@ export function EntitySettingsDialog({ entityId, entityType, entityName, onClose
                     onChange={(e) => onChange(e.target.value || undefined)}
                   >
                     <option value="">Select project...</option>
-                    {(() => {
-                      const { favorites, others } = groupForPicker(projects)
-                      return (
-                        <>
-                          {favorites.length > 0 && (
-                            <optgroup label="★ Favorites">
-                              {favorites.map(p => (
-                                <option key={p.name} value={p.name}>{p.name}</option>
-                              ))}
-                            </optgroup>
-                          )}
-                          {others.length > 0 && (
-                            <optgroup label="Projects">
-                              {others.map(p => (
-                                <option key={p.name} value={p.name}>{p.name}</option>
-                              ))}
-                            </optgroup>
-                          )}
-                        </>
-                      )
-                    })()}
+                    <ProjectPickerOptions projects={projects} selectedValue={String(value ?? '')} />
                   </select>
                 )}
               </SettingRow>

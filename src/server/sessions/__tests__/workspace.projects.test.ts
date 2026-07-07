@@ -167,4 +167,27 @@ describe('reorderProjects', () => {
     expect(p.alpha!.order).toBe(1)
     expect(p.beta!.order).toBe(2)
   })
+  it('rejects duplicate names and does not write', () => {
+    const before = readRaw()
+    const r = reorderProjects(FILE, ['alpha', 'beta', 'alpha'])
+    expect(r).toEqual({ ok: false, duplicate: ['alpha'] })
+    expect(readRaw()).toEqual(before)
+  })
+})
+
+describe('inherited-name safety (Object.prototype members are not projects)', () => {
+  beforeEach(() => {
+    writeRaw({ alpha: { path: '/a', starred: false, hidden: false, order: 0 } })
+  })
+  const magic = ['toString', 'constructor', 'valueOf', 'hasOwnProperty']
+  for (const name of magic) {
+    it(`treats '${name}' as an unknown project, not an inherited member`, () => {
+      expect(getProject(FILE, name)).toBeNull()
+      expect(setProjectFlag(FILE, name, { starred: true })).toBeNull()
+      expect(unregisterProject(FILE, name)).toBe(false)
+      expect(reorderProjects(FILE, [name])).toEqual({ ok: false, unknown: [name] })
+      // None of the above should have written a phantom entry.
+      expect(Object.keys(readRaw())).toEqual(['alpha'])
+    })
+  }
 })

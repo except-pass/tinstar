@@ -11,7 +11,7 @@ import { PercentField } from './Settings/PercentField'
 import { DEFAULT_WIDGET_SIZE_PRESETS, type WidgetSizePresets } from '../widgets/widgetSizePresets'
 import { listWidgetRegistrations } from '../widgets/widgetComponentRegistry'
 import { usePluginWidgetRegistry } from '../hooks/usePluginWidgetRegistry'
-import { type Project, parseProjects, sortByOrder } from '../lib/projects'
+import { type Project, parseProjects, sortByOrder, reorderByDrop } from '../lib/projects'
 
 interface CliTemplate {
   name: string
@@ -150,13 +150,13 @@ export function SettingsDialog({ onClose }: Props) {
   }, [fetchProjects])
 
   // Optimistically flip a starred/hidden flag, then PATCH; revert on failure.
+  // `next` is derived from current state BEFORE setProjects — reading a value
+  // assigned inside the updater is unreliable under React batching.
   const handleToggleFlag = useCallback(async (name: string, flag: 'starred' | 'hidden') => {
-    let next = false
-    setProjects(prev => prev.map(p => {
-      if (p.name !== name) return p
-      next = !p[flag]
-      return { ...p, [flag]: next }
-    }))
+    const current = projects.find(p => p.name === name)
+    if (!current) return
+    const next = !current[flag]
+    setProjects(prev => prev.map(p => (p.name === name ? { ...p, [flag]: next } : p)))
     setError(null)
     try {
       const res = await apiFetch(`/api/projects/${encodeURIComponent(name)}`, {
@@ -170,21 +170,23 @@ export function SettingsDialog({ onClose }: Props) {
       setError(e instanceof Error ? e.message : 'Failed to update project')
       fetchProjects() // revert to server truth
     }
-  }, [fetchProjects])
+  }, [projects, fetchProjects])
 
-  // Reorder by dropping dragName onto targetName. Optimistically reorder, then
-  // PUT the new name sequence; revert on failure.
+  // Reorder by dropping dragName onto targetName. Direction-aware: dragging down
+  // inserts AFTER the target (so an item can reach the last slot), dragging up
+  // inserts BEFORE it. Optimistically reorder (reassigning `order` to stay
+  // internally consistent), then PUT the new sequence; revert on failure.
   const handleDrop = useCallback(async (targetName: string) => {
     const source = dragName
     setDragName(null)
     if (!source || source === targetName) return
 
-    const prevOrder = projects.map(p => p.name)
-    const without = projects.filter(p => p.name !== source)
-    const targetIdx = without.findIndex(p => p.name === targetName)
-    const dragged = projects.find(p => p.name === source)
-    if (targetIdx < 0 || !dragged) return
-    const reordered = [...without.slice(0, targetIdx), dragged, ...without.slice(targetIdx)]
+    const prev = projects // snapshot for revert
+    const byName = new Map(projects.map(p => [p.name, p]))
+    const newOrder = reorderByDrop(projects.map(p => p.name), source, targetName)
+    // Rebuild the project list in the new sequence, reassigning `order` so the
+    // optimistic state stays internally consistent (render + .order agree).
+    const reordered = newOrder.map((name, i) => ({ ...byName.get(name)!, order: i }))
     setProjects(reordered)
     setError(null)
     try {
@@ -197,10 +199,9 @@ export function SettingsDialog({ onClose }: Props) {
       if (!data.ok) throw new Error(data.error?.message ?? 'Reorder failed')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to reorder projects')
-      setProjects(prev => sortByOrder(prev.filter(p => prevOrder.includes(p.name))))
-      fetchProjects() // revert to server truth
+      setProjects(prev) // revert to the pre-drag snapshot
     }
-  }, [dragName, projects, fetchProjects])
+  }, [dragName, projects])
 
   const handleAddTemplate = useCallback(async () => {
     const trimName = newTplName.trim()

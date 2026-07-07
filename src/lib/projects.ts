@@ -43,6 +43,25 @@ export function sortByOrder(projects: Project[]): Project[] {
 }
 
 /**
+ * Compute the new name order after dropping `source` onto `target`.
+ * Direction-aware: dragging downward inserts AFTER the target (so an item can
+ * reach the last slot); dragging upward inserts BEFORE it. Returns the input
+ * unchanged when source === target or either name is absent.
+ */
+export function reorderByDrop(names: string[], source: string, target: string): string[] {
+  if (source === target) return names
+  const from = names.indexOf(source)
+  const to = names.indexOf(target)
+  if (from < 0 || to < 0) return names
+  const next = [...names]
+  next.splice(from, 1)
+  // Insert at the target's ORIGINAL index: after removing an earlier source the
+  // item lands after the target (downward); for a later source, before it (up).
+  next.splice(to, 0, source)
+  return next
+}
+
+/**
  * Picker view: hidden projects dropped, remaining sorted by order and split
  * into a starred "Favorites" group and the rest. Used by the read-only pickers.
  */
