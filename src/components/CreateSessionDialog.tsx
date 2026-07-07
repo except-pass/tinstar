@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { ColorPalette, pickRandomPaletteColor } from './ColorPalette'
 import { isIconUrl } from './agentIcon'
 import { apiFetch } from '../apiClient'
+import { type Project, parseProjects, groupForPicker } from '../lib/projects'
 
 export interface SessionPrefill {
   project?: string
@@ -62,7 +63,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
   const [cliTemplate, setCliTemplate] = useState(prefill?.cliTemplate ?? '')
   const [cliTemplates, setCliTemplates] = useState<Array<{ name: string; icon?: string }>>([])
   const [project, setProject] = useState(prefill?.project ?? '')
-  const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [worktreeMode, setWorktreeMode] = useState<WorktreeMode>(prefill?.worktreeMode ?? 'none')
   const [worktreePath, setWorktreePath] = useState('')
   const [availableWorktrees, setAvailableWorktrees] = useState<Array<{ path: string; branch?: string }>>([])
@@ -90,7 +91,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.ok && d.data && typeof d.data === 'object') {
-          setProjects(Object.entries(d.data).map(([name, path]) => ({ name, path: path as string })))
+          setProjects(parseProjects(d.data))
         }
       })
       .catch(() => {})
@@ -262,14 +263,33 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
               }}
               className="w-full px-3 py-1.5 bg-surface-base border border-white/10 rounded text-xs text-slate-200 focus:border-primary/50 focus:outline-none"
             >
-              {projects.length === 0 ? (
-                <option value="" disabled>No projects yet — add one to get started</option>
-              ) : (
-                <option value="">None</option>
-              )}
-              {projects.map(p => (
-                <option key={p.name} value={p.name}>{p.name}</option>
-              ))}
+              {(() => {
+                const { favorites, others } = groupForPicker(projects)
+                const hasVisible = favorites.length + others.length > 0
+                return (
+                  <>
+                    {!hasVisible ? (
+                      <option value="" disabled>No projects yet — add one to get started</option>
+                    ) : (
+                      <option value="">None</option>
+                    )}
+                    {favorites.length > 0 && (
+                      <optgroup label="★ Favorites">
+                        {favorites.map(p => (
+                          <option key={p.name} value={p.name}>{p.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {others.length > 0 && (
+                      <optgroup label="Projects">
+                        {others.map(p => (
+                          <option key={p.name} value={p.name}>{p.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </>
+                )
+              })()}
               <option value="__add__">+ Add project</option>
             </select>
             {addingProject && (
@@ -289,7 +309,13 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ name, path: newProjectPath.trim() }),
                       }).then(r => r.json()).then(() => {
-                        setProjects(prev => [...prev, { name, path: newProjectPath.trim() }])
+                        setProjects(prev => [...prev, {
+                          name,
+                          path: newProjectPath.trim(),
+                          starred: false,
+                          hidden: false,
+                          order: prev.reduce((m, p) => Math.max(m, p.order), -1) + 1,
+                        }])
                         setProject(name)
                         setAddingProject(false)
                         setNewProjectPath('')
