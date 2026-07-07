@@ -357,6 +357,7 @@ export function SettingsDialog({ onClose }: Props) {
                   projects.map(p => (
                     <div
                       key={p.name}
+                      data-testid={`project-row-${p.name}`}
                       draggable
                       onDragStart={() => setDragName(p.name)}
                       onDragEnd={() => setDragName(null)}

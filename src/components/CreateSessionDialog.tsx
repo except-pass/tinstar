@@ -252,6 +252,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
               </span>
             </label>
             <select
+              data-testid="create-project-select"
               value={addingProject ? '__add__' : project}
               onChange={e => {
                 if (e.target.value === '__add__') {
