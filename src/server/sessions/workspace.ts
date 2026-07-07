@@ -95,7 +95,22 @@ export async function listWorktrees(projectPath: string): Promise<WorktreeInfo[]
 
 // --- Project registry ---
 
-function readJsonFile(path: string): Record<string, string> {
+/**
+ * Metadata for a registered project. Persisted in `projects.json` keyed by
+ * project name. Legacy files store a bare path string per project; those are
+ * normalized to this object shape on read (see `normalizeProjects`).
+ */
+export interface ProjectMeta {
+  path: string
+  starred: boolean
+  hidden: boolean
+  order: number
+}
+
+/** On-disk value shape: either a legacy path string or a (possibly partial) object. */
+type RawProjectValue = string | (Partial<ProjectMeta> & { path: string })
+
+function readRawProjects(path: string): Record<string, RawProjectValue> {
   try {
     return JSON.parse(readFileSync(path, 'utf-8'))
   } catch {
@@ -103,30 +118,116 @@ function readJsonFile(path: string): Record<string, string> {
   }
 }
 
-function writeJsonFile(path: string, data: Record<string, string>): void {
+/**
+ * Normalize a raw project map (mix of legacy strings and objects) into fully
+ * populated `ProjectMeta` objects. Legacy string values expand to a non-starred,
+ * non-hidden project whose `order` is its position in the file. Objects have any
+ * missing flags defaulted to `false` and a missing `order` set to file position.
+ */
+function normalizeProjects(raw: Record<string, RawProjectValue>): Record<string, ProjectMeta> {
+  const out: Record<string, ProjectMeta> = {}
+  Object.keys(raw).forEach((name, index) => {
+    const value = raw[name]!
+    if (typeof value === 'string') {
+      out[name] = { path: value, starred: false, hidden: false, order: index }
+    } else {
+      out[name] = {
+        path: value.path,
+        starred: value.starred ?? false,
+        hidden: value.hidden ?? false,
+        order: value.order ?? index,
+      }
+    }
+  })
+  return out
+}
+
+function writeProjects(path: string, data: Record<string, ProjectMeta>): void {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, JSON.stringify(data, null, 2))
 }
 
-export function listProjects(projectsFile: string): Record<string, string> {
-  return readJsonFile(projectsFile)
+/** All projects as normalized metadata objects (legacy string files are upgraded on read). */
+export function listProjects(projectsFile: string): Record<string, ProjectMeta> {
+  return normalizeProjects(readRawProjects(projectsFile))
 }
 
+/** The filesystem path for a project, or null if unknown. Callers creating sessions rely on this. */
 export function getProject(projectsFile: string, name: string): string | null {
-  const projects = readJsonFile(projectsFile)
-  return projects[name] ?? null
+  const projects = normalizeProjects(readRawProjects(projectsFile))
+  return projects[name]?.path ?? null
 }
 
+/**
+ * Register (or re-point) a project. An existing project keeps its flags and
+ * order and only updates its path; a new project is appended after the current
+ * max order, non-starred and visible. Always writes the normalized object form,
+ * upgrading legacy files on first write.
+ */
 export function registerProject(projectsFile: string, name: string, path: string): void {
-  const projects = readJsonFile(projectsFile)
-  projects[name] = path
-  writeJsonFile(projectsFile, projects)
+  const projects = normalizeProjects(readRawProjects(projectsFile))
+  const existing = projects[name]
+  if (existing) {
+    projects[name] = { ...existing, path }
+  } else {
+    const maxOrder = Object.values(projects).reduce((m, p) => Math.max(m, p.order), -1)
+    projects[name] = { path, starred: false, hidden: false, order: maxOrder + 1 }
+  }
+  writeProjects(projectsFile, projects)
 }
 
 export function unregisterProject(projectsFile: string, name: string): boolean {
-  const projects = readJsonFile(projectsFile)
+  const projects = normalizeProjects(readRawProjects(projectsFile))
   if (!(name in projects)) return false
   delete projects[name]
-  writeJsonFile(projectsFile, projects)
+  writeProjects(projectsFile, projects)
   return true
+}
+
+/**
+ * Toggle a project's starred and/or hidden flags. Returns the updated metadata,
+ * or null if the project does not exist. Flags left undefined are untouched.
+ */
+export function setProjectFlag(
+  projectsFile: string,
+  name: string,
+  flags: { starred?: boolean; hidden?: boolean },
+): ProjectMeta | null {
+  const projects = normalizeProjects(readRawProjects(projectsFile))
+  const existing = projects[name]
+  if (!existing) return null
+  const updated: ProjectMeta = {
+    ...existing,
+    ...(flags.starred !== undefined ? { starred: flags.starred } : {}),
+    ...(flags.hidden !== undefined ? { hidden: flags.hidden } : {}),
+  }
+  projects[name] = updated
+  writeProjects(projectsFile, projects)
+  return updated
+}
+
+/**
+ * Reassign project `order` to match the given name sequence. Rejects (without
+ * writing) if any name is not a registered project. Registered projects omitted
+ * from `names` are appended after the listed ones, preserving their prior
+ * relative order.
+ */
+export function reorderProjects(
+  projectsFile: string,
+  names: string[],
+): { ok: true } | { ok: false; unknown: string[] } {
+  const projects = normalizeProjects(readRawProjects(projectsFile))
+  const unknown = names.filter(n => !(n in projects))
+  if (unknown.length > 0) return { ok: false, unknown }
+
+  const listed = new Set(names)
+  const omitted = Object.keys(projects)
+    .filter(n => !listed.has(n))
+    .sort((a, b) => projects[a]!.order - projects[b]!.order)
+  const ordered = [...names, ...omitted]
+  ordered.forEach((name, index) => {
+    projects[name] = { ...projects[name]!, order: index }
+  })
+  writeProjects(projectsFile, projects)
+  return { ok: true }
 }
