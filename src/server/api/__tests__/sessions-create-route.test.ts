@@ -37,7 +37,9 @@ const TASK_ID = 'task-create-fixture'
 function makeCtx(root: string): RouteContext {
   const cfg = {
     sessions: { prefix: 'tinstar' },
-    cliTemplates: [],
+    cliTemplates: [
+      { name: 'Cursor Agent', adapter: 'generic', startCmd: 'agent --yolo -- {prompt}', resumeCmd: 'agent --yolo resume' },
+    ],
     editor: 'vim',
     ports: { ttyd: 7681, hostStart: 5273 },
     dirs: { root, secrets: join(root, 'secrets'), sessions: join(root, 'sessions') },
@@ -166,6 +168,23 @@ describe('POST /api/sessions', () => {
     // sender reading run.natsSubject couldn't reach it. Now derived from the subs.
     expect(run.natsSubject).toBe('tinstar.create-space._._._.lone-wolf')
     expect(run.natsSubject).toBe(run.natsSubscriptions![0])
+  })
+
+  it('does NOT default NATS on for a non-claude (generic/cursor) adapter', async () => {
+    // NATS is wired via Claude-only flags (--mcp-config), so auto-enabling it for
+    // a cursor session would inject --mcp-config into `agent` and crash the launch.
+    // A generic-adapter session with just an active space must stay off the bus.
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'cursor-worker', cliTemplate: 'Cursor Agent' }),
+    })
+    expect(res.status).toBe(201)
+    const run = testCtx.docStore.getRun('cursor-worker') as Run
+    expect(run).toBeTruthy()
+    expect(run.natsEnabled).toBe(false)
+    // And the launch opts carry no NATS, so buildAgentCommand emits no --mcp-config.
+    const opts = createTmuxSessionMock.mock.calls.at(-1)![1] as unknown as { session: { nats?: { enabled: boolean } | null } }
+    expect(opts.session.nats?.enabled ?? false).toBe(false)
   })
 
   it('still honors an explicit nats:{enabled:false} opt-out', async () => {

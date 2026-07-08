@@ -116,6 +116,29 @@ describe('buildAgentCommand NATS dev-channel coupling', () => {
     expect(cmd).toContain('my prompt')
   })
 
+  it('never injects --mcp-config for a non-claude (generic/cursor) template, even when NATS is provisioned', () => {
+    const cursor: CliTemplate = { name: 'Cursor Agent', adapter: 'generic', startCmd: 'agent --yolo -- {prompt}', resumeCmd: 'agent --yolo resume' }
+    const cmd = buildAgentCommand({
+      template: cursor, sessionId: 'sid', resume: false, initialPrompt: 'do cmsandbox work',
+      nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
+    })
+    // The Claude-only flag must not reach `agent`, which hard-errors on it.
+    expect(cmd).not.toContain('--mcp-config')
+    expect(cmd).toContain('agent --yolo')
+    expect(cmd).toContain('do cmsandbox work')
+  })
+
+  it('never injects --mcp-config for the codex adapter, even when NATS is provisioned', () => {
+    // codex has no --mcp-config flag and dies to a bare shell on it, same as cursor.
+    const codex: CliTemplate = { name: 'Codex (full auto)', adapter: 'codex', startCmd: 'codex --sandbox workspace-write -- {prompt}', resumeCmd: 'codex resume --last --sandbox workspace-write' }
+    const cmd = buildAgentCommand({
+      template: codex, sessionId: 'sid', resume: false, initialPrompt: 'do the work',
+      nats: { enabled: true, mcpConfigPath: '/cfg/nats-mcp.json' },
+    })
+    expect(cmd).not.toContain('--mcp-config')
+    expect(cmd).toBe("codex --sandbox workspace-write -- 'do the work'")
+  })
+
   it('legacy fallback (no template) includes both flags when NATS is provisioned', () => {
     const cmd = buildAgentCommand({
       skipPermissions: true, sessionId: 'sid', resume: false, initialPrompt: 'hi',
