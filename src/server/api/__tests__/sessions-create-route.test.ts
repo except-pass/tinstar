@@ -280,8 +280,10 @@ describe('POST /api/sessions', () => {
     expect(opts.appendSystemPrompt).toBeTruthy()
     expect(opts.appendSystemPrompt!.toLowerCase()).toContain('marshal')
     expect(opts.appendSystemPrompt).not.toContain('Print a short introduction')
-    // The intro fires once as the first user message.
-    expect(opts.session.initialPrompt).toContain('Print a short introduction')
+    // The intro fires once as the first user message: it loads the tinstar skill
+    // (the preload) and then prints a short introduction.
+    expect(opts.session.initialPrompt).toContain('load the `tinstar` skill')
+    expect(opts.session.initialPrompt).toContain('short introduction')
   })
 
   it('re-threads the marshal persona (not the intro) into startTmuxSession on restart', async () => {

@@ -148,9 +148,10 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
   },
   {
     // Dedicated template for the in-app marshal (the canvas-sidebar copilot).
-    // Defaults to Haiku for snappy, low-cost responses; users can override by
-    // dropping a same-named entry into ~/.config/tinstar/config.json's
-    // cliTemplates array.
+    // Runs on Sonnet — the marshal resolves parents, spawns sessions, and drives
+    // the viewport, which needs more reasoning than Haiku reliably gives. Users
+    // can override by dropping a same-named entry into
+    // ~/.config/tinstar/config.json's cliTemplates array.
     name: 'Marshal',
     icon: '/agent-icons/claude.svg',
     adapter: 'claude',
@@ -165,8 +166,8 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     //   {agentName}, {agentDescription}, {agentPrompt}, {agentJson}
     // {agentJson}/--agents is for spawning the persona as a Task subagent —
     // that's NOT what we want for the main marshal conversation.
-    startCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --model haiku --append-system-prompt {agentPrompt} --session-id {sessionId} -- {prompt}',
-    resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --model haiku --append-system-prompt {agentPrompt} --resume {sessionId}',
+    startCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --model sonnet --append-system-prompt {agentPrompt} --session-id {sessionId} -- {prompt}',
+    resumeCmd: 'claude --dangerously-skip-permissions --dangerously-load-development-channels server:nats --model sonnet --append-system-prompt {agentPrompt} --resume {sessionId}',
   },
   {
     name: 'Cursor Agent',
