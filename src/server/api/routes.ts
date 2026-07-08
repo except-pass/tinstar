@@ -49,7 +49,7 @@ import {
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus } from '../../domain/types'
-import { saveActiveSpaceId, deepMerge, loadConfigMerged } from '../sessions/config'
+import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { isPinSet, addReply, mergePreservingReplies } from '../../domain/pinSet'
 import { readBody } from './readBody'
@@ -4285,6 +4285,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         else templates.push(entry)
         data.cliTemplates = templates
         writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+        // Refresh the in-memory config so the change is reflected immediately.
+        // ctx.sessionConfig is deep-frozen (loadConfig → deepFreeze), so reassign
+        // a fresh load rather than mutating in place. Without this, GET
+        // /api/cli-templates and new session launches keep serving the boot-time
+        // snapshot until a server restart — which is why saves appeared to do
+        // nothing in the settings modal.
+        ctx.sessionConfig = loadConfig({ _rootDir: cfg.dirs.root })
         ok(res, entry)
       }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
       return true
@@ -4314,6 +4321,13 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
         data.cliTemplates = templates
         writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+        // Refresh the in-memory config so the change is reflected immediately.
+        // ctx.sessionConfig is deep-frozen (loadConfig → deepFreeze), so reassign
+        // a fresh load rather than mutating in place. Without this, GET
+        // /api/cli-templates and new session launches keep serving the boot-time
+        // snapshot until a server restart — which is why saves appeared to do
+        // nothing in the settings modal.
+        ctx.sessionConfig = loadConfig({ _rootDir: cfg.dirs.root })
         ok(res, entry)
       }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid JSON'))
       return true
@@ -4330,6 +4344,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       templates.splice(idx, 1)
       data.cliTemplates = templates
       writeFileSync(cfg.files.config, JSON.stringify(data, null, 2))
+      // Refresh the in-memory config (see PUT handler) so the deletion sticks
+      // without a server restart.
+      ctx.sessionConfig = loadConfig({ _rootDir: cfg.dirs.root })
       ok(res, null)
       return true
     }
