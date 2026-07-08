@@ -63,7 +63,7 @@ Prompt.
     const hands = discoverHands(testDir)
     const marshal = hands.find(h => h.name === 'marshal')
     expect(marshal).toBeDefined()
-    // Marshal uses a dedicated CLI template (claude + haiku, NATS-enabled);
+    // Marshal uses a dedicated CLI template (claude + sonnet, NATS-enabled);
     // see src/server/hands/builtins/index.ts.
     expect(marshal!.cliTemplate).toBe('Marshal')
   })
