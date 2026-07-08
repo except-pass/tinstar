@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import { join } from 'node:path'
 import type { Session, SessionNats } from '../session'
 import type { TinstarConfig, CliTemplate } from '../config'
+import { isCursorAgentTemplate, ensureCursorWorkspaceTrust } from '../cursor-trust'
 import { log } from '../../logger'
 
 // NATS channel server paths come from config (see config.ts)
@@ -379,7 +380,14 @@ export function buildAgentCommand(opts: {
     // taking the trailing `-- {prompt}` down with it. Strip the flag whenever
     // NATS wasn't provisioned so the command stays internally consistent, and
     // inject `--mcp-config <path>` when it was so Claude can find the server.
-    if (opts.nats?.enabled) {
+    //
+    // `--mcp-config` / `--dangerously-load-development-channels` are
+    // Claude-specific: a non-Claude adapter (cursor's `agent`, codex) hard-errors
+    // on `--mcp-config` and dies to a bare shell. Only wire NATS for a claude
+    // template. Missing adapter ⇒ claude (built-in claude templates predate the
+    // adapter field, and the legacy no-template path below is always claude).
+    const isClaudeTemplate = (opts.template?.adapter ?? 'claude') === 'claude'
+    if (opts.nats?.enabled && isClaudeTemplate) {
       if (opts.nats.mcpConfigPath) preFlags.push(`--mcp-config ${bashSingleQuote(opts.nats.mcpConfigPath)}`)
     } else {
       cmd = cmd.replace(/\s*--dangerously-load-development-channels\s+server:nats/g, '')
@@ -535,6 +543,13 @@ export async function createTmuxSession(
   })
   parts.push(agentCmd)
 
+  // A cursor-agent session hangs on a one-time workspace-trust modal that
+  // `--yolo` can't bypass; pre-seed cursor's trust marker so it launches
+  // unattended (best-effort — never blocks the launch).
+  if (isCursorAgentTemplate(opts.template) && opts.session.workspace?.path) {
+    ensureCursorWorkspaceTrust(opts.session.workspace.path)
+  }
+
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
 
   // Auto-accept dev channel warning by polling for the prompt and sending Enter
@@ -597,6 +612,10 @@ export async function startTmuxSession(
     modelOverride: opts.session.modelOverride,
   })
   parts.push(agentCmd)
+  // Re-seed cursor's workspace trust on restart too (see createTmuxSession).
+  if (isCursorAgentTemplate(opts.template) && opts.session.workspace?.path) {
+    ensureCursorWorkspaceTrust(opts.session.workspace.path)
+  }
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, parts.join(' && '), 'Enter'])
 
   // Same dev-channel auto-accept as createTmuxSession — restarting an exited

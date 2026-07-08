@@ -554,6 +554,9 @@ async function createSessionInternal(
   const resolvedTemplate = cliTemplateName
     ? cfg.cliTemplates.find(t => t.name === cliTemplateName) ?? null
     : null
+  // Missing template ⇒ claude (the built-in claude templates and the legacy
+  // no-template launch path are all claude). NATS wiring is Claude-only.
+  const adapter = resolvedTemplate?.adapter ?? 'claude'
 
   // Compute NATS subscriptions
   let resolvedNats: { enabled: boolean; subscriptions: string[] } | null = nats ? { enabled: nats.enabled, subscriptions: nats.subscriptions ?? [] } : null
@@ -564,7 +567,7 @@ async function createSessionInternal(
     epicId: epicId || null,
     initiativeId: initiativeId || null,
   }
-  if (!nats && (taskId || epicId || initiativeId || natsCtx.spaceId)) {
+  if (!nats && adapter === 'claude' && (taskId || epicId || initiativeId || natsCtx.spaceId)) {
     // NATS on by default whenever there's *any* hierarchy to root a subject in —
     // including a bare space. Previously the gate omitted spaceId, so a
     // standalone session (created with just an active space and no explicit
@@ -573,6 +576,12 @@ async function createSessionInternal(
     // inbox for the task-less case (not a space wildcard — see that fn). Passing
     // `nats:{enabled:false}` explicitly still opts out, since this branch only
     // runs when `nats` is absent.
+    //
+    // Gated on adapter==='claude': NATS is wired via Claude-only flags
+    // (--mcp-config / --dangerously-load-development-channels), so defaulting it
+    // on for a cursor/codex session would crash the launch on an unknown flag.
+    // Non-claude sessions can still opt in explicitly via `nats:{enabled:true}`
+    // if a future adapter learns the bus.
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }
   } else if (nats?.enabled && !nats.subscriptions?.length) {
     resolvedNats = { enabled: true, subscriptions: computeNatsSubscriptions(natsCtx, docStore) }

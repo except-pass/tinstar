@@ -143,8 +143,11 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     name: 'Codex (full auto)',
     icon: '/agent-icons/openai.svg',
     adapter: 'codex',
-    startCmd: 'codex --full-auto -- {prompt}',
-    resumeCmd: 'codex resume --last --full-auto',
+    // --sandbox workspace-write scopes codex to write within the workspace.
+    // No --mcp-config/NATS wiring: codex has no such flag (see buildAgentCommand's
+    // adapter gate). Approval policy falls to codex's config default (no -a).
+    startCmd: 'codex --sandbox workspace-write -- {prompt}',
+    resumeCmd: 'codex resume --last --sandbox workspace-write',
   },
   {
     // Dedicated template for the in-app marshal (the canvas-sidebar copilot).
@@ -172,8 +175,16 @@ const DEFAULT_CLI_TEMPLATES: CliTemplate[] = [
     name: 'Cursor Agent',
     icon: '/agent-icons/cursor.svg',
     adapter: 'generic',
+    // Interactive launch: cursor's `agent` shows a one-time workspace-trust
+    // modal that --yolo can't bypass. Tinstar pre-seeds cursor's trust marker
+    // before launch (see sessions/cursor-trust.ts) so the session starts
+    // unattended. NATS is intentionally never wired for this generic adapter —
+    // --mcp-config is Claude-only (see buildAgentCommand).
     startCmd: 'agent --yolo -- {prompt}',
-    resumeCmd: 'agent resume',
+    // --yolo (alias for --force, "Run Everything") MUST be repeated on resume.
+    // Without it, `agent resume` falls back to the CLI's configured approvalMode
+    // (allowlist), which blocks every tool call in a headless session.
+    resumeCmd: 'agent --yolo resume',
   },
   {
     name: 'shell',
