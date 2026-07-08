@@ -114,6 +114,26 @@ curl -s -X DELETE "$TINSTAR_URL/api/browser-widgets/{id}"
 
 **Typical pattern:** create when starting a dev server, then PATCH the URL as new content is ready. The human can also drag the BROWSER button from a run widget header to create one manually.
 
+**Never embed Tinstar in a browser widget.** `POST` and `PATCH` reject URLs whose origin is the Tinstar dashboard (`localhost:5273`, `localhost:5280`, or `$TINSTAR_DASHBOARD_URL`). Loading the dashboard inside itself ("Tinstar-ception") duplicates every session and widget and will crawl the machine. Use browser widgets for **external** pages (dev servers, stretchplan at `http://localhost:8932/p/<slug>`, etc.) or `POST /api/artifacts` for agent-generated HTML.
+
+#### Stretchplan
+
+"Spawn a stretchplan" means **write a plan file and give the user a URL** — not open a browser widget by default.
+
+```bash
+# Default — no canvas widget
+# 1. Write ~/.config/stretchplan/plans/<slug>.json
+# 2. bin/stretchplan server start   # one shared server on port 8932
+# 3. Tell the user: http://localhost:8932/p/<slug>
+```
+
+Only when the user explicitly asks to put the plan **on the canvas**:
+
+1. Browser widget at `http://localhost:8932/p/<slug>` (path is `/p/<slug>`, not `?plan=`)
+2. Optional: `stretchplan-task` plugin widget in the same constellation slot (see stretchplan `tinstar-plugin/README.md`)
+
+Never point a browser widget at `$TINSTAR_URL` or `localhost:5273` for stretchplan work.
+
 #### Spawning with `attach`
 
 Both `POST /api/browser-widgets` and `POST /api/plugin-widgets` accept an optional `attach` field that positions the new widget flush against an existing one by aligning named anchor points:
