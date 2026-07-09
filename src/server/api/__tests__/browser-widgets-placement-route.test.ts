@@ -310,3 +310,30 @@ describe('POST /api/browser-widgets — sessionId validation', () => {
     expect(data.sessionId).toBeUndefined()
   })
 })
+
+describe('POST/PATCH /api/browser-widgets — Tinstar self-embed guard', () => {
+  it('rejects POST when url points at the Tinstar dashboard', async () => {
+    const res = await testCtx.fetch('/api/browser-widgets', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: SESSION_ID, url: 'http://localhost:5273' }),
+    })
+    expect(res.status).not.toBe(200)
+    const body = await res.json() as { error?: { code?: string; message?: string } }
+    expect(body.error?.code).toBe('INVALID_PARAMS')
+    expect(body.error?.message).toContain('nested Tinstar')
+  })
+
+  it('rejects PATCH when url is updated to the Tinstar dashboard', async () => {
+    const created = await (await testCtx.fetch('/api/browser-widgets', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: SESSION_ID, url: 'http://localhost:8932/p/demo' }),
+    })).json() as { data: BrowserWidget }
+    const res = await testCtx.fetch(`/api/browser-widgets/${created.data.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ url: 'http://localhost:5280' }),
+    })
+    expect(res.status).not.toBe(200)
+    const body = await res.json() as { error?: { code?: string } }
+    expect(body.error?.code).toBe('INVALID_PARAMS')
+  })
+})

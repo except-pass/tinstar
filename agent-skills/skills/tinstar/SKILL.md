@@ -107,6 +107,26 @@ Delete: `DELETE /api/editor-widgets/:id`.
 
 Use this when a user says "put this on the canvas" / "open this file on the canvas" — don't spawn an agent session for a file view.
 
+## Browser widgets (external URLs)
+
+Embed a live **external** web page on the canvas — a dev server, stretchplan, test results, etc. **Not** the Tinstar dashboard itself.
+
+```bash
+curl -s -X POST "$TINSTAR_URL/api/browser-widgets" \
+  -H "Content-Type: application/json" \
+  -d '{"sessionId": "my-session", "url": "http://localhost:3000"}'
+
+curl -s -X DELETE "$TINSTAR_URL/api/browser-widgets/<id>"
+```
+
+### Anti-patterns — DO NOT do these
+
+- ❌ `url: "$TINSTAR_URL"` or `url: "http://localhost:5273"` — nested Tinstar ("Tinstar-ception") duplicates the whole dashboard inside a webview and will crawl the machine. The API **rejects** these URLs.
+- ❌ `POST /api/browser-widgets` when the user says "spawn a stretchplan" — use the `plan-with-stretchplan` skill instead (write `~/.config/stretchplan/plans/<slug>.json`, ensure `bin/stretchplan server start`, give them `http://localhost:8932/p/<slug>`). Only open a browser widget for stretchplan when they explicitly ask to put the plan **on the canvas**.
+- ❌ Stretchplan URLs like `http://localhost:8932/?plan=<slug>` — wrong shape. Use `http://localhost:8932/p/<slug>`.
+
+Canvas stretchplan (only when explicitly requested): browser widget at `8932/p/<slug>` plus optional `stretchplan-task` plugin widget in the same slot. See `docs/agent-api.md` → Stretchplan.
+
 ## Breakout rooms
 
 Cross-cutting NATS channels any session can join regardless of task hierarchy — useful for ad-hoc collaboration. Subscriptions are hot-managed; no restart required.

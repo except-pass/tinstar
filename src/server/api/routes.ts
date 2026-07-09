@@ -53,6 +53,7 @@ import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../s
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { isPinSet, addReply, mergePreservingReplies } from '../../domain/pinSet'
 import { readBody } from './readBody'
+import { isTinstarSelfEmbedUrl, TINSTAR_SELF_EMBED_MESSAGE } from './browser-widget-url'
 import { parseAttach, type ParsedAttach } from './anchorAttach'
 import { planAttach } from './attachPlan'
 import { spec as openapiSpec } from './openapi'
@@ -949,6 +950,9 @@ function createBrowserWidget(ctx: RouteContext, parsed: CreateBrowserWidgetParam
   const run = sessionId ? ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId) : undefined
   if (sessionId && !run) {
     return { error: { code: 'SESSION_NOT_FOUND', message: `No run with sessionId ${sessionId}` } }
+  }
+  if (widgetUrl && isTinstarSelfEmbedUrl(widgetUrl)) {
+    return { error: { code: 'INVALID_PARAMS', message: TINSTAR_SELF_EMBED_MESSAGE } }
   }
   // Reject an explicit spaceId that doesn't exist, so a typo/stale value can't
   // persist an orphaned widget (and constellation membership) under no real
@@ -2356,6 +2360,10 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         notes?: BrowserNote[];
         position?: { x: number; y: number }; size?: { width: number; height: number };
         nearNodeId?: string; slot?: number | string;
+      }
+      if (patch.url !== undefined && isTinstarSelfEmbedUrl(patch.url)) {
+        fail(res, 'INVALID_PARAMS', TINSTAR_SELF_EMBED_MESSAGE)
+        return
       }
       const spaceId = existing.spaceId || ctx.docStore.activeSpaceId || ''
       const placement = resolvePlacement(ctx, spaceId, patch)
