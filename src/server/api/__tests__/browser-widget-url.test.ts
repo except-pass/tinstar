@@ -26,6 +26,11 @@ describe('isTinstarSelfEmbedUrl', () => {
     expect(isTinstarSelfEmbedUrl('')).toBe(false)
   })
 
+  it('allows Tinstar artifact URLs', () => {
+    expect(isTinstarSelfEmbedUrl('http://localhost:5273/api/artifacts/eph-123')).toBe(false)
+    expect(isTinstarSelfEmbedUrl('http://127.0.0.1:5273/api/artifacts/eph-123?v=2')).toBe(false)
+  })
+
   it('honors TINSTAR_DASHBOARD_URL origin', () => {
     process.env.TINSTAR_DASHBOARD_URL = 'http://100.108.201.76:5273'
     expect(isTinstarSelfEmbedUrl('http://100.108.201.76:5273/')).toBe(true)

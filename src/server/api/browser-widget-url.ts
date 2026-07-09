@@ -34,7 +34,12 @@ export function isTinstarSelfEmbedUrl(raw: string): boolean {
   const trimmed = raw.trim()
   if (!trimmed) return false
   try {
-    return tinstarDashboardOrigins().has(new URL(trimmed).origin)
+    const url = new URL(trimmed)
+    if (!tinstarDashboardOrigins().has(url.origin)) return false
+    // Artifact widgets intentionally load server-owned HTML from Tinstar's
+    // artifact endpoint. That is the supported alternative to dashboard nesting.
+    if (url.pathname.startsWith('/api/artifacts/')) return false
+    return true
   } catch {
     return false
   }
