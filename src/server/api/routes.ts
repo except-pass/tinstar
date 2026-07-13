@@ -2828,11 +2828,17 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(async body => {
       const existing = ctx.docStore.getRun(id)
       if (!existing) return fail(res, 'NOT_FOUND', 'not found')
-      const patch = JSON.parse(body) as {
+      let patch: {
         taskId?: string
         attention?: { level: string; reason: string } | null
         background?: boolean
+        name?: unknown
         [key: string]: unknown
+      }
+      try {
+        patch = body ? JSON.parse(body) : {}
+      } catch {
+        return fail(res, 'BAD_REQUEST', 'invalid_json')
       }
       const { attention: attentionPatch, ...patchWithoutAttention } = patch
       // `blocked` is a derived-attention input owned by the StatusWatcher and
@@ -2840,6 +2846,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // catch-all spread below cannot fabricate or suppress a "Waiting on
       // permission" breakthrough.
       delete patchWithoutAttention.blocked
+
+      // Identity is immutable. `id`/`sessionId`/`worktree` are the handles the
+      // tmux session, worktree dir, git branch, NATS subject, and widget-layout
+      // keys are all built from — re-pointing them here would orphan every one
+      // of those without moving anything on disk. Strip them so the catch-all
+      // spread below cannot rewrite identity; a friendly name is what changes.
+      delete patchWithoutAttention.id
+      delete patchWithoutAttention.sessionId
+      delete patchWithoutAttention.worktree
+
+      // Friendly display name: free text, deliberately NOT id-sanitized. Empty
+      // or whitespace-only clears it (undefined), which the UI renders as a
+      // fallback to the run id.
+      if ('name' in patch) {
+        if (patch.name !== null && patch.name !== undefined && typeof patch.name !== 'string') {
+          return fail(res, 'BAD_REQUEST', 'invalid_name: must be a string, or null/empty to clear')
+        }
+        const trimmed = typeof patch.name === 'string' ? patch.name.trim().slice(0, 200) : ''
+        patchWithoutAttention.name = trimmed === '' ? undefined : trimmed
+      }
 
       // Background flip (promote/demote, R3): validate before any mutation so
       // an invalid value cannot leave a half-applied patch.
