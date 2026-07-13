@@ -3445,6 +3445,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             ctx.docStore.upsertTombstone({
               convId,
               sessionName: name,
+              // Snapshot the friendly name at retire-time — the run is about to
+              // be gone, so this is the last chance to keep the graveyard
+              // readable. Kept separate from sessionName, which reviveName()
+              // needs as the real session handle.
+              displayName: retiredRun?.name || undefined,
               coversSummary: buildCoversSummary(retiredRun?.recapEntries ?? [], {
                 sessionName: name,
                 task: retiredRun?.task,

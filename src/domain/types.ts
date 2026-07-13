@@ -133,8 +133,19 @@ export interface RunData {
 export interface Tombstone {
   /** Claude Code conversation.id — the resume handle and the map key. */
   convId: string
-  /** The session's name at retire-time (for display + re-materialize). */
+  /**
+   * The session's name at retire-time — an IDENTITY handle, not a label.
+   * `reviveName()` re-materializes the session from this, so it must stay the
+   * real session name. Never overwrite it with a display string; put the
+   * human-facing label in `displayName` instead.
+   */
   sessionName: string
+  /**
+   * The run's friendly name at retire-time, snapshotted so the graveyard stays
+   * readable after the run itself is gone. Absent ⇒ fall back to `sessionName`
+   * (tombstones written before friendly names existed have none).
+   */
+  displayName?: string
   /** Deterministic roll-up of what the session covered (searchable). */
   coversSummary: string
   /** Task hierarchy at retire-time, for display + search + revive project resolution. */

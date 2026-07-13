@@ -69,9 +69,9 @@ function createTestServer(root: string): Harness {
   }
 }
 
-function seedRun(docStore: DocumentStore, name: string, recap: RecapEntry[]): void {
+function seedRun(docStore: DocumentStore, name: string, recap: RecapEntry[], friendlyName?: string): void {
   const run: Run = {
-    id: name, status: 'stopped', sessionId: name,
+    id: name, status: 'stopped', sessionId: name, name: friendlyName,
     initiative: '', epic: '', task: 'Graveyard design',
     repo: 'repo', worktree: 'wt', taskId: 'task-1', worktreeId: 'wt',
     createdAt: '2026-06-30T00:00:00Z', recapEntries: recap, touchedFiles: [],
@@ -108,6 +108,47 @@ describe('DELETE /api/sessions/:name — entomb to graveyard', () => {
       const retired = srv.events.find(e => e.type === 'managed_session.retired')
       expect(retired).toBeDefined()
       expect((retired!.payload as { convId: string }).convId).toBe(convId)
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('snapshots the run\'s friendly name onto the tombstone, without touching sessionName', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      createSession(srv.sessionsDir, { name: 'vpppm-general-pourpose-2dc86', backend: 'tmux' })
+      const convId = getSession(srv.sessionsDir, 'vpppm-general-pourpose-2dc86')!.conversation.id!
+      seedRun(srv.docStore, 'vpppm-general-pourpose-2dc86', recap(), 'PM Vpp project')
+
+      const res = await srv.fetch('/api/sessions/vpppm-general-pourpose-2dc86', { method: 'DELETE' })
+      expect(res.status).toBe(200)
+
+      const tomb = srv.docStore.getTombstone(convId) as Tombstone
+      expect(tomb.displayName).toBe('PM Vpp project')
+      // sessionName is the revive handle (reviveName reads it) — it must stay
+      // the real session name, never the display string.
+      expect(tomb.sessionName).toBe('vpppm-general-pourpose-2dc86')
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves displayName absent when the run had no friendly name, so the graveyard falls back to sessionName', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      createSession(srv.sessionsDir, { name: 'unnamed', backend: 'tmux' })
+      const convId = getSession(srv.sessionsDir, 'unnamed')!.conversation.id!
+      seedRun(srv.docStore, 'unnamed', recap())
+
+      await srv.fetch('/api/sessions/unnamed', { method: 'DELETE' })
+
+      const tomb = srv.docStore.getTombstone(convId) as Tombstone
+      expect(tomb.displayName).toBeUndefined()
+      expect(tomb.sessionName).toBe('unnamed')
     } finally {
       await srv.close()
       rmSync(root, { recursive: true, force: true })

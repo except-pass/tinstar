@@ -59,7 +59,7 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
 
     const fuse = useMemo(
       () => new Fuse(graves ?? [], {
-        keys: ['coversSummary', 'sessionName', 'task', 'epic', 'initiative'],
+        keys: ['coversSummary', 'displayName', 'sessionName', 'task', 'epic', 'initiative'],
         threshold: 0.4,
         ignoreLocation: true,
       }),
@@ -157,7 +157,7 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
                 }`}
               >
                 <div className="font-bold truncate flex items-center gap-1">
-                  <span>Here lies {orDash(g.sessionName)}</span>
+                  <span>Here lies {orDash(g.displayName || g.sessionName)}</span>
                   {g.snapshotted && <span title="Embalmed — revivable even after Claude Code forgets">⚱️</span>}
                 </div>
                 <div className="text-xs text-amber-200/70 truncate italic">{orDash(g.coversSummary)}</div>
@@ -170,7 +170,7 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
             {!active && <div className="text-amber-300/60 italic">Pick a grave to read its epitaph — or raise the dead.</div>}
             {active && (
               <div className="flex flex-col gap-2">
-                <div className="text-base font-bold border-b border-amber-900/40 pb-1">⚰️ Here lies {orDash(active.sessionName)}</div>
+                <div className="text-base font-bold border-b border-amber-900/40 pb-1">⚰️ Here lies {orDash(active.displayName || active.sessionName)}</div>
                 <div className="text-amber-100/90 italic whitespace-pre-wrap">“{orDash(active.coversSummary)}”</div>
                 <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-xs text-amber-300/70 mt-1">
                   <dt>Task</dt><dd className="text-amber-100/90">{orDash(active.task)}</dd>
