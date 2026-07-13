@@ -2833,7 +2833,6 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         taskId?: string
         attention?: { level: string; reason: string } | null
         background?: boolean
-        name?: unknown
         [key: string]: unknown
       }
       try {
@@ -2860,12 +2859,19 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // Friendly display name: free text, deliberately NOT id-sanitized. Empty
       // or whitespace-only clears it (undefined), which the UI renders as a
       // fallback to the run id.
+      //
+      // Held in its own narrowed variable rather than riding the catch-all
+      // spread: everything on `patch` is `unknown`, and an unknown-typed `name`
+      // spread into upsertRun() does not satisfy Run.name (string | undefined).
+      let namePatch: { name?: string } = {}
       if ('name' in patch) {
-        if (patch.name !== null && patch.name !== undefined && typeof patch.name !== 'string') {
+        const raw = patch.name
+        if (raw !== null && raw !== undefined && typeof raw !== 'string') {
           return fail(res, 'BAD_REQUEST', 'invalid_name: must be a string, or null/empty to clear')
         }
-        patchWithoutAttention.name = normalizeRunName(patch.name)
+        namePatch = { name: normalizeRunName(raw) }
       }
+      delete patchWithoutAttention.name
 
       // Background flip (promote/demote, R3): validate before any mutation so
       // an invalid value cannot leave a half-applied patch.
@@ -2952,7 +2958,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
           if (natsWarnings.length > 0) {
             const baseline = attentionApplied ? ctx.docStore.getRun(id)! : existing
-            ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention })
+            ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention, ...namePatch })
             if (backgroundChanged) ctx.docStore.rederiveRunAttention(id)
             return ok(res, ctx.docStore.getRun(id), { warnings: { nats: natsWarnings } })
           }
@@ -2960,7 +2966,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
 
       const baseline = attentionApplied ? ctx.docStore.getRun(id)! : existing
-      ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention })
+      ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention, ...namePatch })
       // Re-derive attention from the persisted (status, blocked, background)
       // triple in the same mutation (R13): demote clears "Ready for input",
       // promote restores it, a blocked demote surfaces urgent. Guarded on an
