@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useServerEvents } from './useServerEvents'
 import { getInboxReadKeys } from '../lib/uiPrefs'
 import type { AttentionState, AttentionLevel, PluginWidgetInstance, Run, SessionStatus } from '../domain/types'
+import { runDisplayName } from '../domain/runName'
 
 export interface InboxRow {
   widgetId: string
@@ -81,7 +82,9 @@ export function useInbox(activeSpaceId: string | null | undefined): UseInboxResu
         widgetId: run.id,
         source: 'run',
         widgetType: 'run',
-        sourceLabel: run.id,
+        // Friendly name when the run has one, else the id (R2/R5). The row is
+        // still keyed by the id above — only the label changes.
+        sourceLabel: runDisplayName(run),
         attention: run.attention ?? null,
         status: run.status,
         color: run.color ?? null,

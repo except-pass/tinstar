@@ -144,7 +144,8 @@ interface HierarchySidebarProps {
   onRenameSpace: (id: string, name: string) => void
   onDeleteSpace: (id: string) => void
   onAdd: (parentId: string | null, type: GroupingDimension | 'run') => void
-  onRename: (entityId: string, type: GroupingDimension, newName: string) => void
+  /** Runs rename too: their `name` is a display-only field, so `type` may be 'run'. */
+  onRename: (entityId: string, type: GroupingDimension | 'run', newName: string) => void
   onDelete: (entityId: string, type: GroupingDimension) => void
   onFocusRun?: (runId: string) => void
   onMenuOpen?: (entityId: string, entityType: GroupingDimension, entityName: string, anchorRect: DOMRect) => void
@@ -289,12 +290,22 @@ function SidebarNode({
 
   const commitRename = useCallback(() => {
     const trimmed = editValue.trim()
-    if (trimmed && trimmed !== node.label && node.type !== 'run') {
+    if (isRun) {
+      // A run's name is display-only, so unlike a taxonomy entity it is allowed
+      // to be empty: clearing the field is a real edit that reverts the row to
+      // the run id (R12). The id is untouched either way.
+      if (trimmed !== node.label) onRename(node.entityId, 'run', trimmed)
+    } else if (trimmed && trimmed !== node.label) {
       onRename(node.entityId, node.type as GroupingDimension, trimmed)
     }
     setEditing(false)
     onRenameComplete?.()
-  }, [editValue, node, onRename, onRenameComplete])
+  }, [editValue, isRun, node, onRename, onRenameComplete])
+
+  const startRename = useCallback(() => {
+    setEditValue(node.label)
+    setEditing(true)
+  }, [node.label])
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0 || editing) return
@@ -414,6 +425,8 @@ function SidebarNode({
           <input
             ref={inputRef}
             className="flex-1 bg-surface-base border border-primary/40 rounded px-1 py-0 text-xs text-slate-200 outline-none"
+            data-testid={`rename-input-${node.id}`}
+            aria-label={`Rename ${node.label}`}
             value={editValue}
             onChange={e => setEditValue(e.target.value)}
             onKeyDown={e => {
@@ -424,7 +437,10 @@ function SidebarNode({
             onClick={e => e.stopPropagation()}
           />
         ) : (
-          <span className="truncate flex-1">
+          // Runs show their friendly name, so the id — still the handle for
+          // `tmux attach`, the worktree dir, and every API route — has to stay
+          // reachable without opening the card. Hover reveals it (R7).
+          <span className="truncate flex-1" title={isRun ? node.entityId : undefined}>
             {node.type === 'task' && node.status === 'completed' && <span className="mr-1">✅</span>}
             {node.label}
           </span>
@@ -451,6 +467,26 @@ function SidebarNode({
               window.dispatchEvent(new CustomEvent('constellation:flourish', { detail: { nodeId: node.id } }))
             }}
           />
+        )}
+
+        {/* Rename pencil — runs only. Runs are work widgets, so they get no
+            entity kebab (its Start Session / Add Child items are meaningless
+            here); the pencil is their rename affordance and opens the same
+            inline edit the taxonomy rows use. */}
+        {isRun && !editing && (
+          <button
+            className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
+            onClick={(e) => {
+              e.stopPropagation()
+              startRename()
+            }}
+            data-testid={`rename-${node.id}`}
+            aria-label={`Rename ${node.label}`}
+            title="Rename (display name only — the run id never changes)"
+            style={{ opacity: hovered ? 1 : undefined }}
+          >
+            ✏
+          </button>
         )}
 
         {/* Visibility eyeball — runs only.
@@ -542,8 +578,7 @@ function SidebarNode({
               className="w-4 h-4 flex items-center justify-center text-slate-500 hover:text-primary opacity-0 group-hover:opacity-100"
               onClick={(e) => {
                 e.stopPropagation()
-                setEditValue(node.label)
-                setEditing(true)
+                startRename()
               }}
               data-testid={`rename-${node.id}`}
               aria-label={`Rename ${node.label}`}

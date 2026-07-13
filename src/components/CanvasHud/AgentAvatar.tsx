@@ -21,11 +21,14 @@ interface Props {
  */
 export function AgentAvatar({ run, onClick, selected }: Props) {
   const color = resolveRunAccent(run.color)
+  // Tooltip: friendly name when set, else the session id (R5). Tooltip ONLY —
+  // the face below stays seeded by run.id, so a rename must not reroll it.
+  const tooltip = run.name || run.sessionId
   return (
     <button
       type="button"
       onClick={onClick}
-      title={run.sessionId}
+      title={tooltip}
       data-testid="agent-avatar"
       data-run-id={run.id}
       data-selected={selected ? 'true' : undefined}
