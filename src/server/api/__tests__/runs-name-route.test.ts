@@ -129,6 +129,39 @@ describe('PATCH /api/runs/:id — friendly name', () => {
     })
   })
 
+  it('refuses to move a run to another space or reparent it through the catch-all merge', async () => {
+    // The sharp exploit: spaceId/worktreeId/parentId are the topology handles the
+    // per-space widget layouts, pins, and constellations (keyed run-<id>) hang
+    // off. A rename must never be able to strand them.
+    await withServer(async srv => {
+      seedRun(srv.docStore, { spaceId: 'spc-home', worktreeId: 'wt-1' } as Partial<Run>)
+      await patchName(srv, {
+        name: 'PM Vpp project',
+        spaceId: 'spc-other',
+        worktreeId: 'wt-hijacked',
+        parentId: 'someone-else',
+      })
+      const after = srv.docStore.getRun(RUN_ID)!
+      expect(after.spaceId).toBe('spc-home')
+      expect(after.worktreeId).toBe('wt-1')
+      expect(after.parentId).toBeUndefined()
+      expect(after.name).toBe('PM Vpp project')
+    })
+  })
+
+  it('applies a friendly name and a taskId reparent in the same request', async () => {
+    // The handler has two upsertRun call sites — the normal path and the
+    // taskId-reparent branch. namePatch must ride both, or a rename+reparent
+    // drops the name.
+    await withServer(async srv => {
+      seedRun(srv.docStore)
+      await patchName(srv, { name: 'PM Vpp project', taskId: 'task-2' })
+      const after = srv.docStore.getRun(RUN_ID)!
+      expect(after.name).toBe('PM Vpp project')
+      expect(after.taskId).toBe('task-2')
+    })
+  })
+
   it('clears the name on an empty string, so the UI falls back to the id', async () => {
     await withServer(async srv => {
       seedRun(srv.docStore, { name: 'PM Vpp project' } as Partial<Run>)

@@ -89,9 +89,11 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
   const nameInputRef = useRef<HTMLInputElement>(null)
-  // Escape unmounts the input; a browser can still fire blur on the way out,
-  // which would commit the abandoned draft. This flag makes cancel win.
-  const cancelledRef = useRef(false)
+  // Enter and Escape both unmount the input, and a real browser then fires blur
+  // on the way out (jsdom does not, which is why this needs a guard the tests
+  // can't feel). Without it, Escape would commit the abandoned draft and Enter
+  // would fire the rename twice. Once an edit is settled, blur is a no-op.
+  const settledRef = useRef(false)
 
   useEffect(() => {
     if (editingName) nameInputRef.current?.select()
@@ -99,31 +101,34 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
 
   const startRename = useCallback(() => {
     setNameDraft(run.name ?? '')
-    cancelledRef.current = false
+    settledRef.current = false
     setEditingName(true)
   }, [run.name])
 
   const cancelRename = useCallback(() => {
-    cancelledRef.current = true
+    settledRef.current = true
     setEditingName(false)
   }, [])
 
   const commitRename = useCallback(() => {
-    if (cancelledRef.current) {
-      cancelledRef.current = false
-      return
-    }
+    if (settledRef.current) return
+    settledRef.current = true
     setEditingName(false)
     const next = nameDraft.trim()
     if (next === (run.name ?? '')) return
     // Paint first (CLAUDE.md: no waiting on the SSE echo), then persist. An
     // empty name clears the field, so the title falls back to the id.
+    const prior = run
     addOptimistic('run', { ...run, name: next || undefined })
     void apiFetch(`/api/runs/${run.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: next }),
-    })
+    }).then(res => {
+      // Roll back to the pre-edit run if the server rejects the rename, so a
+      // failed PATCH doesn't leave the optimistic title standing as a lie.
+      if (!res.ok) addOptimistic('run', prior)
+    }).catch(() => addOptimistic('run', prior))
   }, [nameDraft, run, addOptimistic])
 
   // ─── Run id: click-to-copy ─────────────────────────────────────────────

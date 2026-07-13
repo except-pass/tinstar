@@ -2847,14 +2847,22 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // permission" breakthrough.
       delete patchWithoutAttention.blocked
 
-      // Identity is immutable. `id`/`sessionId`/`worktree` are the handles the
-      // tmux session, worktree dir, git branch, NATS subject, and widget-layout
-      // keys are all built from — re-pointing them here would orphan every one
-      // of those without moving anything on disk. Strip them so the catch-all
-      // spread below cannot rewrite identity; a friendly name is what changes.
+      // Identity and topology are immutable through this route. These fields are
+      // the handles the tmux session, worktree dir, git branch, NATS subject, and
+      // the per-space widget-layout / pin / constellation keys (`run-<id>`,
+      // scoped by spaceId) are all built from — re-pointing any of them here would
+      // orphan that state without moving anything on disk. The concrete exploit
+      // this closes: `PATCH {"name":"x","spaceId":"other"}` would move a run out
+      // of its space and strand its layouts. Strip them all so the catch-all
+      // spread below can only ever change a display field; identity never moves.
+      // (This route is a deny-list on an arbitrary body — see the follow-up note
+      // in the run-friendly-names plan about converting it to an allow-list.)
       delete patchWithoutAttention.id
       delete patchWithoutAttention.sessionId
       delete patchWithoutAttention.worktree
+      delete patchWithoutAttention.worktreeId
+      delete patchWithoutAttention.spaceId
+      delete patchWithoutAttention.parentId
 
       // Friendly display name: free text, deliberately NOT id-sanitized. Empty
       // or whitespace-only clears it (undefined), which the UI renders as a
@@ -3814,7 +3822,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!parentSession) return fail(res, 'NOT_FOUND', `Session '${parentName}' not found`)
 
       const body = await readBody(req)
-      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride, model: modelOverride, token: tokenOverride, background = false, name: friendlyName } = JSON.parse(body) as {
+      // Guard the parse — the tinstar-hand skill now tells agents to build spawn
+      // bodies (with a friendly name) via jq, so a malformed body should be a
+      // clean 400, not an unhandled throw surfacing as an opaque 500.
+      let spawnBody: {
+        hand: string
+        prompt?: string
+        orchestrator?: boolean
+        repo?: string
+        worktreePath?: string
+        model?: string
+        token?: string
+        background?: boolean
+        name?: string
+      }
+      try {
+        spawnBody = body ? JSON.parse(body) : {}
+      } catch {
+        return fail(res, 'BAD_REQUEST', 'invalid_json')
+      }
+      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride, model: modelOverride, token: tokenOverride, background = false, name: friendlyName } = spawnBody as {
         hand: string
         prompt?: string
         orchestrator?: boolean

@@ -860,6 +860,7 @@ export const spec = {
         type: 'object',
         properties: {
           id: { type: 'string' },
+          name: { type: 'string', nullable: true, description: 'Friendly display name, shown in the UI wherever the run id would otherwise appear. Absent when unset (falls back to id). Set/cleared via PATCH /api/runs/{id}.' },
           status: { type: 'string' },
           sessionId: { type: 'string' },
           color: { type: 'string' },

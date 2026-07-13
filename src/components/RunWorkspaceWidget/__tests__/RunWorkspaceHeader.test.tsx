@@ -221,4 +221,19 @@ describe('RunWorkspaceHeader inline rename', () => {
     expect(apiFetch).not.toHaveBeenCalled()
     expect(addOptimistic).not.toHaveBeenCalled()
   })
+
+  it('rolls the title back to the prior name when the PATCH is rejected', async () => {
+    vi.mocked(apiFetch).mockResolvedValueOnce({ ok: false, status: 400 } as Response)
+    render(<Harness initial={makeRun({ name: 'PM Vpp project' })} />)
+
+    fireEvent.click(title())
+    const input = screen.getByTestId(`run-name-input-${RUN_ID}`)
+    fireEvent.change(input, { target: { value: 'Bad rename' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    // Painted optimistically first...
+    await waitFor(() => expect(title()).toHaveTextContent('Bad rename'))
+    // ...then reverted when the server rejects it, rather than lying.
+    await waitFor(() => expect(title()).toHaveTextContent('PM Vpp project'))
+  })
 })

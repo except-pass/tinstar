@@ -30,10 +30,13 @@ Session names **cannot contain dots** — tmux reads `.` as a pane separator and
 
 ```bash
 curl -s "$TINSTAR_URL/api/state" | jq .                              # Full state (sessions, runs, tasks, epics)
+curl -s "$TINSTAR_URL/api/state" | jq '.runs[] | {id, name, status, task}'  # Runs with their friendly names
 curl -s "$TINSTAR_URL/api/hands" | jq .                              # Installed hands
 curl -s "$TINSTAR_URL/api/cli-templates" | jq .                      # Agent templates
 curl -s -X POST "$TINSTAR_URL/api/sessions/NAME/prompt" -d '{"text":"…"}'   # Non-NATS prompt
 ```
+
+A run's `name` is an optional human-facing label; `id` is the identity (the tmux session, worktree, branch, NATS subject). A run without a `name` shows its `id` in the UI. Set or clear it with `PATCH /api/runs/<id>` and `{"name": "…"}` (empty string clears).
 
 ## Recall a dead session — the Graveyard
 

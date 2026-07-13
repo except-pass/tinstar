@@ -74,13 +74,23 @@ export function dispatchRename(
 ): void {
   if (type === 'run') {
     const trimmed = newName.trim()
-    if (runCtx?.run) {
-      runCtx.addOptimistic('run', { ...runCtx.run, name: trimmed || undefined })
+    // Only paint optimistically when the run still exists. If it was deleted
+    // while its rename input was open, addOptimistic (an upsert) would otherwise
+    // resurrect the dead run as a ghost that no server echo ever clears.
+    const prior = runCtx?.run
+    if (prior) {
+      runCtx!.addOptimistic('run', { ...prior, name: trimmed || undefined })
     }
     void apiFetch(`/api/runs/${entityId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: trimmed }),
+    }).then(res => {
+      // Roll the optimistic paint back to the pre-edit run on failure, so a
+      // rejected rename (400/404/500) doesn't linger as a false success.
+      if (!res.ok && prior) runCtx!.addOptimistic('run', prior)
+    }).catch(() => {
+      if (prior) runCtx!.addOptimistic('run', prior)
     })
     return
   }

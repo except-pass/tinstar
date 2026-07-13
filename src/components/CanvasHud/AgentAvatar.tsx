@@ -1,5 +1,6 @@
 import { AgentIcon } from '../agentIcon'
 import type { Run } from '../../domain/types'
+import { runDisplayName } from '../../domain/runName'
 import { resolveRunAccent } from '../runAccent'
 import './hud.css'
 
@@ -21,9 +22,10 @@ interface Props {
  */
 export function AgentAvatar({ run, onClick, selected }: Props) {
   const color = resolveRunAccent(run.color)
-  // Tooltip: friendly name when set, else the session id (R5). Tooltip ONLY —
-  // the face below stays seeded by run.id, so a rename must not reroll it.
-  const tooltip = run.name || run.sessionId
+  // Tooltip: friendly name when set, else the id (R5), via the shared helper so
+  // the `||`-not-`??` rule lives in one place. Tooltip ONLY — the face below
+  // stays seeded by run.id, so a rename must not reroll it.
+  const tooltip = runDisplayName(run)
   return (
     <button
       type="button"

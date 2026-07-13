@@ -250,6 +250,22 @@ describe('HierarchySidebar — run rename', () => {
     // Not a blank row — `name || id`, never `name ?? id`.
     expect(screen.getByTestId(`sidebar-node-run-${RUN_ID}`)).toHaveTextContent(RUN_ID)
   })
+
+  it('seeds the editor empty for an unnamed run, with the id as placeholder — not the id as text', () => {
+    // node.label is `name || id`, so an unnamed run's label is its id. Seeding
+    // the input with that would invite saving an id-derived string as the name.
+    render(<Harness initialRuns={[makeRun()]} />)
+    startRename(`run-${RUN_ID}`)
+    const input = renameInput(`run-${RUN_ID}`)
+    expect(input.value).toBe('')
+    expect(input.placeholder).toBe(RUN_ID)
+  })
+
+  it('seeds the editor with the current name for a named run', () => {
+    render(<Harness initialRuns={[makeRun({ name: 'PM Vpp project' })]} />)
+    startRename(`run-${RUN_ID}`)
+    expect(renameInput(`run-${RUN_ID}`).value).toBe('PM Vpp project')
+  })
 })
 
 describe('HierarchySidebar — rename optimism (R11)', () => {
@@ -282,6 +298,30 @@ describe('HierarchySidebar — rename optimism (R11)', () => {
 
     const [, patched] = addOptimistic.mock.calls[0]!
     expect((patched as Run).name).toBeUndefined()
+  })
+
+  it('rolls the optimistic paint back to the prior run when the PATCH is rejected', async () => {
+    apiFetch.mockResolvedValueOnce({ ok: false, status: 400 })
+    const addOptimistic = vi.fn()
+    const prior = makeRun({ name: 'Old name' })
+    dispatchRename(RUN_ID, 'run', 'New name', { run: prior, addOptimistic })
+
+    // First call is the optimistic paint.
+    expect(addOptimistic).toHaveBeenNthCalledWith(1, 'run', { ...prior, name: 'New name' })
+    // After the rejection resolves, the prior run is restored.
+    await vi.waitFor(() => expect(addOptimistic).toHaveBeenCalledTimes(2))
+    expect(addOptimistic).toHaveBeenNthCalledWith(2, 'run', prior)
+  })
+
+  it('does not resurrect a deleted run — no optimistic write when the run is gone', () => {
+    // upsertById inserts-if-missing, so painting a run that was deleted while its
+    // editor was open would revive a ghost no server echo ever clears.
+    const addOptimistic = vi.fn()
+    dispatchRename(RUN_ID, 'run', 'New name', { run: undefined, addOptimistic })
+
+    expect(addOptimistic).not.toHaveBeenCalled()
+    // The PATCH still fires; it simply 404s harmlessly.
+    expect(apiFetch).toHaveBeenCalledWith(`/api/runs/${RUN_ID}`, expect.objectContaining({ method: 'PATCH' }))
   })
 })
 

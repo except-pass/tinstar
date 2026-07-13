@@ -90,7 +90,19 @@ curl -s "$TINSTAR_URL/api/state" \
 
 This is display-only, so it costs you nothing operationally. The session id stays `<parent>-<hand>-<uuid8>` (e.g. `my-task-reviewer-a1b2c3d4`) and remains what you use for follow-ups, teardown, and every API call. Remember it.
 
-Skip `name` and the hand shows up as that raw id — and because a hand's id is built by concatenating its parent's, a hand of a hand of a hand becomes an unreadable slug chain. That is exactly the mess `name` exists to prevent. Renaming later is possible (`PATCH /api/runs/<id>` with `{"name": "..."}`), but naming at spawn is free.
+Skip `name` and the hand shows up as that raw id — and because a hand's id is built by concatenating its parent's, a hand of a hand of a hand becomes an unreadable slug chain. That is exactly the mess `name` exists to prevent. Naming at spawn is free.
+
+**Renaming any run later.** The same field is settable after the fact on *any* run — not just hands you spawned — with `PATCH /api/runs/<id>` and `{"name": "..."}`. An empty string clears it, and the run falls back to showing its id. So you can tidy up a badly-named run you inherited, or clear a name you set by mistake:
+
+```bash
+# Rename any run
+curl -s -X PATCH "$TINSTAR_URL/api/runs/<run-id>" \
+  -H "Content-Type: application/json" -d '{"name": "PM Vpp project"}'
+
+# Clear a name (row reverts to showing the id)
+curl -s -X PATCH "$TINSTAR_URL/api/runs/<run-id>" \
+  -H "Content-Type: application/json" -d '{"name": ""}'
+```
 
 The API response is wrapped — the actual session name is at `.data.session`, not `.session`. A `jq` filter at the top level (e.g. `'{name, state}'`) silently produces `{ "name": null, "state": null }` even on a fully successful spawn; that null output is **not** evidence the spawn failed. Trust the HTTP status (`201 Created`) and `GET /api/state` over whatever surface fields you tried to pluck.
 
