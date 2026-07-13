@@ -52,6 +52,20 @@ export interface TouchedFile {
 
 export interface RunData {
   id: string
+  /**
+   * Optional human-chosen display name, shown wherever the UI would otherwise
+   * show `id` (sidebar, run card header, inbox, fleet, Saloon, graveyard).
+   * Free text — deliberately NOT passed through the id sanitizer.
+   *
+   * Display-only. `id` remains the sole identity: it is the tmux session name,
+   * the worktree dir, the git branch, the run's NATS subject token, and the key
+   * for widget layouts / pins / constellations. Nothing resolves a name back to
+   * a run, so names need not be unique.
+   *
+   * Absent or empty ⇒ fall back to `id`. Use `name || id`, never `name ?? id`:
+   * clearing a name from the UI yields '', which `??` would render as blank.
+   */
+  name?: string
   color?: string
   status: SessionStatus
   /**
@@ -119,8 +133,19 @@ export interface RunData {
 export interface Tombstone {
   /** Claude Code conversation.id — the resume handle and the map key. */
   convId: string
-  /** The session's name at retire-time (for display + re-materialize). */
+  /**
+   * The session's name at retire-time — an IDENTITY handle, not a label.
+   * `reviveName()` re-materializes the session from this, so it must stay the
+   * real session name. Never overwrite it with a display string; put the
+   * human-facing label in `displayName` instead.
+   */
   sessionName: string
+  /**
+   * The run's friendly name at retire-time, snapshotted so the graveyard stays
+   * readable after the run itself is gone. Absent ⇒ fall back to `sessionName`
+   * (tombstones written before friendly names existed have none).
+   */
+  displayName?: string
   /** Deterministic roll-up of what the session covered (searchable). */
   coversSummary: string
   /** Task hierarchy at retire-time, for display + search + revive project resolution. */

@@ -40,12 +40,16 @@ export function RunNodeCapabilities({ run }: { run: RunData }) {
   useEffect(() => {
     return capabilityRegistry.publish(`run-${run.id}`, 'session.nats', async () => ({
       sessionId: run.sessionId,
+      // Display-only friendly name; peers (the Saloon header) show `name ||
+      // sessionId`. sessionId stays the identity in the payload — nothing
+      // resolves a run by its name.
+      name: run.name,
       status: run.status,
       subscriptions: run.natsSubscriptions ?? deriveLegacySubscriptions(run.natsSubject),
       color: run.color,
       orphanedAt: run.natsControlOrphanedAt ?? null,
     }))
-  }, [run.id, run.sessionId, run.status, run.natsSubscriptions, run.natsSubject, run.color, run.natsControlOrphanedAt])
+  }, [run.id, run.sessionId, run.name, run.status, run.natsSubscriptions, run.natsSubject, run.color, run.natsControlOrphanedAt])
 
   return null
 }

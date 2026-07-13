@@ -1,6 +1,9 @@
 import type { Run, GroupingDimension, TreeNode, GroupRollupViewModel } from './types'
 import type { TaxonomyRepository } from './repositories'
 import { STATUS_BORDER_COLORS } from './status-colors'
+// A run node's label is its friendly name, falling back to the id (R2/R12).
+// The single source of the empty-vs-undefined rule — do not re-derive it here.
+import { runDisplayName } from './runName'
 
 /**
  * Resolve a run's value for a given grouping dimension.
@@ -109,7 +112,7 @@ export function buildGroupTree(
     // No more dimensions — return run leaf nodes
     return runs.map(run => ({
       id: `run-${run.id}`,
-      label: run.id,
+      label: runDisplayName(run),
       type: 'run' as const,
       entityId: run.id,
       children: [],
@@ -203,7 +206,7 @@ export function buildGroupTree(
       for (const run of orphanRuns) {
         nodes.push({
           id: `run-${run.id}`,
-          label: run.id,
+          label: runDisplayName(run),
           type: 'run' as const,
           entityId: run.id,
           children: [],
@@ -281,7 +284,7 @@ export function buildGroupTree(
       if (!claimedRunIds.has(run.id)) {
         nodes.push({
           id: `run-${run.id}`,
-          label: run.id,
+          label: runDisplayName(run),
           type: 'run' as const,
           entityId: run.id,
           children: [],

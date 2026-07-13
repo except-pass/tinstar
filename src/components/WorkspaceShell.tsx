@@ -37,6 +37,72 @@ import { useConfig, useConfigPatch } from '../context/ConfigContext'
 import { pluginsReady } from '../widgets'
 
 
+/** Taxonomy entities each own a name; the endpoint that owns it is keyed by type. */
+const TAXONOMY_RENAME_ENDPOINTS: Record<string, string> = {
+  initiative: '/api/initiatives',
+  epic: '/api/epics',
+  task: '/api/tasks',
+  worktree: '/api/worktrees',
+}
+
+/**
+ * Rename dispatch behind the sidebar's inline edit.
+ *
+ * Taxonomy entities PATCH their own endpoint. A run instead PATCHes
+ * `/api/runs/:id` with `{ name }` — a display-only field. The run id is never
+ * in the body: it is the tmux session, the worktree dir, and the NATS subject
+ * token, and renaming it would be a filesystem migration, not a UI edit.
+ *
+ * Only the run branch paints optimistically. The taxonomy rename is fine to
+ * wait on its SSE echo, but a run rename is triggered from the row the user is
+ * looking at, and the UI philosophy (CLAUDE.md) is that it lands on Enter, not
+ * on the round-trip. Note `applyOptimistic` REPLACES the run in state (see
+ * `upsertById` in useServerEvents) — hand it the whole run with the new name
+ * merged in, never a `{ id, name }` stub, or every other field is erased until
+ * the server echo lands.
+ *
+ * An empty/whitespace name is a clear: stored as `undefined`, so `name || id`
+ * falls the run back to its id everywhere (R12).
+ *
+ * Exported for tests; the component wraps it in a useCallback.
+ */
+export function dispatchRename(
+  entityId: string,
+  type: GroupingDimension | 'run',
+  newName: string,
+  runCtx?: { run?: Run; addOptimistic: (entity: string, data: unknown) => void },
+): void {
+  if (type === 'run') {
+    const trimmed = newName.trim()
+    // Only paint optimistically when the run still exists. If it was deleted
+    // while its rename input was open, addOptimistic (an upsert) would otherwise
+    // resurrect the dead run as a ghost that no server echo ever clears.
+    const prior = runCtx?.run
+    if (prior) {
+      runCtx!.addOptimistic('run', { ...prior, name: trimmed || undefined })
+    }
+    void apiFetch(`/api/runs/${entityId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: trimmed }),
+    }).then(res => {
+      // Roll the optimistic paint back to the pre-edit run on failure, so a
+      // rejected rename (400/404/500) doesn't linger as a false success.
+      if (!res.ok && prior) runCtx!.addOptimistic('run', prior)
+    }).catch(() => {
+      if (prior) runCtx!.addOptimistic('run', prior)
+    })
+    return
+  }
+  const endpoint = TAXONOMY_RENAME_ENDPOINTS[type]
+  if (!endpoint) return
+  void apiFetch(`${endpoint}/${entityId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: newName }),
+  })
+}
+
 /** Walk the tree to find the path of ancestor node IDs for a given node ID */
 function findAncestorIds(tree: TreeNode[], targetId: string): string[] {
   function walk(nodes: TreeNode[], path: string[]): string[] | null {
@@ -481,21 +547,9 @@ function WorkspaceShellInner() {
     apiFetch(`/api/spaces/${id}`, { method: 'DELETE' })
   }, [])
 
-  const handleRename = useCallback((entityId: string, type: GroupingDimension, newName: string) => {
-    const endpointMap: Record<string, string> = {
-      initiative: '/api/initiatives',
-      epic: '/api/epics',
-      task: '/api/tasks',
-      worktree: '/api/worktrees',
-    }
-    const endpoint = endpointMap[type]
-    if (!endpoint) return
-    fetch(`${endpoint}/${entityId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newName }),
-    })
-  }, [])
+  const handleRename = useCallback((entityId: string, type: GroupingDimension | 'run', newName: string) => {
+    dispatchRename(entityId, type, newName, { run: runRepo.getById(entityId), addOptimistic })
+  }, [runRepo, addOptimistic])
 
   const handleDelete = useCallback((entityId: string, type: GroupingDimension | string) => {
     if (pluginWidgetMap.has(entityId)) {

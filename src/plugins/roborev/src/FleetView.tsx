@@ -14,6 +14,10 @@ const POLL_MS = 12_000
 export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps> {
   return function FleetView() {
     const [rows, setRows] = useState<FleetRow[] | null>(null)
+    // runId → friendly name, from the same /api/state read that yields the
+    // sessions. A fleet row is keyed by its session id, which IS the run id, so
+    // the join is direct. Rows fall back to the id when a run has no name (R2).
+    const [namesById, setNamesById] = useState<Record<string, string>>({})
     const [loading, setLoading] = useState(false)
     const [failed, setFailed] = useState(false)
     const [nudges, setNudges] = useState<Record<string, NudgeState>>({})
@@ -26,7 +30,9 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
       setLoading(true)
       try {
         const state = (await (await api.http.fetch('/api/state')).json()) as Parameters<typeof pickFleetSessions>[0]
+          & { runs?: Array<{ id: string; name?: string }> }
         const sessions = pickFleetSessions(state)
+        setNamesById(Object.fromEntries((state.runs ?? []).filter((r) => !!r.name).map((r) => [r.id, r.name!])))
         const next = await Promise.all(sessions.map(async (s) => {
           try {
             const r = await api.http.fetch(`/api/sessions/${encodeURIComponent(s.sessionId)}/exec`, {
@@ -119,7 +125,15 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
           {failed && rows === null && <Muted>Couldn't load sessions — retrying…</Muted>}
           {!failed && rows === null && <Muted>Scanning sessions…</Muted>}
           {rows && rows.length === 0 && <Muted>{failed ? "Couldn't load sessions — retrying…" : 'No agent sessions with a worktree.'}</Muted>}
-          {rows && rows.map((r) => <RowView key={r.sessionId} r={r} nudge={nudges[r.sessionId]} onNudge={() => void nudge(r)} />)}
+          {rows && rows.map((r) => (
+            <RowView
+              key={r.sessionId}
+              r={r}
+              label={namesById[r.sessionId] || r.sessionId}
+              nudge={nudges[r.sessionId]}
+              onNudge={() => void nudge(r)}
+            />
+          ))}
         </div>
       </Pane>
     )
@@ -129,14 +143,14 @@ export function makeFleetView(api: TinstarPluginAPI): ComponentType<WidgetProps>
 /** 'sending' is the in-flight state; the rest mirror NudgeResult. */
 type NudgeState = 'sending' | NudgeResult
 
-function RowView({ r, nudge, onNudge }: { r: FleetRow; nudge: NudgeState | undefined; onNudge: () => void }) {
+function RowView({ r, label, nudge, onNudge }: { r: FleetRow; label: string; nudge: NudgeState | undefined; onNudge: () => void }) {
   const wt = r.worktree.split('/').filter(Boolean).pop() ?? r.worktree
   const probeFailed = r.open === null
   const hasOpen = !!r.open
   return (
     <div style={{ padding: '6px 10px', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', gap: 8 }}>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 12, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.sessionId}</div>
+        <div title={r.sessionId} style={{ fontSize: 12, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
         <div style={{ fontSize: 10, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {r.project ? `${r.project} · ` : ''}{wt}
         </div>

@@ -242,12 +242,13 @@ export const spec = {
         requestBody: { content: { 'application/json': { schema: {
           type: 'object',
           properties: {
+            name: { type: 'string', nullable: true, description: 'Friendly display name, shown wherever the UI would otherwise show the run id. Free text (spaces, punctuation, emoji), capped at 200 chars, NOT id-sanitized. Empty or null clears it and the UI falls back to the id. Display-only: the run id remains the sole identity (tmux session, worktree, branch, NATS subject), so names need not be unique and nothing resolves one back to a run.' },
             taskId: { type: 'string', description: 'Reparent the run to another task (updates NATS subscriptions when enabled).' },
             attention: { type: 'object', nullable: true, description: 'Explicit attention: { level: urgent|attention|info, reason: string }, or null to clear.' },
             background: { type: 'boolean', description: 'Promote (false) or demote (true) the session to/from background. Persisted to the session record and mirrored onto the run; attention re-derives from (status, blocked, background) in the same mutation, so demoting an idle run clears its "Ready for input" row and promoting restores it.' },
           },
         } } } },
-        responses: { 200: { description: 'Updated' }, 400: { description: 'Invalid attention shape or non-boolean background' }, 404: { description: 'Run not found' } },
+        responses: { 200: { description: 'Updated' }, 400: { description: 'Invalid name/attention shape or non-boolean background' }, 404: { description: 'Run not found' } },
       },
     },
 
@@ -859,6 +860,7 @@ export const spec = {
         type: 'object',
         properties: {
           id: { type: 'string' },
+          name: { type: 'string', nullable: true, description: 'Friendly display name, shown in the UI wherever the run id would otherwise appear. Absent when unset (falls back to id). Set/cleared via PATCH /api/runs/{id}.' },
           status: { type: 'string' },
           sessionId: { type: 'string' },
           color: { type: 'string' },

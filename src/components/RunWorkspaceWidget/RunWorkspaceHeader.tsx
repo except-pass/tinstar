@@ -49,7 +49,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   const paletteRef = useRef<HTMLDivElement>(null)
   const paletteButtonRef = useRef<HTMLButtonElement>(null)
   const { slotsForNode, remove } = useConstellationContext()
-  const { taxRepo } = useBackendState()
+  const { taxRepo, addOptimistic } = useBackendState()
 
   // Resolve entity hierarchy names from IDs for the breadcrumb
   const breadcrumb = useMemo(() => {
@@ -79,6 +79,78 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ color }),
     })
+  }, [run.id])
+
+  // ─── Friendly name: inline rename of the header title ──────────────────
+  // The title shows `run.name` and falls back to the id when unset. `||` (not
+  // `??`) on purpose: clearing the name yields '' and `??` would paint a blank
+  // title. The id itself is immutable and stays reachable from the muted line
+  // beneath the title.
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
+  const nameInputRef = useRef<HTMLInputElement>(null)
+  // Enter and Escape both unmount the input, and a real browser then fires blur
+  // on the way out (jsdom does not, which is why this needs a guard the tests
+  // can't feel). Without it, Escape would commit the abandoned draft and Enter
+  // would fire the rename twice. Once an edit is settled, blur is a no-op.
+  const settledRef = useRef(false)
+
+  useEffect(() => {
+    if (editingName) nameInputRef.current?.select()
+  }, [editingName])
+
+  const startRename = useCallback(() => {
+    setNameDraft(run.name ?? '')
+    settledRef.current = false
+    setEditingName(true)
+  }, [run.name])
+
+  const cancelRename = useCallback(() => {
+    settledRef.current = true
+    setEditingName(false)
+  }, [])
+
+  const commitRename = useCallback(() => {
+    if (settledRef.current) return
+    settledRef.current = true
+    setEditingName(false)
+    const next = nameDraft.trim()
+    if (next === (run.name ?? '')) return
+    // Paint first (CLAUDE.md: no waiting on the SSE echo), then persist. An
+    // empty name clears the field, so the title falls back to the id.
+    const prior = run
+    addOptimistic('run', { ...run, name: next || undefined })
+    void apiFetch(`/api/runs/${run.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: next }),
+    }).then(res => {
+      // Roll back to the pre-edit run if the server rejects the rename, so a
+      // failed PATCH doesn't leave the optimistic title standing as a lie.
+      if (!res.ok) addOptimistic('run', prior)
+    }).catch(() => addOptimistic('run', prior))
+  }, [nameDraft, run, addOptimistic])
+
+  // ─── Run id: click-to-copy ─────────────────────────────────────────────
+  // Once the name is the headline, this is the only place the user can get the
+  // raw id string back out for `tmux attach` / `cd` into the worktree.
+  const [copied, setCopied] = useState(false)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (copyTimer.current) clearTimeout(copyTimer.current)
+  }, [])
+
+  const copyRunId = useCallback(async () => {
+    try {
+      await navigator.clipboard?.writeText(run.id)
+      setCopied(true)
+      if (copyTimer.current) clearTimeout(copyTimer.current)
+      copyTimer.current = setTimeout(() => setCopied(false), 1200)
+    } catch {
+      // Clipboard denied (insecure context / no permission) — the id stays
+      // visible and selectable, so there is nothing useful to say here.
+    }
   }, [run.id])
 
   const [actionError, setActionError] = useState<string | null>(null)
@@ -131,12 +203,37 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h1
-              className="text-2xs font-bold tracking-[0.15em] uppercase font-display leading-none truncate"
-              style={{ color: runAccent }}
-            >
-              Run_{run.id}
-            </h1>
+            {editingName ? (
+              <input
+                ref={nameInputRef}
+                autoFocus
+                data-testid={`run-name-input-${run.id}`}
+                aria-label="Run name"
+                className="min-w-0 max-w-[220px] bg-surface-base border rounded-sm px-1 py-0.5 text-2xs font-bold tracking-[0.1em] font-display leading-none outline-none"
+                style={{ color: runAccent, borderColor: hexToRgba(runAccent, 0.5) }}
+                value={nameDraft}
+                placeholder={run.id}
+                onChange={e => setNameDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') commitRename()
+                  if (e.key === 'Escape') cancelRename()
+                }}
+                onBlur={commitRename}
+                onPointerDown={e => e.stopPropagation()}
+                onClick={e => e.stopPropagation()}
+              />
+            ) : (
+              <h1
+                className="text-2xs font-bold tracking-[0.15em] uppercase font-display leading-none truncate cursor-text hover:underline decoration-dotted underline-offset-4"
+                style={{ color: runAccent }}
+                data-testid={`run-title-${run.id}`}
+                title="Click to rename — the run id never changes"
+                onPointerDown={e => e.stopPropagation()}
+                onClick={startRename}
+              >
+                {run.name || `Run_${run.id}`}
+              </h1>
+            )}
             <div className={`flex items-center gap-1 ${status.color} shrink-0`}>
               <span className={`w-1.5 h-1.5 rounded-full ${status.dot} ${status.pulse ? 'animate-pulse-glow' : ''}`} />
               <span className="text-2xs font-bold tracking-[0.1em] font-mono uppercase">{status.label}</span>
@@ -155,6 +252,35 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
               </div>
             )}
           </div>
+          {/* Raw run id — muted, click-to-copy. The id is what `tmux attach` and
+              `cd <worktree>` need, so it stays one click away even though the
+              friendly name now owns the title. */}
+          <button
+            type="button"
+            data-testid={`run-id-copy-${run.id}`}
+            title={copied ? 'Copied' : `Copy run id — ${run.id}`}
+            onPointerDown={e => e.stopPropagation()}
+            onClick={copyRunId}
+            className="group/id flex items-center gap-1 mt-0.5 max-w-full cursor-pointer text-2xs font-mono leading-none text-slate-500 hover:text-slate-300 transition-colors"
+          >
+            <span className="truncate">{run.id}</span>
+            <span
+              className={`material-symbols-outlined shrink-0 transition-opacity ${copied ? 'opacity-100 text-accent-green' : 'opacity-0 group-hover/id:opacity-100'}`}
+              style={{ fontSize: '11px' }}
+              aria-hidden="true"
+            >
+              {copied ? 'check' : 'content_copy'}
+            </span>
+            {copied && (
+              <span
+                className="shrink-0 font-bold tracking-[0.1em] uppercase text-accent-green"
+                data-testid={`run-id-copied-${run.id}`}
+              >
+                Copied
+              </span>
+            )}
+          </button>
+
           {!compact && breadcrumb.length > 0 && (
             <nav className="flex items-center gap-1 mt-0.5">
               {breadcrumb.map((segment, i, arr) => (

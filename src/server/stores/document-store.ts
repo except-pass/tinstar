@@ -100,6 +100,7 @@ function runShallowEqual(a: Run, b: Run): boolean {
   if (a === b) return true
   // RunData fields
   if (a.id !== b.id) return false
+  if (a.name !== b.name) return false
   if (a.color !== b.color) return false
   if (a.status !== b.status) return false
   if (a.background !== b.background) return false

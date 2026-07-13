@@ -439,6 +439,62 @@ describe('POST /api/sessions', () => {
     expect(getSession(join(tmpRoot, 'sessions'), childName)?.background).toBe(false)
   })
 
+  it('spawn with a friendly name sets it on the child run, leaving the generated id intact', async () => {
+    await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'named-parent', nats: { enabled: false } }),
+    })
+    const res = await testCtx.fetch('/api/sessions/named-parent/spawn', {
+      method: 'POST',
+      body: JSON.stringify({ hand: 'marshal', name: 'Reviewer — auth edge cases' }),
+    })
+    expect(res.status).toBe(201)
+    const { data } = await res.json() as { data: { session: string } }
+
+    const childRun = testCtx.docStore.getRun(data.session) as Run
+    expect(childRun.name).toBe('Reviewer — auth edge cases')
+    // The generated id is the concatenated form, untouched by the friendly name.
+    expect(data.session).toContain('named-parent-marshal-')
+    expect(childRun.id).toBe(data.session)
+  })
+
+  it('spawn without a name leaves the child run unnamed (falls back to its id)', async () => {
+    await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'unnamed-parent', nats: { enabled: false } }),
+    })
+    const res = await testCtx.fetch('/api/sessions/unnamed-parent/spawn', {
+      method: 'POST',
+      body: JSON.stringify({ hand: 'marshal' }),
+    })
+    const { data } = await res.json() as { data: { session: string } }
+    expect((testCtx.docStore.getRun(data.session) as Run).name).toBeUndefined()
+  })
+
+  it('spawn rejects a non-string name with 400', async () => {
+    await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'reject-parent', nats: { enabled: false } }),
+    })
+    const res = await testCtx.fetch('/api/sessions/reject-parent/spawn', {
+      method: 'POST',
+      body: JSON.stringify({ hand: 'marshal', name: 42 }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('spawn 400s on a malformed JSON body rather than throwing a 500', async () => {
+    await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'malformed-parent', nats: { enabled: false } }),
+    })
+    const res = await testCtx.fetch('/api/sessions/malformed-parent/spawn', {
+      method: 'POST',
+      body: '{not json',
+    })
+    expect(res.status).toBe(400)
+  })
+
   it('a plain /start with no body launches with the global token (no override)', async () => {
     const created = await testCtx.fetch('/api/sessions', {
       method: 'POST',

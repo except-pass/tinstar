@@ -72,10 +72,12 @@ If none fit, `general-purpose` with a sharp prompt is always valid.
 ```bash
 HAND="reviewer"
 PROMPT="Review the last 3 commits on this branch. Focus on auth edge cases. Report findings."
+NAME="Reviewer — auth edge cases"   # friendly display name; see below
 
 curl -s -X POST "$TINSTAR_URL/api/sessions/$SESSION/spawn" \
   -H "Content-Type: application/json" \
-  -d "$(jq -n --arg hand "$HAND" --arg prompt "$PROMPT" '{hand: $hand, prompt: $prompt}')" \
+  -d "$(jq -n --arg hand "$HAND" --arg prompt "$PROMPT" --arg name "$NAME" \
+        '{hand: $hand, prompt: $prompt, name: $name}')" \
   | jq '.data | {session, hand, room}'
 
 # Verify exactly one new child appeared (catches accidental double-spawns):
@@ -84,7 +86,23 @@ curl -s "$TINSTAR_URL/api/state" \
        '[.sessions[] | select(.name | startswith($parent + "-"))] | length'
 ```
 
-Spawned names look like `<parent>-<hand>-<uuid8>` (e.g. `my-task-reviewer-a1b2c3d4`). Remember it — you'll use it for follow-ups and teardown.
+**Always pass `name`.** You are the only one who knows what this hand is for, and you know it now — at spawn time. `name` is a free-text display name shown wherever the dashboard would otherwise show the session id: sidebar, run card, inbox, fleet. Write it for a human scanning a crowded fleet: say the hand's *job*, not its type. "Reviewer — auth edge cases" beats "reviewer".
+
+This is display-only, so it costs you nothing operationally. The session id stays `<parent>-<hand>-<uuid8>` (e.g. `my-task-reviewer-a1b2c3d4`) and remains what you use for follow-ups, teardown, and every API call. Remember it.
+
+Skip `name` and the hand shows up as that raw id — and because a hand's id is built by concatenating its parent's, a hand of a hand of a hand becomes an unreadable slug chain. That is exactly the mess `name` exists to prevent. Naming at spawn is free.
+
+**Renaming any run later.** The same field is settable after the fact on *any* run — not just hands you spawned — with `PATCH /api/runs/<id>` and `{"name": "..."}`. An empty string clears it, and the run falls back to showing its id. So you can tidy up a badly-named run you inherited, or clear a name you set by mistake:
+
+```bash
+# Rename any run
+curl -s -X PATCH "$TINSTAR_URL/api/runs/<run-id>" \
+  -H "Content-Type: application/json" -d '{"name": "PM Vpp project"}'
+
+# Clear a name (row reverts to showing the id)
+curl -s -X PATCH "$TINSTAR_URL/api/runs/<run-id>" \
+  -H "Content-Type: application/json" -d '{"name": ""}'
+```
 
 The API response is wrapped — the actual session name is at `.data.session`, not `.session`. A `jq` filter at the top level (e.g. `'{name, state}'`) silently produces `{ "name": null, "state": null }` even on a fully successful spawn; that null output is **not** evidence the spawn failed. Trust the HTTP status (`201 Created`) and `GET /api/state` over whatever surface fields you tried to pluck.
 

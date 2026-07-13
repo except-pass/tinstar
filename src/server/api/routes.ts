@@ -49,6 +49,7 @@ import {
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus } from '../../domain/types'
+import { normalizeRunName } from '../../domain/runName'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { isPinSet, addReply, mergePreservingReplies } from '../../domain/pinSet'
@@ -2828,11 +2829,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     readBody(req).then(async body => {
       const existing = ctx.docStore.getRun(id)
       if (!existing) return fail(res, 'NOT_FOUND', 'not found')
-      const patch = JSON.parse(body) as {
+      let patch: {
         taskId?: string
         attention?: { level: string; reason: string } | null
         background?: boolean
         [key: string]: unknown
+      }
+      try {
+        patch = body ? JSON.parse(body) : {}
+      } catch {
+        return fail(res, 'BAD_REQUEST', 'invalid_json')
       }
       const { attention: attentionPatch, ...patchWithoutAttention } = patch
       // `blocked` is a derived-attention input owned by the StatusWatcher and
@@ -2840,6 +2846,40 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // catch-all spread below cannot fabricate or suppress a "Waiting on
       // permission" breakthrough.
       delete patchWithoutAttention.blocked
+
+      // Identity and topology are immutable through this route. These fields are
+      // the handles the tmux session, worktree dir, git branch, NATS subject, and
+      // the per-space widget-layout / pin / constellation keys (`run-<id>`,
+      // scoped by spaceId) are all built from — re-pointing any of them here would
+      // orphan that state without moving anything on disk. The concrete exploit
+      // this closes: `PATCH {"name":"x","spaceId":"other"}` would move a run out
+      // of its space and strand its layouts. Strip them all so the catch-all
+      // spread below can only ever change a display field; identity never moves.
+      // (This route is a deny-list on an arbitrary body — see the follow-up note
+      // in the run-friendly-names plan about converting it to an allow-list.)
+      delete patchWithoutAttention.id
+      delete patchWithoutAttention.sessionId
+      delete patchWithoutAttention.worktree
+      delete patchWithoutAttention.worktreeId
+      delete patchWithoutAttention.spaceId
+      delete patchWithoutAttention.parentId
+
+      // Friendly display name: free text, deliberately NOT id-sanitized. Empty
+      // or whitespace-only clears it (undefined), which the UI renders as a
+      // fallback to the run id.
+      //
+      // Held in its own narrowed variable rather than riding the catch-all
+      // spread: everything on `patch` is `unknown`, and an unknown-typed `name`
+      // spread into upsertRun() does not satisfy Run.name (string | undefined).
+      let namePatch: { name?: string } = {}
+      if ('name' in patch) {
+        const raw = patch.name
+        if (raw !== null && raw !== undefined && typeof raw !== 'string') {
+          return fail(res, 'BAD_REQUEST', 'invalid_name: must be a string, or null/empty to clear')
+        }
+        namePatch = { name: normalizeRunName(raw) }
+      }
+      delete patchWithoutAttention.name
 
       // Background flip (promote/demote, R3): validate before any mutation so
       // an invalid value cannot leave a half-applied patch.
@@ -2926,7 +2966,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
           if (natsWarnings.length > 0) {
             const baseline = attentionApplied ? ctx.docStore.getRun(id)! : existing
-            ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention })
+            ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention, ...namePatch })
             if (backgroundChanged) ctx.docStore.rederiveRunAttention(id)
             return ok(res, ctx.docStore.getRun(id), { warnings: { nats: natsWarnings } })
           }
@@ -2934,7 +2974,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
 
       const baseline = attentionApplied ? ctx.docStore.getRun(id)! : existing
-      ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention })
+      ctx.docStore.upsertRun(id, { ...baseline, ...patchWithoutAttention, ...namePatch })
       // Re-derive attention from the persisted (status, blocked, background)
       // triple in the same mutation (R13): demote clears "Ready for input",
       // promote restores it, a blocked demote surfaces urgent. Guarded on an
@@ -3419,6 +3459,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             ctx.docStore.upsertTombstone({
               convId,
               sessionName: name,
+              // Snapshot the friendly name at retire-time — the run is about to
+              // be gone, so this is the last chance to keep the graveyard
+              // readable. Kept separate from sessionName, which reviveName()
+              // needs as the real session handle.
+              displayName: retiredRun?.name || undefined,
               coversSummary: buildCoversSummary(retiredRun?.recapEntries ?? [], {
                 sessionName: name,
                 task: retiredRun?.task,
@@ -3777,7 +3822,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!parentSession) return fail(res, 'NOT_FOUND', `Session '${parentName}' not found`)
 
       const body = await readBody(req)
-      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride, model: modelOverride, token: tokenOverride, background = false } = JSON.parse(body) as {
+      // Guard the parse — the tinstar-hand skill now tells agents to build spawn
+      // bodies (with a friendly name) via jq, so a malformed body should be a
+      // clean 400, not an unhandled throw surfacing as an opaque 500.
+      let spawnBody: {
+        hand: string
+        prompt?: string
+        orchestrator?: boolean
+        repo?: string
+        worktreePath?: string
+        model?: string
+        token?: string
+        background?: boolean
+        name?: string
+      }
+      try {
+        spawnBody = body ? JSON.parse(body) : {}
+      } catch {
+        return fail(res, 'BAD_REQUEST', 'invalid_json')
+      }
+      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride, model: modelOverride, token: tokenOverride, background = false, name: friendlyName } = spawnBody as {
         hand: string
         prompt?: string
         orchestrator?: boolean
@@ -3786,11 +3850,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         model?: string         // Switchboard: per-session model override (persisted)
         token?: string         // Switchboard: per-session OAuth token override (spawn-time only, never persisted)
         background?: boolean   // Explicit opt-in only — NEVER inherited from the parent session
+        name?: string          // Friendly display name for the hand (optional; falls back to the generated id)
       }
 
       if (!handName) {
         return fail(res, 'BAD_REQUEST', 'hand field is required')
       }
+
+      // Friendly display name, set by the spawning agent so the hand is born
+      // named rather than renamed after the fact. Optional by design: a hand
+      // spawned without one just displays its generated id, as before. The id
+      // itself is still the concatenated form below — this only affects display.
+      if (friendlyName !== undefined && typeof friendlyName !== 'string') {
+        return fail(res, 'BAD_REQUEST', 'invalid_name: must be a string')
+      }
+      const spawnedDisplayName = normalizeRunName(friendlyName)
 
       // Switchboard Step 6: fail-closed guard for a per-session override on spawn,
       // before the child session is created or launched. Inert when unset.
@@ -3986,6 +4060,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const runId = spawnedName
         ctx.docStore.upsertRun(runId, {
           id: runId,
+          name: spawnedDisplayName,
           color: parentRun?.color,
           status: 'running',
           // Explicit spawn param only (default visible) — a spawned hand NEVER

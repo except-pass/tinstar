@@ -15,9 +15,16 @@ import type { TrafficEvent } from './types'
 const MAX_EVENTS = 200
 
 /** Shape returned by a run's `session.nats` capability. */
-interface SessionNats { sessionId: string; status?: string; subscriptions: string[]; color?: string; orphanedAt?: string | null }
-/** Per-bound-session info kept for the header. */
-interface BoundSession { sessionId: string; status?: string; subscriptions: string[]; orphanedAt?: string | null }
+interface SessionNats { sessionId: string; name?: string; status?: string; subscriptions: string[]; color?: string; orphanedAt?: string | null }
+/** Per-bound-session info kept for the header. `name` is the run's optional
+ *  friendly name — display only; `sessionId` remains the identity. */
+interface BoundSession { sessionId: string; name?: string; status?: string; subscriptions: string[]; orphanedAt?: string | null }
+
+/** Header text for a bound session: friendly name if it has one, else the id.
+ *  `||` not `??` — a cleared name is '' and must fall back, not render blank. */
+function boundLabel(b: BoundSession): string {
+  return b.name || b.sessionId
+}
 
 const STATUS_META: Record<string, { color: string; label: string }> = {
   running: { color: '#22c55e', label: 'running' },
@@ -84,7 +91,7 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
         if (cancelled) return
         const sessions: BoundSession[] = results
           .filter((r): r is SessionNats => r != null)
-          .map(r => ({ sessionId: r.sessionId, status: r.status, subscriptions: r.subscriptions ?? [], orphanedAt: r.orphanedAt ?? null }))
+          .map(r => ({ sessionId: r.sessionId, name: r.name, status: r.status, subscriptions: r.subscriptions ?? [], orphanedAt: r.orphanedAt ?? null }))
         setBound(sessions)
         setAccent(runIds.length === 1 ? api.theme.accent.resolve(results[0]?.color) : undefined)
       })()
@@ -160,7 +167,7 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
           {single ? (
             <span className="flex items-center gap-1.5 flex-1 min-w-0">
               {status && <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: status.color }} title={status.label} />}
-              <span className="text-xs text-slate-200 truncate">{single.sessionId}</span>
+              <span className="text-xs text-slate-200 truncate" title={single.sessionId}>{boundLabel(single)}</span>
               {status && <span className="text-2xs text-slate-500 flex-shrink-0">{status.label}</span>}
             </span>
           ) : (
@@ -168,7 +175,7 @@ export function makeSaloonWidget(api: TinstarPluginAPI) {
               {binding.mode === 'all'
                 ? 'all traffic'
                 : bound.length > 1
-                  ? bound.map(b => b.sessionId).join(', ')
+                  ? bound.map(boundLabel).join(', ')
                   : '…'}
             </span>
           )}

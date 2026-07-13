@@ -313,6 +313,11 @@ export function applyDelta(prev: ServerState, delta: { entity: string; id: strin
       // run's breakthrough card would never return to invisibility), so take
       // attention from the incoming run explicitly: absent key = cleared.
       attention: next.attention,
+      // Same undefined-drop hazard as `attention` above: clearing a run's
+      // friendly name stores `name: undefined`, which JSON.stringify omits from
+      // the SSE payload, so the spread would inherit the stale name forever and
+      // the run could never fall back to showing its id again.
+      name: next.name,
       touchedFiles: next.touchedFiles ?? prevRun?.touchedFiles ?? [],
       recapEntries: next.recapEntries ?? prevRun?.recapEntries ?? [],
     })

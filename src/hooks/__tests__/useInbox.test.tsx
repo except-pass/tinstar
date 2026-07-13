@@ -173,3 +173,33 @@ describe('useInbox', () => {
     expect(result.current.rows[0]?.worktree).toBe('wt')
   })
 })
+
+// U3 (R2/R5): the inbox is one of the surfaces that renders a run's id, so it
+// shows the friendly name instead when the run has one.
+describe('useInbox sourceLabel', () => {
+  const run = (over: Record<string, unknown>) => ({
+    id: 'vpppm-general-pourpose-2dc86', spaceId: 'spc-1', status: 'idle',
+    sessionId: 'vpppm-general-pourpose-2dc86', initiative: 'i', epic: 'e', task: 't',
+    worktree: 'wt', createdAt: '2026-07-13T00:00:00.000Z', ...over,
+  })
+
+  it('falls back to the run id when the run has no friendly name', () => {
+    mockState = { pluginWidgets: [], runs: [run({})] }
+    const { result } = renderHook(() => useInbox('spc-1'))
+    expect(result.current.rows[0]?.sourceLabel).toBe('vpppm-general-pourpose-2dc86')
+  })
+
+  it('prefers the friendly name when set', () => {
+    mockState = { pluginWidgets: [], runs: [run({ name: 'PM Vpp project' })] }
+    const { result } = renderHook(() => useInbox('spc-1'))
+    expect(result.current.rows[0]?.sourceLabel).toBe('PM Vpp project')
+    // The row is still addressed by id — only the label changed.
+    expect(result.current.rows[0]?.widgetId).toBe('vpppm-general-pourpose-2dc86')
+  })
+
+  it('falls back to the id for an empty-string name rather than a blank label (R12)', () => {
+    mockState = { pluginWidgets: [], runs: [run({ name: '' })] }
+    const { result } = renderHook(() => useInbox('spc-1'))
+    expect(result.current.rows[0]?.sourceLabel).toBe('vpppm-general-pourpose-2dc86')
+  })
+})

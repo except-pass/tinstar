@@ -16,6 +16,13 @@ function orDash(v: string | undefined | null): string {
   return v && v.trim() ? v : '—'
 }
 
+/** A tombstone's headline: the run's friendly name snapshotted at retire-time,
+ *  falling back to sessionName (the identity handle) when it had none. Local to
+ *  the plugin — ADR-0002 forbids importing the runtime helper from the host. */
+function graveLabel(t: { displayName?: string; sessionName: string }): string {
+  return t.displayName || t.sessionName
+}
+
 function shortWhen(iso: string | undefined): string {
   if (!iso) return '—'
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
@@ -59,7 +66,7 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
 
     const fuse = useMemo(
       () => new Fuse(graves ?? [], {
-        keys: ['coversSummary', 'sessionName', 'task', 'epic', 'initiative'],
+        keys: ['coversSummary', 'displayName', 'sessionName', 'task', 'epic', 'initiative'],
         threshold: 0.4,
         ignoreLocation: true,
       }),
@@ -157,7 +164,7 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
                 }`}
               >
                 <div className="font-bold truncate flex items-center gap-1">
-                  <span>Here lies {orDash(g.sessionName)}</span>
+                  <span>Here lies {orDash(graveLabel(g))}</span>
                   {g.snapshotted && <span title="Embalmed — revivable even after Claude Code forgets">⚱️</span>}
                 </div>
                 <div className="text-xs text-amber-200/70 truncate italic">{orDash(g.coversSummary)}</div>
@@ -170,7 +177,7 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
             {!active && <div className="text-amber-300/60 italic">Pick a grave to read its epitaph — or raise the dead.</div>}
             {active && (
               <div className="flex flex-col gap-2">
-                <div className="text-base font-bold border-b border-amber-900/40 pb-1">⚰️ Here lies {orDash(active.sessionName)}</div>
+                <div className="text-base font-bold border-b border-amber-900/40 pb-1">⚰️ Here lies {orDash(graveLabel(active))}</div>
                 <div className="text-amber-100/90 italic whitespace-pre-wrap">“{orDash(active.coversSummary)}”</div>
                 <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-xs text-amber-300/70 mt-1">
                   <dt>Task</dt><dd className="text-amber-100/90">{orDash(active.task)}</dd>
