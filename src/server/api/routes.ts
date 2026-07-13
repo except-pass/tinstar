@@ -49,6 +49,7 @@ import {
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus } from '../../domain/types'
+import { normalizeRunName } from '../../domain/runName'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { isPinSet, addReply, mergePreservingReplies } from '../../domain/pinSet'
@@ -2863,8 +2864,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         if (patch.name !== null && patch.name !== undefined && typeof patch.name !== 'string') {
           return fail(res, 'BAD_REQUEST', 'invalid_name: must be a string, or null/empty to clear')
         }
-        const trimmed = typeof patch.name === 'string' ? patch.name.trim().slice(0, 200) : ''
-        patchWithoutAttention.name = trimmed === '' ? undefined : trimmed
+        patchWithoutAttention.name = normalizeRunName(patch.name)
       }
 
       // Background flip (promote/demote, R3): validate before any mutation so
@@ -3803,7 +3803,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!parentSession) return fail(res, 'NOT_FOUND', `Session '${parentName}' not found`)
 
       const body = await readBody(req)
-      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride, model: modelOverride, token: tokenOverride, background = false } = JSON.parse(body) as {
+      const { hand: handName, prompt: promptOverride, orchestrator, repo: repoOverride, worktreePath: worktreePathOverride, model: modelOverride, token: tokenOverride, background = false, name: friendlyName } = JSON.parse(body) as {
         hand: string
         prompt?: string
         orchestrator?: boolean
@@ -3812,11 +3812,21 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         model?: string         // Switchboard: per-session model override (persisted)
         token?: string         // Switchboard: per-session OAuth token override (spawn-time only, never persisted)
         background?: boolean   // Explicit opt-in only — NEVER inherited from the parent session
+        name?: string          // Friendly display name for the hand (optional; falls back to the generated id)
       }
 
       if (!handName) {
         return fail(res, 'BAD_REQUEST', 'hand field is required')
       }
+
+      // Friendly display name, set by the spawning agent so the hand is born
+      // named rather than renamed after the fact. Optional by design: a hand
+      // spawned without one just displays its generated id, as before. The id
+      // itself is still the concatenated form below — this only affects display.
+      if (friendlyName !== undefined && typeof friendlyName !== 'string') {
+        return fail(res, 'BAD_REQUEST', 'invalid_name: must be a string')
+      }
+      const spawnedDisplayName = normalizeRunName(friendlyName)
 
       // Switchboard Step 6: fail-closed guard for a per-session override on spawn,
       // before the child session is created or launched. Inert when unset.
@@ -4012,6 +4022,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         const runId = spawnedName
         ctx.docStore.upsertRun(runId, {
           id: runId,
+          name: spawnedDisplayName,
           color: parentRun?.color,
           status: 'running',
           // Explicit spawn param only (default visible) — a spawned hand NEVER
