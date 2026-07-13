@@ -52,6 +52,20 @@ export interface TouchedFile {
 
 export interface RunData {
   id: string
+  /**
+   * Optional human-chosen display name, shown wherever the UI would otherwise
+   * show `id` (sidebar, run card header, inbox, fleet, Saloon, graveyard).
+   * Free text — deliberately NOT passed through the id sanitizer.
+   *
+   * Display-only. `id` remains the sole identity: it is the tmux session name,
+   * the worktree dir, the git branch, the run's NATS subject token, and the key
+   * for widget layouts / pins / constellations. Nothing resolves a name back to
+   * a run, so names need not be unique.
+   *
+   * Absent or empty ⇒ fall back to `id`. Use `name || id`, never `name ?? id`:
+   * clearing a name from the UI yields '', which `??` would render as blank.
+   */
+  name?: string
   color?: string
   status: SessionStatus
   /**
