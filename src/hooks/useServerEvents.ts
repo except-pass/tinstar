@@ -8,6 +8,7 @@ import type { PinSet } from '../domain/pinSet'
 import { isSystemSession, extractMarshal } from '../domain/system-sessions'
 import { apiUrl } from '../apiClient'
 import { dispatchWindowEvent } from '../lib/windowEvents'
+import { removeHiddenRunId } from './useHiddenRuns'
 
 /** Upsert-or-remove an item in an array by a key field. */
 function upsertById<T>(arr: T[], item: T | null, id: string, key: keyof T & string): T[] {
@@ -300,6 +301,12 @@ export function applyDelta(prev: ServerState, delta: { entity: string; id: strin
       if (prev.marshal && prev.marshal.id === delta.id) {
         return { ...prev, marshal: null }
       }
+      // Prune any stale hidden-runs entry for this id. Run ids are the reusable
+      // session name, so leaving the id in the hidden set would make a future
+      // same-named run born hidden (grayed in the sidebar, absent from canvas).
+      // Removal is the universal, cross-tab signal — the server orders it before
+      // any re-creation, so a reused name can never inherit the stale flag.
+      removeHiddenRunId(delta.id)
       return { ...prev, runs: prev.runs.filter(r => r.id !== delta.id) }
     }
     const run = delta.data as Run
