@@ -199,7 +199,7 @@ function WorkspaceShellInner() {
 
   // Figma-style per-run visibility — hidden runs stay in the sidebar (dimmed) but
   // are pruned from the canvas and skipped by Ctrl+[ / Ctrl+] cycling.
-  const { hiddenIds: hiddenRunIds, isHidden: isRunHidden, toggleHidden: toggleRunHidden } = useHiddenRuns()
+  const { hiddenIds: hiddenRunIds, isHidden: isRunHidden, toggleHidden: toggleRunHidden, removeHidden: removeRunHidden } = useHiddenRuns()
 
   const sidebarTree = useMemo(
     () => showEmptyEntities ? rawSidebarTree : filterEmptyNodes(rawSidebarTree),
@@ -559,6 +559,10 @@ function WorkspaceShellInner() {
       return
     }
     if (type === 'run') {
+      // Optimistically drop any hidden-runs entry for the acting browser, so a
+      // reused name can't be born hidden without waiting for the SSE round-trip.
+      // The run-removed delta prunes it universally too (idempotent no-op here).
+      removeRunHidden(entityId)
       apiFetch(`/api/sessions/${entityId}`, { method: 'DELETE' })
       return
     }
@@ -583,7 +587,7 @@ function WorkspaceShellInner() {
     const endpoint = endpointMap[type]
     if (!endpoint) return
     fetch(`${endpoint}/${entityId}`, { method: 'DELETE' })
-  }, [pluginWidgetMap])
+  }, [pluginWidgetMap, removeRunHidden])
 
   const handleAdd = useCallback((parentId: string | null, type: GroupingDimension | 'run') => {
     if (type === 'run') return
