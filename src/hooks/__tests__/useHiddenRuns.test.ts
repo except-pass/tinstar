@@ -70,3 +70,35 @@ describe('removeHiddenRunId (standalone)', () => {
     expect(result.current.isHidden('dj')).toBe(false)
   })
 })
+
+describe('useHiddenRuns — cross-tab storage sync', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('re-reads when another tab mutates the hidden-runs key (native storage event)', () => {
+    const { result } = renderHook(() => useHiddenRuns())
+    expect(result.current.isHidden('dj')).toBe(false)
+
+    // Another tab hid "dj": storage is already updated; this tab only gets the
+    // event (jsdom does not auto-fire `storage` for same-context writes).
+    localStorage.setItem(LS_KEY, JSON.stringify(['dj']))
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: LS_KEY }))
+    })
+    expect(result.current.isHidden('dj')).toBe(true)
+  })
+
+  it('ignores storage events for unrelated keys', () => {
+    localStorage.setItem(LS_KEY, JSON.stringify(['dj']))
+    const { result } = renderHook(() => useHiddenRuns())
+    expect(result.current.isHidden('dj')).toBe(true)
+
+    localStorage.setItem(LS_KEY, JSON.stringify([]))
+    act(() => {
+      // A different key changed — the hook must NOT re-read on this event.
+      window.dispatchEvent(new StorageEvent('storage', { key: 'some-other-key' }))
+    })
+    expect(result.current.isHidden('dj')).toBe(true)
+  })
+})

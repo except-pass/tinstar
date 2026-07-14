@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { familyKeys, readJSON, writeJSON } from '../lib/uiPrefs'
+import { EV, dispatchWindowEvent, useWindowEvent } from '../lib/windowEvents'
 
 const LS_KEY = familyKeys.hiddenRuns
-
-/** Same-tab change signal. The DOM `storage` event only fires in *other* tabs,
- *  so a mutation made outside the React hook (e.g. the SSE run-removed reducer
- *  calling `removeHiddenRunId`) needs its own event for the hook in this tab to
- *  re-read. Cross-tab sync still rides the native `storage` event. */
-const CHANGE_EVENT = 'tinstar-hidden-runs-changed'
 
 function readFromStorage(): Set<string> {
   const arr = readJSON<string[]>(LS_KEY, [])
@@ -29,16 +24,15 @@ function writeToStorage(ids: Set<string>): void {
  * stale id from ever outliving the run that created it.
  *
  * No-ops (no write, no event) when the id is absent, so it's cheap to call on
- * every run removal. Dispatches CHANGE_EVENT so a `useHiddenRuns` hook in the
- * same tab picks up the change without a reload.
+ * every run removal. Dispatches the same-tab `hiddenRunsChanged` event so a
+ * `useHiddenRuns` hook in this tab picks up the change without a reload — the
+ * native `storage` event only fires in *other* tabs.
  */
 export function removeHiddenRunId(runId: string): void {
   const ids = readFromStorage()
   if (!ids.delete(runId)) return
   writeToStorage(ids)
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent(CHANGE_EVENT))
-  }
+  dispatchWindowEvent(EV.hiddenRunsChanged, undefined)
 }
 
 /**
@@ -52,24 +46,21 @@ export function removeHiddenRunId(runId: string): void {
 export function useHiddenRuns() {
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => readFromStorage())
 
-  // Sync when another tab mutates localStorage (native `storage` event), or
-  // when this tab mutates it outside the hook via `removeHiddenRunId`
-  // (same-tab CHANGE_EVENT — `storage` does not fire in the writing tab).
+  // Cross-tab sync: another tab mutating localStorage fires the native
+  // `storage` event (which never fires in the writing tab).
   useEffect(() => {
     function onStorage(e: StorageEvent) {
       if (e.key !== LS_KEY) return
       setHiddenIds(readFromStorage())
     }
-    function onLocalChange() {
-      setHiddenIds(readFromStorage())
-    }
     window.addEventListener('storage', onStorage)
-    window.addEventListener(CHANGE_EVENT, onLocalChange)
-    return () => {
-      window.removeEventListener('storage', onStorage)
-      window.removeEventListener(CHANGE_EVENT, onLocalChange)
-    }
+    return () => window.removeEventListener('storage', onStorage)
   }, [])
+
+  // Same-tab sync: a non-React writer in THIS tab (e.g. the SSE run-removed
+  // prune calling `removeHiddenRunId`) fires `hiddenRunsChanged` so the hook
+  // re-reads without a reload — `storage` alone would miss it.
+  useWindowEvent(EV.hiddenRunsChanged, () => setHiddenIds(readFromStorage()))
 
   const toggleHidden = useCallback((runId: string) => {
     setHiddenIds(prev => {
