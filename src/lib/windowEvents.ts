@@ -24,6 +24,9 @@ export interface TinstarWindowEventMap {
   'tinstar:download:push': { url: string; filename: string }
   /** Commit delta — no payload, just a notification. */
   'tinstar:commit-delta': undefined
+  /** Hidden-runs set changed by a non-React writer in THIS tab (e.g. the SSE
+   *  run-removed prune). Same-tab signal only — cross-tab rides native `storage`. */
+  'tinstar:hidden-runs-changed': undefined
 }
 
 export type TinstarWindowEventName = keyof TinstarWindowEventMap
@@ -40,6 +43,7 @@ export const EV = {
   projectsChanged: 'tinstar:projects_changed',
   downloadPush: 'tinstar:download:push',
   commitDelta: 'tinstar:commit-delta',
+  hiddenRunsChanged: 'tinstar:hidden-runs-changed',
 } as const satisfies Record<string, TinstarWindowEventName>
 
 export function dispatchWindowEvent<K extends TinstarWindowEventName>(

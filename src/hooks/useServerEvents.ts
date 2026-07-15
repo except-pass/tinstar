@@ -8,6 +8,7 @@ import type { PinSet } from '../domain/pinSet'
 import { isSystemSession, extractMarshal } from '../domain/system-sessions'
 import { apiUrl } from '../apiClient'
 import { dispatchWindowEvent } from '../lib/windowEvents'
+import { removeHiddenRunId } from './useHiddenRuns'
 
 /** Upsert-or-remove an item in an array by a key field. */
 function upsertById<T>(arr: T[], item: T | null, id: string, key: keyof T & string): T[] {
@@ -232,6 +233,7 @@ function startSSE() {
       data: unknown
     }
     currentState = applyDelta(currentState, delta)
+    pruneHiddenForRemoval(delta)
     pushState()
   })
 
@@ -269,6 +271,22 @@ function stopSSE() {
   }
 }
 
+/**
+ * Prune a stale hidden-runs entry when a run is removed. Kept as a discrete
+ * side-effect at the SSE call site (not inside `applyDelta`, which stays a pure
+ * state->state reducer). Run ids are the reusable session name, so leaving the
+ * id in the hidden set would make a future same-named run born hidden (grayed
+ * in the sidebar, absent from canvas). Removal is the universal, cross-tab
+ * signal — the server orders it before any re-creation, so a reused name can
+ * never inherit the stale flag. No-ops for a marshal delete (never hideable)
+ * and for any id not in the hidden set.
+ */
+export function pruneHiddenForRemoval(delta: { entity: string; id: string; data: unknown }): void {
+  if (delta.entity === 'run' && delta.data === null) {
+    removeHiddenRunId(delta.id)
+  }
+}
+
 export function applyDelta(prev: ServerState, delta: { entity: string; id: string; data: unknown }): ServerState {
   if (delta.entity === 'all' && delta.data === null) {
     return { ...prev, initiatives: [], epics: [], tasks: [], worktrees: [], runs: [], marshal: null, editorWidgets: [], browserWidgets: [], imageWidgets: [], constellationGraphs: [], pinSets: [] }
@@ -297,6 +315,9 @@ export function applyDelta(prev: ServerState, delta: { entity: string; id: strin
   if (delta.entity === 'run') {
     if (delta.data === null) {
       // Could be either a marshal delete or a regular run delete.
+      // (The hidden-runs prune for this removal is a side-effect kept OUT of
+      // this pure reducer — see `pruneHiddenForRemoval`, called at the SSE
+      // delta call site.)
       if (prev.marshal && prev.marshal.id === delta.id) {
         return { ...prev, marshal: null }
       }
