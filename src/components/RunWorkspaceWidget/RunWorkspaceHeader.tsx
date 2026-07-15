@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { RunData, SessionStatus } from '../../types'
 import { useConstellationContext } from '../../hotkeys/ConstellationContext'
@@ -94,14 +94,26 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
   // can't feel). Without it, Escape would commit the abandoned draft and Enter
   // would fire the rename twice. Once an edit is settled, blur is a no-op.
   const settledRef = useRef(false)
+  // The prompt composer and terminal iframe both autofocus aggressively when
+  // the widget is selected / the window regains focus from an iframe. That
+  // steals focus from this input a frame or two after mount; onBlur would then
+  // tear the editor down before the user can type. Ignore those blurs briefly
+  // and reclaim focus instead of committing.
+  const editStartedAtRef = useRef(0)
+  const BLUR_GRACE_MS = 150
 
-  useEffect(() => {
-    if (editingName) nameInputRef.current?.select()
+  useLayoutEffect(() => {
+    if (!editingName) return
+    const input = nameInputRef.current
+    if (!input) return
+    input.focus()
+    input.select()
   }, [editingName])
 
   const startRename = useCallback(() => {
     setNameDraft(run.name ?? '')
     settledRef.current = false
+    editStartedAtRef.current = performance.now()
     setEditingName(true)
   }, [run.name])
 
@@ -130,6 +142,16 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
       if (!res.ok) addOptimistic('run', prior)
     }).catch(() => addOptimistic('run', prior))
   }, [nameDraft, run, addOptimistic])
+
+  const handleNameBlur = useCallback(() => {
+    if (settledRef.current) return
+    if (performance.now() - editStartedAtRef.current < BLUR_GRACE_MS) {
+      // Spurious steal (composer / terminal) — take focus back and keep editing.
+      requestAnimationFrame(() => nameInputRef.current?.focus())
+      return
+    }
+    commitRename()
+  }, [commitRename])
 
   // ─── Run id: click-to-copy ─────────────────────────────────────────────
   // Once the name is the headline, this is the only place the user can get the
@@ -209,7 +231,10 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
                 autoFocus
                 data-testid={`run-name-input-${run.id}`}
                 aria-label="Run name"
-                className="min-w-0 max-w-[220px] bg-surface-base border rounded-sm px-1 py-0.5 text-2xs font-bold tracking-[0.1em] font-display leading-none outline-none"
+                // select-text: the header is select-none (drag handle); without
+                // this override the input inherits user-select:none and feels
+                // like a dead field — caret/selection don't work.
+                className="min-w-0 max-w-[220px] bg-surface-base border rounded-sm px-1 py-0.5 text-2xs font-bold tracking-[0.1em] font-display leading-none outline-none select-text"
                 style={{ color: runAccent, borderColor: hexToRgba(runAccent, 0.5) }}
                 value={nameDraft}
                 placeholder={run.id}
@@ -218,7 +243,7 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
                   if (e.key === 'Enter') commitRename()
                   if (e.key === 'Escape') cancelRename()
                 }}
-                onBlur={commitRename}
+                onBlur={handleNameBlur}
                 onPointerDown={e => e.stopPropagation()}
                 onClick={e => e.stopPropagation()}
               />
@@ -228,7 +253,17 @@ export function RunWorkspaceHeader({ run, compact = false, onPointerDown, onPoin
                 style={{ color: runAccent }}
                 data-testid={`run-title-${run.id}`}
                 title="Click to rename — the run id never changes"
-                onPointerDown={e => e.stopPropagation()}
+                // Start rename on pointerdown: preventDefault keeps focus from
+                // parking on <body> when this h1 is replaced by the input, and
+                // stopPropagation keeps CanvasWidgetShell from capturing the
+                // pointer for a drag. preventDefault can suppress the subsequent
+                // click in real browsers, so the edit begins here; onClick remains
+                // for environments (and tests) that synthesize click alone.
+                onPointerDown={e => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  startRename()
+                }}
                 onClick={startRename}
               >
                 {run.name || `Run_${run.id}`}
