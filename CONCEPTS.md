@@ -15,7 +15,12 @@ A managed session spawned as the child of another, inheriting the parent's workt
 
 ### Background session
 A managed session flagged at creation (or by later demotion) to stay off the canvas, hierarchy, and inbox while remaining fully alive and commandable over NATS and the prompt endpoint. Machinery, not a collaborator: it idles, acts on commands, and typically ends its own session. A needs-attention state (permission prompt, error) breaks through to the inbox despite the flag; a reveal toggle in the hierarchy shows background sessions on demand.
-*Avoid:* hidden run (the client-side eyeball-hide, a per-browser view preference on normal sessions).
+*Avoid:* hidden run (a distinct concept — see Hidden run).
+
+### Hidden run
+A run a user has toggled off the canvas via the per-run eyeball — a per-browser view preference on a normal, fully-alive session, not a change to the session itself. The run stays in the hierarchy (dimmed) so it can be re-shown, and is skipped by canvas cycling. Distinct from a Background session: hidden is a client-side, per-browser view choice; background is a server-side flag on the session's nature.
+
+A hidden run's state is keyed to the run's identity and is dropped when the run is removed, so re-creating a run under a reused name does not inherit a prior hide.
 
 ### Agent skill
 A documented capability — a `SKILL.md` with name/description frontmatter — installed into a harness's skills directory to teach an agent how to perform a Tinstar workflow. Skills are instructions only (no slash commands), and are symlinked or copied into any harness directory that has a skills folder.
