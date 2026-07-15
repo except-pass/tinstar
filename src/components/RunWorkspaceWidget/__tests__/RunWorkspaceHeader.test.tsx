@@ -172,15 +172,20 @@ describe('RunWorkspaceHeader inline rename', () => {
   })
 
   it('commits on blur', () => {
+    let now = 1_000
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now)
+
     render(<Harness initial={makeRun()} />)
 
     fireEvent.click(title())
     const input = screen.getByTestId(`run-name-input-${RUN_ID}`)
     fireEvent.change(input, { target: { value: 'Reviewer — dispatch retry' } })
+    now = 1_000 + 200 // past the focus-steal grace window
     fireEvent.blur(input)
 
     const body = lastPatchBody()
     expect(body).toEqual({ name: 'Reviewer — dispatch retry' })
+    nowSpy.mockRestore()
   })
 
   it('submitting an empty name clears it and reverts the title to the id', async () => {
@@ -235,5 +240,25 @@ describe('RunWorkspaceHeader inline rename', () => {
     await waitFor(() => expect(title()).toHaveTextContent('Bad rename'))
     // ...then reverted when the server rejects it, rather than lying.
     await waitFor(() => expect(title()).toHaveTextContent('PM Vpp project'))
+  })
+
+  it('overrides the drag-handle select-none so the input is a real text field', () => {
+    render(<Harness initial={makeRun()} />)
+    fireEvent.click(title())
+    const input = screen.getByTestId(`run-name-input-${RUN_ID}`)
+    expect(input.className).toMatch(/\bselect-text\b/)
+  })
+
+  it('survives a spurious blur right after opening (composer/terminal focus steal)', () => {
+    render(<Harness initial={makeRun({ name: 'PM Vpp project' })} />)
+
+    fireEvent.click(title())
+    const input = screen.getByTestId(`run-name-input-${RUN_ID}`)
+    // Same-tick blur: prompt composer / terminal iframe often steal focus a
+    // frame after mount. Must not tear the editor down.
+    fireEvent.blur(input)
+
+    expect(screen.getByTestId(`run-name-input-${RUN_ID}`)).toBeInTheDocument()
+    expect(apiFetch).not.toHaveBeenCalled()
   })
 })
