@@ -384,9 +384,37 @@ export interface Notice {
   runId: string
   kind: 'needs-you' | 'fyi'
   headline: string
-  background: string
+  /** The notice body as an A2UI v0_9 component description (R14). Optional — a
+   *  headline-only notice carries none. Authored by agents, validated against
+   *  the web_core v0_9 schema at the API boundary, and rendered read-only and
+   *  host-themed by the Roundup widget's walker (R15), degrading when malformed
+   *  (R16). Replaces slice 1's plain-markdown `background`. */
+  content?: A2uiContent
   createdAt: number
   amendedAt: number
+}
+
+/** One node in an A2UI component description. Mirrors web_core's v0_9
+ *  `AnyComponent`: a `component` type string, an optional `id` (so other nodes
+ *  can reference it), and arbitrary type-specific props (passthrough). Kept as a
+ *  host-owned structural type so `domain/` and the server carry no runtime
+ *  dependency on web_core; the plugin's `a2ui/schema.ts` is where the actual
+ *  web_core zod schema validates this shape. */
+export interface A2uiComponent {
+  component: string
+  id?: string
+  [key: string]: unknown
+}
+
+/** A notice's A2UI content: a flat list of components plus an explicit `root`
+ *  reference naming which one to render first. Children are referenced by id
+ *  from within `components` (A2UI's flat-list-with-id-references model). This is
+ *  a host envelope around the A2UI `AnyComponent` protocol unit — the "component
+ *  list + root reference a createSurface would carry" — not an on-the-wire A2UI
+ *  message (the MessageProcessor/streaming path is a later slice). */
+export interface A2uiContent {
+  root: string
+  components: A2uiComponent[]
 }
 
 /** Urgency of a widget's current attention request.

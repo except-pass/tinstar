@@ -13,7 +13,12 @@ function makeNotice(overrides: Partial<Notice> = {}): Notice {
     runId: 'CLD-run-1',
     kind: 'needs-you',
     headline: 'Deploy now or wait for review?',
-    background: 'Two options, laid out in plain words.',
+    content: {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Text', text: 'Two options, laid out in plain words.', variant: 'body' },
+      ],
+    },
     createdAt: now,
     amendedAt: now,
     ...overrides,
@@ -76,6 +81,30 @@ describe('DocumentStore notices', () => {
 
     store.upsertNotice(makeNotice()) // value-equal to the stored one
 
+    expect(events).toHaveLength(0)
+  })
+
+  // Guards the noticeEqual content compare: a changed A2UI body must broadcast,
+  // and a structurally-identical one must short-circuit. If noticeEqual stopped
+  // comparing `content` (e.g. reverted to only scalar fields), the first
+  // assertion fails (a real amend would be swallowed).
+  it('treats content by value: a changed A2UI body emits one change, an identical one emits none', () => {
+    const store = new DocumentStore()
+    store.upsertNotice(makeNotice())
+    const events: Change[] = []
+    store.changes.on('change', e => events.push(e as Change))
+
+    const changed = makeNotice({
+      content: { root: 'root', components: [{ id: 'root', component: 'Text', text: 'A different body.', variant: 'body' }] },
+    })
+    store.upsertNotice(changed)
+    expect(events).toHaveLength(1)
+
+    // Re-post a fresh object that is structurally identical — must short-circuit.
+    events.length = 0
+    store.upsertNotice(makeNotice({
+      content: { root: 'root', components: [{ id: 'root', component: 'Text', text: 'A different body.', variant: 'body' }] },
+    }))
     expect(events).toHaveLength(0)
   })
 

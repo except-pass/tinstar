@@ -68,10 +68,15 @@ function seedRun(store: DocumentStore, id: string, sessionId: string): void {
   store.upsertRun(id, run)
 }
 
+/** A minimal valid A2UI v0_9 content description (a single Text node). */
+function validContent(text = 'context') {
+  return { root: 'root', components: [{ id: 'root', component: 'Text', text, variant: 'body' }] }
+}
+
 async function post(srv: Harness, sessionId: string, over: Record<string, unknown> = {}): Promise<Response> {
   return srv.fetch('/api/notices', {
     method: 'POST',
-    body: JSON.stringify({ sessionId, kind: 'needs-you', headline: 'Deploy or wait?', background: 'context', ...over }),
+    body: JSON.stringify({ sessionId, kind: 'needs-you', headline: 'Deploy or wait?', content: validContent(), ...over }),
   })
 }
 
@@ -97,8 +102,45 @@ describe('POST /api/notices', () => {
     expect(body.data.runId).toBe('CLD-run-1')
     expect(body.data.kind).toBe('needs-you')
     expect(body.data.createdAt).toBe(body.data.amendedAt)
+    // the validated A2UI content round-trips onto the stored notice
+    expect(body.data.content).toEqual(validContent())
     // and it landed in the store
     expect(srv.docStore.getNotice(body.data.id)).toBeDefined()
+  }))
+
+  it('stores and returns a valid A2UI content tree', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const tree = {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Column', children: ['h', 'p'] },
+        { id: 'h', component: 'Text', text: 'Heads up', variant: 'h2' },
+        { id: 'p', component: 'Text', text: 'A decision was made.', variant: 'body' },
+      ],
+    }
+    const res = await post(srv, 'sess-1', { content: tree })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: Notice }
+    expect(body.data.content).toEqual(tree)
+  }))
+
+  it('accepts a headline-only notice with no content', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const res = await post(srv, 'sess-1', { content: undefined })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: Notice }
+    expect(body.data.content).toBeUndefined()
+  }))
+
+  it('returns INVALID_PARAMS (400) for malformed content and stores nothing', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    // Missing the required `root`/`components` envelope — fails the v0_9 schema.
+    const res = await post(srv, 'sess-1', { content: { nope: true } })
+    expect(res.status).toBe(400)
+    const body = await res.json() as { ok: boolean; error: { code: string } }
+    expect(body.ok).toBe(false)
+    expect(body.error.code).toBe('INVALID_PARAMS')
+    expect(srv.docStore.getAllNotices()).toHaveLength(0)
   }))
 
   it('returns SESSION_NOT_FOUND (404) for an unknown session', withServer(async srv => {
@@ -125,9 +167,9 @@ describe('POST /api/notices', () => {
     expect(body.error.code).toBe('INVALID_PARAMS')
   }))
 
-  it('returns 413 for an oversized background', withServer(async srv => {
+  it('returns 413 for oversized content', withServer(async srv => {
     seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
-    const res = await post(srv, 'sess-1', { background: 'x'.repeat(16 * 1024 + 1) })
+    const res = await post(srv, 'sess-1', { content: validContent('x'.repeat(32 * 1024 + 1)) })
     expect(res.status).toBe(413)
     const body = await res.json() as { ok: boolean }
     expect(body.ok).toBe(false)
@@ -173,21 +215,44 @@ describe('PATCH /api/notices/:id', () => {
     expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
   }))
 
-  it('returns 413 for an oversized headline or background', withServer(async srv => {
+  it('returns 413 for oversized content', withServer(async srv => {
     seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
     const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
     const big = await srv.fetch(`/api/notices/${created.data.id}`, {
-      method: 'PATCH', body: JSON.stringify({ background: 'x'.repeat(16 * 1024 + 1) }),
+      method: 'PATCH', body: JSON.stringify({ content: validContent('x'.repeat(32 * 1024 + 1)) }),
     })
     expect(big.status).toBe(413)
   }))
 
-  it('rejects a non-string background (400) rather than persisting a crash vector', withServer(async srv => {
-    const { id, res } = await seedAndPatch(srv, { background: 123 })
+  it('rejects malformed content (400) rather than persisting a crash vector', withServer(async srv => {
+    const { id, res } = await seedAndPatch(srv, { content: { nope: true } })
     expect(res.status).toBe(400)
     expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
-    // and nothing corrupt landed in the store
-    expect(typeof srv.docStore.getNotice(id)!.background).toBe('string')
+    // and the stored notice keeps its prior valid content — nothing corrupt landed
+    expect(srv.docStore.getNotice(id)!.content).toEqual(validContent())
+  }))
+
+  it('amends content in place with a new valid tree', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    const next = validContent('a fourth option appeared')
+    const res = await srv.fetch(`/api/notices/${created.data.id}`, {
+      method: 'PATCH', body: JSON.stringify({ content: next }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: Notice }
+    expect(body.data.content).toEqual(next)
+  }))
+
+  it('clears content to a headline-only notice when patched with null', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    const res = await srv.fetch(`/api/notices/${created.data.id}`, {
+      method: 'PATCH', body: JSON.stringify({ content: null }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: Notice }
+    expect(body.data.content).toBeUndefined()
   }))
 
   it('ignores attempts to change immutable id / runId / createdAt', withServer(async srv => {

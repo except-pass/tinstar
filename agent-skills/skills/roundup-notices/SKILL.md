@@ -24,7 +24,7 @@ Every response is the standard envelope: `{ "ok": true, "data": … }` on succes
 
 - **`needs-you`** — you've reached a decision you should not make alone, and you are
   **waiting**. You are idle by definition; this is exactly when the user needs to hear
-  from you. The headline states the choice; the background gives them enough to decide
+  from you. The headline states the choice; the content gives them enough to decide
   without asking you anything.
 - **`fyi`** — you made a call the user would want to know about but that does **not**
   block you. Silence is consent; you keep working. Use this for "I skipped the flaky
@@ -33,9 +33,43 @@ Every response is the standard envelope: `{ "ok": true, "data": … }` on succes
 If you are stuck, it's `needs-you`. If you're informing, it's `fyi`. Don't post an `fyi`
 for something you actually need answered — it won't read as a question.
 
-## The depth bar for `background` (this is a requirement, not a style note)
+## The notice body is A2UI, not markdown
 
-The user arrives **cold**, having not seen your run in an hour. Write the background so
+A notice's `headline` is a plain string. Its **body is `content`**: a small
+**A2UI component description** — a declarative UI the widget renders in the host's own
+theme. You describe *components* (a heading, a paragraph, a list, a link), and Tinstar
+draws them with its own styling. You are not writing HTML or markdown; you are naming
+components.
+
+`content` is a JSON object with two fields:
+
+- `root` — the `id` of the component to render first.
+- `components` — a **flat list** of components. Each has a `component` type, an `id`
+  (so other components can reference it), and type-specific fields. Containers list
+  their children **by id** — children are never nested inline.
+
+### The component types you can use
+
+| `component` | Fields | Renders as |
+|---|---|---|
+| `Text` | `text` (string), `variant` (`h1`–`h5`, `body`, `caption`) | a heading (`h1`–`h5`) or paragraph (`body`/`caption`, the default) |
+| `Column` | `children` (array of ids) | its children stacked vertically |
+| `Row` | `children` (array of ids) | its children in a row |
+| `List` | `children` (array of ids), `listStyle` (`ordered` \| `unordered`) | a numbered or bulleted list, one child per item |
+| `Card` | `child` (single id) | a bordered box around one child (wrap several in a `Column`) |
+| `Divider` | — | a horizontal rule |
+| `Link` | `text` (label), `url` | a themed link out to a PR, dashboard, or file |
+| `Code` | `text` | a monospace code block |
+
+Anything outside this set (or a malformed `content`) **degrades**: the headline still
+shows, plus a "couldn't render" signal — the user always reaches you, but a garbled
+notice is a worse notice. Stick to the table. Interactive controls (choices, text
+input) are **not available yet** — describe the decision in `Text`/`List` and let the
+user reply however they normally would.
+
+## The depth bar for `content` (this is a requirement, not a style note)
+
+The user arrives **cold**, having not seen your run in an hour. Write the content so
 they can orient without a round trip:
 
 - Plain words. Unpack jargon and project-internal terms the first time they appear:
@@ -43,15 +77,17 @@ they can orient without a round trip:
 - One idea per sentence. Concrete nouns and verbs, not noun piles.
 - Keep the precision — the real distinction, the edge case, the caveat. De-nerd means
   clearer, not vaguer.
-- For a `needs-you`, lay out the options you're stuck between and the tradeoff of each,
-  so the user can pick without asking you to explain.
-- Background is **markdown** — use lists, bold, and links freely. Link out to PRs,
-  dashboards, or files when the real work lives elsewhere.
+- For a `needs-you`, lay out the options you're stuck between (a `List` works well) and
+  the tradeoff of each, so the user can pick without asking you to explain.
+- Link out with a `Link` component to PRs, dashboards, or files when the real work
+  lives elsewhere.
 
 ## Post a notice
 
-`POST /api/notices` with `{ sessionId, kind, headline, background }`. `headline` is
-required and non-empty (≤ 200 chars); `background` is markdown (≤ 16 KB).
+`POST /api/notices` with `{ sessionId, kind, headline, content? }`. `headline` is
+required and non-empty (≤ 200 chars). `content` is optional (omit it for a
+headline-only notice) and must be a valid A2UI description (≤ 32 KB serialized) — an
+invalid one is **rejected** with `INVALID_PARAMS`, so post a shape from the table above.
 
 ```bash
 curl -s -X POST "$TINSTAR_URL/api/notices" \
@@ -60,26 +96,48 @@ curl -s -X POST "$TINSTAR_URL/api/notices" \
     sessionId: $s,
     kind: "needs-you",
     headline: "Deploy to staging or wait for the migration review?",
-    background: "The auth change is ready. Two paths:\n\n- **Ship now** — staging gets it in ~5 min, but the DB migration (the schema change that adds the `role` column) has not been reviewed.\n- **Wait** — hold until a human reads the migration. Safer, costs ~1 day.\n\nI lean toward waiting because the migration is not reversible. Your call."
+    content: {
+      root: "root",
+      components: [
+        { id: "root", component: "Column", children: ["h", "p", "opts", "link"] },
+        { id: "h", component: "Text", variant: "h2", text: "The auth change is ready" },
+        { id: "p", component: "Text", variant: "body",
+          text: "Two paths, and the DB migration (the schema change that adds the role column) is not reversible." },
+        { id: "opts", component: "List", listStyle: "unordered", children: ["opt1", "opt2"] },
+        { id: "opt1", component: "Text", variant: "body",
+          text: "Ship now — staging gets it in ~5 min, but the migration has not been reviewed." },
+        { id: "opt2", component: "Text", variant: "body",
+          text: "Wait — hold until a human reads the migration. Safer, costs ~1 day." },
+        { id: "link", component: "Link", text: "the migration PR", url: "https://github.com/org/repo/pull/42" }
+      ]
+    }
   }')" | jq '.data'
-# → { "id": "notice-…", "runId": "…", "kind": "needs-you", "headline": …, "createdAt": …, "amendedAt": … }
+# → { "id": "notice-…", "runId": "…", "kind": "needs-you", "headline": …, "content": {…}, "createdAt": …, "amendedAt": … }
 ```
 
 Save the returned `id` — you need it to amend or pull.
 
 ## Amend a notice in place (do this when the situation changes)
 
-`PATCH /api/notices/:id` with any of `{ kind?, headline?, background? }`. The change
+`PATCH /api/notices/:id` with any of `{ kind?, headline?, content? }`. The change
 reaches the user **live**. Amend — don't post a second notice — when you discover a new
-option, when the situation shifts, or when your recommendation changes. The user sees
-the updated notice, not a pile of near-duplicates.
+option, when the situation shifts, or when your recommendation changes. Send the full
+new `content` (it replaces the old one); pass `content: null` to drop it to a
+headline-only notice.
 
 ```bash
 curl -s -X PATCH "$TINSTAR_URL/api/notices/notice-abc123" \
   -H 'Content-Type: application/json' \
-  -d '{ "headline": "Deploy to staging, wait, or ship behind a flag?",
-        "background": "Found a third path: ship behind a feature flag (off by default)…" }' \
-  | jq '.data'
+  -d "$(jq -n '{
+    headline: "Deploy to staging, wait, or ship behind a flag?",
+    content: {
+      root: "root",
+      components: [
+        { id: "root", component: "Text", variant: "body",
+          text: "Found a third path: ship behind a feature flag (off by default), so it deploys but stays dark until reviewed." }
+      ]
+    }
+  }')" | jq '.data'
 # amendedAt advances; createdAt is unchanged.
 ```
 

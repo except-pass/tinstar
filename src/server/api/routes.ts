@@ -49,6 +49,11 @@ import {
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
 import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus, Notice } from '../../domain/types'
+// Server-side A2UI validation (KTD4): the notice `content` is parsed through the
+// same web_core v0_9 schema the renderer uses, so malformed descriptions are
+// rejected at the boundary. Importing the plugin's schema here is what pulls
+// @a2ui/web_core into the server (esbuild) bundle — the load-bearing de-risk.
+import { parseA2uiContent } from '../../plugins/roundup/src/a2ui/schema'
 import { normalizeRunName } from '../../domain/runName'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
@@ -2012,14 +2017,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // Size caps (KTD5): keep a malformed post from bloating the persisted
   // snapshot. Oversize is refused with a 413.
   const NOTICE_HEADLINE_MAX = 200
-  const NOTICE_BACKGROUND_MAX = 16 * 1024
+  // Cap the serialized A2UI content so a runaway component tree can't bloat the
+  // persisted snapshot (the render-side degrade also bounds depth/node count).
+  const NOTICE_CONTENT_MAX = 32 * 1024
 
   // POST /api/notices — an agent posts a notice for its run
   if (method === 'POST' && url === '/api/notices') {
     readBody(req).then(body => {
       try {
-        const { sessionId, kind, headline, background } = JSON.parse(body) as {
-          sessionId?: string; kind?: string; headline?: string; background?: string
+        const { sessionId, kind, headline, content } = JSON.parse(body) as {
+          sessionId?: string; kind?: string; headline?: string; content?: unknown
         }
         if (!sessionId) {
           fail(res, 'INVALID_PARAMS', 'sessionId required')
@@ -2042,10 +2049,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           fail(res, 'BAD_REQUEST', `headline exceeds ${NOTICE_HEADLINE_MAX} characters`, { status: 413 })
           return
         }
-        const bg = typeof background === 'string' ? background : ''
-        if (bg.length > NOTICE_BACKGROUND_MAX) {
-          fail(res, 'BAD_REQUEST', `background exceeds ${NOTICE_BACKGROUND_MAX} characters`, { status: 413 })
-          return
+        // Content is an optional A2UI v0_9 description (R14). Absent → a
+        // headline-only notice. Present → it must validate and fit the cap.
+        let parsedContent: Notice['content']
+        if (content !== undefined && content !== null) {
+          if (JSON.stringify(content).length > NOTICE_CONTENT_MAX) {
+            fail(res, 'BAD_REQUEST', `content exceeds ${NOTICE_CONTENT_MAX} bytes`, { status: 413 })
+            return
+          }
+          const valid = parseA2uiContent(content)
+          if (!valid) {
+            fail(res, 'INVALID_PARAMS', 'content must be a valid A2UI v0_9 component description')
+            return
+          }
+          parsedContent = valid
         }
         const now = Date.now()
         const notice: Notice = {
@@ -2053,7 +2070,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           runId: run.id,
           kind,
           headline,
-          background: bg,
+          ...(parsedContent ? { content: parsedContent } : {}),
           createdAt: now,
           amendedAt: now,
         }
@@ -2075,7 +2092,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'NOT_FOUND', `Notice ${id} not found`)
         return
       }
-      let patch: { kind?: Notice['kind']; headline?: string; background?: string }
+      let patch: { kind?: Notice['kind']; headline?: string; content?: unknown }
       try {
         patch = JSON.parse(body)
       } catch {
@@ -2100,16 +2117,26 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'BAD_REQUEST', `headline exceeds ${NOTICE_HEADLINE_MAX} characters`, { status: 413 })
         return
       }
-      // Reject a non-string background BEFORE it can be persisted — the widget
-      // calls background.trim() and feeds ReactMarkdown, both of which throw on
-      // a non-string and crash every notice on the board, not just this one.
-      if (patch.background !== undefined && typeof patch.background !== 'string') {
-        fail(res, 'INVALID_PARAMS', 'background must be a string')
-        return
-      }
-      if (patch.background !== undefined && patch.background.length > NOTICE_BACKGROUND_MAX) {
-        fail(res, 'BAD_REQUEST', `background exceeds ${NOTICE_BACKGROUND_MAX} characters`, { status: 413 })
-        return
+      // Amend the A2UI content (R14/R17). `null` clears it (headline-only);
+      // otherwise it must validate against the v0_9 schema and fit the cap —
+      // rejecting a malformed description BEFORE it can be persisted, the same
+      // crash-vector defense slice 1 applied to a non-string background (KTD4).
+      let contentPatch: { content?: Notice['content'] } = {}
+      if (patch.content !== undefined) {
+        if (patch.content === null) {
+          contentPatch = { content: undefined }
+        } else {
+          if (JSON.stringify(patch.content).length > NOTICE_CONTENT_MAX) {
+            fail(res, 'BAD_REQUEST', `content exceeds ${NOTICE_CONTENT_MAX} bytes`, { status: 413 })
+            return
+          }
+          const valid = parseA2uiContent(patch.content)
+          if (!valid) {
+            fail(res, 'INVALID_PARAMS', 'content must be a valid A2UI v0_9 component description')
+            return
+          }
+          contentPatch = { content: valid }
+        }
       }
       // Whitelist mutable fields — never let a PATCH body clobber id, runId, or
       // createdAt (identity + provenance stay server-owned).
@@ -2117,7 +2144,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ...existing,
         ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
         ...(patch.headline !== undefined ? { headline: patch.headline } : {}),
-        ...(patch.background !== undefined ? { background: patch.background } : {}),
+        ...contentPatch,
         amendedAt: Date.now(),
       }
       ctx.docStore.upsertNotice(updated)
