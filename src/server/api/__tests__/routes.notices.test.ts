@@ -303,3 +303,117 @@ describe('GET /api/notices', () => {
     expect(body.data.map(n => n.headline).sort()).toEqual(['first', 'second'])
   }))
 })
+
+describe('POST /api/notices/:id/answer', () => {
+  /** A needs-you content tree with a single-select Choice (opt-a/opt-b), a text
+   *  field, and a submit — the answerable shape the widget renders (U2/U3). */
+  function answerableContent() {
+    return {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Column', children: ['q', 'choice', 'notes', 'go'] },
+        { id: 'q', component: 'Text', text: 'Deploy or wait?', variant: 'body' },
+        {
+          id: 'choice', component: 'Choice', mode: 'single',
+          options: [{ id: 'opt-a', label: 'Deploy now' }, { id: 'opt-b', label: 'Wait' }],
+        },
+        { id: 'notes', component: 'TextInput', label: 'Notes' },
+        { id: 'go', component: 'Submit', label: 'Submit' },
+      ],
+    }
+  }
+
+  async function seedAnswerable(srv: Harness): Promise<string> {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1', { content: answerableContent() })).json() as { data: Notice }
+    return created.data.id
+  }
+
+  function answer(srv: Harness, id: string, payload: unknown): Promise<Response> {
+    return srv.fetch(`/api/notices/${id}/answer`, { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  it('persists a valid choice + text, marks answered, and reports delivery deferred (no live session)', withServer(async srv => {
+    const id = await seedAnswerable(srv)
+    const res = await answer(srv, id, { choices: ['opt-a'], text: 'go for it' })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; data: { notice: Notice; delivered: boolean } }
+    expect(body.ok).toBe(true)
+    expect(body.data.notice.answer).toBeTruthy()
+    expect(body.data.notice.answer!.choices).toEqual(['opt-a'])
+    expect(body.data.notice.answer!.text).toBe('go for it')
+    expect(body.data.notice.answer!.answeredAt).toBeGreaterThan(0)
+    // No tmux session exists in this harness → delivery is best-effort deferred,
+    // but the answer still persisted (durable, KTD1).
+    expect(body.data.delivered).toBe(false)
+    expect(srv.docStore.getNotice(id)!.answer!.choices).toEqual(['opt-a'])
+  }))
+
+  it('fires exactly one notice change on answer (live refresh for the widget)', withServer(async srv => {
+    const id = await seedAnswerable(srv)
+    const events: string[] = []
+    srv.docStore.changes.on('change', (e: unknown) => {
+      const c = e as { entity: string; id: string }
+      if (c.entity === 'notice') events.push(c.id)
+    })
+    await answer(srv, id, { choices: ['opt-b'] })
+    expect(events).toEqual([id])
+  }))
+
+  it('rejects a choice id not in the notice declared set (INVALID_PARAMS, nothing persisted)', withServer(async srv => {
+    const id = await seedAnswerable(srv)
+    const res = await answer(srv, id, { choices: ['opt-a', 'opt-ZZZ'] })
+    expect(res.status).toBe(400)
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
+    expect(srv.docStore.getNotice(id)!.answer).toBeUndefined()
+  }))
+
+  it('rejects oversized free text (413), nothing persisted', withServer(async srv => {
+    const id = await seedAnswerable(srv)
+    const res = await answer(srv, id, { text: 'x'.repeat(4001) })
+    expect(res.status).toBe(413)
+    expect(srv.docStore.getNotice(id)!.answer).toBeUndefined()
+  }))
+
+  it('rejects an empty answer (no choices, no text) with INVALID_PARAMS', withServer(async srv => {
+    const id = await seedAnswerable(srv)
+    const res = await answer(srv, id, {})
+    expect(res.status).toBe(400)
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
+    expect(srv.docStore.getNotice(id)!.answer).toBeUndefined()
+  }))
+
+  it('returns 404 for an unknown notice', withServer(async srv => {
+    const res = await answer(srv, 'notice-missing', { text: 'hi' })
+    expect(res.status).toBe(404)
+  }))
+
+  // Covers AE2 (origin): a dissent on an FYI persists the objection as a dissent
+  // answer (delivered toward the posting session; deferred here with no tmux).
+  it('persists an FYI dissent (dissent:true + text, no choices)', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const fyi = await (await post(srv, 'sess-1', { kind: 'fyi', headline: 'Skipped a flaky test', content: undefined })).json() as { data: Notice }
+    const res = await answer(srv, fyi.data.id, { dissent: true, text: "don't skip it — it caught a real bug last week" })
+    expect(res.status).toBe(200)
+    const stored = srv.docStore.getNotice(fyi.data.id)!
+    expect(stored.answer!.dissent).toBe(true)
+    expect(stored.answer!.choices).toEqual([])
+    expect(stored.answer!.text).toContain('real bug')
+  }))
+
+  it('answers a free-text-only notice (no choices declared) — AE6', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const textOnly = {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Column', children: ['t', 'go'] },
+        { id: 't', component: 'TextInput', label: 'Your call' },
+        { id: 'go', component: 'Submit', label: 'Submit' },
+      ],
+    }
+    const created = await (await post(srv, 'sess-1', { content: textOnly })).json() as { data: Notice }
+    const res = await answer(srv, created.data.id, { text: 'ship it' })
+    expect(res.status).toBe(200)
+    expect(srv.docStore.getNotice(created.data.id)!.answer!.text).toBe('ship it')
+  }))
+})

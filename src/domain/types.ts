@@ -390,8 +390,29 @@ export interface Notice {
    *  host-themed by the Roundup widget's walker (R15), degrading when malformed
    *  (R16). Replaces slice 1's plain-markdown `background`. */
   content?: A2uiContent
+  /** The user's answer, written on submit from the widget (R22/R23) and durable
+   *  independent of whether the posting agent was reachable (KTD1/KTD3). Its
+   *  presence marks the notice answered — the widget shows "answered" after a
+   *  reload from this, and the agent decides the notice's fate (amend or pull).
+   *  Absent until the user answers or dissents. */
+  answer?: NoticeAnswer
   createdAt: number
   amendedAt: number
+}
+
+/** The user's reply to a notice. For a `needs-you` notice this is the chosen
+ *  option(s) plus optional free text; for an `fyi` dissent it is the objection
+ *  text with `dissent: true` and (usually) no choices. `choices` holds the
+ *  selected option ids, validated server-side against the notice's declared
+ *  choice set before persisting (KTD4). `answeredAt` is epoch millis. */
+export interface NoticeAnswer {
+  /** Selected choice option ids (empty for a text-only answer or a dissent). */
+  choices: string[]
+  /** Free-text field / objection text. Absent when the user only picked options. */
+  text?: string
+  /** True when this is an FYI dissent rather than a needs-you answer (R13). */
+  dissent?: boolean
+  answeredAt: number
 }
 
 /** One node in an A2UI component description. Mirrors web_core's v0_9

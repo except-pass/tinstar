@@ -166,6 +166,10 @@ function noticeEqual(a: Notice, b: Notice): boolean {
     // the new field: an identical re-post must not broadcast an SSE delta or
     // reschedule a persist (see the contract test in document-store.notices).
     JSON.stringify(a.content ?? null) === JSON.stringify(b.content ?? null) &&
+    // `answer` is a structured object (choices/text/dissent/answeredAt) or absent.
+    // Compare it by value so persisting the user's answer broadcasts an SSE delta
+    // (the widget reflects "answered") while an identical re-upsert short-circuits.
+    JSON.stringify(a.answer ?? null) === JSON.stringify(b.answer ?? null) &&
     a.createdAt === b.createdAt &&
     a.amendedAt === b.amendedAt
   )

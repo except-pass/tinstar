@@ -14,6 +14,7 @@
 // A2UI output is visually identical to the markdown it replaces.
 import type { ReactNode } from 'react'
 import type { A2uiComponent } from '../../../../domain/types'
+import { ChoiceControl, TextInputControl, SubmitControl } from './controlComponents'
 
 /** A catalog entry renders one node given its already-resolved, already-rendered
  *  child elements (the renderer owns tree-walking, ref resolution, and cycle
@@ -104,6 +105,20 @@ export const CATALOG: Record<string, CatalogEntry> = {
         <code>{str(node.text)}</code>
       </pre>
     ),
+  },
+  // Interactive controls (U2/U3). These render host-themed form controls whose
+  // value is host-owned via the notice form context; a control rendered without
+  // an interactive form context (read-only) shows a disabled/static form. A
+  // malformed control (e.g. a Choice with no valid options) degrades to an inline
+  // marker inside the component itself — never a throw (KTD4/R16).
+  Choice: {
+    render: (node) => <ChoiceControl node={node} />,
+  },
+  TextInput: {
+    render: (node) => <TextInputControl node={node} />,
+  },
+  Submit: {
+    render: (node) => <SubmitControl node={node} />,
   },
 }
 

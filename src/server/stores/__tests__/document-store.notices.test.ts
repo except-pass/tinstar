@@ -108,6 +108,27 @@ describe('DocumentStore notices', () => {
     expect(events).toHaveLength(0)
   })
 
+  // Guards the noticeEqual answer compare: persisting the user's answer must
+  // broadcast (the widget reflects "answered"), and an identical re-upsert must
+  // short-circuit. If noticeEqual stopped comparing `answer`, the first assertion
+  // fails (a real answer would be swallowed and never reach the board).
+  it('treats answer by value: writing an answer emits one change, an identical re-upsert emits none', () => {
+    const store = new DocumentStore()
+    store.upsertNotice(makeNotice())
+    const events: Change[] = []
+    store.changes.on('change', e => events.push(e as Change))
+
+    const answered = makeNotice({ answer: { choices: ['opt-a'], text: 'go', answeredAt: 1_700_000_060_000 } })
+    store.upsertNotice(answered)
+    expect(events).toHaveLength(1)
+    expect(store.getNotice('notice-1')!.answer!.choices).toEqual(['opt-a'])
+
+    // Re-upsert a structurally identical answered notice — must short-circuit.
+    events.length = 0
+    store.upsertNotice(makeNotice({ answer: { choices: ['opt-a'], text: 'go', answeredAt: 1_700_000_060_000 } }))
+    expect(events).toHaveLength(0)
+  })
+
   it('pulls a notice: deleteNotice removes it and emits a change with data:null; a missing id returns false and emits nothing', () => {
     const store = new DocumentStore()
     store.upsertNotice(makeNotice())
