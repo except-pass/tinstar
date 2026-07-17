@@ -373,6 +373,22 @@ export interface ImageWidget {
   naturalHeight: number
 }
 
+/** A standing brief an agent posts to the Roundup: what it needs from the user
+ *  (`needs-you`) or a call it made on its own (`fyi`). Flat and run-scoped like
+ *  ImageWidget. `runId` holds the posting run's `.id` (the session name), which
+ *  is how the run-end cascade in deleteRun keys the drop — a notice never
+ *  outlives its run (R20). `createdAt`/`amendedAt` are epoch millis; on a fresh
+ *  post they are equal, and `amendedAt` advances on each in-place amend (R21). */
+export interface Notice {
+  id: string
+  runId: string
+  kind: 'needs-you' | 'fyi'
+  headline: string
+  background: string
+  createdAt: number
+  amendedAt: number
+}
+
 /** Urgency of a widget's current attention request.
  *  Drives both color and sort order in the Inbox view. */
 export type AttentionLevel = 'urgent' | 'attention' | 'info'
