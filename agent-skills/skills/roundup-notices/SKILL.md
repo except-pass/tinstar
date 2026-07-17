@@ -63,9 +63,72 @@ components.
 
 Anything outside this set (or a malformed `content`) **degrades**: the headline still
 shows, plus a "couldn't render" signal — the user always reaches you, but a garbled
-notice is a worse notice. Stick to the table. Interactive controls (choices, text
-input) are **not available yet** — describe the decision in `Text`/`List` and let the
-user reply however they normally would.
+notice is a worse notice. Stick to the table.
+
+## Make a `needs-you` notice answerable (choices + free text)
+
+A `needs-you` notice can carry **interactive controls** so the user picks an option and
+submits **from the widget** — no need to switch to your terminal. The controls are just
+more component types you declare in `content`:
+
+| `component` | Fields | Renders as |
+|---|---|---|
+| `Choice` | `mode` (`single` \| `multi`), `options` (array of `{ id, label }`) | radios (`single`) or checkboxes (`multi`) |
+| `TextInput` | `label` (optional), `placeholder` (optional) | a free-text box, with or without a choice set |
+| `Submit` | `label` (optional, default "Submit") | the submit button |
+
+- Each option's `id` is what comes back to you; `label` is what the user reads.
+- Include a `Submit` — without it the user can't send the answer.
+- A `Choice` with no valid options degrades to an inline marker (still no crash), so
+  give every option a non-empty `id` **and** `label`.
+
+```json
+{
+  "root": "root",
+  "components": [
+    { "id": "root", "component": "Column", "children": ["q", "pick", "why", "go"] },
+    { "id": "q", "component": "Text", "variant": "body", "text": "Which rollback path?" },
+    { "id": "pick", "component": "Choice", "mode": "single", "options": [
+      { "id": "revert", "label": "Revert the commit" },
+      { "id": "forward", "label": "Roll forward with a hotfix" }
+    ] },
+    { "id": "why", "component": "TextInput", "label": "Anything I should know?" },
+    { "id": "go", "component": "Submit", "label": "Send answer" }
+  ]
+}
+```
+
+### What you receive when the user submits
+
+When the user submits, Tinstar **persists the answer on the notice** and **delivers a
+prompt to your session** describing it — for example:
+
+```
+The user answered your Roundup notice "Which rollback path?" (notice notice-abc123).
+They chose: Revert the commit
+They added: check the staging logs first
+Act on this answer, then keep the board honest: amend the notice
+(PATCH /api/notices/notice-abc123) or pull it down (DELETE /api/notices/notice-abc123)
+once it is resolved.
+```
+
+The answer is durable even if you were busy when it landed — it is saved on the notice
+regardless, and the delivery is best-effort. Act on it, then **pull the notice** (or
+amend it if there's a follow-up). Don't leave an answered notice standing.
+
+## Let the user disagree with an `fyi` (dissent)
+
+Every `fyi` shows the user a **Disagree** affordance — you don't add anything for it.
+**Silence is consent:** if the user does nothing, you keep working. If they *do*
+disagree, you get an interruption prompt like:
+
+```
+The user DISAGREED with your FYI notice "Skipped a flaky e2e test on CI" (notice notice-xyz).
+Their objection: that test caught a real bug last week — don't skip it.
+Act on this answer, then keep the board honest: amend the notice … or pull it down …
+```
+
+Treat a dissent as a real interruption: reconsider the call, then amend or pull the FYI.
 
 ## The depth bar for `content` (this is a requirement, not a style note)
 

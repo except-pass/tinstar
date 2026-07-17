@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import type { A2uiContent } from '../../../../../domain/types'
 import {
   A2uiRenderer,
@@ -207,6 +207,79 @@ describe('A2uiRenderer — hardening guards', () => {
       )
       expect(container.querySelector('a')?.getAttribute('href')).toBe(url)
     }
+  })
+})
+
+describe('A2uiRenderer — interactive controls (U2/U3)', () => {
+  function form(over: Partial<Parameters<typeof A2uiRenderer>[0]['form'] & object> = {}) {
+    return {
+      interactive: true,
+      answered: false,
+      submitting: false,
+      selectedFor: () => new Set<string>(),
+      text: '',
+      toggleOption: vi.fn(),
+      setText: vi.fn(),
+      submit: vi.fn(),
+      ...over,
+    }
+  }
+
+  it('renders a single-select Choice as radios with the declared options', () => {
+    render(
+      <A2uiRenderer
+        content={content([{ id: 'root', component: 'Choice', mode: 'single', options: [{ id: 'a', label: 'Alpha' }, { id: 'b', label: 'Bravo' }] }])}
+        form={form()}
+      />,
+    )
+    const radios = screen.getAllByRole('radio')
+    expect(radios).toHaveLength(2)
+    expect(screen.getByRole('radio', { name: 'Alpha' })).toBeTruthy()
+  })
+
+  it('renders a multi-select Choice as checkboxes', () => {
+    render(
+      <A2uiRenderer
+        content={content([{ id: 'root', component: 'Choice', mode: 'multi', options: [{ id: 'a', label: 'Alpha' }, { id: 'b', label: 'Bravo' }] }])}
+        form={form()}
+      />,
+    )
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2)
+  })
+
+  it('renders a TextInput as a textarea wired to the form', () => {
+    const f = form()
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'TextInput', label: 'Notes' }])} form={f} />,
+    )
+    const ta = container.querySelector('textarea')
+    expect(ta).not.toBeNull()
+    fireEvent.change(ta!, { target: { value: 'hi' } })
+    expect(f.setText).toHaveBeenCalledWith('hi')
+  })
+
+  it('a Submit control fires the form submit', () => {
+    const f = form()
+    render(<A2uiRenderer content={content([{ id: 'root', component: 'Submit', label: 'Go' }])} form={f} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }))
+    expect(f.submit).toHaveBeenCalled()
+  })
+
+  it('degrades a malformed Choice (no options) to an inline marker, not a throw', () => {
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Choice' }])} form={form()} />,
+    )
+    expect(container.textContent).toContain('choice has no options')
+    expect(container.textContent).not.toContain(MALFORMED_SIGNAL) // the card didn't crash
+  })
+
+  it('renders controls disabled when no interactive form is provided (read-only)', () => {
+    render(
+      <A2uiRenderer
+        content={content([{ id: 'root', component: 'Choice', mode: 'single', options: [{ id: 'a', label: 'Alpha' }] }])}
+      />,
+    )
+    expect((screen.getByRole('radio', { name: 'Alpha' }) as HTMLInputElement).disabled).toBe(true)
   })
 })
 

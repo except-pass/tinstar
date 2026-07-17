@@ -54,6 +54,8 @@ import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, Sessio
 // rejected at the boundary. Importing the plugin's schema here is what pulls
 // @a2ui/web_core into the server (esbuild) bundle — the load-bearing de-risk.
 import { parseA2uiContent } from '../../plugins/roundup/src/a2ui/schema'
+import { collectChoiceOptionIds, collectChoiceOptionLabels, NOTICE_ANSWER_TEXT_MAX } from '../../plugins/roundup/src/a2ui/controls'
+import { answerPromptText } from '../../notices/answerPrompt'
 import { normalizeRunName } from '../../domain/runName'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
@@ -2168,6 +2170,108 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // GET /api/notices — the Roundup's initial load
   if (method === 'GET' && url === '/api/notices') {
     ok(res, ctx.docStore.getAllNotices())
+    return true
+  }
+
+  // POST /api/notices/:id/answer — the user answers a needs-you notice, or
+  // dissents from an FYI (R22/R23/R13). Two effects (KTD1/KTD3):
+  //   1. PERSIST the answer on the notice (durable, marks it answered) — this
+  //      always happens on valid input, independent of the posting session.
+  //   2. DELIVER a prompt describing the answer to the posting session
+  //      (notice.runId), reusing the notes/pins prompt-delivery path. Best-effort:
+  //      if the session isn't reachable/prompt-ready the answer still persisted,
+  //      and the response signals `delivered:false` rather than failing the submit.
+  // Defense in depth (KTD4): every submitted choice id must be in the notice's
+  // declared choice set, and free text is length-capped — bad input is rejected
+  // with INVALID_PARAMS and nothing is persisted.
+  if (method === 'POST' && /^\/api\/notices\/[^/]+\/answer$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const id = decodeURIComponent(path.slice('/api/notices/'.length, -'/answer'.length))
+    readBody(req).then(async body => {
+      const notice = ctx.docStore.getNotice(id)
+      if (!notice) { fail(res, 'NOT_FOUND', `Notice ${id} not found`); return }
+
+      let parsed: { choices?: unknown; text?: unknown; dissent?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object')
+        return
+      }
+
+      // Choices: must be a string[] and every id must be one the notice offered.
+      let selectedChoices: string[] = []
+      if (parsed.choices !== undefined && parsed.choices !== null) {
+        if (!Array.isArray(parsed.choices) || !parsed.choices.every(c => typeof c === 'string')) {
+          fail(res, 'INVALID_PARAMS', 'choices must be an array of strings')
+          return
+        }
+        const declared = collectChoiceOptionIds(notice.content)
+        for (const c of parsed.choices as string[]) {
+          if (!declared.has(c)) {
+            fail(res, 'INVALID_PARAMS', `choice "${c}" is not an offered option on this notice`)
+            return
+          }
+        }
+        selectedChoices = parsed.choices as string[]
+      }
+
+      // Free text: optional, length-capped, trimmed to undefined when blank.
+      let answerText: string | undefined
+      if (parsed.text !== undefined && parsed.text !== null) {
+        if (typeof parsed.text !== 'string') {
+          fail(res, 'INVALID_PARAMS', 'text must be a string')
+          return
+        }
+        if (parsed.text.length > NOTICE_ANSWER_TEXT_MAX) {
+          fail(res, 'BAD_REQUEST', `text exceeds ${NOTICE_ANSWER_TEXT_MAX} characters`, { status: 413 })
+          return
+        }
+        if (parsed.text.trim()) answerText = parsed.text
+      }
+
+      const isDissent = parsed.dissent === true
+      // An answer must carry something — an empty submit is a no-op, not an answer.
+      if (selectedChoices.length === 0 && !answerText) {
+        fail(res, 'INVALID_PARAMS', 'answer must include at least one choice or some text')
+        return
+      }
+
+      const now = Date.now()
+      const updated: Notice = {
+        ...notice,
+        // Only `answer` changes — NOT `amendedAt`. "Amended" means the AGENT edited
+        // the notice (the footer, the PATCH path, and the skill all use it that way);
+        // a user answering is not an agent edit. The answer-by-value compare in
+        // noticeEqual already makes this write broadcast a delta, so no bump is needed.
+        answer: {
+          choices: selectedChoices,
+          ...(answerText ? { text: answerText } : {}),
+          ...(isDissent ? { dissent: true } : {}),
+          answeredAt: now,
+        },
+      }
+      ctx.docStore.upsertNotice(updated)
+
+      // Deliver best-effort to the posting session (notice.runId === session name).
+      let delivered = false
+      const sessDir = ctx.sessionConfig?.dirs.sessions
+      if (sessDir) {
+        const session = getSession(sessDir, notice.runId)
+        if (session) {
+          try {
+            const labels = collectChoiceOptionLabels(notice.content)
+            const prompt = answerPromptText(updated, labels)
+            await tmuxBackend.sendPrompt(ctx.sessionConfig!, notice.runId, prompt)
+            delivered = true
+          } catch (err) {
+            // The answer is already persisted; delivery is best-effort (KTD1).
+            log.warn('notices', 'answer delivery failed', { id, runId: notice.runId, err: (err as Error).message })
+          }
+        }
+      }
+
+      ok(res, { notice: updated, delivered })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
 

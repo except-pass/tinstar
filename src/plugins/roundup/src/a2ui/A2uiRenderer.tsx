@@ -18,6 +18,7 @@ import { Component, type ErrorInfo, type ReactNode } from 'react'
 import type { A2uiComponent, A2uiContent } from '../../../../domain/types'
 import { parseA2uiContent } from './schema'
 import { CATALOG, childIdsOf, isSupported } from './catalog'
+import { NoticeFormProvider, type NoticeFormState } from './controlComponents'
 
 /** The R16 signal shown whenever a notice's content can't be rendered. Kept as a
  *  single exported constant so the API-reject path, the render-degrade path, and
@@ -141,13 +142,25 @@ export class A2uiErrorBoundary extends Component<BoundaryProps, BoundaryState> {
   }
 }
 
-/** Render a notice's A2UI content, read-only and host-themed, degrading to a
- *  readable fallback on any malformed input (R16). The headline is the widget's
- *  responsibility and is always shown outside this component. */
-export function A2uiRenderer({ content }: { content: A2uiContent | undefined | null }): ReactNode {
+/** Render a notice's A2UI content, host-themed, degrading to a readable fallback
+ *  on any malformed input (R16). The headline is the widget's responsibility and
+ *  is always shown outside this component.
+ *
+ *  Pass `form` to make declared controls interactive (U3): the tree is wrapped in
+ *  the notice form context so `Choice`/`TextInput`/`Submit` controls read and
+ *  write host-owned state. Omit it (the default) for a read-only render, where
+ *  any controls show disabled/static — the read-only posture slices 1–2 kept. */
+export function A2uiRenderer({
+  content,
+  form,
+}: {
+  content: A2uiContent | undefined | null
+  form?: NoticeFormState
+}): ReactNode {
+  const tree = renderContent(content)
   return (
     <A2uiErrorBoundary source={content}>
-      {renderContent(content)}
+      {form ? <NoticeFormProvider value={form}>{tree}</NoticeFormProvider> : tree}
     </A2uiErrorBoundary>
   )
 }

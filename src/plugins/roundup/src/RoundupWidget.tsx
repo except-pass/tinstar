@@ -8,15 +8,27 @@
 // `needs-you` (the agent is waiting on you) and `fyi` (a call it made on its own).
 // Notices are agent-authored over /api/notices; this widget only reads and
 // re-reads on the `notice.updated` delta. A notice's body is an A2UI v0_9
-// component description, rendered read-only and host-themed by A2uiRenderer,
-// degrading to a readable fallback when malformed (R14–R16). Interactive
-// answer-back is deferred — see the feature plan's Scope Boundaries.
+// component description, rendered host-themed by A2uiRenderer, degrading to a
+// readable fallback when malformed (R14–R16).
+//
+// This slice makes needs-you notices answerable (R10/R11/R22): the agent
+// declares Choice/TextInput/Submit controls in the notice content, the widget
+// renders them with host-owned form state and submits the answer to
+// POST /api/notices/:id/answer — showing "answered" optimistically (R23) and
+// reverting on failure. FYI notices gain a dissent affordance (R13). Each run
+// section gets a jump-to-canvas link (R12).
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { Notice } from '../../../domain/types'
 import { A2uiRenderer } from './a2ui/A2uiRenderer'
+import { isAnswerable } from './a2ui/controls'
+import type { NoticeFormState } from './a2ui/controlComponents'
 
 interface DeltaMsg { eventType?: string }
+
+/** Stable empty set so `selectedFor` returns a referentially-constant value for
+ *  choice groups with no selection yet (avoids needless control re-renders). */
+const EMPTY_SET: ReadonlySet<string> = new Set()
 
 /** A run's display attribution: its friendly name, falling back to its id (the
  *  session handle) when it has none — mirrors how the host labels a nameless run. */
@@ -24,6 +36,13 @@ interface RunLabel { id: string; name?: string }
 
 function runHeader(label: RunLabel | undefined, runId: string): string {
   return label?.name?.trim() || runId
+}
+
+/** The canvas node id for a run's session card. A notice carries the posting run
+ *  id (= the session name); the host registers that run's canvas widget under
+ *  `run-<id>`, so this is what `api.canvas.fitWidget` pans to (R12/U5). */
+export function runNodeId(runId: string): string {
+  return `run-${runId}`
 }
 
 function shortWhen(ms: number): string {
@@ -54,6 +73,185 @@ export function groupByRun(notices: Notice[]): Array<{ runId: string; notices: N
 }
 
 export function makeRoundupWidget(api: TinstarPluginAPI) {
+  /** One notice row: header + (when expanded) its A2UI body, plus the answer /
+   *  dissent affordances. Holds the per-notice form state (U3) so a submit is
+   *  optimistic (R23) and reverts cleanly on failure. Defined here (not inside
+   *  Roundup's render) so its identity is stable across the parent's re-renders. */
+  function NoticeCard({ notice, isOpen, onToggle }: { notice: Notice; isOpen: boolean; onToggle: () => void }) {
+    // Selection keyed by choice-component id, so multiple choice groups on one
+    // notice are independent (a single-select in one group doesn't wipe another).
+    const [selected, setSelected] = useState<Map<string, Set<string>>>(new Map())
+    const [text, setText] = useState('')
+    const [dissentText, setDissentText] = useState('')
+    const [dissentOpen, setDissentOpen] = useState(false)
+    const [submitting, setSubmitting] = useState(false)
+    const [optimisticAnswered, setOptimisticAnswered] = useState(false)
+    const [submitError, setSubmitError] = useState<string | null>(null)
+
+    const isNeedsYou = notice.kind === 'needs-you'
+    // Answered from the server (persisted answer) OR optimistically (just submitted).
+    const answered = optimisticAnswered || !!notice.answer
+    const hasBody = !!notice.content && Array.isArray(notice.content.components) && notice.content.components.length > 0
+    // A needs-you notice is interactive when it declares controls (a Choice, text
+    // field, or Submit). Its form is wired only then; otherwise it renders read-only.
+    const interactive = isNeedsYou && isAnswerable(notice.content)
+
+    const toggleOption = useCallback((choiceId: string, optionId: string, mode: 'single' | 'multi') => {
+      setSelected(prev => {
+        const next = new Map(prev)
+        const group = new Set(prev.get(choiceId) ?? [])
+        if (mode === 'single') {
+          next.set(choiceId, new Set([optionId])) // clears only THIS group
+        } else {
+          if (group.has(optionId)) group.delete(optionId); else group.add(optionId)
+          next.set(choiceId, group)
+        }
+        return next
+      })
+    }, [])
+
+    const selectedFor = useCallback(
+      (choiceId: string): ReadonlySet<string> => selected.get(choiceId) ?? EMPTY_SET,
+      [selected],
+    )
+
+    // The one submit path (KTD1): POST the answer, optimistically flip to answered,
+    // and revert on failure. Guards double-submit via submitting/answered.
+    const submitAnswer = useCallback(async (payload: { choices?: string[]; text?: string; dissent?: boolean }) => {
+      if (submitting || answered) return
+      setSubmitError(null)
+      setSubmitting(true)
+      setOptimisticAnswered(true) // R23: immediate feedback, before the server responds
+      try {
+        const res = await api.http.fetch(`/api/notices/${notice.id}/answer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
+        if (!res.ok || !body?.ok) throw new Error(body?.error?.message || `answer failed (${res.status})`)
+        // Success: the notice.updated delta reloads and carries the persisted
+        // answer, so the answered state survives — keep the optimistic flag until then.
+      } catch (err) {
+        api.logger.error('roundup: answer submit failed', err)
+        setOptimisticAnswered(false) // R23: revert cleanly so the controls re-enable
+        setSubmitError('Could not deliver your answer. Try again.')
+      } finally {
+        setSubmitting(false)
+      }
+    }, [notice.id, submitting, answered])
+
+    const submitNeedsYou = useCallback(() => {
+      // Flatten selections across every choice group into one id list (the server
+      // validates each id against the notice's declared options).
+      const choices = [...new Set([...selected.values()].flatMap(g => [...g]))]
+      const trimmed = text.trim()
+      if (choices.length === 0 && !trimmed) {
+        setSubmitError('Pick an option or add a note before submitting.')
+        return
+      }
+      void submitAnswer({ ...(choices.length ? { choices } : {}), ...(trimmed ? { text: trimmed } : {}) })
+    }, [selected, text, submitAnswer])
+
+    const submitDissent = useCallback(() => {
+      const trimmed = dissentText.trim()
+      if (!trimmed) { setSubmitError('Add your objection before sending.'); return }
+      void submitAnswer({ dissent: true, text: trimmed })
+    }, [dissentText, submitAnswer])
+
+    const form: NoticeFormState = {
+      interactive: true,
+      answered,
+      submitting,
+      selectedFor,
+      text,
+      toggleOption,
+      setText,
+      submit: submitNeedsYou,
+    }
+
+    return (
+      <div className={`rounded-md border ${isNeedsYou ? 'border-amber-500/50 bg-amber-500/5' : 'border-sky-500/40 bg-sky-500/5'}`}>
+        <button onClick={onToggle} className="w-full flex items-start gap-2 px-3 py-2 text-left">
+          <span
+            className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${
+              isNeedsYou ? 'bg-amber-500 text-neutral-900' : 'bg-sky-500 text-neutral-900'
+            }`}
+          >
+            {isNeedsYou ? 'Needs you' : 'FYI'}
+          </span>
+          <span className="flex-1 text-sm font-medium leading-snug">{notice.headline}</span>
+          {answered && <span className="shrink-0 mt-0.5 text-emerald-400 text-xs" title="Answered">✓</span>}
+          {hasBody && (
+            <span className="shrink-0 text-neutral-500 text-xs mt-0.5">{isOpen ? '▾' : '▸'}</span>
+          )}
+        </button>
+        {isOpen && hasBody && (
+          <div className="px-3 pt-0 pb-1 text-sm text-neutral-200">
+            {/* A2uiRenderer carries its own per-notice error boundary, so a
+                malformed body degrades this card alone — never the board (R16).
+                Passing `form` makes declared controls interactive (U3); read-only
+                notices pass no form and any controls render disabled. */}
+            <A2uiRenderer content={notice.content} form={interactive ? form : undefined} />
+          </div>
+        )}
+        {/* FYI dissent affordance (R13/U4). Shown for headline-only FYIs always and
+            for bodied FYIs once expanded — silence stays consent (no interaction =
+            nothing delivered). Never shown on needs-you notices. */}
+        {!isNeedsYou && (!hasBody || isOpen) && (
+          <div className="px-3 pb-1">
+            {answered ? (
+              <div className="text-sm font-medium text-emerald-300">✓ Objection sent</div>
+            ) : !dissentOpen ? (
+              <button
+                onClick={() => setDissentOpen(true)}
+                className="text-xs text-sky-300 underline hover:text-sky-200"
+              >
+                Disagree
+              </button>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <textarea
+                  rows={2}
+                  value={dissentText}
+                  placeholder="What do you disagree with?"
+                  disabled={submitting}
+                  onChange={e => setDissentText(e.target.value)}
+                  className="w-full rounded border border-neutral-600 bg-neutral-800 px-2 py-1 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-sky-500 focus:outline-none disabled:opacity-70"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={submitDissent}
+                    disabled={submitting}
+                    className="self-start rounded bg-sky-500 px-3 py-1 text-sm font-medium text-neutral-900 hover:bg-sky-400 disabled:opacity-50"
+                  >
+                    {submitting ? 'Sending…' : 'Send objection'}
+                  </button>
+                  <button
+                    onClick={() => { setDissentOpen(false); setSubmitError(null) }}
+                    disabled={submitting}
+                    className="self-start rounded px-3 py-1 text-sm text-neutral-400 hover:text-neutral-200 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {submitError && <div className="px-3 pb-1 text-xs text-red-300">{submitError}</div>}
+        {/* Footer shows for headline-only notices always, and for notices with a
+            body once expanded — so arrival/amend time is never hidden. */}
+        {(!hasBody || isOpen) && (
+          <div className="px-3 pb-2 text-[10px] text-neutral-500">
+            posted {shortWhen(notice.createdAt)}
+            {notice.amendedAt > notice.createdAt && ` · amended ${shortWhen(notice.amendedAt)}`}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return function Roundup(_props: WidgetProps) {
     const [notices, setNotices] = useState<Notice[] | null>(null)
     const [runLabels, setRunLabels] = useState<Record<string, RunLabel>>({})
@@ -141,55 +339,23 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
 
           {groups.map(group => (
             <section key={group.runId} className="flex flex-col gap-2">
-              <div className="text-xs font-semibold uppercase tracking-wider text-neutral-400 border-b border-neutral-800 pb-1">
-                {runHeader(runLabels[group.runId], group.runId)}
+              <div className="flex items-center gap-2 border-b border-neutral-800 pb-1">
+                <span className="flex-1 text-xs font-semibold uppercase tracking-wider text-neutral-400 truncate">
+                  {runHeader(runLabels[group.runId], group.runId)}
+                </span>
+                {/* Jump-to-session (R12/U5): pan the canvas to this run's card.
+                    No-op if the card isn't in the current layout. */}
+                <button
+                  onClick={() => api.canvas.fitWidget(runNodeId(group.runId))}
+                  title="Jump to this session on the canvas"
+                  className="shrink-0 text-[10px] text-neutral-500 hover:text-neutral-200"
+                >
+                  ⤢ jump
+                </button>
               </div>
-              {group.notices.map(n => {
-                const isOpen = expanded.has(n.id)
-                const isNeedsYou = n.kind === 'needs-you'
-                // A notice may be headline-only (no body). The expand toggle and
-                // body only appear when there's A2UI content to render.
-                const hasBody = !!n.content && Array.isArray(n.content.components) && n.content.components.length > 0
-                return (
-                  <div
-                    key={n.id}
-                    className={`rounded-md border ${isNeedsYou ? 'border-amber-500/50 bg-amber-500/5' : 'border-sky-500/40 bg-sky-500/5'}`}
-                  >
-                    <button
-                      onClick={() => toggle(n.id)}
-                      className="w-full flex items-start gap-2 px-3 py-2 text-left"
-                    >
-                      <span
-                        className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${
-                          isNeedsYou ? 'bg-amber-500 text-neutral-900' : 'bg-sky-500 text-neutral-900'
-                        }`}
-                      >
-                        {isNeedsYou ? 'Needs you' : 'FYI'}
-                      </span>
-                      <span className="flex-1 text-sm font-medium leading-snug">{n.headline}</span>
-                      {hasBody && (
-                        <span className="shrink-0 text-neutral-500 text-xs mt-0.5">{isOpen ? '▾' : '▸'}</span>
-                      )}
-                    </button>
-                    {isOpen && hasBody && (
-                      <div className="px-3 pt-0 pb-1 text-sm text-neutral-200">
-                        {/* A2uiRenderer carries its own per-notice error boundary, so a
-                            malformed body degrades this card alone — never the board (R16). */}
-                        <A2uiRenderer content={n.content} />
-                      </div>
-                    )}
-                    {/* Footer shows for headline-only notices always, and for
-                        notices with a body once expanded — so arrival/amend time
-                        is never hidden (a headline-only notice has no expander). */}
-                    {(!hasBody || isOpen) && (
-                      <div className="px-3 pb-2 text-[10px] text-neutral-500">
-                        posted {shortWhen(n.createdAt)}
-                        {n.amendedAt > n.createdAt && ` · amended ${shortWhen(n.amendedAt)}`}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+              {group.notices.map(n => (
+                <NoticeCard key={n.id} notice={n} isOpen={expanded.has(n.id)} onToggle={() => toggle(n.id)} />
+              ))}
             </section>
           ))}
         </div>
