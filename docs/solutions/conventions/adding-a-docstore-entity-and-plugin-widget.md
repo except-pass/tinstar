@@ -1,6 +1,7 @@
 ---
 title: "Adding a docstore entity + read-only plugin widget: the wiring map"
 date: 2026-07-17
+last_updated: 2026-07-17
 category: conventions
 module: document-store
 problem_type: architecture
@@ -10,6 +11,7 @@ applies_when:
   - Adding a new server-side entity to DocumentStore that the UI must render live
   - Building a bundled plugin widget that reads a docstore collection
   - Deciding whether a new collection needs frontend useServerEvents edits
+  - A new bundled plugin widget never appears in the widget palette (no error, count unchanged)
 ---
 
 # Adding a docstore entity + read-only plugin widget
@@ -28,6 +30,19 @@ Every `DocumentStore` mutator that emits `change` MUST equality-short-circuit on
 ## Plugins don't touch useServerEvents — they read over HTTP + a delta subscription
 
 A bundled plugin widget (ADR-0002 boundary) cannot import host hooks. It reads state exactly like `graveyard`: `api.http.fetch('/api/<name>')` for the initial list, plus `api.events.subscribe('delta', msg => msg?.eventType === '<name>.updated' && reload())` for liveness. Consequence: **a plugin-rendered entity needs a `GET /api/<name>` list route and zero `useServerEvents.ts` edits.** Choosing a plugin over a host widget deletes six reducer edits and a whole class of "why isn't it updating" bugs.
+
+## Registering a bundled plugin widget is a TWO-place change — and the second place fails silently
+
+This one shipped a broken widget to `main` (Roundup PR #115) and took a live debugging session to find. Registering a new built-in plugin widget requires editing **two** lists, and missing the second produces **no error** — the widget's code loads, but the palette never lists it, so the tile is simply absent and the widget count doesn't move.
+
+1. `src/core/pluginHost/bundled.ts` — `BUNDLED_PLUGINS`. Client-side. `bootAllPlugins` iterates this in the browser to **activate** the plugin and register its React **component** (so a spawned widget can render).
+2. `src/server/api/builtinPluginManifests.ts` — `BUILTIN_PLUGIN_PKGS`. Server-side. The widget **palette** fetches `GET /api/plugin-widgets/registry` (`usePluginWidgetRegistry` → `apiFetch(...)`), which is built from **this** list. A plugin only in (1) has a working component nobody can spawn, because the palette never surfaces it.
+
+The file header literally says *"Keep this list in sync with BUNDLED_PLUGINS"* — but nothing enforces it, and no test caught the drift until PR #116 added one (`src/server/api/__tests__/builtinPluginManifests.test.ts`).
+
+**Diagnosis shortcut:** `curl -s localhost:5273/api/plugin-widgets/registry | jq -r '.data[].widgetType'`. If the new type isn't there, it's the server list — not a cache, not the client bundle. (This is worth reaching for early: a missing palette tile *looks* like a stale frontend bundle, and chasing browser cache instead of the server registry burns real time.)
+
+**Caveat on "mirror graveyard":** `graveyard` is a good template for the *component-read* pattern above, but it is NOT in `BUILTIN_PLUGIN_PKGS`, so it is not a palette-listed widget. Do not use it as the template for palette registration — use `roborev` or `model-attribution`, which are in both lists.
 
 ## Lifecycle cascades belong in the docstore, not the route
 
