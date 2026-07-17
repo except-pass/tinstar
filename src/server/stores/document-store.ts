@@ -20,7 +20,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone, Notice } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
@@ -155,6 +155,18 @@ function touchedFilesEqual(a: TouchedFile[], b: TouchedFile[]): boolean {
   return true
 }
 
+function noticeEqual(a: Notice, b: Notice): boolean {
+  return (
+    a.id === b.id &&
+    a.runId === b.runId &&
+    a.kind === b.kind &&
+    a.headline === b.headline &&
+    a.background === b.background &&
+    a.createdAt === b.createdAt &&
+    a.amendedAt === b.amendedAt
+  )
+}
+
 function tombstoneEqual(a: Tombstone, b: Tombstone): boolean {
   return (
     a.convId === b.convId &&
@@ -192,6 +204,9 @@ export class DocumentStore {
   /** Retired-session graveyard, keyed by convId. Global (not space-scoped) and
    *  intentionally excluded from clear()/clearSpace() — purge is the only removal. */
   private graveyard = new Map<string, Tombstone>()
+  /** Roundup notices, keyed by notice id. Run-scoped: cleaned up in deleteRun's
+   *  cascade so a notice never outlives the run that posted it (R20). */
+  private notices = new Map<string, Notice>()
 
   activeSpaceId: string = ''
 
@@ -241,6 +256,14 @@ export class DocumentStore {
           continue
         }
         this.graveyard.set(t.convId, t)
+      }
+      if (data.notices) for (const n of data.notices) {
+        // A notice without an id can't be amended, pulled, or rendered — skip it.
+        if (!n || !n.id) {
+          console.warn('[docstore] skipping corrupt notice entry on load:', n)
+          continue
+        }
+        this.notices.set(n.id, n)
       }
     } catch {
       // No file or corrupt — start fresh
@@ -414,6 +437,8 @@ export class DocumentStore {
       // and WorkspaceShell synthetic nodes); pins key off that prefixed id.
       this.pruneWidgetFromGraphs(`run-${id}`)
       this.removePinsForNodeAcrossSpaces(`run-${id}`)
+      // Cascade: a notice must not outlive the run that posted it (R20).
+      this.dropNoticesForRun(id)
       return
     }
     // Simulator runs are keyed by run id (R-xxx) but deleted by session name (CLD-xxx)
@@ -423,8 +448,17 @@ export class DocumentStore {
         this.changes.emit('change', { entity: 'run', id: key, data: null })
         this.pruneWidgetFromGraphs(`run-${key}`)
         this.removePinsForNodeAcrossSpaces(`run-${key}`)
+        this.dropNoticesForRun(key)
         return
       }
+    }
+  }
+
+  /** Drop every notice posted by a run (keyed on Notice.runId === run.id). Emits
+   *  a `change: null` per notice so the Roundup drops the row live. */
+  private dropNoticesForRun(runId: string): void {
+    for (const [nid, n] of this.notices) {
+      if (n.runId === runId) this.deleteNotice(nid)
     }
   }
 
@@ -804,6 +838,32 @@ export class DocumentStore {
     return true
   }
 
+  // --- Notices (Roundup) ---
+
+  upsertNotice(data: Notice): void {
+    const prev = this.notices.get(data.id)
+    // Equality short-circuit (docstore mutator contract): a re-post with no
+    // real change must not broadcast an SSE delta or reschedule a persist.
+    if (prev && noticeEqual(prev, data)) return
+    this.notices.set(data.id, data)
+    this.changes.emit('change', { entity: 'notice', id: data.id, data })
+  }
+
+  getNotice(id: string): Notice | undefined {
+    return this.notices.get(id)
+  }
+
+  getAllNotices(): Notice[] {
+    return [...this.notices.values()]
+  }
+
+  deleteNotice(id: string): boolean {
+    if (!this.notices.has(id)) return false
+    this.notices.delete(id)
+    this.changes.emit('change', { entity: 'notice', id, data: null })
+    return true
+  }
+
   // --- Snapshot (filtered by active space) ---
   // Include entities that match the active space OR have no spaceId (homeless).
   // This ensures nothing silently vanishes from the UI.
@@ -826,6 +886,9 @@ export class DocumentStore {
       constellationGraphs: this.getAllConstellationGraphs().filter(inSpace),
       pinSets: this.getAllPinSets().filter(inSpace),
       topicMetadata: this.getAllTopicMetadata(),
+      // Run-scoped with no spaceId of their own, so there's nothing to filter
+      // on — include them all (space membership rides the notice's run).
+      notices: this.getAllNotices(),
     }
   }
 
@@ -849,6 +912,7 @@ export class DocumentStore {
       pinSets: this.getAllPinSets(),
       topicMetadata: this.getAllTopicMetadata(),
       graveyard: this.getAllTombstones(),
+      notices: this.getAllNotices(),
     }
   }
 
@@ -860,7 +924,11 @@ export class DocumentStore {
     for (const [id, e] of this.epics) if (e.spaceId === spaceId) this.epics.delete(id)
     for (const [id, e] of this.tasks) if (e.spaceId === spaceId) this.tasks.delete(id)
     for (const [id, e] of this.worktrees) if (e.spaceId === spaceId) this.worktrees.delete(id)
-    for (const [id, e] of this.runs) if (e.spaceId === spaceId) this.runs.delete(id)
+    const clearedRunIds = new Set<string>()
+    for (const [id, e] of this.runs) if (e.spaceId === spaceId) { this.runs.delete(id); clearedRunIds.add(id) }
+    // Notices carry no spaceId — drop them by ownership of a run cleared above,
+    // else a notice orphans and lingers in getAllNotices()/snapshots (R20).
+    for (const [id, n] of this.notices) if (clearedRunIds.has(n.runId)) this.notices.delete(id)
     for (const [id, e] of this.editorWidgets) if (e.spaceId === spaceId) this.editorWidgets.delete(id)
     const clearedBrowserIds = new Set<string>()
     for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) { this.browserWidgets.delete(id); clearedBrowserIds.add(id) }
@@ -895,6 +963,7 @@ export class DocumentStore {
       this.imageWidgets.clear()
       this.constellationGraphs.clear()
       this.pinSets.clear()
+      this.notices.clear()
       // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
     }

@@ -1,0 +1,16 @@
+{
+  "name": "roundup",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.tsx",
+  "tinstar": {
+    "apiVersion": "5",
+    "displayName": "Roundup",
+    "description": "A live notice board of what every agent needs from you and what it decided on its own",
+    "contributes": {
+      "widgets": [
+        { "type": "roundup", "label": "Roundup", "icon": "/widget-icons/roundup.svg", "defaultSize": { "width": 720, "height": 620 }, "spawn": "palette", "capabilities": ["spawnable"], "creator": "standalone" }
+      ]
+    }
+  }
+}

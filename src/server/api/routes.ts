@@ -48,7 +48,7 @@ import {
   tmuxBackend,
 } from '../sessions'
 import { resolveEntitySettings } from '../sessions/entity-settings'
-import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus } from '../../domain/types'
+import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, SessionStatus, Notice } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
@@ -2005,6 +2005,142 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     }
     ctx.docStore.deleteImageWidget(id)
     ok(res, null)
+    return true
+  }
+
+  // --- Roundup notices ---
+  // Size caps (KTD5): keep a malformed post from bloating the persisted
+  // snapshot. Oversize is refused with a 413.
+  const NOTICE_HEADLINE_MAX = 200
+  const NOTICE_BACKGROUND_MAX = 16 * 1024
+
+  // POST /api/notices — an agent posts a notice for its run
+  if (method === 'POST' && url === '/api/notices') {
+    readBody(req).then(body => {
+      try {
+        const { sessionId, kind, headline, background } = JSON.parse(body) as {
+          sessionId?: string; kind?: string; headline?: string; background?: string
+        }
+        if (!sessionId) {
+          fail(res, 'INVALID_PARAMS', 'sessionId required')
+          return
+        }
+        const run = ctx.docStore.getAllRuns().find(r => r.sessionId === sessionId)
+        if (!run) {
+          fail(res, 'SESSION_NOT_FOUND', `No run with sessionId ${sessionId}`)
+          return
+        }
+        if (kind !== 'needs-you' && kind !== 'fyi') {
+          fail(res, 'INVALID_PARAMS', "kind must be 'needs-you' or 'fyi'")
+          return
+        }
+        if (typeof headline !== 'string' || !headline.trim()) {
+          fail(res, 'INVALID_PARAMS', 'headline is required and must be non-empty')
+          return
+        }
+        if (headline.length > NOTICE_HEADLINE_MAX) {
+          fail(res, 'BAD_REQUEST', `headline exceeds ${NOTICE_HEADLINE_MAX} characters`, { status: 413 })
+          return
+        }
+        const bg = typeof background === 'string' ? background : ''
+        if (bg.length > NOTICE_BACKGROUND_MAX) {
+          fail(res, 'BAD_REQUEST', `background exceeds ${NOTICE_BACKGROUND_MAX} characters`, { status: 413 })
+          return
+        }
+        const now = Date.now()
+        const notice: Notice = {
+          id: shortId('notice'),
+          runId: run.id,
+          kind,
+          headline,
+          background: bg,
+          createdAt: now,
+          amendedAt: now,
+        }
+        ctx.docStore.upsertNotice(notice)
+        ok(res, notice)
+      } catch {
+        fail(res, 'BAD_REQUEST', 'Invalid request body')
+      }
+    })
+    return true
+  }
+
+  // PATCH /api/notices/:id — amend a posted notice in place (R17)
+  if (method === 'PATCH' && url.startsWith('/api/notices/')) {
+    const id = url.slice('/api/notices/'.length)
+    readBody(req).then(body => {
+      const existing = ctx.docStore.getNotice(id)
+      if (!existing) {
+        fail(res, 'NOT_FOUND', `Notice ${id} not found`)
+        return
+      }
+      let patch: { kind?: Notice['kind']; headline?: string; background?: string }
+      try {
+        patch = JSON.parse(body)
+      } catch {
+        fail(res, 'BAD_REQUEST', 'Invalid request body')
+        return
+      }
+      // `JSON.parse('null')` and `JSON.parse('42')` both succeed; without this
+      // guard `patch.kind` throws inside the .then and the request hangs.
+      if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object')
+        return
+      }
+      if (patch.kind !== undefined && patch.kind !== 'needs-you' && patch.kind !== 'fyi') {
+        fail(res, 'INVALID_PARAMS', "kind must be 'needs-you' or 'fyi'")
+        return
+      }
+      if (patch.headline !== undefined && (typeof patch.headline !== 'string' || !patch.headline.trim())) {
+        fail(res, 'INVALID_PARAMS', 'headline must be non-empty')
+        return
+      }
+      if (patch.headline !== undefined && patch.headline.length > NOTICE_HEADLINE_MAX) {
+        fail(res, 'BAD_REQUEST', `headline exceeds ${NOTICE_HEADLINE_MAX} characters`, { status: 413 })
+        return
+      }
+      // Reject a non-string background BEFORE it can be persisted — the widget
+      // calls background.trim() and feeds ReactMarkdown, both of which throw on
+      // a non-string and crash every notice on the board, not just this one.
+      if (patch.background !== undefined && typeof patch.background !== 'string') {
+        fail(res, 'INVALID_PARAMS', 'background must be a string')
+        return
+      }
+      if (patch.background !== undefined && patch.background.length > NOTICE_BACKGROUND_MAX) {
+        fail(res, 'BAD_REQUEST', `background exceeds ${NOTICE_BACKGROUND_MAX} characters`, { status: 413 })
+        return
+      }
+      // Whitelist mutable fields — never let a PATCH body clobber id, runId, or
+      // createdAt (identity + provenance stay server-owned).
+      const updated: Notice = {
+        ...existing,
+        ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
+        ...(patch.headline !== undefined ? { headline: patch.headline } : {}),
+        ...(patch.background !== undefined ? { background: patch.background } : {}),
+        amendedAt: Date.now(),
+      }
+      ctx.docStore.upsertNotice(updated)
+      ok(res, updated)
+    })
+    return true
+  }
+
+  // DELETE /api/notices/:id — pull a notice down (R18)
+  if (method === 'DELETE' && url.startsWith('/api/notices/')) {
+    const id = url.slice('/api/notices/'.length)
+    if (!ctx.docStore.getNotice(id)) {
+      fail(res, 'NOT_FOUND', `Notice ${id} not found`)
+      return true
+    }
+    ctx.docStore.deleteNotice(id)
+    ok(res, null)
+    return true
+  }
+
+  // GET /api/notices — the Roundup's initial load
+  if (method === 'GET' && url === '/api/notices') {
+    ok(res, ctx.docStore.getAllNotices())
     return true
   }
 
