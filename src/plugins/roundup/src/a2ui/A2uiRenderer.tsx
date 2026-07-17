@@ -24,9 +24,16 @@ import { CATALOG, childIdsOf, isSupported } from './catalog'
  *  the tests all agree on one phrase. */
 export const MALFORMED_SIGNAL = "This notice's content couldn't be rendered."
 
-/** Bound on both recursion depth and total nodes rendered, so a hostile or
- *  accidentally huge/cyclic description can't hang the widget. */
+/** Bound on recursion depth. Depth alone is NOT enough: a shared ("diamond")
+ *  reference is re-walked on every incoming edge, so a shallow description can
+ *  still expand exponentially in total node count (see MAX_NODES). */
 const MAX_DEPTH = 32
+
+/** Hard cap on TOTAL nodes visited across the whole walk, decremented on every
+ *  visit (including re-visits of a shared ref). This — not depth — is what stops
+ *  a tiny hostile description like `c_i.children = [c_{i+1}, c_{i+1}]` from
+ *  forcing 2^N renders and hanging the tab (R16: a bad notice can't hang it). */
+const MAX_NODES = 500
 
 /** Keys whose string values are human-readable content. Used by the degrade path
  *  to salvage something readable out of an invalid description. */
@@ -72,7 +79,12 @@ function walkNode(
   byId: Map<string, A2uiComponent>,
   seen: Set<string>,
   depth: number,
+  budget: { remaining: number },
 ): ReactNode {
+  // Total-node budget first: decremented on every visit, so a diamond-shaped
+  // description that re-walks shared refs is bounded regardless of its depth.
+  if (budget.remaining <= 0) return <NodeFallback label="content too large to render" />
+  budget.remaining--
   if (depth > MAX_DEPTH) return <NodeFallback label="content nested too deeply" />
   if (seen.has(id)) return <NodeFallback label={`cyclic reference to "${id}"`} />
   const node = byId.get(id)
@@ -82,7 +94,7 @@ function walkNode(
   }
   const nextSeen = new Set(seen).add(id)
   const children = childIdsOf(node).map((childId, i) => (
-    <WalkKey key={childId || i}>{walkNode(childId, byId, nextSeen, depth + 1)}</WalkKey>
+    <WalkKey key={childId || i}>{walkNode(childId, byId, nextSeen, depth + 1, budget)}</WalkKey>
   ))
   return CATALOG[node.component]!.render(node, children)
 }
@@ -102,7 +114,7 @@ function renderContent(content: A2uiContent | undefined | null): ReactNode {
   const byId = new Map<string, A2uiComponent>()
   for (const c of parsed.components) if (typeof c.id === 'string') byId.set(c.id, c)
   if (!byId.has(parsed.root)) return <DegradeFallback source={content} />
-  return walkNode(parsed.root, byId, new Set(), 0)
+  return walkNode(parsed.root, byId, new Set(), 0, { remaining: MAX_NODES })
 }
 
 interface BoundaryProps { children: ReactNode; source?: unknown; onError?: (e: Error) => void }

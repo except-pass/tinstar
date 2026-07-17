@@ -29,6 +29,21 @@ function str(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
+/** Return a safe href, or '' to render the label as plain text instead. Content
+ *  is agent-authored and A2UI's component schema is `.passthrough()`, so `url` is
+ *  never scheme-validated upstream — a `javascript:`/`data:` url in an <a href>
+ *  would execute in Tinstar's origin. Allow only http(s) and same-origin relative
+ *  paths (leading `/` or `#`); everything else falls back to a non-link span. */
+function safeHref(url: string): string {
+  if (url.startsWith('/') || url.startsWith('#')) return url
+  try {
+    const proto = new URL(url).protocol
+    return proto === 'http:' || proto === 'https:' ? url : ''
+  } catch {
+    return ''
+  }
+}
+
 /** Text: the heading/paragraph primitive. `variant` h1–h5 render as scaled
  *  headings; caption/body (and the default) render as paragraph text. */
 function textVariantClass(variant: unknown): string {
@@ -74,9 +89,10 @@ export const CATALOG: Record<string, CatalogEntry> = {
     render: (node) => {
       const url = str(node.url)
       const label = str(node.text) || url
-      if (!url) return <span className="text-sky-300">{label}</span>
+      const href = safeHref(url)
+      if (!href) return <span className="text-sky-300">{label}</span>
       return (
-        <a href={url} target="_blank" rel="noreferrer noopener" className="text-sky-300 underline hover:text-sky-200">
+        <a href={href} target="_blank" rel="noreferrer noopener" className="text-sky-300 underline hover:text-sky-200">
           {label}
         </a>
       )

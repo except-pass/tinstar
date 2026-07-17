@@ -174,6 +174,42 @@ describe('A2uiErrorBoundary — per-notice isolation (R16)', () => {
   })
 })
 
+describe('A2uiRenderer — hardening guards', () => {
+  it('bounds a diamond-shaped description (shared refs) instead of exploding', () => {
+    // Each c_i names the same child twice, so a naive walk renders 2^N nodes.
+    // Depth here is small (well under MAX_DEPTH); only the total-node budget saves it.
+    const comps: A2uiContent['components'] = [{ id: 'root', component: 'Column', children: ['c0', 'c0'] }]
+    for (let i = 0; i < 30; i++) {
+      comps.push({ id: `c${i}`, component: 'Column', children: [`c${i + 1}`, `c${i + 1}`] })
+    }
+    comps.push({ id: 'c30', component: 'Text', text: 'leaf' })
+    const started = performance.now()
+    const { container } = render(<A2uiRenderer content={content(comps)} />)
+    // Completes fast (budget stops it) and surfaces the "too large" fallback.
+    expect(performance.now() - started).toBeLessThan(2000)
+    expect(container.textContent).toContain('content too large to render')
+  })
+
+  it('renders a javascript: URL as plain text, never a clickable <a>', () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([{ id: 'root', component: 'Link', text: 'click me', url: 'javascript:alert(1)' }])}
+      />,
+    )
+    expect(container.querySelector('a')).toBeNull() // no anchor emitted
+    expect(container.textContent).toContain('click me') // label still shown as text
+  })
+
+  it('allows http(s) and same-origin relative hrefs', () => {
+    for (const url of ['https://example.com/x', '/local/path', '#anchor']) {
+      const { container } = render(
+        <A2uiRenderer content={content([{ id: 'root', component: 'Link', text: 'go', url }])} />,
+      )
+      expect(container.querySelector('a')?.getAttribute('href')).toBe(url)
+    }
+  })
+})
+
 describe('extractReadableText', () => {
   it('salvages readable strings from a nested description and skips non-readable keys', () => {
     const value = {

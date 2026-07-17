@@ -172,14 +172,19 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
                       )}
                     </button>
                     {isOpen && hasBody && (
-                      <div className="px-3 pb-3 pt-0 text-sm text-neutral-200">
+                      <div className="px-3 pt-0 pb-1 text-sm text-neutral-200">
                         {/* A2uiRenderer carries its own per-notice error boundary, so a
                             malformed body degrades this card alone — never the board (R16). */}
                         <A2uiRenderer content={n.content} />
-                        <div className="mt-2 text-[10px] text-neutral-500">
-                          posted {shortWhen(n.createdAt)}
-                          {n.amendedAt > n.createdAt && ` · amended ${shortWhen(n.amendedAt)}`}
-                        </div>
+                      </div>
+                    )}
+                    {/* Footer shows for headline-only notices always, and for
+                        notices with a body once expanded — so arrival/amend time
+                        is never hidden (a headline-only notice has no expander). */}
+                    {(!hasBody || isOpen) && (
+                      <div className="px-3 pb-2 text-[10px] text-neutral-500">
+                        posted {shortWhen(n.createdAt)}
+                        {n.amendedAt > n.createdAt && ` · amended ${shortWhen(n.amendedAt)}`}
                       </div>
                     )}
                   </div>
