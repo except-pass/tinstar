@@ -216,7 +216,7 @@ describe('A2uiRenderer — interactive controls (U2/U3)', () => {
       interactive: true,
       answered: false,
       submitting: false,
-      selected: new Set<string>(),
+      selectedFor: () => new Set<string>(),
       text: '',
       toggleOption: vi.fn(),
       setText: vi.fn(),

@@ -2239,13 +2239,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const now = Date.now()
       const updated: Notice = {
         ...notice,
+        // Only `answer` changes — NOT `amendedAt`. "Amended" means the AGENT edited
+        // the notice (the footer, the PATCH path, and the skill all use it that way);
+        // a user answering is not an agent edit. The answer-by-value compare in
+        // noticeEqual already makes this write broadcast a delta, so no bump is needed.
         answer: {
           choices: selectedChoices,
           ...(answerText ? { text: answerText } : {}),
           ...(isDissent ? { dissent: true } : {}),
           answeredAt: now,
         },
-        amendedAt: now,
       }
       ctx.docStore.upsertNotice(updated)
 

@@ -103,6 +103,30 @@ describe('RoundupWidget — answering a needs-you notice (U3)', () => {
     expect(h.answerCalls[0]!.body.choices).toEqual(['opt-a'])
   })
 
+  it('keeps multiple choice groups independent (a single-select in one does not wipe the other)', async () => {
+    const twoGroups = answerableNotice({
+      content: {
+        root: 'root',
+        components: [
+          { id: 'root', component: 'Column', children: ['g1', 'g2', 'go'] },
+          { id: 'g1', component: 'Choice', mode: 'single', options: [{ id: 'a1', label: 'A one' }, { id: 'a2', label: 'A two' }] },
+          { id: 'g2', component: 'Choice', mode: 'single', options: [{ id: 'b1', label: 'B one' }, { id: 'b2', label: 'B two' }] },
+          { id: 'go', component: 'Submit', label: 'Submit' },
+        ],
+      },
+    })
+    const h = makeApi([twoGroups])
+    renderWidget(h)
+
+    fireEvent.click(await screen.findByText('Deploy or wait?'))
+    fireEvent.click(await screen.findByRole('radio', { name: 'A one' }))
+    fireEvent.click(await screen.findByRole('radio', { name: 'B two' })) // must NOT clear group 1
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+    await waitFor(() => expect(screen.getByText('✓ Answered')).toBeTruthy())
+    expect([...h.answerCalls[0]!.body.choices!].sort()).toEqual(['a1', 'b2'])
+  })
+
   it('shows the answered state before the server responds (optimistic)', async () => {
     const h = makeApi([answerableNotice()])
     let release!: (r: Response) => void

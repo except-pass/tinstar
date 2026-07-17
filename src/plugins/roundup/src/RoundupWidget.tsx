@@ -26,6 +26,10 @@ import type { NoticeFormState } from './a2ui/controlComponents'
 
 interface DeltaMsg { eventType?: string }
 
+/** Stable empty set so `selectedFor` returns a referentially-constant value for
+ *  choice groups with no selection yet (avoids needless control re-renders). */
+const EMPTY_SET: ReadonlySet<string> = new Set()
+
 /** A run's display attribution: its friendly name, falling back to its id (the
  *  session handle) when it has none — mirrors how the host labels a nameless run. */
 interface RunLabel { id: string; name?: string }
@@ -74,7 +78,9 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
    *  optimistic (R23) and reverts cleanly on failure. Defined here (not inside
    *  Roundup's render) so its identity is stable across the parent's re-renders. */
   function NoticeCard({ notice, isOpen, onToggle }: { notice: Notice; isOpen: boolean; onToggle: () => void }) {
-    const [selected, setSelected] = useState<Set<string>>(new Set())
+    // Selection keyed by choice-component id, so multiple choice groups on one
+    // notice are independent (a single-select in one group doesn't wipe another).
+    const [selected, setSelected] = useState<Map<string, Set<string>>>(new Map())
     const [text, setText] = useState('')
     const [dissentText, setDissentText] = useState('')
     const [dissentOpen, setDissentOpen] = useState(false)
@@ -90,14 +96,24 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
     // field, or Submit). Its form is wired only then; otherwise it renders read-only.
     const interactive = isNeedsYou && isAnswerable(notice.content)
 
-    const toggleOption = useCallback((optionId: string, mode: 'single' | 'multi') => {
+    const toggleOption = useCallback((choiceId: string, optionId: string, mode: 'single' | 'multi') => {
       setSelected(prev => {
-        if (mode === 'single') return new Set([optionId])
-        const next = new Set(prev)
-        if (next.has(optionId)) next.delete(optionId); else next.add(optionId)
+        const next = new Map(prev)
+        const group = new Set(prev.get(choiceId) ?? [])
+        if (mode === 'single') {
+          next.set(choiceId, new Set([optionId])) // clears only THIS group
+        } else {
+          if (group.has(optionId)) group.delete(optionId); else group.add(optionId)
+          next.set(choiceId, group)
+        }
         return next
       })
     }, [])
+
+    const selectedFor = useCallback(
+      (choiceId: string): ReadonlySet<string> => selected.get(choiceId) ?? EMPTY_SET,
+      [selected],
+    )
 
     // The one submit path (KTD1): POST the answer, optimistically flip to answered,
     // and revert on failure. Guards double-submit via submitting/answered.
@@ -126,7 +142,9 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
     }, [notice.id, submitting, answered])
 
     const submitNeedsYou = useCallback(() => {
-      const choices = [...selected]
+      // Flatten selections across every choice group into one id list (the server
+      // validates each id against the notice's declared options).
+      const choices = [...new Set([...selected.values()].flatMap(g => [...g]))]
       const trimmed = text.trim()
       if (choices.length === 0 && !trimmed) {
         setSubmitError('Pick an option or add a note before submitting.')
@@ -145,7 +163,7 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
       interactive: true,
       answered,
       submitting,
-      selected,
+      selectedFor,
       text,
       toggleOption,
       setText,

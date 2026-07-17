@@ -21,11 +21,13 @@ export interface NoticeFormState {
   answered: boolean
   /** A submit is in flight — guards double-submit and shows a pending label. */
   submitting: boolean
-  /** Currently selected choice option ids (across all choice components). */
-  selected: ReadonlySet<string>
+  /** Selected option ids for ONE choice component, keyed by the choice's id. Each
+   *  Choice group is independent, so two groups in a notice don't clobber each
+   *  other (a single-select in one group doesn't wipe the other's selection). */
+  selectedFor(choiceId: string): ReadonlySet<string>
   /** Current free-text value. */
   text: string
-  toggleOption(optionId: string, mode: 'single' | 'multi'): void
+  toggleOption(choiceId: string, optionId: string, mode: 'single' | 'multi'): void
   setText(value: string): void
   submit(): void
 }
@@ -35,7 +37,7 @@ const READ_ONLY_FORM: NoticeFormState = {
   interactive: false,
   answered: false,
   submitting: false,
-  selected: new Set(),
+  selectedFor: () => new Set(),
   text: '',
   toggleOption: () => {},
   setText: () => {},
@@ -68,7 +70,12 @@ export function ChoiceControl({ node }: { node: A2uiComponent }): ReactNode {
   if (!parsed) return <ControlFallback label="choice has no options" />
   const disabled = !form.interactive || form.answered || form.submitting
   const multi = parsed.mode === 'multi'
-  const groupName = typeof node.id === 'string' && node.id ? `choice-${node.id}` : 'choice'
+  // The choice's own id keys its selection so multiple choice groups on one notice
+  // stay independent. Radios also need a unique `name` per group to be mutually
+  // exclusive within the group but not across groups.
+  const choiceId = typeof node.id === 'string' && node.id ? node.id : ''
+  const groupName = `choice-${choiceId || 'default'}`
+  const selected = form.selectedFor(choiceId)
   return (
     <div className="flex flex-col gap-1 my-1.5" role={multi ? 'group' : 'radiogroup'}>
       {parsed.options.map(opt => (
@@ -80,9 +87,9 @@ export function ChoiceControl({ node }: { node: A2uiComponent }): ReactNode {
             type={multi ? 'checkbox' : 'radio'}
             name={groupName}
             value={opt.id}
-            checked={form.selected.has(opt.id)}
+            checked={selected.has(opt.id)}
             disabled={disabled}
-            onChange={() => form.toggleOption(opt.id, parsed.mode)}
+            onChange={() => form.toggleOption(choiceId, opt.id, parsed.mode)}
             className="mt-0.5 accent-amber-500"
           />
           <span>{opt.label}</span>
