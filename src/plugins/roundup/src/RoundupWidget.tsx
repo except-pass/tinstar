@@ -7,12 +7,14 @@
 // by the run that posted them. Two kinds, visually distinct at a glance (R4):
 // `needs-you` (the agent is waiting on you) and `fyi` (a call it made on its own).
 // Notices are agent-authored over /api/notices; this widget only reads and
-// re-reads on the `notice.updated` delta. Interactive answer-back and A2UI
-// rendering are deferred — see the feature plan's Scope Boundaries.
+// re-reads on the `notice.updated` delta. A notice's body is an A2UI v0_9
+// component description, rendered read-only and host-themed by A2uiRenderer,
+// degrading to a readable fallback when malformed (R14–R16). Interactive
+// answer-back is deferred — see the feature plan's Scope Boundaries.
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { Notice } from '../../../domain/types'
+import { A2uiRenderer } from './a2ui/A2uiRenderer'
 
 interface DeltaMsg { eventType?: string }
 
@@ -145,6 +147,9 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
               {group.notices.map(n => {
                 const isOpen = expanded.has(n.id)
                 const isNeedsYou = n.kind === 'needs-you'
+                // A notice may be headline-only (no body). The expand toggle and
+                // body only appear when there's A2UI content to render.
+                const hasBody = !!n.content && Array.isArray(n.content.components) && n.content.components.length > 0
                 return (
                   <div
                     key={n.id}
@@ -162,17 +167,24 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
                         {isNeedsYou ? 'Needs you' : 'FYI'}
                       </span>
                       <span className="flex-1 text-sm font-medium leading-snug">{n.headline}</span>
-                      {n.background.trim() && (
+                      {hasBody && (
                         <span className="shrink-0 text-neutral-500 text-xs mt-0.5">{isOpen ? '▾' : '▸'}</span>
                       )}
                     </button>
-                    {isOpen && n.background.trim() && (
-                      <div className="px-3 pb-3 pt-0 text-sm text-neutral-200 [&_a]:text-sky-300 [&_a]:underline [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_code]:bg-neutral-800 [&_code]:px-1 [&_code]:rounded [&_pre]:bg-neutral-800 [&_pre]:p-2 [&_pre]:rounded [&_pre]:overflow-x-auto">
-                        <ReactMarkdown>{n.background}</ReactMarkdown>
-                        <div className="mt-2 text-[10px] text-neutral-500">
-                          posted {shortWhen(n.createdAt)}
-                          {n.amendedAt > n.createdAt && ` · amended ${shortWhen(n.amendedAt)}`}
-                        </div>
+                    {isOpen && hasBody && (
+                      <div className="px-3 pt-0 pb-1 text-sm text-neutral-200">
+                        {/* A2uiRenderer carries its own per-notice error boundary, so a
+                            malformed body degrades this card alone — never the board (R16). */}
+                        <A2uiRenderer content={n.content} />
+                      </div>
+                    )}
+                    {/* Footer shows for headline-only notices always, and for
+                        notices with a body once expanded — so arrival/amend time
+                        is never hidden (a headline-only notice has no expander). */}
+                    {(!hasBody || isOpen) && (
+                      <div className="px-3 pb-2 text-[10px] text-neutral-500">
+                        posted {shortWhen(n.createdAt)}
+                        {n.amendedAt > n.createdAt && ` · amended ${shortWhen(n.amendedAt)}`}
                       </div>
                     )}
                   </div>

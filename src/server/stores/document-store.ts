@@ -161,7 +161,11 @@ function noticeEqual(a: Notice, b: Notice): boolean {
     a.runId === b.runId &&
     a.kind === b.kind &&
     a.headline === b.headline &&
-    a.background === b.background &&
+    // `content` is a structured A2UI description (an object) or absent. A cheap
+    // serialized compare keeps the equality short-circuit contract holding for
+    // the new field: an identical re-post must not broadcast an SSE delta or
+    // reschedule a persist (see the contract test in document-store.notices).
+    JSON.stringify(a.content ?? null) === JSON.stringify(b.content ?? null) &&
     a.createdAt === b.createdAt &&
     a.amendedAt === b.amendedAt
   )
