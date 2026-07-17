@@ -11,6 +11,7 @@ import fileEditorPkg from '../../plugins/file-editor/package.json'
 import imageViewerPkg from '../../plugins/image-viewer/package.json'
 import roborevPkg from '../../plugins/roborev/package.json'
 import modelAttributionPkg from '../../plugins/model-attribution/package.json'
+import roundupPkg from '../../plugins/roundup/package.json'
 
 /** Built-in plugin package.json manifests (server-safe — manifest only). */
-export const BUILTIN_PLUGIN_PKGS: unknown[] = [browserPkg, natsTrafficPkg, fileEditorPkg, imageViewerPkg, roborevPkg, modelAttributionPkg]
+export const BUILTIN_PLUGIN_PKGS: unknown[] = [browserPkg, natsTrafficPkg, fileEditorPkg, imageViewerPkg, roborevPkg, modelAttributionPkg, roundupPkg]
