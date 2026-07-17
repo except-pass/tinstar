@@ -158,6 +158,55 @@ describe('PATCH /api/notices/:id', () => {
     })
     expect(res.status).toBe(404)
   }))
+
+  async function seedAndPatch(srv: Harness, patch: unknown): Promise<{ id: string; res: Response }> {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    const id = created.data.id
+    const res = await srv.fetch(`/api/notices/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+    return { id, res }
+  }
+
+  it('returns INVALID_PARAMS (400) for an invalid kind', withServer(async srv => {
+    const { res } = await seedAndPatch(srv, { kind: 'urgent' })
+    expect(res.status).toBe(400)
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
+  }))
+
+  it('returns 413 for an oversized headline or background', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    const big = await srv.fetch(`/api/notices/${created.data.id}`, {
+      method: 'PATCH', body: JSON.stringify({ background: 'x'.repeat(16 * 1024 + 1) }),
+    })
+    expect(big.status).toBe(413)
+  }))
+
+  it('rejects a non-string background (400) rather than persisting a crash vector', withServer(async srv => {
+    const { id, res } = await seedAndPatch(srv, { background: 123 })
+    expect(res.status).toBe(400)
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
+    // and nothing corrupt landed in the store
+    expect(typeof srv.docStore.getNotice(id)!.background).toBe('string')
+  }))
+
+  it('ignores attempts to change immutable id / runId / createdAt', withServer(async srv => {
+    const { id, res } = await seedAndPatch(srv, {
+      headline: 'legit change', id: 'hijacked', runId: 'victim-run', createdAt: 0,
+    })
+    expect(res.status).toBe(200)
+    const stored = srv.docStore.getNotice(id)!
+    expect(stored.id).toBe(id)              // not re-keyed
+    expect(stored.runId).toBe('CLD-run-1')  // cascade key intact
+    expect(stored.createdAt).not.toBe(0)    // provenance intact
+    expect(stored.headline).toBe('legit change')
+  }))
+
+  it('returns INVALID_PARAMS (400) for a non-object body (null) instead of hanging', withServer(async srv => {
+    const { res } = await seedAndPatch(srv, null)
+    expect(res.status).toBe(400)
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
+  }))
 })
 
 describe('DELETE /api/notices/:id', () => {

@@ -2039,12 +2039,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           return
         }
         if (headline.length > NOTICE_HEADLINE_MAX) {
-          fail(res, 'BAD_REQUEST', `headline exceeds ${NOTICE_HEADLINE_MAX} chars`, { status: 413 })
+          fail(res, 'BAD_REQUEST', `headline exceeds ${NOTICE_HEADLINE_MAX} characters`, { status: 413 })
           return
         }
         const bg = typeof background === 'string' ? background : ''
         if (bg.length > NOTICE_BACKGROUND_MAX) {
-          fail(res, 'BAD_REQUEST', `background exceeds ${NOTICE_BACKGROUND_MAX} bytes`, { status: 413 })
+          fail(res, 'BAD_REQUEST', `background exceeds ${NOTICE_BACKGROUND_MAX} characters`, { status: 413 })
           return
         }
         const now = Date.now()
@@ -2082,6 +2082,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'BAD_REQUEST', 'Invalid request body')
         return
       }
+      // `JSON.parse('null')` and `JSON.parse('42')` both succeed; without this
+      // guard `patch.kind` throws inside the .then and the request hangs.
+      if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object')
+        return
+      }
       if (patch.kind !== undefined && patch.kind !== 'needs-you' && patch.kind !== 'fyi') {
         fail(res, 'INVALID_PARAMS', "kind must be 'needs-you' or 'fyi'")
         return
@@ -2090,15 +2096,30 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         fail(res, 'INVALID_PARAMS', 'headline must be non-empty')
         return
       }
-      if (typeof patch.headline === 'string' && patch.headline.length > NOTICE_HEADLINE_MAX) {
-        fail(res, 'BAD_REQUEST', `headline exceeds ${NOTICE_HEADLINE_MAX} chars`, { status: 413 })
+      if (patch.headline !== undefined && patch.headline.length > NOTICE_HEADLINE_MAX) {
+        fail(res, 'BAD_REQUEST', `headline exceeds ${NOTICE_HEADLINE_MAX} characters`, { status: 413 })
         return
       }
-      if (typeof patch.background === 'string' && patch.background.length > NOTICE_BACKGROUND_MAX) {
-        fail(res, 'BAD_REQUEST', `background exceeds ${NOTICE_BACKGROUND_MAX} bytes`, { status: 413 })
+      // Reject a non-string background BEFORE it can be persisted — the widget
+      // calls background.trim() and feeds ReactMarkdown, both of which throw on
+      // a non-string and crash every notice on the board, not just this one.
+      if (patch.background !== undefined && typeof patch.background !== 'string') {
+        fail(res, 'INVALID_PARAMS', 'background must be a string')
         return
       }
-      const updated: Notice = { ...existing, ...patch, amendedAt: Date.now() }
+      if (patch.background !== undefined && patch.background.length > NOTICE_BACKGROUND_MAX) {
+        fail(res, 'BAD_REQUEST', `background exceeds ${NOTICE_BACKGROUND_MAX} characters`, { status: 413 })
+        return
+      }
+      // Whitelist mutable fields — never let a PATCH body clobber id, runId, or
+      // createdAt (identity + provenance stay server-owned).
+      const updated: Notice = {
+        ...existing,
+        ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
+        ...(patch.headline !== undefined ? { headline: patch.headline } : {}),
+        ...(patch.background !== undefined ? { background: patch.background } : {}),
+        amendedAt: Date.now(),
+      }
       ctx.docStore.upsertNotice(updated)
       ok(res, updated)
     })
