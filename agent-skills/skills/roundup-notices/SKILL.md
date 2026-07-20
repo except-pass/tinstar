@@ -223,6 +223,28 @@ curl -s -X DELETE "$TINSTAR_URL/api/notices/notice-abc123" | jq '.ok'
 curl -s "$TINSTAR_URL/api/notices" | jq '.data'
 ```
 
+## The user can dismiss a notice — that is not a signal to act
+
+The user can mark any notice **dismissed**: "I've seen this, it's off my plate."
+A dismissed notice dims, collapses, and sinks below the live ones on the board, but
+it is **not** deleted and the user can undo it.
+
+Two things follow, and both matter:
+
+- **You are not told when it happens, and you should not act on it.** Dismissing is
+  about the user's attention, not about your work. It is not an answer, not an
+  approval, and not a rejection. There is no prompt, on purpose — a dismissal that
+  cost you a turn would make the board expensive to post to.
+- **It does not clean up after you.** A dismissed notice is still on the board and
+  still yours. Pull a notice the moment you know it's resolved (`DELETE
+  /api/notices/:id`), exactly as you would have. Do not assume a dismissal means the
+  user already handled it, and do not treat "they'll just dismiss it" as a reason to
+  leave a resolved notice standing.
+
+The board also **de-emphasizes notices you haven't touched in a while** — an old,
+untended card visibly recedes. Nothing happens to it and nobody is notified; it just
+reads as stale. That is another reason to amend a notice when the situation moves.
+
 ## The discipline that makes this work
 
 - **Post when you block; pull when you unblock.** The moment you go idle waiting on the

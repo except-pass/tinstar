@@ -396,6 +396,14 @@ export interface Notice {
    *  reload from this, and the agent decides the notice's fate (amend or pull).
    *  Absent until the user answers or dissents. */
   answer?: NoticeAnswer
+  /** Epoch millis when the USER dismissed this notice — "I've seen it, it's off
+   *  my plate". Deliberately a single optional timestamp and NOT a status enum:
+   *  the Roundup is a board, not a kanban. A dismissed notice stays on the board
+   *  (dimmed and collapsed, with an undo) so it keeps a short memory; clearing
+   *  the field un-dismisses it. Dismissal is a VIEW-level act about the user's
+   *  attention — it never prompts the posting agent (unlike `answer`), and the
+   *  agent is still expected to pull a notice it knows is resolved. */
+  dismissedAt?: number
   createdAt: number
   amendedAt: number
 }

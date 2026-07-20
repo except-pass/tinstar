@@ -170,6 +170,10 @@ function noticeEqual(a: Notice, b: Notice): boolean {
     // Compare it by value so persisting the user's answer broadcasts an SSE delta
     // (the widget reflects "answered") while an identical re-upsert short-circuits.
     JSON.stringify(a.answer ?? null) === JSON.stringify(b.answer ?? null) &&
+    // `dismissedAt` is the user's attention bit. Compare it (null-normalized, so
+    // absent and undefined agree) or dismiss/undismiss writes short-circuit
+    // SILENTLY — no SSE delta, and the board never dims the card.
+    (a.dismissedAt ?? null) === (b.dismissedAt ?? null) &&
     a.createdAt === b.createdAt &&
     a.amendedAt === b.amendedAt
   )

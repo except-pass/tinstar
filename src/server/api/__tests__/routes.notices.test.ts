@@ -417,3 +417,102 @@ describe('POST /api/notices/:id/answer', () => {
     expect(srv.docStore.getNotice(created.data.id)!.answer!.text).toBe('ship it')
   }))
 })
+
+// The user's one attention bit (R24). Deliberately NOT a status workflow: a
+// single optional timestamp, set and cleared, with no enum and no state machine.
+describe('POST/DELETE /api/notices/:id/dismiss', () => {
+  it('POST sets dismissedAt to now and returns the updated notice', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    const before = Date.now()
+
+    const res = await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; data: Notice }
+    expect(body.ok).toBe(true)
+    expect(body.data.dismissedAt).toBeGreaterThanOrEqual(before)
+    expect(srv.docStore.getNotice(created.data.id)!.dismissedAt).toBe(body.data.dismissedAt)
+  }))
+
+  it('does NOT delete the notice — it stays on the board so undo is possible', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'POST' })
+
+    expect(srv.docStore.getNotice(created.data.id)).toBeDefined()
+    expect(srv.docStore.getAllNotices()).toHaveLength(1)
+  }))
+
+  it('DELETE clears dismissedAt (undo) without pulling the notice down', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'POST' })
+
+    const res = await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; data: Notice }
+    expect(body.ok).toBe(true)
+    expect(body.data.dismissedAt).toBeUndefined()
+    // The DELETE /dismiss route must NOT be swallowed by the generic pull route.
+    expect(srv.docStore.getNotice(created.data.id)).toBeDefined()
+    expect(srv.docStore.getNotice(created.data.id)!.dismissedAt).toBeUndefined()
+  }))
+
+  it('leaves the rest of the notice untouched, including amendedAt', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'POST' })
+
+    const stored = srv.docStore.getNotice(created.data.id)!
+    // A user dismissing is not an agent amend — the derived staleness signal
+    // reads amendedAt, so bumping it would make an old notice look fresh.
+    expect(stored.amendedAt).toBe(created.data.amendedAt)
+    expect(stored.createdAt).toBe(created.data.createdAt)
+    expect(stored.headline).toBe(created.data.headline)
+    expect(stored.kind).toBe(created.data.kind)
+    expect(stored.content).toEqual(created.data.content)
+  }))
+
+  it('does not answer the notice — dismissing never prompts the posting agent', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'POST' })
+
+    expect(srv.docStore.getNotice(created.data.id)!.answer).toBeUndefined()
+  }))
+
+  it('returns NOT_FOUND (404) for an unknown notice on both POST and DELETE', withServer(async srv => {
+    for (const method of ['POST', 'DELETE']) {
+      const res = await srv.fetch('/api/notices/notice-nope/dismiss', { method })
+      expect(res.status).toBe(404)
+      const body = await res.json() as { ok: boolean; error: { code: string } }
+      expect(body.ok).toBe(false)
+      expect(body.error.code).toBe('NOT_FOUND')
+    }
+  }))
+
+  it('a second POST is idempotent: it keeps the ORIGINAL dismissedAt rather than re-stamping it', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    const first = await (await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'POST' })).json() as { data: Notice }
+    // Let the clock actually move, so a re-stamp would be visible.
+    await new Promise(r => setTimeout(r, 5))
+    const second = await (await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'POST' })).json() as { data: Notice }
+
+    expect(second.data.dismissedAt).toBe(first.data.dismissedAt)
+    expect(srv.docStore.getNotice(created.data.id)!.dismissedAt).toBe(first.data.dismissedAt)
+  }))
+
+  it('is idempotent enough: a second DELETE on an undismissed notice still 200s and leaves it undismissed', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    const res = await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(srv.docStore.getNotice(created.data.id)!.dismissedAt).toBeUndefined()
+  }))
+})

@@ -17,12 +17,20 @@
 // POST /api/notices/:id/answer — showing "answered" optimistically (R23) and
 // reverting on failure. FYI notices gain a dissent affordance (R13). Each run
 // section gets a jump-to-canvas link (R12).
+//
+// This slice adds ONE user-attention bit (R24): the user can dismiss a notice
+// they're done with. A dismissed notice dims, collapses, and sorts below the live
+// ones — but stays on the board with an undo, so the board keeps a short memory
+// and nothing is destroyed. Staleness rides alongside it and is purely derived
+// from `amendedAt` (see ./age), so old cards recede with nobody acting. Neither
+// is a status workflow: there is no enum, no lane, and no state machine here.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { Notice } from '../../../domain/types'
 import { A2uiRenderer } from './a2ui/A2uiRenderer'
 import { isAnswerable } from './a2ui/controls'
 import type { NoticeFormState } from './a2ui/controlComponents'
+import { relativeAge, isStale } from './age'
 
 interface DeltaMsg { eventType?: string }
 
@@ -53,10 +61,15 @@ function shortWhen(ms: number): string {
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : iso
 }
 
+/** Whether the user has dismissed this notice (the one attention bit). */
+export function isDismissed(n: Notice): boolean {
+  return n.dismissedAt !== undefined && n.dismissedAt !== null
+}
+
 /** Group notices by their posting run, preserving each run's first-seen order.
- *  Within a run, `needs-you` sorts ahead of `fyi`, then most-recently-amended
- *  first — the thing most likely to want you is at the top. Pure, so it's cheap
- *  to recompute on every delta. */
+ *  Within a run: dismissed notices sink below every live one, then `needs-you`
+ *  sorts ahead of `fyi`, then most-recently-amended first — the thing most likely
+ *  to want you is at the top. Pure, so it's cheap to recompute on every delta. */
 export function groupByRun(notices: Notice[]): Array<{ runId: string; notices: Notice[] }> {
   const order: string[] = []
   const byRun = new Map<string, Notice[]>()
@@ -65,10 +78,11 @@ export function groupByRun(notices: Notice[]): Array<{ runId: string; notices: N
     byRun.get(n.runId)!.push(n)
   }
   const kindRank = (k: Notice['kind']) => (k === 'needs-you' ? 0 : 1)
+  const dismissRank = (n: Notice) => (isDismissed(n) ? 1 : 0)
   return order.map(runId => ({
     runId,
     notices: [...byRun.get(runId)!].sort((a, b) =>
-      kindRank(a.kind) - kindRank(b.kind) || b.amendedAt - a.amendedAt),
+      dismissRank(a) - dismissRank(b) || kindRank(a.kind) - kindRank(b.kind) || b.amendedAt - a.amendedAt),
   }))
 }
 
@@ -77,7 +91,17 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
    *  dissent affordances. Holds the per-notice form state (U3) so a submit is
    *  optimistic (R23) and reverts cleanly on failure. Defined here (not inside
    *  Roundup's render) so its identity is stable across the parent's re-renders. */
-  function NoticeCard({ notice, isOpen, onToggle }: { notice: Notice; isOpen: boolean; onToggle: () => void }) {
+  function NoticeCard({ notice, isOpen, onToggle, onChanged, now }: {
+    notice: Notice
+    isOpen: boolean
+    onToggle: () => void
+    /** Reloads the board. Returns the load promise so the dismiss path can clear
+     *  its optimistic override only once the server's truth is actually in hand. */
+    onChanged: () => Promise<void>
+    /** The parent's ticking clock, so derived age/staleness recompute over time
+     *  instead of freezing at first render. */
+    now: number
+  }) {
     // Selection keyed by choice-component id, so multiple choice groups on one
     // notice are independent (a single-select in one group doesn't wipe another).
     const [selected, setSelected] = useState<Map<string, Set<string>>>(new Map())
@@ -87,7 +111,18 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
     const [submitting, setSubmitting] = useState(false)
     const [optimisticAnswered, setOptimisticAnswered] = useState(false)
     const [submitError, setSubmitError] = useState<string | null>(null)
+    // Optimistic override for the dismiss bit (null = trust the server value), so
+    // the card dims on click instead of after a round trip. Cleared in the success
+    // path once the reload has landed — NOT by watching `notice.dismissedAt`. A
+    // reload that races an in-flight delta can return the pre-write snapshot, so
+    // that value may never change and the card would sit optimistic forever.
+    const [pendingDismiss, setPendingDismiss] = useState<boolean | null>(null)
+    // Guards the dismiss request the way `submitting` guards the answer path:
+    // without it, a rapid double-click fires POST then DELETE and the responses
+    // can land out of order, leaving the stored bit disagreeing with the last click.
+    const [dismissing, setDismissing] = useState(false)
 
+    const dismissed = pendingDismiss ?? isDismissed(notice)
     const isNeedsYou = notice.kind === 'needs-you'
     // Answered from the server (persisted answer) OR optimistically (just submitted).
     const answered = optimisticAnswered || !!notice.answer
@@ -153,6 +188,32 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
       void submitAnswer({ ...(choices.length ? { choices } : {}), ...(trimmed ? { text: trimmed } : {}) })
     }, [selected, text, submitAnswer])
 
+    // Dismiss / undo. Flips the user's attention bit and nothing else — the
+    // posting agent is NOT prompted (that would cost it a turn for a view-level
+    // act) and the notice is not deleted, so undo is always one click away.
+    const setDismiss = useCallback(async (next: boolean) => {
+      if (dismissing) return // one dismiss request in flight at a time
+      setSubmitError(null)
+      setDismissing(true)
+      setPendingDismiss(next)
+      try {
+        const res = await api.http.fetch(`/api/notices/${notice.id}/dismiss`, { method: next ? 'POST' : 'DELETE' })
+        const body = await res.json().catch(() => null) as { ok?: boolean; error?: { message?: string } } | null
+        if (!res.ok || !body?.ok) throw new Error(body?.error?.message || `dismiss failed (${res.status})`)
+        // Reload first, THEN drop the override — so the card never flickers back
+        // to the old value in the gap, and never gets stuck if the reloaded
+        // snapshot happens to carry an unchanged `dismissedAt`.
+        await onChanged()
+        setPendingDismiss(null)
+      } catch (err) {
+        api.logger.error('roundup: dismiss failed', err)
+        setPendingDismiss(null) // revert — the card snaps back to the server truth
+        setSubmitError(next ? 'Could not dismiss this notice.' : 'Could not bring this notice back.')
+      } finally {
+        setDismissing(false)
+      }
+    }, [notice.id, onChanged, dismissing])
+
     const submitDissent = useCallback(() => {
       const trimmed = dissentText.trim()
       if (!trimmed) { setSubmitError('Add your objection before sending.'); return }
@@ -170,23 +231,67 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
       submit: submitNeedsYou,
     }
 
+    // Derived staleness (no schema): a notice the agent hasn't tended in a while
+    // recedes on its own. Reads the parent's ticking `now`, so an open board dims
+    // a card as it crosses the threshold instead of waiting for a delta.
+    // A dismissed card is already de-emphasized, so it doesn't double up.
+    const stale = !dismissed && isStale(notice.amendedAt, now)
+    const age = relativeAge(notice.amendedAt, now)
+
+    // One ternary chain: exactly one opacity/border/background class is emitted,
+    // so a later branch can never stack a second opacity on an earlier one.
+    const cardTone = dismissed
+      ? 'border-neutral-700 bg-neutral-800/40 opacity-50'
+      : stale
+        ? (isNeedsYou ? 'border-amber-500/30 bg-amber-500/5 opacity-60' : 'border-sky-500/25 bg-sky-500/5 opacity-60')
+        : (isNeedsYou ? 'border-amber-500/50 bg-amber-500/5' : 'border-sky-500/40 bg-sky-500/5')
+
     return (
-      <div className={`rounded-md border ${isNeedsYou ? 'border-amber-500/50 bg-amber-500/5' : 'border-sky-500/40 bg-sky-500/5'}`}>
-        <button onClick={onToggle} className="w-full flex items-start gap-2 px-3 py-2 text-left">
-          <span
-            className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${
-              isNeedsYou ? 'bg-amber-500 text-neutral-900' : 'bg-sky-500 text-neutral-900'
-            }`}
+      <div
+        data-testid={`notice-${notice.id}`}
+        data-dismissed={dismissed ? 'true' : undefined}
+        data-stale={stale ? 'true' : undefined}
+        className={`rounded-md border transition-opacity ${cardTone}`}
+      >
+        <div className="flex items-start gap-2 px-3 py-2">
+          <button
+            onClick={onToggle}
+            disabled={dismissed}
+            className="flex-1 flex items-start gap-2 text-left disabled:cursor-default"
           >
-            {isNeedsYou ? 'Needs you' : 'FYI'}
-          </span>
-          <span className="flex-1 text-sm font-medium leading-snug">{notice.headline}</span>
-          {answered && <span className="shrink-0 mt-0.5 text-emerald-400 text-xs" title="Answered">✓</span>}
-          {hasBody && (
-            <span className="shrink-0 text-neutral-500 text-xs mt-0.5">{isOpen ? '▾' : '▸'}</span>
-          )}
-        </button>
-        {isOpen && hasBody && (
+            <span
+              className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${
+                dismissed ? 'bg-neutral-600 text-neutral-200'
+                  : isNeedsYou ? 'bg-amber-500 text-neutral-900' : 'bg-sky-500 text-neutral-900'
+              }`}
+            >
+              {isNeedsYou ? 'Needs you' : 'FYI'}
+            </span>
+            <span className={`flex-1 text-sm font-medium leading-snug ${dismissed ? 'line-through text-neutral-400' : ''}`}>
+              {notice.headline}
+            </span>
+            {answered && <span className="shrink-0 mt-0.5 text-emerald-400 text-xs" title="Answered">✓</span>}
+            {age && (
+              <span className="shrink-0 mt-0.5 text-[10px] text-neutral-500" title={`last amended ${shortWhen(notice.amendedAt)}`}>
+                {age}
+              </span>
+            )}
+            {hasBody && !dismissed && (
+              <span className="shrink-0 text-neutral-500 text-xs mt-0.5">{isOpen ? '▾' : '▸'}</span>
+            )}
+          </button>
+          {/* The one attention bit. Non-destructive both ways, and it never
+              prompts the posting agent. */}
+          <button
+            onClick={() => void setDismiss(!dismissed)}
+            disabled={dismissing}
+            title={dismissed ? 'Put this notice back on the board' : "Dismiss — I'm done with this one"}
+            className="shrink-0 mt-0.5 rounded px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-700 hover:text-neutral-200 disabled:opacity-50"
+          >
+            {dismissed ? '↺ Undo' : '✕ Dismiss'}
+          </button>
+        </div>
+        {!dismissed && isOpen && hasBody && (
           <div className="px-3 pt-0 pb-1 text-sm text-neutral-200">
             {/* A2uiRenderer carries its own per-notice error boundary, so a
                 malformed body degrades this card alone — never the board (R16).
@@ -198,7 +303,7 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
         {/* FYI dissent affordance (R13/U4). Shown for headline-only FYIs always and
             for bodied FYIs once expanded — silence stays consent (no interaction =
             nothing delivered). Never shown on needs-you notices. */}
-        {!isNeedsYou && (!hasBody || isOpen) && (
+        {!dismissed && !isNeedsYou && (!hasBody || isOpen) && (
           <div className="px-3 pb-1">
             {answered ? (
               <div className="text-sm font-medium text-emerald-300">✓ Objection sent</div>
@@ -242,7 +347,7 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
         {submitError && <div className="px-3 pb-1 text-xs text-red-300">{submitError}</div>}
         {/* Footer shows for headline-only notices always, and for notices with a
             body once expanded — so arrival/amend time is never hidden. */}
-        {(!hasBody || isOpen) && (
+        {!dismissed && (!hasBody || isOpen) && (
           <div className="px-3 pb-2 text-[10px] text-neutral-500">
             posted {shortWhen(notice.createdAt)}
             {notice.amendedAt > notice.createdAt && ` · amended ${shortWhen(notice.amendedAt)}`}
@@ -289,6 +394,17 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
 
     useEffect(() => { void load(); void loadRuns() }, [load, loadRuns])
 
+    // Staleness is derived from a clock, so without a tick it only recomputes when
+    // something else re-renders the board — an open Roundup would never dim a card
+    // as it aged past the threshold, and every age label would freeze at load time.
+    // One minute is well under the coarsest thing we display (minutes) and costs
+    // nothing. The helpers stay pure: only this caller reads the clock.
+    const [now, setNow] = useState(() => Date.now())
+    useEffect(() => {
+      const t = setInterval(() => setNow(Date.now()), 60_000)
+      return () => clearInterval(t)
+    }, [])
+
     // Live-refresh: the host forwards docstore notice changes as `notice.updated`
     // deltas (post, amend, pull, and run-end cascade all land here).
     useEffect(() => {
@@ -308,14 +424,25 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
       })
     }, [])
 
-    const total = notices?.length ?? 0
+    // The header count is the "does anything need me" signal, so dismissed cards
+    // are counted separately rather than padding the headline number.
+    const dismissedCount = (notices ?? []).filter(isDismissed).length
+    const total = (notices?.length ?? 0) - dismissedCount
+    // "0 notices" alongside visible dismissed cards reads as a contradiction, so
+    // the zero-live case says what it means instead of counting to zero.
+    const countLabel = `${total === 0 ? 'nothing needs you' : `${total} notice${total === 1 ? '' : 's'}`}${
+      dismissedCount ? ` · ${dismissedCount} dismissed` : ''}`
 
     return (
       <div className="w-full h-full flex flex-col rounded-lg overflow-hidden bg-neutral-900 text-neutral-100">
         <div className="widget-drag-handle flex items-center gap-2 px-3 py-2 border-b border-neutral-700 bg-neutral-800 cursor-grab">
           <span className="text-sm font-bold tracking-wide">📋 Roundup</span>
           <span className="text-xs text-neutral-400">
-            {loadError ? "couldn't reach the board" : notices === null ? 'gathering…' : `${total} notice${total === 1 ? '' : 's'}`}
+            {loadError
+              ? "couldn't reach the board"
+              : notices === null
+                ? 'gathering…'
+                : countLabel}
           </span>
         </div>
 
@@ -354,7 +481,14 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
                 </button>
               </div>
               {group.notices.map(n => (
-                <NoticeCard key={n.id} notice={n} isOpen={expanded.has(n.id)} onToggle={() => toggle(n.id)} />
+                <NoticeCard
+                  key={n.id}
+                  notice={n}
+                  isOpen={expanded.has(n.id)}
+                  onToggle={() => toggle(n.id)}
+                  onChanged={load}
+                  now={now}
+                />
               ))}
             </section>
           ))}

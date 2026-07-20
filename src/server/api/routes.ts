@@ -2155,6 +2155,44 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST   /api/notices/:id/dismiss — the USER marks a notice off their plate
+  // DELETE /api/notices/:id/dismiss — the USER undoes that (R24)
+  //
+  // One optional timestamp on the envelope, deliberately NOT a status workflow:
+  // no enum, no lanes, no state machine. The notice is NOT deleted — it stays on
+  // the board dimmed and collapsed so the board keeps a short memory and the undo
+  // is one click away.
+  //
+  // Critically, unlike the /answer path this delivers NO prompt to the posting
+  // session. Dismissing is a view-level act about the user's attention; prompting
+  // would cost the agent a turn and make the board noisy to post to. The agent
+  // remains responsible for pulling a notice it knows is resolved.
+  //
+  // Must be matched BEFORE the generic `DELETE /api/notices/:id` pull route below,
+  // which is a startsWith match and would otherwise swallow `/dismiss` and delete
+  // the notice outright.
+  if ((method === 'POST' || method === 'DELETE') && /^\/api\/notices\/[^/]+\/dismiss$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const id = decodeURIComponent(path.slice('/api/notices/'.length, -'/dismiss'.length))
+    const notice = ctx.docStore.getNotice(id)
+    if (!notice) {
+      fail(res, 'NOT_FOUND', `Notice ${id} not found`)
+      return true
+    }
+    // `amendedAt` is NOT bumped: "amended" means the AGENT edited the notice, and
+    // the derived staleness signal reads that field. A user dismissing must not
+    // make an old notice look freshly tended.
+    // POST is idempotent: re-dismissing an already-dismissed notice keeps the
+    // ORIGINAL timestamp. Re-stamping would rewrite when the user actually set it
+    // aside — and would emit a pointless SSE delta on every repeat.
+    const updated: Notice = method === 'POST'
+      ? { ...notice, dismissedAt: notice.dismissedAt ?? Date.now() }
+      : { ...notice, dismissedAt: undefined }
+    ctx.docStore.upsertNotice(updated)
+    ok(res, updated)
+    return true
+  }
+
   // DELETE /api/notices/:id — pull a notice down (R18)
   if (method === 'DELETE' && url.startsWith('/api/notices/')) {
     const id = url.slice('/api/notices/'.length)
