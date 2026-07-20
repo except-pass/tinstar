@@ -129,6 +129,41 @@ describe('DocumentStore notices', () => {
     expect(events).toHaveLength(0)
   })
 
+  // Guards the noticeEqual dismissedAt compare. The user's dismiss bit is the
+  // ONLY thing that changes on a dismiss write, so if noticeEqual stopped
+  // comparing it the write would short-circuit SILENTLY: no SSE delta, and the
+  // board would never dim the card. Both assertions below would fail.
+  it('treats dismissedAt by value: dismissing emits one change, an identical re-upsert emits none', () => {
+    const store = new DocumentStore()
+    store.upsertNotice(makeNotice())
+    const events: Change[] = []
+    store.changes.on('change', e => events.push(e as Change))
+
+    store.upsertNotice(makeNotice({ dismissedAt: 1_700_000_060_000 }))
+    expect(events).toHaveLength(1)
+    expect(store.getNotice('notice-1')!.dismissedAt).toBe(1_700_000_060_000)
+
+    events.length = 0
+    store.upsertNotice(makeNotice({ dismissedAt: 1_700_000_060_000 }))
+    expect(events).toHaveLength(0)
+  })
+
+  it('undismissing (clearing dismissedAt) emits a change; absent and undefined are the same value', () => {
+    const store = new DocumentStore()
+    store.upsertNotice(makeNotice({ dismissedAt: 1_700_000_060_000 }))
+    const events: Change[] = []
+    store.changes.on('change', e => events.push(e as Change))
+
+    store.upsertNotice(makeNotice({ dismissedAt: undefined }))
+    expect(events).toHaveLength(1)
+    expect(store.getNotice('notice-1')!.dismissedAt).toBeUndefined()
+
+    // An explicit `undefined` and an absent key must not look like a change.
+    events.length = 0
+    store.upsertNotice(makeNotice())
+    expect(events).toHaveLength(0)
+  })
+
   it('pulls a notice: deleteNotice removes it and emits a change with data:null; a missing id returns false and emits nothing', () => {
     const store = new DocumentStore()
     store.upsertNotice(makeNotice())

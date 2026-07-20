@@ -36,12 +36,14 @@ function answerableNotice(over: Partial<Notice> = {}): Notice {
 interface Harness {
   api: TinstarPluginAPI
   answerCalls: Array<{ id: string; body: { choices?: string[]; text?: string; dissent?: boolean } }>
+  dismissCalls: Array<{ id: string; method: string }>
   fitWidget: ReturnType<typeof vi.fn>
   setAnswerResponder(r: (id: string) => Promise<Response>): void
 }
 
 function makeApi(notices: Notice[]): Harness {
   const answerCalls: Harness['answerCalls'] = []
+  const dismissCalls: Harness['dismissCalls'] = []
   const fitWidget = vi.fn()
   let answerResponder = async (_id: string): Promise<Response> => jsonResponse({ ok: true, data: { delivered: false } })
 
@@ -58,12 +60,25 @@ function makeApi(notices: Notice[]): Harness {
           answerCalls.push({ id: m[1]!, body: JSON.parse(init.body as string) })
           return answerResponder(m[1]!)
         }
+        // Dismiss / undo: mutate the backing array so the widget's reload after
+        // onChanged() reflects the server's new truth, like the real backend.
+        const d = path.match(/^\/api\/notices\/([^/]+)\/dismiss$/)
+        if (d && (init?.method === 'POST' || init?.method === 'DELETE')) {
+          dismissCalls.push({ id: d[1]!, method: init.method })
+          const idx = notices.findIndex(n => n.id === d[1])
+          if (idx >= 0) {
+            notices[idx] = init.method === 'POST'
+              ? { ...notices[idx]!, dismissedAt: 1_700_000_500_000 }
+              : { ...notices[idx]!, dismissedAt: undefined }
+          }
+          return jsonResponse({ ok: true, data: notices[idx] ?? null })
+        }
         return jsonResponse({ ok: false }, 404)
       },
     },
   } as unknown as TinstarPluginAPI
 
-  return { api, answerCalls, fitWidget, setAnswerResponder: r => { answerResponder = r } }
+  return { api, answerCalls, dismissCalls, fitWidget, setAnswerResponder: r => { answerResponder = r } }
 }
 
 function renderWidget(h: Harness) {
@@ -223,5 +238,104 @@ describe('RoundupWidget — viewport jump (U5/R12)', () => {
     renderWidget(h)
     fireEvent.click(await screen.findByRole('button', { name: /jump/ }))
     expect(h.fitWidget).toHaveBeenCalledWith('run-CLD-run-1')
+  })
+})
+
+describe('groupByRun — dismissed sinks below live (R24)', () => {
+  it('sorts every dismissed notice below every live one, even a dismissed needs-you', () => {
+    const groups = groupByRun([
+      // A dismissed needs-you would otherwise sort FIRST (needs-you outranks fyi).
+      answerableNotice({ id: 'dismissed-needs-you', kind: 'needs-you', dismissedAt: 1_700_000_500_000 }),
+      answerableNotice({ id: 'live-fyi', kind: 'fyi' }),
+      answerableNotice({ id: 'live-needs-you', kind: 'needs-you' }),
+      answerableNotice({ id: 'dismissed-fyi', kind: 'fyi', dismissedAt: 1_700_000_500_000 }),
+    ])
+    expect(groups[0]!.notices.map(n => n.id)).toEqual([
+      'live-needs-you', 'live-fyi', 'dismissed-needs-you', 'dismissed-fyi',
+    ])
+  })
+
+  it('still orders live notices needs-you-first, newest-amended-first', () => {
+    const groups = groupByRun([
+      answerableNotice({ id: 'old', kind: 'needs-you', amendedAt: 1 }),
+      answerableNotice({ id: 'fyi', kind: 'fyi', amendedAt: 9 }),
+      answerableNotice({ id: 'new', kind: 'needs-you', amendedAt: 5 }),
+    ])
+    expect(groups[0]!.notices.map(n => n.id)).toEqual(['new', 'old', 'fyi'])
+  })
+})
+
+describe('RoundupWidget — dismissing a notice (R24)', () => {
+  it('dismisses via POST, collapses the body, and keeps the card with an undo', async () => {
+    const h = makeApi([answerableNotice()])
+    const { container } = renderWidget(h)
+
+    // Expand it first so we can prove the body is hidden after dismissing.
+    fireEvent.click(await screen.findByText('Deploy or wait?'))
+    expect(await screen.findByRole('radio', { name: 'Deploy now' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /Dismiss/ }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Undo/ })).toBeTruthy())
+    expect(h.dismissCalls).toEqual([{ id: 'notice-1', method: 'POST' }])
+    // Non-destructive: the card is still on the board, just dimmed + collapsed.
+    expect(screen.getByText('Deploy or wait?')).toBeTruthy()
+    expect(container.querySelector('[data-testid="notice-notice-1"][data-dismissed="true"]')).toBeTruthy()
+    expect(screen.queryByRole('radio', { name: 'Deploy now' })).toBeNull()
+  })
+
+  it('dismissing does NOT answer the notice (no prompt is delivered to the agent)', async () => {
+    const h = makeApi([answerableNotice()])
+    renderWidget(h)
+    fireEvent.click(await screen.findByRole('button', { name: /Dismiss/ }))
+    await waitFor(() => expect(h.dismissCalls).toHaveLength(1))
+    expect(h.answerCalls).toHaveLength(0)
+  })
+
+  it('undoes a dismissal via DELETE and brings the card back to life', async () => {
+    const h = makeApi([answerableNotice({ dismissedAt: 1_700_000_500_000 })])
+    const { container } = renderWidget(h)
+
+    fireEvent.click(await screen.findByRole('button', { name: /Undo/ }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Dismiss/ })).toBeTruthy())
+    expect(h.dismissCalls).toEqual([{ id: 'notice-1', method: 'DELETE' }])
+    expect(container.querySelector('[data-dismissed="true"]')).toBeNull()
+  })
+
+  it('renders a dismissed FYI without its Disagree affordance', async () => {
+    const fyi: Notice = {
+      id: 'fyi-3', runId: 'CLD-run-1', kind: 'fyi', headline: 'Skipped a flaky test',
+      createdAt: 1_700_000_000_000, amendedAt: 1_700_000_000_000, dismissedAt: 1_700_000_500_000,
+    }
+    const h = makeApi([fyi])
+    renderWidget(h)
+    await screen.findByText('Skipped a flaky test')
+    expect(screen.queryByRole('button', { name: 'Disagree' })).toBeNull()
+  })
+
+  it('renders dismissed cards after live ones in the DOM', async () => {
+    const h = makeApi([
+      answerableNotice({ id: 'gone', headline: 'Already handled', dismissedAt: 1_700_000_500_000 }),
+      answerableNotice({ id: 'here', headline: 'Still needs you' }),
+    ])
+    const { container } = renderWidget(h)
+    await screen.findByText('Still needs you')
+    const ids = [...container.querySelectorAll('[data-testid^="notice-"]')].map(el => el.getAttribute('data-testid'))
+    expect(ids).toEqual(['notice-here', 'notice-gone'])
+  })
+
+  it('marks a notice untended for over a day as stale, and a fresh one not', async () => {
+    const now = Date.now()
+    const h = makeApi([
+      answerableNotice({ id: 'old', headline: 'Old ask', amendedAt: now - 3 * 24 * 60 * 60 * 1000 }),
+      answerableNotice({ id: 'fresh', headline: 'Fresh ask', amendedAt: now - 60_000 }),
+    ])
+    const { container } = renderWidget(h)
+    await screen.findByText('Old ask')
+    expect(container.querySelector('[data-testid="notice-old"][data-stale="true"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="notice-fresh"][data-stale="true"]')).toBeNull()
+    // The derived age is shown on the card, so old cards read as old.
+    expect(screen.getByText('3d ago')).toBeTruthy()
   })
 })
