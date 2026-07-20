@@ -33,10 +33,13 @@ export async function createWorktree(projectPath: string, sessionName: string): 
     await git(['-C', projectPath, 'worktree', 'add', wtDir, sessionName])
   }
 
-  // Inherit .claude dir from base repo
+  // Inherit .claude from the base repo when the worktree doesn't already have
+  // one. Tracked `.claude` (or a prior checkout) already lands via `git worktree
+  // add`; re-copying then throws EEXIST — especially when the tree contains
+  // symlinks (Node's cpSync fails hard on those).
   const baseClaude = join(projectPath, '.claude')
-  if (existsSync(baseClaude)) {
-    const wtClaude = join(wtDir, '.claude')
+  const wtClaude = join(wtDir, '.claude')
+  if (existsSync(baseClaude) && !existsSync(wtClaude)) {
     cpSync(baseClaude, wtClaude, { recursive: true })
   }
 
