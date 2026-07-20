@@ -3900,6 +3900,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
               task: retiredRun?.task || undefined,
               epic: retiredRun?.epic || undefined,
               initiative: retiredRun?.initiative || undefined,
+              // Resolve the project now — entity settings are the only source,
+              // and after the run is gone there is nothing left to resolve from.
+              project: (retiredRun?.taskId
+                ? resolveEntitySettings(retiredRun.taskId, 'task', ctx.docStore)?.resolved.project
+                : undefined) || undefined,
               workspacePath: session?.workspace.path ?? undefined,
               model: lastModel ?? session?.modelOverride ?? undefined,
               created: session?.created,
@@ -3979,7 +3984,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       const all = ctx.docStore.getAllTombstones()
       const matched = q
         ? all.filter(t =>
-            [t.coversSummary, t.sessionName, t.task, t.epic, t.initiative]
+            [t.coversSummary, t.sessionName, t.displayName, t.task, t.epic, t.initiative, t.project, t.workspacePath]
               .some(f => f?.toLowerCase().includes(q)))
         : all
       // Newest graves first.

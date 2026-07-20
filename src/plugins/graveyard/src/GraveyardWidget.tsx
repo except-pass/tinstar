@@ -29,10 +29,53 @@ function shortWhen(iso: string | undefined): string {
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : iso
 }
 
+/** A grave's worktree, as its workspace directory name. Unlike `project` (which
+ *  is recorded at retire-time and absent on older graves), this is derived, so
+ *  it works on every grave ever buried. */
+function worktreeOf(t: Tombstone): string | undefined {
+  const p = t.workspacePath?.replace(/\/+$/, '')
+  return p ? p.slice(p.lastIndexOf('/') + 1) || undefined : undefined
+}
+
+/** Distinct facet values present in the graveyard, alphabetical. Graves missing
+ *  the facet contribute nothing — an absent value is unknown, not a category. */
+function facetValues(graves: Tombstone[], of: (t: Tombstone) => string | undefined): string[] {
+  return [...new Set(graves.map(of).filter((v): v is string => !!v))].sort()
+}
+
+/** One facet's chip row. Renders nothing when the graveyard has no values for
+ *  the facet — a row offering only "all" is noise, not a filter. */
+function FilterRow({ testId, label, values, active, onPick }: {
+  testId: string
+  label: string
+  values: string[]
+  active: string | null
+  onPick: (v: string | null) => void
+}) {
+  if (values.length === 0) return null
+  const chip = (on: boolean) =>
+    `px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
+      on ? 'bg-amber-600 border-amber-400 text-amber-50 font-bold'
+         : 'bg-amber-950/40 border-amber-900/50 text-amber-200/70 hover:bg-amber-900/50'
+    }`
+  return (
+    <div data-testid={testId} className="flex items-center gap-1 flex-wrap px-2 pb-1">
+      <span className="text-[10px] uppercase tracking-wider text-amber-400/60 w-14 shrink-0">{label}</span>
+      <button data-chip="all" onClick={() => onPick(null)} className={chip(active === null)}>all</button>
+      {values.map(v => (
+        // Clicking the active chip clears it — a second click is the way out.
+        <button key={v} onClick={() => onPick(active === v ? null : v)} className={chip(active === v)}>{v}</button>
+      ))}
+    </div>
+  )
+}
+
 export function makeGraveyardWidget(api: TinstarPluginAPI) {
   return function Graveyard(_props: WidgetProps) {
     const [graves, setGraves] = useState<Tombstone[] | null>(null)
     const [query, setQuery] = useState('')
+    const [project, setProject] = useState<string | null>(null)
+    const [worktree, setWorktree] = useState<string | null>(null)
     const [selected, setSelected] = useState<string | null>(null)
     const [busy, setBusy] = useState<string | null>(null)
     const [notice, setNotice] = useState<string | null>(null)
@@ -64,20 +107,33 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
       return () => sub.dispose()
     }, [load])
 
+    const projects = useMemo(() => facetValues(graves ?? [], g => g.project), [graves])
+    const worktrees = useMemo(() => facetValues(graves ?? [], worktreeOf), [graves])
+
+    // Chips narrow first, then the text search runs over what's left — so a
+    // query and a chip compose instead of competing.
+    const scoped = useMemo(
+      () => (graves ?? []).filter(g =>
+        (!project || g.project === project) && (!worktree || worktreeOf(g) === worktree)),
+      [graves, project, worktree],
+    )
+
     const fuse = useMemo(
-      () => new Fuse(graves ?? [], {
-        keys: ['coversSummary', 'displayName', 'sessionName', 'task', 'epic', 'initiative'],
+      () => new Fuse(scoped, {
+        // project + workspacePath are indexed too, so typing a project or branch
+        // name finds graves even with every chip cleared.
+        keys: ['coversSummary', 'displayName', 'sessionName', 'task', 'epic', 'initiative', 'project', 'workspacePath'],
         threshold: 0.4,
         ignoreLocation: true,
       }),
-      [graves],
+      [scoped],
     )
 
     const shown = useMemo(() => {
       const q = query.trim()
-      if (!q) return graves ?? []
+      if (!q) return scoped
       return fuse.search(q).map(r => r.item)
-    }, [query, fuse, graves])
+    }, [query, fuse, scoped])
 
     const active = shown.find(g => g.convId === selected) ?? null
 
@@ -138,6 +194,9 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
           className="m-2 px-2 py-1 text-sm rounded outline-none bg-amber-50/90 text-stone-800 placeholder-stone-500 border border-amber-900/40 focus:border-amber-700"
         />
 
+        <FilterRow testId="project-filter" label="Project" values={projects} active={project} onPick={setProject} />
+        <FilterRow testId="worktree-filter" label="Worktree" values={worktrees} active={worktree} onPick={setWorktree} />
+
         <div className="flex-1 flex min-h-0">
           <ul className="w-1/2 overflow-y-auto border-r-2 border-amber-900/50 text-sm">
             {/* Prominent error only when there's no data to fall back on. On a
@@ -181,6 +240,8 @@ export function makeGraveyardWidget(api: TinstarPluginAPI) {
                 <div className="text-amber-100/90 italic whitespace-pre-wrap">“{orDash(active.coversSummary)}”</div>
                 <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-xs text-amber-300/70 mt-1">
                   <dt>Task</dt><dd className="text-amber-100/90">{orDash(active.task)}</dd>
+                  <dt>Project</dt><dd className="text-amber-100/90">{orDash(active.project)}</dd>
+                  <dt>Worktree</dt><dd className="text-amber-100/90">{orDash(worktreeOf(active))}</dd>
                   <dt>Buried</dt><dd className="text-amber-100/90">{shortWhen(active.retiredAt)}</dd>
                   <dt>Last workshop</dt><dd className="text-amber-100/90 break-all">{orDash(active.workspacePath)}</dd>
                   <dt>Model</dt><dd className="text-amber-100/90">{orDash(active.model)}</dd>

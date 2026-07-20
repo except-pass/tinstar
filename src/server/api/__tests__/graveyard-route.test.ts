@@ -317,3 +317,73 @@ describe('GET/POST /api/graveyard', () => {
     }
   })
 })
+
+describe('graveyard — project + worktree', () => {
+  it('records the resolved project on the tombstone at retire-time', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      createSession(srv.sessionsDir, { name: 'projecty', backend: 'tmux' })
+      const convId = getSession(srv.sessionsDir, 'projecty')!.conversation.id!
+      seedRun(srv.docStore, 'projecty', recap())
+      // seedRun parents the run under task-1; the project is inherited from it.
+      srv.docStore.upsertTask('task-1', {
+        id: 'task-1', name: 'Graveyard design', epicId: '', initiativeId: '',
+        status: 'active', settings: { project: 'tinstar' },
+      })
+
+      await srv.fetch('/api/sessions/projecty', { method: 'DELETE' })
+
+      expect((srv.docStore.getTombstone(convId) as Tombstone).project).toBe('tinstar')
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves project absent when no task settings resolve one', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      createSession(srv.sessionsDir, { name: 'projectless', backend: 'tmux' })
+      const convId = getSession(srv.sessionsDir, 'projectless')!.conversation.id!
+      seedRun(srv.docStore, 'projectless', recap())
+
+      await srv.fetch('/api/sessions/projectless', { method: 'DELETE' })
+
+      // Absent, not '' — the widget distinguishes unknown from a real project.
+      expect((srv.docStore.getTombstone(convId) as Tombstone).project).toBeUndefined()
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    ['project', 'tinstar'],
+    ['workspace path', 'fix-run-title'],
+  ])('search matches on %s', async (_label, q) => {
+    const root = mkdtempSync(join(tmpdir(), 'gy-route-'))
+    const srv = createTestServer(root)
+    try {
+      srv.docStore.upsertTombstone({
+        convId: 'c-hit', sessionName: 'hit', coversSummary: 'unrelated summary',
+        project: 'tinstar', workspacePath: '/home/ubuntu/wt/fix-run-title',
+        retiredAt: '2026-07-01T12:00:00Z',
+      })
+      srv.docStore.upsertTombstone({
+        convId: 'c-miss', sessionName: 'miss', coversSummary: 'unrelated summary',
+        project: 'cmsandbox', workspacePath: '/home/ubuntu/repo/cmsandbox',
+        retiredAt: '2026-07-01T12:00:00Z',
+      })
+
+      const res = await srv.fetch(`/api/graveyard?q=${encodeURIComponent(q)}`)
+      const body = await res.json() as { data: Tombstone[] }
+
+      expect(body.data.map(t => t.convId)).toEqual(['c-hit'])
+    } finally {
+      await srv.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})

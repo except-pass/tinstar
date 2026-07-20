@@ -158,6 +158,13 @@ export interface Tombstone {
   task?: string
   epic?: string
   initiative?: string
+  /**
+   * Project the session belonged to, resolved from entity settings at
+   * retire-time. Absent on graves buried before this field existed — the
+   * settings that resolved them are gone, so there is no backfill. Treat
+   * absent as "unknown project", never as a project named "".
+   */
+  project?: string
   /** Workspace path the session ran in; may no longer exist at revive-time. */
   workspacePath?: string
   /** Model the session last ran with, if known. */
