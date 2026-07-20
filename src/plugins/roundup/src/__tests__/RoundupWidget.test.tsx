@@ -4,7 +4,8 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { ComponentType } from 'react'
 import type { Notice } from '../../../../domain/types'
-import { makeRoundupWidget, runNodeId, groupByRun } from '../RoundupWidget'
+import { makeRoundupWidget, runNodeId, groupByRun, askThread, isAwaitingReply } from '../RoundupWidget'
+import { UNIVERSAL_FOLLOW_UPS } from '../a2ui/followUps'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -37,8 +38,10 @@ interface Harness {
   api: TinstarPluginAPI
   answerCalls: Array<{ id: string; body: { choices?: string[]; text?: string; dissent?: boolean } }>
   dismissCalls: Array<{ id: string; method: string }>
+  repliesCalls: Array<{ id: string; body: { presetId?: string; text?: string; author?: string } }>
   fitWidget: ReturnType<typeof vi.fn>
   setAnswerResponder(r: (id: string) => Promise<Response>): void
+  setRepliesResponder(r: () => Promise<Response>): void
   /** Hold the dismiss response open, to exercise the in-flight guard. */
   setDismissGate(gate: Promise<void>): void
   /** Make the dismiss write succeed but the reload return the PRE-write snapshot,
@@ -49,10 +52,12 @@ interface Harness {
 function makeApi(notices: Notice[]): Harness {
   const answerCalls: Harness['answerCalls'] = []
   const dismissCalls: Harness['dismissCalls'] = []
+  const repliesCalls: Harness['repliesCalls'] = []
   let dismissGate: Promise<void> | null = null
   let frozen = false
   const fitWidget = vi.fn()
   let answerResponder = async (_id: string): Promise<Response> => jsonResponse({ ok: true, data: { delivered: false } })
+  let repliesResponder: (() => Promise<Response>) | null = null
 
   const api = {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -66,6 +71,26 @@ function makeApi(notices: Notice[]): Harness {
         if (m && init?.method === 'POST') {
           answerCalls.push({ id: m[1]!, body: JSON.parse(init.body as string) })
           return answerResponder(m[1]!)
+        }
+        // Follow-up thread: append to the backing notice so the widget's reload
+        // after onChanged() sees the server's new truth, like the real backend.
+        const r = path.match(/^\/api\/notices\/([^/]+)\/replies$/)
+        if (r && init?.method === 'POST') {
+          const body = JSON.parse(init.body as string)
+          repliesCalls.push({ id: r[1]!, body })
+          if (repliesResponder) return repliesResponder()
+          const idx = notices.findIndex(n => n.id === r[1])
+          if (idx >= 0) {
+            const text = body.presetId
+              ? (UNIVERSAL_FOLLOW_UPS.find(p => p.id === body.presetId)?.question ?? body.presetId)
+              : body.text
+            notices[idx] = {
+              ...notices[idx]!,
+              followUps: [...(notices[idx]!.followUps ?? []),
+                { id: `fu-${repliesCalls.length}`, author: 'user', text, createdAt: 1 }],
+            }
+          }
+          return jsonResponse({ ok: true, data: { notice: notices[idx] ?? null, delivered: true } })
         }
         // Dismiss / undo: mutate the backing array so the widget's reload after
         // onChanged() reflects the server's new truth, like the real backend.
@@ -87,8 +112,9 @@ function makeApi(notices: Notice[]): Harness {
   } as unknown as TinstarPluginAPI
 
   return {
-    api, answerCalls, dismissCalls, fitWidget,
+    api, answerCalls, dismissCalls, repliesCalls, fitWidget,
     setAnswerResponder: r => { answerResponder = r },
+    setRepliesResponder: r => { repliesResponder = r },
     setDismissGate: g => { dismissGate = g },
     freezeSnapshot: () => { frozen = true },
   }
@@ -453,5 +479,188 @@ describe('RoundupWidget — staleness ticks on its own', () => {
     await screen.findByText('Deploy or wait?')
     unmount()
     expect(clearSpy).toHaveBeenCalled()
+  })
+})
+
+describe('askThread / isAwaitingReply', () => {
+  it('appends optimistic questions after the persisted thread', () => {
+    const n = answerableNotice({ followUps: [{ id: 'a', author: 'agent', text: 'hi', createdAt: 1 }] })
+    const out = askThread(n, [{ id: 'p', author: 'user', text: 'why?', createdAt: 2 }])
+    expect(out.map(m => m.text)).toEqual(['hi', 'why?'])
+  })
+
+  it('shimmers only while the last word is the user\'s', () => {
+    expect(isAwaitingReply([])).toBe(false)
+    expect(isAwaitingReply([{ id: 'a', author: 'user', text: 'q', createdAt: 1 }])).toBe(true)
+    expect(isAwaitingReply([
+      { id: 'a', author: 'user', text: 'q', createdAt: 1 },
+      { id: 'b', author: 'agent', text: 'a', createdAt: 2 },
+    ])).toBe(false)
+  })
+})
+
+// The ask panel (U6). Its placement is the point: a compact secondary surface, not
+// part of the notice body, so a long thread never grows the card.
+describe('RoundupWidget — asking a follow-up (U6)', () => {
+  it('offers the ask panel on every notice, collapsed, without expanding the body', async () => {
+    const h = makeApi([answerableNotice()])
+    renderWidget(h)
+    // Present before anything is expanded, and it is NOT inside the body — the
+    // body's controls stay hidden until the card is expanded.
+    expect(await screen.findByTestId('ask-toggle-notice-1')).toBeTruthy()
+    expect(screen.queryByRole('radio', { name: 'Deploy now' })).toBeNull()
+    // Collapsed: no chips, no input.
+    expect(screen.queryByTestId('followup-chip-simplify')).toBeNull()
+    expect(screen.queryByTestId('ask-input-notice-1')).toBeNull()
+  })
+
+  it('shows the universal presets — including "Simplify your explanation" — on a notice that declared none', async () => {
+    const h = makeApi([answerableNotice()])
+    renderWidget(h)
+    fireEvent.click(await screen.findByTestId('ask-toggle-notice-1'))
+
+    for (const p of UNIVERSAL_FOLLOW_UPS) {
+      expect(screen.getByTestId(`followup-chip-${p.id}`)).toBeTruthy()
+    }
+    expect(screen.getByText('Simplify your explanation')).toBeTruthy()
+  })
+
+  it('also shows the agent-declared follow-ups, after the universal set', async () => {
+    const notice = answerableNotice({
+      content: {
+        root: 'root',
+        components: [
+          { id: 'root', component: 'Column', children: ['t', 'fu'] },
+          { id: 't', component: 'Text', text: 'body' },
+          { id: 'fu', component: 'FollowUp', label: 'How long is the rollback?', question: 'How long would a rollback take?' },
+        ],
+      },
+    })
+    const h = makeApi([notice])
+    renderWidget(h)
+    fireEvent.click(await screen.findByTestId('ask-toggle-notice-1'))
+    expect(screen.getByTestId('followup-chip-fu')).toBeTruthy()
+    expect(screen.getByText('How long is the rollback?')).toBeTruthy()
+  })
+
+  it('a FollowUp declaration renders nothing in the notice body — it belongs to the panel', async () => {
+    const notice = answerableNotice({
+      content: {
+        root: 'root',
+        components: [
+          { id: 'root', component: 'Column', children: ['t', 'fu'] },
+          { id: 't', component: 'Text', text: 'the body prose' },
+          { id: 'fu', component: 'FollowUp', label: 'Declared chip', question: 'q?' },
+        ],
+      },
+    })
+    const h = makeApi([notice])
+    renderWidget(h)
+    fireEvent.click(await screen.findByText('Deploy or wait?')) // expand the body
+    await screen.findByText('the body prose')
+    // The declaration is known to the catalog, so it draws neither a chip nor an
+    // "unsupported component" warning inline.
+    expect(screen.queryByText('Declared chip')).toBeNull()
+    expect(screen.queryByText(/unsupported/i)).toBeNull()
+  })
+
+  it('posts a preset question as the user and shows it on the thread immediately', async () => {
+    const h = makeApi([answerableNotice()])
+    renderWidget(h)
+    fireEvent.click(await screen.findByTestId('ask-toggle-notice-1'))
+    fireEvent.click(screen.getByTestId('followup-chip-simplify'))
+
+    const simplify = UNIVERSAL_FOLLOW_UPS.find(p => p.id === 'simplify')!
+    // Optimistic: the question is on the thread before the round trip settles.
+    await waitFor(() => expect(screen.getByText(simplify.question)).toBeTruthy())
+    await waitFor(() => expect(h.repliesCalls).toHaveLength(1))
+    expect(h.repliesCalls[0]).toEqual({ id: 'notice-1', body: { presetId: 'simplify', author: 'user' } })
+  })
+
+  it('posts freeform text and clears the input on success', async () => {
+    const h = makeApi([answerableNotice()])
+    renderWidget(h)
+    fireEvent.click(await screen.findByTestId('ask-toggle-notice-1'))
+
+    const input = screen.getByTestId('ask-input-notice-1') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'what does flaky mean here?' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+
+    await waitFor(() => expect(h.repliesCalls).toHaveLength(1))
+    expect(h.repliesCalls[0]!.body).toEqual({ text: 'what does flaky mean here?', author: 'user' })
+    await waitFor(() => expect((screen.getByTestId('ask-input-notice-1') as HTMLInputElement).value).toBe(''))
+  })
+
+  it('shimmers "agent is replying…" while the last message is the user\'s', async () => {
+    const h = makeApi([answerableNotice()])
+    renderWidget(h)
+    fireEvent.click(await screen.findByTestId('ask-toggle-notice-1'))
+    fireEvent.click(screen.getByTestId('followup-chip-why'))
+
+    await waitFor(() => expect(screen.getByTestId('ask-awaiting-open-notice-1')).toBeTruthy())
+  })
+
+  it('shows the shimmer while collapsed too, so a pending answer is visible at a glance', async () => {
+    const h = makeApi([answerableNotice({
+      followUps: [{ id: 'fu-1', author: 'user', text: 'why?', createdAt: 1 }],
+    })])
+    renderWidget(h)
+    expect(await screen.findByTestId('ask-awaiting-notice-1')).toBeTruthy()
+  })
+
+  it('stops shimmering once the agent has replied', async () => {
+    const h = makeApi([answerableNotice({
+      followUps: [
+        { id: 'fu-1', author: 'user', text: 'why?', createdAt: 1 },
+        { id: 'fu-2', author: 'agent', text: 'because CI is blocked', createdAt: 2 },
+      ],
+    })])
+    renderWidget(h)
+    await screen.findByTestId('ask-toggle-notice-1')
+    expect(screen.queryByTestId('ask-awaiting-notice-1')).toBeNull()
+  })
+
+  it('reverts the optimistic question and surfaces an error when the ask fails', async () => {
+    const h = makeApi([answerableNotice()])
+    h.setRepliesResponder(async () => jsonResponse({ ok: false, error: { message: 'nope' } }, 500))
+    renderWidget(h)
+    fireEvent.click(await screen.findByTestId('ask-toggle-notice-1'))
+    fireEvent.click(screen.getByTestId('followup-chip-why'))
+
+    const why = UNIVERSAL_FOLLOW_UPS.find(p => p.id === 'why')!
+    await waitFor(() => expect(screen.getByText('Could not send your question. Try again.')).toBeTruthy())
+    // Cleanly reverted: no ghost message, and no shimmer for a reply that isn't coming.
+    expect(screen.queryByText(why.question)).toBeNull()
+    expect(screen.queryByTestId('ask-awaiting-open-notice-1')).toBeNull()
+  })
+
+  it('says so when the question persisted but the session was unreachable', async () => {
+    const h = makeApi([answerableNotice()])
+    h.setRepliesResponder(async () => jsonResponse({ ok: true, data: { delivered: false } }))
+    renderWidget(h)
+    fireEvent.click(await screen.findByTestId('ask-toggle-notice-1'))
+    fireEvent.click(screen.getByTestId('followup-chip-why'))
+
+    await waitFor(() => expect(screen.getByText(/isn't reachable right now/)).toBeTruthy())
+  })
+
+  it('renders a persisted thread with both authors', async () => {
+    const h = makeApi([answerableNotice({
+      followUps: [
+        { id: 'fu-1', author: 'user', text: 'explain plainly?', createdAt: 1 },
+        { id: 'fu-2', author: 'agent', text: 'in plain words: …', createdAt: 2 },
+      ],
+    })])
+    renderWidget(h)
+    fireEvent.click(await screen.findByTestId('ask-toggle-notice-1'))
+    expect(screen.getByText('explain plainly?')).toBeTruthy()
+    expect(screen.getByText('in plain words: …')).toBeTruthy()
+  })
+
+  it('hides the ask panel on a dismissed notice — it is off the plate', async () => {
+    const h = makeApi([answerableNotice({ dismissedAt: 1_700_000_500_000 })])
+    renderWidget(h)
+    await screen.findByText('Deploy or wait?')
+    expect(screen.queryByTestId('ask-toggle-notice-1')).toBeNull()
   })
 })

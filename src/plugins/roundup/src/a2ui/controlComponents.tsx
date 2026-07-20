@@ -10,6 +10,7 @@
 import { createContext, useContext, type ReactNode } from 'react'
 import type { A2uiComponent } from '../../../../domain/types'
 import { parseChoice } from './controls'
+import type { FollowUpPreset } from './followUps'
 
 /** The host-owned form state for one notice. Held by the widget's NoticeCard
  *  (U3); the control components below read and mutate it through context. */
@@ -117,6 +118,29 @@ export function TextInputControl({ node }: { node: A2uiComponent }): ReactNode {
         className="w-full rounded border border-neutral-600 bg-neutral-800 px-2 py-1 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-amber-500 focus:outline-none disabled:opacity-70"
       />
     </div>
+  )
+}
+
+/** One ask chip in a notice's follow-up panel. Host-themed like every other control
+ *  here, and rendered from a validated `FollowUpPreset` — the label is agent-authored
+ *  text and nothing else, with no url/href anywhere on the component, so a chip can
+ *  never become a navigation vector. */
+export function FollowUpChip({ preset, disabled, onAsk }: {
+  preset: FollowUpPreset
+  disabled: boolean
+  onAsk: (preset: FollowUpPreset) => void
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      data-testid={`followup-chip-${preset.id}`}
+      title={preset.question}
+      disabled={disabled}
+      onClick={() => onAsk(preset)}
+      className="rounded-full border border-neutral-600 px-2 py-0.5 text-[11px] text-neutral-300 hover:border-amber-500 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {preset.label}
+    </button>
   )
 }
 

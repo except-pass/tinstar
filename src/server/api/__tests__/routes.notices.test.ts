@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
@@ -7,6 +7,8 @@ import type { AddressInfo } from 'node:net'
 import { handleRequest, type RouteContext } from '../routes'
 import { DocumentStore } from '../../stores/document-store'
 import type { Notice, Run } from '../../../domain/types'
+import type { Reply } from '../../../domain/pinSet'
+import { UNIVERSAL_FOLLOW_UPS, NOTICE_FOLLOWUP_TEXT_MAX } from '../../../plugins/roundup/src/a2ui/followUps'
 
 interface Harness {
   docStore: DocumentStore
@@ -514,5 +516,196 @@ describe('POST/DELETE /api/notices/:id/dismiss', () => {
     const res = await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'DELETE' })
     expect(res.status).toBe(200)
     expect(srv.docStore.getNotice(created.data.id)!.dismissedAt).toBeUndefined()
+  }))
+})
+
+// The follow-up thread (U6): the user asks a question about a notice before they
+// answer it, and the agent replies onto the same thread.
+describe('POST /api/notices/:id/replies', () => {
+  const reply = (srv: Harness, id: string, body: unknown) =>
+    srv.fetch(`/api/notices/${id}/replies`, { method: 'POST', body: JSON.stringify(body) })
+
+  // THE ROUTE-ORDERING GUARD.
+  //
+  // `/replies` is a sub-resource under `/api/notices/:id`, whose PATCH (amend) and
+  // DELETE (pull) handlers both match with a greedy `startsWith`. If the replies
+  // block is ever moved BELOW them, a request falls through to a handler that
+  // mutates or destroys the notice — and still returns 200, so a happy-path
+  // assertion alone would keep passing. This asserts the destructive outcome does
+  // NOT happen: after asking, the notice is still there and completely untouched
+  // apart from its thread.
+  it('does not pull or mutate the notice — the sub-resource route wins over the generic handlers', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    const before = srv.docStore.getNotice(created.data.id)!
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'simplify' })
+    expect(res.status).toBe(200)
+
+    const after = srv.docStore.getNotice(created.data.id)
+    expect(after).toBeDefined()                          // not pulled
+    expect(after!.headline).toBe(before.headline)        // not clobbered by the amend path
+    expect(after!.kind).toBe(before.kind)
+    expect(after!.content).toEqual(before.content)
+    expect(after!.createdAt).toBe(before.createdAt)
+    expect(after!.amendedAt).toBe(before.amendedAt)      // a question is not an agent amend
+    expect(after!.followUps).toHaveLength(1)             // and the thread actually got the message
+    // The board still lists it — a swallowed DELETE would leave an empty board.
+    const all = await (await srv.fetch('/api/notices')).json() as { data: Notice[] }
+    expect(all.data.map(n => n.id)).toContain(created.data.id)
+  }))
+
+  // ...and the STRUCTURAL half of the same guard.
+  //
+  // The behavioural test above is necessary but not sufficient: today no generic
+  // handler matches POST on the `/api/notices/` prefix, so moving this block below
+  // the amend/pull handlers would not currently break it. That safety is an
+  // accident of which verbs happen to exist, not a property anyone is maintaining
+  // — the moment someone adds a PATCH or POST prefix handler for notices, a
+  // misordered replies route starts silently eating requests. Assert the ordering
+  // itself, so a revert fails immediately rather than the next time a verb is added.
+  it('is registered BEFORE the greedy startsWith amend and pull handlers', () => {
+    const src = readFileSync(new URL('../routes.ts', import.meta.url), 'utf8')
+    const replies = src.indexOf("/^\\/api\\/notices\\/[^/]+\\/replies$/")
+    const amend = src.indexOf("method === 'PATCH' && url.startsWith('/api/notices/')")
+    const pull = src.indexOf("method === 'DELETE' && url.startsWith('/api/notices/')")
+    expect(replies).toBeGreaterThan(-1)
+    expect(amend).toBeGreaterThan(-1)
+    expect(pull).toBeGreaterThan(-1)
+    expect(replies).toBeLessThan(amend)
+    expect(replies).toBeLessThan(pull)
+  })
+
+  it('appends a universal preset question as the user, resolving it to the preset text', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'simplify' })
+    const body = await res.json() as { ok: boolean; data: { notice: Notice; reply: Reply; delivered: boolean } }
+    expect(body.ok).toBe(true)
+    expect(body.data.reply.author).toBe('user')
+    expect(body.data.reply.text).toBe(
+      UNIVERSAL_FOLLOW_UPS.find(p => p.id === 'simplify')!.question,
+    )
+    // No session on disk in this harness, so delivery is a best-effort miss — the
+    // question persists regardless, which is the whole point (KTD1).
+    expect(body.data.delivered).toBe(false)
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toHaveLength(1)
+  }))
+
+  it('ships "Simplify your explanation" in the universal preset set', () => {
+    const simplify = UNIVERSAL_FOLLOW_UPS.find(p => p.id === 'simplify')
+    expect(simplify).toBeDefined()
+    expect(simplify!.label).toBe('Simplify your explanation')
+    // The guidance is what makes it a de-nerd request rather than a dumb-it-down one.
+    expect(simplify!.guidance).toMatch(/precision/i)
+    expect(simplify!.guidance).toMatch(/jargon/i)
+  })
+
+  it('accepts freeform text and appends it verbatim', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    await reply(srv, created.data.id, { author: 'user', text: 'what does "flaky" mean here?' })
+    const thread = srv.docStore.getNotice(created.data.id)!.followUps!
+    expect(thread).toHaveLength(1)
+    expect(thread[0]!.text).toBe('what does "flaky" mean here?')
+  }))
+
+  it('defaults the author to agent, so the curl baked into the prompt works as written', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    await reply(srv, created.data.id, { text: 'because the migration is irreversible' })
+    expect(srv.docStore.getNotice(created.data.id)!.followUps![0]!.author).toBe('agent')
+  }))
+
+  it('keeps the thread in order across a user question and an agent reply', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    await reply(srv, created.data.id, { author: 'user', presetId: 'why' })
+    await reply(srv, created.data.id, { author: 'agent', text: 'because CI is blocked on it' })
+
+    const thread = srv.docStore.getNotice(created.data.id)!.followUps!
+    expect(thread.map(m => m.author)).toEqual(['user', 'agent'])
+  }))
+
+  it('accepts an agent-declared FollowUp id from this notice', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const withDeclared = {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Column', children: ['t', 'fu'] },
+        { id: 't', component: 'Text', text: 'Rollback or roll forward?' },
+        { id: 'fu', component: 'FollowUp', label: 'How long is the rollback?', question: 'How long would a rollback take?' },
+      ],
+    }
+    const created = await (await post(srv, 'sess-1', { content: withDeclared })).json() as { data: Notice }
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'fu' })
+    expect(res.status).toBe(200)
+    expect(srv.docStore.getNotice(created.data.id)!.followUps![0]!.text).toBe('How long would a rollback take?')
+  }))
+
+  it('rejects a presetId this notice does not offer — nothing is persisted', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'not-a-preset' })
+    expect(res.status).toBe(400)
+    const body = await res.json() as { ok: boolean; error: { code: string } }
+    expect(body.error.code).toBe('INVALID_PARAMS')
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toBeUndefined()
+  }))
+
+  it('rejects malformed bodies with INVALID_PARAMS and never hangs', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    for (const bad of ['null', '42', '[]', '"hi"']) {
+      const res = await srv.fetch(`/api/notices/${created.data.id}/replies`, { method: 'POST', body: bad })
+      expect(res.status).toBe(400)
+      const body = await res.json() as { ok: boolean; error: { code: string } }
+      expect(body.error.code).toBe('INVALID_PARAMS')
+    }
+    // Non-string / empty text and a bad author are refused too.
+    for (const bad of [{ text: 12 }, { text: '   ' }, { presetId: 7 }, { text: 'x', author: 'nobody' }]) {
+      const res = await reply(srv, created.data.id, bad)
+      expect(res.status).toBe(400)
+    }
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toBeUndefined()
+  }))
+
+  it('refuses oversize question text with a 413', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    const res = await reply(srv, created.data.id, { author: 'user', text: 'x'.repeat(NOTICE_FOLLOWUP_TEXT_MAX + 1) })
+    expect(res.status).toBe(413)
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toBeUndefined()
+  }))
+
+  it('404s for an unknown notice', withServer(async srv => {
+    const res = await reply(srv, 'notice-nope', { author: 'user', text: 'hello?' })
+    expect(res.status).toBe(404)
+  }))
+
+  // The thread is server-owned: an agent amending its notice must not be able to
+  // drop a question that landed mid-flight.
+  it('survives a PATCH amend, and PATCH cannot write followUps', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    await reply(srv, created.data.id, { author: 'user', presetId: 'simplify' })
+
+    const res = await srv.fetch(`/api/notices/${created.data.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ headline: 'Rewritten, plainly', followUps: [] }),
+    })
+    expect(res.status).toBe(200)
+
+    const after = srv.docStore.getNotice(created.data.id)!
+    expect(after.headline).toBe('Rewritten, plainly')
+    expect(after.followUps).toHaveLength(1) // the client's `followUps: []` was ignored
   }))
 })

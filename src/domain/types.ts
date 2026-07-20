@@ -6,6 +6,11 @@
 // duplicating the domain root. This file is now the canonical home;
 // src/types.ts is a thin re-export shim for backwards compatibility.
 
+// Type-only (erases at build time, so the cycle with pinSet.ts never exists at
+// runtime): notice follow-up threads reuse the notes/pins `Reply` shape verbatim
+// rather than growing a parallel message type.
+import type { Reply } from './pinSet'
+
 /** Single source of truth for session/run status — matches Qala's session states */
 export type SessionStatus = 'creating' | 'running' | 'idle' | 'needs_attention' | 'stopped'
 
@@ -404,6 +409,19 @@ export interface Notice {
    *  attention — it never prompts the posting agent (unlike `answer`), and the
    *  agent is still expected to pull a notice it knows is resolved. */
   dismissedAt?: number
+  /** The follow-up thread: the user's questions about this notice and the agent's
+   *  answers, oldest first. Append-only and SERVER-owned — written exclusively by
+   *  POST /api/notices/:id/replies, never by the PATCH amend path, so an agent
+   *  amending its notice can't clobber a question that landed mid-flight (the same
+   *  guarantee `mergePreservingReplies` gives note threads).
+   *
+   *  Reuses the notes/pins `Reply` shape so both threads render and read alike.
+   *  Absent until the first question — a notice nobody asked about carries none.
+   *  The thread is a SECONDARY surface in the widget (a collapsible ask panel), not
+   *  part of the notice body: the card must stay glanceable no matter how long the
+   *  thread gets. Knowledge worth keeping belongs in `content` via an amend; the
+   *  thread is the conversation that got it there. */
+  followUps?: Reply[]
   createdAt: number
   amendedAt: number
 }

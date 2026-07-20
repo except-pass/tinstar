@@ -65,6 +65,10 @@ Anything outside this set (or a malformed `content`) **degrades**: the headline 
 shows, plus a "couldn't render" signal — the user always reaches you, but a garbled
 notice is a worse notice. Stick to the table.
 
+Three more component types exist for interaction rather than prose: `Choice`,
+`TextInput`, and `Submit` (see "Make a `needs-you` notice answerable"), plus `FollowUp`
+(see "Declare the follow-ups you expect").
+
 ## Make a `needs-you` notice answerable (choices + free text)
 
 A `needs-you` notice can carry **interactive controls** so the user picks an option and
@@ -129,6 +133,103 @@ Act on this answer, then keep the board honest: amend the notice … or pull it 
 ```
 
 Treat a dissent as a real interruption: reconsider the call, then amend or pull the FYI.
+
+## The user can ask you a follow-up before they answer
+
+Answering is not always the user's first move. Often they need to ask something first —
+"why this?", "what if I do nothing?", and most of all **"explain that more plainly"** —
+before they can decide. Every notice therefore carries a small **ask panel**: a
+collapsible thread beside the card where the user asks and you answer.
+
+### How a follow-up arrives
+
+When the user asks, Tinstar **appends the question to the notice's thread** and
+**delivers a prompt to your session**:
+
+```
+The user asked a follow-up about your Roundup notice "Which rollback path?" (notice notice-abc123).
+
+Their question: Can you explain that more plainly?
+
+What they are asking for: Rewrite this notice's background in plainer language. …
+
+Do BOTH of these — they are not alternatives:
+
+1. REPLY on the thread …
+2. AMEND the notice whenever the answer improves it …
+```
+
+Like an answer, the question is **durable whether or not you were reachable** — if you
+were busy, you'll find it on the notice via `GET /api/notices`. `amendedAt` does *not*
+move when someone asks: a question is not an amend, and the board's staleness signal
+must keep telling the truth about when *you* last tended the notice.
+
+### You must do BOTH: reply AND amend
+
+This is the part that's easy to get wrong. Answering only on the thread is a **failure
+mode**, not a shortcut:
+
+1. **Reply on the thread** — so the user gets their answer where they asked:
+
+   ```bash
+   curl -s -X POST "$TINSTAR_URL/api/notices/notice-abc123/replies" \
+     -H 'Content-Type: application/json' \
+     -d '{"author":"agent","text":"Reverting takes ~2 minutes; rolling forward needs a review."}'
+   ```
+
+2. **Amend the notice** whenever the answer improves it — which is most of the time:
+
+   ```bash
+   curl -s -X PATCH "$TINSTAR_URL/api/notices/notice-abc123" \
+     -H 'Content-Type: application/json' \
+     -d '{"content": { "root": "root", "components": [ … revised … ] }}'
+   ```
+
+If your reply contains anything a *fresh* reader of the board would need, it belongs in
+the notice body. A thread holding the real explanation while the card still says the old
+thing means the next person has to read a conversation to learn what the notice should
+have said in the first place. **The thread is the conversation; the notice is the record.**
+
+Keep the reply concise — the depth goes into the amended notice.
+
+### "Simplify your explanation" — what it actually requires
+
+This is the preset the user reaches for most, and it does **not** mean "dumb it down".
+It means rewrite the notice's background at **de-nerd depth**:
+
+- **Plain words.** Swap needless jargon for ordinary language.
+- **Jargon unpacked.** Define every project-internal, acronym-heavy, or
+  framework-specific term the first time it appears — `term (plain-words meaning)`.
+- **One idea per sentence.** Break long compound sentences apart.
+- **Precision KEPT.** Every load-bearing detail, caveat, and edge case stays. Do not
+  blur a real distinction just to sound plain, and do not drop the specifics the
+  decision actually turns on.
+
+The target reader is a **smart peer outside this particular niche** — not a beginner.
+And **amend the notice** with the plainer version; don't just append a glossary to the
+thread and leave the original wall of jargon standing.
+
+### Declare the follow-ups you expect
+
+Beyond the universal presets (`Simplify your explanation`, `Why this?`,
+`What if I do nothing?`, `More background`, `Show me the code`), which appear on
+**every** notice for free, you can declare questions specific to *this* notice:
+
+| `component` | Fields | Renders as |
+|---|---|---|
+| `FollowUp` | `id`, `label` (the chip), `question` (what gets asked) | a chip in the notice's ask panel |
+
+```json
+{ "id": "rollback-cost", "component": "FollowUp",
+  "label": "How long is the rollback?",
+  "question": "How long would a rollback take, and is it reversible?" }
+```
+
+A `FollowUp` is a **declaration, not a body element** — it renders in the ask panel
+beside the card, never inline in the prose, so the card stays glanceable. Put them
+anywhere in `components`. Give each a non-empty `id`, `label`, and `question`, or the
+declaration is dropped. You cannot reuse a universal preset's id (`simplify`, `why`,
+`do-nothing`, `background`, `show-code`) — those mean the same thing on every notice.
 
 ## The depth bar for `content` (this is a requirement, not a style note)
 
@@ -252,6 +353,10 @@ reads as stale. That is another reason to amend a notice when the situation move
 - **Amend, don't accumulate.** One live notice per open question, kept current.
 - **Never leave a resolved notice standing.** When in doubt, pull it — a missing notice
   costs the user nothing; a stale one costs them trust.
+- **Answer a follow-up on the thread AND in the notice.** A reply the card doesn't
+  reflect is knowledge you left in a side conversation.
+- **A follow-up is a signal your notice was unclear.** If someone had to ask, the next
+  reader would have too — fix the notice, not just the thread.
 
 Your run's notices leave the board automatically when the run is deleted — you don't
 have to clean up on shutdown. But while you're alive, keeping them honest is on you.
