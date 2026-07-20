@@ -2182,8 +2182,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     // `amendedAt` is NOT bumped: "amended" means the AGENT edited the notice, and
     // the derived staleness signal reads that field. A user dismissing must not
     // make an old notice look freshly tended.
+    // POST is idempotent: re-dismissing an already-dismissed notice keeps the
+    // ORIGINAL timestamp. Re-stamping would rewrite when the user actually set it
+    // aside — and would emit a pointless SSE delta on every repeat.
     const updated: Notice = method === 'POST'
-      ? { ...notice, dismissedAt: Date.now() }
+      ? { ...notice, dismissedAt: notice.dismissedAt ?? Date.now() }
       : { ...notice, dismissedAt: undefined }
     ctx.docStore.upsertNotice(updated)
     ok(res, updated)

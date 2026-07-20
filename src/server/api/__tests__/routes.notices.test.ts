@@ -494,6 +494,19 @@ describe('POST/DELETE /api/notices/:id/dismiss', () => {
     }
   }))
 
+  it('a second POST is idempotent: it keeps the ORIGINAL dismissedAt rather than re-stamping it', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    const first = await (await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'POST' })).json() as { data: Notice }
+    // Let the clock actually move, so a re-stamp would be visible.
+    await new Promise(r => setTimeout(r, 5))
+    const second = await (await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'POST' })).json() as { data: Notice }
+
+    expect(second.data.dismissedAt).toBe(first.data.dismissedAt)
+    expect(srv.docStore.getNotice(created.data.id)!.dismissedAt).toBe(first.data.dismissedAt)
+  }))
+
   it('is idempotent enough: a second DELETE on an undismissed notice still 200s and leaves it undismissed', withServer(async srv => {
     seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
     const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
