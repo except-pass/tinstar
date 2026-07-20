@@ -94,11 +94,24 @@ export function askThread(notice: Notice, pending: Reply[]): Reply[] {
   return [...(notice.followUps ?? []), ...pending]
 }
 
-/** True when the board should shimmer "agent is replying…" — the thread is non-empty
- *  and the last word was the user's, so an answer is outstanding. Mirrors PinBubble's
- *  `awaiting` rule so both threads signal waiting the same way. */
-export function isAwaitingReply(thread: Reply[]): boolean {
-  return thread[thread.length - 1]?.author === 'user'
+/** How long the "agent is replying…" shimmer keeps pulsing before it gives up.
+ *
+ *  A shimmer is a claim that an answer is ON ITS WAY. Left unbounded it becomes a
+ *  lie the moment an agent ignores a question, silently drops it, or dies — and it
+ *  would pulse forever on a board the user is meant to trust at a glance. After the
+ *  window the thread just sits there showing the unanswered question, which is the
+ *  honest rendering of "nobody replied". */
+export const SHIMMER_MAX_MS = 10 * 60_000
+
+/** True when the board should shimmer "agent is replying…" — the last word was the
+ *  user's, so an answer is outstanding. Mirrors PinBubble's `awaiting` rule, plus a
+ *  time bound: pass `now` to stop claiming a reply is coming long after it wasn't.
+ *  Omitting `now` keeps the pure last-author reading (used by the unit tests). */
+export function isAwaitingReply(thread: Reply[], now?: number): boolean {
+  const last = thread[thread.length - 1]
+  if (last?.author !== 'user') return false
+  if (now === undefined) return true
+  return now - last.createdAt <= SHIMMER_MAX_MS
 }
 
 export function makeRoundupWidget(api: TinstarPluginAPI) {
@@ -111,11 +124,21 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
    *  time someone asks a question, and the Roundup's whole value is that the board
    *  stays glanceable. The thread scrolls inside its own fixed max height, so even an
    *  open panel has a ceiling and the card's footprint never depends on thread length. */
-  function AskPanel({ notice, onChanged }: { notice: Notice; onChanged: () => Promise<void> }) {
+  function AskPanel({ notice, onChanged, now }: {
+    notice: Notice
+    onChanged: () => Promise<void>
+    /** The parent's ticking clock, so the shimmer can time out on its own. */
+    now: number
+  }) {
     const [open, setOpen] = useState(false)
     const [freeform, setFreeform] = useState('')
     const [asking, setAsking] = useState(false)
     const [askError, setAskError] = useState<string | null>(null)
+    // The last ask persisted but reached nobody. Tracked SEPARATELY from askError
+    // because it has to suppress the shimmer: otherwise the panel says "that session
+    // isn't reachable" and pulses "agent is replying…" directly beneath it — two
+    // contradictory claims at once, the second of which will never come true.
+    const [undelivered, setUndelivered] = useState(false)
     // The optimistic question(s): shown on the thread the instant the user asks, and
     // dropped only once a reload has the server's copy in hand — cleared in the
     // success path rather than by watching `notice.followUps`, which a reload racing
@@ -124,11 +147,14 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
 
     const presets = useMemo(() => followUpsFor(notice.content), [notice.content])
     const thread = askThread(notice, pending)
-    const awaiting = isAwaitingReply(thread)
+    // Two independent reasons not to promise a reply: nobody received the question,
+    // or it's been outstanding long enough that nobody is going to answer it.
+    const awaiting = isAwaitingReply(thread, now) && !undelivered
 
     const ask = useCallback(async (payload: { presetId?: string; text?: string }, shown: string) => {
       if (asking) return
       setAskError(null)
+      setUndelivered(false) // a fresh ask is optimistic again until told otherwise
       setAsking(true)
       const optimistic: Reply = {
         id: `pending-${Date.now()}`, author: 'user', text: shown, createdAt: Date.now(),
@@ -150,6 +176,7 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
         // sleeping session is a note, not an error. Saying so beats a silent wait
         // for a reply that isn't coming until the agent wakes up.
         if (body.data?.delivered === false) {
+          setUndelivered(true)
           setAskError("Asked — but that session isn't reachable right now. It'll see this when it's back.")
         }
       } catch (err) {
@@ -505,7 +532,7 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
         {submitError && <div className="px-3 pb-1 text-xs text-red-300">{submitError}</div>}
         {/* The ask panel — a secondary surface, never inline in the body. Hidden on a
             dismissed card (it's off the user's plate; asking about it isn't). */}
-        {!dismissed && <AskPanel notice={notice} onChanged={onChanged} />}
+        {!dismissed && <AskPanel notice={notice} onChanged={onChanged} now={now} />}
         {/* Footer shows for headline-only notices always, and for notices with a
             body once expanded — so arrival/amend time is never hidden. */}
         {!dismissed && (!hasBody || isOpen) && (

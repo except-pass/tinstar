@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { Notice } from '../../domain/types'
 import type { Reply } from '../../domain/pinSet'
-import { followUpPromptText, followUpThreadSoFar } from '../followUpPrompt'
+import { followUpPromptText, followUpThreadSoFar, isThreadWindowed, PROMPT_THREAD_WINDOW } from '../followUpPrompt'
 import { UNIVERSAL_FOLLOW_UPS } from '../../plugins/roundup/src/a2ui/followUps'
 
 const ORIGIN = 'http://localhost:5273'
@@ -82,6 +82,46 @@ describe('followUpPromptText', () => {
     expect(multi).toContain('[agent] here you go')
     // The question quoted at the top is the LAST message, not the first.
     expect(multi).toContain('Their question: and the rollback cost?')
+  })
+
+  // Without a window, every delivered prompt re-serializes the ENTIRE history, so a
+  // long-lived chatty notice grows the agent's context without bound.
+  it(`windows the thread to the last ${PROMPT_THREAD_WINDOW} messages and says so`, () => {
+    const long: Reply[] = Array.from({ length: PROMPT_THREAD_WINDOW + 15 }, (_, i) => ({
+      id: `fu-${i}`,
+      author: i % 2 === 0 ? 'agent' as const : 'user' as const,
+      text: `message-${i}`,
+      createdAt: i,
+    }))
+    const out = followUpPromptText(notice(long), undefined, ORIGIN)
+
+    // The oldest messages are dropped, the newest are kept.
+    expect(out).not.toContain('message-0')
+    expect(out).not.toContain('message-14')
+    expect(out).toContain(`message-${long.length - 1}`)
+    // Exactly the window's worth of thread lines.
+    expect(followUpThreadSoFar(long).split('\n')).toHaveLength(PROMPT_THREAD_WINDOW)
+    // And the agent is TOLD it's a window, so it doesn't silently contradict
+    // something it said earlier in a history it can no longer see.
+    expect(out).toContain(`the last ${PROMPT_THREAD_WINDOW} of ${long.length} messages`)
+    expect(out).toContain('GET /api/notices')
+  })
+
+  it('does not announce a window when the thread fits', () => {
+    const out = followUpPromptText(notice([
+      question,
+      { id: 'fu-2', author: 'agent', text: 'here you go', createdAt: 2 },
+    ]), undefined, ORIGIN)
+    expect(out).toContain('The thread so far:')
+    expect(out).not.toContain('read the full thread')
+  })
+
+  it('isThreadWindowed flips exactly at the window boundary', () => {
+    const make = (n: number): Reply[] => Array.from({ length: n }, (_, i) => ({
+      id: `x${i}`, author: 'user' as const, text: 't', createdAt: i,
+    }))
+    expect(isThreadWindowed(make(PROMPT_THREAD_WINDOW))).toBe(false)
+    expect(isThreadWindowed(make(PROMPT_THREAD_WINDOW + 1))).toBe(true)
   })
 
   it('does not throw on a notice with no thread yet', () => {

@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { ComponentType } from 'react'
 import type { Notice } from '../../../../domain/types'
-import { makeRoundupWidget, runNodeId, groupByRun, askThread, isAwaitingReply } from '../RoundupWidget'
+import { makeRoundupWidget, runNodeId, groupByRun, askThread, isAwaitingReply, SHIMMER_MAX_MS } from '../RoundupWidget'
 import { UNIVERSAL_FOLLOW_UPS } from '../a2ui/followUps'
 
 afterEach(() => vi.restoreAllMocks())
@@ -87,7 +87,7 @@ function makeApi(notices: Notice[]): Harness {
             notices[idx] = {
               ...notices[idx]!,
               followUps: [...(notices[idx]!.followUps ?? []),
-                { id: `fu-${repliesCalls.length}`, author: 'user', text, createdAt: 1 }],
+                { id: `fu-${repliesCalls.length}`, author: 'user', text, createdAt: Date.now() }],
             }
           }
           return jsonResponse({ ok: true, data: { notice: notices[idx] ?? null, delivered: true } })
@@ -602,7 +602,7 @@ describe('RoundupWidget — asking a follow-up (U6)', () => {
 
   it('shows the shimmer while collapsed too, so a pending answer is visible at a glance', async () => {
     const h = makeApi([answerableNotice({
-      followUps: [{ id: 'fu-1', author: 'user', text: 'why?', createdAt: 1 }],
+      followUps: [{ id: 'fu-1', author: 'user', text: 'why?', createdAt: Date.now() }],
     })])
     renderWidget(h)
     expect(await screen.findByTestId('ask-awaiting-notice-1')).toBeTruthy()
@@ -662,5 +662,62 @@ describe('RoundupWidget — asking a follow-up (U6)', () => {
     renderWidget(h)
     await screen.findByText('Deploy or wait?')
     expect(screen.queryByTestId('ask-toggle-notice-1')).toBeNull()
+  })
+})
+
+// A shimmer claims an answer is ON ITS WAY. These are the two cases where that
+// claim is false, and rendering it anyway is a lie the user is meant to trust.
+describe('RoundupWidget — the shimmer never promises a reply that is not coming', () => {
+  it('suppresses the shimmer when the question persisted but reached nobody', async () => {
+    const h = makeApi([answerableNotice()])
+    h.setRepliesResponder(async () => jsonResponse({ ok: true, data: { delivered: false } }))
+    renderWidget(h)
+    fireEvent.click(await screen.findByTestId('ask-toggle-notice-1'))
+    fireEvent.click(screen.getByTestId('followup-chip-why'))
+
+    // The "not reachable" note appears...
+    await waitFor(() => expect(screen.getByText(/isn't reachable right now/)).toBeTruthy())
+    // ...and the contradictory "agent is replying…" does NOT, in either position.
+    expect(screen.queryByTestId('ask-awaiting-open-notice-1')).toBeNull()
+    fireEvent.click(screen.getByTestId('ask-toggle-notice-1')) // collapse
+    expect(screen.queryByTestId('ask-awaiting-notice-1')).toBeNull()
+  })
+
+  it('clears the undelivered state on the next ask, so a retry shimmers again', async () => {
+    const h = makeApi([answerableNotice()])
+    h.setRepliesResponder(async () => jsonResponse({ ok: true, data: { delivered: false } }))
+    renderWidget(h)
+    fireEvent.click(await screen.findByTestId('ask-toggle-notice-1'))
+    fireEvent.click(screen.getByTestId('followup-chip-why'))
+    await waitFor(() => expect(screen.getByText(/isn't reachable right now/)).toBeTruthy())
+
+    // Session is back; asking again must be optimistic once more.
+    h.setRepliesResponder(async () => jsonResponse({ ok: true, data: { delivered: true } }))
+    fireEvent.click(screen.getByTestId('followup-chip-background'))
+    await waitFor(() => expect(screen.getByTestId('ask-awaiting-open-notice-1')).toBeTruthy())
+  })
+
+  it('stops shimmering for a question the agent simply never answered', async () => {
+    // Delivered fine, but it has been outstanding well past the give-up window —
+    // an unbounded shimmer would still be pulsing here, forever.
+    const h = makeApi([answerableNotice({
+      followUps: [{ id: 'fu-1', author: 'user', text: 'why?', createdAt: Date.now() - (SHIMMER_MAX_MS + 60_000) }],
+    })])
+    renderWidget(h)
+    await screen.findByTestId('ask-toggle-notice-1')
+    expect(screen.queryByTestId('ask-awaiting-notice-1')).toBeNull()
+    // The question itself is still there — that is the honest rendering.
+    fireEvent.click(screen.getByTestId('ask-toggle-notice-1'))
+    expect(screen.getByText('why?')).toBeTruthy()
+  })
+
+  it('isAwaitingReply times out on its own once `now` is supplied', () => {
+    const t = 1_700_000_000_000
+    const thread = [{ id: 'a', author: 'user' as const, text: 'q', createdAt: t }]
+    expect(isAwaitingReply(thread, t + 1_000)).toBe(true)
+    expect(isAwaitingReply(thread, t + SHIMMER_MAX_MS)).toBe(true)
+    expect(isAwaitingReply(thread, t + SHIMMER_MAX_MS + 1)).toBe(false)
+    // Omitting `now` keeps the pure last-author reading.
+    expect(isAwaitingReply(thread)).toBe(true)
   })
 })

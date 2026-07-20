@@ -19,10 +19,28 @@
 import type { Notice } from '../domain/types'
 import type { Reply } from '../domain/pinSet'
 
+/** How many of the most recent thread messages the prompt carries.
+ *
+ *  The thread is append-only and per-message length is its only other bound, so a
+ *  long-lived chatty notice would otherwise re-serialize its ENTIRE history into
+ *  every delivered prompt — growing the agent's context without limit for a
+ *  conversation whose useful part is almost always the recent turns. Windowing
+ *  bounds the prompt regardless of how long the thread gets. */
+export const PROMPT_THREAD_WINDOW = 20
+
 /** The thread rendered for the prompt: one line per message, oldest first —
- *  mirrors `threadSoFar` in the pins prompt so both read identically. */
+ *  mirrors `threadSoFar` in the pins prompt so both read identically. Windowed to
+ *  the last `PROMPT_THREAD_WINDOW` messages. */
 export function followUpThreadSoFar(followUps: Reply[]): string {
-  return followUps.map(m => `[${m.author}] ${m.text}`).join('\n')
+  return followUps.slice(-PROMPT_THREAD_WINDOW).map(m => `[${m.author}] ${m.text}`).join('\n')
+}
+
+/** True when the thread is longer than the prompt window, so the prompt can SAY it
+ *  is showing a window. An agent that silently receives a truncated history may
+ *  contradict something it said earlier and not know why; one that is told it's
+ *  seeing the last N can go read the rest off GET /api/notices. */
+export function isThreadWindowed(followUps: Reply[]): boolean {
+  return followUps.length > PROMPT_THREAD_WINDOW
 }
 
 /** Build the follow-up delivery prompt. `notice` must already carry the appended
@@ -43,7 +61,14 @@ export function followUpPromptText(notice: Notice, guidance: string | undefined,
   }
 
   if (thread.length > 1) {
-    lines.push('', 'The thread so far:', followUpThreadSoFar(thread))
+    lines.push(
+      '',
+      isThreadWindowed(thread)
+        ? `The thread so far (the last ${PROMPT_THREAD_WINDOW} of ${thread.length} messages — ` +
+          `read the full thread on GET /api/notices if you need it):`
+        : 'The thread so far:',
+      followUpThreadSoFar(thread),
+    )
   }
 
   lines.push(

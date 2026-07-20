@@ -1,4 +1,27 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The anti-loop guard (see the `author === 'user'` test below) is invisible without
+// these: the real `getSession` reads from disk and finds nothing in a temp root, so
+// `delivered` is false in EVERY case and deleting the guard breaks no assertion.
+// Stubbing both lets a test distinguish "not delivered because there is no session"
+// from "not delivered because the author was an agent".
+// Typed params, so `sendPrompt.mock.calls[0]` is indexable and the assertions can
+// check WHICH session was prompted and WHAT it was told.
+const sendPrompt = vi.hoisted(() =>
+  vi.fn(async (_cfg: unknown, _sessionName: string, _prompt: string) => {}))
+const getSession = vi.hoisted(() => vi.fn((_dir: string, _name: string) => null as unknown))
+vi.mock('../../sessions', async (orig) => {
+  const actual = await orig<typeof import('../../sessions')>()
+  return { ...actual, getSession, tmuxBackend: { ...actual.tmuxBackend, sendPrompt } }
+})
+
+// Default: no session on disk, which is what every pre-existing test in this file
+// assumes (delivery is a best-effort miss and the write still persists).
+beforeEach(() => {
+  sendPrompt.mockClear()
+  getSession.mockReset()
+  getSession.mockReturnValue(null)
+})
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -684,6 +707,70 @@ describe('POST /api/notices/:id/replies', () => {
     const res = await reply(srv, created.data.id, { author: 'user', text: 'x'.repeat(NOTICE_FOLLOWUP_TEXT_MAX + 1) })
     expect(res.status).toBe(413)
     expect(srv.docStore.getNotice(created.data.id)!.followUps).toBeUndefined()
+  }))
+
+  // THE ANTI-LOOP GUARD.
+  //
+  // Only a USER question prompts the posting session. If an AGENT's own reply also
+  // prompted, the agent would receive its own answer as a new instruction and reply
+  // again — an infinite self-triggering loop, which is exactly the failure mode
+  // raised as a design risk. Without stubbing the session lookup this is untestable:
+  // `delivered` is false either way, so removing `if (author === 'user')` breaks
+  // nothing. These two assertions are the only thing holding the guard in place.
+  it("prompts the session for a USER question but NOT for an agent's own reply", withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    // The session now exists, so delivery is genuinely reachable — this is what
+    // makes the two cases distinguishable at all.
+    getSession.mockReturnValue({ name: 'CLD-run-1' })
+
+    const asUser = await reply(srv, created.data.id, { author: 'user', presetId: 'why' })
+    expect(asUser.status).toBe(200)
+    expect((await asUser.json() as { data: { delivered: boolean } }).data.delivered).toBe(true)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+    // It prompted the POSTING run, and the prompt carries the question.
+    expect(sendPrompt.mock.calls[0]![1]).toBe('CLD-run-1')
+    expect(String(sendPrompt.mock.calls[0]![2])).toContain('Why does this need deciding')
+
+    sendPrompt.mockClear()
+    const asAgent = await reply(srv, created.data.id, { author: 'agent', text: 'because CI is blocked' })
+    expect(asAgent.status).toBe(200)
+    // Persisted, but deliberately NOT delivered — no self-prompt, no loop.
+    expect(sendPrompt).not.toHaveBeenCalled()
+    expect((await asAgent.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toHaveLength(2)
+  }))
+
+  it('reports delivered:false for a user question when the session is genuinely gone', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    getSession.mockReturnValue(null) // no session on disk
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'why' })
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(sendPrompt).not.toHaveBeenCalled()
+    // The question persisted regardless — that is the whole best-effort contract.
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toHaveLength(1)
+  }))
+
+  it('still persists the question when delivery throws', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    getSession.mockReturnValue({ name: 'CLD-run-1' })
+    sendPrompt.mockRejectedValueOnce(new Error('tmux is unhappy'))
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'why' })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toHaveLength(1)
+  }))
+
+  it('trims the stored question rather than persisting surrounding whitespace', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    await reply(srv, created.data.id, { author: 'user', text: '  \n why this?  \n\n ' })
+    expect(srv.docStore.getNotice(created.data.id)!.followUps![0]!.text).toBe('why this?')
   }))
 
   it('404s for an unknown notice', withServer(async srv => {

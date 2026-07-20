@@ -2160,11 +2160,16 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           fail(res, 'BAD_REQUEST', `text exceeds ${NOTICE_FOLLOWUP_TEXT_MAX} characters`, { status: 413 })
           return
         }
-        if (!parsed.text.trim()) {
+        // Persist the TRIMMED value, not the raw one. Gating emptiness on
+        // `.trim()` while storing the original lets leading/trailing whitespace
+        // and newlines onto the thread verbatim, where they also get interpolated
+        // into the delivered prompt and can disturb its line structure.
+        const trimmed = parsed.text.trim()
+        if (!trimmed) {
           fail(res, 'INVALID_PARAMS', 'text must be non-empty')
           return
         }
-        text = parsed.text
+        text = trimmed
       }
 
       const reply: Reply = { id: shortId('followup'), author, text, createdAt: Date.now() }
