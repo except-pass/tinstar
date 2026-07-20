@@ -120,6 +120,16 @@ export const CATALOG: Record<string, CatalogEntry> = {
   Submit: {
     render: (node) => <SubmitControl node={node} />,
   },
+  // `FollowUp` is a DECLARATION, not a body element: the agent names a question it
+  // expects for this notice, and the widget surfaces it as a chip in the notice's
+  // ask panel — the compact secondary surface beside the card, never inside it.
+  // Rendering it here would put an ask affordance in the middle of the prose and
+  // grow the card, which is exactly what the ask panel exists to prevent. So the
+  // catalog KNOWS the type (it is not an unknown-component fallback, and it does not
+  // draw a "⚠ unsupported" marker at the user) and renders nothing in place.
+  FollowUp: {
+    render: () => null,
+  },
 }
 
 /** True when the host catalog knows how to render this component type. */

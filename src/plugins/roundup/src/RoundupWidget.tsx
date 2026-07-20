@@ -27,9 +27,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { Notice } from '../../../domain/types'
+import type { Reply } from '../../../domain/pinSet'
 import { A2uiRenderer } from './a2ui/A2uiRenderer'
 import { isAnswerable } from './a2ui/controls'
-import type { NoticeFormState } from './a2ui/controlComponents'
+import { followUpsFor } from './a2ui/followUps'
+import { FollowUpChip, type NoticeFormState } from './a2ui/controlComponents'
 import { relativeAge, isStale } from './age'
 
 interface DeltaMsg { eventType?: string }
@@ -86,7 +88,190 @@ export function groupByRun(notices: Notice[]): Array<{ runId: string; notices: N
   }))
 }
 
+/** The follow-up thread for rendering: the persisted messages plus any question the
+ *  user just asked that the server hasn't echoed back yet (optimistic, R23-style). */
+export function askThread(notice: Notice, pending: Reply[]): Reply[] {
+  return [...(notice.followUps ?? []), ...pending]
+}
+
+/** How long the "agent is replying…" shimmer keeps pulsing before it gives up.
+ *
+ *  A shimmer is a claim that an answer is ON ITS WAY. Left unbounded it becomes a
+ *  lie the moment an agent ignores a question, silently drops it, or dies — and it
+ *  would pulse forever on a board the user is meant to trust at a glance. After the
+ *  window the thread just sits there showing the unanswered question, which is the
+ *  honest rendering of "nobody replied". */
+export const SHIMMER_MAX_MS = 10 * 60_000
+
+/** True when the board should shimmer "agent is replying…" — the last word was the
+ *  user's, so an answer is outstanding. Mirrors PinBubble's `awaiting` rule, plus a
+ *  time bound: pass `now` to stop claiming a reply is coming long after it wasn't.
+ *  Omitting `now` keeps the pure last-author reading (used by the unit tests). */
+export function isAwaitingReply(thread: Reply[], now?: number): boolean {
+  const last = thread[thread.length - 1]
+  if (last?.author !== 'user') return false
+  if (now === undefined) return true
+  return now - last.createdAt <= SHIMMER_MAX_MS
+}
+
 export function makeRoundupWidget(api: TinstarPluginAPI) {
+  /** The ask panel (U6): a notice's follow-up thread and the three ways to ask —
+   *  the universal presets, whatever this notice's agent declared, and freeform text.
+   *
+   *  This is deliberately a compact SECONDARY surface hanging off the card, not part
+   *  of the notice body, and it is collapsed by default. A follow-up thread is
+   *  persistent and unbounded; putting it inline would mean a card that grows every
+   *  time someone asks a question, and the Roundup's whole value is that the board
+   *  stays glanceable. The thread scrolls inside its own fixed max height, so even an
+   *  open panel has a ceiling and the card's footprint never depends on thread length. */
+  function AskPanel({ notice, onChanged, now }: {
+    notice: Notice
+    onChanged: () => Promise<void>
+    /** The parent's ticking clock, so the shimmer can time out on its own. */
+    now: number
+  }) {
+    const [open, setOpen] = useState(false)
+    const [freeform, setFreeform] = useState('')
+    const [asking, setAsking] = useState(false)
+    const [askError, setAskError] = useState<string | null>(null)
+    // The last ask persisted but reached nobody. Tracked SEPARATELY from askError
+    // because it has to suppress the shimmer: otherwise the panel says "that session
+    // isn't reachable" and pulses "agent is replying…" directly beneath it — two
+    // contradictory claims at once, the second of which will never come true.
+    const [undelivered, setUndelivered] = useState(false)
+    // The optimistic question(s): shown on the thread the instant the user asks, and
+    // dropped only once a reload has the server's copy in hand — cleared in the
+    // success path rather than by watching `notice.followUps`, which a reload racing
+    // an SSE delta can return unchanged (leaving the panel stuck showing a ghost).
+    const [pending, setPending] = useState<Reply[]>([])
+
+    const presets = useMemo(() => followUpsFor(notice.content), [notice.content])
+    const thread = askThread(notice, pending)
+    // Two independent reasons not to promise a reply: nobody received the question,
+    // or it's been outstanding long enough that nobody is going to answer it.
+    const awaiting = isAwaitingReply(thread, now) && !undelivered
+
+    const ask = useCallback(async (payload: { presetId?: string; text?: string }, shown: string) => {
+      if (asking) return
+      setAskError(null)
+      setUndelivered(false) // a fresh ask is optimistic again until told otherwise
+      setAsking(true)
+      const optimistic: Reply = {
+        id: `pending-${Date.now()}`, author: 'user', text: shown, createdAt: Date.now(),
+      }
+      setPending(prev => [...prev, optimistic])
+      try {
+        const res = await api.http.fetch(`/api/notices/${notice.id}/replies`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...payload, author: 'user' }),
+        })
+        const body = await res.json().catch(() => null) as
+          { ok?: boolean; data?: { delivered?: boolean }; error?: { message?: string } } | null
+        if (!res.ok || !body?.ok) throw new Error(body?.error?.message || `ask failed (${res.status})`)
+        await onChanged()
+        setPending(prev => prev.filter(p => p.id !== optimistic.id))
+        setFreeform('')
+        // Delivery is best-effort: the question is on the thread either way, so a
+        // sleeping session is a note, not an error. Saying so beats a silent wait
+        // for a reply that isn't coming until the agent wakes up.
+        if (body.data?.delivered === false) {
+          setUndelivered(true)
+          setAskError("Asked — but that session isn't reachable right now. It'll see this when it's back.")
+        }
+      } catch (err) {
+        api.logger.error('roundup: follow-up failed', err)
+        setPending(prev => prev.filter(p => p.id !== optimistic.id)) // revert cleanly
+        setAskError('Could not send your question. Try again.')
+      } finally {
+        setAsking(false)
+      }
+    }, [notice.id, onChanged, asking])
+
+    const askFreeform = useCallback(() => {
+      const trimmed = freeform.trim()
+      if (!trimmed) { setAskError('Type a question first.'); return }
+      void ask({ text: trimmed }, trimmed)
+    }, [freeform, ask])
+
+    const count = notice.followUps?.length ?? 0
+
+    return (
+      <div className="mx-3 mb-2 rounded border-l-2 border-neutral-600 bg-neutral-800/40 px-2 py-1">
+        <button
+          data-testid={`ask-toggle-${notice.id}`}
+          onClick={() => setOpen(o => !o)}
+          className="flex w-full items-center gap-1.5 text-left text-[11px] text-neutral-400 hover:text-neutral-200"
+        >
+          <span>{open ? '▾' : '▸'}</span>
+          <span className="font-medium">Ask a follow-up</span>
+          {count > 0 && <span className="text-neutral-500">· {count}</span>}
+          {/* The shimmer is visible while COLLAPSED too — a pending answer is the
+              one thing worth knowing without opening the panel. */}
+          {!open && awaiting && (
+            <span data-testid={`ask-awaiting-${notice.id}`} className="animate-pulse text-neutral-500">
+              agent is replying…
+            </span>
+          )}
+        </button>
+
+        {open && (
+          <div className="mt-1.5 flex flex-col gap-1.5">
+            {thread.length > 0 && (
+              // Fixed ceiling + internal scroll: this is what keeps a 40-message
+              // thread from turning the card into a wall.
+              <div className="max-h-40 overflow-y-auto flex flex-col gap-1 pr-1">
+                {thread.map(m => (
+                  <div key={m.id} className="text-xs leading-snug">
+                    <span className={m.author === 'user' ? 'text-neutral-400' : 'text-amber-300'}>
+                      {m.author === 'user' ? 'you' : 'agent'}
+                    </span>
+                    <span className="text-neutral-500"> · </span>
+                    <span className="text-neutral-200 whitespace-pre-wrap">{m.text}</span>
+                  </div>
+                ))}
+                {awaiting && (
+                  <div data-testid={`ask-awaiting-open-${notice.id}`} className="text-xs text-neutral-500 animate-pulse">
+                    agent is replying…
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Universal presets first (same position on every notice, so they
+                become muscle memory), then this notice's agent-declared ones. */}
+            <div className="flex flex-wrap gap-1">
+              {presets.map(p => (
+                <FollowUpChip key={p.id} preset={p} disabled={asking} onAsk={() => void ask({ presetId: p.id }, p.question)} />
+              ))}
+            </div>
+
+            <div className="flex items-center gap-1">
+              <input
+                data-testid={`ask-input-${notice.id}`}
+                value={freeform}
+                placeholder="…or ask something else"
+                disabled={asking}
+                onChange={e => setFreeform(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); askFreeform() } }}
+                className="flex-1 rounded border border-neutral-600 bg-neutral-800 px-2 py-0.5 text-xs text-neutral-100 placeholder:text-neutral-500 focus:border-amber-500 focus:outline-none disabled:opacity-70"
+              />
+              <button
+                onClick={askFreeform}
+                disabled={asking}
+                className="rounded bg-neutral-700 px-2 py-0.5 text-xs text-neutral-200 hover:bg-neutral-600 disabled:opacity-50"
+              >
+                {asking ? '…' : 'Ask'}
+              </button>
+            </div>
+
+            {askError && <div className="text-[11px] text-amber-300/90">{askError}</div>}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   /** One notice row: header + (when expanded) its A2UI body, plus the answer /
    *  dissent affordances. Holds the per-notice form state (U3) so a submit is
    *  optimistic (R23) and reverts cleanly on failure. Defined here (not inside
@@ -345,6 +530,9 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
           </div>
         )}
         {submitError && <div className="px-3 pb-1 text-xs text-red-300">{submitError}</div>}
+        {/* The ask panel — a secondary surface, never inline in the body. Hidden on a
+            dismissed card (it's off the user's plate; asking about it isn't). */}
+        {!dismissed && <AskPanel notice={notice} onChanged={onChanged} now={now} />}
         {/* Footer shows for headline-only notices always, and for notices with a
             body once expanded — so arrival/amend time is never hidden. */}
         {!dismissed && (!hasBody || isOpen) && (

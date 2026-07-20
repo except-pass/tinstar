@@ -55,11 +55,13 @@ import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, Sessio
 // @a2ui/web_core into the server (esbuild) bundle — the load-bearing de-risk.
 import { parseA2uiContent } from '../../plugins/roundup/src/a2ui/schema'
 import { collectChoiceOptionIds, collectChoiceOptionLabels, NOTICE_ANSWER_TEXT_MAX } from '../../plugins/roundup/src/a2ui/controls'
+import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../plugins/roundup/src/a2ui/followUps'
+import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
 import { normalizeRunName } from '../../domain/runName'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
-import { isPinSet, addReply, mergePreservingReplies } from '../../domain/pinSet'
+import { isPinSet, addReply, mergePreservingReplies, type Reply } from '../../domain/pinSet'
 import { readBody } from './readBody'
 import { isTinstarSelfEmbedUrl, TINSTAR_SELF_EMBED_MESSAGE } from './browser-widget-url'
 import { parseAttach, type ParsedAttach } from './anchorAttach'
@@ -2085,6 +2087,122 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // POST /api/notices/:id/replies — append one message to a notice's follow-up
+  // thread. Two callers, one endpoint (mirroring POST /api/notes/:noteId/replies):
+  //   - the USER (`author:"user"`), asking a question from the Roundup widget —
+  //     either a preset id or freeform text. Persists, then DELIVERS a prompt to
+  //     the posting session, best-effort.
+  //   - the AGENT (`author:"agent"`, the default), answering — the curl baked into
+  //     that prompt. Persists only; nothing to deliver.
+  //
+  // The thread is SERVER-owned for the same reason note replies are: the PATCH
+  // amend path rebuilds the notice from the stored copy and never accepts a
+  // `followUps` field, so an agent amending its notice cannot clobber a question
+  // that landed mid-flight.
+  //
+  // ROUTE ORDERING (docs/solutions/conventions/sub-resource-routes-under-prefix-matched-handlers.md):
+  // this is a sub-resource under `/api/notices/:id`, whose PATCH (amend) and DELETE
+  // (pull) handlers below both match with a GREEDY `startsWith`. It is matched with
+  // an ANCHORED REGEX on the query-stripped path and placed BEFORE both of them, so
+  // a `/replies` request can never fall through to a handler that would mutate or
+  // delete the notice outright — a failure that returns 200 and looks like it worked.
+  // The guard is the test, not this comment: routes.notices.test.ts asserts a
+  // replies POST leaves the notice present and its headline/content/amendedAt
+  // untouched, which fails if this block is ever moved below them.
+  if (method === 'POST' && /^\/api\/notices\/[^/]+\/replies$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const id = decodeURIComponent(path.slice('/api/notices/'.length, -'/replies'.length))
+    readBody(req).then(async body => {
+      const notice = ctx.docStore.getNotice(id)
+      if (!notice) { fail(res, 'NOT_FOUND', `Notice ${id} not found`); return }
+
+      let parsed: { text?: unknown; presetId?: unknown; author?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+      // `JSON.parse('null')`/`'42'`/`'[]'` all parse — without this the property
+      // reads below throw inside the .then and the request hangs.
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object')
+        return
+      }
+      if (parsed.author !== undefined && parsed.author !== 'user' && parsed.author !== 'agent') {
+        fail(res, 'INVALID_PARAMS', "author must be 'user' or 'agent'")
+        return
+      }
+      // Default 'agent', matching POST /api/notes/:noteId/replies: the agent is the
+      // caller that curls this from a baked prompt, so the terse body it was handed
+      // must keep working. The widget always sends author explicitly.
+      const author: 'user' | 'agent' = parsed.author === 'user' ? 'user' : 'agent'
+
+      // The message text comes from a preset id OR freeform text, never both.
+      // A preset id is validated against the notice's OWN menu (universal set +
+      // whatever this notice declared) — an id outside it is rejected and nothing
+      // is persisted, the same defense the answer path applies to `choices[]`.
+      let text: string
+      let guidance: string | undefined
+      if (parsed.presetId !== undefined && parsed.presetId !== null) {
+        if (typeof parsed.presetId !== 'string') {
+          fail(res, 'INVALID_PARAMS', 'presetId must be a string')
+          return
+        }
+        const preset = resolveFollowUp(notice.content, parsed.presetId)
+        if (!preset) {
+          fail(res, 'INVALID_PARAMS', `presetId "${parsed.presetId}" is not a follow-up offered on this notice`)
+          return
+        }
+        text = preset.question
+        guidance = preset.guidance
+      } else {
+        if (typeof parsed.text !== 'string') {
+          fail(res, 'INVALID_PARAMS', 'text must be a string')
+          return
+        }
+        if (parsed.text.length > NOTICE_FOLLOWUP_TEXT_MAX) {
+          fail(res, 'BAD_REQUEST', `text exceeds ${NOTICE_FOLLOWUP_TEXT_MAX} characters`, { status: 413 })
+          return
+        }
+        // Persist the TRIMMED value, not the raw one. Gating emptiness on
+        // `.trim()` while storing the original lets leading/trailing whitespace
+        // and newlines onto the thread verbatim, where they also get interpolated
+        // into the delivered prompt and can disturb its line structure.
+        const trimmed = parsed.text.trim()
+        if (!trimmed) {
+          fail(res, 'INVALID_PARAMS', 'text must be non-empty')
+          return
+        }
+        text = trimmed
+      }
+
+      const reply: Reply = { id: shortId('followup'), author, text, createdAt: Date.now() }
+      // Only `followUps` changes — NOT `amendedAt`. "Amended" means the AGENT edited
+      // the notice, and the derived staleness signal reads that field; a question (or
+      // a thread reply) must not make an old card look freshly tended. The by-value
+      // followUps compare in noticeEqual is what broadcasts the delta.
+      const updated: Notice = { ...notice, followUps: [...(notice.followUps ?? []), reply] }
+      ctx.docStore.upsertNotice(updated)
+
+      // Deliver best-effort to the posting session (notice.runId === session name).
+      // Only a USER question prompts: an agent's own reply landing back in its lap
+      // would loop. The question is already persisted, so an unreachable session
+      // reports `delivered:false` rather than failing the request (KTD1).
+      let delivered = false
+      if (author === 'user') {
+        const sessDir = ctx.sessionConfig?.dirs.sessions
+        if (sessDir && getSession(sessDir, notice.runId)) {
+          try {
+            await tmuxBackend.sendPrompt(ctx.sessionConfig!, notice.runId,
+              followUpPromptText(updated, guidance, serverBase()))
+            delivered = true
+          } catch (err) {
+            log.warn('notices', 'follow-up delivery failed', { id, runId: notice.runId, err: (err as Error).message })
+          }
+        }
+      }
+
+      ok(res, { notice: updated, reply, delivered })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
+    return true
+  }
+
   // PATCH /api/notices/:id — amend a posted notice in place (R17)
   if (method === 'PATCH' && url.startsWith('/api/notices/')) {
     const id = url.slice('/api/notices/'.length)
@@ -2141,7 +2259,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         }
       }
       // Whitelist mutable fields — never let a PATCH body clobber id, runId, or
-      // createdAt (identity + provenance stay server-owned).
+      // createdAt (identity + provenance stay server-owned). `followUps` is in that
+      // same server-owned set: it is carried over from `existing` and is NOT a
+      // patchable field, so an amend racing a question can't drop it.
       const updated: Notice = {
         ...existing,
         ...(patch.kind !== undefined ? { kind: patch.kind } : {}),

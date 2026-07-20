@@ -1,5 +1,28 @@
-import { describe, it, expect } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The anti-loop guard (see the `author === 'user'` test below) is invisible without
+// these: the real `getSession` reads from disk and finds nothing in a temp root, so
+// `delivered` is false in EVERY case and deleting the guard breaks no assertion.
+// Stubbing both lets a test distinguish "not delivered because there is no session"
+// from "not delivered because the author was an agent".
+// Typed params, so `sendPrompt.mock.calls[0]` is indexable and the assertions can
+// check WHICH session was prompted and WHAT it was told.
+const sendPrompt = vi.hoisted(() =>
+  vi.fn(async (_cfg: unknown, _sessionName: string, _prompt: string) => {}))
+const getSession = vi.hoisted(() => vi.fn((_dir: string, _name: string) => null as unknown))
+vi.mock('../../sessions', async (orig) => {
+  const actual = await orig<typeof import('../../sessions')>()
+  return { ...actual, getSession, tmuxBackend: { ...actual.tmuxBackend, sendPrompt } }
+})
+
+// Default: no session on disk, which is what every pre-existing test in this file
+// assumes (delivery is a best-effort miss and the write still persists).
+beforeEach(() => {
+  sendPrompt.mockClear()
+  getSession.mockReset()
+  getSession.mockReturnValue(null)
+})
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
@@ -7,6 +30,8 @@ import type { AddressInfo } from 'node:net'
 import { handleRequest, type RouteContext } from '../routes'
 import { DocumentStore } from '../../stores/document-store'
 import type { Notice, Run } from '../../../domain/types'
+import type { Reply } from '../../../domain/pinSet'
+import { UNIVERSAL_FOLLOW_UPS, NOTICE_FOLLOWUP_TEXT_MAX } from '../../../plugins/roundup/src/a2ui/followUps'
 
 interface Harness {
   docStore: DocumentStore
@@ -514,5 +539,260 @@ describe('POST/DELETE /api/notices/:id/dismiss', () => {
     const res = await srv.fetch(`/api/notices/${created.data.id}/dismiss`, { method: 'DELETE' })
     expect(res.status).toBe(200)
     expect(srv.docStore.getNotice(created.data.id)!.dismissedAt).toBeUndefined()
+  }))
+})
+
+// The follow-up thread (U6): the user asks a question about a notice before they
+// answer it, and the agent replies onto the same thread.
+describe('POST /api/notices/:id/replies', () => {
+  const reply = (srv: Harness, id: string, body: unknown) =>
+    srv.fetch(`/api/notices/${id}/replies`, { method: 'POST', body: JSON.stringify(body) })
+
+  // THE ROUTE-ORDERING GUARD.
+  //
+  // `/replies` is a sub-resource under `/api/notices/:id`, whose PATCH (amend) and
+  // DELETE (pull) handlers both match with a greedy `startsWith`. If the replies
+  // block is ever moved BELOW them, a request falls through to a handler that
+  // mutates or destroys the notice — and still returns 200, so a happy-path
+  // assertion alone would keep passing. This asserts the destructive outcome does
+  // NOT happen: after asking, the notice is still there and completely untouched
+  // apart from its thread.
+  it('does not pull or mutate the notice — the sub-resource route wins over the generic handlers', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    const before = srv.docStore.getNotice(created.data.id)!
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'simplify' })
+    expect(res.status).toBe(200)
+
+    const after = srv.docStore.getNotice(created.data.id)
+    expect(after).toBeDefined()                          // not pulled
+    expect(after!.headline).toBe(before.headline)        // not clobbered by the amend path
+    expect(after!.kind).toBe(before.kind)
+    expect(after!.content).toEqual(before.content)
+    expect(after!.createdAt).toBe(before.createdAt)
+    expect(after!.amendedAt).toBe(before.amendedAt)      // a question is not an agent amend
+    expect(after!.followUps).toHaveLength(1)             // and the thread actually got the message
+    // The board still lists it — a swallowed DELETE would leave an empty board.
+    const all = await (await srv.fetch('/api/notices')).json() as { data: Notice[] }
+    expect(all.data.map(n => n.id)).toContain(created.data.id)
+  }))
+
+  // ...and the STRUCTURAL half of the same guard.
+  //
+  // The behavioural test above is necessary but not sufficient: today no generic
+  // handler matches POST on the `/api/notices/` prefix, so moving this block below
+  // the amend/pull handlers would not currently break it. That safety is an
+  // accident of which verbs happen to exist, not a property anyone is maintaining
+  // — the moment someone adds a PATCH or POST prefix handler for notices, a
+  // misordered replies route starts silently eating requests. Assert the ordering
+  // itself, so a revert fails immediately rather than the next time a verb is added.
+  it('is registered BEFORE the greedy startsWith amend and pull handlers', () => {
+    const src = readFileSync(new URL('../routes.ts', import.meta.url), 'utf8')
+    const replies = src.indexOf("/^\\/api\\/notices\\/[^/]+\\/replies$/")
+    const amend = src.indexOf("method === 'PATCH' && url.startsWith('/api/notices/')")
+    const pull = src.indexOf("method === 'DELETE' && url.startsWith('/api/notices/')")
+    expect(replies).toBeGreaterThan(-1)
+    expect(amend).toBeGreaterThan(-1)
+    expect(pull).toBeGreaterThan(-1)
+    expect(replies).toBeLessThan(amend)
+    expect(replies).toBeLessThan(pull)
+  })
+
+  it('appends a universal preset question as the user, resolving it to the preset text', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'simplify' })
+    const body = await res.json() as { ok: boolean; data: { notice: Notice; reply: Reply; delivered: boolean } }
+    expect(body.ok).toBe(true)
+    expect(body.data.reply.author).toBe('user')
+    expect(body.data.reply.text).toBe(
+      UNIVERSAL_FOLLOW_UPS.find(p => p.id === 'simplify')!.question,
+    )
+    // No session on disk in this harness, so delivery is a best-effort miss — the
+    // question persists regardless, which is the whole point (KTD1).
+    expect(body.data.delivered).toBe(false)
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toHaveLength(1)
+  }))
+
+  it('ships "Simplify your explanation" in the universal preset set', () => {
+    const simplify = UNIVERSAL_FOLLOW_UPS.find(p => p.id === 'simplify')
+    expect(simplify).toBeDefined()
+    expect(simplify!.label).toBe('Simplify your explanation')
+    // The guidance is what makes it a de-nerd request rather than a dumb-it-down one.
+    expect(simplify!.guidance).toMatch(/precision/i)
+    expect(simplify!.guidance).toMatch(/jargon/i)
+  })
+
+  it('accepts freeform text and appends it verbatim', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    await reply(srv, created.data.id, { author: 'user', text: 'what does "flaky" mean here?' })
+    const thread = srv.docStore.getNotice(created.data.id)!.followUps!
+    expect(thread).toHaveLength(1)
+    expect(thread[0]!.text).toBe('what does "flaky" mean here?')
+  }))
+
+  it('defaults the author to agent, so the curl baked into the prompt works as written', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    await reply(srv, created.data.id, { text: 'because the migration is irreversible' })
+    expect(srv.docStore.getNotice(created.data.id)!.followUps![0]!.author).toBe('agent')
+  }))
+
+  it('keeps the thread in order across a user question and an agent reply', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    await reply(srv, created.data.id, { author: 'user', presetId: 'why' })
+    await reply(srv, created.data.id, { author: 'agent', text: 'because CI is blocked on it' })
+
+    const thread = srv.docStore.getNotice(created.data.id)!.followUps!
+    expect(thread.map(m => m.author)).toEqual(['user', 'agent'])
+  }))
+
+  it('accepts an agent-declared FollowUp id from this notice', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const withDeclared = {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Column', children: ['t', 'fu'] },
+        { id: 't', component: 'Text', text: 'Rollback or roll forward?' },
+        { id: 'fu', component: 'FollowUp', label: 'How long is the rollback?', question: 'How long would a rollback take?' },
+      ],
+    }
+    const created = await (await post(srv, 'sess-1', { content: withDeclared })).json() as { data: Notice }
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'fu' })
+    expect(res.status).toBe(200)
+    expect(srv.docStore.getNotice(created.data.id)!.followUps![0]!.text).toBe('How long would a rollback take?')
+  }))
+
+  it('rejects a presetId this notice does not offer — nothing is persisted', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'not-a-preset' })
+    expect(res.status).toBe(400)
+    const body = await res.json() as { ok: boolean; error: { code: string } }
+    expect(body.error.code).toBe('INVALID_PARAMS')
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toBeUndefined()
+  }))
+
+  it('rejects malformed bodies with INVALID_PARAMS and never hangs', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    for (const bad of ['null', '42', '[]', '"hi"']) {
+      const res = await srv.fetch(`/api/notices/${created.data.id}/replies`, { method: 'POST', body: bad })
+      expect(res.status).toBe(400)
+      const body = await res.json() as { ok: boolean; error: { code: string } }
+      expect(body.error.code).toBe('INVALID_PARAMS')
+    }
+    // Non-string / empty text and a bad author are refused too.
+    for (const bad of [{ text: 12 }, { text: '   ' }, { presetId: 7 }, { text: 'x', author: 'nobody' }]) {
+      const res = await reply(srv, created.data.id, bad)
+      expect(res.status).toBe(400)
+    }
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toBeUndefined()
+  }))
+
+  it('refuses oversize question text with a 413', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    const res = await reply(srv, created.data.id, { author: 'user', text: 'x'.repeat(NOTICE_FOLLOWUP_TEXT_MAX + 1) })
+    expect(res.status).toBe(413)
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toBeUndefined()
+  }))
+
+  // THE ANTI-LOOP GUARD.
+  //
+  // Only a USER question prompts the posting session. If an AGENT's own reply also
+  // prompted, the agent would receive its own answer as a new instruction and reply
+  // again — an infinite self-triggering loop, which is exactly the failure mode
+  // raised as a design risk. Without stubbing the session lookup this is untestable:
+  // `delivered` is false either way, so removing `if (author === 'user')` breaks
+  // nothing. These two assertions are the only thing holding the guard in place.
+  it("prompts the session for a USER question but NOT for an agent's own reply", withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    // The session now exists, so delivery is genuinely reachable — this is what
+    // makes the two cases distinguishable at all.
+    getSession.mockReturnValue({ name: 'CLD-run-1' })
+
+    const asUser = await reply(srv, created.data.id, { author: 'user', presetId: 'why' })
+    expect(asUser.status).toBe(200)
+    expect((await asUser.json() as { data: { delivered: boolean } }).data.delivered).toBe(true)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+    // It prompted the POSTING run, and the prompt carries the question.
+    expect(sendPrompt.mock.calls[0]![1]).toBe('CLD-run-1')
+    expect(String(sendPrompt.mock.calls[0]![2])).toContain('Why does this need deciding')
+
+    sendPrompt.mockClear()
+    const asAgent = await reply(srv, created.data.id, { author: 'agent', text: 'because CI is blocked' })
+    expect(asAgent.status).toBe(200)
+    // Persisted, but deliberately NOT delivered — no self-prompt, no loop.
+    expect(sendPrompt).not.toHaveBeenCalled()
+    expect((await asAgent.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toHaveLength(2)
+  }))
+
+  it('reports delivered:false for a user question when the session is genuinely gone', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    getSession.mockReturnValue(null) // no session on disk
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'why' })
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(sendPrompt).not.toHaveBeenCalled()
+    // The question persisted regardless — that is the whole best-effort contract.
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toHaveLength(1)
+  }))
+
+  it('still persists the question when delivery throws', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    getSession.mockReturnValue({ name: 'CLD-run-1' })
+    sendPrompt.mockRejectedValueOnce(new Error('tmux is unhappy'))
+
+    const res = await reply(srv, created.data.id, { author: 'user', presetId: 'why' })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(srv.docStore.getNotice(created.data.id)!.followUps).toHaveLength(1)
+  }))
+
+  it('trims the stored question rather than persisting surrounding whitespace', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+
+    await reply(srv, created.data.id, { author: 'user', text: '  \n why this?  \n\n ' })
+    expect(srv.docStore.getNotice(created.data.id)!.followUps![0]!.text).toBe('why this?')
+  }))
+
+  it('404s for an unknown notice', withServer(async srv => {
+    const res = await reply(srv, 'notice-nope', { author: 'user', text: 'hello?' })
+    expect(res.status).toBe(404)
+  }))
+
+  // The thread is server-owned: an agent amending its notice must not be able to
+  // drop a question that landed mid-flight.
+  it('survives a PATCH amend, and PATCH cannot write followUps', withServer(async srv => {
+    seedRun(srv.docStore, 'CLD-run-1', 'sess-1')
+    const created = await (await post(srv, 'sess-1')).json() as { data: Notice }
+    await reply(srv, created.data.id, { author: 'user', presetId: 'simplify' })
+
+    const res = await srv.fetch(`/api/notices/${created.data.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ headline: 'Rewritten, plainly', followUps: [] }),
+    })
+    expect(res.status).toBe(200)
+
+    const after = srv.docStore.getNotice(created.data.id)!
+    expect(after.headline).toBe('Rewritten, plainly')
+    expect(after.followUps).toHaveLength(1) // the client's `followUps: []` was ignored
   }))
 })

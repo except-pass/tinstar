@@ -174,6 +174,12 @@ function noticeEqual(a: Notice, b: Notice): boolean {
     // absent and undefined agree) or dismiss/undismiss writes short-circuit
     // SILENTLY — no SSE delta, and the board never dims the card.
     (a.dismissedAt ?? null) === (b.dismissedAt ?? null) &&
+    // `followUps` is the append-only ask thread. Compare it by value or appending a
+    // question (or the agent's reply) short-circuits SILENTLY — no SSE delta, and
+    // the widget's ask panel never shows the new message. Neither `amendedAt` nor
+    // any other field moves on a thread write, so this compare is the ONLY thing
+    // that makes the write observable.
+    JSON.stringify(a.followUps ?? null) === JSON.stringify(b.followUps ?? null) &&
     a.createdAt === b.createdAt &&
     a.amendedAt === b.amendedAt
   )

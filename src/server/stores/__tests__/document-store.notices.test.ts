@@ -164,6 +164,32 @@ describe('DocumentStore notices', () => {
     expect(events).toHaveLength(0)
   })
 
+  // Guards the noticeEqual followUps compare. A thread write moves NOTHING else on
+  // the notice — not amendedAt, not answer, not dismissedAt — so this compare is the
+  // only thing that makes asking a question observable. Drop it and the write
+  // short-circuits SILENTLY: no SSE delta, and the widget's ask panel never updates.
+  it('treats followUps by value: appending a message emits one change, an identical re-upsert emits none', () => {
+    const store = new DocumentStore()
+    store.upsertNotice(makeNotice())
+    const events: Change[] = []
+    store.changes.on('change', e => events.push(e as Change))
+
+    const q = { id: 'fu-1', author: 'user' as const, text: 'explain that plainly?', createdAt: 1_700_000_060_000 }
+    store.upsertNotice(makeNotice({ followUps: [q] }))
+    expect(events).toHaveLength(1)
+    expect(store.getNotice('notice-1')!.followUps).toHaveLength(1)
+
+    events.length = 0
+    store.upsertNotice(makeNotice({ followUps: [q] }))
+    expect(events).toHaveLength(0)
+
+    // The agent's reply appends to the same thread — also a change.
+    const a = { id: 'fu-2', author: 'agent' as const, text: 'here it is in plain words', createdAt: 1_700_000_070_000 }
+    store.upsertNotice(makeNotice({ followUps: [q, a] }))
+    expect(events).toHaveLength(1)
+    expect(store.getNotice('notice-1')!.followUps).toHaveLength(2)
+  })
+
   it('pulls a notice: deleteNotice removes it and emits a change with data:null; a missing id returns false and emits nothing', () => {
     const store = new DocumentStore()
     store.upsertNotice(makeNotice())
