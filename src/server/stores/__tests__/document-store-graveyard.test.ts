@@ -158,3 +158,24 @@ describe('DocumentStore graveyard', () => {
     }
   })
 })
+
+describe('DocumentStore graveyard — field-drift guards', () => {
+  // tombstoneEqual() short-circuits the upsert. Any Tombstone field it forgets
+  // to compare silently drops the change: the store keeps the stale value and
+  // no 'change' event fires, so the graveyard UI never refreshes. One test per
+  // field that has been added since the original shape.
+  it.each([
+    ['project', { project: 'tinstar' }, { project: 'cmsandbox' }],
+    ['displayName', { displayName: 'old name' }, { displayName: 'new name' }],
+  ] as const)('re-emits when only %s changes', (_field, before, after) => {
+    const store = new DocumentStore()
+    store.upsertTombstone(makeTombstone(before))
+    const events: Array<{ entity: string }> = []
+    store.changes.on('change', e => events.push(e))
+
+    store.upsertTombstone(makeTombstone(after))
+
+    expect(events).toHaveLength(1)
+    expect(store.getTombstone('conv-abc')).toMatchObject(after)
+  })
+})

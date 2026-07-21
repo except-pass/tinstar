@@ -189,11 +189,13 @@ function tombstoneEqual(a: Tombstone, b: Tombstone): boolean {
   return (
     a.convId === b.convId &&
     a.sessionName === b.sessionName &&
+    a.displayName === b.displayName &&
     a.coversSummary === b.coversSummary &&
     a.taskId === b.taskId &&
     a.task === b.task &&
     a.epic === b.epic &&
     a.initiative === b.initiative &&
+    a.project === b.project &&
     a.workspacePath === b.workspacePath &&
     a.model === b.model &&
     a.created === b.created &&

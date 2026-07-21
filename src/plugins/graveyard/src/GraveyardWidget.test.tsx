@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import { makeGraveyardWidget } from './GraveyardWidget'
 import type { Tombstone } from './types'
@@ -121,5 +121,77 @@ describe('GraveyardWidget', () => {
     expect(api.events.subscribe).toHaveBeenCalledWith('delta', expect.any(Function))
     unmount()
     expect(dispose).toHaveBeenCalled()
+  })
+})
+
+// --- Project / worktree filtering ---
+
+const FILTER_GRAVES: Tombstone[] = [
+  { convId: 'f1', sessionName: 'alpha', coversSummary: 'wired the palette', project: 'tinstar', workspacePath: '/home/ubuntu/wt/fix-run-title', retiredAt: '2026-07-01T09:00:00Z' },
+  { convId: 'f2', sessionName: 'bravo', coversSummary: 'chased a flake', project: 'tinstar', workspacePath: '/home/ubuntu/repo/tinstar', retiredAt: '2026-07-02T09:00:00Z' },
+  { convId: 'f3', sessionName: 'charlie', coversSummary: 'wired the portal', project: 'cmsandbox', workspacePath: '/home/ubuntu/repo/cmsandbox', retiredAt: '2026-07-03T09:00:00Z' },
+  // Buried before the project field existed — must stay listed, but is not a chip.
+  { convId: 'f4', sessionName: 'delta', coversSummary: 'ancient history', retiredAt: '2026-07-04T09:00:00Z' },
+]
+
+function mockApiWith(graves: Tombstone[]) {
+  const fetchMock = vi.fn(async (path: string) => {
+    if (path === '/api/graveyard') return jsonResponse({ ok: true, data: graves })
+    throw new Error(`unexpected path ${path}`)
+  })
+  return {
+    pluginId: 'graveyard', version: '1.0.0',
+    http: { fetch: fetchMock },
+    events: { subscribe: vi.fn(() => ({ dispose: vi.fn() })) },
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  } as unknown as TinstarPluginAPI
+}
+
+const listed = () => screen.getAllByText(/^Here lies /).map(el => el.textContent!.replace('Here lies ', '').trim())
+
+// Scope chip lookups to their row: a name like "cmsandbox" is legitimately both
+// a project and a worktree (the repo directory basename), so a bare role query
+// is ambiguous.
+const chip = (row: 'project' | 'worktree', name: string) =>
+  within(screen.getByTestId(`${row}-filter`)).getByRole('button', { name })
+
+describe('GraveyardWidget — project + worktree filters', () => {
+  it('narrows to one project when its chip is clicked, and restores on "all"', async () => {
+    render(<>{(() => { const W = makeGraveyardWidget(mockApiWith(FILTER_GRAVES)); return <W {...props} /> })()}</>)
+    await waitFor(() => expect(listed()).toHaveLength(4))
+
+    fireEvent.click(chip('project', 'cmsandbox'))
+    expect(listed()).toEqual(['charlie'])
+
+    fireEvent.click(chip('project', 'all'))
+    expect(listed()).toHaveLength(4)
+  })
+
+  it('offers worktree chips derived from the workspace path basename', async () => {
+    render(<>{(() => { const W = makeGraveyardWidget(mockApiWith(FILTER_GRAVES)); return <W {...props} /> })()}</>)
+    await waitFor(() => expect(listed()).toHaveLength(4))
+
+    fireEvent.click(chip('worktree', 'fix-run-title'))
+    expect(listed()).toEqual(['alpha'])
+  })
+
+  it('combines a chip filter with the text search', async () => {
+    render(<>{(() => { const W = makeGraveyardWidget(mockApiWith(FILTER_GRAVES)); return <W {...props} /> })()}</>)
+    await waitFor(() => expect(listed()).toHaveLength(4))
+
+    fireEvent.click(chip('project', 'tinstar'))
+    expect(listed()).toEqual(['alpha', 'bravo'])
+    fireEvent.change(screen.getByPlaceholderText(/Search the dearly departed/i), { target: { value: 'palette' } })
+    expect(listed()).toEqual(['alpha'])
+  })
+
+  it('hides the project row entirely when no grave records a project', async () => {
+    // The all-legacy graveyard: a row showing only "all" is noise, not a filter.
+    const legacy = FILTER_GRAVES.map(({ project: _p, ...rest }) => rest as Tombstone)
+    render(<>{(() => { const W = makeGraveyardWidget(mockApiWith(legacy)); return <W {...props} /> })()}</>)
+    await waitFor(() => expect(listed()).toHaveLength(4))
+
+    expect(screen.queryByTestId('project-filter')).not.toBeInTheDocument()
+    expect(screen.getByTestId('worktree-filter')).toBeInTheDocument()
   })
 })
