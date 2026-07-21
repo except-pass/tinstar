@@ -25,15 +25,15 @@ function surface(id: string, text: string, extra: Partial<SlateSurface> = {}): S
 
 describe('SlatePanel (U5)', () => {
   it('renders nothing when the slate is empty or absent', () => {
-    const { container: empty } = render(<SlatePanel surfaces={[]} />)
+    const { container: empty } = render(<SlatePanel runId="run-1" surfaces={[]} />)
     expect(empty.firstChild).toBeNull()
 
-    const { container: absent } = render(<SlatePanel />)
+    const { container: absent } = render(<SlatePanel runId="run-1" />)
     expect(absent.firstChild).toBeNull()
   })
 
   it('renders a valid surface A2UI body', () => {
-    render(<SlatePanel surfaces={[surface('s1', 'Open point: pick a name')]} />)
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'Open point: pick a name')]} />)
     expect(screen.getByText('Open point: pick a name')).toBeTruthy()
     // The scroll body carries data-scrollable so the canvas wheel handler yields.
     expect(document.querySelector('[data-scrollable]')).not.toBeNull()
@@ -52,7 +52,7 @@ describe('SlatePanel (U5)', () => {
     }
     const healthy = surface('good', 'I still render', { createdAt: 2 })
 
-    render(<SlatePanel surfaces={[malformed, healthy]} />)
+    render(<SlatePanel runId="run-1" surfaces={[malformed, healthy]} />)
 
     // The malformed surface shows the degrade signal...
     expect(screen.getByText(new RegExp(MALFORMED_SIGNAL))).toBeTruthy()
@@ -63,6 +63,7 @@ describe('SlatePanel (U5)', () => {
   it('sorts surfaces by order then createdAt', () => {
     render(
       <SlatePanel
+        runId="run-1"
         surfaces={[
           surface('c', 'gamma', { order: 2, createdAt: 1 }),
           surface('a', 'alpha', { order: 1, createdAt: 5 }),

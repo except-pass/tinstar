@@ -381,7 +381,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
             className={`flex ${focusZone === 'slate' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
           >
             <div className="w-64 h-full flex flex-col bg-surface-panel border-l border-primary/10">
-              <SlatePanel surfaces={run.slate} />
+              <SlatePanel runId={run.id} surfaces={run.slate} />
             </div>
           </div>
         )}
