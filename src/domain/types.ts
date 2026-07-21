@@ -124,6 +124,11 @@ export interface RunData {
    *  so background/supervisor callers can create a session without yanking the
    *  user's camera. Absent/true ⇒ the canvas auto-focuses the new run as usual. */
   focusOnCreate?: boolean
+  /** The run's Slate surfaces (see The Slate). A server-authoritative projection
+   *  populated by the Slate watcher from `.tinstar/slate/*`. Adding this field is
+   *  a 3-place change (this type, `runShallowEqual`, and `mergeRun` in
+   *  useServerEvents) — two of which fail SILENTLY if missed; see those sites. */
+  slate?: SlateSurface[]
 }
 
 
@@ -469,6 +474,32 @@ export interface A2uiComponent {
 export interface A2uiContent {
   root: string
   components: A2uiComponent[]
+}
+
+/** One surface on a run's Slate (see The Slate in CONCEPTS.md): a small,
+ *  scoped, agent/user/process-authored panel rendered in the run workspace card.
+ *  This is the client-facing PROJECTION the run card renders — assembled by the
+ *  Slate store from the file-watched A2UI `body` plus store-owned points/threads.
+ *
+ *  Field ownership is the load-bearing invariant (plan KTD1): the file authors
+ *  `body`/`kind`/`order`; the store owns everything else (points, threads,
+ *  lifecycle). A file re-projection must merge by `id`, never clobber store fields.
+ *  U2 wires this projection through the 3-place RunData contract; U3 fills in the
+ *  store-owned thread/point detail. */
+export interface SlateSurface {
+  id: string
+  /** Who authored the surface body — agent, the user, or a local process. */
+  author: 'agent' | 'user' | 'process'
+  /** Surface kind, drives which renderer the Slate panel picks
+   *  (e.g. 'open-points' | 'diagram' | 'progress'). */
+  kind: string
+  /** Sort order within the Slate; ties broken by createdAt. */
+  order?: number
+  /** File-owned A2UI body. Absent for a surface assembled purely from store state
+   *  (e.g. a bare open-points list). */
+  body?: A2uiContent
+  createdAt: number
+  amendedAt: number
 }
 
 /** Urgency of a widget's current attention request.

@@ -20,7 +20,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone, Notice } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone, Notice, SlateSurface } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
@@ -126,6 +126,12 @@ function runShallowEqual(a: Run, b: Run): boolean {
   if (a.parentId !== b.parentId) return false
   if (a.breakoutRooms !== b.breakoutRooms) return false
   if (!attentionShallowEqual(a.attention, b.attention)) return false
+  // `slate` is a structured array of surfaces (objects) or absent. Compare it by
+  // value — a shallow reference compare would never short-circuit (the Slate
+  // watcher rebuilds a fresh projection on every read, so the ref always differs,
+  // producing a permanent SSE/persist storm), and OMITTING the compare drops the
+  // SSE delta SILENTLY so the run card never updates. Mirrors `noticeEqual`.
+  if (JSON.stringify(a.slate ?? null) !== JSON.stringify(b.slate ?? null)) return false
   if (a.view !== b.view) return false
   // viewData is an opaque (usually object) blob; reference equality is intentional
   // — each PATCH deserializes a fresh object, so a viewData write is always a real
@@ -705,6 +711,21 @@ export class DocumentStore {
     const next: typeof existing = state === null
       ? { ...existing, attention: undefined }
       : { ...existing, attention: state }
+    this.runs.set(runId, next)
+    this.changes.emit('change', { entity: 'run', id: runId, data: next })
+  }
+
+  /** Project a run's Slate surfaces (see The Slate). Called by the Slate watcher
+   *  after it reads and validates `.tinstar/slate/*`. By-value short-circuit so a
+   *  re-projection of unchanged content emits ZERO change events — the file-watch
+   *  storm guard (a watcher re-projecting on every fs event must not hammer the
+   *  docstore/SSE). Pass an empty array or undefined to clear the Slate. */
+  setRunSlate(runId: string, surfaces: SlateSurface[] | undefined): void {
+    const existing = this.runs.get(runId)
+    if (!existing) return
+    const nextSlate = surfaces && surfaces.length > 0 ? surfaces : undefined
+    if (JSON.stringify(existing.slate ?? null) === JSON.stringify(nextSlate ?? null)) return
+    const next: typeof existing = { ...existing, slate: nextSlate }
     this.runs.set(runId, next)
     this.changes.emit('change', { entity: 'run', id: runId, data: next })
   }
