@@ -19,7 +19,7 @@
 // unchanged content (mirrors `setRunSlate` / `noticeEqual`) — the file-watch storm
 // guard. It is server-only (rides the server esbuild bundle) and React-free.
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { A2uiContent, Point, PointAnchor, PointAuthor, PointStatus } from '../../domain/types'
 import type { Reply } from '../../domain/pinSet'
 
@@ -90,12 +90,19 @@ function fileOwnedChanged(prior: Point, input: PointInput): boolean {
   )
 }
 
-function createPoint(runId: string, id: string, input: PointInput, now: number): Point {
+function createPoint(
+  runId: string,
+  id: string,
+  input: PointInput,
+  now: number,
+  source: 'file' | 'user' = 'file',
+): Point {
   const createdAt = input.createdAt ?? now
   const p: Point = {
     id,
     runId,
     author: input.author ?? 'agent',
+    source,
     ...(input.anchor ? { anchor: input.anchor } : {}),
     headline: input.headline,
     ...(input.content ? { content: input.content } : {}),
@@ -164,9 +171,12 @@ export class SlateStore {
    * projection. Emits one `slatePoint` change per point that actually changed — an
    * identical re-projection emits ZERO events (the file-watch storm guard).
    *
-   * NOTE: retraction drops any of the run's points absent from `inputs`. User-added
-   * points (a store-only authoring path) are reconciled by the HTTP layer (U7), which
-   * feeds them back through the projection set; U3 owns the file→store merge only.
+   * RETRACTION SCOPE (plan U7 reconciliation): only `source:'file'` points absent
+   * from `inputs` are dropped. A `source:'user'` point (added over HTTP via
+   * {@link addUserPoint}) is EXEMPT — the file that projects onto this run does not
+   * know about it, so without this exemption the next file re-projection would nuke
+   * a point the user just added. A prior point without a `source` field (legacy) is
+   * treated as file-owned and retracted, so old snapshots keep their behavior.
    */
   applyProjection(runId: string, inputs: PointInput[], now: number = Date.now()): void {
     const seen = new Set<string>()
@@ -182,9 +192,31 @@ export class SlateStore {
     }
     for (const [id, p] of this.points) {
       if (p.runId !== runId || seen.has(id)) continue
+      if (p.source === 'user') continue // user points survive a file re-projection
       this.points.delete(id)
       this.emit({ entity: 'slatePoint', id, runId, data: null })
     }
+  }
+
+  /**
+   * Create OR amend a USER-authored point (plan U7). Unlike {@link applyProjection}
+   * (the file→store path), a user point carries `source:'user'` so a later file
+   * re-projection does NOT retract it. When `input.id` names an existing point of
+   * this run the file-owned body/headline/anchor are amended (its thread/status are
+   * preserved, mirroring the merge rule); otherwise a fresh point is created with a
+   * generated id. Emits one change (or none if a byte-identical amend). Returns the
+   * resulting point.
+   */
+  addUserPoint(runId: string, input: PointInput, now: number = Date.now()): Point {
+    const id = input.id && input.id.length > 0 ? input.id : 'pt-user-' + randomUUID().slice(0, 12)
+    const prior = this.points.get(id)
+    const next = prior && prior.runId === runId
+      ? { ...mergeFileOwned(prior, input, now), source: prior.source ?? 'user' as const }
+      : createPoint(runId, id, { author: 'user', ...input }, now, 'user')
+    if (prior && pointEqual(prior, next)) return prior
+    this.points.set(id, next)
+    this.emit({ entity: 'slatePoint', id, runId, data: next })
+    return next
   }
 
   /** Append a reply to a point's thread (append-only; mirrors pins/notes). Re-derives

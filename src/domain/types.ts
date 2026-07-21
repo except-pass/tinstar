@@ -539,6 +539,12 @@ export interface Point {
   runId: string
   /** Set once when the point is first created; a re-projection never flips it. */
   author: PointAuthor
+  /** Provenance (plan U7 reconciliation). A `'file'` point is authored by a
+   *  `.tinstar/slate/*.json` projection and is RETRACTED when a later file
+   *  re-projection omits it; a `'user'` point is added over HTTP and is EXEMPT
+   *  from that retraction, so a file re-projection can't nuke a point the user
+   *  just added. Absent is treated as `'file'` (the projection default). */
+  source?: 'file' | 'user'
   anchor?: PointAnchor
   /** File-owned: the one-line title of the point. */
   headline: string

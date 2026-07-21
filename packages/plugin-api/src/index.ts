@@ -88,7 +88,10 @@ export interface PinContext {
  *  per the plugin-api isolation convention — keep the two structurally identical. */
 export interface Reply {
   id: string
-  author: 'user' | 'agent'
+  /** `'process'` is a Slate thread author (a local `tinstar-run` wrapper posting
+   *  onto a point); pins/notes only ever produce `'user'`/`'agent'`. Kept in sync
+   *  with the host's `src/domain/pinSet.ts` per the parity guard. */
+  author: 'user' | 'agent' | 'process'
   text: string
   createdAt: number
 }

@@ -1,0 +1,95 @@
+// The prompts an agent receives when the user acts on one of its Slate points —
+// adds a point, replies on a thread, or submits a control answer.
+//
+// Same delivery pattern as the Roundup notices (src/notices/followUpPrompt.ts,
+// answerPrompt.ts) and note replies (src/pins/replyPrompt.ts): the server bakes a
+// human-readable block — including the exact curl the agent should run to reply —
+// and submits it to the run's session (the point's `runId`, which IS the tmux
+// session name). The point/reply is already persisted before this is delivered, so
+// delivery is best-effort; an unreachable session just means the agent reads it
+// later. React-free, server-only (rides the esbuild bundle with the answer route).
+//
+// The injection guardrail (plan KTD6): an injected comment is a NOTE, not a command
+// to drop in-flight work. Every prompt says so, so a mid-tool-use injection can't
+// derail the agent into abandoning what it was doing.
+import type { Point } from '../domain/types'
+import type { Reply } from '../domain/pinSet'
+
+/** How many of the most recent thread messages a prompt carries — bounds the
+ *  delivered prompt regardless of how long a chatty point's thread grows (mirrors
+ *  followUpPrompt's PROMPT_THREAD_WINDOW). */
+export const SLATE_PROMPT_THREAD_WINDOW = 20
+
+/** The GUARDRAIL line every Slate injection carries (plan KTD6/R15). */
+const GUARDRAIL =
+  'This is a note on the run\'s Slate, not a command to drop what you are doing — ' +
+  'finish or checkpoint your in-flight work first, then act on it.'
+
+/** The thread rendered for a prompt: one line per message, oldest first, windowed
+ *  to the last SLATE_PROMPT_THREAD_WINDOW messages. */
+export function slateThreadSoFar(replies: Reply[]): string {
+  return replies.slice(-SLATE_PROMPT_THREAD_WINDOW).map(m => `[${m.author}] ${m.text}`).join('\n')
+}
+
+/** The curl block telling the agent how to reply onto a point's thread. */
+function replyCurl(point: Point, origin: string): string[] {
+  return [
+    `curl -s -X POST '${origin}/api/runs/${point.runId}/slate/points/${point.id}/replies' \\`,
+    `  -H 'Content-Type: application/json' \\`,
+    `  -d '{"author":"agent","text":"YOUR REPLY"}'`,
+  ]
+}
+
+/** Prompt for a brand-new USER-added point (POST /slate/points). */
+export function slatePointPromptText(point: Point, origin: string): string {
+  return [
+    `The user added a point to your run's Slate: "${point.headline}" (point ${point.id}).`,
+    '',
+    GUARDRAIL,
+    '',
+    'Reply on its thread when you have something to say:',
+    ...replyCurl(point, origin),
+  ].join('\n')
+}
+
+/** Prompt for a USER reply on a point's thread (POST /slate/points/:pid/replies).
+ *  `point` must already carry the appended reply as the last thread entry. */
+export function slateReplyPromptText(point: Point, origin: string): string {
+  const thread = point.replies ?? []
+  const latest = thread[thread.length - 1]?.text ?? ''
+  const lines: string[] = [
+    `The user replied on a point on your run's Slate: "${point.headline}" (point ${point.id}).`,
+    '',
+    `Their message: ${latest}`,
+    '',
+    GUARDRAIL,
+  ]
+  if (thread.length > 1) {
+    lines.push(
+      '',
+      thread.length > SLATE_PROMPT_THREAD_WINDOW
+        ? `The thread so far (the last ${SLATE_PROMPT_THREAD_WINDOW} of ${thread.length} messages):`
+        : 'The thread so far:',
+      slateThreadSoFar(thread),
+    )
+  }
+  lines.push('', 'Reply on its thread:', ...replyCurl(point, origin))
+  return lines.join('\n')
+}
+
+/** Prompt for a USER control answer (POST /slate/points/:pid/answer). `chosenLabels`
+ *  are the human labels of the selected choice ids; `text` the free-text note. */
+export function slateAnswerPromptText(
+  point: Point,
+  chosenLabels: string[],
+  text: string | undefined,
+  origin: string,
+): string {
+  const lines: string[] = [
+    `The user answered a control on your run's Slate: "${point.headline}" (point ${point.id}).`,
+  ]
+  if (chosenLabels.length > 0) lines.push(`They chose: ${chosenLabels.join(', ')}`)
+  if (text) lines.push(`They added: ${text}`)
+  lines.push('', GUARDRAIL, '', 'Reply on its thread once you have acted:', ...replyCurl(point, origin))
+  return lines.join('\n')
+}

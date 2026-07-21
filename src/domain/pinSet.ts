@@ -12,7 +12,10 @@ export interface PinContext {
 
 export interface Reply {
   id: string
-  author: 'user' | 'agent'
+  /** `'process'` is a Slate thread author (a local `tinstar-run` wrapper posting
+   *  onto a point); pins/notes only ever produce `'user'`/`'agent'`, and their
+   *  routes reject anything else, so the wider union is inert for them. */
+  author: 'user' | 'agent' | 'process'
   text: string
   createdAt: number
 }

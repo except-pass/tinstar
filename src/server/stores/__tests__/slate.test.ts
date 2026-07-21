@@ -82,6 +82,24 @@ describe('SlateStore.applyProjection — merge by id (KTD1)', () => {
     expect(changes).toEqual([{ entity: 'slatePoint', id: 'p2', runId: RUN, data: null }])
   })
 
+  it('does NOT retract a source:user point absent from the file (U7 reconciliation)', () => {
+    const { store, changes } = makeStore()
+    store.applyProjection(RUN, [input('p1', 'file body')], 100)
+    const userPoint = store.addUserPoint(RUN, { headline: 'user asked this', content: body('u') })
+    expect(userPoint.source).toBe('user')
+
+    changes.length = 0
+    // A file re-projection that omits the user point (the file never knew about it).
+    store.applyProjection(RUN, [input('p1', 'file body')], 200)
+
+    // The file point is untouched; the user point SURVIVES (would be nuked without
+    // the source:'user' retraction exemption).
+    expect(store.getPoint('p1')).toBeDefined()
+    expect(store.getPoint(userPoint.id)).toBeDefined()
+    // No retract was emitted for the user point.
+    expect(changes.filter(c => c.data === null)).toEqual([])
+  })
+
   it('does not retract points belonging to a different run', () => {
     const { store } = makeStore()
     store.applyProjection('runA', [input('a1', 'x')], 100)
@@ -210,6 +228,37 @@ describe('SlateStore — id synthesis for file entries without an id', () => {
     a.store.applyProjection(RUN, [entry], 1)
     b.store.applyProjection(RUN, [entry], 999)
     expect(a.store.getPointsForRun(RUN)[0]!.id).toBe(b.store.getPointsForRun(RUN)[0]!.id)
+  })
+})
+
+describe('SlateStore.addUserPoint (U7)', () => {
+  it('creates a source:user point with a generated id, author user, and emits', () => {
+    const { store, emit } = makeStore()
+    const p = store.addUserPoint(RUN, { headline: 'why is CI red?' })
+    expect(p.source).toBe('user')
+    expect(p.author).toBe('user')
+    expect(p.runId).toBe(RUN)
+    expect(p.id).toMatch(/^pt-user-/)
+    expect(p.status).toBe('open')
+    expect(emit).toHaveBeenCalledTimes(1)
+  })
+
+  it('amends an existing user point by id, preserving its thread', () => {
+    const { store } = makeStore()
+    store.addUserPoint(RUN, { id: 'up1', headline: 'first' })
+    store.addReply(RUN, 'up1', reply('agent', 'looking', 110))
+    const amended = store.addUserPoint(RUN, { id: 'up1', headline: 'first (edited)' })
+    expect(amended.headline).toBe('first (edited)')
+    expect(amended.replies).toHaveLength(1)   // thread preserved across amend
+    expect(amended.source).toBe('user')
+  })
+
+  it('a byte-identical amend is a no-op (no emit)', () => {
+    const { store, emit } = makeStore()
+    store.addUserPoint(RUN, { id: 'up1', headline: 'same' })
+    emit.mockClear()
+    store.addUserPoint(RUN, { id: 'up1', headline: 'same' })
+    expect(emit).not.toHaveBeenCalled()
   })
 })
 

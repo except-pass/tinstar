@@ -925,6 +925,15 @@ export class DocumentStore {
     this.projectRunToSlate(runId)
   }
 
+  /** Create or amend a USER-authored point (source:'user'), then rebuild the run's
+   *  render projection. A user point survives a subsequent file re-projection (the
+   *  reconciliation the U7 HTTP layer relies on). Returns the resulting point. */
+  addUserSlatePoint(runId: string, input: PointInput): Point {
+    const point = this.slate.addUserPoint(runId, input)
+    this.projectRunToSlate(runId)
+    return point
+  }
+
   addSlateReply(runId: string, pointId: string, reply: Reply): void {
     this.slate.addReply(runId, pointId, reply)
     this.projectRunToSlate(runId)
