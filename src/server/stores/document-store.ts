@@ -922,22 +922,49 @@ export class DocumentStore {
   /** Project a run's file-authored surfaces onto the store (merge by id, KTD1). */
   applyRunSlateProjection(runId: string, inputs: PointInput[], now?: number): void {
     this.slate.applyProjection(runId, inputs, now)
+    this.projectRunToSlate(runId)
   }
 
   addSlateReply(runId: string, pointId: string, reply: Reply): void {
     this.slate.addReply(runId, pointId, reply)
+    this.projectRunToSlate(runId)
   }
 
   resolveSlatePoint(runId: string, pointId: string, at?: number): void {
     this.slate.resolve(runId, pointId, at)
+    this.projectRunToSlate(runId)
   }
 
   reopenSlatePoint(runId: string, pointId: string, at?: number): void {
     this.slate.reopen(runId, pointId, at)
+    this.projectRunToSlate(runId)
   }
 
   dismissSlatePoint(runId: string, pointId: string, at?: number): void {
     this.slate.dismiss(runId, pointId, at)
+    this.projectRunToSlate(runId)
+  }
+
+  /** Bridge: rebuild a run's SlateSurface[] render projection from its store points
+   *  and publish it on RunData.slate — the single client render channel (U5 renders
+   *  run.slate). Called after every point mutation so the run card reflects points +
+   *  their threads/status without a separate client subscription to `slatePoint`.
+   *  setRunSlate's by-value short-circuit keeps an unchanged projection from emitting. */
+  private projectRunToSlate(runId: string): void {
+    const surfaces: SlateSurface[] = this.slate.getPointsForRun(runId).map(p => ({
+      id: p.id,
+      author: p.author,
+      kind: p.anchor?.kind === 'surface' ? 'diagram' : 'open-point',
+      order: p.createdAt,
+      ...(p.content ? { body: p.content } : {}),
+      headline: p.headline,
+      status: p.status,
+      ...(p.replies ? { thread: p.replies } : {}),
+      ...(p.anchor ? { anchor: p.anchor } : {}),
+      createdAt: p.createdAt,
+      amendedAt: p.amendedAt,
+    }))
+    this.setRunSlate(runId, surfaces)
   }
 
   getSlatePoint(id: string): Point | undefined {

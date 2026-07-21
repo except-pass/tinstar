@@ -496,8 +496,17 @@ export interface SlateSurface {
   /** Sort order within the Slate; ties broken by createdAt. */
   order?: number
   /** File-owned A2UI body. Absent for a surface assembled purely from store state
-   *  (e.g. a bare open-points list). */
+   *  (e.g. a bare open-point). */
   body?: A2uiContent
+  /** Point render fields — present when this surface is a store-backed point
+   *  (open-points list, threaded surface). DocumentStore projects the run's
+   *  SlateStore points into RunData.slate so the client renders ONE channel
+   *  (run.slate) rather than subscribing to a second point stream. The file owns
+   *  `body`/`headline`/`anchor`; the store owns `status`/`thread`. */
+  headline?: string
+  status?: PointStatus
+  thread?: Reply[]
+  anchor?: PointAnchor
   createdAt: number
   amendedAt: number
 }
