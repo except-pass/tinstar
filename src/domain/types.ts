@@ -507,6 +507,10 @@ export interface SlateSurface {
   status?: PointStatus
   thread?: Reply[]
   anchor?: PointAnchor
+  /** Server-set staleness marker (plan R19): present when a `process`-authored
+   *  surface has gone stale (its wrapper stopped updating). The renderer styles it
+   *  as "stalled/unknown" instead of a live spinner. */
+  stalledAt?: number
   createdAt: number
   amendedAt: number
 }
@@ -561,6 +565,12 @@ export interface Point {
   resolvedAt?: number
   /** Set only by an explicit dismiss; survives a later file re-projection. */
   dismissedAt?: number
+  /** Server-set backstop marker (plan R19): a `process`-authored point whose
+   *  `amendedAt` has gone stale (no file update for N minutes) is marked stalled so
+   *  a `kill -9`'d `tinstar-run` wrapper can't leave a permanent fake-live spinner.
+   *  Only the SERVER can detect this (a client can only style age). Cleared when a
+   *  later file re-projection actually changes the point's body. */
+  stalledAt?: number
 }
 
 /** Urgency of a widget's current attention request.

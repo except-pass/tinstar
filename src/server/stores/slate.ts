@@ -125,6 +125,9 @@ function mergeFileOwned(prior: Point, input: PointInput, now: number): Point {
     headline: input.headline,
     amendedAt: changed ? now : prior.amendedAt,
   }
+  // A fresh file update un-stalls the point (the wrapper resumed writing), so the
+  // staleness backstop never sticks on a still-live process (plan R19).
+  if (changed) delete next.stalledAt
   // File owns the body: an omitted `content` clears it.
   if (input.content) next.content = input.content
   else delete next.content
@@ -249,6 +252,20 @@ export class SlateStore {
       delete next.resolvedAt
       next.status = derivePointStatus(next)
       return next
+    })
+  }
+
+  /** Server-side staleness backstop (plan R19): mark a `process`-authored point
+   *  stalled so a `kill -9`'d `tinstar-run` wrapper (which can't run its finalize
+   *  trap) doesn't leave a permanent fake-live spinner. Sets `stalledAt` WITHOUT
+   *  bumping `amendedAt` (that would reset the staleness clock) and does NOT touch
+   *  `status` (the renderer styles from `stalledAt`). No-op if already stalled, so a
+   *  repeated sweep emits nothing. Cleared by a later file re-projection that changes
+   *  the body ({@link mergeFileOwned}). */
+  markStalled(runId: string, pointId: string, at: number = Date.now()): void {
+    this.mutate(runId, pointId, prior => {
+      if (prior.stalledAt != null) return prior
+      return { ...prior, stalledAt: at }
     })
   }
 

@@ -28,6 +28,7 @@ import { migrateSnapEdges } from '../../domain/constellationGraph'
 import { type PinSet, removePinsForNode, type Reply } from '../../domain/pinSet'
 import { migrateAllBrowserNotes } from '../migrations/migrateAllBrowserNotes'
 import { SlateStore, type PointInput } from './slate'
+import { sweepStalledProcessPoints } from '../sessions/slate-staleness'
 
 /** Translate a non-background run's status into a default attention signal.
  *  Returns null when the inbox shouldn't surface the run. This is the
@@ -954,6 +955,15 @@ export class DocumentStore {
     this.projectRunToSlate(runId)
   }
 
+  /** Server-side staleness backstop (plan R19): mark every process-authored point
+   *  whose file writer stopped updating N minutes ago as stalled, then re-project
+   *  the affected runs so the render channel (RunData.slate) reflects it. Driven by
+   *  the SlateWatcher's low-frequency sweep timer. */
+  markStalledSlatePoints(now?: number, thresholdMs?: number): void {
+    const affected = sweepStalledProcessPoints(this.slate, now, thresholdMs)
+    for (const runId of affected) this.projectRunToSlate(runId)
+  }
+
   /** Bridge: rebuild a run's SlateSurface[] render projection from its store points
    *  and publish it on RunData.slate — the single client render channel (U5 renders
    *  run.slate). Called after every point mutation so the run card reflects points +
@@ -970,6 +980,7 @@ export class DocumentStore {
       status: p.status,
       ...(p.replies ? { thread: p.replies } : {}),
       ...(p.anchor ? { anchor: p.anchor } : {}),
+      ...(p.stalledAt != null ? { stalledAt: p.stalledAt } : {}),
       createdAt: p.createdAt,
       amendedAt: p.amendedAt,
     }))

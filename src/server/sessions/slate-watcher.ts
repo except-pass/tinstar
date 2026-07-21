@@ -50,6 +50,10 @@ export interface LiveRun {
 /** Minimal store surface the watcher drives — never touches the store directly. */
 export interface SlateDocStore {
   applyRunSlateProjection(runId: string, inputs: PointInput[], now?: number): void
+  /** Server-side staleness backstop (plan R19): mark process-authored surfaces whose
+   *  writer went silent as stalled. Optional so a minimal test double needn't provide
+   *  it; the watcher guards the call. */
+  markStalledSlatePoints?(now?: number, thresholdMs?: number): void
 }
 
 /** A watch handle the watcher can tear down. */
@@ -85,6 +89,11 @@ export interface SlateWatcherOpts {
   debounceMs?: number
   /** Per-file size cap in bytes; larger files are skipped unread (default 32 KiB). */
   maxFileBytes?: number
+  /** Staleness threshold in ms for the R19 sweep — a process-authored surface with no
+   *  file update for this long is marked stalled (default 10 min). */
+  stalenessMs?: number
+  /** How often the staleness sweep runs, in ms (default 60s — low-frequency backstop). */
+  stalenessSweepMs?: number
   fs?: SlateFs
   timers?: SlateTimers
   /** Content validator — the notices funnel by default; injectable for tests. */
@@ -94,6 +103,8 @@ export interface SlateWatcherOpts {
 const DEFAULT_INTERVAL_MS = 3000
 const DEFAULT_DEBOUNCE_MS = 100
 const DEFAULT_MAX_FILE_BYTES = 32 * 1024
+const DEFAULT_STALENESS_MS = 10 * 60_000
+const DEFAULT_STALENESS_SWEEP_MS = 60_000
 
 const defaultFs: SlateFs = {
   existsSync,
@@ -126,10 +137,13 @@ export class SlateWatcher {
   private readonly interval: number
   private readonly debounce: number
   private readonly maxBytes: number
+  private readonly stalenessMs: number
+  private readonly stalenessSweepMs: number
   private readonly parseContent: (value: unknown) => A2uiContent | null
 
   private pollTimer: unknown = null
   private debounceTimer: unknown = null
+  private sweepTimer: unknown = null
 
   /** Active fs.watch handles keyed by runId, remembering which dir each watches. */
   private readonly watches = new Map<string, { dir: string; handle: SlateWatchHandle }>()
@@ -147,6 +161,8 @@ export class SlateWatcher {
     this.interval = opts.intervalMs ?? DEFAULT_INTERVAL_MS
     this.debounce = opts.debounceMs ?? DEFAULT_DEBOUNCE_MS
     this.maxBytes = opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
+    this.stalenessMs = opts.stalenessMs ?? DEFAULT_STALENESS_MS
+    this.stalenessSweepMs = opts.stalenessSweepMs ?? DEFAULT_STALENESS_SWEEP_MS
     this.parseContent = opts.parseContent ?? parseA2uiContent
   }
 
@@ -154,12 +170,20 @@ export class SlateWatcher {
     if (this.pollTimer) return
     void this.tick() // run immediately
     this.pollTimer = this.timers.setInterval(() => void this.tick(), this.interval)
+    // A low-frequency backstop, independent of the fs-watch cadence: a SIGKILL'd
+    // wrapper never fires its finalize trap, so only a server sweep can retire its
+    // fake-live spinner (plan R19).
+    this.sweepTimer = this.timers.setInterval(() => this.sweepStale(), this.stalenessSweepMs)
   }
 
   stop(): void {
     if (this.pollTimer) {
       this.timers.clearInterval(this.pollTimer)
       this.pollTimer = null
+    }
+    if (this.sweepTimer) {
+      this.timers.clearInterval(this.sweepTimer)
+      this.sweepTimer = null
     }
     if (this.debounceTimer) {
       this.timers.clearTimeout(this.debounceTimer)
@@ -177,6 +201,16 @@ export class SlateWatcher {
   /** Run one poll tick now — the backstop cadence exposed for tests / manual triggering. */
   async pollOnce(): Promise<void> {
     await this.tick()
+  }
+
+  /** Run one staleness sweep now — exposed for tests / manual triggering. Error-isolated
+   *  (a sweep failure must never take down the watcher). */
+  sweepStale(): void {
+    try {
+      this.opts.docStore.markStalledSlatePoints?.(Date.now(), this.stalenessMs)
+    } catch (err) {
+      log.warn('slate-watcher', `staleness sweep failed: ${(err as Error).message}`)
+    }
   }
 
   /**
