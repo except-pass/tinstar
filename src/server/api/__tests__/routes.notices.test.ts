@@ -31,7 +31,7 @@ import { handleRequest, type RouteContext } from '../routes'
 import { DocumentStore } from '../../stores/document-store'
 import type { Notice, Run } from '../../../domain/types'
 import type { Reply } from '../../../domain/pinSet'
-import { UNIVERSAL_FOLLOW_UPS, NOTICE_FOLLOWUP_TEXT_MAX } from '../../../plugins/roundup/src/a2ui/followUps'
+import { UNIVERSAL_FOLLOW_UPS, NOTICE_FOLLOWUP_TEXT_MAX } from '../../../a2ui/followUps'
 
 interface Harness {
   docStore: DocumentStore

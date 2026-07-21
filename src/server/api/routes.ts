@@ -53,9 +53,9 @@ import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, Sessio
 // same web_core v0_9 schema the renderer uses, so malformed descriptions are
 // rejected at the boundary. Importing the plugin's schema here is what pulls
 // @a2ui/web_core into the server (esbuild) bundle — the load-bearing de-risk.
-import { parseA2uiContent } from '../../plugins/roundup/src/a2ui/schema'
-import { collectChoiceOptionIds, collectChoiceOptionLabels, NOTICE_ANSWER_TEXT_MAX } from '../../plugins/roundup/src/a2ui/controls'
-import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../plugins/roundup/src/a2ui/followUps'
+import { parseA2uiContent } from '../../a2ui/schema'
+import { collectChoiceOptionIds, collectChoiceOptionLabels, NOTICE_ANSWER_TEXT_MAX } from '../../a2ui/controls'
+import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../a2ui/followUps'
 import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
 import { normalizeRunName } from '../../domain/runName'

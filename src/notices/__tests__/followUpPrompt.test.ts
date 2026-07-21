@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { Notice } from '../../domain/types'
 import type { Reply } from '../../domain/pinSet'
 import { followUpPromptText, followUpThreadSoFar, isThreadWindowed, PROMPT_THREAD_WINDOW } from '../followUpPrompt'
-import { UNIVERSAL_FOLLOW_UPS } from '../../plugins/roundup/src/a2ui/followUps'
+import { UNIVERSAL_FOLLOW_UPS } from '../../a2ui/followUps'
 
 const ORIGIN = 'http://localhost:5273'
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import type { A2uiContent } from '../../../../../domain/types'
+import type { A2uiContent } from '../../domain/types'
 import {
   A2uiRenderer,
   A2uiErrorBoundary,

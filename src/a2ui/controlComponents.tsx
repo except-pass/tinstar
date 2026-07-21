@@ -8,7 +8,7 @@
 // read-only, e.g. a headline preview), the default context renders the controls
 // disabled/static so nothing is ever half-wired.
 import { createContext, useContext, type ReactNode } from 'react'
-import type { A2uiComponent } from '../../../../domain/types'
+import type { A2uiComponent } from '../domain/types'
 import { parseChoice } from './controls'
 import type { FollowUpPreset } from './followUps'
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { A2uiContent } from '../../../../../domain/types'
+import type { A2uiContent } from '../../domain/types'
 import {
   parseChoice,
   hasTextInput,

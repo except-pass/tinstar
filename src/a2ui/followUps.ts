@@ -13,7 +13,7 @@
 //      This extends the existing host control model (controls.ts / catalog.tsx);
 //      web_core's MessageProcessor/action runtime stays deferred.
 //   3. FREEFORM text.
-import type { A2uiComponent, A2uiContent } from '../../../../domain/types'
+import type { A2uiComponent, A2uiContent } from '../domain/types'
 
 /** The A2UI `component` type string an agent uses to declare a likely follow-up. */
 export const FOLLOW_UP_COMPONENT = 'FollowUp'
