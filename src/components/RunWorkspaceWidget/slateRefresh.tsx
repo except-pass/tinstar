@@ -119,14 +119,14 @@ export function useSlateRefresh(runId: string, surfaces: SlateSurface[]): SlateR
     (visible: SlateSurface[]) => {
       if (visible.length === 0) return
       setBulkRefreshing(true)
-      // Sequential: await each surface's POST before the next so the per-surface
-      // sendPrompts don't interleave into one tmux pane. Clear the bulk flag in
-      // `finally` (when dispatch finishes), NOT on a transient refreshing.size===0 —
-      // a dead run clears its first surface immediately, which would otherwise flip
-      // the bulk flag off mid-loop before the rest are even POSTed.
-      void (async () => {
-        for (const s of visible) await refresh(s)
-      })().finally(() => setBulkRefreshing(false))
+      // Fan out: fire every surface's refresh at once. The tmux backend now
+      // serializes send-keys per session (serializeByKey), so concurrent POSTs
+      // can't interleave a session's keystrokes — and recipe-bearing surfaces
+      // (code-spawned authors, separate processes) refresh TRULY in parallel with
+      // no main-agent bottleneck. Clear the bulk flag once every POST has settled
+      // (Promise.all), NOT on a transient refreshing.size===0 — a dead run clears
+      // its first surface at once, which would otherwise flip the flag off early.
+      void Promise.all(visible.map((s) => refresh(s))).finally(() => setBulkRefreshing(false))
     },
     [refresh],
   )

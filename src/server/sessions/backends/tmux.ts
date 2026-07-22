@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { Session, SessionNats } from '../session'
 import type { TinstarConfig, CliTemplate } from '../config'
 import { isCursorAgentTemplate, ensureCursorWorkspaceTrust } from '../cursor-trust'
+import { serializeByKey } from './serializeByKey'
 import { log } from '../../logger'
 
 // NATS channel server paths come from config (see config.ts)
@@ -1104,8 +1105,19 @@ export async function sendKeys(config: TinstarConfig, sessionName: string, keys:
   await execFileAsync('tmux', ['send-keys', '-t', tmuxName, ...keys])
 }
 
-export async function sendPrompt(config: TinstarConfig, sessionName: string, prompt: string): Promise<void> {
+// Per-session send queue (keyed by tmux session name). A prompt is delivered in
+// three steps (send-keys text → settle → send-keys Enter); two of those racing on
+// the SAME session interleave into a garbled prompt. Serializing here lets callers
+// fan out freely (a Slate refresh-all, concurrent reply/compose/explain) while each
+// session's keystrokes stay intact. Different sessions still send in parallel.
+const sendChains = new Map<string, Promise<unknown>>()
+
+export function sendPrompt(config: TinstarConfig, sessionName: string, prompt: string): Promise<void> {
   const tmuxName = tmuxSessionName(config, sessionName)
+  return serializeByKey(sendChains, tmuxName, () => doSendPrompt(tmuxName, prompt))
+}
+
+async function doSendPrompt(tmuxName: string, prompt: string): Promise<void> {
   // The pane enters copy-mode when the user scrolls in the ttyd terminal.
   // While in copy-mode (or a nested sub-prompt like search/jump), send-keys
   // text goes to the mode handler instead of the underlying process — which
