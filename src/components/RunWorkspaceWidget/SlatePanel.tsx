@@ -33,6 +33,7 @@ import { useSlateRefresh, RefreshButton } from './slateRefresh'
 import { SlateComposer } from './SlateComposer'
 import { SlateExplainButton } from './SlateExplainButton'
 import { SurfaceAge } from './SurfaceAge'
+import { FastPathBadge } from './FastPathBadge'
 import { useNow } from '../../hooks/useNow'
 
 /** Column width (px) at/above which surfaces reflow into two columns (R2). Kept
@@ -286,8 +287,10 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
           ) : null
           // Freshness footer: "updated Xm ago", ambering when the surface hasn't been
           // tended in a while — the visible cue so a stale assertion gets a second look.
+          // A ⚡ leads it when the surface self-refreshes from a recipe (fast path).
           const footer = (
-            <div className="mt-1 flex justify-end">
+            <div className="mt-1 flex items-center justify-end gap-1.5">
+              {surface.refresh && <FastPathBadge className="text-[10px]" />}
               <SurfaceAge amendedAt={surface.amendedAt} now={now} />
             </div>
           )

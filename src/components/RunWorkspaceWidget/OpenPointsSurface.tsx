@@ -24,6 +24,7 @@ import { apiFetch } from '../../apiClient'
 import { SurfaceThread } from './SurfaceThread'
 import { RefreshButton } from './slateRefresh'
 import { SurfaceAge } from './SurfaceAge'
+import { FastPathBadge } from './FastPathBadge'
 
 /** The visible track stages, in order. `resolved` is terminal; `dismissed` is a
  *  side exit (rendered as a dimmed row, not a track position). */
@@ -248,6 +249,9 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
             >
               {status}
             </span>
+            {/* ⚡ — this point self-refreshes from a recipe (fast path, off the main
+                agent). */}
+            {surface.refresh && <FastPathBadge className="text-[10px]" />}
             <span
               className={`flex-1 truncate text-[13px] font-medium leading-snug text-ink-high ${resolved ? 'line-through text-ink-low' : ''}`}
             >

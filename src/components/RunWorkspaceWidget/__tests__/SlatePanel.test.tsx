@@ -276,4 +276,21 @@ describe('SlatePanel refresh (U3)', () => {
       )
     })
   })
+
+  it('shows the ⚡ fast-path badge only on surfaces carrying a refresh recipe', () => {
+    render(
+      <SlatePanel
+        runId="run-1"
+        surfaces={[surface('withrecipe', 'x', { refresh: 're-run the eval' }), surface('norecipe', 'y')]}
+      />,
+    )
+    // Exactly one badge — the recipe-bearing surface.
+    expect(screen.getAllByTestId('fast-path-badge')).toHaveLength(1)
+    expect(
+      screen.getByTestId('slate-surface-withrecipe').querySelector('[data-testid="fast-path-badge"]'),
+    ).toBeTruthy()
+    expect(
+      screen.getByTestId('slate-surface-norecipe').querySelector('[data-testid="fast-path-badge"]'),
+    ).toBeNull()
+  })
 })
