@@ -41,6 +41,12 @@ export interface UiPrefs {
   /** Persisted width (px) of a run card's Slate column (Slate v2 U1/R1).
    *  Per-browser view preference; restored on mount, written on drag end. */
   slateWidth?: number
+  /** Per-browser: telemetry panel manually collapsed in the run workspace, so the
+   *  Slate can reclaim the right side. Default false (shown). */
+  telemetryCollapsed?: boolean
+  /** Per-browser: keep the Slate column open even with zero surfaces, so it can be
+   *  opened blank and filled via Explain / + Add surface. Default false. */
+  slateOpen?: boolean
 }
 
 function readAll(): UiPrefs {

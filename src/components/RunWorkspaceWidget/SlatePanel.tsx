@@ -40,11 +40,18 @@ const SLATE_TWO_COL_MIN = 420
 interface Props {
   /** The run id (= the run's `.id`) — Slate mutations are run-scoped. */
   runId: string
-  /** The run's Slate projection. Undefined/empty renders nothing (additive). */
+  /** The run's Slate projection. Undefined/empty renders nothing (additive) unless
+   *  `open` forces a blank Slate to render. */
   surfaces?: SlateSurface[]
   /** Measured column width (px) driving the 1→2 column reflow (R2). When absent
    *  the grid stays single-column. */
   width?: number
+  /** When true, render even with zero surfaces (a blank Slate the user opened on
+   *  purpose) so Explain / + Add are reachable to fill it. */
+  open?: boolean
+  /** Collapse the (blank) Slate back to the strip. Only offered when there are no
+   *  surfaces holding the column open. */
+  onClose?: () => void
 }
 
 /** Sort by `order` (undefined sinks to the end) then `createdAt` tiebreak. */
@@ -90,7 +97,7 @@ function HideToggle({ id, hidden, onHide, onUnhide }: {
   )
 }
 
-export function SlatePanel({ runId, surfaces = [], width }: Props) {
+export function SlatePanel({ runId, surfaces = [], width, open = false, onClose }: Props) {
   // Hidden surfaces are a per-browser view preference; seed from the persisted
   // set and keep a React copy so mutations re-render. The filter is applied on
   // every render against this set, so an SSE re-projection never resurrects a
@@ -122,8 +129,10 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
     })
   }, [])
 
-  // Additive: no surfaces → render nothing, so the card layout is unchanged.
-  if (surfaces.length === 0) return null
+  // Additive: no surfaces → render nothing (card layout unchanged) UNLESS the user
+  // opened the Slate blank on purpose (`open`), in which case we render the header so
+  // Explain / + Add are reachable to fill it.
+  if (surfaces.length === 0 && !open) return null
 
   const openPoints = sorted.filter((s) => s.kind === 'open-point')
   // The grouped open-points list renders once, at the first open-point's slot.
@@ -181,6 +190,17 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
             + Add surface
           </button>
           <span className="text-2xs font-mono text-slate-500">{sorted.length}</span>
+          {/* Close only when nothing holds the column open (a blank, user-opened Slate). */}
+          {sorted.length === 0 && onClose && (
+            <button
+              data-testid="slate-close"
+              onClick={onClose}
+              title="Close the Slate"
+              className="text-2xs text-slate-500 hover:text-slate-200 leading-none"
+            >
+              ✕
+            </button>
+          )}
         </div>
       </div>
 
@@ -201,6 +221,12 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
         data-columns={columns}
         className={`flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin p-2 grid gap-2 items-start [overflow-wrap:anywhere] ${columns === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}
       >
+        {sorted.length === 0 && (
+          <div data-testid="slate-empty-hint" className="col-span-full px-1 py-6 text-center text-2xs text-slate-500 leading-relaxed">
+            Nothing on the Slate yet.<br />
+            <span className="text-slate-400">✦ Explain</span> the session, or <span className="text-slate-400">+ Add a surface</span> to fill it.
+          </div>
+        )}
         {sorted.map((surface, i) => {
           // Open-points collapse into one grouped list at the first one's slot;
           // it always spans the full width (R2). Per-point hiding lives inside.
