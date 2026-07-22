@@ -31,6 +31,7 @@ import { DiagramSurface } from './DiagramSurface'
 import { getHiddenSlateSurfaces, addHiddenSlateSurface, removeHiddenSlateSurface } from '../../lib/uiPrefs'
 import { useSlateRefresh, RefreshButton } from './slateRefresh'
 import { SlateComposer } from './SlateComposer'
+import { SlateExplainButton } from './SlateExplainButton'
 
 /** Column width (px) at/above which surfaces reflow into two columns (R2). Kept
  *  in step with the resize clamp in `RunWorkspaceWidget` (min 260, max 560). */
@@ -165,6 +166,8 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
           >
             <span className={bulkRefreshing ? 'inline-block animate-spin' : 'inline-block'}>⟳</span>
           </button>
+          {/* One-click: ask the agent to (re-)explain the session as surfaces. */}
+          <SlateExplainButton runId={runId} />
           {/* Open the composer to author a new surface. */}
           <button
             data-testid="slate-add-surface"

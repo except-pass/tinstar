@@ -99,6 +99,8 @@ test('capture Slate surfaces for QA', async ({ page }) => {
   // in SlateComposer.test.tsx; its open interaction is flaky under the mock canvas. ---
   await expect(page.getByTestId('slate-refresh-all')).toBeVisible()
   await expect(page.getByTestId('slate-add-surface')).toBeVisible()
+  // The one-click "Explain the session" affordance sits in the header alongside them.
+  await expect(page.getByTestId('slate-explain')).toBeVisible()
 
   // Hide every OTHER canvas widget so a sibling HUD can't occlude the run card,
   // then crop just the Slate column. Injected stylesheet (inline hides get wiped

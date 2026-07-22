@@ -120,6 +120,35 @@ export function slateRefreshPromptText(point: Point, _origin: string): string {
   return [...body, '', GUARDRAIL].join('\n')
 }
 
+/** Prompt for the "Explain the session" one-click (POST /slate/explain). Persists
+ *  NOTHING: delivered best-effort; the agent authors one or more surfaces by writing
+ *  their `.tinstar/slate/<slug>.json` files, reusing the Slate's one file-in model.
+ *  Unlike the composer (which authors ONE surface), this asks for SEVERAL — the common
+ *  kinds that fit plus the agent's own — so it has its own multi-surface framing. The
+ *  prompt is a fixed server string (no user/file input), but it carries the GUARDRAIL
+ *  like every Slate injection: even a user-requested fan-out is a note to act on after
+ *  checkpointing in-flight work, not a command to abandon it mid-turn. `_origin` is
+ *  unused (authoring is file-based) but kept for signature parity. */
+export function slateExplainPromptText(_origin?: string): string {
+  return [
+    'Explain this session on its Slate. Render the important parts as SEPARATE surfaces —',
+    'one .tinstar/slate/<slug>.json file each — so the user can touch each independently.',
+    '',
+    'Common surfaces that often fit (use the ones that apply, and INVENT YOUR OWN wherever',
+    'they would tell the story better):',
+    '- Open points — the unresolved questions and decisions',
+    '- Decisions — what has been settled, and why',
+    '- Diagram — an A2UI picture of the architecture or flow under discussion',
+    '- Dataflow — the external resources this run touches and the reads/writes between them',
+    '- Blockers, external resources, or next steps',
+    '',
+    'For each surface write .tinstar/slate/<slug>.json (id, headline, A2UI content, optional',
+    'refresh recipe). Prefer several small, well-scoped surfaces over one big one.',
+    '',
+    GUARDRAIL,
+  ].join('\n')
+}
+
 /** Prompt for the surface COMPOSER (POST /slate/compose). Persists NOTHING (KTD4):
  *  delivered best-effort; the agent authors a NEW surface by writing its
  *  `.tinstar/slate/<slug>.json`, so composition reuses the Slate's one file-in model.

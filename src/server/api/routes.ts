@@ -58,7 +58,7 @@ import { collectChoiceOptionIds, collectChoiceOptionLabels, NOTICE_ANSWER_TEXT_M
 import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../a2ui/followUps'
 import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
-import { slatePointPromptText, slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText } from '../../slate/slatePrompt'
+import { slatePointPromptText, slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText } from '../../slate/slatePrompt'
 import type { PointInput } from '../stores/slate'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
@@ -3542,6 +3542,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         slateComposePromptText({ prompt, freeform }, serverBase()))
       ok(res, { delivered })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
+    return true
+  }
+
+  // POST /api/runs/:id/slate/explain — one-click "Explain the session": nudge the run's
+  // agent to fan the whole session onto its Slate as SEVERAL surfaces (common kinds plus
+  // its own). Like compose it persists NOTHING and delivers best-effort; but the framing
+  // is MULTI-surface (compose authors exactly one), so it has its own prompt builder and
+  // needs no body. delivered:false on an unreachable session is NOT an error. Anchored
+  // regex, matched BEFORE the greedy PATCH /api/runs/ handler.
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/explain$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/explain'.length))
+    const delivered = await deliverSlatePrompt(ctx, runId, slateExplainPromptText(serverBase()))
+    ok(res, { delivered })
     return true
   }
 
