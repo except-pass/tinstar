@@ -478,6 +478,41 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
   }))
 })
 
+describe('POST /api/runs/:id/slate/explain', () => {
+  const explain = (srv: Harness) =>
+    srv.fetch(`/api/runs/${RUN}/slate/explain`, { method: 'POST' })
+
+  it('delivers the multi-surface explain nudge and persists nothing', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN }) // reachable
+    sendPrompt.mockClear()
+
+    const res = await explain(srv)
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; data: { delivered: boolean } }
+    expect(body.ok).toBe(true)
+    expect(body.data.delivered).toBe(true)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+    expect(sendPrompt.mock.calls[0]![1]).toBe(RUN)
+    const prompt = sendPrompt.mock.calls[0]![2] as string
+    expect(prompt).toContain('Explain this session on its Slate') // multi-surface framing
+    expect(prompt).toContain('SEPARATE surfaces')
+    expect(prompt).toContain('.tinstar/slate/')                   // authoring-to-file instruction
+    // Persist-nothing: no surface is created by the nudge itself.
+    expect(srv.docStore.getRun(RUN)!.slate ?? []).toHaveLength(0)
+  }))
+
+  it('an unreachable session returns delivered:false + 200 (persists nothing)', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue(null) // session gone
+    const res = await explain(srv)
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(sendPrompt).not.toHaveBeenCalled()
+    expect(srv.docStore.getRun(RUN)!.slate ?? []).toHaveLength(0)
+  }))
+})
+
 describe('POST /api/runs/:id/slate/compose', () => {
   const compose = (srv: Harness, payload: unknown) =>
     srv.fetch(`/api/runs/${RUN}/slate/compose`, { method: 'POST', body: JSON.stringify(payload) })

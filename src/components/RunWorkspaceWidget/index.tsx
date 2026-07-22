@@ -6,6 +6,7 @@ import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { TelemetryPanel } from './TelemetryPanel'
 import { SlatePanel } from './SlatePanel'
+import { SlateExplainButton } from './SlateExplainButton'
 import { HandsPanel } from './HandsPanel'
 import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
@@ -410,7 +411,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
             composerFocusTrigger={composerFocusTrigger}
           />
         </div>
-        {hasSlate && (
+        {hasSlate ? (
           <div
             data-testid="focus-zone-slate"
             className={`flex ${focusZone === 'slate' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
@@ -431,6 +432,19 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
                 onLostPointerCapture={onSlateResizePointerUp}
               />
               <SlatePanel runId={run.id} surfaces={run.slate} width={slateWidth} />
+            </div>
+          </div>
+        ) : (
+          // Empty Slate: a thin right-edge strip (mirrors the collapsed Files/Hands
+          // strips) whose only affordance is "Explain the session" — the call-to-action
+          // that bootstraps an empty Slate. Once surfaces arrive, hasSlate flips and the
+          // full column above replaces this strip.
+          <div
+            data-testid="slate-empty-strip"
+            className="w-7 flex flex-col items-center justify-center bg-surface-panel border-l border-primary/10 flex-shrink-0"
+          >
+            <div className="[writing-mode:vertical-lr] rotate-180">
+              <SlateExplainButton runId={run.id} />
             </div>
           </div>
         )}
