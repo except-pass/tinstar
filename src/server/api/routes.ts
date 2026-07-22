@@ -39,6 +39,7 @@ import {
   setProjectFlag,
   reorderProjects,
   createWorktree,
+  WorktreeBranchConflictError,
   listWorktrees,
   listSessions,
   reconcileSessionStates,
@@ -539,7 +540,17 @@ async function createSessionInternal(
     workspacePath = worktreePath
     branch = await detectBranch(worktreePath)
   } else if (worktree && projectPath) {
-    workspacePath = await createWorktree(projectPath, name)
+    // Fail fast on a blocked branch name (e.g. a `cockpit/…` branch blocking a
+    // plain `cockpit`) BEFORE any tmux/launch work, with a clean message the
+    // caller can show — not git's cryptic "invalid reference".
+    try {
+      workspacePath = await createWorktree(projectPath, name)
+    } catch (err) {
+      if (err instanceof WorktreeBranchConflictError) {
+        return { ok: false, error: { code: 'WORKTREE_NAME_CONFLICT', message: err.message } }
+      }
+      throw err
+    }
     branch = name
   }
 
@@ -3982,6 +3993,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
             switch (result.error.code) {
               case 'MISSING_NAME': return fail(res, 'BAD_REQUEST', result.error.message)
               case 'SESSION_EXISTS': return fail(res, 'CONFLICT', result.error.message)
+              case 'WORKTREE_NAME_CONFLICT': return fail(res, 'CONFLICT', result.error.message)
               case 'PROJECT_NOT_FOUND': return fail(res, 'NOT_FOUND', result.error.message)
               // Switchboard override guard — surface the stable code/status (not INTERNAL).
               case 'OVERRIDE_MODEL_NOT_CONFIGURED':

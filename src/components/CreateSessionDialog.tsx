@@ -80,6 +80,8 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
   const [addingProject, setAddingProject] = useState(false)
   const [newProjectPath, setNewProjectPath] = useState('')
   const nameRef = useRef<HTMLInputElement>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const sources = prefill?.sources ?? {}
 
   useEffect(() => {
@@ -145,7 +147,8 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
 
   const effectiveName = name || placeholder
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
+    if (submitting) return
     const body: Record<string, unknown> = {
       name: effectiveName,
       skipPermissions,
@@ -161,32 +164,37 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
     if (prefill?.initiativeId) body.initiativeId = prefill.initiativeId
     if (prefill?.view) body.view = prefill.view
 
-    // Close optimistically — the SSE event stream will surface the new session.
-    onClose()
-
-    apiFetch('/api/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then(r => r.json())
-      .then(data => {
-        if (!data.ok) {
-          console.error('Failed to create session:', data.error?.message ?? data)
-          window.alert(`Failed to create session: ${data.error?.message ?? 'unknown error'}`)
-          return
-        }
-        // The created session's `name` is the identifier that equals a run's
-        // `sessionId`. Fall back to the name we submitted if the server response
-        // omits it for any reason.
-        const createdId = (data.data?.name as string | undefined) ?? effectiveName
-        onCreated?.(createdId)
+    // Keep the modal open until the create actually succeeds. A failed create
+    // (e.g. a blocked branch name) used to close optimistically and destroy the
+    // user's filled-in settings; now the error shows inline and the form stays
+    // put so they can fix the name and retry.
+    setSubmitting(true)
+    setError(null)
+    try {
+      const r = await apiFetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       })
-      .catch(err => {
-        console.error('Failed to create session:', err)
-        window.alert(`Failed to create session: ${(err as Error).message}`)
-      })
-  }, [effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, prefill?.view, onClose, onCreated])
+      const data = await r.json()
+      if (!data.ok) {
+        console.error('Failed to create session:', data.error?.message ?? data)
+        setError(data.error?.message ?? 'unknown error')
+        setSubmitting(false)
+        return
+      }
+      // The created session's `name` is the identifier that equals a run's
+      // `sessionId`. Fall back to the name we submitted if the server response
+      // omits it for any reason.
+      const createdId = (data.data?.name as string | undefined) ?? effectiveName
+      onCreated?.(createdId)
+      onClose()
+    } catch (err) {
+      console.error('Failed to create session:', err)
+      setError((err as Error).message)
+      setSubmitting(false)
+    }
+  }, [submitting, effectiveName, project, worktreeMode, worktreePath, skipPermissions, cliTemplate, prompt, taskId, runColor, prefill?.epicId, prefill?.initiativeId, prefill?.view, onClose, onCreated])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -215,7 +223,7 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
             autoFocus
             type="text"
             value={name}
-            onChange={e => setName(sanitizeName(e.target.value))}
+            onChange={e => { setName(sanitizeName(e.target.value)); if (error) setError(null) }}
             onKeyDown={e => { if (e.key === 'Enter') handleSubmit() }}
             placeholder={placeholder}
             className="w-full px-3 py-2 bg-surface-base border border-white/10 rounded text-sm text-slate-200 placeholder:text-slate-500 focus:border-primary/50 focus:outline-none"
@@ -508,6 +516,18 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
           />
         </div>
 
+        {/* Error — shown inline so a failed create keeps the form (and its
+            settings) intact instead of vanishing behind an alert. */}
+        {error && (
+          <div
+            className="mb-3 px-3 py-2 rounded border border-red-500/40 bg-red-500/10 text-xs text-red-300"
+            data-testid="create-session-error"
+            role="alert"
+          >
+            {error}
+          </div>
+        )}
+
         {/* Footer */}
         <div className="flex justify-between items-center">
           <span className="text-2xs text-slate-500">Ctrl+Enter to create</span>
@@ -519,11 +539,12 @@ export function CreateSessionDialog({ onClose, prefill, onCreated }: Props) {
               Cancel
             </button>
             <button
-              className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30"
+              className="px-3 py-1.5 text-xs bg-primary/20 text-primary border border-primary/40 rounded hover:bg-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={handleSubmit}
+              disabled={submitting}
               data-testid="create-session-submit"
             >
-              Create
+              {submitting ? 'Creating…' : 'Create'}
             </button>
           </div>
         </div>
