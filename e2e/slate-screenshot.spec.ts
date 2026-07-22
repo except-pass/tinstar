@@ -94,6 +94,12 @@ test('capture Slate surfaces for QA', async ({ page }) => {
   expect(layout.columnsOverlapPx, 'Slate and telemetry columns must not overlap').toBe(0)
   expect(layout.slateContentOverflowX ?? 0, 'Slate content must not overflow its column').toBeLessThan(4)
 
+  // --- v2 affordances render (header Refresh-all + Add-surface; per-surface ⟳/✕
+  // show in the column captures below). The composer's fuzzy filter is unit-tested
+  // in SlateComposer.test.tsx; its open interaction is flaky under the mock canvas. ---
+  await expect(page.getByTestId('slate-refresh-all')).toBeVisible()
+  await expect(page.getByTestId('slate-add-surface')).toBeVisible()
+
   // Hide every OTHER canvas widget so a sibling HUD can't occlude the run card,
   // then crop just the Slate column. Injected stylesheet (inline hides get wiped
   // by SSE re-renders — the documented canvas-screenshot technique).
