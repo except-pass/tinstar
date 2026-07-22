@@ -1,10 +1,25 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
 import type { A2uiContent, SlateSurface } from '../../../types'
 import { MALFORMED_SIGNAL } from '../../../a2ui/A2uiRenderer'
+
+// apiFetch is the single HTTP seam (never bare fetch — it 404s in Tauri). Mock it so
+// the refresh POSTs are observable and the delivered/timeout paths are deterministic.
+const apiFetch = vi.fn()
+vi.mock('../../../apiClient', () => ({
+  apiFetch: (...args: unknown[]) => apiFetch(...args),
+  apiUrl: (p: string) => p,
+}))
+
 import { SlatePanel } from '../SlatePanel'
+import { REFRESH_MAX_MS } from '../slateRefresh'
 import { getHiddenSlateSurfaces, familyKeys } from '../../../lib/uiPrefs'
+
+/** A resolved refresh/compose response envelope, matching the server shape. */
+function okDelivered(delivered: boolean) {
+  return Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { delivered } }) } as unknown as Response)
+}
 
 /** Build an A2UI content envelope from a flat component list. */
 function content(components: A2uiContent['components'], root?: string): A2uiContent {
@@ -177,5 +192,88 @@ describe('SlatePanel hide surfaces (U2/R4)', () => {
     // 'a' was hidden in a prior session → not rendered; toggle shows 1 hidden.
     expect(screen.queryByText('alpha')).toBeNull()
     expect(screen.getByTestId('slate-hidden-toggle').textContent).toContain('1 hidden')
+  })
+})
+
+describe('SlatePanel refresh (U3)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    cleanup()
+    apiFetch.mockReset()
+    apiFetch.mockImplementation(() => okDelivered(true))
+  })
+
+  it('clicking a surface ⟳ marks it refreshing and POSTs the refresh', async () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'x')]} />)
+    fireEvent.click(screen.getByTestId('refresh-surface-s1'))
+
+    // Optimistic: the spinner shows at once (before the round trip).
+    expect(screen.getByTestId('refresh-surface-s1').getAttribute('data-refreshing')).toBe('true')
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith(
+        '/api/runs/run-1/slate/surfaces/s1/refresh',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    )
+  })
+
+  it('clears the refreshing state when a newer surface.amendedAt arrives', async () => {
+    const { rerender } = render(
+      <SlatePanel runId="run-1" surfaces={[surface('s1', 'x', { amendedAt: 1 })]} />,
+    )
+    fireEvent.click(screen.getByTestId('refresh-surface-s1'))
+    expect(screen.getByTestId('refresh-surface-s1').getAttribute('data-refreshing')).toBe('true')
+
+    // Simulate the re-authored surface arriving over the SSE run delta (newer amendedAt).
+    rerender(<SlatePanel runId="run-1" surfaces={[surface('s1', 'x', { amendedAt: 2 })]} />)
+    await waitFor(() =>
+      expect(screen.getByTestId('refresh-surface-s1').getAttribute('data-refreshing')).toBeNull(),
+    )
+  })
+
+  it('clears a stuck spinner after the refresh timeout elapses', () => {
+    vi.useFakeTimers()
+    try {
+      // A POST that never resolves → only the timeout can clear the spinner.
+      apiFetch.mockImplementation(() => new Promise<never>(() => {}))
+      render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'x')]} />)
+      fireEvent.click(screen.getByTestId('refresh-surface-s1'))
+      expect(screen.getByTestId('refresh-surface-s1').getAttribute('data-refreshing')).toBe('true')
+
+      act(() => {
+        vi.advanceTimersByTime(REFRESH_MAX_MS)
+      })
+      expect(screen.getByTestId('refresh-surface-s1').getAttribute('data-refreshing')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows "session not reachable" and clears the spinner on delivered:false', async () => {
+    apiFetch.mockImplementation(() => okDelivered(false))
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'x')]} />)
+    fireEvent.click(screen.getByTestId('refresh-surface-s1'))
+
+    await waitFor(() => expect(screen.getByTestId('refresh-unreachable-s1')).toBeTruthy())
+    // Don't spin on a dead run — the spinner is cleared immediately.
+    expect(screen.getByTestId('refresh-surface-s1').getAttribute('data-refreshing')).toBeNull()
+  })
+
+  it('Refresh all POSTs for each visible surface and shows the Slate-level loading state', async () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'x'), surface('b', 'y')]} />)
+    fireEvent.click(screen.getByTestId('slate-refresh-all'))
+
+    // Slate-level loading state (each surface keeps spinning on delivered:true).
+    expect(screen.getByTestId('slate-refreshing-all')).toBeTruthy()
+    await waitFor(() => {
+      expect(apiFetch).toHaveBeenCalledWith(
+        '/api/runs/run-1/slate/surfaces/a/refresh',
+        expect.objectContaining({ method: 'POST' }),
+      )
+      expect(apiFetch).toHaveBeenCalledWith(
+        '/api/runs/run-1/slate/surfaces/b/refresh',
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
   })
 })

@@ -124,6 +124,29 @@ describe('OpenPointsSurface (U6)', () => {
     expect(onHide).toHaveBeenCalledWith('p1')
   })
 
+  // Slate v2 U3 — refresh state is owned by the parent SlatePanel and threaded down;
+  // a point row's ⟳ reports its surface up so the parent hook drives the POST.
+  it('a point row carries a ⟳ refresh control that reports its surface', () => {
+    const onRefresh = vi.fn()
+    render(<OpenPointsSurface runId="run-1" points={[point('p1')]} onRefresh={onRefresh} />)
+    fireEvent.click(screen.getByTestId('refresh-surface-p1'))
+    expect(onRefresh).toHaveBeenCalledWith(expect.objectContaining({ id: 'p1' }))
+  })
+
+  it('shows the spinner for a refreshing point and a note for an unreachable one', () => {
+    render(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[point('p1')]}
+        onRefresh={vi.fn()}
+        refreshingIds={new Set(['p1'])}
+        unreachableIds={new Set(['p1'])}
+      />,
+    )
+    expect(screen.getByTestId('refresh-surface-p1').getAttribute('data-refreshing')).toBe('true')
+    expect(screen.getByTestId('refresh-unreachable-p1')).toBeTruthy()
+  })
+
   it('filters a hidden point unless the reveal toggle is on', () => {
     const points = [point('p1'), point('p2')]
     const { rerender } = render(

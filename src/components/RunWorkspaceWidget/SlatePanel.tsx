@@ -23,12 +23,14 @@
 //
 // This panel is purely additive: it renders NOTHING when the run has no Slate
 // surfaces, so the run card keeps its existing three-panel layout unchanged.
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import type { SlateSurface } from '../../types'
 import { A2uiRenderer, A2uiErrorBoundary } from '../../a2ui/A2uiRenderer'
 import { OpenPointsSurface } from './OpenPointsSurface'
 import { DiagramSurface } from './DiagramSurface'
 import { getHiddenSlateSurfaces, addHiddenSlateSurface, removeHiddenSlateSurface } from '../../lib/uiPrefs'
+import { useSlateRefresh, RefreshButton } from './slateRefresh'
+import { SlateComposer } from './SlateComposer'
 
 /** Column width (px) at/above which surfaces reflow into two columns (R2). Kept
  *  in step with the resize clamp in `RunWorkspaceWidget` (min 260, max 560). */
@@ -54,7 +56,9 @@ function sortSurfaces(surfaces: SlateSurface[]): SlateSurface[] {
   })
 }
 
-/** A ✕ hide / "unhide" control shared by the diagram and generic surface cards. */
+/** A ✕ hide / "unhide" control shared by the diagram and generic surface cards.
+ *  Inline (unpositioned) — it lives in the card's absolute control cluster next to
+ *  the refresh button (see the card wrapper). */
 function HideToggle({ id, hidden, onHide, onUnhide }: {
   id: string
   hidden: boolean
@@ -67,7 +71,7 @@ function HideToggle({ id, hidden, onHide, onUnhide }: {
         data-testid={`unhide-surface-${id}`}
         onClick={() => onUnhide(id)}
         title="Unhide this surface"
-        className="absolute top-1 right-1 z-10 rounded bg-surface-hover px-1 text-[9px] text-slate-400 hover:text-slate-200"
+        className="rounded bg-surface-hover px-1 text-[9px] text-slate-400 hover:text-slate-200"
       >
         unhide
       </button>
@@ -78,7 +82,7 @@ function HideToggle({ id, hidden, onHide, onUnhide }: {
       data-testid={`hide-surface-${id}`}
       onClick={() => onHide(id)}
       title="Hide this surface (view-only — the file stays intact)"
-      className="absolute top-1 right-1 z-10 rounded px-1 text-[11px] leading-none text-slate-500 hover:text-slate-200"
+      className="rounded px-1 text-[11px] leading-none text-slate-500 hover:text-slate-200"
     >
       ✕
     </button>
@@ -92,6 +96,12 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
   // hidden surface (R4).
   const [hidden, setHidden] = useState<Set<string>>(() => getHiddenSlateSurfaces())
   const [showHidden, setShowHidden] = useState(false)
+  const [composerOpen, setComposerOpen] = useState(false)
+
+  // Sorted once, above the early return, so the refresh hook (which must run
+  // unconditionally) can watch the same list the render uses.
+  const sorted = useMemo(() => sortSurfaces(surfaces), [surfaces])
+  const { refreshingIds, unreachableIds, bulkRefreshing, refresh, refreshAll } = useSlateRefresh(runId, sorted)
 
   const hide = useCallback((id: string) => {
     addHiddenSlateSurface(id)
@@ -114,16 +124,18 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
   // Additive: no surfaces → render nothing, so the card layout is unchanged.
   if (surfaces.length === 0) return null
 
-  const sorted = sortSurfaces(surfaces)
   const openPoints = sorted.filter((s) => s.kind === 'open-point')
   // The grouped open-points list renders once, at the first open-point's slot.
   const firstOpenPointIdx = sorted.findIndex((s) => s.kind === 'open-point')
 
   const hiddenCount = sorted.filter((s) => hidden.has(s.id)).length
   const columns = width && width >= SLATE_TWO_COL_MIN ? 2 : 1
+  // "Refresh all" fans out over every VISIBLE surface (each open point is a surface
+  // too) — a recipe is optional, so all of them are refreshable.
+  const visibleSurfaces = sorted.filter((s) => showHidden || !hidden.has(s.id))
 
   return (
-    <div className="flex flex-col h-full min-w-0">
+    <div className="relative flex flex-col h-full min-w-0">
       {/* Summary bar — mirrors the other panels' header row */}
       <div className="px-3 py-1.5 border-b border-primary/10 bg-surface-base/50 flex items-center justify-between gap-2">
         <span className="text-2xs font-mono text-slate-500 uppercase tracking-wider">The Slate</span>
@@ -137,9 +149,41 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
               {hiddenCount} hidden · {showHidden ? 'hide' : 'show'}
             </button>
           )}
+          {/* Slate-level loading state while a refresh-all is still settling. */}
+          {bulkRefreshing && (
+            <span data-testid="slate-refreshing-all" className="text-2xs font-mono text-slate-500 animate-pulse">
+              refreshing…
+            </span>
+          )}
+          {/* Refresh ALL visible surfaces (each open point counts). */}
+          <button
+            data-testid="slate-refresh-all"
+            onClick={() => refreshAll(visibleSurfaces)}
+            disabled={bulkRefreshing}
+            title="Refresh every surface — re-run each one’s author"
+            className="text-slate-500 hover:text-slate-200 disabled:opacity-70 leading-none"
+          >
+            <span className={bulkRefreshing ? 'inline-block animate-spin' : 'inline-block'}>⟳</span>
+          </button>
+          {/* Open the composer to author a new surface. */}
+          <button
+            data-testid="slate-add-surface"
+            onClick={() => setComposerOpen((v) => !v)}
+            title="Add a surface"
+            className="text-2xs font-mono text-slate-400 hover:text-slate-200"
+          >
+            + Add surface
+          </button>
           <span className="text-2xs font-mono text-slate-500">{sorted.length}</span>
         </div>
       </div>
+
+      {/* The composer popover — anchored under the header (R7/U4). */}
+      {composerOpen && (
+        <div className="absolute top-8 right-2 z-20 w-64 max-w-[calc(100%-1rem)]">
+          <SlateComposer runId={runId} onClose={() => setComposerOpen(false)} />
+        </div>
+      )}
 
       {/* Scroll body — data-scrollable so the canvas wheel handler yields the
           wheel to this column instead of panning the canvas (useCanvasCamera).
@@ -165,6 +209,9 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
                   showHidden={showHidden}
                   onHide={hide}
                   onUnhide={unhide}
+                  refreshingIds={refreshingIds}
+                  unreachableIds={unreachableIds}
+                  onRefresh={refresh}
                 />
               </div>
             )
@@ -174,6 +221,24 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
           // Hidden + not revealing → skip entirely; revealing → render dimmed.
           if (isHidden && !showHidden) return null
 
+          const isRefreshing = refreshingIds.has(surface.id)
+          const isUnreachable = unreachableIds.has(surface.id)
+          // The card's control cluster: refresh (⟳) then hide (✕), top-right.
+          const controls = (
+            <div className="absolute top-1 right-1 z-10 flex items-center gap-1">
+              {!isHidden && (
+                <RefreshButton id={surface.id} refreshing={isRefreshing} onClick={() => refresh(surface)} />
+              )}
+              <HideToggle id={surface.id} hidden={isHidden} onHide={hide} onUnhide={unhide} />
+            </div>
+          )
+          // Shown when a refresh reached nobody (delivered:false / unreachable run).
+          const note = isUnreachable ? (
+            <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-1 text-2xs text-amber-300/90">
+              session not reachable
+            </div>
+          ) : null
+
           if (surface.kind === 'diagram') {
             return (
               <div
@@ -181,8 +246,9 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
                 data-testid={`slate-surface-${surface.id}`}
                 className={`relative rounded border border-primary/10 bg-surface-base/40 p-2 min-w-0 ${isHidden ? 'opacity-50' : ''}`}
               >
-                <HideToggle id={surface.id} hidden={isHidden} onHide={hide} onUnhide={unhide} />
+                {controls}
                 <DiagramSurface runId={runId} surface={surface} />
+                {note}
               </div>
             )
           }
@@ -193,12 +259,13 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
               data-testid={`slate-surface-${surface.id}`}
               className={`relative rounded border border-primary/10 bg-surface-base/40 p-2 min-w-0 ${isHidden ? 'opacity-50' : ''}`}
             >
-              <HideToggle id={surface.id} hidden={isHidden} onHide={hide} onUnhide={unhide} />
+              {controls}
               {/* Per-surface boundary: a throw or malformed body degrades THIS
                   surface alone; siblings are untouched (R2, per-surface budget). */}
               <A2uiErrorBoundary source={surface.body}>
                 <A2uiRenderer content={surface.body} />
               </A2uiErrorBoundary>
+              {note}
             </div>
           )
         })}
