@@ -191,6 +191,17 @@ for (const e of entries) {
 }
 ```
 
+## Keeping a surface fresh (a reply is not an update)
+
+A surface asserts something durable — the state of the world as of when it was authored. A **reply on its thread is a comment ABOUT the surface; it does not change what the surface asserts.** The blind spot this repeatedly causes: you take an action that makes a surface false (merge a PR, clear a blocker), you *reply* "that's cleared now," and you leave the surface itself asserting the old truth. The glanceable panel goes stale while the thread looks tended.
+
+Two disciplines close it:
+
+- **If your action changed what a surface says, rewrite the file — don't just reply.** Re-author the `.tinstar/slate/*.json` so the panel's body reflects the new reality. The reply is optional colour; the file is the truth.
+- **Sweep after you ship.** After merging, clearing a blocker, or any state change, re-read your run's surfaces and re-author any that are now false. Don't wait to be refreshed — refresh is the *user's* pull; keeping the file current is *your* push.
+
+The client surfaces the age of each panel ("updated 3m ago", ambering when untended) precisely so an author and a reader can both *see* staleness instead of trusting a stale assertion silently.
+
 ## Related
 
 This doc is the **author** corner of a four-way partition of the Slate/A2UI surface lifecycle:
