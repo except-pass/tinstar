@@ -208,6 +208,10 @@ spinner. Prefer it over a bare long call you have to watch. (The underlying mech
 just a progress-surface file; you can author one by hand the same way if you want custom
 progress.)
 
+## Make surfaces refreshable by a fresh author (the vacuum test)
+
+A surface's `refresh` recipe is its **authoring contract**: when it's self-contained, refreshing the surface spawns a *fresh, context-free* author (a headless child in the run's workdir) that re-runs the recipe and rewrites the file — off your (the main agent's) critical path. So write every living surface's recipe to pass the **vacuum test**: name its **source** (a PR, files, a query), its **derivation** (what to do with the source), and its **output** (what to rewrite). `"regenerate this surface"` fails — it assumes context a fresh author won't have. A surface whose only source is *this session* (e.g. "explain the session") is session-derived: it stays with you and needs no self-contained recipe. Capture the recipe at create time so the surface is born handoff-able.
+
 ## The discipline that makes this work
 
 - **Author with files; answer with HTTP.** Write a file to make a surface; reply with a

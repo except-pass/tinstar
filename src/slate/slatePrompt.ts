@@ -156,14 +156,23 @@ export function slateExplainPromptText(_origin?: string): string {
  *  text; at least one is present (the route rejects an empty body). `_origin` is unused
  *  (authoring is file-based) but kept for signature parity. */
 export function slateComposePromptText(
-  parts: { prompt?: string; freeform?: string },
+  parts: { prompt?: string; freeform?: string; recipe?: string },
   _origin: string,
 ): string {
   const head = parts.prompt ? `Author a Slate surface. ${parts.prompt}` : 'Author a Slate surface.'
   const lines: string[] = [head]
   if (parts.freeform) lines.push(parts.freeform)
+  // A user-supplied refresh recipe (feat: multi-agent Slate) makes the new surface
+  // handoff-able at birth — it's the self-contained instruction a future one-shot author
+  // re-runs. oneLine() collapses it (the field is untrusted; a multi-line planted value
+  // could otherwise inject past the GUARDRAIL).
+  if (parts.recipe) lines.push(
+    `Set this surface's refresh recipe (how it stays fresh — name its source, derivation, and output) to: ${oneLine(parts.recipe)}`,
+  )
   lines.push(
-    'Write it to .tinstar/slate/<slug>.json with an id, headline, A2UI content, and an optional refresh recipe.',
+    parts.recipe
+      ? 'Write it to .tinstar/slate/<slug>.json with an id, headline, A2UI content, and the refresh recipe above.'
+      : 'Write it to .tinstar/slate/<slug>.json with an id, headline, A2UI content, and an optional refresh recipe.',
     '',
     GUARDRAIL,
   )

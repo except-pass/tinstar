@@ -30,6 +30,10 @@ export function SlateComposer({ runId, onClose }: Props) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<SurfaceTemplate | null>(null)
   const [freeform, setFreeform] = useState('')
+  // Create-time refresh recipe (feat: multi-agent Slate). Captured now so the new
+  // surface is born handoff-able — it's the self-contained instruction a one-shot
+  // author re-runs to keep the surface fresh.
+  const [recipe, setRecipe] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [unreachable, setUnreachable] = useState(false)
@@ -74,6 +78,7 @@ export function SlateComposer({ runId, onClose }: Props) {
         body: JSON.stringify({
           ...(selected ? { prompt: selected.prompt } : {}),
           ...(trimmed ? { freeform: trimmed } : {}),
+          ...(recipe.trim() ? { recipe: recipe.trim() } : {}),
         }),
       })
       const body = (await res.json().catch(() => null)) as
@@ -92,7 +97,7 @@ export function SlateComposer({ runId, onClose }: Props) {
     } finally {
       setSubmitting(false)
     }
-  }, [submitting, selected, freeform, runId, onClose])
+  }, [submitting, selected, freeform, recipe, runId, onClose])
 
   return (
     <div
@@ -154,6 +159,20 @@ export function SlateComposer({ runId, onClose }: Props) {
         onChange={(e) => setFreeform(e.target.value)}
         className="rounded border border-primary/20 bg-surface-base px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
       />
+
+      {/* Create-time recipe — how this surface stays fresh. A good recipe names its
+          source, derivation, and output so a one-shot author can re-run it in a vacuum. */}
+      <label className="flex flex-col gap-0.5">
+        <span className="text-2xs font-mono uppercase tracking-wider text-slate-500">Stays fresh by… (optional)</span>
+        <textarea
+          data-testid="composer-recipe"
+          rows={2}
+          value={recipe}
+          placeholder="e.g. re-run the blind eval of PR #7 and rewrite the two columns"
+          onChange={(e) => setRecipe(e.target.value)}
+          className="rounded border border-primary/20 bg-surface-base px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+        />
+      </label>
 
       <div className="flex items-center gap-2">
         <button
