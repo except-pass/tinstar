@@ -5,6 +5,7 @@ import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { TelemetryPanel } from './TelemetryPanel'
+import { SlatePanel } from './SlatePanel'
 import { HandsPanel } from './HandsPanel'
 import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
@@ -67,9 +68,16 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const leftExpanded = !filesCollapsed
   const runAccent = resolveRunAccent(run.color)
 
-  const ZONES: FocusZone[] = leftExpanded
-    ? ['left-tab', 'file-list', 'center-tabs', 'right-panel']
-    : ['center-tabs', 'right-panel']
+  // The Slate column is additive: only present (and only a focus zone) when the
+  // run actually has surfaces, so an empty run keeps its three-panel layout.
+  const hasSlate = (run.slate?.length ?? 0) > 0
+
+  const ZONES: FocusZone[] = [
+    ...(leftExpanded ? (['left-tab', 'file-list'] as FocusZone[]) : []),
+    'center-tabs',
+    ...(hasSlate ? (['slate'] as FocusZone[]) : []),
+    'right-panel',
+  ]
 
   const { activeContextKey } = useWidgetFocus(run.id)
   const { pushFocus, popFocus, path } = useFocusPath()
@@ -90,14 +98,14 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
       const idx = prev ? ZONES.indexOf(prev) : -1
       return ZONES[(idx + 1) % ZONES.length] ?? ZONES[0]!
     })
-  }, [leftExpanded])
+  }, [leftExpanded, hasSlate])
 
   const onFocusPrev = useCallback(() => {
     setFocusZone(prev => {
       const idx = prev ? ZONES.indexOf(prev) : 0
       return ZONES[(idx - 1 + ZONES.length) % ZONES.length] ?? ZONES[0]!
     })
-  }, [leftExpanded])
+  }, [leftExpanded, hasSlate])
 
   // Sync terminal focus when context router navigates into run-terminal
   useEffect(() => {
@@ -367,6 +375,16 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
             composerFocusTrigger={composerFocusTrigger}
           />
         </div>
+        {hasSlate && (
+          <div
+            data-testid="focus-zone-slate"
+            className={`flex ${focusZone === 'slate' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
+          >
+            <div className="w-80 h-full flex flex-col overflow-hidden bg-surface-panel border-l border-primary/10">
+              <SlatePanel runId={run.id} surfaces={run.slate} />
+            </div>
+          </div>
+        )}
         <div
           data-testid="focus-zone-right-panel"
           className={`flex ${focusZone === 'right-panel' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}

@@ -20,13 +20,15 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone, Notice } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone, Notice, SlateSurface, Point } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
 import { migrateSnapEdges } from '../../domain/constellationGraph'
-import { type PinSet, removePinsForNode } from '../../domain/pinSet'
+import { type PinSet, removePinsForNode, type Reply } from '../../domain/pinSet'
 import { migrateAllBrowserNotes } from '../migrations/migrateAllBrowserNotes'
+import { SlateStore, type PointInput } from './slate'
+import { sweepStalledProcessPoints } from '../sessions/slate-staleness'
 
 /** Translate a non-background run's status into a default attention signal.
  *  Returns null when the inbox shouldn't surface the run. This is the
@@ -126,6 +128,12 @@ function runShallowEqual(a: Run, b: Run): boolean {
   if (a.parentId !== b.parentId) return false
   if (a.breakoutRooms !== b.breakoutRooms) return false
   if (!attentionShallowEqual(a.attention, b.attention)) return false
+  // `slate` is a structured array of surfaces (objects) or absent. Compare it by
+  // value — a shallow reference compare would never short-circuit (the Slate
+  // watcher rebuilds a fresh projection on every read, so the ref always differs,
+  // producing a permanent SSE/persist storm), and OMITTING the compare drops the
+  // SSE delta SILENTLY so the run card never updates. Mirrors `noticeEqual`.
+  if (JSON.stringify(a.slate ?? null) !== JSON.stringify(b.slate ?? null)) return false
   if (a.view !== b.view) return false
   // viewData is an opaque (usually object) blob; reference equality is intentional
   // — each PATCH deserializes a fresh object, so a viewData write is always a real
@@ -232,6 +240,11 @@ export class DocumentStore {
 
   readonly changes = new EventEmitter()
 
+  /** The Slate point/thread store — store-backed points with merge-by-id projection
+   *  (The Slate). Composed here so its mutators emit through this store's `changes`
+   *  emitter (SSE + persist) and share the run-scoped prune cascade. */
+  private slate = new SlateStore(evt => this.changes.emit('change', evt))
+
   private persistPath: string | null = null
   private persistTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -285,6 +298,7 @@ export class DocumentStore {
         }
         this.notices.set(n.id, n)
       }
+      if (data.slatePoints) this.slate.loadPoints(data.slatePoints)
     } catch {
       // No file or corrupt — start fresh
     }
@@ -459,6 +473,8 @@ export class DocumentStore {
       this.removePinsForNodeAcrossSpaces(`run-${id}`)
       // Cascade: a notice must not outlive the run that posted it (R20).
       this.dropNoticesForRun(id)
+      // Cascade: the run's Slate points/threads must not outlive it either.
+      this.slate.pruneRun(id)
       return
     }
     // Simulator runs are keyed by run id (R-xxx) but deleted by session name (CLD-xxx)
@@ -469,6 +485,7 @@ export class DocumentStore {
         this.pruneWidgetFromGraphs(`run-${key}`)
         this.removePinsForNodeAcrossSpaces(`run-${key}`)
         this.dropNoticesForRun(key)
+        this.slate.pruneRun(key)
         return
       }
     }
@@ -709,6 +726,21 @@ export class DocumentStore {
     this.changes.emit('change', { entity: 'run', id: runId, data: next })
   }
 
+  /** Project a run's Slate surfaces (see The Slate). Called by the Slate watcher
+   *  after it reads and validates `.tinstar/slate/*`. By-value short-circuit so a
+   *  re-projection of unchanged content emits ZERO change events — the file-watch
+   *  storm guard (a watcher re-projecting on every fs event must not hammer the
+   *  docstore/SSE). Pass an empty array or undefined to clear the Slate. */
+  setRunSlate(runId: string, surfaces: SlateSurface[] | undefined): void {
+    const existing = this.runs.get(runId)
+    if (!existing) return
+    const nextSlate = surfaces && surfaces.length > 0 ? surfaces : undefined
+    if (JSON.stringify(existing.slate ?? null) === JSON.stringify(nextSlate ?? null)) return
+    const next: typeof existing = { ...existing, slate: nextSlate }
+    this.runs.set(runId, next)
+    this.changes.emit('change', { entity: 'run', id: runId, data: next })
+  }
+
   deletePluginWidget(id: string): void {
     this.pluginWidgets.delete(id)
     this.changes.emit('change', { entity: 'pluginWidget', id, data: null })
@@ -884,6 +916,89 @@ export class DocumentStore {
     return true
   }
 
+  // --- Slate points (The Slate) ---
+  // Thin delegation to the composed SlateStore; the merge-by-id / status-derivation
+  // logic and the zero-change short-circuit live in stores/slate.ts.
+
+  /** Project a run's file-authored surfaces onto the store (merge by id, KTD1). */
+  applyRunSlateProjection(runId: string, inputs: PointInput[], now?: number): void {
+    this.slate.applyProjection(runId, inputs, now)
+    this.projectRunToSlate(runId)
+  }
+
+  /** Create or amend a USER-authored point (source:'user'), then rebuild the run's
+   *  render projection. A user point survives a subsequent file re-projection (the
+   *  reconciliation the U7 HTTP layer relies on). Returns the resulting point. */
+  addUserSlatePoint(runId: string, input: PointInput): Point {
+    const point = this.slate.addUserPoint(runId, input)
+    this.projectRunToSlate(runId)
+    return point
+  }
+
+  addSlateReply(runId: string, pointId: string, reply: Reply): void {
+    this.slate.addReply(runId, pointId, reply)
+    this.projectRunToSlate(runId)
+  }
+
+  resolveSlatePoint(runId: string, pointId: string, at?: number): void {
+    this.slate.resolve(runId, pointId, at)
+    this.projectRunToSlate(runId)
+  }
+
+  reopenSlatePoint(runId: string, pointId: string, at?: number): void {
+    this.slate.reopen(runId, pointId, at)
+    this.projectRunToSlate(runId)
+  }
+
+  dismissSlatePoint(runId: string, pointId: string, at?: number): void {
+    this.slate.dismiss(runId, pointId, at)
+    this.projectRunToSlate(runId)
+  }
+
+  /** Server-side staleness backstop (plan R19): mark every process-authored point
+   *  whose file writer stopped updating N minutes ago as stalled, then re-project
+   *  the affected runs so the render channel (RunData.slate) reflects it. Driven by
+   *  the SlateWatcher's low-frequency sweep timer. */
+  markStalledSlatePoints(now?: number, thresholdMs?: number): void {
+    const affected = sweepStalledProcessPoints(this.slate, now, thresholdMs)
+    for (const runId of affected) this.projectRunToSlate(runId)
+  }
+
+  /** Bridge: rebuild a run's SlateSurface[] render projection from its store points
+   *  and publish it on RunData.slate — the single client render channel (U5 renders
+   *  run.slate). Called after every point mutation so the run card reflects points +
+   *  their threads/status without a separate client subscription to `slatePoint`.
+   *  setRunSlate's by-value short-circuit keeps an unchanged projection from emitting. */
+  private projectRunToSlate(runId: string): void {
+    const surfaces: SlateSurface[] = this.slate.getPointsForRun(runId).map(p => ({
+      id: p.id,
+      author: p.author,
+      kind: p.anchor?.kind === 'surface' ? 'diagram' : 'open-point',
+      order: p.createdAt,
+      ...(p.content ? { body: p.content } : {}),
+      headline: p.headline,
+      status: p.status,
+      ...(p.replies ? { thread: p.replies } : {}),
+      ...(p.anchor ? { anchor: p.anchor } : {}),
+      ...(p.stalledAt != null ? { stalledAt: p.stalledAt } : {}),
+      createdAt: p.createdAt,
+      amendedAt: p.amendedAt,
+    }))
+    this.setRunSlate(runId, surfaces)
+  }
+
+  getSlatePoint(id: string): Point | undefined {
+    return this.slate.getPoint(id)
+  }
+
+  getSlatePointsForRun(runId: string): Point[] {
+    return this.slate.getPointsForRun(runId)
+  }
+
+  getAllSlatePoints(): Point[] {
+    return this.slate.getAllPoints()
+  }
+
   // --- Snapshot (filtered by active space) ---
   // Include entities that match the active space OR have no spaceId (homeless).
   // This ensures nothing silently vanishes from the UI.
@@ -933,6 +1048,7 @@ export class DocumentStore {
       topicMetadata: this.getAllTopicMetadata(),
       graveyard: this.getAllTombstones(),
       notices: this.getAllNotices(),
+      slatePoints: this.slate.getAllPoints(),
     }
   }
 
@@ -949,6 +1065,9 @@ export class DocumentStore {
     // Notices carry no spaceId — drop them by ownership of a run cleared above,
     // else a notice orphans and lingers in getAllNotices()/snapshots (R20).
     for (const [id, n] of this.notices) if (clearedRunIds.has(n.runId)) this.notices.delete(id)
+    // Slate points are run-scoped with no spaceId — drop them by ownership of a
+    // cleared run (silent; the `all` reset below tells clients to resync).
+    this.slate.deleteRunsSilently(clearedRunIds)
     for (const [id, e] of this.editorWidgets) if (e.spaceId === spaceId) this.editorWidgets.delete(id)
     const clearedBrowserIds = new Set<string>()
     for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) { this.browserWidgets.delete(id); clearedBrowserIds.add(id) }
@@ -984,6 +1103,7 @@ export class DocumentStore {
       this.constellationGraphs.clear()
       this.pinSets.clear()
       this.notices.clear()
+      this.slate.clearAll()
       // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
     }

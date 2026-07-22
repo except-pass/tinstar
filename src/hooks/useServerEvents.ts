@@ -339,6 +339,12 @@ export function applyDelta(prev: ServerState, delta: { entity: string; id: strin
       // the SSE payload, so the spread would inherit the stale name forever and
       // the run could never fall back to showing its id again.
       name: next.name,
+      // Same undefined-drop hazard as `attention`/`name`: when the Slate watcher
+      // clears a run's surfaces it stores `slate: undefined`, which JSON.stringify
+      // omits from the SSE payload, so the spread would inherit the stale Slate
+      // forever and a retracted surface would never leave the card. Take it from
+      // the incoming run explicitly: absent key = cleared.
+      slate: next.slate,
       touchedFiles: next.touchedFiles ?? prevRun?.touchedFiles ?? [],
       recapEntries: next.recapEntries ?? prevRun?.recapEntries ?? [],
     })

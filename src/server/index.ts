@@ -25,6 +25,7 @@ import {
 import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
 import { StatusWatcher } from './sessions/status-watcher'
+import { SlateWatcher } from './sessions/slate-watcher'
 import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
@@ -108,10 +109,12 @@ export function initBackend(): RouteContext {
   let natsManager: NatsManager | undefined
   let natsTraffic: NatsTrafficBridge | undefined
   let natsHealth: NatsHealthMonitor | undefined
+  let slateWatcher: SlateWatcher | undefined
 
   if (!shutdownRegistered) {
     shutdownRegistered = true
     const shutdown = async () => {
+      try { slateWatcher?.stop() } catch (e) { log.debug('shutdown', `slateWatcher: ${(e as Error).message}`) }
       try { natsHealth?.stop() } catch (e) { log.debug('shutdown', `natsHealth: ${(e as Error).message}`) }
       try { await natsTraffic?.stop() } catch (e) { log.debug('shutdown', `natsTraffic: ${(e as Error).message}`) }
       try { await natsManager?.stop() } catch (e) { log.debug('shutdown', `natsManager: ${(e as Error).message}`) }
@@ -467,6 +470,24 @@ export function initBackend(): RouteContext {
           })
         }
       }, 10_000)
+
+      // The Slate watcher — mirrors the git-diff reconcile loop, but fs-watches each
+      // live run's `.tinstar/slate/` for latency and projects the validated surface
+      // files onto the run's store points (U4). The store mutator short-circuits on
+      // unchanged content, so the poll-floor backstop is cheap.
+      slateWatcher = new SlateWatcher({
+        docStore,
+        listLiveRuns: () => {
+          const runs: { runId: string; workdir: string }[] = []
+          for (const run of docStore.getAllRuns()) {
+            if (run.status !== 'running' && run.status !== 'idle') continue
+            const workdir = getSession(cfg.dirs.sessions, run.id)?.workspace?.path
+            if (workdir) runs.push({ runId: run.id, workdir })
+          }
+          return runs
+        },
+      })
+      slateWatcher.start()
     } catch (err) {
       log.error('server', 'session initialization failed', { error: (err as Error).message })
       if (fastSim) {

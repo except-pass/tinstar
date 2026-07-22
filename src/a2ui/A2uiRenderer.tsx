@@ -15,7 +15,7 @@
 //   3. any unexpected throw during the walk → caught by a per-notice React error
 //      boundary, isolating the bad notice from its siblings.
 import { Component, type ErrorInfo, type ReactNode } from 'react'
-import type { A2uiComponent, A2uiContent } from '../../../../domain/types'
+import type { A2uiComponent, A2uiContent } from '../domain/types'
 import { parseA2uiContent } from './schema'
 import { CATALOG, childIdsOf, isSupported } from './catalog'
 import { NoticeFormProvider, type NoticeFormState } from './controlComponents'

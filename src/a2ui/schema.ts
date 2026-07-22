@@ -17,7 +17,7 @@ import { z } from 'zod'
 // map has no per-file subpath), so we import the two schema atoms we adopt from
 // there. `sideEffects: false` lets both bundlers tree-shake the unused runtime.
 import { AnyComponentSchema, ComponentIdSchema } from '@a2ui/web_core/v0_9'
-import type { A2uiContent as DomainA2uiContent } from '../../../../domain/types'
+import type { A2uiContent as DomainA2uiContent } from '../domain/types'
 
 /** A2UI's `AnyComponent`: a `component` type string, an optional `id`, an
  *  optional layout `weight`, and arbitrary passthrough props. This is the actual

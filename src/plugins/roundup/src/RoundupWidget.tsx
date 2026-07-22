@@ -28,10 +28,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { Notice } from '../../../domain/types'
 import type { Reply } from '../../../domain/pinSet'
-import { A2uiRenderer } from './a2ui/A2uiRenderer'
-import { isAnswerable } from './a2ui/controls'
-import { followUpsFor } from './a2ui/followUps'
-import { FollowUpChip, type NoticeFormState } from './a2ui/controlComponents'
+import { A2uiRenderer } from '../../../a2ui/A2uiRenderer'
+import { isAnswerable } from '../../../a2ui/controls'
+import { followUpsFor } from '../../../a2ui/followUps'
+import { FollowUpChip, type NoticeFormState } from '../../../a2ui/controlComponents'
 import { relativeAge, isStale } from './age'
 
 interface DeltaMsg { eventType?: string }
@@ -220,7 +220,7 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
             {thread.length > 0 && (
               // Fixed ceiling + internal scroll: this is what keeps a 40-message
               // thread from turning the card into a wall.
-              <div className="max-h-40 overflow-y-auto flex flex-col gap-1 pr-1">
+              <div data-scrollable className="max-h-40 overflow-y-auto flex flex-col gap-1 pr-1">
                 {thread.map(m => (
                   <div key={m.id} className="text-xs leading-snug">
                     <span className={m.author === 'user' ? 'text-neutral-400' : 'text-amber-300'}>
@@ -634,7 +634,9 @@ export function makeRoundupWidget(api: TinstarPluginAPI) {
           </span>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
+        {/* data-scrollable: the canvas wheel handler pans/zooms unless a hovered
+            child claims the wheel via this marker (see useCanvasCamera handleWheel). */}
+        <div data-scrollable className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
           {loadError && (notices === null || notices.length === 0) && (
             <div className="text-sm text-red-300/80 italic">
               Couldn&apos;t reach the notice board.{' '}

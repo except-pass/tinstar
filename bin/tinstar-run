@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# tinstar-run — wrap a long-running command so it self-reports onto the run's Slate.
+#
+# The Slate watcher (src/server/sessions/slate-watcher.ts) reads
+# `<worktree>/.tinstar/slate/*.json` per run — each file a JSON ARRAY of surface
+# entries — validates the A2UI `content`, and projects them onto the run card. This
+# wrapper is the process-authored author (plan U9 / R18): it writes a pid-namespaced
+# surface file `run-<pid>.json` so the run shows a live "running…" progress card while
+# the wrapped command runs, then a ✓/✗ terminal card when it exits.
+#
+# Contract — the wrapped command is sacred:
+#   - Slate reporting is BEST-EFFORT. A missing `.tinstar/`, an unwritable slate dir,
+#     or any write failure NEVER changes the wrapped command's stdout/stderr or its
+#     exit code. Every Slate helper swallows its own errors and returns success.
+#   - Writes are ATOMIC: a temp file in the slate dir + `mv` (rename), so a reader that
+#     catches the file mid-write sees either the old or the new whole file, never a
+#     torn one (which the watcher would otherwise retain as last-valid).
+#   - The finalize runs from an EXIT + signal trap, so a normal exit AND a SIGTERM/INT
+#     both retire the spinner. A SIGKILL (-9) CANNOT be trapped — that gap is what the
+#     server-side staleness sweep (plan R19) backstops.
+#
+# Usage: tinstar-run <cmd> [args...]
+
+set -u
+
+if [ "$#" -eq 0 ]; then
+  echo "usage: tinstar-run <cmd> [args...]" >&2
+  exit 2
+fi
+
+MAIN_PID=$$
+START_TS=$(date +%s)
+CMD_STR="$*"
+POINT_ID="proc-$$"
+
+# --- Resolve the worktree root: walk up for a `.tinstar/` dir, else git toplevel. ---
+find_root() {
+  local d="$PWD"
+  while [ "$d" != "/" ] && [ -n "$d" ]; do
+    if [ -d "$d/.tinstar" ]; then
+      printf '%s\n' "$d"
+      return 0
+    fi
+    d="$(dirname "$d")"
+  done
+  local top
+  if top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
+    printf '%s\n' "$top"
+    return 0
+  fi
+  return 1
+}
+
+SLATE_DIR=""
+if ROOT="$(find_root)"; then
+  SLATE_DIR="$ROOT/.tinstar/slate"
+else
+  echo "tinstar-run: no .tinstar/ dir found walking up from $PWD and not a git repo;" \
+       "Slate reporting disabled (running the command anyway)." >&2
+fi
+
+# --- JSON string escaper (pure bash; no jq dependency). ---
+json_escape() {
+  local s=$1
+  s=${s//\\/\\\\}      # backslash first
+  s=${s//\"/\\\"}      # double quote
+  s=${s//$'\n'/\\n}    # newline
+  s=${s//$'\t'/\\t}    # tab
+  s=${s//$'\r'/\\r}    # carriage return
+  printf '%s' "$s"
+}
+
+# Build the one-element surface array. $1 = status line text.
+surface_json() {
+  local status_line=$1
+  local esc_headline esc_title esc_status created_ms
+  esc_headline=$(json_escape "$CMD_STR")
+  esc_title=$(json_escape "\$ $CMD_STR")
+  esc_status=$(json_escape "$status_line")
+  created_ms=$(( START_TS * 1000 ))
+  printf '[{"id":"%s","author":"process","anchor":{"kind":"surface"},"createdAt":%s,"headline":"%s","content":{"root":"root","components":[{"id":"root","component":"Column","children":["title","status"]},{"id":"title","component":"Text","variant":"h2","text":"%s"},{"id":"status","component":"Text","text":"%s"}]}}]' \
+    "$POINT_ID" "$created_ms" "$esc_headline" "$esc_title" "$esc_status"
+}
+
+# Atomic best-effort write of the surface file. All failures are swallowed.
+write_surface() {
+  [ -n "$SLATE_DIR" ] || return 0
+  mkdir -p "$SLATE_DIR" 2>/dev/null || return 0
+  local target="$SLATE_DIR/run-$MAIN_PID.json"
+  local tmp="$SLATE_DIR/.run-$MAIN_PID.$$.$RANDOM.tmp"
+  if printf '%s' "$1" >"$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$target" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
+# --- Finalize: rewrite the surface to a terminal ✓/✗ card, retiring the spinner. ---
+FINALIZED=0
+finalize() {
+  local code=$1
+  [ "$FINALIZED" -eq 1 ] && return 0
+  FINALIZED=1
+  # Stop the background amender so it can't re-freshen a finalized/dead surface.
+  # WAIT for it to actually exit before the terminal write below — otherwise a
+  # last-gasp amender `mv` can serialize AFTER finalize's and revert the card to
+  # "running…" forever (the sweep would then mislabel it stalled).
+  if [ -n "${AMEND_PID:-}" ]; then
+    kill "$AMEND_PID" 2>/dev/null
+    wait "$AMEND_PID" 2>/dev/null || true
+  fi
+  local elapsed=$(( $(date +%s) - START_TS ))
+  local mark
+  if [ "$code" -eq 0 ]; then
+    mark="✓ done"
+  else
+    mark="✗ exit ${code}"
+  fi
+  write_surface "$(surface_json "${mark}  (${elapsed}s)")"
+  return 0
+}
+
+# EXIT catches normal termination with the real exit code; the signal traps catch
+# SIGINT/SIGTERM/SIGHUP and disarm EXIT so we finalize exactly once. SIGKILL (-9) is
+# untrappable by design — the server staleness sweep (R19) retires that orphan.
+trap 'rc=$?; trap - EXIT INT TERM HUP; finalize "$rc"; exit "$rc"' EXIT
+trap 'trap - EXIT INT TERM HUP; finalize 130; exit 130' INT
+trap 'trap - EXIT INT TERM HUP; finalize 143; exit 143' TERM
+trap 'trap - EXIT INT TERM HUP; finalize 129; exit 129' HUP
+
+# --- START: paint the initial "running…" surface. ---
+write_surface "$(surface_json "running…  (0s)")"
+
+# --- DURING (bonus): a background amender re-freshens elapsed every few seconds, and
+# self-terminates the moment the wrapper is gone (so a SIGKILL'd wrapper stops
+# refreshing `amendedAt` and the server sweep can mark it stalled). ---
+if [ -n "$SLATE_DIR" ]; then
+  # Detach the amender's stdio from the wrapper's (</dev/null, >/dev/null) so a
+  # still-sleeping amender can't hold the wrapped command's captured pipes open and
+  # delay the caller after the command has already finished.
+  (
+    while kill -0 "$MAIN_PID" 2>/dev/null; do
+      sleep 5
+      kill -0 "$MAIN_PID" 2>/dev/null || break
+      elapsed=$(( $(date +%s) - START_TS ))
+      write_surface "$(surface_json "running…  (${elapsed}s)")"
+    done
+  ) </dev/null >/dev/null 2>&1 &
+  AMEND_PID=$!
+fi
+
+# --- Run the wrapped command, passing through stdio and its real exit code. ---
+"$@"
+# Falls through to the EXIT trap with `$?` = the command's exit code.

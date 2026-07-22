@@ -37,7 +37,7 @@ export interface WidgetDefinition {
  * Focus zones within RunWorkspaceWidget — kept here so RunWorkspaceWidget
  * can import it after useWidgetHotkeys.ts is deleted.
  */
-export type FocusZone = 'left-tab' | 'file-list' | 'center-tabs' | 'right-panel'
+export type FocusZone = 'left-tab' | 'file-list' | 'center-tabs' | 'slate' | 'right-panel'
 
 /** Format a key code string for human-readable display in the hotkeys sidebar */
 export function formatKey(key: string): string {

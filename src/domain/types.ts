@@ -124,6 +124,11 @@ export interface RunData {
    *  so background/supervisor callers can create a session without yanking the
    *  user's camera. Absent/true ⇒ the canvas auto-focuses the new run as usual. */
   focusOnCreate?: boolean
+  /** The run's Slate surfaces (see The Slate). A server-authoritative projection
+   *  populated by the Slate watcher from `.tinstar/slate/*`. Adding this field is
+   *  a 3-place change (this type, `runShallowEqual`, and `mergeRun` in
+   *  useServerEvents) — two of which fail SILENTLY if missed; see those sites. */
+  slate?: SlateSurface[]
 }
 
 
@@ -469,6 +474,103 @@ export interface A2uiComponent {
 export interface A2uiContent {
   root: string
   components: A2uiComponent[]
+}
+
+/** One surface on a run's Slate (see The Slate in CONCEPTS.md): a small,
+ *  scoped, agent/user/process-authored panel rendered in the run workspace card.
+ *  This is the client-facing PROJECTION the run card renders — assembled by the
+ *  Slate store from the file-watched A2UI `body` plus store-owned points/threads.
+ *
+ *  Field ownership is the load-bearing invariant (plan KTD1): the file authors
+ *  `body`/`kind`/`order`; the store owns everything else (points, threads,
+ *  lifecycle). A file re-projection must merge by `id`, never clobber store fields.
+ *  U2 wires this projection through the 3-place RunData contract; U3 fills in the
+ *  store-owned thread/point detail. */
+export interface SlateSurface {
+  id: string
+  /** Who authored the surface body — agent, the user, or a local process. */
+  author: 'agent' | 'user' | 'process'
+  /** Surface kind, drives which renderer the Slate panel picks
+   *  (e.g. 'open-points' | 'diagram' | 'progress'). */
+  kind: string
+  /** Sort order within the Slate; ties broken by createdAt. */
+  order?: number
+  /** File-owned A2UI body. Absent for a surface assembled purely from store state
+   *  (e.g. a bare open-point). */
+  body?: A2uiContent
+  /** Point render fields — present when this surface is a store-backed point
+   *  (open-points list, threaded surface). DocumentStore projects the run's
+   *  SlateStore points into RunData.slate so the client renders ONE channel
+   *  (run.slate) rather than subscribing to a second point stream. The file owns
+   *  `body`/`headline`/`anchor`; the store owns `status`/`thread`. */
+  headline?: string
+  status?: PointStatus
+  thread?: Reply[]
+  anchor?: PointAnchor
+  /** Server-set staleness marker (plan R19): present when a `process`-authored
+   *  surface has gone stale (its wrapper stopped updating). The renderer styles it
+   *  as "stalled/unknown" instead of a live spinner. */
+  stalledAt?: number
+  createdAt: number
+  amendedAt: number
+}
+
+/** Who authored a Slate point/surface body. Mirrors {@link SlateSurface.author}. */
+export type PointAuthor = 'agent' | 'user' | 'process'
+
+/** A point's lifecycle status. `open`/`discussing`/`waiting` are DERIVED from the
+ *  thread (replies + last-author); `resolved`/`dismissed` are EXPLICIT (set only by
+ *  an HTTP resolve/dismiss and survive a subsequent file re-projection). The Slate
+ *  never auto-resolves a point — that was the CMT-1302 failure this feature prevents. */
+export type PointStatus = 'open' | 'discussing' | 'waiting' | 'resolved' | 'dismissed'
+
+/** What a point is attached to. `none` = a free-standing open-points entry;
+ *  `decision` / `surface` anchor it to a decision record or a Slate surface by id. */
+export interface PointAnchor {
+  kind: 'none' | 'decision' | 'surface'
+  ref?: string
+}
+
+/** A store-backed addressable point on a run's Slate: an open question, decision,
+ *  or follow-up with its own thread and lifecycle. Points are docstore state; a
+ *  file (`.tinstar/slate/*.json`) authors only the file-owned fields (`headline`,
+ *  `content`, `anchor`) — the store owns `status`, `replies`, and the lifecycle
+ *  timestamps. A file re-projection MERGES BY `id` and must never clobber a
+ *  store-owned thread or status (plan KTD1). Reuses the notes/pins {@link Reply}
+ *  shape so all threads render and read alike. */
+export interface Point {
+  id: string
+  runId: string
+  /** Set once when the point is first created; a re-projection never flips it. */
+  author: PointAuthor
+  /** Provenance (plan U7 reconciliation). A `'file'` point is authored by a
+   *  `.tinstar/slate/*.json` projection and is RETRACTED when a later file
+   *  re-projection omits it; a `'user'` point is added over HTTP and is EXEMPT
+   *  from that retraction, so a file re-projection can't nuke a point the user
+   *  just added. Absent is treated as `'file'` (the projection default). */
+  source?: 'file' | 'user'
+  anchor?: PointAnchor
+  /** File-owned: the one-line title of the point. */
+  headline: string
+  /** File-owned: the point's A2UI body (absent for a bare headline point). */
+  content?: A2uiContent
+  /** Derived from the thread unless `resolvedAt`/`dismissedAt` is set (explicit). */
+  status: PointStatus
+  /** Store-owned thread, append-only (mirrors pins/notes). Preserved across a
+   *  file re-projection by `id`. */
+  replies?: Reply[]
+  createdAt: number
+  amendedAt: number
+  /** Set only by an explicit resolve; survives a later file re-projection. */
+  resolvedAt?: number
+  /** Set only by an explicit dismiss; survives a later file re-projection. */
+  dismissedAt?: number
+  /** Server-set backstop marker (plan R19): a `process`-authored point whose
+   *  `amendedAt` has gone stale (no file update for N minutes) is marked stalled so
+   *  a `kill -9`'d `tinstar-run` wrapper can't leave a permanent fake-live spinner.
+   *  Only the SERVER can detect this (a client can only style age). Cleared when a
+   *  later file re-projection actually changes the point's body. */
+  stalledAt?: number
 }
 
 /** Urgency of a widget's current attention request.

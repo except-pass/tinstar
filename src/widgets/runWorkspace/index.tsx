@@ -11,7 +11,7 @@ registerWidgetComponent({
   type: 'run-workspace',
   component: RunWorkspaceAdapter,
   isContainer: false,
-  defaultSize: { width: 1320, height: 1230 },
+  defaultSize: { width: 1560, height: 1230 },
   minSize: { width: 300, height: 150 },
   dragHandleSelector: '.widget-drag-handle',
   getFrameClass: ({ isDragging, isSelected }) => {

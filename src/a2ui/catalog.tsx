@@ -13,7 +13,7 @@
 // Classes mirror the markdown styling slice 1 applied in RoundupWidget, so the
 // A2UI output is visually identical to the markdown it replaces.
 import type { ReactNode } from 'react'
-import type { A2uiComponent } from '../../../../domain/types'
+import type { A2uiComponent } from '../domain/types'
 import { ChoiceControl, TextInputControl, SubmitControl } from './controlComponents'
 
 /** A catalog entry renders one node given its already-resolved, already-rendered

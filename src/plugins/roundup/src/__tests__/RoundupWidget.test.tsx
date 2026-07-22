@@ -5,7 +5,7 @@ import type { TinstarPluginAPI, WidgetProps } from '@tinstar/plugin-api'
 import type { ComponentType } from 'react'
 import type { Notice } from '../../../../domain/types'
 import { makeRoundupWidget, runNodeId, groupByRun, askThread, isAwaitingReply, SHIMMER_MAX_MS } from '../RoundupWidget'
-import { UNIVERSAL_FOLLOW_UPS } from '../a2ui/followUps'
+import { UNIVERSAL_FOLLOW_UPS } from '../../../../a2ui/followUps'
 
 afterEach(() => vi.restoreAllMocks())
 

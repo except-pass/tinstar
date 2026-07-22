@@ -5,7 +5,7 @@
 // the controls are A2UI *schema* component types the agent declares; only the
 // rendering and submit are host-owned, and web_core's action runtime stays
 // deferred (see docs/plans/2026-07-17-003-feat-roundup-interactivity-plan.md).
-import type { A2uiComponent, A2uiContent } from '../../../../domain/types'
+import type { A2uiComponent, A2uiContent } from '../domain/types'
 
 /** The A2UI `component` type strings this slice adds as host-rendered controls.
  *  `Choice` carries a `mode` discriminator (single vs multi); `TextInput` is a

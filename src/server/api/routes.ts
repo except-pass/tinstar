@@ -53,11 +53,14 @@ import type { Run, EditorWidget, ImageWidget, TopicMetadata, BrowserNote, Sessio
 // same web_core v0_9 schema the renderer uses, so malformed descriptions are
 // rejected at the boundary. Importing the plugin's schema here is what pulls
 // @a2ui/web_core into the server (esbuild) bundle — the load-bearing de-risk.
-import { parseA2uiContent } from '../../plugins/roundup/src/a2ui/schema'
-import { collectChoiceOptionIds, collectChoiceOptionLabels, NOTICE_ANSWER_TEXT_MAX } from '../../plugins/roundup/src/a2ui/controls'
-import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../plugins/roundup/src/a2ui/followUps'
+import { parseA2uiContent } from '../../a2ui/schema'
+import { collectChoiceOptionIds, collectChoiceOptionLabels, NOTICE_ANSWER_TEXT_MAX } from '../../a2ui/controls'
+import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../a2ui/followUps'
 import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
+import { slatePointPromptText, slateReplyPromptText, slateAnswerPromptText } from '../../slate/slatePrompt'
+import type { PointInput } from '../stores/slate'
+import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
@@ -1039,6 +1042,24 @@ function readArtifactFile(
 /** The server's own origin, for artifact URLs the widget proxy will fetch. */
 function serverBase(): string {
   return `http://localhost:${process.env.TINSTAR_DASHBOARD_PORT ?? 5273}`
+}
+
+/** Best-effort delivery of a Slate injection to a run's agent session (plan U7,
+ *  KTD5). `runId` IS the tmux session name. Persist-then-deliver: the caller has
+ *  already persisted, so an unreachable/ended session reports `false` rather than
+ *  failing the request. Never throws. Only a USER-authored injection should reach
+ *  here — an agent/process reply must NOT prompt its own session (self-loop guard,
+ *  R15); the caller gates on author before calling this. */
+async function deliverSlatePrompt(ctx: RouteContext, runId: string, promptText: string): Promise<boolean> {
+  const sessDir = ctx.sessionConfig?.dirs.sessions
+  if (!sessDir || !getSession(sessDir, runId)) return false
+  try {
+    await tmuxBackend.sendPrompt(ctx.sessionConfig!, runId, promptText)
+    return true
+  } catch (err) {
+    log.warn('slate', 'delivery failed', { runId, err: (err as Error).message })
+    return false
+  }
 }
 
 /** Synchronously enumerate every persisted session on disk. Mirrors the
@@ -3247,6 +3268,225 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
 
   // NOTE: GET /api/file-watch SSE endpoint removed — file watching now goes
   // through POST /api/file-watch/subscribe and the main SSE connection.
+
+  // --- The Slate: run-scoped point/thread/answer endpoints (U7) ---
+  //
+  // ROUTE ORDERING (docs/solutions/conventions/sub-resource-routes-under-prefix-matched-handlers.md):
+  // every one of these is a sub-resource under `/api/runs/:id`, whose PATCH handler
+  // below matches with a GREEDY `startsWith('/api/runs/')`. Each is matched with an
+  // ANCHORED REGEX on the query-stripped path and placed BEFORE that handler, so a
+  // `/slate/...` request can never fall through to a generic handler that would
+  // silently win (returning 200). The guard is the test, not this comment:
+  // routes.slate.test.ts asserts the `/slate/points/:pid/answer` regex is registered
+  // ahead of the greedy PATCH, which fails if this block is ever moved below it.
+  //
+  // Naming is run/capability-scoped, NOT plugin-scoped (KTD5,
+  // docs/solutions/conventions/no-bespoke-per-plugin-server-routes.md). `runId` (the
+  // `:id` segment) IS the tmux session name used for delivery.
+  //
+  // Size caps mirror the notices caps — keep a malformed submit from bloating the
+  // persisted snapshot; oversize is refused with a 413.
+  const SLATE_HEADLINE_MAX = 200
+  const SLATE_CONTENT_MAX = 32 * 1024
+
+  // Append a reply to a point's thread, composing REOPEN-ON-REPLY: a reply landing
+  // on a resolved/dismissed point reopens it first (plan lifecycle diagram), so a
+  // terminal point re-enters the conversation instead of swallowing the message.
+  const appendSlateReply = (runId: string, pid: string, reply: Reply): Point | undefined => {
+    const prior = ctx.docStore.getSlatePoint(pid)
+    if (!prior || prior.runId !== runId) return undefined
+    if (prior.resolvedAt != null || prior.dismissedAt != null) ctx.docStore.reopenSlatePoint(runId, pid)
+    ctx.docStore.addSlateReply(runId, pid, reply)
+    return ctx.docStore.getSlatePoint(pid)
+  }
+
+  // POST /api/runs/:id/slate/points — create OR amend a USER-authored point.
+  // Persist first (a user point, source:'user', survives a later file re-projection),
+  // then best-effort deliver the injection to the run's agent (author is always
+  // 'user' here, so it always attempts delivery — R15).
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/points$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/points'.length))
+    readBody(req).then(async body => {
+      if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return }
+
+      let parsed: { id?: unknown; headline?: unknown; content?: unknown; anchor?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
+      }
+      if (typeof parsed.headline !== 'string' || !parsed.headline.trim()) {
+        fail(res, 'INVALID_PARAMS', 'headline must be a non-empty string'); return
+      }
+      if (parsed.headline.length > SLATE_HEADLINE_MAX) {
+        fail(res, 'BAD_REQUEST', `headline exceeds ${SLATE_HEADLINE_MAX} characters`, { status: 413 }); return
+      }
+      if (parsed.id !== undefined && (typeof parsed.id !== 'string' || parsed.id.length === 0)) {
+        fail(res, 'INVALID_PARAMS', 'id must be a non-empty string when provided'); return
+      }
+      // Optional A2UI body — validated through the v0_9 schema so a malformed
+      // description is rejected at the boundary (KTD4), never persisted.
+      let content: A2uiContent | undefined
+      if (parsed.content !== undefined && parsed.content !== null) {
+        if (JSON.stringify(parsed.content).length > SLATE_CONTENT_MAX) {
+          fail(res, 'BAD_REQUEST', `content exceeds ${SLATE_CONTENT_MAX} bytes`, { status: 413 }); return
+        }
+        const valid = parseA2uiContent(parsed.content)
+        if (!valid) { fail(res, 'INVALID_PARAMS', 'content must be a valid A2UI v0_9 component description'); return }
+        content = valid
+      }
+      // Optional anchor.
+      let anchor: PointAnchor | undefined
+      if (parsed.anchor !== undefined && parsed.anchor !== null) {
+        const a = parsed.anchor as { kind?: unknown; ref?: unknown }
+        if (typeof a !== 'object' || Array.isArray(a) || (a.kind !== 'none' && a.kind !== 'decision' && a.kind !== 'surface')) {
+          fail(res, 'INVALID_PARAMS', "anchor.kind must be 'none' | 'decision' | 'surface'"); return
+        }
+        anchor = { kind: a.kind, ...(typeof a.ref === 'string' ? { ref: a.ref } : {}) }
+      }
+
+      const input: PointInput = {
+        ...(typeof parsed.id === 'string' ? { id: parsed.id } : {}),
+        author: 'user',
+        headline: parsed.headline.trim(),
+        ...(content ? { content } : {}),
+        ...(anchor ? { anchor } : {}),
+      }
+      const point = ctx.docStore.addUserSlatePoint(runId, input)
+      const delivered = await deliverSlatePrompt(ctx, runId, slatePointPromptText(point, serverBase()))
+      ok(res, { point, delivered })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
+    return true
+  }
+
+  // POST /api/runs/:id/slate/points/:pid/answer — a control answer (choices + text).
+  // Validate submitted choices against the point's CURRENT content (a stale choice
+  // absent from the live surface is rejected, nothing persisted) and length-cap the
+  // text. The answer persists as a USER reply on the point's thread (the store owns
+  // no separate `answer` field; a control submit is a structured user message), then
+  // best-effort delivers. Matched BEFORE the greedy PATCH /api/runs/ handler.
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/points\/[^/]+\/answer$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const rest = path.slice('/api/runs/'.length, -'/answer'.length) // "<runId>/slate/points/<pid>"
+    const segs = rest.split('/')
+    const runId = decodeURIComponent(segs[0] ?? '')
+    const pid = decodeURIComponent(segs[3] ?? '')
+    readBody(req).then(async body => {
+      const point = ctx.docStore.getSlatePoint(pid)
+      if (!point || point.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
+
+      let parsed: { choices?: unknown; text?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
+      }
+
+      // Choices validate against the CURRENT surface content — a choice id no longer
+      // offered means the surface changed under the user; reject and persist nothing.
+      let selectedChoices: string[] = []
+      if (parsed.choices !== undefined && parsed.choices !== null) {
+        if (!Array.isArray(parsed.choices) || !parsed.choices.every(c => typeof c === 'string')) {
+          fail(res, 'INVALID_PARAMS', 'choices must be an array of strings'); return
+        }
+        const declared = collectChoiceOptionIds(point.content)
+        for (const c of parsed.choices as string[]) {
+          if (!declared.has(c)) {
+            fail(res, 'INVALID_PARAMS', `choice "${c}" is not an offered option on this surface (it may have changed — reload)`); return
+          }
+        }
+        selectedChoices = parsed.choices as string[]
+      }
+
+      let answerText: string | undefined
+      if (parsed.text !== undefined && parsed.text !== null) {
+        if (typeof parsed.text !== 'string') { fail(res, 'INVALID_PARAMS', 'text must be a string'); return }
+        if (parsed.text.length > NOTICE_ANSWER_TEXT_MAX) {
+          fail(res, 'BAD_REQUEST', `text exceeds ${NOTICE_ANSWER_TEXT_MAX} characters`, { status: 413 }); return
+        }
+        if (parsed.text.trim()) answerText = parsed.text.trim()
+      }
+      if (selectedChoices.length === 0 && !answerText) {
+        fail(res, 'INVALID_PARAMS', 'answer must include at least one choice or some text'); return
+      }
+
+      const labels = collectChoiceOptionLabels(point.content)
+      const chosenLabels = selectedChoices.map(id => labels.get(id) ?? id)
+      const parts: string[] = []
+      if (chosenLabels.length > 0) parts.push(`Chose: ${chosenLabels.join(', ')}`)
+      if (answerText) parts.push(answerText)
+      const reply: Reply = { id: shortId('slate-answer'), author: 'user', text: parts.join(' — '), createdAt: Date.now() }
+      const updated = appendSlateReply(runId, pid, reply)
+      if (!updated) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
+
+      const delivered = await deliverSlatePrompt(ctx, runId,
+        slateAnswerPromptText(updated, chosenLabels, answerText, serverBase()))
+      ok(res, { point: updated, delivered })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
+    return true
+  }
+
+  // POST /api/runs/:id/slate/points/:pid/replies — append a reply to a thread.
+  // author 'user'|'agent'|'process', default 'agent' (the agent curls this from a
+  // baked prompt, mirroring the notices replies route). Only a USER reply delivers —
+  // an agent/process reply must not prompt the agent's own session (self-loop guard,
+  // R15). REOPEN-ON-REPLY applies via appendSlateReply.
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/points\/[^/]+\/replies$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const rest = path.slice('/api/runs/'.length, -'/replies'.length) // "<runId>/slate/points/<pid>"
+    const segs = rest.split('/')
+    const runId = decodeURIComponent(segs[0] ?? '')
+    const pid = decodeURIComponent(segs[3] ?? '')
+    readBody(req).then(async body => {
+      const existing = ctx.docStore.getSlatePoint(pid)
+      if (!existing || existing.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
+
+      let parsed: { text?: unknown; author?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
+      }
+      if (parsed.author !== undefined && parsed.author !== 'user' && parsed.author !== 'agent' && parsed.author !== 'process') {
+        fail(res, 'INVALID_PARAMS', "author must be 'user', 'agent', or 'process'"); return
+      }
+      const author: 'user' | 'agent' | 'process' = parsed.author === 'user' ? 'user' : parsed.author === 'process' ? 'process' : 'agent'
+      if (typeof parsed.text !== 'string') { fail(res, 'INVALID_PARAMS', 'text must be a string'); return }
+      if (parsed.text.length > NOTICE_ANSWER_TEXT_MAX) {
+        fail(res, 'BAD_REQUEST', `text exceeds ${NOTICE_ANSWER_TEXT_MAX} characters`, { status: 413 }); return
+      }
+      const trimmed = parsed.text.trim()
+      if (!trimmed) { fail(res, 'INVALID_PARAMS', 'text must be non-empty'); return }
+
+      const reply: Reply = { id: shortId('slate-reply'), author, text: trimmed, createdAt: Date.now() }
+      const updated = appendSlateReply(runId, pid, reply)
+      if (!updated) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
+
+      // Only a USER reply delivers — the anti-loop guard (R15).
+      const delivered = author === 'user'
+        ? await deliverSlatePrompt(ctx, runId, slateReplyPromptText(updated, serverBase()))
+        : false
+      ok(res, { point: updated, reply, delivered })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
+    return true
+  }
+
+  // POST /api/runs/:id/slate/points/:pid/resolve|reopen|dismiss — explicit lifecycle.
+  // Sticky status the store owns; no delivery (a lifecycle flip is not an injection,
+  // mirroring the notices dismiss route). Matched BEFORE the greedy PATCH handler.
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/points\/[^/]+\/(resolve|reopen|dismiss)$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const rest = path.slice('/api/runs/'.length)
+    const segs = rest.split('/') // [runId, 'slate', 'points', pid, action]
+    const runId = decodeURIComponent(segs[0] ?? '')
+    const pid = decodeURIComponent(segs[3] ?? '')
+    const action = segs[4] as 'resolve' | 'reopen' | 'dismiss'
+    const existing = ctx.docStore.getSlatePoint(pid)
+    if (!existing || existing.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
+    if (action === 'resolve') ctx.docStore.resolveSlatePoint(runId, pid)
+    else if (action === 'reopen') ctx.docStore.reopenSlatePoint(runId, pid)
+    else ctx.docStore.dismissSlatePoint(runId, pid)
+    ok(res, { point: ctx.docStore.getSlatePoint(pid) })
+    return true
+  }
 
   // PATCH /api/runs/:id
   if (method === 'PATCH' && url.startsWith('/api/runs/')) {
