@@ -45,7 +45,7 @@ export function SlatePanel({ runId, surfaces = [] }: Props) {
   const firstOpenPointIdx = sorted.findIndex((s) => s.kind === 'open-point')
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-w-0">
       {/* Summary bar — mirrors the other panels' header row */}
       <div className="px-3 py-1.5 border-b border-primary/10 bg-surface-base/50 flex items-center justify-between">
         <span className="text-2xs font-mono text-slate-500 uppercase tracking-wider">The Slate</span>
@@ -54,7 +54,7 @@ export function SlatePanel({ runId, surfaces = [] }: Props) {
 
       {/* Scroll body — data-scrollable so the canvas wheel handler yields the
           wheel to this column instead of panning the canvas (useCanvasCamera). */}
-      <div data-scrollable className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-2">
+      <div data-scrollable className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin p-2 space-y-2 [overflow-wrap:anywhere]">
         {sorted.map((surface, i) => {
           // Open-points collapse into one grouped list at the first one's slot.
           if (surface.kind === 'open-point') {
