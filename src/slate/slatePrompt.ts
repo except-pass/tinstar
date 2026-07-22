@@ -112,8 +112,8 @@ export function slateAnswerPromptText(
  *  file-based, not a curl) but kept for signature parity with the other builders. */
 export function slateRefreshPromptText(point: Point, _origin: string): string {
   const body = point.refresh
-    ? [point.refresh, '', `Then rewrite .tinstar/slate/${point.id}.json with the regenerated surface.`]
-    : [`Regenerate the Slate surface "${oneLine(point.headline)}" (surface ${point.id}) and rewrite its .tinstar/slate file.`]
+    ? [point.refresh, '', `Then rewrite the .tinstar/slate file that defines surface ${point.id} (its id/filename need not match).`]
+    : [`Regenerate the Slate surface "${oneLine(point.headline)}" (surface ${point.id}) and rewrite the .tinstar/slate file that defines it.`]
   // Carry the GUARDRAIL like every other Slate prompt: the recipe is file-authored
   // (an untrusted repo/branch/process could plant one), so frame it as a note, not a
   // command to abandon in-flight work.

@@ -87,7 +87,10 @@ export function fuzzyScore(query: string, target: string): number {
     matched += 1
     ti = idx + 1
   }
-  return matched === q.length ? 10 + bestRun : 0
+  // Every char found (any miss already returned 0 above) → a subsequence match. Don't
+  // gate on matched === q.length: `for…of` counts code points while `q.length` counts
+  // UTF-16 units, so an astral-plane query (emoji) would wrongly score 0.
+  return 10 + bestRun
 }
 
 /** Fuzzy-search the catalog by name (full weight) + description (half weight).

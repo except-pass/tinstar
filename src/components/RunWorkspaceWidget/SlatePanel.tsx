@@ -168,7 +168,10 @@ export function SlatePanel({ runId, surfaces = [], width }: Props) {
           {/* Open the composer to author a new surface. */}
           <button
             data-testid="slate-add-surface"
-            onClick={() => setComposerOpen((v) => !v)}
+            // Open-only: the composer closes itself (outside-click / cancel / escape).
+            // A toggle here fights its outside-pointerdown handler — that fires first and
+            // closes it, then the toggle flips it back open, so it could never close.
+            onClick={() => setComposerOpen(true)}
             title="Add a surface"
             className="text-2xs font-mono text-slate-400 hover:text-slate-200"
           >

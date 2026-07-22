@@ -120,10 +120,13 @@ export function useSlateRefresh(runId: string, surfaces: SlateSurface[]): SlateR
       if (visible.length === 0) return
       setBulkRefreshing(true)
       // Sequential: await each surface's POST before the next so the per-surface
-      // sendPrompts don't interleave into one tmux pane.
+      // sendPrompts don't interleave into one tmux pane. Clear the bulk flag in
+      // `finally` (when dispatch finishes), NOT on a transient refreshing.size===0 —
+      // a dead run clears its first surface immediately, which would otherwise flip
+      // the bulk flag off mid-loop before the rest are even POSTed.
       void (async () => {
         for (const s of visible) await refresh(s)
-      })()
+      })().finally(() => setBulkRefreshing(false))
     },
     [refresh],
   )
@@ -160,11 +163,6 @@ export function useSlateRefresh(runId: string, surfaces: SlateSurface[]): SlateR
     }
     if (changed) setUnreachable(next)
   }, [surfaces, unreachable])
-
-  // The bulk loading state ends when nothing is left refreshing.
-  useEffect(() => {
-    if (bulkRefreshing && refreshing.size === 0) setBulkRefreshing(false)
-  }, [bulkRefreshing, refreshing.size])
 
   // Drop every pending timer on unmount.
   useEffect(() => {
