@@ -30,6 +30,36 @@ export interface SlateAuthorConfig {
 }
 
 /**
+ * The A2UI authoring contract, prepended to EVERY author prompt. A code-spawned author is
+ * a fresh `claude -p` in the run's workdir — which is often a FOREIGN repo with no Tinstar
+ * skill and no idea what a Slate surface or A2UI is. Without this it writes nothing valid,
+ * and the watcher silently drops it (no surface appears). This is the condensed contract
+ * from docs/solutions/documentation-gaps/slate-surface-authoring-contract.md, inlined
+ * because the author can't read the docs.
+ */
+export const SLATE_AUTHOR_CONTRACT = [
+  'SLATE SURFACE AUTHORING CONTRACT (you are a one-shot author with no prior context — read this):',
+  'Write a Slate "surface" as a JSON file at .tinstar/slate/<slug>.json in the current working directory. File shape:',
+  '{ "id": "<stable-slug>", "headline": "<one line>", "author": "agent",',
+  '  "anchor": { "kind": "surface" },   // include for a standalone card; OMIT the anchor for an open-point row',
+  '  "content": { "root": "<component-id>", "components": [ ... ] },   // A2UI, see below',
+  '  "refresh": "<optional self-contained instruction to regenerate this FROM SOURCE — never say \'this session\'>" }',
+  '',
+  'A2UI `content` is a FLAT list of components referenced BY ID from one `root`. This is the COMPLETE set — nothing else renders:',
+  '- Text:    { id, component:"Text", text, variant? }   variant one of: h1 h2 h3 h4 h5 | caption | body',
+  '- Column:  { id, component:"Column", children:[ids] }   (vertical stack)',
+  '- Row:     { id, component:"Row", children:[ids] }   (horizontal)',
+  '- List:    { id, component:"List", children:[ids], listStyle?:"ordered" }',
+  '- Card:    { id, component:"Card", child:"<id>" }   (single child, bordered)',
+  '- Divider: { id, component:"Divider" }',
+  '- Link:    { id, component:"Link", text, url }   (http(s) or /-relative urls only)',
+  '- Code:    { id, component:"Code", text }   (monospace block)',
+  'RULES: every id in a children[]/child MUST exist in components; `root` MUST name a component id. There is NO image,',
+  'diagram, graph, or markdown component — use Text/List/Code. INVALID content is SILENTLY DROPPED (no surface appears),',
+  'so keep it minimal and valid. Write ONLY the file; output nothing else.',
+].join('\n')
+
+/**
  * Spawn a one-shot author with a PRE-BUILT prompt. The caller's prompt builder
  * (`slateRefreshPromptText` for refresh, `slateComposePromptText` for compose) is
  * responsible for the standing GUARDRAIL + `oneLine()` sanitization — the author just
@@ -59,9 +89,12 @@ export function dispatchSurfaceAuthor(params: {
     // single argv arg (spawn WITHOUT a shell) so recipe contents can't inject shell syntax.
     // NOTE (spike): the exact `claude -p` invocation may need tuning at first live run —
     // this is the deliberately-throwaway edge.
+    // Prepend the authoring contract so a fresh author (often in a foreign repo) knows the
+    // A2UI vocabulary + file format. The caller's prompt (recipe/compose) follows it.
+    const authorPrompt = SLATE_AUTHOR_CONTRACT + '\n\n' + prompt
     const child = spawn(
       'claude',
-      ['-p', prompt, '--model', config.model, '--dangerously-skip-permissions'],
+      ['-p', authorPrompt, '--model', config.model, '--dangerously-skip-permissions'],
       { cwd: workdir, stdio: 'ignore', detached: false, timeout: config.timeoutMs },
     )
     child.on('error', (err) =>

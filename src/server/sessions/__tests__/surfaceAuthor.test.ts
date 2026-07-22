@@ -31,7 +31,10 @@ describe('dispatchSurfaceAuthor', () => {
     expect(spawn).toHaveBeenCalledTimes(1)
     const [bin, args, opts] = spawn.mock.calls[0] as [string, string[], { cwd?: string; timeout?: number }]
     expect(bin).toBe('claude')
-    expect(args).toContain('AUTHOR THIS')      // the pre-built (GUARDRAIL'd) prompt, passed as one argv
+    const promptArg = args[args.indexOf('-p') + 1]!
+    expect(promptArg).toContain('AUTHOR THIS')                     // the caller's pre-built prompt
+    expect(promptArg).toContain('SLATE SURFACE AUTHORING CONTRACT') // ...prepended with the A2UI contract
+    expect(promptArg).toContain('component:"Text"')                // the contract carries the vocabulary
     expect(args).toContain('--model')
     expect(args).toContain('sonnet')
     expect(opts.cwd).toBe('/wd')               // the run's workdir (where the watcher looks)
