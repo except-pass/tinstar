@@ -3532,6 +3532,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (!prompt && !freeform) {
         fail(res, 'INVALID_PARAMS', 'compose requires a prompt or freeform text'); return
       }
+      // Bound the delivered text — the siblings cap their inputs; an unbounded
+      // freeform would blast an oversized prompt into the agent's session.
+      const SLATE_COMPOSE_MAX = 8 * 1024
+      if (prompt.length + freeform.length > SLATE_COMPOSE_MAX) {
+        fail(res, 'BAD_REQUEST', `compose text exceeds ${SLATE_COMPOSE_MAX} bytes`, { status: 413 }); return
+      }
       const delivered = await deliverSlatePrompt(ctx, runId,
         slateComposePromptText({ prompt, freeform }, serverBase()))
       ok(res, { delivered })

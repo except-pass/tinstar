@@ -216,9 +216,10 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const onSlateResizePointerUp = useCallback(() => {
     if (!slateResizeDragRef.current) return
     slateResizeDragRef.current = null
-    // Persist the settled width so it survives reload (R1).
-    setSlateWidth((w) => { setPref('slateWidth', w); return w })
-  }, [])
+    // Persist the settled width so it survives reload (R1). Outside a setState updater —
+    // updaters must be pure (StrictMode/concurrent would double-write the pref).
+    setPref('slateWidth', slateWidth)
+  }, [slateWidth])
 
   const onHandsResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
@@ -426,6 +427,8 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
                 onPointerDown={onSlateResizePointerDown}
                 onPointerMove={onSlateResizePointerMove}
                 onPointerUp={onSlateResizePointerUp}
+                onPointerCancel={onSlateResizePointerUp}
+                onLostPointerCapture={onSlateResizePointerUp}
               />
               <SlatePanel runId={run.id} surfaces={run.slate} width={slateWidth} />
             </div>

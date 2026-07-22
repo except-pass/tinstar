@@ -111,14 +111,13 @@ export function slateAnswerPromptText(
  *  bare regenerate-nudge naming the surface. `_origin` is unused (regeneration is
  *  file-based, not a curl) but kept for signature parity with the other builders. */
 export function slateRefreshPromptText(point: Point, _origin: string): string {
-  if (point.refresh) {
-    return [
-      point.refresh,
-      '',
-      `Then rewrite .tinstar/slate/${point.id}.json with the regenerated surface.`,
-    ].join('\n')
-  }
-  return `Regenerate the Slate surface "${oneLine(point.headline)}" (surface ${point.id}) and rewrite its .tinstar/slate file.`
+  const body = point.refresh
+    ? [point.refresh, '', `Then rewrite .tinstar/slate/${point.id}.json with the regenerated surface.`]
+    : [`Regenerate the Slate surface "${oneLine(point.headline)}" (surface ${point.id}) and rewrite its .tinstar/slate file.`]
+  // Carry the GUARDRAIL like every other Slate prompt: the recipe is file-authored
+  // (an untrusted repo/branch/process could plant one), so frame it as a note, not a
+  // command to abandon in-flight work.
+  return [...body, '', GUARDRAIL].join('\n')
 }
 
 /** Prompt for the surface COMPOSER (POST /slate/compose). Persists NOTHING (KTD4):
@@ -136,6 +135,8 @@ export function slateComposePromptText(
   if (parts.freeform) lines.push(parts.freeform)
   lines.push(
     'Write it to .tinstar/slate/<slug>.json with an id, headline, A2UI content, and an optional refresh recipe.',
+    '',
+    GUARDRAIL,
   )
   return lines.join('\n')
 }

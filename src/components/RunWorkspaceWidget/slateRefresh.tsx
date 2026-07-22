@@ -43,7 +43,9 @@ export function useSlateRefresh(runId: string, surfaces: SlateSurface[]): SlateR
   // surfaceId → the amendedAt we recorded when refresh was requested. Membership IS
   // "this surface is refreshing"; the value is the baseline the clear-effect compares.
   const [refreshing, setRefreshing] = useState<Map<string, number>>(() => new Map())
-  const [unreachable, setUnreachable] = useState<Set<string>>(() => new Set())
+  // surfaceId → the amendedAt when the last refresh reached nobody. The note clears
+  // when the user refreshes again OR the surface later updates (amendedAt advances).
+  const [unreachable, setUnreachable] = useState<Map<string, number>>(() => new Map())
   const [bulkRefreshing, setBulkRefreshing] = useState(false)
   // Per-surface timeout handles (the bound) and in-flight POST guard, in refs so they
   // don't churn identities or leak into the closure as stale values.
@@ -74,7 +76,7 @@ export function useSlateRefresh(runId: string, surfaces: SlateSurface[]): SlateR
       })
       setUnreachable((prev) => {
         if (!prev.has(id)) return prev
-        const next = new Set(prev)
+        const next = new Map(prev)
         next.delete(id)
         return next
       })
@@ -82,7 +84,10 @@ export function useSlateRefresh(runId: string, surfaces: SlateSurface[]): SlateR
       if (existing) clearTimeout(existing)
       timers.current.set(id, setTimeout(() => clear(id), REFRESH_MAX_MS))
 
-      void (async () => {
+      // Return the POST promise so refreshAll can await each in sequence — concurrent
+      // POSTs all hit the SAME tmux session and interleave keystrokes (send-keys +
+      // sleep + Enter is not serialized), garbling the agent's input.
+      return (async () => {
         try {
           const res = await apiFetch(`/api/runs/${runId}/slate/surfaces/${id}/refresh`, {
             method: 'POST',
@@ -94,13 +99,13 @@ export function useSlateRefresh(runId: string, surfaces: SlateSurface[]): SlateR
           // Delivered:false — the run is unreachable, so no new version is coming.
           // Clear the spinner NOW and flag the note; don't spin on a dead run.
           if (body.data?.delivered === false) {
-            setUnreachable((prev) => new Set(prev).add(id))
+            setUnreachable((prev) => new Map(prev).set(id, surface.amendedAt))
             clear(id)
           }
           // Delivered:true — keep spinning until amendedAt advances or the bound elapses.
         } catch {
           // Couldn't even reach the endpoint — treat like unreachable: stop spinning.
-          setUnreachable((prev) => new Set(prev).add(id))
+          setUnreachable((prev) => new Map(prev).set(id, surface.amendedAt))
           clear(id)
         } finally {
           inFlight.current.delete(id)
@@ -114,7 +119,11 @@ export function useSlateRefresh(runId: string, surfaces: SlateSurface[]): SlateR
     (visible: SlateSurface[]) => {
       if (visible.length === 0) return
       setBulkRefreshing(true)
-      for (const s of visible) refresh(s)
+      // Sequential: await each surface's POST before the next so the per-surface
+      // sendPrompts don't interleave into one tmux pane.
+      void (async () => {
+        for (const s of visible) await refresh(s)
+      })()
     },
     [refresh],
   )
@@ -139,6 +148,19 @@ export function useSlateRefresh(runId: string, surfaces: SlateSurface[]): SlateR
     if (changed) setRefreshing(next)
   }, [surfaces, refreshing])
 
+  // Clear the "session not reachable" note once the surface actually updates — a newer
+  // amendedAt means a version DID arrive, so the note is stale.
+  useEffect(() => {
+    if (unreachable.size === 0) return
+    let changed = false
+    const next = new Map(unreachable)
+    for (const [id, at] of unreachable) {
+      const s = surfaces.find((x) => x.id === id)
+      if (s && s.amendedAt > at) { next.delete(id); changed = true }
+    }
+    if (changed) setUnreachable(next)
+  }, [surfaces, unreachable])
+
   // The bulk loading state ends when nothing is left refreshing.
   useEffect(() => {
     if (bulkRefreshing && refreshing.size === 0) setBulkRefreshing(false)
@@ -153,10 +175,11 @@ export function useSlateRefresh(runId: string, surfaces: SlateSurface[]): SlateR
     }
   }, [])
 
-  // Membership set for consumers (the Map's value is only the internal baseline).
+  // Membership sets for consumers (the Maps' values are internal baselines only).
   const refreshingIds = useMemo(() => new Set(refreshing.keys()), [refreshing])
+  const unreachableIds = useMemo(() => new Set(unreachable.keys()), [unreachable])
 
-  return { refreshingIds, unreachableIds: unreachable, bulkRefreshing, refresh, refreshAll }
+  return { refreshingIds, unreachableIds, bulkRefreshing, refresh, refreshAll }
 }
 
 /** A ⟳ refresh affordance shared by the surface cards and the open-point rows. Shows
