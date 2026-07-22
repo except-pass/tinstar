@@ -51,8 +51,8 @@ describe('sweepStalledProcessPoints (R19)', () => {
     const affected = sweepStalledProcessPoints(store, now, THRESHOLD)
 
     expect([...affected]).toEqual([RUN])
-    expect(store.getPoint('stale')!.stalledAt).toBe(now)
-    expect(store.getPoint('fresh')!.stalledAt).toBeUndefined()
+    expect(store.getPoint(RUN, 'stale')!.stalledAt).toBe(now)
+    expect(store.getPoint(RUN, 'fresh')!.stalledAt).toBeUndefined()
     // Exactly one point changed → exactly one emit.
     expect(changes.map((c) => c.id)).toEqual(['stale'])
   })
@@ -66,8 +66,8 @@ describe('sweepStalledProcessPoints (R19)', () => {
 
     sweepStalledProcessPoints(store, now, THRESHOLD)
 
-    expect(store.getPoint('resolved')!.stalledAt).toBeUndefined()
-    expect(store.getPoint('dismissed')!.stalledAt).toBeUndefined()
+    expect(store.getPoint(RUN, 'resolved')!.stalledAt).toBeUndefined()
+    expect(store.getPoint(RUN, 'dismissed')!.stalledAt).toBeUndefined()
   })
 
   it('only marks process-authored points, not agent/user ones', () => {
@@ -80,8 +80,8 @@ describe('sweepStalledProcessPoints (R19)', () => {
 
     sweepStalledProcessPoints(store, now, THRESHOLD)
 
-    expect(store.getPoint('proc')!.stalledAt).toBe(now)
-    expect(store.getPoint('agent')!.stalledAt).toBeUndefined()
+    expect(store.getPoint(RUN, 'proc')!.stalledAt).toBe(now)
+    expect(store.getPoint(RUN, 'agent')!.stalledAt).toBeUndefined()
   })
 
   it('is idempotent — a second sweep re-marks nothing (no emit storm)', () => {
@@ -96,7 +96,7 @@ describe('sweepStalledProcessPoints (R19)', () => {
     expect([...affected]).toEqual([])
     expect(changes).toHaveLength(0)
     // stalledAt keeps its ORIGINAL timestamp (not re-stamped).
-    expect(store.getPoint('stale')!.stalledAt).toBe(now)
+    expect(store.getPoint(RUN, 'stale')!.stalledAt).toBe(now)
   })
 
   it('a later file re-projection that changes the body clears the stalled marker', () => {
@@ -104,12 +104,12 @@ describe('sweepStalledProcessPoints (R19)', () => {
     store.applyProjection(RUN, [procInput('p', { content: body('running…') })], 0)
     const now = THRESHOLD + 1
     sweepStalledProcessPoints(store, now, THRESHOLD)
-    expect(store.getPoint('p')!.stalledAt).toBe(now)
+    expect(store.getPoint(RUN, 'p')!.stalledAt).toBe(now)
 
     // Wrapper resumed writing: a body change re-freshens the point and un-stalls it.
     store.applyProjection(RUN, [procInput('p', { content: body('✓ done') })], now + 1000)
 
-    expect(store.getPoint('p')!.stalledAt).toBeUndefined()
+    expect(store.getPoint(RUN, 'p')!.stalledAt).toBeUndefined()
   })
 
   it('respects the threshold boundary (exactly at threshold is NOT yet stale)', () => {
@@ -117,10 +117,10 @@ describe('sweepStalledProcessPoints (R19)', () => {
     store.applyProjection(RUN, [procInput('p')], 0)
     // now - amendedAt === THRESHOLD → not strictly older → not marked.
     sweepStalledProcessPoints(store, THRESHOLD, THRESHOLD)
-    expect(store.getPoint('p')!.stalledAt).toBeUndefined()
+    expect(store.getPoint(RUN, 'p')!.stalledAt).toBeUndefined()
     // One ms past the threshold → marked.
     sweepStalledProcessPoints(store, THRESHOLD + 1, THRESHOLD)
-    expect(store.getPoint('p')!.stalledAt).toBe(THRESHOLD + 1)
+    expect(store.getPoint(RUN, 'p')!.stalledAt).toBe(THRESHOLD + 1)
   })
 
   it('DEFAULT_STALENESS_MS is 10 minutes', () => {

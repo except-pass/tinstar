@@ -154,7 +154,7 @@ describe('POST /api/runs/:id/slate/points', () => {
     // even to a live session. The agent finds it next time it reads its open points.
     expect(body.data.notified).toBe(false)
     expect(sendPrompt).not.toHaveBeenCalled()
-    expect(srv.docStore.getSlatePoint(body.data.point.id)).toBeDefined()
+    expect(srv.docStore.getSlatePoint(RUN, body.data.point.id)).toBeDefined()
   }))
 
   it('404s when the run does not exist', withServer(async srv => {
@@ -177,7 +177,7 @@ describe('POST /api/runs/:id/slate/points', () => {
   it('a user point SURVIVES a subsequent file re-projection (the reconciliation)', withServer(async srv => {
     seedRun(srv.docStore)
     const pid = await createPoint(srv, { headline: 'user added me' })
-    expect(srv.docStore.getSlatePoint(pid)).toBeDefined()
+    expect(srv.docStore.getSlatePoint(RUN, pid)).toBeDefined()
 
     // The watcher re-projects the run's file surfaces, which do NOT include the
     // user point (the file never knew about it). Without the source:'user' retract
@@ -186,8 +186,8 @@ describe('POST /api/runs/:id/slate/points', () => {
       { id: 'file-pt', author: 'agent', headline: 'from a file', content: { root: 'r', components: [{ id: 'r', component: 'Text', text: 'x' }] } },
     ])
 
-    expect(srv.docStore.getSlatePoint(pid)).toBeDefined()       // user point survived
-    expect(srv.docStore.getSlatePoint('file-pt')).toBeDefined() // file point present
+    expect(srv.docStore.getSlatePoint(RUN, pid)).toBeDefined()       // user point survived
+    expect(srv.docStore.getSlatePoint(RUN, 'file-pt')).toBeDefined() // file point present
   }))
 })
 
@@ -208,7 +208,7 @@ describe('POST /api/runs/:id/slate/points/:pid/answer', () => {
     expect(sendPrompt).toHaveBeenCalledTimes(1)
     expect(sendPrompt.mock.calls[0]![1]).toBe(RUN)
     // The answer persisted as a user reply on the thread (choice label + text).
-    const stored = srv.docStore.getSlatePoint(pid)!
+    const stored = srv.docStore.getSlatePoint(RUN, pid)!
     expect(stored.replies).toHaveLength(1)
     expect(stored.replies![0]!.author).toBe('user')
     expect(stored.replies![0]!.text).toContain('Deploy now')
@@ -224,7 +224,7 @@ describe('POST /api/runs/:id/slate/points/:pid/answer', () => {
     expect(res.status).toBe(200)
     expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
     expect(sendPrompt).not.toHaveBeenCalled()
-    expect(srv.docStore.getSlatePoint(pid)!.replies).toHaveLength(1) // persisted regardless
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toHaveLength(1) // persisted regardless
   }))
 
   it('rejects a choice id absent from the CURRENT content (INVALID_PARAMS, nothing persisted)', withServer(async srv => {
@@ -233,7 +233,7 @@ describe('POST /api/runs/:id/slate/points/:pid/answer', () => {
     const res = await answer(srv, pid, { choices: ['opt-a', 'opt-ZZZ'] })
     expect(res.status).toBe(400)
     expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
-    expect(srv.docStore.getSlatePoint(pid)!.replies).toBeUndefined()
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toBeUndefined()
   }))
 
   it('rejects oversized free text with 413, nothing persisted', withServer(async srv => {
@@ -241,7 +241,7 @@ describe('POST /api/runs/:id/slate/points/:pid/answer', () => {
     const pid = await createPoint(srv, { content: answerableContent() })
     const res = await answer(srv, pid, { text: 'x'.repeat(4001) })
     expect(res.status).toBe(413)
-    expect(srv.docStore.getSlatePoint(pid)!.replies).toBeUndefined()
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toBeUndefined()
   }))
 
   it('rejects an empty answer (no choice, no text) with INVALID_PARAMS', withServer(async srv => {
@@ -284,7 +284,7 @@ describe('POST /api/runs/:id/slate/points/:pid/answer', () => {
     const body = await res.json() as { ok: boolean; data: { point: Point; delivered: boolean } }
     expect(body.ok).toBe(true)
     expect(body.data.point.id).toBe(pid)              // the answered point came back
-    expect(srv.docStore.getSlatePoint(pid)!.replies).toHaveLength(1) // and it mutated the point
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toHaveLength(1) // and it mutated the point
   }))
 })
 
@@ -312,7 +312,7 @@ describe('POST /api/runs/:id/slate/points/:pid/replies', () => {
     expect((await asAgent.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
     expect(sendPrompt).not.toHaveBeenCalled()
     // Both persisted regardless of delivery.
-    expect(srv.docStore.getSlatePoint(pid)!.replies).toHaveLength(2)
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toHaveLength(2)
   }))
 
   it('a process reply does not deliver either', withServer(async srv => {
@@ -324,14 +324,14 @@ describe('POST /api/runs/:id/slate/points/:pid/replies', () => {
     expect(res.status).toBe(200)
     expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
     expect(sendPrompt).not.toHaveBeenCalled()
-    expect(srv.docStore.getSlatePoint(pid)!.replies![0]!.author).toBe('process')
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies![0]!.author).toBe('process')
   }))
 
   it('defaults the author to agent when omitted', withServer(async srv => {
     seedRun(srv.docStore)
     const pid = await createPoint(srv, { headline: 'open q' })
     await reply(srv, pid, { text: 'because the migration is irreversible' })
-    expect(srv.docStore.getSlatePoint(pid)!.replies![0]!.author).toBe('agent')
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies![0]!.author).toBe('agent')
   }))
 
   it('rejects a bad author, empty text, and oversize text', withServer(async srv => {
@@ -340,7 +340,7 @@ describe('POST /api/runs/:id/slate/points/:pid/replies', () => {
     expect((await reply(srv, pid, { author: 'nobody', text: 'x' })).status).toBe(400)
     expect((await reply(srv, pid, { text: '   ' })).status).toBe(400)
     expect((await reply(srv, pid, { author: 'user', text: 'x'.repeat(4001) })).status).toBe(413)
-    expect(srv.docStore.getSlatePoint(pid)!.replies).toBeUndefined()
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toBeUndefined()
   }))
 
   it('404s for an unknown point', withServer(async srv => {
@@ -354,10 +354,10 @@ describe('POST /api/runs/:id/slate/points/:pid/replies', () => {
     seedRun(srv.docStore)
     const pid = await createPoint(srv, { headline: 'open q' })
     await srv.fetch(`/api/runs/${RUN}/slate/points/${pid}/resolve`, { method: 'POST' })
-    expect(srv.docStore.getSlatePoint(pid)!.status).toBe('resolved')
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.status).toBe('resolved')
 
     await reply(srv, pid, { author: 'user', text: 'actually, one more thing' })
-    const after = srv.docStore.getSlatePoint(pid)!
+    const after = srv.docStore.getSlatePoint(RUN, pid)!
     expect(after.resolvedAt).toBeUndefined()   // reopened
     expect(after.status).toBe('waiting')       // derived from the new user reply
   }))
@@ -372,13 +372,13 @@ describe('POST /api/runs/:id/slate/points/:pid/{resolve,reopen,dismiss}', () => 
 
     const resolved = await srv.fetch(`/api/runs/${RUN}/slate/points/${pid}/resolve`, { method: 'POST' })
     expect(resolved.status).toBe(200)
-    expect(srv.docStore.getSlatePoint(pid)!.status).toBe('resolved')
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.status).toBe('resolved')
 
     await srv.fetch(`/api/runs/${RUN}/slate/points/${pid}/dismiss`, { method: 'POST' })
-    expect(srv.docStore.getSlatePoint(pid)!.status).toBe('dismissed')
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.status).toBe('dismissed')
 
     await srv.fetch(`/api/runs/${RUN}/slate/points/${pid}/reopen`, { method: 'POST' })
-    expect(srv.docStore.getSlatePoint(pid)!.status).toBe('open')
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.status).toBe('open')
 
     // A lifecycle flip is not an injection — the agent is never prompted.
     expect(sendPrompt).not.toHaveBeenCalled()
@@ -422,7 +422,7 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
     const prompt = sendPrompt.mock.calls[0]![2] as string
     expect(prompt).toContain('Re-run the blind PR eval and rewrite the file') // recipe verbatim
     // Persist-nothing: refresh is a nudge — the point gains no thread / no mutation.
-    expect(srv.docStore.getSlatePoint(pid)!.replies).toBeUndefined()
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toBeUndefined()
   }))
 
   it('without a recipe delivers the bare regenerate-nudge', withServer(async srv => {
@@ -448,7 +448,7 @@ describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
     expect(res.status).toBe(200)
     expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
     expect(sendPrompt).not.toHaveBeenCalled()
-    expect(srv.docStore.getSlatePoint(pid)!.replies).toBeUndefined()
+    expect(srv.docStore.getSlatePoint(RUN, pid)!.replies).toBeUndefined()
   }))
 
   it('rejects a cross-run pid (point.runId !== URL runId) with 404, nothing delivered', withServer(async srv => {
