@@ -16,7 +16,9 @@ vi.mock('../../sessions', async (orig) => {
 // The code-spawned author is mocked so tests never launch a real `claude -p`. Default
 // return is dispatched:false so every EXISTING test falls through to the main-agent path
 // (deliverSlatePrompt) unchanged; the author-branch tests override the return to true.
-const dispatchSurfaceAuthor = vi.hoisted(() => vi.fn(() => ({ dispatched: false })))
+const dispatchSurfaceAuthor = vi.hoisted(() =>
+  vi.fn((_params: { runId: string; prompt: string; label: string; sessionsDir: string; config: unknown }) =>
+    ({ dispatched: false })))
 vi.mock('../../sessions/surfaceAuthor', () => ({ dispatchSurfaceAuthor }))
 
 beforeEach(() => {

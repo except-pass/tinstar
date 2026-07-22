@@ -3544,25 +3544,28 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const path = url.split('?')[0] ?? url
     const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/compose'.length))
     readBody(req).then(async body => {
-      let parsed: { prompt?: unknown; freeform?: unknown }
+      let parsed: { prompt?: unknown; freeform?: unknown; recipe?: unknown }
       try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
       }
       const prompt = typeof parsed.prompt === 'string' ? parsed.prompt.trim() : ''
       const freeform = typeof parsed.freeform === 'string' ? parsed.freeform.trim() : ''
+      // Optional user-supplied refresh recipe (create-time capture) — makes the new
+      // surface handoff-able to a one-shot author at birth.
+      const recipe = typeof parsed.recipe === 'string' ? parsed.recipe.trim() : ''
       if (!prompt && !freeform) {
         fail(res, 'INVALID_PARAMS', 'compose requires a prompt or freeform text'); return
       }
       // Bound the delivered text — the siblings cap their inputs; an unbounded
       // freeform would blast an oversized prompt into the agent's session.
       const SLATE_COMPOSE_MAX = 8 * 1024
-      if (prompt.length + freeform.length > SLATE_COMPOSE_MAX) {
+      if (prompt.length + freeform.length + recipe.length > SLATE_COMPOSE_MAX) {
         fail(res, 'BAD_REQUEST', `compose text exceeds ${SLATE_COMPOSE_MAX} bytes`, { status: 413 }); return
       }
       // The compose instruction IS a recipe for a NEW surface, so it's source-derived:
       // offload to a one-shot author when enabled, else the unchanged main-agent nudge.
-      const composePrompt = slateComposePromptText({ prompt, freeform }, serverBase())
+      const composePrompt = slateComposePromptText({ prompt, freeform, recipe }, serverBase())
       if (ctx.sessionConfig?.slate.author.enabled) {
         const { dispatched } = dispatchSurfaceAuthor({
           sessionsDir: ctx.sessionConfig.dirs.sessions,

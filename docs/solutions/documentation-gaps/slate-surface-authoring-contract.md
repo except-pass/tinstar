@@ -202,6 +202,17 @@ Two disciplines close it:
 
 The client surfaces the age of each panel ("updated 3m ago", ambering when untended) precisely so an author and a reader can both *see* staleness instead of trusting a stale assertion silently.
 
+## The vacuum test: source-derived vs session-derived
+
+Under multi-agent authoring the `refresh` recipe stops being a convenience and becomes the **authoring contract a fresh, context-free author executes.** When a surface carries a self-contained recipe, refreshing it spawns a one-shot author (a headless child in the run's workdir) that runs the recipe and rewrites the file — the run's main agent is never involved.
+
+So apply the **vacuum test** to every living surface: *could this recipe produce a sensible refresh in a vacuum, with no session context?*
+
+- **Passes** — the recipe names an external **source** (a PR, files, a query), the **derivation** (describe it blind, compare A to B), and the **output** (rewrite these columns). This is a **source-derived** surface; a fresh author can refresh it. Write recipes this way.
+- **Fails** — the only "source" is the main agent's own session (e.g. "summarize the session so far"). This is **session-derived**; it stays with the main agent. Don't give it a self-contained recipe it can't honor.
+
+A self-contained recipe is exactly what lets a surface refresh off the main agent's critical path. `"regenerate this surface"` fails the vacuum test — it assumes context the author won't have.
+
 ## Related
 
 This doc is the **author** corner of a four-way partition of the Slate/A2UI surface lifecycle:

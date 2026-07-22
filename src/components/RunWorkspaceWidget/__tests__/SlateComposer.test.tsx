@@ -68,6 +68,19 @@ describe('SlateComposer (U4)', () => {
     expect((screen.getByTestId('composer-submit') as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('a create-time recipe is passed through in the compose payload', async () => {
+    render(<SlateComposer runId="run-1" onClose={vi.fn()} />)
+    fireEvent.change(screen.getByTestId('composer-freeform'), { target: { value: 'a PR review surface' } })
+    fireEvent.change(screen.getByTestId('composer-recipe'), { target: { value: 're-run the blind PR eval' } })
+    fireEvent.click(screen.getByTestId('composer-submit'))
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalled())
+    const [, init] = apiFetch.mock.calls[0]!
+    const payload = JSON.parse((init as RequestInit).body as string)
+    expect(payload.recipe).toBe('re-run the blind PR eval')
+    expect(payload.freeform).toBe('a PR review surface')
+  })
+
   it('shows "not reachable" and stays open on delivered:false', async () => {
     const onClose = vi.fn()
     apiFetch.mockImplementation(() => okDelivered(false))
