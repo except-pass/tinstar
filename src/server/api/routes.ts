@@ -58,7 +58,7 @@ import { collectChoiceOptionIds, collectChoiceOptionLabels, NOTICE_ANSWER_TEXT_M
 import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../a2ui/followUps'
 import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
-import { slatePointPromptText, slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText } from '../../slate/slatePrompt'
+import { slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText } from '../../slate/slatePrompt'
 import type { PointInput } from '../stores/slate'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
@@ -3353,8 +3353,15 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         ...(anchor ? { anchor } : {}),
       }
       const point = ctx.docStore.addUserSlatePoint(runId, input)
-      const delivered = await deliverSlatePrompt(ctx, runId, slatePointPromptText(point, serverBase()))
-      ok(res, { point, delivered })
+      // EVENTUAL, not interrupt (dogfood decision): adding a point MUTATES the store and
+      // does NOT deliver a prompt. "Add a point" means "get to this eventually", not "do
+      // it now" — the agent picks it up next time it reads its open points, instead of
+      // being yanked mid-turn. Replies and control answers (the genuinely interrupt-worthy
+      // interactions) still deliver; only the add is silent. Safe because a user point is
+      // source:'user' data the agent's file re-authoring never clobbers (see the
+      // reconciliation test). `notified:false` is invariant here — it is a posture, not a
+      // failed delivery.
+      ok(res, { point, notified: false })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
