@@ -127,18 +127,23 @@ async function createPoint(srv: Harness, over: Record<string, unknown> = {}): Pr
 }
 
 describe('POST /api/runs/:id/slate/points', () => {
-  it('creates a user-authored point (author user, source user) and reports delivery', withServer(async srv => {
+  it('creates a user-authored point (author user, source user) — EVENTUAL, never prompts', withServer(async srv => {
     seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN }) // session REACHABLE — and still no prompt
+    sendPrompt.mockClear()
     const res = await srv.fetch(`/api/runs/${RUN}/slate/points`, {
       method: 'POST', body: JSON.stringify({ headline: 'why is CI red?' }),
     })
     expect(res.status).toBe(200)
-    const body = await res.json() as { ok: boolean; data: { point: Point; delivered: boolean } }
+    const body = await res.json() as { ok: boolean; data: { point: Point; notified: boolean } }
     expect(body.ok).toBe(true)
     expect(body.data.point.author).toBe('user')
     expect(body.data.point.source).toBe('user')
     expect(body.data.point.headline).toBe('why is CI red?')
-    expect(body.data.delivered).toBe(false) // no session on disk
+    // Adding a point is eventual: it mutates the store and does NOT deliver a prompt,
+    // even to a live session. The agent finds it next time it reads its open points.
+    expect(body.data.notified).toBe(false)
+    expect(sendPrompt).not.toHaveBeenCalled()
     expect(srv.docStore.getSlatePoint(body.data.point.id)).toBeDefined()
   }))
 

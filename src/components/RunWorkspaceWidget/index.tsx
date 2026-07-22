@@ -6,7 +6,6 @@ import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { TelemetryPanel } from './TelemetryPanel'
 import { SlatePanel } from './SlatePanel'
-import { SlateExplainButton } from './SlateExplainButton'
 import { HandsPanel } from './HandsPanel'
 import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
@@ -23,7 +22,7 @@ import { getPref, setPref } from '../../lib/uiPrefs'
 // kicks in above SLATE_TWO_COL_MIN (see SlatePanel); the max keeps the column
 // from crowding out the session pane on a narrow card.
 const SLATE_MIN_WIDTH = 260
-const SLATE_MAX_WIDTH = 560
+const SLATE_MAX_WIDTH = 900
 const SLATE_DEFAULT_WIDTH = 320
 
 interface Props {
@@ -81,14 +80,23 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const leftExpanded = !filesCollapsed
   const runAccent = resolveRunAccent(run.color)
 
-  // The Slate column is additive: only present (and only a focus zone) when the
-  // run actually has surfaces, so an empty run keeps its three-panel layout.
+  // The Slate column is additive: present when the run has surfaces OR the user has
+  // explicitly opened it blank (`slateOpen`), so it can be revealed and filled on
+  // demand. An empty, un-opened run keeps its three-panel layout.
   const hasSlate = (run.slate?.length ?? 0) > 0
+  const [slateOpen, setSlateOpen] = useState(() => getPref('slateOpen') ?? false)
+  const slateVisible = hasSlate || slateOpen
+  // Telemetry can be manually collapsed to give the Slate the right side (a per-browser
+  // view pref, mirror of the Files collapse). Not gated on the Slate — an independent hide.
+  const [telemetryCollapsed, setTelemetryCollapsed] = useState(() => getPref('telemetryCollapsed') ?? false)
+
+  useEffect(() => { setPref('slateOpen', slateOpen) }, [slateOpen])
+  useEffect(() => { setPref('telemetryCollapsed', telemetryCollapsed) }, [telemetryCollapsed])
 
   const ZONES: FocusZone[] = [
     ...(leftExpanded ? (['left-tab', 'file-list'] as FocusZone[]) : []),
     'center-tabs',
-    ...(hasSlate ? (['slate'] as FocusZone[]) : []),
+    ...(slateVisible ? (['slate'] as FocusZone[]) : []),
     'right-panel',
   ]
 
@@ -111,14 +119,14 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
       const idx = prev ? ZONES.indexOf(prev) : -1
       return ZONES[(idx + 1) % ZONES.length] ?? ZONES[0]!
     })
-  }, [leftExpanded, hasSlate])
+  }, [leftExpanded, slateVisible])
 
   const onFocusPrev = useCallback(() => {
     setFocusZone(prev => {
       const idx = prev ? ZONES.indexOf(prev) : 0
       return ZONES[(idx - 1 + ZONES.length) % ZONES.length] ?? ZONES[0]!
     })
-  }, [leftExpanded, hasSlate])
+  }, [leftExpanded, slateVisible])
 
   // Sync terminal focus when context router navigates into run-terminal
   useEffect(() => {
@@ -411,7 +419,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
             composerFocusTrigger={composerFocusTrigger}
           />
         </div>
-        {hasSlate ? (
+        {slateVisible ? (
           <div
             data-testid="focus-zone-slate"
             className={`flex ${focusZone === 'slate' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
@@ -431,33 +439,65 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
                 onPointerCancel={onSlateResizePointerUp}
                 onLostPointerCapture={onSlateResizePointerUp}
               />
-              <SlatePanel runId={run.id} surfaces={run.slate} width={slateWidth} />
+              {/* `open` forces the panel to render even with zero surfaces (a blank Slate
+                  the user opened on purpose); `onClose` collapses it back to the strip —
+                  only meaningful when there are no surfaces holding it open. */}
+              <SlatePanel
+                runId={run.id}
+                surfaces={run.slate}
+                width={slateWidth}
+                open={slateOpen}
+                onClose={() => setSlateOpen(false)}
+              />
             </div>
           </div>
         ) : (
-          // Empty Slate: a thin right-edge strip (mirrors the collapsed Files/Hands
-          // strips) whose only affordance is "Explain the session" — the call-to-action
-          // that bootstraps an empty Slate. Once surfaces arrive, hasSlate flips and the
-          // full column above replaces this strip.
+          // Empty & un-opened: a thin right-edge strip (mirrors the collapsed Files/Hands
+          // strips) whose job is to OPEN the Slate — even blank — so it's a real, always-
+          // present affordance. Once open (or once surfaces arrive) the full column above
+          // replaces this strip, and Explain / + Add live in its header to fill it.
           <div
-            data-testid="slate-empty-strip"
-            className="w-7 flex flex-col items-center justify-center bg-surface-panel border-l border-primary/10 flex-shrink-0"
+            data-testid="slate-open-strip"
+            onClick={() => setSlateOpen(true)}
+            title="Open the Slate"
+            className="w-7 flex flex-col items-center justify-center bg-surface-panel border-l border-primary/10 flex-shrink-0 cursor-pointer hover:bg-surface-hover"
           >
-            <div className="[writing-mode:vertical-lr] rotate-180">
-              <SlateExplainButton runId={run.id} />
-            </div>
+            <span className="text-2xs font-mono text-slate-400 [writing-mode:vertical-lr] rotate-180">✦ Slate</span>
           </div>
         )}
         <div
           data-testid="focus-zone-right-panel"
           className={`flex ${focusZone === 'right-panel' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
         >
-          <div className="w-40 h-full flex flex-col bg-surface-panel">
-            <TelemetryPanel
-              sessionId={run.sessionId}
-              runAccent={runAccent}
-            />
-          </div>
+          {telemetryCollapsed ? (
+            // Collapsed telemetry: a thin strip (mirrors the collapsed Files strip) that
+            // reclaims the right side for the Slate. Click to bring telemetry back.
+            <div
+              data-testid="collapsed-telemetry"
+              onClick={() => setTelemetryCollapsed(false)}
+              title="Show telemetry"
+              className="w-6 flex flex-col items-center justify-center bg-surface-panel border-l border-primary/10 cursor-pointer hover:bg-surface-hover"
+            >
+              <span className="text-2xs font-mono text-slate-500 [writing-mode:vertical-lr] rotate-180">Telemetry</span>
+            </div>
+          ) : (
+            <div className="relative w-40 h-full flex flex-col bg-surface-panel">
+              {/* Manual hide — the toggle the user asked for; pairs with the collapsed
+                  strip above. Per-browser pref, so it sticks across reloads. */}
+              <button
+                data-testid="telemetry-hide"
+                onClick={() => setTelemetryCollapsed(true)}
+                title="Hide telemetry"
+                className="absolute top-1 right-1 z-10 text-slate-500 hover:text-slate-200 text-xs leading-none"
+              >
+                »
+              </button>
+              <TelemetryPanel
+                sessionId={run.sessionId}
+                runAccent={runAccent}
+              />
+            </div>
+          )}
         </div>
       </div>
 
