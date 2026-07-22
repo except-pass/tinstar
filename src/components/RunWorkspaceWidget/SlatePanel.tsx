@@ -81,7 +81,7 @@ function HideToggle({ id, hidden, onHide, onUnhide }: {
         data-testid={`unhide-surface-${id}`}
         onClick={() => onUnhide(id)}
         title="Unhide this surface"
-        className="rounded bg-surface-hover px-1 text-[9px] text-slate-400 hover:text-slate-200"
+        className="rounded bg-surface-hover px-1 text-[9px] text-ink-low hover:text-ink-high"
       >
         unhide
       </button>
@@ -92,7 +92,7 @@ function HideToggle({ id, hidden, onHide, onUnhide }: {
       data-testid={`hide-surface-${id}`}
       onClick={() => onHide(id)}
       title="Hide this surface (view-only — the file stays intact)"
-      className="rounded px-1 text-[11px] leading-none text-slate-500 hover:text-slate-200"
+      className="rounded px-1 text-[11px] leading-none text-ink-ctrl hover:text-ink-high"
     >
       ✕
     </button>
@@ -227,9 +227,9 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
         className={`flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin p-2 grid gap-2 items-start [overflow-wrap:anywhere] ${columns === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}
       >
         {sorted.length === 0 && (
-          <div data-testid="slate-empty-hint" className="col-span-full px-1 py-6 text-center text-2xs text-slate-500 leading-relaxed">
+          <div data-testid="slate-empty-hint" className="col-span-full px-1 py-8 text-center text-[12px] text-ink-low leading-relaxed">
             Nothing on the Slate yet.<br />
-            <span className="text-slate-400">✦ Explain</span> the session, or <span className="text-slate-400">+ Add a surface</span> to fill it.
+            <span className="text-ink-mid">✦ Explain</span> the session, or <span className="text-ink-mid">+ Add a surface</span> to fill it.
           </div>
         )}
         {sorted.map((surface, i) => {
@@ -271,9 +271,11 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
             </div>
           )
           // Shown when a refresh reached nobody (delivered:false / unreachable run).
+          // Framed as a quiet note, not an error (low ink) — the run being asleep isn't
+          // a failure of the surface.
           const note = isUnreachable ? (
-            <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-1 text-2xs text-amber-300/90">
-              session not reachable
+            <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-2 text-[11px] leading-snug text-ink-low">
+              Sent — but that session isn’t reachable right now.
             </div>
           ) : null
           // Freshness footer: "updated Xm ago", ambering when the surface hasn't been
@@ -284,33 +286,34 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
             </div>
           )
 
-          if (surface.kind === 'diagram') {
-            return (
-              <div
-                key={surface.id}
-                data-testid={`slate-surface-${surface.id}`}
-                className={`relative rounded border border-primary/10 bg-surface-base/40 p-2 min-w-0 ${isHidden ? 'opacity-50' : ''}`}
-              >
-                {controls}
-                <DiagramSurface runId={runId} surface={surface} />
-                {note}
-                {footer}
-              </div>
-            )
-          }
-
+          // One shell for every non-list surface kind (P2, "one system, N surfaces"):
+          // raised card, hairline border, 14px padding. State signals live at the
+          // EDGES — a cyan glow marks an in-flight refresh (P4, the live edge), dimming
+          // marks hidden — so the authored body never moves between states.
+          const shellClass = [
+            'relative rounded border p-[14px] min-w-0 transition-shadow',
+            isRefreshing
+              ? 'border-primary/40 bg-surface-raised shadow-[0_0_14px_rgba(0,240,255,0.10)]'
+              : 'border-hairline bg-surface-raised',
+            isHidden ? 'opacity-50' : '',
+          ].join(' ')
           return (
             <div
               key={surface.id}
               data-testid={`slate-surface-${surface.id}`}
-              className={`relative rounded border border-primary/10 bg-surface-base/40 p-2 min-w-0 ${isHidden ? 'opacity-50' : ''}`}
+              data-refreshing={isRefreshing ? 'true' : undefined}
+              className={shellClass}
             >
               {controls}
-              {/* Per-surface boundary: a throw or malformed body degrades THIS
-                  surface alone; siblings are untouched (R2, per-surface budget). */}
-              <A2uiErrorBoundary source={surface.body}>
-                <A2uiRenderer content={surface.body} />
-              </A2uiErrorBoundary>
+              {surface.kind === 'diagram' ? (
+                <DiagramSurface runId={runId} surface={surface} />
+              ) : (
+                /* Per-surface boundary: a throw or malformed body degrades THIS
+                   surface alone; siblings are untouched (R2, per-surface budget). */
+                <A2uiErrorBoundary source={surface.body}>
+                  <A2uiRenderer content={surface.body} />
+                </A2uiErrorBoundary>
+              )}
               {note}
               {footer}
             </div>

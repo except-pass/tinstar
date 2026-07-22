@@ -249,7 +249,7 @@ describe('SlatePanel refresh (U3)', () => {
     }
   })
 
-  it('shows "session not reachable" and clears the spinner on delivered:false', async () => {
+  it('shows the unreachable note and clears the spinner on delivered:false', async () => {
     apiFetch.mockImplementation(() => okDelivered(false))
     render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'x')]} />)
     fireEvent.click(screen.getByTestId('refresh-surface-s1'))

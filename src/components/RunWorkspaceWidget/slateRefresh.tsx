@@ -196,7 +196,7 @@ export function RefreshButton({ id, refreshing, onClick, className }: {
       onClick={onClick}
       disabled={refreshing}
       title={refreshing ? 'Refreshing…' : 'Refresh — re-run this surface’s author'}
-      className={`leading-none text-slate-500 hover:text-slate-200 disabled:opacity-70 ${className ?? ''}`}
+      className={`leading-none text-ink-ctrl hover:text-ink-high disabled:opacity-70 ${className ?? ''}`}
     >
       <span className={refreshing ? 'inline-block animate-spin' : 'inline-block'}>⟳</span>
     </button>
