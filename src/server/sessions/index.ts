@@ -16,6 +16,8 @@ export {
 } from './session'
 export {
   createWorktree,
+  checkWorktreeBranch,
+  WorktreeBranchConflictError,
   deleteWorktree,
   listWorktrees,
   worktreeDir,

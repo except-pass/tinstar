@@ -18,6 +18,48 @@ export function worktreeDir(projectPath: string, sessionName: string): string {
   return join(`${projectPath}-worktrees`, sessionName)
 }
 
+/**
+ * Thrown when a worktree branch can't be created because the name is blocked by
+ * an existing sub-branch (a git directory/file ref conflict). Example: a branch
+ * `cockpit/soak-evidence` makes `cockpit` a ref *directory*, so a plain branch
+ * `cockpit` is impossible. Kept as a distinct type so createSessionInternal can
+ * translate it into a clean 409 instead of leaking git's cryptic
+ * "fatal: invalid reference: <name>".
+ */
+export class WorktreeBranchConflictError extends Error {
+  constructor(public readonly name: string, public readonly conflict: string) {
+    super(`Can't create worktree branch '${name}': a branch '${conflict}' already exists. Pick a different name.`)
+    this.name = 'WorktreeBranchConflictError'
+  }
+}
+
+/** Whether a new worktree branch named `name` can be made in `projectPath`. */
+export type WorktreeBranchCheck =
+  | { ok: true; action: 'create' } // no such ref — safe to `-b`
+  | { ok: true; action: 'attach' } // exact branch exists — check it out
+  | { ok: false; conflict: string } // a `name/…` sub-branch blocks it (D/F conflict)
+
+/**
+ * Classify whether we can create (or attach to) a branch named `name`, WITHOUT
+ * mutating anything. One `for-each-ref` returns the exact ref and any sub-refs;
+ * a sub-ref present means git can't hold both a branch and a directory at that
+ * path (the "cockpit" bug). Best-effort: if the query itself fails (e.g. not a
+ * git repo), we assume 'create' and let the real worktree-add surface any error.
+ */
+export async function checkWorktreeBranch(projectPath: string, name: string): Promise<WorktreeBranchCheck> {
+  let refs: string
+  try {
+    refs = await git(['-C', projectPath, 'for-each-ref', '--format=%(refname)', `refs/heads/${name}`])
+  } catch {
+    return { ok: true, action: 'create' }
+  }
+  const lines = refs.split('\n').filter(Boolean)
+  const subref = lines.find(l => l.startsWith(`refs/heads/${name}/`))
+  if (subref) return { ok: false, conflict: subref.slice('refs/heads/'.length) }
+  if (lines.includes(`refs/heads/${name}`)) return { ok: true, action: 'attach' }
+  return { ok: true, action: 'create' }
+}
+
 export async function createWorktree(projectPath: string, sessionName: string): Promise<string> {
   const wtDir = worktreeDir(projectPath, sessionName)
   mkdirSync(dirname(wtDir), { recursive: true })
@@ -26,11 +68,17 @@ export async function createWorktree(projectPath: string, sessionName: string): 
     return wtDir
   }
 
-  try {
-    await git(['-C', projectPath, 'worktree', 'add', wtDir, '-b', sessionName])
-  } catch {
-    // Branch might already exist — attach to it
+  // Decide -b (new branch) vs attach (existing branch) up front rather than
+  // blindly retrying without -b on any failure — that old fallback masked the
+  // real error and emitted "invalid reference" when the name was actually blocked.
+  const check = await checkWorktreeBranch(projectPath, sessionName)
+  if (!check.ok) {
+    throw new WorktreeBranchConflictError(sessionName, check.conflict)
+  }
+  if (check.action === 'attach') {
     await git(['-C', projectPath, 'worktree', 'add', wtDir, sessionName])
+  } else {
+    await git(['-C', projectPath, 'worktree', 'add', wtDir, '-b', sessionName])
   }
 
   // Inherit .claude dir from base repo

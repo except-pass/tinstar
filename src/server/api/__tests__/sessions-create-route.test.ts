@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
@@ -400,6 +401,32 @@ describe('POST /api/sessions', () => {
     // Still never persisted: the session file has no token field.
     const persisted = await (await testCtx.fetch('/api/sessions/restart-token')).json() as Record<string, unknown>
     expect(persisted).not.toHaveProperty('token')
+  })
+
+  it('returns 409 with a clear message (and no spawn) when the worktree branch name is blocked', async () => {
+    // Repro of the "cockpit" bug: a branch `cockpit/soak-evidence` makes a plain
+    // branch `cockpit` impossible (git directory/file ref conflict). The create
+    // must fail FAST — before any tmux spawn — with a helpful 409, not git's
+    // cryptic "fatal: invalid reference: cockpit" surfaced as a 500.
+    const repo = join(tmpRoot, 'proj')
+    const g = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf-8' })
+    execFileSync('git', ['init', '-q', repo], { encoding: 'utf-8' })
+    g('config', 'user.email', 'test@example.com')
+    g('config', 'user.name', 'Test')
+    g('commit', '--allow-empty', '-q', '-m', 'init')
+    g('branch', 'cockpit/soak-evidence')
+    writeFileSync(join(tmpRoot, 'projects.json'), JSON.stringify({ proj: repo }))
+
+    const res = await testCtx.fetch('/api/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'cockpit', project: 'proj', worktree: true }),
+    })
+    expect(res.status).toBe(409)
+    const body = await res.json() as { ok: boolean; error: { message: string } }
+    expect(body.error.message).toContain('cockpit')
+    expect(body.error.message).toContain('cockpit/soak-evidence')
+    // Fail-fast: the blocked name is caught before the tmux backend is touched.
+    expect(createTmuxSessionMock).not.toHaveBeenCalled()
   })
 
   it('returns 400 (never hangs) for a malformed JSON body', async () => {
