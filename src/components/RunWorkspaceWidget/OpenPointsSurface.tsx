@@ -253,7 +253,7 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
                 agent). */}
             {surface.refresh && <FastPathBadge className="text-[10px]" />}
             <span
-              className={`flex-1 truncate text-[13px] font-medium leading-snug text-ink-high ${resolved ? 'line-through text-ink-low' : ''}`}
+              className={`flex-1 truncate font-sans text-[13px] font-medium leading-snug text-ink-high ${resolved ? 'line-through text-ink-low' : ''}`}
             >
               {surface.headline ?? '(untitled point)'}
             </span>
@@ -341,7 +341,7 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
           )}
 
           {unreachable && (
-            <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-2 text-[11px] leading-snug text-ink-low">
+            <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-2 font-sans text-[11px] leading-snug text-ink-low">
               Sent — but that session isn’t reachable right now.
             </div>
           )}

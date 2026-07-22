@@ -56,10 +56,14 @@ function textVariantClass(variant: unknown): string {
     // Section H4/H5: mono, 11px, caps, wide tracking, low ink — a quiet label.
     case 'h4':
     case 'h5': return 'font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-low mt-2 mb-1'
-    // Caption: a quieter supporting aside.
-    case 'caption': return 'text-[12.5px] text-ink-low my-1'
-    // Body: neutral sans, comfortable reading measure, mid ink. Never the display face.
-    default: return 'text-[14px] leading-[1.6] text-ink-mid my-1'
+    // Caption: a quieter supporting aside. Reading sans — pinned so it doesn't
+    // inherit the run card's terminal mono.
+    case 'caption': return 'font-sans text-[12.5px] text-ink-low my-1'
+    // Body: neutral sans, comfortable reading measure, mid ink. `font-sans` is
+    // load-bearing — the surrounding run card defaults to mono, so prose must pin
+    // the reading face explicitly (only labels/code/headlines override it). Never
+    // the display face.
+    default: return 'font-sans text-[14px] leading-[1.6] text-ink-mid my-1'
   }
 }
 
@@ -79,7 +83,7 @@ export const CATALOG: Record<string, CatalogEntry> = {
     render: (node, children) => {
       const ordered = node.listStyle === 'ordered'
       const Tag = ordered ? 'ol' : 'ul'
-      const cls = `${ordered ? 'list-decimal' : 'list-disc'} pl-5 my-1 text-[14px] leading-[1.6] text-ink-mid marker:text-ink-low`
+      const cls = `${ordered ? 'list-decimal' : 'list-disc'} pl-5 my-1 font-sans text-[14px] leading-[1.6] text-ink-mid marker:text-ink-low`
       return <Tag className={cls}>{children.map((c, i) => <li key={i} className="my-1">{c}</li>)}</Tag>
     },
   },
@@ -100,13 +104,13 @@ export const CATALOG: Record<string, CatalogEntry> = {
       const href = safeHref(url)
       // P1 — chrome quiet: a link is navigation, not meaning, so it stays ink (no hue),
       // underlined and brightening on hover, with a ↗ affordance for the external jump.
-      if (!href) return <span className="text-ink-mid">{label}</span>
+      if (!href) return <span className="font-sans text-ink-mid">{label}</span>
       return (
         <a
           href={href}
           target="_blank"
           rel="noreferrer noopener"
-          className="text-ink-mid underline decoration-hairline underline-offset-2 hover:text-ink-high"
+          className="font-sans text-ink-mid underline decoration-hairline underline-offset-2 hover:text-ink-high"
         >
           {label} <span className="text-ink-low">↗</span>
         </a>
