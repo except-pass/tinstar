@@ -151,38 +151,44 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
 
   return (
     <div className="relative flex flex-col h-full min-w-0">
-      {/* Summary bar — mirrors the other panels' header row */}
-      <div className="px-3 py-1.5 border-b border-primary/10 bg-surface-base/50 flex items-center justify-between gap-2">
-        <span className="text-2xs font-mono text-slate-500 uppercase tracking-wider">The Slate</span>
+      {/* Header strip — the only always-visible chrome (design: Panel chrome). Mono
+          label left, quiet actions right. Cyan is spent on ONLY the two generative
+          moves (✦ Explain, + Add) — the live/creative edge (P4); everything else
+          (maintenance, counts, close) stays low-contrast ink. */}
+      <div className="px-3 py-1.5 border-b border-hairline bg-surface-panel/60 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-mono text-ink-low uppercase tracking-[0.12em]">The Slate</span>
         <div className="flex items-center gap-2">
           {hiddenCount > 0 && (
             <button
               data-testid="slate-hidden-toggle"
               onClick={() => setShowHidden((v) => !v)}
-              className="text-2xs font-mono text-slate-500 hover:text-slate-300"
+              className="text-2xs font-mono text-ink-low hover:text-ink-mid"
             >
               {hiddenCount} hidden · {showHidden ? 'hide' : 'show'}
             </button>
           )}
           {/* Slate-level loading state while a refresh-all is still settling. */}
           {bulkRefreshing && (
-            <span data-testid="slate-refreshing-all" className="text-2xs font-mono text-slate-500 animate-pulse">
+            <span data-testid="slate-refreshing-all" className="text-2xs font-mono text-ink-low animate-pulse">
               refreshing…
             </span>
           )}
-          {/* Refresh ALL visible surfaces (each open point counts). */}
+          {/* Refresh ALL visible surfaces (each open point counts). Maintenance, not
+              generative — quiet control ink, never cyan. */}
           <button
             data-testid="slate-refresh-all"
             onClick={() => refreshAll(visibleSurfaces)}
             disabled={bulkRefreshing}
             title="Refresh every surface — re-run each one’s author"
-            className="text-slate-500 hover:text-slate-200 disabled:opacity-70 leading-none"
+            className="text-ink-ctrl hover:text-ink-high disabled:opacity-70 leading-none"
           >
             <span className={bulkRefreshing ? 'inline-block animate-spin' : 'inline-block'}>⟳</span>
           </button>
-          {/* One-click: ask the agent to (re-)explain the session as surfaces. */}
+          {/* One-click: ask the agent to (re-)explain the session as surfaces. A
+              generative move — carries the cyan. */}
           <SlateExplainButton runId={runId} />
-          {/* Open the composer to author a new surface. */}
+          {/* Open the composer to author a new surface. The other generative move —
+              cyan, like Explain. */}
           <button
             data-testid="slate-add-surface"
             // Open-only: the composer closes itself (outside-click / cancel / escape).
@@ -190,18 +196,18 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
             // closes it, then the toggle flips it back open, so it could never close.
             onClick={() => setComposerOpen(true)}
             title="Add a surface"
-            className="text-2xs font-mono text-slate-400 hover:text-slate-200"
+            className="text-2xs font-mono text-primary hover:text-primary/80"
           >
             + Add surface
           </button>
-          <span className="text-2xs font-mono text-slate-500">{sorted.length}</span>
+          <span className="text-2xs font-mono text-ink-low">{sorted.length}</span>
           {/* Close only when nothing holds the column open (a blank, user-opened Slate). */}
           {sorted.length === 0 && onClose && (
             <button
               data-testid="slate-close"
               onClick={onClose}
               title="Close the Slate"
-              className="text-2xs text-slate-500 hover:text-slate-200 leading-none"
+              className="text-2xs text-ink-ctrl hover:text-ink-high leading-none"
             >
               ✕
             </button>

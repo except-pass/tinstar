@@ -43,17 +43,17 @@ export function SlateExplainButton({ runId, className }: { runId: string; classN
         onClick={() => void ask()}
         disabled={state === 'asking'}
         title="Ask the agent to explain this session as Slate surfaces"
-        className={`text-2xs font-mono text-slate-400 hover:text-slate-200 disabled:opacity-70 ${className ?? ''}`}
+        className={`text-2xs font-mono text-primary hover:text-primary/80 disabled:opacity-70 ${className ?? ''}`}
       >
         {state === 'asking' ? 'asking…' : '✦ Explain'}
       </button>
       {state === 'unreachable' && (
-        <span data-testid="slate-explain-unreachable" className="text-2xs text-amber-300/90">
+        <span data-testid="slate-explain-unreachable" className="text-2xs text-ink-low">
           not reachable
         </span>
       )}
       {state === 'error' && (
-        <span data-testid="slate-explain-error" className="text-2xs text-red-300">
+        <span data-testid="slate-explain-error" className="text-2xs text-hue-error">
           failed
         </span>
       )}

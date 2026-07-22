@@ -103,9 +103,9 @@ export function SlateComposer({ runId, onClose }: Props) {
     <div
       ref={rootRef}
       data-testid="slate-composer"
-      className="flex flex-col gap-2 rounded border border-primary/20 bg-surface-panel p-2 shadow-lg"
+      className="flex flex-col gap-2 rounded border border-hairline bg-surface-raised p-3 shadow-lg"
     >
-      <div id={labelId} className="text-2xs font-mono uppercase tracking-wider text-slate-500">
+      <div id={labelId} className="text-2xs font-mono uppercase tracking-[0.12em] text-ink-low">
         Add a surface
       </div>
 
@@ -115,7 +115,7 @@ export function SlateComposer({ runId, onClose }: Props) {
         value={query}
         placeholder="Search templates…"
         onChange={(e) => setQuery(e.target.value)}
-        className="rounded border border-primary/20 bg-surface-base px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+        className="rounded border border-hairline bg-surface-panel px-2 py-1 text-xs text-ink-high placeholder:text-ink-low focus:border-primary/60 focus:outline-none"
       />
 
       {/* Matches — data-scrollable so the canvas wheel handler yields to this list. */}
@@ -126,7 +126,7 @@ export function SlateComposer({ runId, onClose }: Props) {
         aria-labelledby={labelId}
       >
         {matches.length === 0 && (
-          <li className="px-1 py-2 text-2xs text-slate-500 text-center">No matching templates</li>
+          <li className="px-1 py-2 text-2xs text-ink-low text-center">No matching templates</li>
         )}
         {matches.map((t) => {
           const isSel = selected?.id === t.id
@@ -136,14 +136,14 @@ export function SlateComposer({ runId, onClose }: Props) {
                 data-testid={`composer-template-${t.id}`}
                 aria-selected={isSel}
                 onClick={() => setSelected(isSel ? null : t)}
-                className={`w-full rounded border px-2 py-1 text-left ${
+                className={`w-full rounded-sm border px-2 py-1 text-left ${
                   isSel
-                    ? 'border-indigo-500 bg-indigo-500/10'
-                    : 'border-primary/10 bg-surface-base/40 hover:border-primary/30'
+                    ? 'border-primary/50 bg-primary/10'
+                    : 'border-hairline bg-surface-hover hover:border-ink-ctrl'
                 }`}
               >
-                <div className="text-xs font-medium text-slate-200">{t.name}</div>
-                <div className="text-2xs text-slate-500 leading-snug">{t.description}</div>
+                <div className="text-xs font-medium text-ink-high">{t.name}</div>
+                <div className="text-2xs text-ink-low leading-snug">{t.description}</div>
               </button>
             </li>
           )
@@ -157,20 +157,20 @@ export function SlateComposer({ runId, onClose }: Props) {
         value={freeform}
         placeholder={selected ? 'Add anything else… (optional)' : '…or describe the surface you want'}
         onChange={(e) => setFreeform(e.target.value)}
-        className="rounded border border-primary/20 bg-surface-base px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+        className="rounded border border-hairline bg-surface-panel px-2 py-1 text-xs text-ink-high placeholder:text-ink-low focus:border-primary/60 focus:outline-none"
       />
 
       {/* Create-time recipe — how this surface stays fresh. A good recipe names its
           source, derivation, and output so a one-shot author can re-run it in a vacuum. */}
       <label className="flex flex-col gap-0.5">
-        <span className="text-2xs font-mono uppercase tracking-wider text-slate-500">Stays fresh by… (optional)</span>
+        <span className="text-2xs font-mono uppercase tracking-[0.12em] text-ink-low">Stays fresh by… (optional)</span>
         <textarea
           data-testid="composer-recipe"
           rows={2}
           value={recipe}
           placeholder="e.g. re-run the blind eval of PR #7 and rewrite the two columns"
           onChange={(e) => setRecipe(e.target.value)}
-          className="rounded border border-primary/20 bg-surface-base px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+          className="rounded border border-hairline bg-surface-panel px-2 py-1 text-xs text-ink-high placeholder:text-ink-low focus:border-primary/60 focus:outline-none"
         />
       </label>
 
@@ -179,7 +179,8 @@ export function SlateComposer({ runId, onClose }: Props) {
           data-testid="composer-submit"
           onClick={() => void submit()}
           disabled={!canSubmit || submitting}
-          className="rounded bg-indigo-500 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-40"
+          // The primary Create — a generative move, so it carries the cyan (P4).
+          className="rounded bg-primary px-3 py-1 text-xs font-semibold text-surface-base hover:bg-primary/85 disabled:opacity-40"
         >
           {submitting ? 'Sending…' : 'Add surface'}
         </button>
@@ -187,18 +188,18 @@ export function SlateComposer({ runId, onClose }: Props) {
           data-testid="composer-cancel"
           onClick={onClose}
           disabled={submitting}
-          className="rounded px-2 py-1 text-xs text-slate-400 hover:text-slate-200 disabled:opacity-50"
+          className="rounded px-2 py-1 text-xs text-ink-low hover:text-ink-high disabled:opacity-50"
         >
           Cancel
         </button>
       </div>
 
       {unreachable && (
-        <div data-testid="composer-unreachable" className="text-2xs text-amber-300/90">
+        <div data-testid="composer-unreachable" className="text-2xs text-ink-low">
           Sent — but that session isn’t reachable right now. It’ll pick this up when it’s back.
         </div>
       )}
-      {error && <div className="text-2xs text-red-300">{error}</div>}
+      {error && <div className="text-2xs text-hue-error">{error}</div>}
     </div>
   )
 }
