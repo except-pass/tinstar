@@ -32,7 +32,9 @@ describe('A2uiRenderer — host-themed rendering (R14/R15)', () => {
       <A2uiRenderer content={content([{ id: 'root', component: 'Text', text: 'Heads up', variant: 'h2' }])} />,
     )
     const p = container.querySelector('p')
-    expect(p!.className).toContain('font-bold')
+    // Design language: headings render in the Chakra display face, semibold, high ink.
+    expect(p!.className).toContain('font-display')
+    expect(p!.className).toContain('font-semibold')
     expect(p!.textContent).toBe('Heads up')
   })
 
@@ -79,7 +81,7 @@ describe('A2uiRenderer — host-themed rendering (R14/R15)', () => {
     const a = container.querySelector('a')
     expect(a).not.toBeNull()
     expect(a!.getAttribute('href')).toBe('https://example.com/pr/1')
-    expect(a!.textContent).toBe('the PR')
+    expect(a!.textContent).toContain('the PR') // + a ↗ external-jump affordance
     expect(a!.className).toContain('underline')
   })
 

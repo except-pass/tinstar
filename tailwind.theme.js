@@ -24,4 +24,23 @@ export const colors = {
     green: '#00ff88',
     amber: '#ffaa00',
   },
+  // Slate Surface Design Language (docs/slate-design-language.md).
+  // Ink: three contrast steps for text; controls sit one step below low.
+  ink: {
+    high: '#eaf1f5', // headlines
+    mid: '#9fb0bd',  // body
+    low: '#5c6b74',  // meta / labels
+    ctrl: '#4f5e67', // edge controls (⟳ ✕) — brighten on hover
+  },
+  // One hue per meaning — status semantics (used at ~14% fill / ~22% border / bright text).
+  hue: {
+    open: '#818cf8',       // indigo — a live question
+    discussing: '#ffc266', // amber — agent / in progress / stale
+    waiting: '#6fcff6',    // sky — blocked on someone
+    resolved: '#4fe0a6',   // emerald — settled
+    dismissed: '#7c8b95',  // slate — off-track, dimmed
+    error: '#ff6b8a',      // red — failed action only
+  },
+  // Depth = a single hairline + a lightness step (not shadows).
+  hairline: 'rgba(130, 175, 195, 0.10)',
 }
