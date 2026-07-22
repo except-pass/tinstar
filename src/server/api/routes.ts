@@ -58,7 +58,7 @@ import { collectChoiceOptionIds, collectChoiceOptionLabels, NOTICE_ANSWER_TEXT_M
 import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../a2ui/followUps'
 import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
-import { slatePointPromptText, slateReplyPromptText, slateAnswerPromptText } from '../../slate/slatePrompt'
+import { slatePointPromptText, slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText } from '../../slate/slatePrompt'
 import type { PointInput } from '../stores/slate'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
@@ -3485,6 +3485,57 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     else if (action === 'reopen') ctx.docStore.reopenSlatePoint(runId, pid)
     else ctx.docStore.dismissSlatePoint(runId, pid)
     ok(res, { point: ctx.docStore.getSlatePoint(pid) })
+    return true
+  }
+
+  // POST /api/runs/:id/slate/surfaces/:pid/refresh — nudge the run's agent to
+  // regenerate a surface (plan U3, KTD2/KTD6). This is a NUDGE, NOT a mutation: it
+  // persists NOTHING. It looks the surface up (cross-run guard: point.runId must equal
+  // the URL runId), delivers the recipe verbatim when the surface carries one, else a
+  // bare regenerate-nudge, best-effort down the SAME sendPrompt path as the reply/answer
+  // routes, and returns { delivered }. The surface regenerates through the already-shipped
+  // file→watcher→projection pipe, so there is exactly one write path. delivered:false on
+  // an unreachable session is NOT an error — refresh is best-effort. Matched with an
+  // ANCHORED regex placed BEFORE the greedy PATCH /api/runs/ handler below.
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/surfaces\/[^/]+\/refresh$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const rest = path.slice('/api/runs/'.length, -'/refresh'.length) // "<runId>/slate/surfaces/<pid>"
+    const segs = rest.split('/') // [runId, 'slate', 'surfaces', pid]
+    const runId = decodeURIComponent(segs[0] ?? '')
+    const pid = decodeURIComponent(segs[3] ?? '')
+    const point = ctx.docStore.getSlatePoint(pid)
+    if (!point || point.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
+    const delivered = await deliverSlatePrompt(ctx, runId, slateRefreshPromptText(point, serverBase()))
+    ok(res, { delivered })
+    return true
+  }
+
+  // POST /api/runs/:id/slate/compose — deliver an authoring prompt to the run's agent
+  // so it composes a NEW surface (plan U4, KTD4/KTD6). Body: { prompt?, freeform? } —
+  // `prompt` from a catalog template, `freeform` from the user's own words; at least
+  // one must be non-blank (an empty body is INVALID_PARAMS). Persists NOTHING: the agent
+  // authors the surface by writing its `.tinstar/slate/<slug>.json`, reusing the Slate's
+  // one file-in model. Best-effort delivery via the same sendPrompt path; delivered:false
+  // on an unreachable session is NOT an error. Anchored regex, matched BEFORE the greedy
+  // PATCH /api/runs/ handler.
+  if (method === 'POST' && /^\/api\/runs\/[^/]+\/slate\/compose$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/compose'.length))
+    readBody(req).then(async body => {
+      let parsed: { prompt?: unknown; freeform?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
+      }
+      const prompt = typeof parsed.prompt === 'string' ? parsed.prompt.trim() : ''
+      const freeform = typeof parsed.freeform === 'string' ? parsed.freeform.trim() : ''
+      if (!prompt && !freeform) {
+        fail(res, 'INVALID_PARAMS', 'compose requires a prompt or freeform text'); return
+      }
+      const delivered = await deliverSlatePrompt(ctx, runId,
+        slateComposePromptText({ prompt, freeform }, serverBase()))
+      ok(res, { delivered })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true
   }
 

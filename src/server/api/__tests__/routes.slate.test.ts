@@ -375,3 +375,156 @@ describe('POST /api/runs/:id/slate/points/:pid/{resolve,reopen,dismiss}', () => 
     expect(res.status).toBe(404)
   }))
 })
+
+describe('POST /api/runs/:id/slate/surfaces/:pid/refresh', () => {
+  const refresh = (srv: Harness, pid: string) =>
+    srv.fetch(`/api/runs/${RUN}/slate/surfaces/${pid}/refresh`, { method: 'POST' })
+
+  // Seed a FILE-projected surface: `refresh` is file-owned, so it arrives via the
+  // watcher projection, NOT the user-point POST route (which never carries a recipe).
+  function seedSurface(srv: Harness, over: Record<string, unknown> = {}): string {
+    srv.docStore.applyRunSlateProjection(RUN, [{
+      id: 'srf-1', author: 'agent', headline: 'a surface',
+      content: { root: 'r', components: [{ id: 'r', component: 'Text', text: 'x' }] },
+      ...over,
+    }])
+    return 'srf-1'
+  }
+
+  it('with a recipe delivers the recipe VERBATIM and persists nothing', withServer(async srv => {
+    seedRun(srv.docStore)
+    const pid = seedSurface(srv, { refresh: 'Re-run the blind PR eval and rewrite the file' })
+    getSession.mockReturnValue({ name: RUN }) // reachable
+    sendPrompt.mockClear()
+
+    const res = await refresh(srv, pid)
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; data: { delivered: boolean } }
+    expect(body.ok).toBe(true)
+    expect(body.data.delivered).toBe(true)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+    expect(sendPrompt.mock.calls[0]![1]).toBe(RUN)
+    const prompt = sendPrompt.mock.calls[0]![2] as string
+    expect(prompt).toContain('Re-run the blind PR eval and rewrite the file') // recipe verbatim
+    // Persist-nothing: refresh is a nudge — the point gains no thread / no mutation.
+    expect(srv.docStore.getSlatePoint(pid)!.replies).toBeUndefined()
+  }))
+
+  it('without a recipe delivers the bare regenerate-nudge', withServer(async srv => {
+    seedRun(srv.docStore)
+    const pid = seedSurface(srv) // no refresh recipe
+    getSession.mockReturnValue({ name: RUN })
+    sendPrompt.mockClear()
+
+    const res = await refresh(srv, pid)
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(true)
+    const prompt = sendPrompt.mock.calls[0]![2] as string
+    expect(prompt).toContain('Regenerate the Slate surface')
+    expect(prompt).toContain(pid)
+  }))
+
+  it('an unreachable session returns delivered:false + 200 and persists nothing', withServer(async srv => {
+    seedRun(srv.docStore)
+    const pid = seedSurface(srv, { refresh: 'recipe' })
+    getSession.mockReturnValue(null) // session gone
+
+    const res = await refresh(srv, pid)
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(sendPrompt).not.toHaveBeenCalled()
+    expect(srv.docStore.getSlatePoint(pid)!.replies).toBeUndefined()
+  }))
+
+  it('rejects a cross-run pid (point.runId !== URL runId) with 404, nothing delivered', withServer(async srv => {
+    seedRun(srv.docStore)
+    const pid = seedSurface(srv, { refresh: 'recipe' }) // belongs to RUN
+    getSession.mockReturnValue({ name: RUN })
+    // POST under a DIFFERENT run id — the cross-run guard must reject it.
+    const res = await srv.fetch(`/api/runs/OTHER-run/slate/surfaces/${pid}/refresh`, { method: 'POST' })
+    expect(res.status).toBe(404)
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+
+  it('404s for an unknown surface', withServer(async srv => {
+    seedRun(srv.docStore)
+    const res = await refresh(srv, 'srf-nope')
+    expect(res.status).toBe(404)
+  }))
+
+  // ROUTE-ORDERING GUARD (structural): the anchored /refresh regex must precede the
+  // greedy PATCH /api/runs/ handler, or a request could fall through to it (break the
+  // order → this test goes red).
+  it('is registered BEFORE the greedy startsWith PATCH /api/runs/ handler', () => {
+    const src = readFileSync(new URL('../routes.ts', import.meta.url), 'utf8')
+    const refreshRoute = src.indexOf('slate\\/surfaces\\/[^/]+\\/refresh$/')
+    const patchRuns = src.indexOf("method === 'PATCH' && url.startsWith('/api/runs/')")
+    expect(refreshRoute).toBeGreaterThan(-1)
+    expect(patchRuns).toBeGreaterThan(-1)
+    expect(refreshRoute).toBeLessThan(patchRuns)
+  })
+
+  // ...and behavioural: the anchored route is actually matched (a generic handler does
+  // NOT eat it — it returns the refresh envelope).
+  it('is matched by the anchored regex — a generic handler does not eat it', withServer(async srv => {
+    seedRun(srv.docStore)
+    const pid = seedSurface(srv, { refresh: 'recipe' })
+    getSession.mockReturnValue({ name: RUN })
+    const res = await refresh(srv, pid)
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; data: { delivered: boolean } }
+    expect(body.ok).toBe(true)
+    expect(typeof body.data.delivered).toBe('boolean')
+  }))
+})
+
+describe('POST /api/runs/:id/slate/compose', () => {
+  const compose = (srv: Harness, payload: unknown) =>
+    srv.fetch(`/api/runs/${RUN}/slate/compose`, { method: 'POST', body: JSON.stringify(payload) })
+
+  it('delivers the composed authoring prompt (prompt + freeform interpolated)', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN }) // reachable
+    sendPrompt.mockClear()
+
+    const res = await compose(srv, { prompt: 'Build a PR review surface', freeform: 'focus on the migration' })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; data: { delivered: boolean } }
+    expect(body.ok).toBe(true)
+    expect(body.data.delivered).toBe(true)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+    expect(sendPrompt.mock.calls[0]![1]).toBe(RUN)
+    const prompt = sendPrompt.mock.calls[0]![2] as string
+    expect(prompt).toContain('Build a PR review surface') // template prompt interpolated
+    expect(prompt).toContain('focus on the migration')    // freeform interpolated
+    expect(prompt).toContain('.tinstar/slate/')           // authoring-to-file instruction
+  }))
+
+  it('a freeform-only body delivers the freeform text', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    sendPrompt.mockClear()
+    const res = await compose(srv, { freeform: 'a checklist of deploy steps' })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(true)
+    expect(sendPrompt.mock.calls[0]![2]).toContain('a checklist of deploy steps')
+  }))
+
+  it('an empty body (no prompt, no freeform) is INVALID_PARAMS, nothing delivered', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    const res = await compose(srv, { prompt: '   ', freeform: '' })
+    expect(res.status).toBe(400)
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+
+  it('an unreachable session returns delivered:false + 200 (persists nothing)', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue(null) // session gone
+    const res = await compose(srv, { prompt: 'Author a Dataflow surface' })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+})

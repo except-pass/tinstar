@@ -441,6 +441,10 @@ export class SlateWatcher {
       out.content = content
     }
 
+    // File-owned refresh recipe (plan U3): carried through verbatim. A non-string or
+    // empty recipe is simply dropped (the surface still refreshes via the bare nudge).
+    if (typeof r.refresh === 'string' && r.refresh.length > 0) out.refresh = r.refresh
+
     if (typeof r.createdAt === 'number' && Number.isFinite(r.createdAt)) {
       out.createdAt = r.createdAt
     }

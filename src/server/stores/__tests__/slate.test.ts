@@ -344,6 +344,51 @@ describe('DocumentStore — Slate prune cascade', () => {
   })
 })
 
+describe('SlateStore — refresh recipe (U3 file-owned field)', () => {
+  it('a projection carrying `refresh` sets it on the point', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'Re-run the PR eval' })], 100)
+    expect(store.getPoint('p1')!.refresh).toBe('Re-run the PR eval')
+  })
+
+  it('re-projecting an UNCHANGED recipe emits ZERO change (short-circuit holds)', () => {
+    const { store, emit } = makeStore()
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe A' })], 100)
+    emit.mockClear()
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe A' })], 200)
+    expect(emit).not.toHaveBeenCalled()          // byte-identical re-projection is a no-op
+    expect(store.getPoint('p1')!.amendedAt).toBe(100) // amendedAt untouched
+  })
+
+  it('a recipe-ONLY change DOES emit and updates the point (zero-change guard must not swallow it)', () => {
+    const { store, emit } = makeStore()
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe A' })], 100)
+    emit.mockClear()
+    // headline + content identical — ONLY the recipe changes.
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe B' })], 200)
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(store.getPoint('p1')!.refresh).toBe('recipe B')
+    expect(store.getPoint('p1')!.amendedAt).toBe(200) // a recipe change bumps amendedAt
+  })
+
+  it('clears `refresh` when a later projection omits the recipe', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe A' })], 100)
+    store.applyProjection(RUN, [input('p1', 'body')], 200) // recipe omitted → cleared
+    expect(store.getPoint('p1')!.refresh).toBeUndefined()
+  })
+
+  it('projects `refresh` onto run.slate and a recipe-only change updates the surface', () => {
+    const store = new DocumentStore()
+    store.upsertRun('run-1', makeRun())
+    store.applyRunSlateProjection('run-1', [input('p1', 'body', { refresh: 'recipe A' })], 100)
+    expect(store.getRun('run-1')!.slate![0]!.refresh).toBe('recipe A')
+
+    store.applyRunSlateProjection('run-1', [input('p1', 'body', { refresh: 'recipe B' })], 200)
+    expect(store.getRun('run-1')!.slate![0]!.refresh).toBe('recipe B')
+  })
+})
+
 // A compile-time nod that Point stays the source of truth for the store shape.
 const _typecheck: Point['status'] = 'open'
 void _typecheck
