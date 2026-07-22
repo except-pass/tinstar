@@ -988,8 +988,8 @@ export class DocumentStore {
     this.setRunSlate(runId, surfaces)
   }
 
-  getSlatePoint(id: string): Point | undefined {
-    return this.slate.getPoint(id)
+  getSlatePoint(runId: string, id: string): Point | undefined {
+    return this.slate.getPoint(runId, id)
   }
 
   getSlatePointsForRun(runId: string): Point[] {

@@ -3294,11 +3294,11 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
   // on a resolved/dismissed point reopens it first (plan lifecycle diagram), so a
   // terminal point re-enters the conversation instead of swallowing the message.
   const appendSlateReply = (runId: string, pid: string, reply: Reply): Point | undefined => {
-    const prior = ctx.docStore.getSlatePoint(pid)
+    const prior = ctx.docStore.getSlatePoint(runId, pid)
     if (!prior || prior.runId !== runId) return undefined
     if (prior.resolvedAt != null || prior.dismissedAt != null) ctx.docStore.reopenSlatePoint(runId, pid)
     ctx.docStore.addSlateReply(runId, pid, reply)
-    return ctx.docStore.getSlatePoint(pid)
+    return ctx.docStore.getSlatePoint(runId, pid)
   }
 
   // POST /api/runs/:id/slate/points — create OR amend a USER-authored point.
@@ -3380,7 +3380,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const runId = decodeURIComponent(segs[0] ?? '')
     const pid = decodeURIComponent(segs[3] ?? '')
     readBody(req).then(async body => {
-      const point = ctx.docStore.getSlatePoint(pid)
+      const point = ctx.docStore.getSlatePoint(runId, pid)
       if (!point || point.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
 
       let parsed: { choices?: unknown; text?: unknown }
@@ -3445,7 +3445,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const runId = decodeURIComponent(segs[0] ?? '')
     const pid = decodeURIComponent(segs[3] ?? '')
     readBody(req).then(async body => {
-      const existing = ctx.docStore.getSlatePoint(pid)
+      const existing = ctx.docStore.getSlatePoint(runId, pid)
       if (!existing || existing.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return }
 
       let parsed: { text?: unknown; author?: unknown }
@@ -3487,12 +3487,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const runId = decodeURIComponent(segs[0] ?? '')
     const pid = decodeURIComponent(segs[3] ?? '')
     const action = segs[4] as 'resolve' | 'reopen' | 'dismiss'
-    const existing = ctx.docStore.getSlatePoint(pid)
+    const existing = ctx.docStore.getSlatePoint(runId, pid)
     if (!existing || existing.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
     if (action === 'resolve') ctx.docStore.resolveSlatePoint(runId, pid)
     else if (action === 'reopen') ctx.docStore.reopenSlatePoint(runId, pid)
     else ctx.docStore.dismissSlatePoint(runId, pid)
-    ok(res, { point: ctx.docStore.getSlatePoint(pid) })
+    ok(res, { point: ctx.docStore.getSlatePoint(runId, pid) })
     return true
   }
 
@@ -3511,7 +3511,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const segs = rest.split('/') // [runId, 'slate', 'surfaces', pid]
     const runId = decodeURIComponent(segs[0] ?? '')
     const pid = decodeURIComponent(segs[3] ?? '')
-    const point = ctx.docStore.getSlatePoint(pid)
+    const point = ctx.docStore.getSlatePoint(runId, pid)
     if (!point || point.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
     // Source-derived (carries a self-contained recipe) → spawn a fresh one-shot author OFF
     // the main agent's path (feat: multi-agent Slate). Recipe-less / session-derived surfaces

@@ -61,7 +61,7 @@ describe('SlateStore.applyProjection — merge by id (KTD1)', () => {
     // The file amends the body (e.g. a tinstar-run progress write).
     store.applyProjection(RUN, [input('p1', 'step 2/3')], 140)
 
-    const p = store.getPoint('p1')!
+    const p = store.getPoint(RUN, 'p1')!
     expect(p.content).toEqual(body('step 2/3'))     // file-owned body overwritten
     expect(p.replies).toHaveLength(2)               // store-owned thread preserved
     expect(p.replies?.map(r => r.text)).toEqual(['why this way?', 'because X'])
@@ -76,8 +76,8 @@ describe('SlateStore.applyProjection — merge by id (KTD1)', () => {
 
     changes.length = 0
     store.applyProjection(RUN, [input('p1', 'a')], 200) // p2 gone from the file
-    expect(store.getPoint('p2')).toBeUndefined()
-    expect(store.getPoint('p1')).toBeDefined()
+    expect(store.getPoint(RUN, 'p2')).toBeUndefined()
+    expect(store.getPoint(RUN, 'p1')).toBeDefined()
     // The retract emits a null-data change for the dropped point (only).
     expect(changes).toEqual([{ entity: 'slatePoint', id: 'p2', runId: RUN, data: null }])
   })
@@ -94,8 +94,8 @@ describe('SlateStore.applyProjection — merge by id (KTD1)', () => {
 
     // The file point is untouched; the user point SURVIVES (would be nuked without
     // the source:'user' retraction exemption).
-    expect(store.getPoint('p1')).toBeDefined()
-    expect(store.getPoint(userPoint.id)).toBeDefined()
+    expect(store.getPoint(RUN, 'p1')).toBeDefined()
+    expect(store.getPoint(RUN, userPoint.id)).toBeDefined()
     // No retract was emitted for the user point.
     expect(changes.filter(c => c.data === null)).toEqual([])
   })
@@ -127,8 +127,8 @@ describe('SlateStore.applyProjection — merge by id (KTD1)', () => {
     store.applyProjection(RUN, [input('p1', 'a'), input('p2', 'CHANGED')], 200)
     expect(emit).toHaveBeenCalledTimes(1)
     expect(emit.mock.calls[0]![0]).toMatchObject({ entity: 'slatePoint', id: 'p2', runId: RUN })
-    expect(store.getPoint('p2')?.amendedAt).toBe(200) // bumped only on real change
-    expect(store.getPoint('p1')?.amendedAt).toBe(100) // untouched point keeps its stamp
+    expect(store.getPoint(RUN, 'p2')?.amendedAt).toBe(200) // bumped only on real change
+    expect(store.getPoint(RUN, 'p1')?.amendedAt).toBe(100) // untouched point keeps its stamp
   })
 })
 
@@ -136,13 +136,13 @@ describe('SlateStore — status lifecycle', () => {
   it('derives open → waiting → discussing as the thread grows', () => {
     const { store } = makeStore()
     store.applyProjection(RUN, [input('p1', 'a')], 100)
-    expect(store.getPoint('p1')?.status).toBe('open')
+    expect(store.getPoint(RUN, 'p1')?.status).toBe('open')
 
     store.addReply(RUN, 'p1', reply('user', 'question', 110))
-    expect(store.getPoint('p1')?.status).toBe('waiting')
+    expect(store.getPoint(RUN, 'p1')?.status).toBe('waiting')
 
     store.addReply(RUN, 'p1', reply('agent', 'answer', 120))
-    expect(store.getPoint('p1')?.status).toBe('discussing')
+    expect(store.getPoint(RUN, 'p1')?.status).toBe('discussing')
   })
 
   it('an explicit resolve survives a subsequent file re-projection (does not revert to derived)', () => {
@@ -150,11 +150,11 @@ describe('SlateStore — status lifecycle', () => {
     store.applyProjection(RUN, [input('p1', 'a')], 100)
     store.addReply(RUN, 'p1', reply('agent', 'fyi', 110))
     store.resolve(RUN, 'p1', 120)
-    expect(store.getPoint('p1')?.status).toBe('resolved')
+    expect(store.getPoint(RUN, 'p1')?.status).toBe('resolved')
 
     store.applyProjection(RUN, [input('p1', 'body v2')], 130)
-    expect(store.getPoint('p1')?.status).toBe('resolved')
-    expect(store.getPoint('p1')?.resolvedAt).toBe(120)
+    expect(store.getPoint(RUN, 'p1')?.status).toBe('resolved')
+    expect(store.getPoint(RUN, 'p1')?.resolvedAt).toBe(120)
   })
 
   it('resolve/dismiss/reopen are explicit and mutually exclusive', () => {
@@ -162,15 +162,15 @@ describe('SlateStore — status lifecycle', () => {
     store.applyProjection(RUN, [input('p1', 'a')], 100)
 
     store.dismiss(RUN, 'p1', 110)
-    expect(store.getPoint('p1')).toMatchObject({ status: 'dismissed', dismissedAt: 110 })
+    expect(store.getPoint(RUN, 'p1')).toMatchObject({ status: 'dismissed', dismissedAt: 110 })
 
     store.resolve(RUN, 'p1', 120)
-    expect(store.getPoint('p1')?.dismissedAt).toBeUndefined() // resolve clears dismiss
-    expect(store.getPoint('p1')).toMatchObject({ status: 'resolved', resolvedAt: 120 })
+    expect(store.getPoint(RUN, 'p1')?.dismissedAt).toBeUndefined() // resolve clears dismiss
+    expect(store.getPoint(RUN, 'p1')).toMatchObject({ status: 'resolved', resolvedAt: 120 })
 
     store.reopen(RUN, 'p1', 130)
-    expect(store.getPoint('p1')?.resolvedAt).toBeUndefined()
-    expect(store.getPoint('p1')?.status).toBe('open') // back to derived (no replies)
+    expect(store.getPoint(RUN, 'p1')?.resolvedAt).toBeUndefined()
+    expect(store.getPoint(RUN, 'p1')?.status).toBe('open') // back to derived (no replies)
   })
 
   it('never auto-resolves: a fully-answered thread stays discussing, not resolved (CMT-1302)', () => {
@@ -178,8 +178,8 @@ describe('SlateStore — status lifecycle', () => {
     store.applyProjection(RUN, [input('p1', 'a')], 100)
     store.addReply(RUN, 'p1', reply('user', 'q', 110))
     store.addReply(RUN, 'p1', reply('agent', 'done, I think', 120))
-    expect(store.getPoint('p1')?.status).toBe('discussing')
-    expect(store.getPoint('p1')?.resolvedAt).toBeUndefined()
+    expect(store.getPoint(RUN, 'p1')?.status).toBe('discussing')
+    expect(store.getPoint(RUN, 'p1')?.resolvedAt).toBeUndefined()
   })
 
   it('addReply is append-only and emits one change', () => {
@@ -188,7 +188,7 @@ describe('SlateStore — status lifecycle', () => {
     emit.mockClear()
     store.addReply(RUN, 'p1', reply('user', 'first', 110))
     store.addReply(RUN, 'p1', reply('user', 'second', 120))
-    expect(store.getPoint('p1')?.replies).toHaveLength(2)
+    expect(store.getPoint(RUN, 'p1')?.replies).toHaveLength(2)
     expect(emit).toHaveBeenCalledTimes(2)
   })
 
@@ -219,7 +219,7 @@ describe('SlateStore — id synthesis for file entries without an id', () => {
     // incidental, identity is the content-derived id). The thread must survive.
     store.applyProjection(RUN, [{ author: 'agent', headline: 'orphan?', content: body('a') }], 200)
     expect(store.getPointsForRun(RUN)).toHaveLength(1)
-    expect(store.getPoint(synthId)?.replies).toHaveLength(1)
+    expect(store.getPoint(RUN, synthId)?.replies).toHaveLength(1)
   })
 
   it('the synthesized id is stable across store instances (pure function of content)', () => {
@@ -348,7 +348,7 @@ describe('SlateStore — refresh recipe (U3 file-owned field)', () => {
   it('a projection carrying `refresh` sets it on the point', () => {
     const { store } = makeStore()
     store.applyProjection(RUN, [input('p1', 'body', { refresh: 'Re-run the PR eval' })], 100)
-    expect(store.getPoint('p1')!.refresh).toBe('Re-run the PR eval')
+    expect(store.getPoint(RUN, 'p1')!.refresh).toBe('Re-run the PR eval')
   })
 
   it('re-projecting an UNCHANGED recipe emits ZERO change (short-circuit holds)', () => {
@@ -357,7 +357,7 @@ describe('SlateStore — refresh recipe (U3 file-owned field)', () => {
     emit.mockClear()
     store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe A' })], 200)
     expect(emit).not.toHaveBeenCalled()          // byte-identical re-projection is a no-op
-    expect(store.getPoint('p1')!.amendedAt).toBe(100) // amendedAt untouched
+    expect(store.getPoint(RUN, 'p1')!.amendedAt).toBe(100) // amendedAt untouched
   })
 
   it('a recipe-ONLY change DOES emit and updates the point (zero-change guard must not swallow it)', () => {
@@ -367,15 +367,15 @@ describe('SlateStore — refresh recipe (U3 file-owned field)', () => {
     // headline + content identical — ONLY the recipe changes.
     store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe B' })], 200)
     expect(emit).toHaveBeenCalledTimes(1)
-    expect(store.getPoint('p1')!.refresh).toBe('recipe B')
-    expect(store.getPoint('p1')!.amendedAt).toBe(200) // a recipe change bumps amendedAt
+    expect(store.getPoint(RUN, 'p1')!.refresh).toBe('recipe B')
+    expect(store.getPoint(RUN, 'p1')!.amendedAt).toBe(200) // a recipe change bumps amendedAt
   })
 
   it('clears `refresh` when a later projection omits the recipe', () => {
     const { store } = makeStore()
     store.applyProjection(RUN, [input('p1', 'body', { refresh: 'recipe A' })], 100)
     store.applyProjection(RUN, [input('p1', 'body')], 200) // recipe omitted → cleared
-    expect(store.getPoint('p1')!.refresh).toBeUndefined()
+    expect(store.getPoint(RUN, 'p1')!.refresh).toBeUndefined()
   })
 
   it('projects `refresh` onto run.slate and a recipe-only change updates the surface', () => {
@@ -392,3 +392,41 @@ describe('SlateStore — refresh recipe (U3 file-owned field)', () => {
 // A compile-time nod that Point stays the source of truth for the store shape.
 const _typecheck: Point['status'] = 'open'
 void _typecheck
+
+describe('SlateStore - per-(runId, id) scoping (cross-run collision fix)', () => {
+  it('a generic id reused across runs does NOT collide - each run keeps its own point', () => {
+    const { store } = makeStore()
+    // The factory bug: two runs each write a file with the SAME generic id.
+    store.applyProjection('run-A', [input('session-arc', 'A content')], 100)
+    store.applyProjection('run-B', [input('session-arc', 'B content')], 100)
+
+    const a = store.getPoint('run-A', 'session-arc')!
+    const b = store.getPoint('run-B', 'session-arc')!
+    expect(a.runId).toBe('run-A')
+    expect(b.runId).toBe('run-B')
+    // run-B must NOT have clobbered run-A's body (the content-bleed symptom).
+    expect(a.content).toEqual(body('A content'))
+    expect(b.content).toEqual(body('B content'))
+    expect(store.getPointsForRun('run-A')).toHaveLength(1)
+    expect(store.getPointsForRun('run-B')).toHaveLength(1)
+  })
+
+  it("retracting one run's file leaves the other run's same-id point intact", () => {
+    const { store } = makeStore()
+    store.applyProjection('run-A', [input('decisions', 'A')], 100)
+    store.applyProjection('run-B', [input('decisions', 'B')], 100)
+    store.applyProjection('run-B', [], 200) // run-B's file empties (retract)
+    expect(store.getPoint('run-A', 'decisions')).toBeDefined()   // survives
+    expect(store.getPoint('run-B', 'decisions')).toBeUndefined() // retracted
+  })
+
+  it('a user point and a file point with the same id on different runs are independent', () => {
+    const { store } = makeStore()
+    store.addUserPoint('run-A', { id: 'blockers', author: 'user', headline: 'user A' })
+    store.applyProjection('run-B', [input('blockers', 'file B')], 100)
+    expect(store.getPoint('run-A', 'blockers')!.source).toBe('user')
+    expect(store.getPoint('run-A', 'blockers')!.runId).toBe('run-A')
+    expect(store.getPoint('run-B', 'blockers')!.runId).toBe('run-B')
+    expect(store.getPoint('run-B', 'blockers')!.content).toEqual(body('file B'))
+  })
+})
