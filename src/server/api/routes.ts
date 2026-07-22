@@ -59,6 +59,7 @@ import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../a2ui/followUps'
 import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
 import { slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText } from '../../slate/slatePrompt'
+import { dispatchSurfaceAuthor } from '../sessions/surfaceAuthor'
 import type { PointInput } from '../stores/slate'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
@@ -3512,6 +3513,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const pid = decodeURIComponent(segs[3] ?? '')
     const point = ctx.docStore.getSlatePoint(pid)
     if (!point || point.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
+    // Source-derived (carries a self-contained recipe) → spawn a fresh one-shot author OFF
+    // the main agent's path (feat: multi-agent Slate). Recipe-less / session-derived surfaces
+    // fall through to the unchanged main-agent nudge below — which also covers the backlog.
+    if (point.refresh && ctx.sessionConfig?.slate.author.enabled) {
+      const { dispatched } = dispatchSurfaceAuthor({
+        sessionsDir: ctx.sessionConfig.dirs.sessions,
+        config: ctx.sessionConfig.slate.author,
+        runId,
+        prompt: slateRefreshPromptText(point, serverBase()),
+        label: point.id,
+      })
+      if (dispatched) { ok(res, { dispatched: true }); return true }
+      // Spawn declined (disabled mid-flight / no workdir / spawn error) → main-agent fallback.
+    }
     const delivered = await deliverSlatePrompt(ctx, runId, slateRefreshPromptText(point, serverBase()))
     ok(res, { delivered })
     return true
@@ -3545,8 +3560,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (prompt.length + freeform.length > SLATE_COMPOSE_MAX) {
         fail(res, 'BAD_REQUEST', `compose text exceeds ${SLATE_COMPOSE_MAX} bytes`, { status: 413 }); return
       }
-      const delivered = await deliverSlatePrompt(ctx, runId,
-        slateComposePromptText({ prompt, freeform }, serverBase()))
+      // The compose instruction IS a recipe for a NEW surface, so it's source-derived:
+      // offload to a one-shot author when enabled, else the unchanged main-agent nudge.
+      const composePrompt = slateComposePromptText({ prompt, freeform }, serverBase())
+      if (ctx.sessionConfig?.slate.author.enabled) {
+        const { dispatched } = dispatchSurfaceAuthor({
+          sessionsDir: ctx.sessionConfig.dirs.sessions,
+          config: ctx.sessionConfig.slate.author,
+          runId,
+          prompt: composePrompt,
+          label: 'compose',
+        })
+        if (dispatched) { ok(res, { dispatched: true }); return }
+      }
+      const delivered = await deliverSlatePrompt(ctx, runId, composePrompt)
       ok(res, { delivered })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
     return true

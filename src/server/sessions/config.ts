@@ -86,6 +86,24 @@ export interface TinstarConfig {
      *  override is rejected at launch (the auth-sensitive default). */
     allowTokenOverride: boolean
   }
+  /**
+   * The Slate's code-spawned surface authors. When a surface carries a self-contained
+   * `refresh` recipe, refreshing it spawns a fresh one-shot author (a headless child)
+   * instead of nudging the run's single main agent — see src/server/sessions/surfaceAuthor.ts.
+   */
+  slate: {
+    author: {
+      /** Master kill switch for the spike. False ⇒ every refresh falls back to the
+       *  main-agent path (deliverSlatePrompt), disabling code-spawned authors with no
+       *  code revert. */
+      enabled: boolean
+      /** Model the one-shot author runs on. Capable by default — a headless author
+       *  wanders on a too-weak model; tune toward cheaper/faster once quality holds. */
+      model: string
+      /** Hard timeout (ms) after which a wandering/hung author child is killed. */
+      timeoutMs: number
+    }
+  }
 }
 
 // --- Helpers ---
@@ -246,6 +264,14 @@ export const BASE_CONFIG = {
     allowedModels: [] as string[],
     allowTokenOverride: false,
   },
+  slate: {
+    author: {
+      enabled: true,
+      // Capable default: a headless `claude -p` author wanders on a weak model.
+      model: 'sonnet',
+      timeoutMs: 5 * 60_000,
+    },
+  },
 }
 
 // --- Public API ---
@@ -326,6 +352,8 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
         ? (userConfig.switchboard as Record<string, boolean>).allowTokenOverride!
         : merged.switchboard.allowTokenOverride,
     },
+    // deepMerge already folded any user `slate.author` overrides into merged.slate.
+    slate: merged.slate,
   }
 
   return deepFreeze(config)
