@@ -49,13 +49,17 @@ function safeHref(url: string): string {
  *  headings; caption/body (and the default) render as paragraph text. */
 function textVariantClass(variant: unknown): string {
   switch (variant) {
-    case 'h1': return 'text-base font-bold mt-2 mb-1'
-    case 'h2': return 'text-sm font-bold mt-2 mb-1'
-    case 'h3': return 'text-sm font-semibold mt-1.5 mb-1'
+    // Headlines/subheads: Chakra Petch (display), high ink. Sharp, tight leading.
+    case 'h1': return 'font-display text-[15px] font-semibold leading-tight text-ink-high mt-2 mb-1'
+    case 'h2': return 'font-display text-[13.5px] font-semibold leading-tight text-ink-high mt-2 mb-1'
+    case 'h3': return 'font-display text-[12.5px] font-semibold text-ink-high mt-1.5 mb-1'
+    // Section H4/H5: mono, 11px, caps, wide tracking, low ink — a quiet label.
     case 'h4':
-    case 'h5': return 'text-xs font-semibold uppercase tracking-wide mt-1.5 mb-0.5'
-    case 'caption': return 'text-xs text-neutral-400 my-1'
-    default: return 'my-1'
+    case 'h5': return 'font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-low mt-2 mb-1'
+    // Caption: a quieter supporting aside.
+    case 'caption': return 'text-[12.5px] text-ink-low my-1'
+    // Body: neutral sans, comfortable reading measure, mid ink. Never the display face.
+    default: return 'text-[14px] leading-[1.6] text-ink-mid my-1'
   }
 }
 
@@ -64,44 +68,54 @@ export const CATALOG: Record<string, CatalogEntry> = {
     render: (node) => <p className={textVariantClass(node.variant)}>{str(node.text)}</p>,
   },
   Column: {
-    render: (_node, children) => <div className="flex flex-col gap-1">{children}</div>,
+    // Layout only, no box. Gap-inside-a-surface = 8px (the design's inner rhythm).
+    render: (_node, children) => <div className="flex flex-col gap-2">{children}</div>,
   },
   Row: {
-    render: (_node, children) => <div className="flex flex-row flex-wrap gap-2 items-baseline">{children}</div>,
+    // Wraps and aligns to baseline; gap 12px.
+    render: (_node, children) => <div className="flex flex-row flex-wrap gap-3 items-baseline">{children}</div>,
   },
   List: {
     render: (node, children) => {
       const ordered = node.listStyle === 'ordered'
       const Tag = ordered ? 'ol' : 'ul'
-      const cls = ordered ? 'list-decimal pl-5 my-1' : 'list-disc pl-5 my-1'
-      return <Tag className={cls}>{children.map((c, i) => <li key={i} className="my-0.5">{c}</li>)}</Tag>
+      const cls = `${ordered ? 'list-decimal' : 'list-disc'} pl-5 my-1 text-[14px] leading-[1.6] text-ink-mid marker:text-ink-low`
+      return <Tag className={cls}>{children.map((c, i) => <li key={i} className="my-1">{c}</li>)}</Tag>
     },
   },
   Card: {
     // A2UI Card carries a single `child`; the renderer resolves it into children[0].
+    // Nested cards step UP to surface.hover so nesting reads by lightness, not by border.
     render: (_node, children) => (
-      <div className="rounded-md border border-neutral-700 bg-neutral-800/50 p-2 my-1">{children[0] ?? null}</div>
+      <div className="rounded border border-hairline bg-surface-hover p-3 my-1">{children[0] ?? null}</div>
     ),
   },
   Divider: {
-    render: () => <hr className="my-2 border-neutral-700" />,
+    render: () => <hr className="my-2 border-hairline" />,
   },
   Link: {
     render: (node) => {
       const url = str(node.url)
       const label = str(node.text) || url
       const href = safeHref(url)
-      if (!href) return <span className="text-sky-300">{label}</span>
+      // P1 — chrome quiet: a link is navigation, not meaning, so it stays ink (no hue),
+      // underlined and brightening on hover, with a ↗ affordance for the external jump.
+      if (!href) return <span className="text-ink-mid">{label}</span>
       return (
-        <a href={href} target="_blank" rel="noreferrer noopener" className="text-sky-300 underline hover:text-sky-200">
-          {label}
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="text-ink-mid underline decoration-hairline underline-offset-2 hover:text-ink-high"
+        >
+          {label} <span className="text-ink-low">↗</span>
         </a>
       )
     },
   },
   Code: {
     render: (node) => (
-      <pre className="bg-neutral-800 p-2 rounded overflow-x-auto my-1 text-xs">
+      <pre className="font-mono text-[12px] bg-surface-hover border border-hairline rounded p-2 overflow-x-auto my-1 text-ink-mid">
         <code>{str(node.text)}</code>
       </pre>
     ),
