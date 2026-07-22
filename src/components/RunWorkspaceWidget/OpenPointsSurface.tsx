@@ -22,6 +22,7 @@ import { isAnswerable } from '../../a2ui/controls'
 import type { NoticeFormState } from '../../a2ui/controlComponents'
 import { apiFetch } from '../../apiClient'
 import { SurfaceThread } from './SurfaceThread'
+import { RefreshButton } from './slateRefresh'
 
 /** The visible track stages, in order. `resolved` is terminal; `dismissed` is a
  *  side exit (rendered as a dimmed row, not a track position). */
@@ -67,7 +68,19 @@ const EMPTY_SET: ReadonlySet<string> = new Set()
 
 /** A single point row. Holds its own optimistic resolve + answer form state, keyed
  *  per control-component id, so multiple choice groups on one body stay independent. */
-function OpenPointRow({ runId, surface }: { runId: string; surface: SlateSurface }) {
+function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refreshing = false, unreachable = false, onRefresh }: {
+  runId: string
+  surface: SlateSurface
+  /** Slate v2 U2/R4 — this point is a hidden surface, rendered dimmed. */
+  hidden?: boolean
+  onHide?: (id: string) => void
+  onUnhide?: (id: string) => void
+  /** Slate v2 U3 — refresh state is owned by the parent SlatePanel and threaded
+   *  down so a per-row ⟳ and the header "refresh all" share one source of truth. */
+  refreshing?: boolean
+  unreachable?: boolean
+  onRefresh?: (surface: SlateSurface) => void
+}) {
   const [expanded, setExpanded] = useState(false)
   // Optimistic status override (null = trust the server value). Cleared only once
   // the reconciled surface actually carries the new status — NOT by watching
@@ -199,7 +212,7 @@ function OpenPointRow({ runId, surface }: { runId: string; surface: SlateSurface
       data-testid={`point-${surface.id}`}
       data-status={status}
       className={`rounded border border-primary/10 bg-surface-base/40 p-2 ${
-        status === 'dismissed' ? 'opacity-50' : ''
+        status === 'dismissed' || hidden ? 'opacity-50' : ''
       }`}
     >
       <div className="flex items-start gap-1.5">
@@ -231,6 +244,37 @@ function OpenPointRow({ runId, surface }: { runId: string; surface: SlateSurface
             >
               {surface.headline ?? '(untitled point)'}
             </span>
+            {/* Refresh (⟳) — re-run this point's author (U3). Hidden on a hidden row
+                (nothing to look at) but present on every visible one. */}
+            {!hidden && onRefresh && (
+              <RefreshButton
+                id={surface.id}
+                refreshing={refreshing}
+                onClick={() => onRefresh(surface)}
+                className="shrink-0 text-[11px]"
+              />
+            )}
+            {/* Hide (✕) / unhide — a per-browser view preference (R4), never a
+                destructive delete; the point stays in the agent's file. */}
+            {hidden ? (
+              <button
+                data-testid={`unhide-surface-${surface.id}`}
+                onClick={() => onUnhide?.(surface.id)}
+                title="Unhide this point"
+                className="shrink-0 rounded bg-surface-hover px-1 text-[9px] text-slate-400 hover:text-slate-200"
+              >
+                unhide
+              </button>
+            ) : (
+              <button
+                data-testid={`hide-surface-${surface.id}`}
+                onClick={() => onHide?.(surface.id)}
+                title="Hide this point (view-only — the file stays intact)"
+                className="shrink-0 rounded px-1 text-[11px] leading-none text-slate-500 hover:text-slate-200"
+              >
+                ✕
+              </button>
+            )}
           </div>
 
           {/* State track: open → discuss → waiting → resolved. `data-stage` is the
@@ -289,6 +333,11 @@ function OpenPointRow({ runId, surface }: { runId: string; surface: SlateSurface
             </div>
           )}
 
+          {unreachable && (
+            <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-1 text-2xs text-amber-300/90">
+              session not reachable
+            </div>
+          )}
           {error && <div className="mt-1 text-2xs text-red-300">{error}</div>}
         </div>
       </div>
@@ -362,14 +411,30 @@ interface Props {
   runId: string
   /** Every `kind === 'open-point'` surface on the run, already sorted. */
   points: SlateSurface[]
+  /** Slate v2 U2/R4 — ids of hidden surfaces. Hidden points are excluded unless
+   *  `showHidden` is set, in which case they render dimmed with an "unhide". */
+  hiddenIds?: ReadonlySet<string>
+  showHidden?: boolean
+  onHide?: (id: string) => void
+  onUnhide?: (id: string) => void
+  /** Slate v2 U3 — refresh state owned by the parent SlatePanel. */
+  refreshingIds?: ReadonlySet<string>
+  unreachableIds?: ReadonlySet<string>
+  onRefresh?: (surface: SlateSurface) => void
 }
 
-export function OpenPointsSurface({ runId, points }: Props) {
-  // Points sink once resolved/dismissed so the live ones stay at the top.
+const EMPTY_HIDDEN: ReadonlySet<string> = new Set()
+
+export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, showHidden = false, onHide, onUnhide, refreshingIds = EMPTY_HIDDEN, unreachableIds = EMPTY_HIDDEN, onRefresh }: Props) {
+  // Points sink once resolved/dismissed so the live ones stay at the top; hidden
+  // ones are dropped unless the reveal toggle is on (R4 — the filter runs every
+  // render so an SSE re-projection can't resurrect a hidden point).
   const ordered = useMemo(() => {
     const rank = (s: SlateSurface) => (s.status === 'resolved' || s.status === 'dismissed' ? 1 : 0)
-    return [...points].sort((a, b) => rank(a) - rank(b))
-  }, [points])
+    return [...points]
+      .filter((s) => showHidden || !hiddenIds.has(s.id))
+      .sort((a, b) => rank(a) - rank(b))
+  }, [points, hiddenIds, showHidden])
 
   return (
     <div
@@ -378,7 +443,17 @@ export function OpenPointsSurface({ runId, points }: Props) {
     >
       <div className="text-[9px] font-mono uppercase tracking-wider text-slate-500">Open points</div>
       {ordered.map((surface) => (
-        <OpenPointRow key={surface.id} runId={runId} surface={surface} />
+        <OpenPointRow
+          key={surface.id}
+          runId={runId}
+          surface={surface}
+          hidden={hiddenIds.has(surface.id)}
+          onHide={onHide}
+          onUnhide={onUnhide}
+          refreshing={refreshingIds.has(surface.id)}
+          unreachable={unreachableIds.has(surface.id)}
+          onRefresh={onRefresh}
+        />
       ))}
       <AddPoint runId={runId} />
     </div>

@@ -102,3 +102,41 @@ export function slateAnswerPromptText(
   lines.push('', GUARDRAIL, '', 'Reply on its thread once you have acted:', ...replyCurl(point, origin))
   return lines.join('\n')
 }
+
+/** Prompt for a REFRESH nudge (POST /slate/surfaces/:pid/refresh). Refresh persists
+ *  NOTHING (plan KTD2): this text is delivered best-effort and the surface regenerates
+ *  through the normal file→watcher→projection path. When the surface carries a
+ *  file-owned `refresh` recipe, the delivered text IS that recipe verbatim, plus a
+ *  one-line instruction to rewrite the surface's `.tinstar/slate` file; otherwise a
+ *  bare regenerate-nudge naming the surface. `_origin` is unused (regeneration is
+ *  file-based, not a curl) but kept for signature parity with the other builders. */
+export function slateRefreshPromptText(point: Point, _origin: string): string {
+  const body = point.refresh
+    ? [point.refresh, '', `Then rewrite the .tinstar/slate file that defines surface ${point.id} (its id/filename need not match).`]
+    : [`Regenerate the Slate surface "${oneLine(point.headline)}" (surface ${point.id}) and rewrite the .tinstar/slate file that defines it.`]
+  // Carry the GUARDRAIL like every other Slate prompt: the recipe is file-authored
+  // (an untrusted repo/branch/process could plant one), so frame it as a note, not a
+  // command to abandon in-flight work.
+  return [...body, '', GUARDRAIL].join('\n')
+}
+
+/** Prompt for the surface COMPOSER (POST /slate/compose). Persists NOTHING (KTD4):
+ *  delivered best-effort; the agent authors a NEW surface by writing its
+ *  `.tinstar/slate/<slug>.json`, so composition reuses the Slate's one file-in model.
+ *  `parts.prompt` comes from a catalog template, `parts.freeform` from the user's own
+ *  text; at least one is present (the route rejects an empty body). `_origin` is unused
+ *  (authoring is file-based) but kept for signature parity. */
+export function slateComposePromptText(
+  parts: { prompt?: string; freeform?: string },
+  _origin: string,
+): string {
+  const head = parts.prompt ? `Author a Slate surface. ${parts.prompt}` : 'Author a Slate surface.'
+  const lines: string[] = [head]
+  if (parts.freeform) lines.push(parts.freeform)
+  lines.push(
+    'Write it to .tinstar/slate/<slug>.json with an id, headline, A2UI content, and an optional refresh recipe.',
+    '',
+    GUARDRAIL,
+  )
+  return lines.join('\n')
+}

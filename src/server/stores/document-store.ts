@@ -976,6 +976,7 @@ export class DocumentStore {
       kind: p.anchor?.kind === 'surface' ? 'diagram' : 'open-point',
       order: p.createdAt,
       ...(p.content ? { body: p.content } : {}),
+      ...(p.refresh ? { refresh: p.refresh } : {}),
       headline: p.headline,
       status: p.status,
       ...(p.replies ? { thread: p.replies } : {}),

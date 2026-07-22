@@ -33,6 +33,10 @@ export interface PointInput {
   anchor?: PointAnchor
   headline: string
   content?: A2uiContent
+  /** File-owned refresh recipe (plan U3/KTD3): the exact prompt the agent re-runs to
+   *  regenerate this surface. Optional — a recipe-less surface still gets a bare nudge.
+   *  Rides the file→store→bridge path exactly like `headline`/`content`/`anchor`. */
+  refresh?: string
   /** Server stamps `createdAt` on first projection; a file may seed it. */
   createdAt?: number
 }
@@ -85,6 +89,7 @@ function pointEqual(a: Point, b: Point): boolean {
 function fileOwnedChanged(prior: Point, input: PointInput): boolean {
   return (
     prior.headline !== input.headline ||
+    (prior.refresh ?? undefined) !== (input.refresh ?? undefined) ||
     JSON.stringify(prior.content ?? null) !== JSON.stringify(input.content ?? null) ||
     JSON.stringify(prior.anchor ?? null) !== JSON.stringify(input.anchor ?? null)
   )
@@ -106,6 +111,7 @@ function createPoint(
     ...(input.anchor ? { anchor: input.anchor } : {}),
     headline: input.headline,
     ...(input.content ? { content: input.content } : {}),
+    ...(input.refresh ? { refresh: input.refresh } : {}),
     status: 'open',
     createdAt,
     amendedAt: createdAt,
@@ -131,6 +137,9 @@ function mergeFileOwned(prior: Point, input: PointInput, now: number): Point {
   // File owns the body: an omitted `content` clears it.
   if (input.content) next.content = input.content
   else delete next.content
+  // File owns the refresh recipe too: overwrite on projection, clear when omitted.
+  if (input.refresh) next.refresh = input.refresh
+  else delete next.refresh
   if (input.anchor) next.anchor = input.anchor
   // status recomputes, but replies/resolvedAt/dismissedAt are untouched, so a
   // pure body change never disturbs a live thread or an explicit resolve.

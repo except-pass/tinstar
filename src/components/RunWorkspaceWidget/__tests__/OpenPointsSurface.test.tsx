@@ -114,4 +114,60 @@ describe('OpenPointsSurface (U6)', () => {
       author: 'user',
     })
   })
+
+  // Slate v2 U2/R4 — an open point is a surface; hiding is a per-browser view
+  // preference driven from the parent (SlatePanel owns the persisted set).
+  it('a point row carries a ✕ hide control that reports its id', () => {
+    const onHide = vi.fn()
+    render(<OpenPointsSurface runId="run-1" points={[point('p1')]} onHide={onHide} />)
+    fireEvent.click(screen.getByTestId('hide-surface-p1'))
+    expect(onHide).toHaveBeenCalledWith('p1')
+  })
+
+  // Slate v2 U3 — refresh state is owned by the parent SlatePanel and threaded down;
+  // a point row's ⟳ reports its surface up so the parent hook drives the POST.
+  it('a point row carries a ⟳ refresh control that reports its surface', () => {
+    const onRefresh = vi.fn()
+    render(<OpenPointsSurface runId="run-1" points={[point('p1')]} onRefresh={onRefresh} />)
+    fireEvent.click(screen.getByTestId('refresh-surface-p1'))
+    expect(onRefresh).toHaveBeenCalledWith(expect.objectContaining({ id: 'p1' }))
+  })
+
+  it('shows the spinner for a refreshing point and a note for an unreachable one', () => {
+    render(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[point('p1')]}
+        onRefresh={vi.fn()}
+        refreshingIds={new Set(['p1'])}
+        unreachableIds={new Set(['p1'])}
+      />,
+    )
+    expect(screen.getByTestId('refresh-surface-p1').getAttribute('data-refreshing')).toBe('true')
+    expect(screen.getByTestId('refresh-unreachable-p1')).toBeTruthy()
+  })
+
+  it('filters a hidden point unless the reveal toggle is on', () => {
+    const points = [point('p1'), point('p2')]
+    const { rerender } = render(
+      <OpenPointsSurface runId="run-1" points={points} hiddenIds={new Set(['p1'])} showHidden={false} />,
+    )
+    expect(screen.queryByTestId('point-p1')).toBeNull()
+    expect(screen.getByTestId('point-p2')).toBeTruthy()
+
+    // Revealed → the hidden row returns with an "unhide" affordance.
+    const onUnhide = vi.fn()
+    rerender(
+      <OpenPointsSurface
+        runId="run-1"
+        points={points}
+        hiddenIds={new Set(['p1'])}
+        showHidden
+        onUnhide={onUnhide}
+      />,
+    )
+    expect(screen.getByTestId('point-p1')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('unhide-surface-p1'))
+    expect(onUnhide).toHaveBeenCalledWith('p1')
+  })
 })

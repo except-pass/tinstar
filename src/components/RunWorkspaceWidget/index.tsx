@@ -16,6 +16,14 @@ import '../../hotkeys/widgets/runWorkspaceWidget'  // side-effect: registers Wid
 import { hexToRgba, resolveRunAccent } from '../runAccent'
 import { apiFetch } from '../../apiClient'
 import { useConfig } from '../../context/ConfigContext'
+import { getPref, setPref } from '../../lib/uiPrefs'
+
+// The Slate column's drag-resize bounds (Slate v2 U1/R1). Two-column reflow
+// kicks in above SLATE_TWO_COL_MIN (see SlatePanel); the max keeps the column
+// from crowding out the session pane on a narrow card.
+const SLATE_MIN_WIDTH = 260
+const SLATE_MAX_WIDTH = 560
+const SLATE_DEFAULT_WIDTH = 320
 
 interface Props {
   run: RunData
@@ -42,8 +50,12 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const [sessionTab, setSessionTab] = useState<'recap' | 'terminal'>(run.port ? 'terminal' : 'recap')
   const [filesPanelWidth, setFilesPanelWidth] = useState(180)
   const [handsPanelHeight, setHandsPanelHeight] = useState(120)
+  // Slate column width — restored from the per-browser pref on mount, written on
+  // drag end (Slate v2 U1/R1). Mirrors the files-panel resize below.
+  const [slateWidth, setSlateWidth] = useState(() => getPref('slateWidth') ?? SLATE_DEFAULT_WIDTH)
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
   const handsResizeDragRef = useRef<{ startY: number; startH: number } | null>(null)
+  const slateResizeDragRef = useRef<{ startX: number; startW: number } | null>(null)
 
   const [termTick, bumpTerm] = useReducer((n: number) => n + 1, 0)
   const config = useConfig()
@@ -185,6 +197,29 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   }, [])
 
   const onResizePointerUp = useCallback(() => { resizeDragRef.current = null }, [])
+
+  // Slate column resize — the grab handle sits on the Slate's LEFT border, so
+  // dragging left (clientX decreasing) widens it (R1). Persisted on drag end.
+  const onSlateResizePointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    slateResizeDragRef.current = { startX: e.clientX, startW: slateWidth }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }, [slateWidth])
+
+  const onSlateResizePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!slateResizeDragRef.current) return
+    const next = slateResizeDragRef.current.startW + (slateResizeDragRef.current.startX - e.clientX)
+    setSlateWidth(Math.max(SLATE_MIN_WIDTH, Math.min(SLATE_MAX_WIDTH, next)))
+  }, [])
+
+  const onSlateResizePointerUp = useCallback(() => {
+    if (!slateResizeDragRef.current) return
+    slateResizeDragRef.current = null
+    // Persist the settled width so it survives reload (R1). Outside a setState updater —
+    // updaters must be pure (StrictMode/concurrent would double-write the pref).
+    setPref('slateWidth', slateWidth)
+  }, [slateWidth])
 
   const onHandsResizePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
@@ -380,8 +415,22 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
             data-testid="focus-zone-slate"
             className={`flex ${focusZone === 'slate' ? 'ring-2 ring-inset ring-indigo-500 rounded' : ''}`}
           >
-            <div className="w-80 h-full flex flex-col overflow-hidden bg-surface-panel border-l border-primary/10">
-              <SlatePanel runId={run.id} surfaces={run.slate} />
+            <div
+              className="relative h-full flex flex-col overflow-hidden bg-surface-panel border-l border-primary/10 flex-shrink-0"
+              style={{ width: slateWidth }}
+            >
+              {/* Left-border drag handle — widen by dragging left (R1). */}
+              <div
+                data-testid="slate-resize-handle"
+                className="absolute top-0 left-0 w-1.5 h-full cursor-col-resize transition-colors z-10"
+                style={{ backgroundColor: hexToRgba(runAccent, 0.18) }}
+                onPointerDown={onSlateResizePointerDown}
+                onPointerMove={onSlateResizePointerMove}
+                onPointerUp={onSlateResizePointerUp}
+                onPointerCancel={onSlateResizePointerUp}
+                onLostPointerCapture={onSlateResizePointerUp}
+              />
+              <SlatePanel runId={run.id} surfaces={run.slate} width={slateWidth} />
             </div>
           </div>
         )}

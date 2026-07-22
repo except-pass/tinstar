@@ -498,6 +498,10 @@ export interface SlateSurface {
   /** File-owned A2UI body. Absent for a surface assembled purely from store state
    *  (e.g. a bare open-point). */
   body?: A2uiContent
+  /** File-owned refresh recipe (plan U3/R5): the prompt the agent re-runs to
+   *  regenerate this surface. Absent when the surface carries no recipe (refresh
+   *  still nudges). Carried from the file through the store onto `run.slate`. */
+  refresh?: string
   /** Point render fields — present when this surface is a store-backed point
    *  (open-points list, threaded surface). DocumentStore projects the run's
    *  SlateStore points into RunData.slate so the client renders ONE channel
@@ -554,6 +558,10 @@ export interface Point {
   headline: string
   /** File-owned: the point's A2UI body (absent for a bare headline point). */
   content?: A2uiContent
+  /** File-owned refresh recipe (plan U3/R5): the prompt POST /slate/surfaces/:pid/refresh
+   *  delivers verbatim to regenerate this surface. Optional; a recipe-less surface
+   *  still gets a bare nudge. Merged like the other file-owned fields (KTD3). */
+  refresh?: string
   /** Derived from the thread unless `resolvedAt`/`dismissedAt` is set (explicit). */
   status: PointStatus
   /** Store-owned thread, append-only (mirrors pins/notes). Preserved across a
