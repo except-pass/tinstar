@@ -40,3 +40,9 @@ A region of a run's workspace card where an agent, the user, or any local proces
 
 ### Addressable point
 The single primitive the Slate is built from: a durable, threaded item authored by an agent, a user, or a process, optionally anchored to a decision or a whole surface, carrying an append-only discussion thread and a soft lifecycle (open, discussing, waiting, resolved, dismissed). A Roundup notice, a canvas pin, and a per-surface discussion are the same object with a different anchor and default author.
+
+### Surface
+A single interactive panel on the Slate — the unit an agent, user, or process authors and the user touches independently. Each surface is an addressable point rendered as its own card: an open point in the grouped list, a standalone diagram, a form, or a progress panel. A surface's body is written in A2UI; its identity, discussion thread, and lifecycle status are owned by the store, so re-authoring a surface under the same identity amends it without discarding what has accumulated on it.
+
+### A2UI
+The bounded, host-rendered UI description language a surface's body is written in: a flat set of components — text, layout rows and columns, lists, cards, links, and interactive controls — referenced by id from one root. Closed vocabulary, open composition: an agent composes from a fixed catalog the host draws in its own theme, rather than shipping arbitrary markup or styles. A body that is not valid A2UI is rejected at the boundary and never renders.
