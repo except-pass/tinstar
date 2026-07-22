@@ -32,6 +32,8 @@ import { getHiddenSlateSurfaces, addHiddenSlateSurface, removeHiddenSlateSurface
 import { useSlateRefresh, RefreshButton } from './slateRefresh'
 import { SlateComposer } from './SlateComposer'
 import { SlateExplainButton } from './SlateExplainButton'
+import { SurfaceAge } from './SurfaceAge'
+import { useNow } from '../../hooks/useNow'
 
 /** Column width (px) at/above which surfaces reflow into two columns (R2). Kept
  *  in step with the resize clamp in `RunWorkspaceWidget` (min 260, max 560). */
@@ -110,6 +112,9 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
   // unconditionally) can watch the same list the render uses.
   const sorted = useMemo(() => sortSurfaces(surfaces), [surfaces])
   const { refreshingIds, unreachableIds, bulkRefreshing, refresh, refreshAll } = useSlateRefresh(runId, sorted)
+  // One ticking clock for the whole panel — every surface's "updated Xm ago" reads
+  // from this so they agree and there's no timer-per-card.
+  const now = useNow()
 
   const hide = useCallback((id: string) => {
     addHiddenSlateSurface(id)
@@ -244,6 +249,7 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
                   refreshingIds={refreshingIds}
                   unreachableIds={unreachableIds}
                   onRefresh={refresh}
+                  now={now}
                 />
               </div>
             )
@@ -270,6 +276,13 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
               session not reachable
             </div>
           ) : null
+          // Freshness footer: "updated Xm ago", ambering when the surface hasn't been
+          // tended in a while — the visible cue so a stale assertion gets a second look.
+          const footer = (
+            <div className="mt-1 flex justify-end">
+              <SurfaceAge amendedAt={surface.amendedAt} now={now} />
+            </div>
+          )
 
           if (surface.kind === 'diagram') {
             return (
@@ -281,6 +294,7 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
                 {controls}
                 <DiagramSurface runId={runId} surface={surface} />
                 {note}
+                {footer}
               </div>
             )
           }
@@ -298,6 +312,7 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
                 <A2uiRenderer content={surface.body} />
               </A2uiErrorBoundary>
               {note}
+              {footer}
             </div>
           )
         })}

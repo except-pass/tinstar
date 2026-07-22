@@ -23,6 +23,7 @@ import type { NoticeFormState } from '../../a2ui/controlComponents'
 import { apiFetch } from '../../apiClient'
 import { SurfaceThread } from './SurfaceThread'
 import { RefreshButton } from './slateRefresh'
+import { SurfaceAge } from './SurfaceAge'
 
 /** The visible track stages, in order. `resolved` is terminal; `dismissed` is a
  *  side exit (rendered as a dimmed row, not a track position). */
@@ -68,7 +69,7 @@ const EMPTY_SET: ReadonlySet<string> = new Set()
 
 /** A single point row. Holds its own optimistic resolve + answer form state, keyed
  *  per control-component id, so multiple choice groups on one body stay independent. */
-function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refreshing = false, unreachable = false, onRefresh }: {
+function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refreshing = false, unreachable = false, onRefresh, now }: {
   runId: string
   surface: SlateSurface
   /** Slate v2 U2/R4 — this point is a hidden surface, rendered dimmed. */
@@ -80,6 +81,8 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
   refreshing?: boolean
   unreachable?: boolean
   onRefresh?: (surface: SlateSurface) => void
+  /** Ticking clock from the panel — drives the row's "updated Xm ago" freshness. */
+  now: number
 }) {
   const [expanded, setExpanded] = useState(false)
   // Optimistic status override (null = trust the server value). Cleared only once
@@ -339,6 +342,10 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
             </div>
           )}
           {error && <div className="mt-1 text-2xs text-red-300">{error}</div>}
+          {/* Freshness: "updated Xm ago", ambering when the point has gone untended. */}
+          <div className="mt-1 flex justify-end">
+            <SurfaceAge amendedAt={surface.amendedAt} now={now} />
+          </div>
         </div>
       </div>
     </div>
@@ -421,11 +428,14 @@ interface Props {
   refreshingIds?: ReadonlySet<string>
   unreachableIds?: ReadonlySet<string>
   onRefresh?: (surface: SlateSurface) => void
+  /** Ticking clock from the panel — threaded to each row's freshness footer.
+   *  Optional so tests/standalone callers render without wiring a clock. */
+  now?: number
 }
 
 const EMPTY_HIDDEN: ReadonlySet<string> = new Set()
 
-export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, showHidden = false, onHide, onUnhide, refreshingIds = EMPTY_HIDDEN, unreachableIds = EMPTY_HIDDEN, onRefresh }: Props) {
+export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, showHidden = false, onHide, onUnhide, refreshingIds = EMPTY_HIDDEN, unreachableIds = EMPTY_HIDDEN, onRefresh, now = Date.now() }: Props) {
   // Points sink once resolved/dismissed so the live ones stay at the top; hidden
   // ones are dropped unless the reveal toggle is on (R4 — the filter runs every
   // render so an SSE re-projection can't resurrect a hidden point).
@@ -453,6 +463,7 @@ export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, sho
           refreshing={refreshingIds.has(surface.id)}
           unreachable={unreachableIds.has(surface.id)}
           onRefresh={onRefresh}
+          now={now}
         />
       ))}
       <AddPoint runId={runId} />

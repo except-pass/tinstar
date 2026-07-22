@@ -490,8 +490,9 @@ export interface SlateSurface {
   id: string
   /** Who authored the surface body — agent, the user, or a local process. */
   author: 'agent' | 'user' | 'process'
-  /** Surface kind, drives which renderer the Slate panel picks
-   *  (e.g. 'open-points' | 'diagram' | 'progress'). */
+  /** Surface kind, drives which renderer the Slate panel picks. Derived from the
+   *  anchor by projectRunToSlate: anchor.kind==='surface' → 'diagram' (a standalone
+   *  card + thread); no/other anchor → 'open-point' (grouped list). */
   kind: string
   /** Sort order within the Slate; ties broken by createdAt. */
   order?: number
