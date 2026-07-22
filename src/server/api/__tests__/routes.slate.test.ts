@@ -13,11 +13,18 @@ vi.mock('../../sessions', async (orig) => {
   const actual = await orig<typeof import('../../sessions')>()
   return { ...actual, getSession, tmuxBackend: { ...actual.tmuxBackend, sendPrompt } }
 })
+// The code-spawned author is mocked so tests never launch a real `claude -p`. Default
+// return is dispatched:false so every EXISTING test falls through to the main-agent path
+// (deliverSlatePrompt) unchanged; the author-branch tests override the return to true.
+const dispatchSurfaceAuthor = vi.hoisted(() => vi.fn(() => ({ dispatched: false })))
+vi.mock('../../sessions/surfaceAuthor', () => ({ dispatchSurfaceAuthor }))
 
 beforeEach(() => {
   sendPrompt.mockClear()
   getSession.mockReset()
   getSession.mockReturnValue(null)
+  dispatchSurfaceAuthor.mockClear()
+  dispatchSurfaceAuthor.mockReturnValue({ dispatched: false })
 })
 
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
@@ -47,6 +54,7 @@ function createTestServer(root: string): Harness {
     nats: { channelServerPackage: '', bunPath: '', jetstream: false },
     uploadMaxBytes: 100 * 1024 * 1024,
     ui: { promptComposerDefault: false, showEmptyEntities: true, layouts: {}, telemetryPanels: {} },
+    slate: { author: { enabled: true, model: 'test-model', timeoutMs: 1000 } },
   }
   const docStore = new DocumentStore()
   const ctx = {
@@ -565,6 +573,69 @@ describe('POST /api/runs/:id/slate/compose', () => {
     const res = await compose(srv, { prompt: 'Author a Dataflow surface' })
     expect(res.status).toBe(200)
     expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(false)
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+})
+
+describe('refresh/compose — code-spawned author branch (feat: multi-agent Slate)', () => {
+  function seedSurfaceWithRecipe(srv: Harness, id = 'srf-auth'): string {
+    srv.docStore.applyRunSlateProjection(RUN, [{
+      id, author: 'agent', headline: 'a surface',
+      content: { root: 'r', components: [{ id: 'r', component: 'Text', text: 'x' }] },
+      refresh: 'Re-run the eval of PR #7 and rewrite this surface',
+    }])
+    return id
+  }
+
+  it('a surface WITH a recipe spawns an author — no main-agent nudge', withServer(async srv => {
+    seedRun(srv.docStore)
+    const pid = seedSurfaceWithRecipe(srv)
+    dispatchSurfaceAuthor.mockReturnValue({ dispatched: true })
+    getSession.mockReturnValue({ name: RUN }) // would be reachable — the author path skips it
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/${pid}/refresh`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { dispatched: boolean } }).data.dispatched).toBe(true)
+    expect(dispatchSurfaceAuthor).toHaveBeenCalledTimes(1)
+    const arg = dispatchSurfaceAuthor.mock.calls[0]![0] as { runId: string; prompt: string }
+    expect(arg.runId).toBe(RUN)
+    expect(arg.prompt).toContain('Re-run the eval of PR #7') // recipe carried into the author prompt
+    expect(sendPrompt).not.toHaveBeenCalled()                // the run's main agent is untouched
+  }))
+
+  it('a recipe surface falls back to the main agent when the spawn declines', withServer(async srv => {
+    seedRun(srv.docStore)
+    const pid = seedSurfaceWithRecipe(srv)
+    dispatchSurfaceAuthor.mockReturnValue({ dispatched: false }) // disabled / no workdir / spawn error
+    getSession.mockReturnValue({ name: RUN })
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/${pid}/refresh`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { delivered: boolean } }).data.delivered).toBe(true)
+    expect(dispatchSurfaceAuthor).toHaveBeenCalledTimes(1)
+    expect(sendPrompt).toHaveBeenCalledTimes(1) // fell back to the unchanged main-agent nudge
+  }))
+
+  it('a surface WITHOUT a recipe never spawns an author (session-derived stays main-agent)', withServer(async srv => {
+    seedRun(srv.docStore)
+    srv.docStore.applyRunSlateProjection(RUN, [{
+      id: 'srf-norecipe', author: 'agent', headline: 'no recipe',
+      content: { root: 'r', components: [{ id: 'r', component: 'Text', text: 'x' }] },
+    }])
+    getSession.mockReturnValue({ name: RUN })
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/surfaces/srf-norecipe/refresh`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(dispatchSurfaceAuthor).not.toHaveBeenCalled()
+    expect(sendPrompt).toHaveBeenCalledTimes(1) // the unchanged main-agent path
+  }))
+
+  it('compose offloads to an author when enabled', withServer(async srv => {
+    seedRun(srv.docStore)
+    dispatchSurfaceAuthor.mockReturnValue({ dispatched: true })
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/compose`, {
+      method: 'POST', body: JSON.stringify({ prompt: 'Build a PR review surface' }),
+    })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { dispatched: boolean } }).data.dispatched).toBe(true)
+    expect(dispatchSurfaceAuthor).toHaveBeenCalledTimes(1)
     expect(sendPrompt).not.toHaveBeenCalled()
   }))
 })
