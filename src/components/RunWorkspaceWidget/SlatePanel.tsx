@@ -234,7 +234,7 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
         className={`flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin p-2 grid gap-2 items-start [overflow-wrap:anywhere] ${columns === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}
       >
         {sorted.length === 0 && (
-          <div data-testid="slate-empty-hint" className="col-span-full px-1 py-8 text-center text-[12px] text-ink-low leading-relaxed">
+          <div data-testid="slate-empty-hint" className="col-span-full px-1 py-8 text-center font-sans text-[12px] text-ink-low leading-relaxed">
             Nothing on the Slate yet.<br />
             <span className="text-ink-mid">✦ Explain</span> the session, or <span className="text-ink-mid">+ Add a surface</span> to fill it.
           </div>
@@ -281,7 +281,7 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
           // Framed as a quiet note, not an error (low ink) — the run being asleep isn't
           // a failure of the surface.
           const note = isUnreachable ? (
-            <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-2 text-[11px] leading-snug text-ink-low">
+            <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-2 font-sans text-[11px] leading-snug text-ink-low">
               Sent — but that session isn’t reachable right now.
             </div>
           ) : null

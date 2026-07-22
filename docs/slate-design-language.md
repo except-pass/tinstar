@@ -29,7 +29,7 @@ One visual language for every surface an agent (or the user) authors on a run's 
 ### Type — three faces, three jobs
 - **Chakra Petch** (`font-display`) — surface headlines + section titles.
 - **JetBrains Mono** (`font-mono`) — labels, meta, pills, code.
-- **Neutral system sans** — reading body. Author-written prose never uses the display face.
+- **Neutral system sans** — reading body. Author-written prose never uses the display face. **Load-bearing:** the run card defaults to mono (its terminal aesthetic), so every prose primitive must pin `font-sans` explicitly — it does NOT inherit sans. Body/caption/List/Link pin it; only labels (h4/h5), Code, and headlines override to mono/display.
 
 | Role | Spec |
 |---|---|
