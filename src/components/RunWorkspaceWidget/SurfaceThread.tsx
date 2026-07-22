@@ -19,6 +19,10 @@ import { apiFetch } from '../../apiClient'
  *  stable when no thread is supplied. */
 const EMPTY_THREAD: Reply[] = []
 
+// Module-level monotonic sequence for optimistic-reply ids — guarantees uniqueness
+// even across same-millisecond sends (see the id comment in `send`).
+let pendingSeq = 0
+
 interface Props {
   /** The run id (= the run's `.id`) — the reply endpoint is run-scoped. */
   runId: string
@@ -60,7 +64,10 @@ export function SurfaceThread({ runId, pointId, thread = EMPTY_THREAD, placehold
     setUndelivered(false)
     setSending(true)
     const optimistic: Reply = {
-      id: `pending-${Date.now()}`,
+      // Monotonic counter, not Date.now() — two sends in the same millisecond would
+      // mint the same id, colliding React keys and making the failure-revert pull
+      // the wrong pending reply off the thread.
+      id: `pending-${++pendingSeq}`,
       author: 'user',
       text,
       createdAt: Date.now(),

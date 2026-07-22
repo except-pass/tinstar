@@ -94,11 +94,15 @@ function OpenPointRow({ runId, surface }: { runId: string; surface: SlateSurface
   const interactive = isAnswerable(surface.body)
 
   const lifecycle = useCallback(
-    async (action: 'resolve' | 'reopen' | 'dismiss', nextStatus: PointStatus) => {
+    async (action: 'resolve' | 'reopen' | 'dismiss', nextStatus: PointStatus | null) => {
       if (busy) return
       setError(null)
       setBusy(true)
       const prev = optimisticStatus
+      // `null` for reopen: the server re-derives status from the thread
+      // (open/discussing/waiting), so we can't guess it here — an optimistic
+      // 'open' would never match the derived value and the override would stick
+      // forever. Let the SSE delta carry the real status instead.
       setOptimisticStatus(nextStatus)
       try {
         const res = await apiFetch(`/api/runs/${runId}/slate/points/${surface.id}/${action}`, {
@@ -121,7 +125,7 @@ function OpenPointRow({ runId, surface }: { runId: string; surface: SlateSurface
   )
 
   const toggleResolve = useCallback(() => {
-    void lifecycle(resolved ? 'reopen' : 'resolve', resolved ? 'open' : 'resolved')
+    void lifecycle(resolved ? 'reopen' : 'resolve', resolved ? null : 'resolved')
   }, [resolved, lifecycle])
 
   const toggleOption = useCallback((choiceId: string, optionId: string, mode: 'single' | 'multi') => {

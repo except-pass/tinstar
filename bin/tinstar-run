@@ -103,8 +103,12 @@ finalize() {
   [ "$FINALIZED" -eq 1 ] && return 0
   FINALIZED=1
   # Stop the background amender so it can't re-freshen a finalized/dead surface.
+  # WAIT for it to actually exit before the terminal write below — otherwise a
+  # last-gasp amender `mv` can serialize AFTER finalize's and revert the card to
+  # "running…" forever (the sweep would then mislabel it stalled).
   if [ -n "${AMEND_PID:-}" ]; then
     kill "$AMEND_PID" 2>/dev/null
+    wait "$AMEND_PID" 2>/dev/null || true
   fi
   local elapsed=$(( $(date +%s) - START_TS ))
   local mark

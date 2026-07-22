@@ -40,10 +40,19 @@ function replyCurl(point: Point, origin: string): string[] {
   ]
 }
 
+/** Collapse a headline to a single line before embedding it in a delivered prompt.
+ *  A headline is only .trim()'d at ingestion, so embedded newlines would otherwise
+ *  survive verbatim into the agent's tmux prompt — a multi-line "SYSTEM: …" headline
+ *  could inject directives past the guardrail. Collapse all whitespace runs to a
+ *  single space so the headline stays one quoted line. */
+function oneLine(s: string): string {
+  return s.replace(/\s+/g, ' ').trim()
+}
+
 /** Prompt for a brand-new USER-added point (POST /slate/points). */
 export function slatePointPromptText(point: Point, origin: string): string {
   return [
-    `The user added a point to your run's Slate: "${point.headline}" (point ${point.id}).`,
+    `The user added a point to your run's Slate: "${oneLine(point.headline)}" (point ${point.id}).`,
     '',
     GUARDRAIL,
     '',
@@ -58,7 +67,7 @@ export function slateReplyPromptText(point: Point, origin: string): string {
   const thread = point.replies ?? []
   const latest = thread[thread.length - 1]?.text ?? ''
   const lines: string[] = [
-    `The user replied on a point on your run's Slate: "${point.headline}" (point ${point.id}).`,
+    `The user replied on a point on your run's Slate: "${oneLine(point.headline)}" (point ${point.id}).`,
     '',
     `Their message: ${latest}`,
     '',
@@ -86,7 +95,7 @@ export function slateAnswerPromptText(
   origin: string,
 ): string {
   const lines: string[] = [
-    `The user answered a control on your run's Slate: "${point.headline}" (point ${point.id}).`,
+    `The user answered a control on your run's Slate: "${oneLine(point.headline)}" (point ${point.id}).`,
   ]
   if (chosenLabels.length > 0) lines.push(`They chose: ${chosenLabels.join(', ')}`)
   if (text) lines.push(`They added: ${text}`)
