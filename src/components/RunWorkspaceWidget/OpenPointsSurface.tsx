@@ -34,6 +34,11 @@ const TRACK: Array<{ key: PointStatus; label: string }> = [
   { key: 'resolved', label: 'resolved' },
 ]
 
+/** Lit-dot hue per stage, index-aligned with TRACK: each filled dot wears its own
+ *  stage's hue (not a single accent), so the track reads as a colored lifecycle.
+ *  Literal strings for the JIT. Unlit dots use `primary/12` (the faint resting rail). */
+const TRACK_DOT_ON = ['bg-hue-open', 'bg-hue-discussing', 'bg-hue-waiting', 'bg-hue-resolved']
+
 /** Which track index a status lights up to. `dismissed` returns -1 (off-track). */
 function stageOf(status: PointStatus | undefined): number {
   switch (status) {
@@ -51,19 +56,20 @@ function stageOf(status: PointStatus | undefined): number {
   }
 }
 
+// One hue per meaning (design language): ~15% fill / ~30% border / bright hue text.
+// Literal class strings (no interpolation) so Tailwind's JIT emits them.
 const PILL_TONE: Record<PointStatus, string> = {
-  open: 'bg-indigo-500/20 text-indigo-300',
-  discussing: 'bg-amber-500/20 text-amber-300',
-  waiting: 'bg-sky-500/20 text-sky-300',
-  resolved: 'bg-emerald-500/20 text-emerald-300',
-  dismissed: 'bg-slate-600/30 text-slate-400',
+  open: 'bg-hue-open/15 border border-hue-open/30 text-hue-open',
+  discussing: 'bg-hue-discussing/15 border border-hue-discussing/30 text-hue-discussing',
+  waiting: 'bg-hue-waiting/15 border border-hue-waiting/30 text-hue-waiting',
+  resolved: 'bg-hue-resolved/15 border border-hue-resolved/30 text-hue-resolved',
+  dismissed: 'bg-hue-dismissed/20 border border-hue-dismissed/25 text-hue-dismissed',
 }
 
-const AUTHOR_TONE: Record<SlateSurface['author'], string> = {
-  agent: 'bg-amber-500/15 text-amber-300',
-  user: 'bg-slate-500/20 text-slate-300',
-  process: 'bg-cyan-500/15 text-cyan-300',
-}
+// Author is meta, not meaning — a quiet mono label. The WORD distinguishes agent /
+// user / process; color is reserved for status (P1, and P4 forbids the old cyan
+// `process` badge — cyan is the live edge only).
+const AUTHOR_TONE = 'bg-surface-hover text-ink-low'
 
 const EMPTY_SET: ReadonlySet<string> = new Set()
 
@@ -214,11 +220,11 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
     <div
       data-testid={`point-${surface.id}`}
       data-status={status}
-      className={`rounded border border-primary/10 bg-surface-base/40 p-2 ${
-        status === 'dismissed' || hidden ? 'opacity-50' : ''
+      className={`rounded border border-hairline bg-surface-hover p-2.5 ${
+        status === 'dismissed' || hidden ? 'opacity-50' : resolved ? 'opacity-70' : ''
       }`}
     >
-      <div className="flex items-start gap-1.5">
+      <div className="flex items-start gap-2">
         {/* Soft resolve: a checkbox, never the point's identity. */}
         <input
           type="checkbox"
@@ -227,23 +233,23 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
           disabled={busy}
           onChange={toggleResolve}
           title={resolved ? 'Reopen this point' : 'Resolve — the thread stays readable'}
-          className="mt-0.5 shrink-0 accent-emerald-500"
+          className="mt-0.5 shrink-0 accent-hue-resolved"
         />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
             <span
-              className={`shrink-0 px-1 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide ${AUTHOR_TONE[surface.author]}`}
+              className={`shrink-0 px-1 py-0.5 rounded-sm font-mono text-[9px] uppercase tracking-[0.1em] ${AUTHOR_TONE}`}
             >
               {surface.author}
             </span>
             <span
               data-testid={`pill-${surface.id}`}
-              className={`shrink-0 px-1 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide ${PILL_TONE[status]}`}
+              className={`shrink-0 px-1.5 py-0.5 rounded-sm font-mono text-[9px] font-semibold uppercase tracking-[0.1em] ${PILL_TONE[status]}`}
             >
               {status}
             </span>
             <span
-              className={`flex-1 truncate text-xs font-medium leading-snug text-slate-200 ${resolved ? 'line-through text-slate-400' : ''}`}
+              className={`flex-1 truncate text-[13px] font-medium leading-snug text-ink-high ${resolved ? 'line-through text-ink-low' : ''}`}
             >
               {surface.headline ?? '(untitled point)'}
             </span>
@@ -264,7 +270,7 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
                 data-testid={`unhide-surface-${surface.id}`}
                 onClick={() => onUnhide?.(surface.id)}
                 title="Unhide this point"
-                className="shrink-0 rounded bg-surface-hover px-1 text-[9px] text-slate-400 hover:text-slate-200"
+                className="shrink-0 rounded-sm bg-surface-raised px-1 text-[9px] text-ink-low hover:text-ink-high"
               >
                 unhide
               </button>
@@ -273,7 +279,7 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
                 data-testid={`hide-surface-${surface.id}`}
                 onClick={() => onHide?.(surface.id)}
                 title="Hide this point (view-only — the file stays intact)"
-                className="shrink-0 rounded px-1 text-[11px] leading-none text-slate-500 hover:text-slate-200"
+                className="shrink-0 rounded-sm px-1 text-[11px] leading-none text-ink-ctrl hover:text-ink-high"
               >
                 ✕
               </button>
@@ -289,23 +295,17 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
           >
             {TRACK.map((seg, i) => {
               const on = stage >= i && stage >= 0
-              const terminal = resolved && i === TRACK.length - 1
+              // Each lit dot wears its OWN stage's hue; unlit dots are the faint rail.
               return (
                 <span key={seg.key} className="flex items-center gap-0.5">
                   <span
                     data-active={on ? 'true' : undefined}
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      terminal
-                        ? 'bg-emerald-400'
-                        : on
-                          ? 'bg-indigo-400'
-                          : 'bg-primary/15'
-                    }`}
+                    className={`h-1.5 w-1.5 rounded-full ${on ? TRACK_DOT_ON[i] : 'bg-primary/12'}`}
                   />
-                  <span className={`text-[8px] ${on ? 'text-slate-400' : 'text-slate-600'}`}>
+                  <span className={`font-mono text-[8px] ${on ? 'text-ink-mid' : 'text-ink-ctrl'}`}>
                     {seg.label}
                   </span>
-                  {i < TRACK.length - 1 && <span className="text-[8px] text-slate-600">›</span>}
+                  {i < TRACK.length - 1 && <span className="text-[8px] text-ink-ctrl">›</span>}
                 </span>
               )
             })}
@@ -315,7 +315,7 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
               a form so declared controls read/write host-owned state keyed per
               control-component id. A read-only body renders as static prose. */}
           {surface.body && (
-            <div className="mt-1.5 text-xs text-slate-200">
+            <div className="mt-2 text-[13px] text-ink-mid">
               <A2uiRenderer content={surface.body} form={interactive ? form : undefined} />
             </div>
           )}
@@ -324,11 +324,11 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
           <button
             data-testid={`thread-toggle-${surface.id}`}
             onClick={() => setExpanded((o) => !o)}
-            className="mt-1.5 flex items-center gap-1 text-[10px] text-slate-500 hover:text-slate-300"
+            className="mt-2 flex items-center gap-1 font-mono text-[10px] text-ink-low hover:text-ink-mid"
           >
             <span>{expanded ? '▾' : '▸'}</span>
             <span>Thread</span>
-            {threadCount > 0 && <span className="text-slate-600">· {threadCount}</span>}
+            {threadCount > 0 && <span className="text-ink-ctrl">· {threadCount}</span>}
           </button>
           {expanded && (
             <div className="mt-1">
@@ -337,11 +337,11 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
           )}
 
           {unreachable && (
-            <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-1 text-2xs text-amber-300/90">
-              session not reachable
+            <div data-testid={`refresh-unreachable-${surface.id}`} className="mt-2 text-[11px] leading-snug text-ink-low">
+              Sent — but that session isn’t reachable right now.
             </div>
           )}
-          {error && <div className="mt-1 text-2xs text-red-300">{error}</div>}
+          {error && <div className="mt-1 text-[11px] text-hue-error">{error}</div>}
           {/* Freshness: "updated Xm ago", ambering when the point has gone untended. */}
           <div className="mt-1 flex justify-end">
             <SurfaceAge amendedAt={surface.amendedAt} now={now} />
@@ -398,18 +398,18 @@ function AddPoint({ runId }: { runId: string }) {
               void add()
             }
           }}
-          className="flex-1 rounded border border-primary/20 bg-surface-base px-2 py-0.5 text-2xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none disabled:opacity-70"
+          className="flex-1 rounded border border-hairline bg-surface-panel px-2 py-1 text-[12px] text-ink-high placeholder:text-ink-low focus:border-primary/60 focus:outline-none disabled:opacity-70"
         />
         <button
           data-testid="add-point-send"
           onClick={() => void add()}
           disabled={busy}
-          className="rounded bg-surface-hover px-2 py-0.5 text-2xs text-slate-200 hover:bg-primary/20 disabled:opacity-50"
+          className="rounded bg-surface-hover px-2 py-1 text-[12px] text-ink-mid hover:text-ink-high hover:bg-surface-raised disabled:opacity-50"
         >
           {busy ? '…' : 'Add'}
         </button>
       </div>
-      {error && <div className="text-2xs text-red-300">{error}</div>}
+      {error && <div className="text-[11px] text-hue-error">{error}</div>}
     </div>
   )
 }
@@ -449,9 +449,9 @@ export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, sho
   return (
     <div
       data-testid="open-points-surface"
-      className="rounded border border-primary/10 bg-surface-base/40 p-2 space-y-1.5"
+      className="rounded border border-hairline bg-surface-raised p-[14px] space-y-2"
     >
-      <div className="text-[9px] font-mono uppercase tracking-wider text-slate-500">Open points</div>
+      <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-low">Open points</div>
       {ordered.map((surface) => (
         <OpenPointRow
           key={surface.id}
