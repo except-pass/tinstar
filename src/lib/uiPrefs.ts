@@ -38,6 +38,9 @@ export interface UiPrefs {
   showBackgroundSessions?: boolean
   sidebarViewBySpace?: Record<string, 'hierarchy' | 'inbox'>
   inboxReadKeys?: string[]
+  /** Persisted width (px) of a run card's Slate column (Slate v2 U1/R1).
+   *  Per-browser view preference; restored on mount, written on drag end. */
+  slateWidth?: number
 }
 
 function readAll(): UiPrefs {
@@ -76,6 +79,11 @@ export const familyKeys = {
   // since the schema is unchanged but the key is new — pre-V5 data is intentionally not migrated.
   constellations: (spaceId: string): string => `tinstar-constellations-v1-${spaceId}`,
   hiddenRuns: 'tinstar-hidden-runs',
+  // Slate v2 (U2/R4): per-browser set of hidden Slate surface ids. A hide is a
+  // non-destructive VIEW preference — the agent's file stays intact and a file
+  // re-projection can't resurrect a hidden surface (the filter reads this set on
+  // every render). Mirrors `hiddenRuns`.
+  hiddenSlateSurfaces: 'tinstar-hidden-slate-surfaces',
 } as const
 
 export function readJSON<T>(key: string, fallback: T): T {
@@ -187,4 +195,30 @@ export function markInboxRead(key: string): void {
 export function markInboxUnread(key: string): void {
   const list = getPref('inboxReadKeys') ?? []
   setPref('inboxReadKeys', list.filter(k => k !== key))
+}
+
+// --- Hidden Slate surfaces (Slate v2 U2/R4) ---
+//
+// A per-browser view preference mirroring the `hiddenRuns` family: hiding a
+// surface is non-destructive (no server route, no file unlink) and survives a
+// file re-projection because the filter reads this set on every render. Stored
+// as a JSON array of surface ids; exposed as a Set for O(1) membership tests.
+
+export function getHiddenSlateSurfaces(): Set<string> {
+  const arr = readJSON<string[]>(familyKeys.hiddenSlateSurfaces, [])
+  if (!Array.isArray(arr)) return new Set()
+  return new Set(arr.filter((v): v is string => typeof v === 'string'))
+}
+
+export function addHiddenSlateSurface(id: string): void {
+  const ids = getHiddenSlateSurfaces()
+  if (ids.has(id)) return
+  ids.add(id)
+  writeJSON(familyKeys.hiddenSlateSurfaces, [...ids])
+}
+
+export function removeHiddenSlateSurface(id: string): void {
+  const ids = getHiddenSlateSurfaces()
+  if (!ids.delete(id)) return
+  writeJSON(familyKeys.hiddenSlateSurfaces, [...ids])
 }

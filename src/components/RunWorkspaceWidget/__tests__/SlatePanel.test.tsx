@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, beforeEach } from 'vitest'
+import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import type { A2uiContent, SlateSurface } from '../../../types'
 import { MALFORMED_SIGNAL } from '../../../a2ui/A2uiRenderer'
 import { SlatePanel } from '../SlatePanel'
+import { getHiddenSlateSurfaces, familyKeys } from '../../../lib/uiPrefs'
 
 /** Build an A2UI content envelope from a flat component list. */
 function content(components: A2uiContent['components'], root?: string): A2uiContent {
@@ -79,5 +80,102 @@ describe('SlatePanel (U5)', () => {
     // order 1 (createdAt 1 before 5) then order 2.
     expect(ids).toEqual(['slate-surface-b', 'slate-surface-a', 'slate-surface-c'])
     expect(rendered).not.toBeNull()
+  })
+})
+
+describe('SlatePanel reflow (U1/R2)', () => {
+  it('renders one grid column for a narrow (or unset) width', () => {
+    const { container } = render(
+      <SlatePanel runId="run-1" surfaces={[surface('s1', 'a')]} width={300} />,
+    )
+    const scroll = container.querySelector('[data-scrollable]')!
+    expect(scroll.className).toContain('grid-cols-1')
+    expect(scroll.className).not.toContain('grid-cols-2')
+    expect(scroll.getAttribute('data-columns')).toBe('1')
+
+    // No width prop → still single-column.
+    cleanup()
+    const { container: c2 } = render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'a')]} />)
+    expect(c2.querySelector('[data-scrollable]')!.getAttribute('data-columns')).toBe('1')
+  })
+
+  it('renders two grid columns for a wide width', () => {
+    const { container } = render(
+      <SlatePanel runId="run-1" surfaces={[surface('s1', 'a')]} width={500} />,
+    )
+    const scroll = container.querySelector('[data-scrollable]')!
+    expect(scroll.className).toContain('grid-cols-2')
+    expect(scroll.getAttribute('data-columns')).toBe('2')
+    // The #126 layout guards must survive the grid switch.
+    expect(scroll.className).toContain('overflow-x-hidden')
+    expect(scroll.className).toContain('[overflow-wrap:anywhere]')
+  })
+})
+
+describe('SlatePanel hide surfaces (U2/R4)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    cleanup()
+  })
+
+  it('hides a surface, removing it from the render and persisting the id', () => {
+    const surfaces = [surface('keep', 'keep me'), surface('drop', 'drop me')]
+    render(<SlatePanel runId="run-1" surfaces={surfaces} />)
+
+    expect(screen.getByText('drop me')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('hide-surface-drop'))
+
+    // Removed from the render...
+    expect(screen.queryByText('drop me')).toBeNull()
+    expect(screen.getByText('keep me')).toBeTruthy()
+    // ...and persisted to the per-browser set.
+    expect([...getHiddenSlateSurfaces()]).toContain('drop')
+    expect(localStorage.getItem(familyKeys.hiddenSlateSurfaces)).toContain('drop')
+  })
+
+  it('shows the correct hidden count and reveals hidden surfaces via the toggle', () => {
+    const surfaces = [surface('a', 'alpha'), surface('b', 'beta'), surface('c', 'gamma')]
+    render(<SlatePanel runId="run-1" surfaces={surfaces} />)
+
+    fireEvent.click(screen.getByTestId('hide-surface-a'))
+    fireEvent.click(screen.getByTestId('hide-surface-b'))
+
+    // Header reflects two hidden.
+    const toggle = screen.getByTestId('slate-hidden-toggle')
+    expect(toggle.textContent).toContain('2 hidden')
+    expect(toggle.textContent).toContain('show')
+    expect(screen.queryByText('alpha')).toBeNull()
+
+    // Reveal → the hidden surfaces come back (dimmed) with an unhide affordance.
+    fireEvent.click(toggle)
+    expect(screen.getByText('alpha')).toBeTruthy()
+    expect(screen.getByTestId('unhide-surface-a')).toBeTruthy()
+    expect(screen.getByTestId('slate-hidden-toggle').textContent).toContain('hide')
+
+    // Unhide restores it fully.
+    fireEvent.click(screen.getByTestId('unhide-surface-a'))
+    expect([...getHiddenSlateSurfaces()]).not.toContain('a')
+  })
+
+  it('keeps a surface hidden across a re-render that still carries it in run.slate', () => {
+    const surfaces = [surface('a', 'alpha'), surface('b', 'beta')]
+    const { rerender } = render(<SlatePanel runId="run-1" surfaces={surfaces} />)
+
+    fireEvent.click(screen.getByTestId('hide-surface-a'))
+    expect(screen.queryByText('alpha')).toBeNull()
+
+    // Simulate an SSE re-projection: the SAME surface list (a still present) is
+    // pushed again. The client-side filter must NOT resurrect the hidden surface.
+    rerender(<SlatePanel runId="run-1" surfaces={[...surfaces]} />)
+    expect(screen.queryByText('alpha')).toBeNull()
+    expect(screen.getByText('beta')).toBeTruthy()
+  })
+
+  it('seeds the hidden set from persisted prefs on mount', () => {
+    localStorage.setItem(familyKeys.hiddenSlateSurfaces, JSON.stringify(['a']))
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'alpha'), surface('b', 'beta')]} />)
+    // 'a' was hidden in a prior session → not rendered; toggle shows 1 hidden.
+    expect(screen.queryByText('alpha')).toBeNull()
+    expect(screen.getByTestId('slate-hidden-toggle').textContent).toContain('1 hidden')
   })
 })
