@@ -21,3 +21,8 @@ todos.txt
 # name/subjects). When a tinstar session uses this repo as its workspace it
 # rewrites this file on every start/resume — never commit it.
 /.mcp.json
+
+# The Slate's runtime authoring dir: agents write `.tinstar/slate/*.json` per run
+# and a watcher projects them onto the run's Slate. These are ephemeral per-session
+# surfaces (like /.mcp.json above), not source — never commit them.
+/.tinstar/
