@@ -28,7 +28,7 @@ export function DiagramSurface({ runId, surface }: Props) {
           runId={runId}
           pointId={surface.id}
           thread={surface.thread}
-          placeholder="Comment on this diagram…"
+          placeholder="Comment on this surface…"
         />
       </div>
     </div>
