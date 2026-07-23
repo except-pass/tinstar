@@ -115,7 +115,7 @@ function ReorderGrip({ id, canMoveUp, canMoveDown, onMove }: {
 
 /** A single point row. Holds its own optimistic resolve + answer form state, keyed
  *  per control-component id, so multiple choice groups on one body stay independent. */
-function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refreshing = false, unreachable = false, onRefresh, now, reorder }: {
+function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refreshing = false, unreachable = false, onRefresh, now, reorder, focused = false }: {
   runId: string
   surface: SlateSurface
   /** Slate v2 U2/R4 — this point is a hidden surface, rendered dimmed. */
@@ -132,6 +132,9 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
   /** S6 U2 — reorder controls. Absent on rows that don't participate (a resolved or
    *  dismissed point sinks by rank, so nudging it would be a lie). */
   reorder?: { canMoveUp: boolean; canMoveDown: boolean; onMove: (id: string, delta: -1 | 1) => void }
+  /** S6 U1 — this row holds the Slate's keyboard focus (j/k), so it wears the cyan
+   *  focus ring: keyboard focus is a live, moving thing (design language P4). */
+  focused?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   // Optimistic status override (null = trust the server value). Cleared only once
@@ -264,12 +267,15 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
       data-testid={`point-${surface.id}`}
       data-status={status}
       data-refreshing={refreshing ? 'true' : undefined}
+      data-focused={focused ? 'true' : undefined}
       // A refreshing row wears the same slow cyan breathe as a refreshing surface
       // card (S6 U4) so the two states read identically; the class + keyframes live
       // in src/index.css and honor prefers-reduced-motion.
       className={`rounded border bg-surface-hover p-2.5 ${
         refreshing ? 'slate-surface-refreshing' : 'border-hairline'
-      } ${status === 'dismissed' || hidden ? 'opacity-50' : resolved ? 'opacity-70' : ''}`}
+      } ${focused ? 'ring-1 ring-primary/70' : ''} ${
+        status === 'dismissed' || hidden ? 'opacity-50' : resolved ? 'opacity-70' : ''
+      }`}
     >
       <div className="flex items-start gap-2">
         {/* Soft resolve: a checkbox, never the point's identity. */}
@@ -490,6 +496,8 @@ interface Props {
   /** Ticking clock from the panel — threaded to each row's freshness footer.
    *  Optional so tests/standalone callers render without wiring a clock. */
   now?: number
+  /** S6 U1 — the id currently holding the Slate's keyboard focus, if it's a point. */
+  focusedId?: string | null
 }
 
 const EMPTY_HIDDEN: ReadonlySet<string> = new Set()
@@ -500,7 +508,27 @@ function isLive(s: SlateSurface): boolean {
   return s.status !== 'resolved' && s.status !== 'dismissed'
 }
 
-export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, showHidden = false, onHide, onUnhide, refreshingIds = EMPTY_HIDDEN, unreachableIds = EMPTY_HIDDEN, onRefresh, now = Date.now() }: Props) {
+/**
+ * The visible open points in the order this component renders them: hidden ones
+ * dropped (unless revealed), resolved/dismissed ones sunk to the bottom, creation/
+ * `order` sequence otherwise (the caller passes them pre-sorted, and `sort` is
+ * stable).
+ *
+ * Exported so SlatePanel's j/k focus traversal (S6 U1) walks EXACTLY the rows that
+ * appear here instead of re-deriving the rule and drifting out of step with it.
+ */
+export function orderOpenPoints(
+  points: SlateSurface[],
+  hiddenIds: ReadonlySet<string>,
+  showHidden: boolean,
+): SlateSurface[] {
+  const rank = (s: SlateSurface) => (isLive(s) ? 0 : 1)
+  return [...points]
+    .filter((s) => showHidden || !hiddenIds.has(s.id))
+    .sort((a, b) => rank(a) - rank(b))
+}
+
+export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, showHidden = false, onHide, onUnhide, refreshingIds = EMPTY_HIDDEN, unreachableIds = EMPTY_HIDDEN, onRefresh, now = Date.now(), focusedId = null }: Props) {
   // Optimistic reorder (S6 U2): the id sequence the user just asked for, held until
   // the server's own sequence arrives on the SSE `run` delta and matches. `points`
   // arrives from the panel already sorted by surface `order`, so "matches" is a
@@ -513,14 +541,14 @@ export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, sho
   // ones are dropped unless the reveal toggle is on (R4 — the filter runs every
   // render so an SSE re-projection can't resurrect a hidden point).
   const ordered = useMemo(() => {
-    const rank = (s: SlateSurface) => (isLive(s) ? 0 : 1)
-    const visible = [...points].filter((s) => showHidden || !hiddenIds.has(s.id))
-    if (!optimisticOrder) return visible.sort((a, b) => rank(a) - rank(b))
+    const base = orderOpenPoints(points, hiddenIds, showHidden)
+    if (!optimisticOrder) return base
     // An id absent from the optimistic list (e.g. a point that arrived mid-flight)
     // sinks below the ones being moved rather than jumping to the top.
+    const rank = (s: SlateSurface) => (isLive(s) ? 0 : 1)
     const at = new Map(optimisticOrder.map((id, i) => [id, i]))
     const slot = (s: SlateSurface) => at.get(s.id) ?? Number.POSITIVE_INFINITY
-    return visible.sort((a, b) => rank(a) - rank(b) || slot(a) - slot(b))
+    return base.sort((a, b) => rank(a) - rank(b) || slot(a) - slot(b))
   }, [points, hiddenIds, showHidden, optimisticOrder])
 
   // The ids the chevrons actually permute: the live rows, in rendered order.
@@ -595,6 +623,7 @@ export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, sho
             onRefresh={onRefresh}
             now={now}
             reorder={reorder}
+            focused={focusedId === surface.id}
           />
         )
       })}

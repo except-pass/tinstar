@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { createRef } from 'react'
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
 import type { A2uiContent, SlateSurface } from '../../../types'
 import { MALFORMED_SIGNAL } from '../../../a2ui/A2uiRenderer'
@@ -12,7 +13,8 @@ vi.mock('../../../apiClient', () => ({
   apiUrl: (p: string) => p,
 }))
 
-import { SlatePanel } from '../SlatePanel'
+import { SlatePanel, type SlatePanelHandle } from '../SlatePanel'
+import { SLATE_HOTKEYS } from '../slateHotkeys'
 import { REFRESH_MAX_MS } from '../slateRefresh'
 import { getHiddenSlateSurfaces, getMinimizedSlateSurfaces, familyKeys } from '../../../lib/uiPrefs'
 
@@ -192,6 +194,185 @@ describe('SlatePanel hide surfaces (U2/R4)', () => {
     // 'a' was hidden in a prior session → not rendered; toggle shows 1 hidden.
     expect(screen.queryByText('alpha')).toBeNull()
     expect(screen.getByTestId('slate-hidden-toggle').textContent).toContain('1 hidden')
+  })
+})
+
+describe('SlatePanel keyboard surface (S6 U1)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    cleanup()
+    apiFetch.mockReset()
+    apiFetch.mockImplementation(() => okDelivered(true))
+  })
+
+  /** Render with a ref so we can drive the imperative handle the widget drives. */
+  function renderWithHandle(surfaces: SlateSurface[], props: Record<string, unknown> = {}) {
+    const ref = createRef<SlatePanelHandle>()
+    render(<SlatePanel ref={ref} runId="run-1" surfaces={surfaces} {...props} />)
+    return ref
+  }
+
+  const focusedId = () =>
+    document.querySelector('[data-focused="true"]')?.getAttribute('data-testid') ?? null
+
+  it('j / k walk the focus ring across surfaces and clamp at the ends', () => {
+    const ref = renderWithHandle([surface('a', 'alpha'), surface('b', 'beta'), surface('c', 'gamma')])
+    expect(focusedId()).toBeNull()
+
+    // First press lands on the first row rather than moving from nowhere.
+    act(() => ref.current!.focusNext())
+    expect(focusedId()).toBe('slate-surface-a')
+    act(() => ref.current!.focusNext())
+    expect(focusedId()).toBe('slate-surface-b')
+    act(() => ref.current!.focusPrev())
+    expect(focusedId()).toBe('slate-surface-a')
+
+    // Clamp, don't wrap — running off the top stays at the top.
+    act(() => ref.current!.focusPrev())
+    expect(focusedId()).toBe('slate-surface-a')
+    act(() => { ref.current!.focusNext(); ref.current!.focusNext(); ref.current!.focusNext() })
+    expect(focusedId()).toBe('slate-surface-c')
+  })
+
+  it('walks open-point ROWS too, in the order they render', () => {
+    const points = [
+      surface('p1', '', { kind: 'open-point', headline: 'first', status: 'open' }),
+      surface('p2', '', { kind: 'open-point', headline: 'second', status: 'open' }),
+    ]
+    const ref = renderWithHandle([...points, surface('card', 'a card', { createdAt: 9 })])
+
+    act(() => ref.current!.focusNext())
+    expect(focusedId()).toBe('point-p1')
+    act(() => ref.current!.focusNext())
+    expect(focusedId()).toBe('point-p2')
+    act(() => ref.current!.focusNext())
+    expect(focusedId()).toBe('slate-surface-card')
+  })
+
+  it('x hides the focused surface and moves focus to the next row', () => {
+    const ref = renderWithHandle([surface('a', 'alpha'), surface('b', 'beta')])
+    act(() => ref.current!.focusNext())
+    expect(focusedId()).toBe('slate-surface-a')
+
+    act(() => ref.current!.hideFocused())
+    expect(screen.queryByText('alpha')).toBeNull()
+    expect([...getHiddenSlateSurfaces()]).toContain('a')
+    expect(focusedId()).toBe('slate-surface-b')
+  })
+
+  it('r refreshes the focused surface (and nothing when nothing is focused)', async () => {
+    const ref = renderWithHandle([surface('a', 'alpha'), surface('b', 'beta')])
+
+    act(() => ref.current!.refreshFocused())
+    expect(apiFetch).not.toHaveBeenCalled()
+
+    act(() => ref.current!.focusNext())
+    act(() => ref.current!.refreshFocused())
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith(
+        '/api/runs/run-1/slate/surfaces/a/refresh',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    )
+  })
+
+  it('c opens the composer popover, and on a blank Slate focuses the inline one', () => {
+    const ref = renderWithHandle([surface('a', 'alpha')])
+    expect(screen.queryByTestId('slate-composer')).toBeNull()
+    act(() => ref.current!.openComposer())
+    expect(screen.getByTestId('slate-composer')).toBeTruthy()
+
+    // Blank Slate: the composer is already inline (U5), so `c` puts the cursor in it
+    // instead of stacking a second one on top.
+    cleanup()
+    const blank = renderWithHandle([], { open: true })
+    act(() => blank.current!.openComposer())
+    expect(screen.getAllByTestId('slate-composer')).toHaveLength(1)
+    expect(document.activeElement).toBe(screen.getByTestId('composer-search'))
+  })
+
+  it('/ opens the search field, which filters the rendered surfaces', () => {
+    const ref = renderWithHandle([
+      surface('a', 'alpha', { headline: 'Deploy checklist' }),
+      surface('b', 'beta', { headline: 'Dataflow' }),
+    ])
+    expect(screen.queryByTestId('slate-search')).toBeNull()
+
+    act(() => ref.current!.focusSearch())
+    const search = screen.getByTestId('slate-search')
+
+    fireEvent.change(search, { target: { value: 'deploy' } })
+    expect(screen.getByTestId('slate-surface-a')).toBeTruthy()
+    expect(screen.queryByTestId('slate-surface-b')).toBeNull()
+
+    // A miss says so instead of looking like an empty Slate.
+    fireEvent.change(search, { target: { value: 'zzz' } })
+    expect(screen.getByTestId('slate-no-matches')).toBeTruthy()
+
+    // Esc clears the filter and closes the field.
+    fireEvent.keyDown(search, { key: 'Escape' })
+    expect(screen.queryByTestId('slate-search')).toBeNull()
+    expect(screen.getByTestId('slate-surface-b')).toBeTruthy()
+  })
+
+  it('? toggles the cheatsheet ONLY while the Slate zone is focused', () => {
+    // Not focused → the panel must not touch `?`; the global command palette owns it.
+    const { rerender } = render(<SlatePanel runId="run-1" surfaces={[surface('a', 'x')]} />)
+    fireEvent.keyDown(window, { code: 'Slash', key: '?', shiftKey: true })
+    expect(screen.queryByTestId('slate-cheatsheet')).toBeNull()
+
+    rerender(<SlatePanel runId="run-1" surfaces={[surface('a', 'x')]} focused />)
+    fireEvent.keyDown(window, { code: 'Slash', key: '?', shiftKey: true })
+    expect(screen.getByTestId('slate-cheatsheet')).toBeTruthy()
+    // Every key the Slate answers to is listed.
+    for (const h of SLATE_HOTKEYS) {
+      expect(screen.getByTestId('slate-cheatsheet').textContent).toContain(h.label)
+    }
+
+    // …and `?` again closes it.
+    fireEvent.keyDown(window, { code: 'Slash', key: '?', shiftKey: true })
+    expect(screen.queryByTestId('slate-cheatsheet')).toBeNull()
+  })
+
+  it('the ? shim stops the event so the global command palette never sees it', () => {
+    // The palette listens on a bubble-phase window listener. Ours is capture-phase +
+    // stopImmediatePropagation, so a later listener must not run.
+    const palette = vi.fn()
+    window.addEventListener('keydown', palette)
+    try {
+      render(<SlatePanel runId="run-1" surfaces={[surface('a', 'x')]} focused />)
+      fireEvent.keyDown(window, { code: 'Slash', key: '?', shiftKey: true })
+      expect(screen.getByTestId('slate-cheatsheet')).toBeTruthy()
+      expect(palette).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('keydown', palette)
+    }
+  })
+
+  it('the ? shim stands down while an input has focus', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'x')]} focused />)
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+    try {
+      fireEvent.keyDown(window, { code: 'Slash', key: '?', shiftKey: true })
+      expect(screen.queryByTestId('slate-cheatsheet')).toBeNull()
+    } finally {
+      input.remove()
+    }
+  })
+
+  it('Esc and an outside click dismiss the cheatsheet', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'x')]} focused />)
+    fireEvent.keyDown(window, { code: 'Slash', key: '?', shiftKey: true })
+    expect(screen.getByTestId('slate-cheatsheet')).toBeTruthy()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByTestId('slate-cheatsheet')).toBeNull()
+
+    fireEvent.keyDown(window, { code: 'Slash', key: '?', shiftKey: true })
+    fireEvent.click(screen.getByTestId('slate-cheatsheet'))
+    expect(screen.queryByTestId('slate-cheatsheet')).toBeNull()
   })
 })
 

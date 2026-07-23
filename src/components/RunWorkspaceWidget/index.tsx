@@ -5,7 +5,7 @@ import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { TelemetryPanel } from './TelemetryPanel'
-import { SlatePanel } from './SlatePanel'
+import { SlatePanel, type SlatePanelHandle } from './SlatePanel'
 import { HandsPanel } from './HandsPanel'
 import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
@@ -72,6 +72,9 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const [composerFocusTrigger, bumpComposerFocus] = useReducer((n: number) => n + 1, 0)
 
   const rootRef = useRef<HTMLDivElement>(null)
+  // The Slate's imperative handle (S6 U1). The widget owns the binding registration
+  // and the focus-zone gate; the panel owns what each key MEANS.
+  const slatePanelRef = useRef<SlatePanelHandle>(null)
   const [focusZone, setFocusZone] = useState<FocusZone | null>(null)
   const [terminalFocused, setTerminalFocused] = useState(false)
   const [_fileSelectionIndex, setFileSelectionIndex] = useState(0)
@@ -182,6 +185,17 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
         case 'activate':        /* no-op for now */                               break
         case 'toggle-prompt':   setPromptComposerExpanded(e => !e);              break
         case 'fit-viewport':    fitWidgetToViewport(`run-${run.id}`);            break
+        // The Slate's keys (S6 U1). Each is gated on the Slate zone holding focus,
+        // so j/k/x/r/c// stay inert while the file list or the session pane is
+        // focused. The router already blocks all of them inside an editable element,
+        // so typing in the composer / search / add-a-point input is safe. `?` never
+        // reaches here — it's the capture-shim exception inside SlatePanel.
+        case 'slate-focus-next':      if (focusZone === 'slate') slatePanelRef.current?.focusNext();      break
+        case 'slate-focus-prev':      if (focusZone === 'slate') slatePanelRef.current?.focusPrev();      break
+        case 'slate-hide-focused':    if (focusZone === 'slate') slatePanelRef.current?.hideFocused();    break
+        case 'slate-refresh-focused': if (focusZone === 'slate') slatePanelRef.current?.refreshFocused(); break
+        case 'slate-compose':         if (focusZone === 'slate') slatePanelRef.current?.openComposer();   break
+        case 'slate-search':          if (focusZone === 'slate') slatePanelRef.current?.focusSearch();    break
       }
     })
     return () => deregisterActionHandler(run.id)
@@ -443,11 +457,13 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
                   the user opened on purpose); `onClose` collapses it back to the strip —
                   only meaningful when there are no surfaces holding it open. */}
               <SlatePanel
+                ref={slatePanelRef}
                 runId={run.id}
                 surfaces={run.slate}
                 width={slateWidth}
                 open={slateOpen}
                 onClose={() => setSlateOpen(false)}
+                focused={focusZone === 'slate'}
               />
             </div>
           </div>

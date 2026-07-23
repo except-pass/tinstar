@@ -23,10 +23,10 @@
 //
 // This panel is purely additive: it renders NOTHING when the run has no Slate
 // surfaces, so the run card keeps its existing three-panel layout unchanged.
-import { useCallback, useMemo, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import type { SlateSurface } from '../../types'
 import { A2uiRenderer, A2uiErrorBoundary } from '../../a2ui/A2uiRenderer'
-import { OpenPointsSurface } from './OpenPointsSurface'
+import { OpenPointsSurface, orderOpenPoints } from './OpenPointsSurface'
 import { DiagramSurface } from './DiagramSurface'
 import {
   getHiddenSlateSurfaces, addHiddenSlateSurface, removeHiddenSlateSurface,
@@ -38,6 +38,8 @@ import { SlateExplainButton } from './SlateExplainButton'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
 import { useNow } from '../../hooks/useNow'
+import { SLATE_HOTKEYS, keyToSlateAction } from './slateHotkeys'
+import { isEditable } from '../../hotkeys/isEditable'
 
 /** Column width (px) at/above which surfaces reflow into two columns (R2). Kept
  *  in step with the resize clamp in `RunWorkspaceWidget` (min 260, max 560). */
@@ -58,6 +60,23 @@ interface Props {
   /** Collapse the (blank) Slate back to the strip. Only offered when there are no
    *  surfaces holding the column open. */
   onClose?: () => void
+  /** S6 U1 — the Slate zone currently holds the widget's focus. Arms the `?`
+   *  capture shim (and nothing else: the other six keys are gated upstream, in the
+   *  widget's action handler). */
+  focused?: boolean
+}
+
+/** The keyboard surface RunWorkspaceWidget drives (S6 U1). The widget owns the
+ *  binding registration and the focus-zone gate; the panel owns what each action
+ *  actually means. */
+export interface SlatePanelHandle {
+  focusNext: () => void
+  focusPrev: () => void
+  hideFocused: () => void
+  refreshFocused: () => void
+  openComposer: () => void
+  focusSearch: () => void
+  toggleCheatsheet: () => void
 }
 
 /** Sort by `order` (undefined sinks to the end) then `createdAt` tiebreak. */
@@ -124,7 +143,42 @@ function MinimizeToggle({ id, minimized, onMinimize, onRestore }: {
   )
 }
 
-export function SlatePanel({ runId, surfaces = [], width, open = false, onClose }: Props) {
+/** The `?` overlay (S6 U1). Mono keycaps and labels, hairline border, control ink —
+ *  no cyan: a reference card is the opposite of a live edge. */
+function SlateCheatsheet({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <div
+      data-testid="slate-cheatsheet"
+      onClick={onDismiss}
+      className="absolute inset-0 z-30 flex items-start justify-center bg-surface-base/80 p-3"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-[260px] rounded border border-hairline bg-surface-raised p-3 shadow-lg"
+      >
+        <div className="mb-2 font-mono text-2xs uppercase tracking-[0.12em] text-ink-low">
+          Slate keys
+        </div>
+        <dl className="flex flex-col gap-1">
+          {SLATE_HOTKEYS.map((h) => (
+            <div key={h.key} className="flex items-baseline gap-2">
+              <dt className="w-5 shrink-0 rounded-sm bg-surface-hover text-center font-mono text-[11px] text-ink-mid">
+                {h.key}
+              </dt>
+              <dd className="font-mono text-[11px] text-ink-ctrl">{h.label}</dd>
+            </div>
+          ))}
+        </dl>
+        <div className="mt-2 font-mono text-[10px] text-ink-ctrl">esc / ? to close</div>
+      </div>
+    </div>
+  )
+}
+
+export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePanel(
+  { runId, surfaces = [], width, open = false, onClose, focused = false }: Props,
+  ref,
+) {
   // Hidden surfaces are a per-browser view preference; seed from the persisted
   // set and keep a React copy so mutations re-render. The filter is applied on
   // every render against this set, so an SSE re-projection never resurrects a
@@ -180,23 +234,157 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
     })
   }, [])
 
+  // ── Keyboard surface (S6 U1) ────────────────────────────────────────────
+  // Search (`/`), the cheatsheet (`?`), and the focused row (j/k). "Focus" here is
+  // client-only and orthogonal to the widget's `focusZone`: it's which ROW inside
+  // the Slate the next x/r applies to.
+  const [query, setQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [cheatsheetOpen, setCheatsheetOpen] = useState(false)
+  const [focusedSurfaceId, setFocusedSurfaceId] = useState<string | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  const q = query.trim().toLowerCase()
+  /** The surfaces the body renders — everything, or the search hits. */
+  const matched = useMemo(() => {
+    if (!q) return sorted
+    return sorted.filter((s) =>
+      (s.headline ?? '').toLowerCase().includes(q) ||
+      s.id.toLowerCase().includes(q) ||
+      s.kind.toLowerCase().includes(q),
+    )
+  }, [sorted, q])
+
+  const openPoints = useMemo(() => matched.filter((s) => s.kind === 'open-point'), [matched])
+
+  /**
+   * The rows j/k walks, in the order they appear on screen: each visible open point
+   * (the grouped list's rows are traversable individually — that's where x and r are
+   * most useful) followed by each visible card, interleaved exactly as rendered.
+   * `orderOpenPoints` is imported from OpenPointsSurface rather than re-derived, so
+   * this can't drift out of step with what that component actually renders.
+   */
+  const focusRows = useMemo(() => {
+    const rows: SlateSurface[] = []
+    const firstIdx = matched.findIndex((s) => s.kind === 'open-point')
+    matched.forEach((s, i) => {
+      if (s.kind === 'open-point') {
+        if (i !== firstIdx) return
+        rows.push(...orderOpenPoints(openPoints, hidden, showHidden))
+        return
+      }
+      if (hidden.has(s.id) && !showHidden) return
+      rows.push(s)
+    })
+    return rows
+  }, [matched, openPoints, hidden, showHidden])
+
+  // Clamp, don't wrap: running off the end of a list and silently reappearing at the
+  // top is disorienting when you can't see the whole column. The FIRST press lands on
+  // the first row rather than moving from nowhere.
+  const moveFocus = useCallback((delta: 1 | -1) => {
+    setFocusedSurfaceId((prev) => {
+      if (focusRows.length === 0) return null
+      const i = prev ? focusRows.findIndex((s) => s.id === prev) : -1
+      if (i < 0) return focusRows[0]!.id
+      const next = Math.min(Math.max(i + delta, 0), focusRows.length - 1)
+      return focusRows[next]!.id
+    })
+  }, [focusRows])
+
+  const hideFocused = useCallback(() => {
+    const i = focusRows.findIndex((s) => s.id === focusedSurfaceId)
+    if (i < 0) return
+    hide(focusRows[i]!.id)
+    // Keep the keyboard somewhere useful: fall to the next row, or back to the
+    // previous one when the hidden row was last.
+    const next = focusRows[i + 1] ?? focusRows[i - 1] ?? null
+    setFocusedSurfaceId(next ? next.id : null)
+  }, [focusRows, focusedSurfaceId, hide])
+
+  const refreshFocused = useCallback(() => {
+    const s = focusRows.find((x) => x.id === focusedSurfaceId)
+    if (s) refresh(s)
+  }, [focusRows, focusedSurfaceId, refresh])
+
+  const openComposer = useCallback(() => {
+    // On a blank Slate the composer is already on screen (U5) — put the cursor in it
+    // instead of stacking a popover on top of it.
+    if (sorted.length === 0) {
+      const el = rootRef.current?.querySelector<HTMLInputElement>('[data-testid="composer-search"]')
+      el?.focus()
+      return
+    }
+    setComposerOpen(true)
+  }, [sorted.length])
+
+  const focusSearch = useCallback(() => {
+    setSearchOpen(true)
+    // The input may not exist yet on the frame the key fires.
+    requestAnimationFrame(() => searchRef.current?.focus())
+  }, [])
+
+  const toggleCheatsheet = useCallback(() => setCheatsheetOpen((v) => !v), [])
+
+  useImperativeHandle(ref, () => ({
+    focusNext: () => moveFocus(1),
+    focusPrev: () => moveFocus(-1),
+    hideFocused,
+    refreshFocused,
+    openComposer,
+    focusSearch,
+    toggleCheatsheet,
+  }), [moveFocus, hideFocused, refreshFocused, openComposer, focusSearch, toggleCheatsheet])
+
+  // The `?` shim — the ONE key that can't ride the binding registry. `useGlobalHotkeys`
+  // claims `?` for the command palette on a bubble-phase window listener guarded only
+  // by `isEditable`; it has no idea about focus zones. So we listen in the CAPTURE
+  // phase (which runs first) and `stopImmediatePropagation` so the palette never sees
+  // the event. Armed only while the Slate zone holds focus, so `?` still opens the
+  // palette everywhere else.
+  useEffect(() => {
+    if (!focused) return
+    function onKey(e: KeyboardEvent) {
+      if (isEditable(document.activeElement)) return
+      if (keyToSlateAction(e) !== 'cheatsheet') return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      setCheatsheetOpen((v) => !v)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [focused])
+
+  // Esc dismisses the cheatsheet (capture, to beat anything focused underneath).
+  useEffect(() => {
+    if (!cheatsheetOpen) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      setCheatsheetOpen(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [cheatsheetOpen])
+
   // Additive: no surfaces → render nothing (card layout unchanged) UNLESS the user
   // opened the Slate blank on purpose (`open`), in which case we render the header so
   // Explain / + Add are reachable to fill it.
   if (surfaces.length === 0 && !open) return null
 
-  const openPoints = sorted.filter((s) => s.kind === 'open-point')
   // The grouped open-points list renders once, at the first open-point's slot.
-  const firstOpenPointIdx = sorted.findIndex((s) => s.kind === 'open-point')
+  const firstOpenPointIdx = matched.findIndex((s) => s.kind === 'open-point')
 
   const hiddenCount = sorted.filter((s) => hidden.has(s.id)).length
   const columns = width && width >= SLATE_TWO_COL_MIN ? 2 : 1
   // "Refresh all" fans out over every VISIBLE surface (each open point is a surface
   // too) — a recipe is optional, so all of them are refreshable.
-  const visibleSurfaces = sorted.filter((s) => showHidden || !hidden.has(s.id))
+  const visibleSurfaces = matched.filter((s) => showHidden || !hidden.has(s.id))
 
   return (
-    <div className="relative flex flex-col h-full min-w-0">
+    <div ref={rootRef} className="relative flex flex-col h-full min-w-0">
       {/* Header strip — the only always-visible chrome (design: Panel chrome). Mono
           label left, quiet actions right. Cyan is spent on ONLY the two generative
           moves (✦ Explain, + Add) — the live/creative edge (P4); everything else
@@ -204,6 +392,34 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
       <div className="px-3 py-1.5 border-b border-hairline bg-surface-panel/60 flex items-center justify-between gap-2">
         <span className="text-[11px] font-mono text-ink-low uppercase tracking-[0.12em]">The Slate</span>
         <div className="flex items-center gap-2">
+          {/* Search (S6 U1, `/`). Collapsed to a glyph until asked for, so the
+              header doesn't grow a permanent field on a three-surface Slate.
+              Maintenance, not generative — control ink, never cyan. */}
+          {searchOpen ? (
+            <input
+              ref={searchRef}
+              data-testid="slate-search"
+              value={query}
+              placeholder="Filter…"
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Escape') return
+                e.preventDefault()
+                setQuery('')
+                setSearchOpen(false)
+              }}
+              className="w-20 rounded border border-hairline bg-surface-panel px-1 py-0.5 font-mono text-2xs text-ink-high placeholder:text-ink-ctrl focus:border-primary/60 focus:outline-none"
+            />
+          ) : (
+            <button
+              data-testid="slate-search-open"
+              onClick={focusSearch}
+              title="Filter surfaces ( / )"
+              className="text-2xs leading-none text-ink-ctrl hover:text-ink-high"
+            >
+              ⌕
+            </button>
+          )}
           {hiddenCount > 0 && (
             <button
               data-testid="slate-hidden-toggle"
@@ -265,6 +481,10 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
         </div>
       </div>
 
+      {/* The `?` cheatsheet (S6 U1) — an overlay over the column, dismissed by ?, Esc,
+          or a click outside the card. */}
+      {cheatsheetOpen && <SlateCheatsheet onDismiss={() => setCheatsheetOpen(false)} />}
+
       {/* The composer popover — anchored under the header (R7/U4). Only ever the
           non-empty path; a blank Slate carries the inline composer instead. */}
       {composerOpen && sorted.length > 0 && (
@@ -298,7 +518,14 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
             <SlateComposer runId={runId} inline onClose={() => {}} />
           </div>
         )}
-        {sorted.map((surface, i) => {
+        {/* A search that matches nothing says so, rather than looking like an empty
+            Slate — the surfaces are still there, just filtered out. */}
+        {sorted.length > 0 && matched.length === 0 && (
+          <div data-testid="slate-no-matches" className="col-span-full px-1 py-6 text-center font-mono text-2xs text-ink-ctrl">
+            No surface matches “{query.trim()}”.
+          </div>
+        )}
+        {matched.map((surface, i) => {
           // Open-points collapse into one grouped list at the first one's slot;
           // it always spans the full width (R2). Per-point hiding lives inside.
           if (surface.kind === 'open-point') {
@@ -316,6 +543,7 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
                   unreachableIds={unreachableIds}
                   onRefresh={refresh}
                   now={now}
+                  focusedId={focusedSurfaceId}
                 />
               </div>
             )
@@ -371,10 +599,15 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
           // `.slate-surface-refreshing` + its keyframes live in src/index.css, since
           // tailwind.config keyframes are not bundled into that stylesheet), dimming
           // marks hidden — so the authored body never moves between states.
+          // The j/k focus ring is cyan: keyboard focus is a live, moving thing (P4),
+          // and it never collides with the refresh pulse — that lives on the border
+          // and the shadow, this on the ring.
+          const isFocused = focusedSurfaceId === surface.id
           const shellClass = [
             'relative rounded border min-w-0 transition-shadow',
             isMinimized ? 'px-[14px] py-2' : 'p-[14px]',
             isRefreshing ? 'bg-surface-raised slate-surface-refreshing' : 'border-hairline bg-surface-raised',
+            isFocused ? 'ring-1 ring-primary/70' : '',
             isHidden ? 'opacity-50' : '',
           ].join(' ')
 
@@ -391,6 +624,7 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
                 data-testid={`slate-surface-${surface.id}`}
                 data-minimized="true"
                 data-refreshing={isRefreshing ? 'true' : undefined}
+                data-focused={isFocused ? 'true' : undefined}
                 className={shellClass}
               >
                 {controls}
@@ -415,6 +649,7 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
               key={surface.id}
               data-testid={`slate-surface-${surface.id}`}
               data-refreshing={isRefreshing ? 'true' : undefined}
+              data-focused={isFocused ? 'true' : undefined}
               className={shellClass}
             >
               {controls}
@@ -435,4 +670,4 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
       </div>
     </div>
   )
-}
+})
