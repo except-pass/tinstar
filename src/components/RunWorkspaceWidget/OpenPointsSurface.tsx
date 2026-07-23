@@ -15,7 +15,7 @@
 // immediately and reverts on failure; a new point appears at once and reconciles
 // when the SSE `run` delta carries it on run.slate (run.slate IS the channel — no
 // second subscription).
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SlateSurface, PointStatus } from '../../types'
 import { A2uiRenderer } from '../../a2ui/A2uiRenderer'
 import { isAnswerable } from '../../a2ui/controls'
@@ -25,6 +25,7 @@ import { SurfaceThread } from './SurfaceThread'
 import { RefreshButton } from './slateRefresh'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
+import { moveItem } from './reorderUtil'
 
 /** The visible track stages, in order. `resolved` is terminal; `dismissed` is a
  *  side exit (rendered as a dimmed row, not a track position). */
@@ -74,9 +75,52 @@ const AUTHOR_TONE = 'bg-surface-hover text-ink-low'
 
 const EMPTY_SET: ReadonlySet<string> = new Set()
 
+/** The reorder affordance (S6 U2): a thumb-pad grip that reveals ▲/▼ to nudge the
+ *  point one slot. NOT pointer-drag — native DnD is unreliable on the zoom/pan
+ *  transformed canvas, and the chevrons reduce the interaction to pure index math
+ *  (`moveItem`) that a unit test can drive directly. Ends of the list are disabled
+ *  rather than hidden, so the row's shape doesn't jump as points move. */
+function ReorderGrip({ id, canMoveUp, canMoveDown, onMove }: {
+  id: string
+  canMoveUp: boolean
+  canMoveDown: boolean
+  onMove: (id: string, delta: -1 | 1) => void
+}) {
+  return (
+    <span data-testid={`reorder-grip-${id}`} className="flex shrink-0 items-center gap-0.5">
+      {/* Thumb-pad glyph: the "you can move this" cue. Purely decorative — the
+          chevrons do the work, so it isn't a focus target. */}
+      <span aria-hidden className="select-none text-[11px] leading-none text-ink-ctrl">⠿</span>
+      {/* aria-label, not just title: a button that already has text content takes
+          its accessible name from that text, so without these a screen reader
+          announces "black up-pointing triangle, button". */}
+      <button
+        data-testid={`reorder-up-${id}`}
+        onClick={() => onMove(id, -1)}
+        disabled={!canMoveUp}
+        aria-label="Move this point up"
+        title="Move this point up"
+        className="rounded px-0.5 text-[9px] leading-none text-ink-ctrl hover:text-ink-high disabled:opacity-30 disabled:hover:text-ink-ctrl"
+      >
+        ▲
+      </button>
+      <button
+        data-testid={`reorder-down-${id}`}
+        onClick={() => onMove(id, 1)}
+        disabled={!canMoveDown}
+        aria-label="Move this point down"
+        title="Move this point down"
+        className="rounded px-0.5 text-[9px] leading-none text-ink-ctrl hover:text-ink-high disabled:opacity-30 disabled:hover:text-ink-ctrl"
+      >
+        ▼
+      </button>
+    </span>
+  )
+}
+
 /** A single point row. Holds its own optimistic resolve + answer form state, keyed
  *  per control-component id, so multiple choice groups on one body stay independent. */
-function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refreshing = false, unreachable = false, onRefresh, now }: {
+function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refreshing = false, unreachable = false, onRefresh, now, reorder, focused = false }: {
   runId: string
   surface: SlateSurface
   /** Slate v2 U2/R4 — this point is a hidden surface, rendered dimmed. */
@@ -90,6 +134,12 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
   onRefresh?: (surface: SlateSurface) => void
   /** Ticking clock from the panel — drives the row's "updated Xm ago" freshness. */
   now: number
+  /** S6 U2 — reorder controls. Absent on rows that don't participate (a resolved or
+   *  dismissed point sinks by rank, so nudging it would be a lie). */
+  reorder?: { canMoveUp: boolean; canMoveDown: boolean; onMove: (id: string, delta: -1 | 1) => void }
+  /** S6 U1 — this row holds the Slate's keyboard focus (j/k), so it wears the cyan
+   *  focus ring: keyboard focus is a live, moving thing (design language P4). */
+  focused?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   // Optimistic status override (null = trust the server value). Cleared only once
@@ -217,11 +267,21 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
 
   const threadCount = surface.thread?.length ?? 0
 
+  // A refreshing row wears the same slow cyan breathe as a refreshing surface card
+  // (S6 U4) so the two states read identically; the class + keyframes live in
+  // src/index.css and honor prefers-reduced-motion. `transition-shadow` matches the
+  // card's, so the row eases into and out of the cue the same way rather than
+  // snapping. (Kept out of the JSX attribute list: a `//` comment between attributes
+  // swallows the rest of its line if the file is ever reflowed.)
   return (
     <div
       data-testid={`point-${surface.id}`}
       data-status={status}
-      className={`rounded border border-hairline bg-surface-hover p-2.5 ${
+      data-refreshing={refreshing ? 'true' : undefined}
+      data-focused={focused ? 'true' : undefined}
+      className={`rounded border bg-surface-hover p-2.5 transition-shadow ${
+        refreshing ? 'border-primary/40 slate-surface-refreshing' : 'border-hairline'
+      } ${focused ? 'ring-1 ring-primary/70' : ''} ${
         status === 'dismissed' || hidden ? 'opacity-50' : resolved ? 'opacity-70' : ''
       }`}
     >
@@ -257,6 +317,15 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
             >
               {surface.headline ?? '(untitled point)'}
             </span>
+            {/* Reorder (⠿ ▲▼) — nudge this point one slot (S6 U2). */}
+            {!hidden && reorder && (
+              <ReorderGrip
+                id={surface.id}
+                canMoveUp={reorder.canMoveUp}
+                canMoveDown={reorder.canMoveDown}
+                onMove={reorder.onMove}
+              />
+            )}
             {/* Refresh (⟳) — re-run this point's author (U3). Hidden on a hidden row
                 (nothing to look at) but present on every visible one. */}
             {!hidden && onRefresh && (
@@ -435,20 +504,138 @@ interface Props {
   /** Ticking clock from the panel — threaded to each row's freshness footer.
    *  Optional so tests/standalone callers render without wiring a clock. */
   now?: number
+  /** S6 U1 — the id currently holding the Slate's keyboard focus, if it's a point. */
+  focusedId?: string | null
 }
 
 const EMPTY_HIDDEN: ReadonlySet<string> = new Set()
 
-export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, showHidden = false, onHide, onUnhide, refreshingIds = EMPTY_HIDDEN, unreachableIds = EMPTY_HIDDEN, onRefresh, now = Date.now() }: Props) {
+/** A point that still participates in the ordering. Resolved/dismissed points sink
+ *  to the bottom by rank, so a reorder chevron on one would be a lie. */
+function isLive(s: SlateSurface): boolean {
+  return s.status !== 'resolved' && s.status !== 'dismissed'
+}
+
+/**
+ * The visible open points in the order this component renders them: hidden ones
+ * dropped (unless revealed), resolved/dismissed ones sunk to the bottom, creation/
+ * `order` sequence otherwise (the caller passes them pre-sorted, and `sort` is
+ * stable).
+ *
+ * Exported so SlatePanel's j/k focus traversal (S6 U1) walks the same rule this
+ * component renders from instead of re-deriving it and drifting out of step.
+ *
+ * CAVEAT: this is the BASE order. While a chevron reorder is in flight, the rendered
+ * list is this sequence re-sorted by the component's optimistic override, so for
+ * those few frames the panel's traversal order can differ from the DOM order by the
+ * one row that moved. The override is short-lived by construction (it clears on the
+ * reconciling `run` delta, and drops itself if its ids stop matching the server's),
+ * so this is a transient off-by-one in `j`/`k`, never a stuck divergence.
+ */
+export function orderOpenPoints(
+  points: SlateSurface[],
+  hiddenIds: ReadonlySet<string>,
+  showHidden: boolean,
+): SlateSurface[] {
+  const rank = (s: SlateSurface) => (isLive(s) ? 0 : 1)
+  return [...points]
+    .filter((s) => showHidden || !hiddenIds.has(s.id))
+    .sort((a, b) => rank(a) - rank(b))
+}
+
+export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, showHidden = false, onHide, onUnhide, refreshingIds = EMPTY_HIDDEN, unreachableIds = EMPTY_HIDDEN, onRefresh, now = Date.now(), focusedId = null }: Props) {
+  // Optimistic reorder (S6 U2): the id sequence the user just asked for, held until
+  // the server's own sequence arrives on the SSE `run` delta and matches. `points`
+  // arrives from the panel already sorted by surface `order`, so "matches" is a
+  // straight comparison against the incoming order — the same reconcile-on-the-delta
+  // discipline the resolve/refresh paths use, rather than watching a raw field.
+  const [optimisticOrder, setOptimisticOrder] = useState<string[] | null>(null)
+  const [reorderError, setReorderError] = useState<string | null>(null)
+
   // Points sink once resolved/dismissed so the live ones stay at the top; hidden
   // ones are dropped unless the reveal toggle is on (R4 — the filter runs every
   // render so an SSE re-projection can't resurrect a hidden point).
   const ordered = useMemo(() => {
-    const rank = (s: SlateSurface) => (s.status === 'resolved' || s.status === 'dismissed' ? 1 : 0)
-    return [...points]
-      .filter((s) => showHidden || !hiddenIds.has(s.id))
-      .sort((a, b) => rank(a) - rank(b))
-  }, [points, hiddenIds, showHidden])
+    const base = orderOpenPoints(points, hiddenIds, showHidden)
+    if (!optimisticOrder) return base
+    // An id absent from the optimistic list (e.g. a point that arrived mid-flight)
+    // sinks below the ones being moved rather than jumping to the top.
+    const rank = (s: SlateSurface) => (isLive(s) ? 0 : 1)
+    const at = new Map(optimisticOrder.map((id, i) => [id, i]))
+    const slot = (s: SlateSurface) => at.get(s.id) ?? Number.POSITIVE_INFINITY
+    return base.sort((a, b) => rank(a) - rank(b) || slot(a) - slot(b))
+  }, [points, hiddenIds, showHidden, optimisticOrder])
+
+  // The ids the chevrons actually permute: the live rows, in rendered order.
+  const liveIds = useMemo(() => ordered.filter(isLive).map((s) => s.id), [ordered])
+
+  // Reconcile: drop the optimistic override once the server agrees — or once it can
+  // no longer be checked. Both exits matter, because an override that never clears
+  // masks the server's real sequence for as long as the panel lives:
+  //   · the server's sequence for these ids equals what we asked for → settled, or
+  //   · one of the ids is GONE from the projection (a file re-projection retracted
+  //     it), so the exact-sequence test could never pass again.
+  useEffect(() => {
+    if (!optimisticOrder) return
+    const present = new Set(points.map((s) => s.id))
+    if (!optimisticOrder.every((id) => present.has(id))) {
+      setOptimisticOrder(null)
+      setReorderError(null)
+      return
+    }
+    const wanted = new Set(optimisticOrder)
+    const serverIds = points.filter((s) => wanted.has(s.id)).map((s) => s.id)
+    if (
+      serverIds.length === optimisticOrder.length &&
+      serverIds.every((id, i) => id === optimisticOrder[i])
+    ) {
+      setOptimisticOrder(null)
+      // Back in sync — any earlier "could not save" line is stale by definition.
+      setReorderError(null)
+    }
+  }, [points, optimisticOrder])
+
+  // Reorder writes are SERIALIZED. Nudging a point three slots is three clicks in
+  // quick succession, and three concurrent PUTs have no ordering guarantee — if the
+  // last one is applied first the server settles on an intermediate sequence while
+  // the client holds the final one, and the exact-match reconcile above never fires.
+  // `chainRef` queues each PUT behind the previous; `seqRef` makes sure only the
+  // LATEST click's failure can roll the list back (a stale failure must not discard
+  // a newer, successful move).
+  const chainRef = useRef<Promise<void>>(Promise.resolve())
+  const seqRef = useRef(0)
+
+  const move = useCallback(
+    (id: string, delta: -1 | 1) => {
+      const from = liveIds.indexOf(id)
+      if (from < 0) return
+      const next = moveItem(liveIds, from, from + delta)
+      if (next.every((v, i) => v === liveIds[i])) return // at an end — quiet no-op
+      const prev = optimisticOrder
+      const mySeq = ++seqRef.current
+      setReorderError(null)
+      setOptimisticOrder(next)
+      chainRef.current = chainRef.current.then(async () => {
+        try {
+          const res = await apiFetch(`/api/runs/${runId}/slate/points/order`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order: next }),
+          })
+          const body = (await res.json().catch(() => null)) as
+            | { ok?: boolean; error?: { message?: string } }
+            | null
+          if (!res.ok || !body?.ok) throw new Error(body?.error?.message || `reorder failed (${res.status})`)
+          // Success: hold the optimistic order until the run delta carries it.
+        } catch {
+          if (seqRef.current !== mySeq) return // a newer move already superseded this
+          setOptimisticOrder(prev) // put the list back exactly where it was
+          setReorderError('Could not save the new order.')
+        }
+      })
+    },
+    [liveIds, optimisticOrder, runId],
+  )
 
   return (
     <div
@@ -456,20 +643,30 @@ export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, sho
       className="rounded border border-hairline bg-surface-raised p-[14px] space-y-2"
     >
       <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-low">Open points</div>
-      {ordered.map((surface) => (
-        <OpenPointRow
-          key={surface.id}
-          runId={runId}
-          surface={surface}
-          hidden={hiddenIds.has(surface.id)}
-          onHide={onHide}
-          onUnhide={onUnhide}
-          refreshing={refreshingIds.has(surface.id)}
-          unreachable={unreachableIds.has(surface.id)}
-          onRefresh={onRefresh}
-          now={now}
-        />
-      ))}
+      {ordered.map((surface) => {
+        const liveIdx = liveIds.indexOf(surface.id)
+        // Only live rows get a grip, and only when there's more than one of them.
+        const reorder = liveIdx >= 0 && liveIds.length > 1
+          ? { canMoveUp: liveIdx > 0, canMoveDown: liveIdx < liveIds.length - 1, onMove: move }
+          : undefined
+        return (
+          <OpenPointRow
+            key={surface.id}
+            runId={runId}
+            surface={surface}
+            hidden={hiddenIds.has(surface.id)}
+            onHide={onHide}
+            onUnhide={onUnhide}
+            refreshing={refreshingIds.has(surface.id)}
+            unreachable={unreachableIds.has(surface.id)}
+            onRefresh={onRefresh}
+            now={now}
+            reorder={reorder}
+            focused={focusedId === surface.id}
+          />
+        )
+      })}
+      {reorderError && <div className="text-[11px] text-hue-error">{reorderError}</div>}
       <AddPoint runId={runId} />
     </div>
   )

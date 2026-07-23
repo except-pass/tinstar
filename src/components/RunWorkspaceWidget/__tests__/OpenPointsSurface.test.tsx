@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import type { SlateSurface } from '../../../types'
 
 // apiFetch is the single HTTP seam (never bare fetch — it 404s in Tauri). Mock it
@@ -145,6 +145,188 @@ describe('OpenPointsSurface (U6)', () => {
     )
     expect(screen.getByTestId('refresh-surface-p1').getAttribute('data-refreshing')).toBe('true')
     expect(screen.getByTestId('refresh-unreachable-p1')).toBeTruthy()
+  })
+
+  it('gives a refreshing row the same slow cyan pulse as a refreshing card (U4)', () => {
+    const { rerender } = render(
+      <OpenPointsSurface runId="run-1" points={[point('p1')]} onRefresh={vi.fn()} />,
+    )
+    expect(screen.getByTestId('point-p1').className).not.toContain('slate-surface-refreshing')
+
+    rerender(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[point('p1')]}
+        onRefresh={vi.fn()}
+        refreshingIds={new Set(['p1'])}
+      />,
+    )
+    const row = screen.getByTestId('point-p1')
+    expect(row.className).toContain('slate-surface-refreshing')
+    expect(row.getAttribute('data-refreshing')).toBe('true')
+  })
+
+  it('nudges a point up, optimistically and via the order PUT (S6 U2)', async () => {
+    const points = [point('p1'), point('p2'), point('p3')]
+    render(<OpenPointsSurface runId="run-1" points={points} />)
+    const idsInDom = () =>
+      Array.from(document.querySelectorAll('[data-testid^="point-"]')).map((el) =>
+        el.getAttribute('data-testid'),
+      )
+    expect(idsInDom()).toEqual(['point-p1', 'point-p2', 'point-p3'])
+
+    fireEvent.click(screen.getByTestId('reorder-up-p3'))
+
+    // Optimistic: the row moves at once, before any round trip.
+    expect(idsInDom()).toEqual(['point-p1', 'point-p3', 'point-p2'])
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith(
+        '/api/runs/run-1/slate/points/order',
+        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ order: ['p1', 'p3', 'p2'] }) }),
+      ),
+    )
+  })
+
+  it('disables the chevrons at the ends and omits the grip for a lone point', () => {
+    const { rerender } = render(
+      <OpenPointsSurface runId="run-1" points={[point('p1'), point('p2')]} />,
+    )
+    expect((screen.getByTestId('reorder-up-p1') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('reorder-down-p1') as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByTestId('reorder-down-p2') as HTMLButtonElement).disabled).toBe(true)
+
+    // One point → nothing to permute, so no grip at all.
+    rerender(<OpenPointsSurface runId="run-1" points={[point('p1')]} />)
+    expect(screen.queryByTestId('reorder-grip-p1')).toBeNull()
+  })
+
+  it('does not offer a grip on a resolved point (it sinks by rank instead)', () => {
+    render(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[point('p1'), point('p2'), point('done', { status: 'resolved' })]}
+      />,
+    )
+    expect(screen.getByTestId('reorder-grip-p1')).toBeTruthy()
+    expect(screen.queryByTestId('reorder-grip-done')).toBeNull()
+  })
+
+  it('reverts the optimistic order when the PUT fails', async () => {
+    apiFetch.mockImplementation(() =>
+      Promise.resolve({ ok: false, status: 500, json: async () => ({ ok: false, error: { message: 'nope' } }) } as unknown as Response),
+    )
+    render(<OpenPointsSurface runId="run-1" points={[point('p1'), point('p2')]} />)
+    const idsInDom = () =>
+      Array.from(document.querySelectorAll('[data-testid^="point-"]')).map((el) =>
+        el.getAttribute('data-testid'),
+      )
+
+    fireEvent.click(screen.getByTestId('reorder-down-p1'))
+    expect(idsInDom()).toEqual(['point-p2', 'point-p1'])
+
+    // The failure puts the list back exactly where it was, and says so.
+    await waitFor(() => expect(idsInDom()).toEqual(['point-p1', 'point-p2']))
+    expect(screen.getByText('Could not save the new order.')).toBeTruthy()
+  })
+
+  it('drops the optimistic order once the run delta carries the same sequence', async () => {
+    const points = [point('p1'), point('p2')]
+    const { rerender } = render(<OpenPointsSurface runId="run-1" points={points} />)
+    const idsInDom = () =>
+      Array.from(document.querySelectorAll('[data-testid^="point-"]')).map((el) =>
+        el.getAttribute('data-testid'),
+      )
+
+    fireEvent.click(screen.getByTestId('reorder-down-p1'))
+    expect(idsInDom()).toEqual(['point-p2', 'point-p1'])
+
+    // The SSE run delta arrives carrying the server's order. The optimistic override
+    // is dropped; the projection drives from here.
+    rerender(<OpenPointsSurface runId="run-1" points={[point('p2'), point('p1')]} />)
+    await waitFor(() => expect(idsInDom()).toEqual(['point-p2', 'point-p1']))
+
+    // Proof the override really let go: a LATER delta reordering them back is honored
+    // instead of being fought by a stuck optimistic list.
+    rerender(<OpenPointsSurface runId="run-1" points={[point('p1'), point('p2')]} />)
+    await waitFor(() => expect(idsInDom()).toEqual(['point-p1', 'point-p2']))
+  })
+
+  it('drops the override when one of its points is RETRACTED, instead of sticking', async () => {
+    // The exact-sequence reconcile can never match again once an id leaves the
+    // projection, so without a second exit the override outlives the thing it was
+    // reconciling and masks the server's order for the rest of the panel's life.
+    const { rerender } = render(
+      <OpenPointsSurface runId="run-1" points={[point('p1'), point('p2'), point('p3')]} />,
+    )
+    const idsInDom = () =>
+      Array.from(document.querySelectorAll('[data-testid^="point-"]')).map((el) =>
+        el.getAttribute('data-testid'),
+      )
+
+    fireEvent.click(screen.getByTestId('reorder-up-p3'))
+    expect(idsInDom()).toEqual(['point-p1', 'point-p3', 'point-p2'])
+
+    // A file re-projection retracts p3 entirely.
+    rerender(<OpenPointsSurface runId="run-1" points={[point('p1'), point('p2')]} />)
+    await waitFor(() => expect(idsInDom()).toEqual(['point-p1', 'point-p2']))
+
+    // …and the projection drives again: a later delta is honored, not fought.
+    rerender(<OpenPointsSurface runId="run-1" points={[point('p2'), point('p1')]} />)
+    await waitFor(() => expect(idsInDom()).toEqual(['point-p2', 'point-p1']))
+  })
+
+  it('clears a stale reorder error once the panel is back in sync', async () => {
+    apiFetch.mockImplementation(() =>
+      Promise.resolve({ ok: false, status: 500, json: async () => ({ ok: false }) } as unknown as Response),
+    )
+    const { rerender } = render(
+      <OpenPointsSurface runId="run-1" points={[point('p1'), point('p2')]} />,
+    )
+    fireEvent.click(screen.getByTestId('reorder-down-p1'))
+    await waitFor(() => expect(screen.getByText('Could not save the new order.')).toBeTruthy())
+
+    // A later successful move settles on the delta — the old red line is stale by
+    // definition and must not sit under the list forever with no dismiss.
+    apiFetch.mockImplementation(() =>
+      Promise.resolve({ ok: true, json: async () => ({ ok: true }) } as unknown as Response),
+    )
+    fireEvent.click(screen.getByTestId('reorder-down-p1'))
+    rerender(<OpenPointsSurface runId="run-1" points={[point('p2'), point('p1')]} />)
+    await waitFor(() => expect(screen.queryByText('Could not save the new order.')).toBeNull())
+  })
+
+  it('serializes concurrent reorder PUTs so the server cannot settle out of order', async () => {
+    // Nudging a point two slots is two clicks in quick succession. Fired in parallel,
+    // two PUTs have no ordering guarantee — the server can apply the second first and
+    // settle on an intermediate sequence the client never asked for.
+    const seen: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let calls = 0
+    apiFetch.mockImplementation((_url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string) as { order: string[] }
+      // Hold the FIRST request open. A parallel implementation would issue the
+      // second one anyway; a serialized one cannot.
+      const wait = calls++ === 0 ? gate : Promise.resolve()
+      return wait.then(() => {
+        seen.push(body.order.join(','))
+        return { ok: true, json: async () => ({ ok: true }) } as unknown as Response
+      })
+    })
+
+    render(<OpenPointsSurface runId="run-1" points={[point('p1'), point('p2'), point('p3')]} />)
+    fireEvent.click(screen.getByTestId('reorder-up-p3'))
+    fireEvent.click(screen.getByTestId('reorder-up-p3'))
+
+    // With the first PUT held open, the second must not have been issued at all.
+    await act(async () => { await Promise.resolve() })
+    expect(calls).toBe(1)
+    expect(seen).toEqual([])
+
+    await act(async () => { release(); await Promise.resolve() })
+    await waitFor(() => expect(seen).toHaveLength(2))
+    // Applied in click order — the cumulative sequence lands last.
+    expect(seen).toEqual(['p1,p3,p2', 'p3,p1,p2'])
   })
 
   it('filters a hidden point unless the reveal toggle is on', () => {

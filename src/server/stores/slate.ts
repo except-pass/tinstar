@@ -126,6 +126,11 @@ function createPoint(
  *  identical re-projection is byte-equal and short-circuits. */
 function mergeFileOwned(prior: Point, input: PointInput, now: number): Point {
   const changed = fileOwnedChanged(prior, input)
+  // The `...prior` spread is what preserves every STORE-owned field across a file
+  // re-projection — `replies`, the lifecycle stamps, and (S6 U2) `order`. A file
+  // never authors `order`, so there is nothing to overwrite here; the spread is the
+  // whole mechanism, and dropping it would silently reset a user's reordering on
+  // the next file write.
   const next: Point = {
     ...prior,
     headline: input.headline,
@@ -145,6 +150,32 @@ function mergeFileOwned(prior: Point, input: PointInput, now: number): Point {
   // pure body change never disturbs a live thread or an explicit resolve.
   next.status = derivePointStatus(next)
   return next
+}
+
+/**
+ * Given the order values a set of points CURRENTLY occupies, return the same set of
+ * slots re-issued in ascending order and forced strictly increasing (S6 U2).
+ *
+ * Reusing the existing slots is what keeps a reorder local: the run as a whole stays
+ * exactly where it was on the Slate's single `order` axis, and only the sequence
+ * within it changes. Strictly-increasing matters because the render sort tiebreaks
+ * equal `order` on `createdAt`/id — points sharing a slot (which is the COMMON case:
+ * one file projection stamps every point it creates with the same `now`) would
+ * otherwise silently ignore the new sequence. Ties are broken by nudging up by 1,
+ * which can push the last slot at most `n` past its original value: negligible
+ * against millisecond timestamps.
+ *
+ * Callers must pass the slots of the WHOLE run, not just the points being permuted —
+ * see {@link SlateStore.reorderPoints} for why.
+ */
+export function assignOrderSlots(current: number[]): number[] {
+  const slots = [...current].sort((a, b) => a - b)
+  const out: number[] = []
+  for (let i = 0; i < slots.length; i++) {
+    const base = slots[i]!
+    out.push(i === 0 ? base : Math.max(base, out[i - 1]! + 1))
+  }
+  return out
 }
 
 export class SlateStore {
@@ -168,11 +199,15 @@ export class SlateStore {
     return this.points.get(this.k(runId, id))
   }
 
-  /** All of a run's points, oldest first (createdAt, id tiebreak). */
+  /** All of a run's points in render order: `order` (S6 U2) when set, falling back
+   *  to `createdAt`, with an id tiebreak. An un-reordered run is byte-identical to
+   *  the old oldest-first behavior, since every point's effective order IS its
+   *  createdAt until someone reorders. */
   getPointsForRun(runId: string): Point[] {
+    const rank = (p: Point) => p.order ?? p.createdAt
     return [...this.points.values()]
       .filter(p => p.runId === runId)
-      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .sort((a, b) => rank(a) - rank(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   }
 
   getAllPoints(): Point[] {
@@ -289,6 +324,57 @@ export class SlateStore {
     this.mutate(runId, pointId, prior => {
       if (prior.stalledAt != null) return prior
       return { ...prior, stalledAt: at }
+    })
+  }
+
+  /**
+   * Reorder a run's points (S6 U2). `ids` is the desired sequence; points of this run
+   * not named in `ids` keep exactly the position they had.
+   *
+   * The assigned values REUSE the slots the run's points already occupy (see
+   * {@link assignOrderSlots}) rather than being 0,1,2… That matters: `order` is one
+   * shared axis for the whole Slate, so numbering the open points 0..n-1 would
+   * yank them ahead of every diagram/generic surface the moment anything was
+   * reordered once. Reusing the run's own slots keeps the group exactly where it was
+   * relative to everything else and only permutes it internally.
+   *
+   * DECONFLICTING AGAINST THE WHOLE RUN (not just the listed subset) is load-bearing.
+   * A single file projection stamps EVERY point it creates with the same `now`, so a
+   * listed and an unlisted point routinely share one effective slot. Re-issuing slots
+   * for the listed points alone would spread them to T, T+1, T+2… while an unlisted
+   * point stayed at T — and the id tiebreak could then slide that unlisted surface
+   * into the middle of a group it was never part of. So the walk below covers the
+   * run's full sequence, and an unlisted point is re-stamped ONLY when leaving it
+   * implicit would let it drift (its effective order has to change).
+   *
+   * `amendedAt` is deliberately NOT bumped — a reorder is not a re-authoring, and
+   * bumping it would reset the freshness clock and clear an in-flight refresh
+   * spinner. An identical reorder emits nothing (`mutate`'s equality guard).
+   */
+  reorderPoints(runId: string, ids: string[]): void {
+    const targets: Point[] = []
+    const seen = new Set<string>()
+    for (const id of ids) {
+      if (seen.has(id)) continue // first mention wins on a duplicate id
+      seen.add(id)
+      const p = this.points.get(this.k(runId, id))
+      if (p) targets.push(p)
+    }
+    if (targets.length < 2) return // nothing to permute
+    const targetIds = new Set(targets.map(p => p.id))
+    // The run's CURRENT sequence, with the listed points swapped into the desired
+    // order at exactly the positions they collectively already held.
+    const all = this.getPointsForRun(runId)
+    let taken = 0
+    const sequence = all.map(p => (targetIds.has(p.id) ? targets[taken++]! : p))
+    const slots = assignOrderSlots(all.map(p => p.order ?? p.createdAt))
+    sequence.forEach((p, i) => {
+      const order = slots[i]!
+      this.mutate(runId, p.id, prior =>
+        // Already effectively at this slot → leave it alone, so an unlisted point
+        // that needs no nudge keeps its implicit (createdAt-derived) order.
+        (prior.order ?? prior.createdAt) === order ? prior : { ...prior, order },
+      )
     })
   }
 

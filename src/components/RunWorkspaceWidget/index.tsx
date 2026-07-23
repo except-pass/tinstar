@@ -5,7 +5,7 @@ import { TouchedFilesPanel } from './TouchedFilesPanel'
 import { FileTreePanel } from './FileTreePanel'
 import { RunSessionPanel } from './RunSessionPanel'
 import { TelemetryPanel } from './TelemetryPanel'
-import { SlatePanel } from './SlatePanel'
+import { SlatePanel, type SlatePanelHandle } from './SlatePanel'
 import { HandsPanel } from './HandsPanel'
 import { registerActionHandler, deregisterActionHandler, registerFlourishHandler, registerScanHandler, deregisterFlourishHandler } from '../../hotkeys/actionHandlerRegistry'
 import { fitWidgetToViewport } from '../../hotkeys/canvasActionsRegistry'
@@ -24,6 +24,20 @@ import { getPref, setPref } from '../../lib/uiPrefs'
 const SLATE_MIN_WIDTH = 260
 const SLATE_MAX_WIDTH = 900
 const SLATE_DEFAULT_WIDTH = 320
+
+/** The six registry actions the Slate answers to (S6 U1), mapped to the panel's
+ *  imperative handle. A table rather than switch cases so the "is this a Slate
+ *  action?" test — which decides whether the widget DECLINES the keystroke when the
+ *  Slate zone isn't focused — is one lookup that can't drift from the list. `?` is
+ *  absent on purpose: it never reaches the registry (see slateHotkeys.ts). */
+const SLATE_ACTIONS: Record<string, ((h: SlatePanelHandle) => void) | undefined> = {
+  'slate-focus-next': h => h.focusNext(),
+  'slate-focus-prev': h => h.focusPrev(),
+  'slate-hide-focused': h => h.hideFocused(),
+  'slate-refresh-focused': h => h.refreshFocused(),
+  'slate-compose': h => h.openComposer(),
+  'slate-search': h => h.focusSearch(),
+}
 
 interface Props {
   run: RunData
@@ -72,6 +86,9 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
   const [composerFocusTrigger, bumpComposerFocus] = useReducer((n: number) => n + 1, 0)
 
   const rootRef = useRef<HTMLDivElement>(null)
+  // The Slate's imperative handle (S6 U1). The widget owns the binding registration
+  // and the focus-zone gate; the panel owns what each key MEANS.
+  const slatePanelRef = useRef<SlatePanelHandle>(null)
   const [focusZone, setFocusZone] = useState<FocusZone | null>(null)
   const [terminalFocused, setTerminalFocused] = useState(false)
   const [_fileSelectionIndex, setFileSelectionIndex] = useState(0)
@@ -172,6 +189,22 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
       }
       // All other widget hotkeys suspended when terminal has focus
       if (terminalFocused) return
+      // The Slate's keys (S6 U1). Each is gated on the Slate zone holding focus, so
+      // j/k/x/r/c// stay inert while the file list or the session pane is focused.
+      // Returning FALSE when the gate is shut is what keeps them inert rather than
+      // merely silent: the router leaves the keystroke alone and skips the sidebar
+      // confirmation flash, instead of swallowing the key and flashing a
+      // confirmation for something that did nothing. (On a run card whose Slate is
+      // never opened, the Slate zone isn't even in ZONES, so this is permanent.)
+      // The router already blocks all of them inside an editable element, so typing
+      // in the composer / search / add-a-point input is safe. `?` never reaches here
+      // — it's the capture-shim exception inside SlatePanel.
+      const slate = SLATE_ACTIONS[action]
+      if (slate) {
+        if (focusZone !== 'slate' || !slatePanelRef.current) return false
+        slate(slatePanelRef.current)
+        return true
+      }
       switch (action) {
         case 'focus-next':      onFocusNext();                                    break
         case 'focus-prev':      onFocusPrev();                                    break
@@ -183,6 +216,7 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
         case 'toggle-prompt':   setPromptComposerExpanded(e => !e);              break
         case 'fit-viewport':    fitWidgetToViewport(`run-${run.id}`);            break
       }
+      return true
     })
     return () => deregisterActionHandler(run.id)
   })
@@ -443,11 +477,13 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
                   the user opened on purpose); `onClose` collapses it back to the strip —
                   only meaningful when there are no surfaces holding it open. */}
               <SlatePanel
+                ref={slatePanelRef}
                 runId={run.id}
                 surfaces={run.slate}
                 width={slateWidth}
                 open={slateOpen}
                 onClose={() => setSlateOpen(false)}
+                focused={focusZone === 'slate'}
               />
             </div>
           </div>

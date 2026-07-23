@@ -280,3 +280,48 @@
 .constellation-star.is-exiting .constellation-star__shape {
   animation: constellation-star-out 280ms cubic-bezier(0.5, 0, 0.75, 0) both;
 }
+
+/* ── Slate: in-flight refresh pulse (S6 U4) ──────────────────────────────
+   A refreshing surface is the LIVE EDGE, so it carries cyan (design language
+   P4) — but the old static `0 0 14px rgba(0,240,255,.10)` glow was so faint it
+   read as "nothing is happening". A slow (1.8s) breathe makes the claim
+   legible without shouting: too fast or too bright and it reads as an error,
+   not as work in flight.
+
+   Worn by BOTH consumers of the cue: the standalone surface card (SlatePanel)
+   and an open-point row (OpenPointsSurface) — the two are meant to read
+   identically while a refresh is in flight, so they share one class.
+
+   Keyframes must live HERE — Tailwind's config keyframes are not bundled into
+   this stylesheet, so a `animate-[…]` arbitrary value would resolve to nothing.
+
+   RESTING BORDER IS NOT SET HERE. Both consumers pass `border-primary/40`
+   as a Tailwind utility alongside this class, so the resting colour is resolved
+   by the same mechanism as every other border in the app instead of depending on
+   this hand-written rule out-ranking a utility by source order. The animation's
+   0%/100% stop is that same 0.4, so the breathe rests exactly where the static
+   state does and a reduced-motion user (below) loses only the motion. */
+@keyframes slate-refresh-pulse {
+  0%, 100% {
+    box-shadow: 0 0 14px rgba(0, 240, 255, 0.10);
+    border-color: rgba(0, 240, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 22px rgba(0, 240, 255, 0.28);
+    border-color: rgba(0, 240, 255, 0.55);
+  }
+}
+
+.slate-surface-refreshing {
+  box-shadow: 0 0 14px rgba(0, 240, 255, 0.10);
+  animation: slate-refresh-pulse 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slate-surface-refreshing {
+    animation: none;
+    /* Fall back to the static glow — the state is still readable, just still.
+       The border stays on the `border-primary/40` utility, unchanged. */
+    box-shadow: 0 0 14px rgba(0, 240, 255, 0.10);
+  }
+}

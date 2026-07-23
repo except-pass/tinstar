@@ -48,10 +48,13 @@ One visual language for every surface an agent (or the user) authors on a run's 
 
 The base unit every non-list surface inherits: a quiet shell around agent-authored A2UI, controls + freshness pinned to the edges so the content owns the middle.
 
-1. **Headline + controls** — Chakra 15/600. Controls (⟳ refresh, ✕ hide) top-right at `#4f5e67`, brightening only on hover. Never compete with the title.
+1. **Headline + controls** — Chakra 15/600. Controls (⟳ refresh, **– minimize**, ✕ hide) top-right at `#4f5e67`, brightening only on hover. Never compete with the title.
 2. **A2UI body** — rendered through the shared catalog. A **hairline divider** separates the headline from the body and any internal H4 sections.
 3. **Thread** — collapsed to a single mono affordance with a count; expands in place, reply input inside. Quiet until needed.
 4. **Freshness stamp** — bottom-right, mono, low ink. Turns **amber past the 15-minute stale horizon** — a "worth a refresh?" cue, never a claim of wrongness.
+5. **Collapsed card** (– minimize) — the shell, the controls (now ⟳ / **+ restore** / ✕) and the freshness stamp stay; only the body goes. The collapsed title uses the **Meta / label ramp** (mono 10–11 caps) on purpose — a collapsed card is a label, not a heading — and falls back to the surface id when there's no headline. State cues survive the collapse: a refresh still pulses (the pulse lives on the shell) and an unreachable refresh still shows its ⚠ marker. **Do:** keep minimize non-destructive and per-browser, exactly like hide. **Don't:** treat it as a second hide — a minimized card keeps its slot.
+
+**Keyboard focus ring** — the focused row/card (see *Panel keys*) wears `ring-1 ring-primary/70`. Cyan, because keyboard focus is a live, moving thing (P4); on the **ring** specifically so it can never collide with the refresh pulse, which lives on the border and the shadow.
 
 **Do:** keep the shell identical across every surface kind; let the authored body vary. **Don't:** give each surface its own accent border / bg tint / radius to differentiate — differentiation is the headline's job, not the frame's.
 
@@ -76,17 +79,24 @@ Read-only until the surface is answerable; the chosen/focused accent is the **li
 ## Open-points list — the hero surface
 Every open point shares one grouped surface. Each row: author + status pill, a **lifecycle track**, a soft resolve, an expandable thread, and a body when declared. One add-a-point input at the foot.
 - **Status track:** four dots, filled up to the current stage in the stage's hue; the terminal `resolved` dot goes emerald; unlit dots use `primary/12`. Dismissed = off-track, dimmed row.
+- **Reorder (⠿ ▲▼):** a live row carries a thumb-pad grip plus two chevrons at control ink `#4f5e67`, right of the headline. The grip is decorative (`aria-hidden`); the chevrons do the work and carry real `aria-label`s. At the ends of the list they are **disabled, not hidden**, so the row's shape doesn't jump as points move. Resolved/dismissed rows sink by rank, so they get no grip at all — nudging one would be a lie.
 - **Do:** sink resolved/dismissed rows to the bottom and dim them; live points stay at top. **Don't:** make resolve destructive-looking — it's a soft checkbox; reopening is one click.
 
 ## Surface states (same shell across lifecycle; state signalled at the edges + freshness stamp, body never moves)
-- **Refreshing** — cyan glow = live (`0 0 14 rgba(0,240,255,.1)`), "refreshing…".
+- **Refreshing** — cyan = live: a **slow 1.8s breathe** between `0 0 14 rgba(0,240,255,.1)` / border `.4` and `0 0 22 rgba(0,240,255,.28)` / border `.55`, plus "refreshing…". The same cue on a surface card and on an open-point row — they must read identically. Under `prefers-reduced-motion` it settles to the static glow: the state is still readable, just still.
 - **Stale** — amber past 15m, "⚠ updated 47m ago".
 - **Unreachable** — a note, not an error: "Sent — but that session isn't reachable right now."
 - **Hidden** — dimmed to 50%, revealed only via the header toggle.
-- **Empty** — an invitation, never a dead end: "Nothing on the Slate yet. ✦ Explain the session, or + Add a surface to fill it."
+- **Empty** — an invitation, never a dead end: the composer itself renders **inline**, right where the surfaces would be, under a one-liner ("Nothing on the Slate yet — describe a surface, or ✦ Explain the session."). An inline composer has nothing to close back to, so it drops its Cancel, its drop shadow, and its Esc / outside-click self-close; a successful submit clears the form and says "Sent — the agent is authoring it" rather than sitting there looking dead. While it holds a draft the header's ✕ stands down — collapsing the column would destroy typed text.
 
 ## Panel chrome
-The column's header strip is the only always-visible chrome: a mono label left, quiet actions right; the composer opens as a popover beneath. **Do:** keep header actions mono + low-contrast; give only **✦ Explain** and the primary **Create** the cyan (the generative moves). **Don't:** pack the strip with icon buttons — text actions read faster and survive the 260px collapsed width.
+The column's header strip is the only always-visible chrome: a mono label left, quiet actions right. **Do:** keep header actions mono + low-contrast; give only **✦ Explain** and the primary **Create** the cyan (the generative moves). **Don't:** pack the strip with icon buttons — text actions read faster and survive the 260px collapsed width.
+
+- **Composer placement** — a popover beneath the header once the Slate has surfaces; on a blank Slate it is inline in the body instead (above). The two are mutually exclusive — never two composers on one panel.
+- **Search (⌕)** — collapsed to a single glyph until asked for (`/`), then a narrow mono field. Maintenance, not generative: control ink, never cyan. It matches the **rendered body text** as well as headline/id/kind, because an expanded card never shows its headline. A filter that matches nothing says so ("No surface matches …") rather than looking like an empty Slate, and while a filter is on, ⟳ *Refresh all* renames itself to the matching count instead of promising "every surface".
+
+## Panel keys
+`j` / `k` walk a focus ring down and up the rendered rows (clamped, never wrapping) · `x` hides the focused one · `r` refreshes it · `c` opens the composer · `/` opens search · `?` the cheatsheet. All seven are live only while the Slate zone holds the card's focus; a key that isn't answered falls through untouched rather than flashing a false confirmation. The cheatsheet is a **reference card, not a live edge** — mono keycaps and labels, hairline border, control ink, no cyan.
 
 ## Token cheat-sheet
 `column #0a0e12` · `card #0f1419` · `hairline rgba(130,175,195,.10)` · headline `Chakra 15/600 #eaf1f5` · body `sans 14/1.6 #9fb0bd` · meta/pill `Mono 10–11 caps` · card padding `14` · surface gap `12` · radius card/pill `4 / 3` · live glow `0 0 14 rgba(0,240,255,.1)` · stale after `15m → amber` · reflow 1→2 col `≥ 420px`.

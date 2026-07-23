@@ -641,3 +641,89 @@ describe('refresh/compose — code-spawned author branch (feat: multi-agent Slat
     expect(sendPrompt).not.toHaveBeenCalled()
   }))
 })
+
+describe('PUT /api/runs/:id/slate/points/order (S6 U2)', () => {
+  /** Seed N points over HTTP and return their ids in creation order. */
+  async function seedPoints(srv: Harness, n: number): Promise<string[]> {
+    const ids: string[] = []
+    for (let i = 0; i < n; i++) ids.push(await createPoint(srv, { headline: `point ${i}` }))
+    return ids
+  }
+
+  const putOrder = (srv: Harness, order: unknown) =>
+    srv.fetch(`/api/runs/${RUN}/slate/points/order`, { method: 'PUT', body: JSON.stringify({ order }) })
+
+  it('reorders the run\'s points and re-projects run.slate', withServer(async srv => {
+    seedRun(srv.docStore)
+    const [a, b, c] = await seedPoints(srv, 3)
+    expect(srv.docStore.getSlatePointsForRun(RUN).map(p => p.id)).toEqual([a, b, c])
+
+    const res = await putOrder(srv, [c, a, b])
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; data: { order: string[] } }
+    expect(body.ok).toBe(true)
+    expect(body.data.order).toEqual([c, a, b])
+
+    // The store AND the render projection agree — the projection leg is the one
+    // that fails silently if `order: p.order ?? p.createdAt` is ever backed out.
+    expect(srv.docStore.getSlatePointsForRun(RUN).map(p => p.id)).toEqual([c, a, b])
+    expect(srv.docStore.getRun(RUN)!.slate!.map(s => s.id)).toEqual([c, a, b])
+  }))
+
+  it('never delivers a prompt — a reorder is an arrangement, not an injection', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN }) // session reachable, still no prompt
+    const [a, b] = await seedPoints(srv, 2)
+    sendPrompt.mockClear()
+    await putOrder(srv, [b, a])
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+
+  it('404s when the run does not exist', withServer(async srv => {
+    const res = await putOrder(srv, ['whatever'])
+    expect(res.status).toBe(404)
+  }))
+
+  it('rejects a non-array or non-string order (INVALID_PARAMS, nothing moved)', withServer(async srv => {
+    seedRun(srv.docStore)
+    const [a, b] = await seedPoints(srv, 2)
+
+    for (const bad of ['nope', 42, null, { 0: a }, [a, 7], [a, ''], [a, null]]) {
+      const res = await putOrder(srv, bad)
+      expect(res.status).toBe(400)
+      expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
+    }
+    // A malformed body is inert — the order is untouched.
+    expect(srv.docStore.getSlatePointsForRun(RUN).map(p => p.id)).toEqual([a, b])
+  }))
+
+  it('rejects a body that is not a JSON object', withServer(async srv => {
+    seedRun(srv.docStore)
+    await seedPoints(srv, 2)
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/points/order`, { method: 'PUT', body: 'not json' })
+    expect(res.status).toBe(400)
+  }))
+
+  it('ignores unknown ids and leaves unlisted points where they were', withServer(async srv => {
+    // Deterministic even when all three land in the same millisecond: the store
+    // deconflicts against the WHOLE run, so an unlisted point sharing a slot with the
+    // reordered ones is nudged out of the tie rather than sorting into the middle of
+    // them by id. (See the "cannot let an unlisted point slide in" store test.)
+    seedRun(srv.docStore)
+    const [a, b, c] = await seedPoints(srv, 3)
+    const res = await putOrder(srv, [b, 'ghost', a]) // c is not mentioned at all
+    expect(res.status).toBe(200)
+    expect(srv.docStore.getSlatePointsForRun(RUN).map(p => p.id)).toEqual([b, a, c])
+  }))
+
+  // THE ROUTE-ORDERING GUARD: like the answer route, this is a sub-resource under
+  // `/api/runs/:id` and must be registered above the greedy PATCH handler.
+  it('is registered BEFORE the greedy startsWith PATCH /api/runs/ handler', () => {
+    const src = readFileSync(new URL('../routes.ts', import.meta.url), 'utf8')
+    const orderRoute = src.indexOf('slate\\/points\\/order$/')
+    const patchRuns = src.indexOf("method === 'PATCH' && url.startsWith('/api/runs/')")
+    expect(orderRoute).toBeGreaterThan(-1)
+    expect(patchRuns).toBeGreaterThan(-1)
+    expect(orderRoute).toBeLessThan(patchRuns)
+  })
+})
