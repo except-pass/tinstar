@@ -221,9 +221,13 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
     <div
       data-testid={`point-${surface.id}`}
       data-status={status}
-      className={`rounded border border-hairline bg-surface-hover p-2.5 ${
-        status === 'dismissed' || hidden ? 'opacity-50' : resolved ? 'opacity-70' : ''
-      }`}
+      data-refreshing={refreshing ? 'true' : undefined}
+      // A refreshing row wears the same slow cyan breathe as a refreshing surface
+      // card (S6 U4) so the two states read identically; the class + keyframes live
+      // in src/index.css and honor prefers-reduced-motion.
+      className={`rounded border bg-surface-hover p-2.5 ${
+        refreshing ? 'slate-surface-refreshing' : 'border-hairline'
+      } ${status === 'dismissed' || hidden ? 'opacity-50' : resolved ? 'opacity-70' : ''}`}
     >
       <div className="flex items-start gap-2">
         {/* Soft resolve: a checkbox, never the point's identity. */}

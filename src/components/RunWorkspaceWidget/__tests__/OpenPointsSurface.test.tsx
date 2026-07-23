@@ -147,6 +147,25 @@ describe('OpenPointsSurface (U6)', () => {
     expect(screen.getByTestId('refresh-unreachable-p1')).toBeTruthy()
   })
 
+  it('gives a refreshing row the same slow cyan pulse as a refreshing card (U4)', () => {
+    const { rerender } = render(
+      <OpenPointsSurface runId="run-1" points={[point('p1')]} onRefresh={vi.fn()} />,
+    )
+    expect(screen.getByTestId('point-p1').className).not.toContain('slate-surface-refreshing')
+
+    rerender(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[point('p1')]}
+        onRefresh={vi.fn()}
+        refreshingIds={new Set(['p1'])}
+      />,
+    )
+    const row = screen.getByTestId('point-p1')
+    expect(row.className).toContain('slate-surface-refreshing')
+    expect(row.getAttribute('data-refreshing')).toBe('true')
+  })
+
   it('filters a hidden point unless the reveal toggle is on', () => {
     const points = [point('p1'), point('p2')]
     const { rerender } = render(

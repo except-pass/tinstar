@@ -297,13 +297,13 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
 
           // One shell for every non-list surface kind (P2, "one system, N surfaces"):
           // raised card, hairline border, 14px padding. State signals live at the
-          // EDGES — a cyan glow marks an in-flight refresh (P4, the live edge), dimming
+          // EDGES — a slow cyan pulse marks an in-flight refresh (P4, the live edge;
+          // `.slate-surface-refreshing` + its keyframes live in src/index.css, since
+          // tailwind.config keyframes are not bundled into that stylesheet), dimming
           // marks hidden — so the authored body never moves between states.
           const shellClass = [
             'relative rounded border p-[14px] min-w-0 transition-shadow',
-            isRefreshing
-              ? 'border-primary/40 bg-surface-raised shadow-[0_0_14px_rgba(0,240,255,0.10)]'
-              : 'border-hairline bg-surface-raised',
+            isRefreshing ? 'bg-surface-raised slate-surface-refreshing' : 'border-hairline bg-surface-raised',
             isHidden ? 'opacity-50' : '',
           ].join(' ')
           return (

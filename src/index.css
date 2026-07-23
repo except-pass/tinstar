@@ -280,3 +280,41 @@
 .constellation-star.is-exiting .constellation-star__shape {
   animation: constellation-star-out 280ms cubic-bezier(0.5, 0, 0.75, 0) both;
 }
+
+/* ── Slate: in-flight refresh pulse (S6 U4) ──────────────────────────────
+   A refreshing surface is the LIVE EDGE, so it carries cyan (design language
+   P4) — but the old static `0 0 14px rgba(0,240,255,.10)` glow was so faint it
+   read as "nothing is happening". A slow (1.8s) breathe makes the claim
+   legible without shouting: too fast or too bright and it reads as an error,
+   not as work in flight.
+
+   Keyframes must live HERE — Tailwind's config keyframes are not bundled into
+   this stylesheet, so a `animate-[…]` arbitrary value would resolve to nothing.
+
+   The resting end of the breathe is exactly the old static glow, so a
+   reduced-motion user (below) loses only the motion, never the signal. */
+@keyframes slate-refresh-pulse {
+  0%, 100% {
+    box-shadow: 0 0 14px rgba(0, 240, 255, 0.10);
+    border-color: rgba(0, 240, 255, 0.28);
+  }
+  50% {
+    box-shadow: 0 0 22px rgba(0, 240, 255, 0.28);
+    border-color: rgba(0, 240, 255, 0.55);
+  }
+}
+
+.slate-surface-refreshing {
+  border-color: rgba(0, 240, 255, 0.4);
+  box-shadow: 0 0 14px rgba(0, 240, 255, 0.10);
+  animation: slate-refresh-pulse 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slate-surface-refreshing {
+    animation: none;
+    /* Fall back to the static glow — the state is still readable, just still. */
+    box-shadow: 0 0 14px rgba(0, 240, 255, 0.10);
+    border-color: rgba(0, 240, 255, 0.4);
+  }
+}

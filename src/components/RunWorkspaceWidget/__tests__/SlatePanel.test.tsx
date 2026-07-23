@@ -277,6 +277,25 @@ describe('SlatePanel refresh (U3)', () => {
     })
   })
 
+  it('carries the slow cyan pulse class only while a surface is refreshing (U4)', () => {
+    // The POST never resolves → the surface stays in the refreshing state.
+    apiFetch.mockImplementation(() => new Promise<never>(() => {}))
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'x'), surface('s2', 'y')]} />)
+
+    expect(screen.getByTestId('slate-surface-s1').className).not.toContain('slate-surface-refreshing')
+
+    fireEvent.click(screen.getByTestId('refresh-surface-s1'))
+
+    const card = screen.getByTestId('slate-surface-s1')
+    expect(card.className).toContain('slate-surface-refreshing')
+    expect(card.getAttribute('data-refreshing')).toBe('true')
+    // The static glow it replaces must be gone (one cue, not two stacked).
+    expect(card.className).not.toContain('shadow-[0_0_14px')
+    // A sibling that isn't refreshing keeps the resting hairline.
+    expect(screen.getByTestId('slate-surface-s2').className).toContain('border-hairline')
+    expect(screen.getByTestId('slate-surface-s2').className).not.toContain('slate-surface-refreshing')
+  })
+
   it('shows the ⚡ fast-path badge only on surfaces carrying a refresh recipe', () => {
     render(
       <SlatePanel
