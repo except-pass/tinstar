@@ -260,6 +260,98 @@ describe('SlateStore.addUserPoint (U7)', () => {
     store.addUserPoint(RUN, { id: 'up1', headline: 'same' })
     expect(emit).not.toHaveBeenCalled()
   })
+
+  // `claim` (S2 — taking over the reserved Objective id). The plain amend inherits the
+  // prior point's provenance AND its author; claim takes both, in ONE mutation, without
+  // discarding what the store has accumulated on the point.
+  it('claim TAKES source and author from a file point, keeping thread and stamps', () => {
+    const { store, emit, changes } = makeStore()
+    // A file point is created author:'agent' — the exact attribution that must not stick.
+    store.applyProjection(RUN, [input('objective', 'agent-authored goal')], 1000)
+    store.addReply(RUN, 'objective', { id: 'r1', author: 'user', text: 'why?', createdAt: 1 })
+    store.resolve(RUN, 'objective', 5)
+    expect(store.getPoint(RUN, 'objective')!.source).toBe('file')
+    expect(store.getPoint(RUN, 'objective')!.author).toBe('agent')
+    emit.mockClear()
+    changes.length = 0
+
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'the real goal' }, 2000, { claim: true })
+
+    const after = store.getPoint(RUN, 'objective')!
+    expect(after.source).toBe('user')
+    expect(after.author).toBe('user') // NOT the file point's 'agent'
+    expect(after.headline).toBe('the real goal')
+    // An amend, not a replace: everything store-owned survives.
+    expect(after.replies).toHaveLength(1)
+    expect(after.resolvedAt).toBe(5)
+    expect(after.createdAt).toBe(1000) // a re-add would stamp `now` (2000)
+    // ONE emit — a flip-then-amend would publish an intermediate frame carrying the
+    // agent's headline under the objective's identity.
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(changes[0]!.data).not.toBeNull()
+  })
+
+  it('claim drops the file-owned body AND anchor (the agent’s pointer is not the goal)', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [{
+      id: 'objective',
+      headline: 'agent goal',
+      content: body('a'),
+      anchor: { kind: 'surface', ref: 'some-surface' },
+    }])
+    const seeded = store.getPoint(RUN, 'objective')!
+    expect(seeded.content).toBeDefined()
+    expect(seeded.anchor).toBeDefined()
+
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'the real goal' }, 2000, { claim: true })
+
+    const after = store.getPoint(RUN, 'objective')!
+    expect(after.content).toBeUndefined()
+    // `mergeFileOwned` only ever SETS anchor, so this only holds because claim clears it.
+    expect(after.anchor).toBeUndefined()
+  })
+
+  // `claim` means USER-ownership, so the author is not the caller's to choose — otherwise
+  // it could mint a retraction-exempt point attributed to the agent.
+  it('claim ignores a caller-supplied non-user author — on the AMEND path', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('objective', 'agent goal')])
+    store.addUserPoint(RUN, { id: 'objective', author: 'agent', headline: 'the real goal' }, 2000, { claim: true })
+    expect(store.getPoint(RUN, 'objective')!.author).toBe('user')
+    expect(store.getPoint(RUN, 'objective')!.source).toBe('user')
+  })
+
+  // …and on the CREATE path, where `...input` would otherwise let the caller's author
+  // win over the default. A create can mint a retraction-exempt agent-attributed point
+  // just as easily as an amend, so the guarantee must not have a seam.
+  it('claim ignores a caller-supplied non-user author — on the CREATE path', () => {
+    const { store } = makeStore()
+    store.addUserPoint(RUN, { id: 'objective', author: 'agent', headline: 'the real goal' }, 2000, { claim: true })
+    const p = store.getPoint(RUN, 'objective')!
+    expect(p.author).toBe('user')
+    expect(p.source).toBe('user')
+  })
+
+  it('WITHOUT claim, a create still honours a caller-supplied author', () => {
+    const { store } = makeStore()
+    store.addUserPoint(RUN, { id: 'p1', author: 'process', headline: 'from a wrapper' })
+    expect(store.getPoint(RUN, 'p1')!.author).toBe('process')
+  })
+
+  it('claim on an already-user point that changes nothing still emits nothing', () => {
+    const { store, emit } = makeStore()
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'same' })
+    emit.mockClear()
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'same' }, Date.now(), { claim: true })
+    expect(emit).not.toHaveBeenCalled()
+  })
+
+  it('without claim, an amend still INHERITS the prior provenance (unchanged behaviour)', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('fp', 'from a file')])
+    store.addUserPoint(RUN, { id: 'fp', author: 'user', headline: 'amended' })
+    expect(store.getPoint(RUN, 'fp')!.source).toBe('file')
+  })
 })
 
 // --- DocumentStore integration: prune cascade + persistence ---
@@ -585,5 +677,52 @@ describe('DocumentStore.reorderSlatePoints — the projection leg (S6 U2)', () =
     const after = store.getRun('run-1')!.slate!
     expect(after.map(s => s.id)).toEqual(['b', 'a'])
     expect(after.map(s => s.order)).toEqual([100, 200])
+  })
+})
+
+describe('SlateStore.deletePoint (S2 — clearing the Objective)', () => {
+  it('removes only the targeted (runId, id) and emits ONE retract', () => {
+    const { store, emit, changes } = makeStore()
+    store.addUserPoint(RUN, { id: 'objective', headline: 'ship S2' })
+    store.applyProjection(RUN, [input('other', 'x')])
+    emit.mockClear()
+    changes.length = 0
+
+    expect(store.deletePoint(RUN, 'objective')).toBe(true)
+
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(changes[0]).toMatchObject({ entity: 'slatePoint', id: 'objective', runId: RUN, data: null })
+    expect(store.getPoint(RUN, 'objective')).toBeUndefined()
+    expect(store.getPoint(RUN, 'other')).toBeDefined() // sibling untouched
+  })
+
+  it("leaves ANOTHER run's point with the same id alone (composite-key scoping)", () => {
+    const { store } = makeStore()
+    store.addUserPoint(RUN, { id: 'objective', headline: 'mine' })
+    store.addUserPoint('other-run', { id: 'objective', headline: 'theirs' })
+
+    store.deletePoint(RUN, 'objective')
+
+    expect(store.getPoint(RUN, 'objective')).toBeUndefined()
+    expect(store.getPoint('other-run', 'objective')?.headline).toBe('theirs')
+  })
+
+  it('deleting an absent point is a no-op — false, no emit', () => {
+    const { store, emit } = makeStore()
+    expect(store.deletePoint(RUN, 'nope')).toBe(false)
+    expect(emit).not.toHaveBeenCalled()
+  })
+
+  it('DocumentStore.deleteSlatePoint re-projects run.slate (and is inert when absent)', () => {
+    const store = new DocumentStore()
+    store.upsertRun('run-1', makeRun())
+    store.addUserSlatePoint('run-1', { id: 'objective', author: 'user', headline: 'the goal' })
+    expect(store.getRun('run-1')!.slate).toHaveLength(1)
+
+    expect(store.deleteSlatePoint('run-1', 'objective')).toBe(true)
+    // An empty projection clears the field entirely (setRunSlate's own convention).
+    expect(store.getRun('run-1')!.slate).toBeUndefined()
+
+    expect(store.deleteSlatePoint('run-1', 'objective')).toBe(false)
   })
 })

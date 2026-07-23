@@ -39,7 +39,7 @@ import { basename, join, sep } from 'node:path'
 import { log } from '../logger'
 import { parseA2uiContent } from '../../a2ui/schema'
 import type { PointInput } from '../stores/slate'
-import type { PointAnchor, PointAuthor, A2uiContent } from '../../domain/types'
+import { OBJECTIVE_POINT_ID, type PointAnchor, type PointAuthor, type A2uiContent } from '../../domain/types'
 
 /** A live run and the worktree the watcher resolves its slate dir from. */
 export interface LiveRun {
@@ -153,6 +153,10 @@ export class SlateWatcher {
   private readonly dirty = new Set<string>()
   /** Runs currently in the retain (invalid) state, for log-once-on-transition. */
   private readonly retained = new Set<string>()
+  /** Slate files last seen claiming the RESERVED objective id. Polling is every few
+   *  seconds, so the warn is log-once-per-file (same log-on-transition posture as
+   *  {@link retained}) — a lingering bad file must not turn the log into a drum. */
+  private readonly warnedReservedId = new Set<string>()
 
   constructor(opts: SlateWatcherOpts) {
     this.opts = opts
@@ -358,6 +362,10 @@ export class SlateWatcher {
 
     const inputs: PointInput[] = []
     let sawUnusable = false // a file that INTENDED to contribute but couldn't
+    // Files caught claiming the reserved objective id THIS pass — becomes the new
+    // warn-once ledger below, so a file that stops offending can warn again if it
+    // regresses, and one that keeps offending only ever logs once.
+    const reservedNow = new Set<string>()
 
     for (const name of jsonNames) {
       const path = join(slateDir, name)
@@ -398,11 +406,37 @@ export class SlateWatcher {
       if (entries === null) { sawUnusable = true; continue } // not an array/object — torn
 
       for (const rawEntry of entries) {
+        // `toPointInput` drops the reserved objective id too (it is the validator, and
+        // the guard belongs there). Detect it here as well, purely so the drop is not
+        // SILENT: an author whose surface simply never appears otherwise has nothing to
+        // find — no error, no exit code, no trace.
+        if (isReservedObjectiveEntry(rawEntry)) {
+          reservedNow.add(path)
+          if (!this.warnedReservedId.has(path)) {
+            log.warn('slate-watcher', `${name}: entry id '${OBJECTIVE_POINT_ID}' is RESERVED for the user's Objective — entry dropped, pick another id`)
+          }
+          // Counts as UNUSABLE, deliberately — so a dir that yields nothing else RETAINS
+          // the last-valid projection instead of clearing it. The alternative (treat it
+          // as a skip, letting an empty result read as a genuine clear) would retract
+          // every file-owned point of the run because one entry used a bad id, turning a
+          // typo into data loss. Retaining is the recoverable failure: fix the id and the
+          // next poll re-projects. The warn above is what makes it findable.
+          sawUnusable = true
+          continue
+        }
         const entry = toPointInput(rawEntry, this.parseContent)
         if (entry === null) { sawUnusable = true; continue } // schema-invalid entry — drop it
         inputs.push(entry)
       }
     }
+
+    // Refresh the warn-once ledger for THIS dir only. `readSlateDir` runs once per run,
+    // so replacing the whole set would let two simultaneously-offending runs keep
+    // evicting each other's entry and re-warn on every poll.
+    for (const p of this.warnedReservedId) {
+      if (p.startsWith(slateDir + sep) && !reservedNow.has(p)) this.warnedReservedId.delete(p)
+    }
+    for (const p of reservedNow) this.warnedReservedId.add(p)
 
     if (inputs.length > 0) return inputs // keep the valid ones (mixed valid + invalid)
     // Zero valid entries: retain if something was torn/dropped, else it's a genuine clear.
@@ -433,6 +467,12 @@ export function toPointInput(
   if (typeof r.headline !== 'string' || r.headline.length === 0) return null
   const out: PointInput = { headline: r.headline }
 
+  // The Objective (S2) is USER-owned and lives at a RESERVED id. A file claiming it
+  // would merge into the user's objective — and, as a file point, become retractable
+  // by the next projection that omits it. Drop the entry entirely (same posture as a
+  // schema-invalid one) so the file-in channel can neither hijack nor delete it.
+  if (r.id === OBJECTIVE_POINT_ID) return null
+
   if (typeof r.id === 'string' && r.id.length > 0) out.id = r.id
 
   if (r.author !== undefined) {
@@ -461,6 +501,14 @@ export function toPointInput(
   }
 
   return out
+}
+
+/** True when a raw file entry claims the RESERVED objective id (S2). Mirrors the drop
+ *  inside `toPointInput` — this one exists so the drop can be LOGGED with the file it
+ *  came from, which `toPointInput` (a pure per-entry validator) has no way to name. */
+function isReservedObjectiveEntry(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false
+  return (raw as Record<string, unknown>).id === OBJECTIVE_POINT_ID
 }
 
 function toAnchor(raw: unknown): PointAnchor | null {

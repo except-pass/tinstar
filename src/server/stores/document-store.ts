@@ -20,6 +20,7 @@
 import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { OBJECTIVE_ORDER, OBJECTIVE_POINT_ID } from '../../domain/types'
 import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone, Notice, SlateSurface, Point } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
@@ -928,11 +929,24 @@ export class DocumentStore {
 
   /** Create or amend a USER-authored point (source:'user'), then rebuild the run's
    *  render projection. A user point survives a subsequent file re-projection (the
-   *  reconciliation the U7 HTTP layer relies on). Returns the resulting point. */
-  addUserSlatePoint(runId: string, input: PointInput): Point {
-    const point = this.slate.addUserPoint(runId, input)
+   *  reconciliation the U7 HTTP layer relies on). Returns the resulting point.
+   *
+   *  `claim` (S2 — the reserved Objective id) makes an amend TAKE OVER a point that
+   *  arrived through the file channel: source and author both become the user's, in
+   *  one mutation, while the thread and lifecycle stamps survive. */
+  addUserSlatePoint(runId: string, input: PointInput, opts: { claim?: boolean } = {}): Point {
+    const point = this.slate.addUserPoint(runId, input, Date.now(), opts)
     this.projectRunToSlate(runId)
     return point
+  }
+
+  /** Delete ONE of a run's points (S2 — clearing the Objective), then rebuild the
+   *  render projection so the card drops the card. Returns false when there was
+   *  nothing to delete (and nothing was emitted). */
+  deleteSlatePoint(runId: string, pointId: string): boolean {
+    const deleted = this.slate.deletePoint(runId, pointId)
+    if (deleted) this.projectRunToSlate(runId)
+    return deleted
   }
 
   addSlateReply(runId: string, pointId: string, reply: Reply): void {
@@ -977,23 +991,31 @@ export class DocumentStore {
    *  their threads/status without a separate client subscription to `slatePoint`.
    *  setRunSlate's by-value short-circuit keeps an unchanged projection from emitting. */
   private projectRunToSlate(runId: string): void {
-    const surfaces: SlateSurface[] = this.slate.getPointsForRun(runId).map(p => ({
-      id: p.id,
-      author: p.author,
-      kind: p.anchor?.kind === 'surface' ? 'diagram' : 'open-point',
-      // S6 U2: a user reorder writes the store-owned `order`; everything else falls
-      // back to creation time, which is what `order` has always been implicitly.
-      order: p.order ?? p.createdAt,
-      ...(p.content ? { body: p.content } : {}),
-      ...(p.refresh ? { refresh: p.refresh } : {}),
-      headline: p.headline,
-      status: p.status,
-      ...(p.replies ? { thread: p.replies } : {}),
-      ...(p.anchor ? { anchor: p.anchor } : {}),
-      ...(p.stalledAt != null ? { stalledAt: p.stalledAt } : {}),
-      createdAt: p.createdAt,
-      amendedAt: p.amendedAt,
-    }))
+    const surfaces: SlateSurface[] = this.slate.getPointsForRun(runId).map(p => {
+      // The Objective (S2) is the reserved USER point — and only a user point: a file
+      // that somehow carried the reserved id renders as an ordinary surface rather
+      // than impersonating the user's goal (the watcher already drops it upstream).
+      const isObjective = p.source === 'user' && p.id === OBJECTIVE_POINT_ID
+      return {
+        id: p.id,
+        author: p.author,
+        kind: isObjective ? 'objective' : p.anchor?.kind === 'surface' ? 'diagram' : 'open-point',
+        // S6 U2: a user reorder writes the store-owned `order`; everything else falls
+        // back to creation time, which is what `order` has always been implicitly.
+        // The objective is FORCED to its pin sentinel (finite — see OBJECTIVE_ORDER)
+        // rather than storing one, so a reorder that swept it up can't strand it.
+        order: isObjective ? OBJECTIVE_ORDER : p.order ?? p.createdAt,
+        ...(p.content ? { body: p.content } : {}),
+        ...(p.refresh ? { refresh: p.refresh } : {}),
+        headline: p.headline,
+        status: p.status,
+        ...(p.replies ? { thread: p.replies } : {}),
+        ...(p.anchor ? { anchor: p.anchor } : {}),
+        ...(p.stalledAt != null ? { stalledAt: p.stalledAt } : {}),
+        createdAt: p.createdAt,
+        amendedAt: p.amendedAt,
+      }
+    })
     this.setRunSlate(runId, surfaces)
   }
 

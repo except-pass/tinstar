@@ -59,9 +59,10 @@ import { collectChoiceOptionIds, collectChoiceOptionLabels, NOTICE_ANSWER_TEXT_M
 import { resolveFollowUp, NOTICE_FOLLOWUP_TEXT_MAX } from '../../a2ui/followUps'
 import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
-import { slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText } from '../../slate/slatePrompt'
+import { slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText, slateObjectivePromptText } from '../../slate/slatePrompt'
 import { dispatchSurfaceAuthor } from '../sessions/surfaceAuthor'
 import type { PointInput } from '../stores/slate'
+import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID } from '../../domain/types'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
 import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../sessions/config'
@@ -3336,6 +3337,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (parsed.id !== undefined && (typeof parsed.id !== 'string' || parsed.id.length === 0)) {
         fail(res, 'INVALID_PARAMS', 'id must be a non-empty string when provided'); return
       }
+      // The Objective (S2) lives at a RESERVED id with its own endpoint. Refuse it here
+      // for the same reason the watcher drops it out of the file-in channel: this route
+      // takes a caller-supplied id, and an agent with `curl` would otherwise overwrite
+      // the user's goal through the side door — no nudge, no `changed` bookkeeping, and
+      // with a `content`/`anchor` body the objective card never renders.
+      if (parsed.id === OBJECTIVE_POINT_ID) {
+        fail(res, 'INVALID_PARAMS', `'${OBJECTIVE_POINT_ID}' is a reserved id — use PUT /api/runs/:id/slate/objective`); return
+      }
       // Optional A2UI body — validated through the v0_9 schema so a malformed
       // description is rejected at the boundary (KTD4), never persisted.
       let content: A2uiContent | undefined
@@ -3403,6 +3412,83 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // as the lifecycle routes). The new sequence rides the SSE `run` delta.
       ok(res, { order: ctx.docStore.getSlatePointsForRun(runId).map(p => p.id) })
     }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
+    return true
+  }
+
+  // PUT /api/runs/:id/slate/objective — set or replace the run's Objective (S2), and
+  // nudge its agent to re-align to it.
+  //
+  // The Objective is a single RESERVED user point (OBJECTIVE_POINT_ID), so a PUT always
+  // AMENDS the same point — a second objective is structurally impossible.
+  //
+  // This is the ONE Slate write that both persists AND delivers, and deliberately so:
+  //   · `POST /slate/points` persists without delivering ("add a point = eventual"), and
+  //   · `/compose`, `/explain`, `/refresh` deliver without persisting.
+  // Applying an objective is a deliberate re-alignment, so it does both. Delivery fires
+  // ONLY from this route (the client holds edits locally until the user presses Apply —
+  // typing must never nudge a working agent), and is skipped when the amend changed
+  // nothing: `addUserPoint` returns the PRIOR object identity on a byte-identical
+  // amend, which is exactly the store's own zero-change short-circuit.
+  //
+  // Anchored regex, matched BEFORE the greedy PATCH /api/runs/ handler.
+  if (method === 'PUT' && /^\/api\/runs\/[^/]+\/slate\/objective$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/objective'.length))
+    readBody(req).then(async body => {
+      if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return }
+      let parsed: { text?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
+      }
+      if (typeof parsed.text !== 'string' || !parsed.text.trim()) {
+        fail(res, 'INVALID_PARAMS', 'text must be a non-empty string'); return
+      }
+      if (parsed.text.length > OBJECTIVE_MAX) {
+        fail(res, 'BAD_REQUEST', `objective exceeds ${OBJECTIVE_MAX} characters`, { status: 413 }); return
+      }
+      const text = parsed.text.trim()
+      const prior = ctx.docStore.getSlatePoint(runId, OBJECTIVE_POINT_ID)
+      // `claim` makes the reserved id USER-owned unconditionally. A point already
+      // sitting there with another provenance (a `source:'file'` point from a snapshot
+      // written before the watcher guard existed) would otherwise survive the amend:
+      // a plain `addUserPoint` inherits `prior.source`, so the projection's
+      // `source === 'user'` gate would keep rendering it as an ordinary open-point and
+      // the objective card would stay empty while this route reported 200/changed and
+      // nudged. It also inherits `prior.author`, which would ship the user's own words
+      // under the agent's name.
+      //
+      // It is an AMEND, not a delete-and-re-add: the point may already carry a thread
+      // the user replied on, and the Slate's standing promise is that the same identity
+      // keeps what has accumulated on it.
+      const objective = ctx.docStore.addUserSlatePoint(runId, {
+        id: OBJECTIVE_POINT_ID,
+        author: 'user',
+        headline: text,
+      }, { claim: true })
+      // Identity, not deep-equality: the store hands back the prior object itself when
+      // nothing changed. An Apply that changed no text is not a re-alignment, so it
+      // must not re-nudge an agent mid-turn.
+      const changed = objective !== prior
+      const delivered = changed
+        ? await deliverSlatePrompt(ctx, runId, slateObjectivePromptText(text, serverBase()))
+        : false
+      // delivered:false on an unreachable run is a NOTE, not an error (mirrors compose/
+      // refresh) — the objective is persisted either way and the card says as much.
+      ok(res, { objective, delivered, changed })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
+    return true
+  }
+
+  // DELETE /api/runs/:id/slate/objective — clear the run's Objective (S2). No delivery:
+  // clearing is not an injection (same posture as the resolve/dismiss lifecycle route).
+  // Idempotent — clearing an absent objective is a 200 with `cleared:false`.
+  if (method === 'DELETE' && /^\/api\/runs\/[^/]+\/slate\/objective$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/objective'.length))
+    if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return true }
+    const cleared = ctx.docStore.deleteSlatePoint(runId, OBJECTIVE_POINT_ID)
+    ok(res, { cleared })
     return true
   }
 

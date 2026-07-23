@@ -267,13 +267,49 @@ export class SlateStore {
    * generated id. Emits one change (or none if a byte-identical amend). Returns the
    * resulting point.
    */
-  addUserPoint(runId: string, input: PointInput, now: number = Date.now()): Point {
+  addUserPoint(runId: string, input: PointInput, now: number = Date.now(), opts: { claim?: boolean } = {}): Point {
     const id = input.id && input.id.length > 0 ? input.id : 'pt-user-' + randomUUID().slice(0, 12)
     // Scoped to THIS run by the composite key — a prior hit is always this run's point.
     const prior = this.points.get(this.k(runId, id))
-    const next = prior
-      ? { ...mergeFileOwned(prior, input, now), source: prior.source ?? 'user' as const }
-      : createPoint(runId, id, { author: 'user', ...input }, now, 'user')
+    let next: Point
+    if (!prior) {
+      // `...input` spreads AFTER the default, so a caller-supplied `author` normally
+      // wins here. Under `claim` it must not: the option means user-ownership, and a
+      // create is just as capable of minting a retraction-exempt, agent-attributed
+      // point as an amend is. Forced on both branches so the guarantee has no seam.
+      next = createPoint(
+        runId,
+        id,
+        { author: 'user', ...input, ...(opts.claim ? { author: 'user' as const } : {}) },
+        now,
+        'user',
+      )
+    } else if (opts.claim) {
+      // `claim` (S2 — the reserved Objective id) makes the amend TAKE OWNERSHIP instead
+      // of inheriting it. Without it the amend keeps `prior.source` (so a pre-guard file
+      // point stays `source:'file'` and never projects as the objective) AND keeps
+      // `prior.author` — `mergeFileOwned` does not read `input.author`, so a file point
+      // created as `author:'agent'` would ship the user's own words under the agent's
+      // name.
+      //
+      // `author` is HARD-CODED, not taken from the caller: the option means user-
+      // ownership, so the author is not the caller's to choose. Letting it through would
+      // make `claim` able to mint a retraction-exempt point attributed to the agent —
+      // the same mixup inverted.
+      //
+      // Done here rather than as a separate flip-then-amend so it is ONE mutation and
+      // ONE emit: two calls would publish an intermediate frame where the card is
+      // already the Objective but still carries the agent's headline and body.
+      next = { ...mergeFileOwned(prior, input, now), source: 'user', author: 'user' }
+      // The anchor is file-owned like `content` and `refresh`, but `mergeFileOwned` only
+      // ever SETS it — so a claimed point would otherwise inherit the agent's pointer
+      // (e.g. `{kind:'surface', ref:…}`) onto a point that is now unconditionally the
+      // user's. Clear it on the same terms as the body: gone unless this input supplies
+      // one. Inert on the render channel today, but by coincidence rather than design.
+      if (!input.anchor) delete next.anchor
+    } else {
+      next = { ...mergeFileOwned(prior, input, now), source: prior.source ?? 'user' }
+    }
     if (prior && pointEqual(prior, next)) return prior
     this.points.set(this.k(runId, id), next)
     this.emit({ entity: 'slatePoint', id, runId, data: next })
@@ -390,6 +426,26 @@ export class SlateStore {
       return next
     })
   }
+
+  /**
+   * Drop ONE point of a run, emitting the same `{ data: null }` retract `pruneRun`
+   * emits per point. Scoped by the composite key, so another run's point with the
+   * same id is untouched. A no-op (and no emit) when the point is absent — the
+   * zero-change posture every other mutator here keeps.
+   *
+   * Added for the Objective (S2): clearing the objective is a single-point delete,
+   * which the file-in path can't express (the objective is user-owned, so no file
+   * projection retracts it) and `pruneRun` is far too blunt for.
+   */
+  deletePoint(runId: string, id: string): boolean {
+    const mapKey = this.k(runId, id)
+    const prior = this.points.get(mapKey)
+    if (!prior) return false
+    this.points.delete(mapKey)
+    this.emit({ entity: 'slatePoint', id, runId, data: null })
+    return true
+  }
+
 
   /** Drop every point of a run, emitting a retract per point (deleteRun cascade). */
   pruneRun(runId: string): void {

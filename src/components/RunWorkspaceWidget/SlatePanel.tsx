@@ -2,6 +2,9 @@
 // R13, R16, R17; Slate v2 U1/U2, R2/R4).
 //
 // The panel dispatches on each surface's `kind`:
+//   · 'objective'  → the run's goal (S2), lifted out of the grid and PINNED between
+//     the header and the scroll body. User-owned prose, so it sits outside the
+//     search/count/refresh/hide machinery the authored surfaces share.
 //   · 'open-point' → the open-points hero surface (U6): all open-points share ONE
 //     grouped list with status pills, a state track, threads, soft resolve, and an
 //     add-a-point input. Rendered once, at the position of the first open-point.
@@ -28,6 +31,7 @@ import type { SlateSurface } from '../../types'
 import { A2uiRenderer, A2uiErrorBoundary } from '../../a2ui/A2uiRenderer'
 import { OpenPointsSurface, orderOpenPoints } from './OpenPointsSurface'
 import { DiagramSurface } from './DiagramSurface'
+import { ObjectiveSurface } from './ObjectiveSurface'
 import {
   getHiddenSlateSurfaces, addHiddenSlateSurface, removeHiddenSlateSurface,
   getMinimizedSlateSurfaces, addMinimizedSlateSurface, removeMinimizedSlateSurface,
@@ -206,9 +210,16 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
     setMinimized(getMinimizedSlateSurfaces(runId))
   }, [runId])
 
+  // The Objective (S2) is lifted OUT of the grid and pinned above it: it is the run's
+  // goal, so it stays on screen while the surfaces below scroll, and it is excluded
+  // from the search filter, the surface count, refresh-all, hide/minimize, and the
+  // j/k focus ring — it's the user's own prose, not an authored, refreshable surface.
+  const objective = useMemo(() => surfaces.find((s) => s.kind === 'objective'), [surfaces])
+  const gridSurfaces = useMemo(() => surfaces.filter((s) => s.kind !== 'objective'), [surfaces])
+
   // Sorted once, above the early return, so the refresh hook (which must run
   // unconditionally) can watch the same list the render uses.
-  const sorted = useMemo(() => sortSurfaces(surfaces), [surfaces])
+  const sorted = useMemo(() => sortSurfaces(gridSurfaces), [gridSurfaces])
   const { refreshingIds, unreachableIds, bulkRefreshing, refresh, refreshAll } = useSlateRefresh(runId, sorted)
   // One ticking clock for the whole panel — every surface's "updated Xm ago" reads
   // from this so they agree and there's no timer-per-card.
@@ -523,8 +534,10 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           {/* Close only when nothing holds the column open (a blank, user-opened
               Slate) AND the inline composer isn't holding a draft — collapsing the
               column would destroy typed text with no way back to it. The ✕ returns
-              as soon as the draft is cleared or sent. */}
-          {sorted.length === 0 && !composerDirty && onClose && (
+              as soon as the draft is cleared or sent. An objective counts as holding
+              the column open — the panel re-renders itself while `run.slate` is
+              non-empty, so offering a Close that can't close would lie. */}
+          {surfaces.length === 0 && !composerDirty && onClose && (
             <button
               data-testid="slate-close"
               onClick={onClose}
@@ -540,6 +553,14 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
       {/* The `?` cheatsheet (S6 U1) — an overlay over the column, dismissed by ?, Esc,
           or a click outside the card. */}
       {cheatsheetOpen && <SlateCheatsheet onDismiss={() => setCheatsheetOpen(false)} />}
+
+      {/* The Objective (S2) — pinned between the header and the scroll body, so the
+          run's goal never scrolls away under the surfaces it governs. Rendered even
+          when the run has none: there it collapses to a single quiet "+ Set an
+          objective" line, which is the only way to author the first one. */}
+      <div className="shrink-0 px-2 pt-2">
+        <ObjectiveSurface runId={runId} surface={objective} />
+      </div>
 
       {/* The composer popover — anchored under the header (R7/U4). Only ever the
           non-empty path; a blank Slate carries the inline composer instead. */}
@@ -568,7 +589,9 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
         {sorted.length === 0 && (
           <div data-testid="slate-blank-invite" className="col-span-full flex flex-col gap-2 px-1 pt-4">
             <div className="text-center font-sans text-[12px] leading-relaxed text-ink-low">
-              Nothing on the Slate yet — describe a surface, or{' '}
+              {/* "else" once an objective is pinned above — otherwise the invitation
+                  would contradict the card the user is looking at. */}
+              Nothing {objective ? 'else ' : ''}on the Slate yet — describe a surface, or{' '}
               <span className="text-ink-mid">✦ Explain</span> the session.
             </div>
             <SlateComposer runId={runId} inline onClose={() => {}} onDraftChange={setComposerDirty} />

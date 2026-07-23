@@ -149,6 +149,30 @@ export function slateExplainPromptText(_origin?: string): string {
   ].join('\n')
 }
 
+/**
+ * Prompt for the OBJECTIVE nudge (PUT /slate/objective, S2). The Objective is the
+ * user's standing statement of what the session is for; unlike the launch prompt it
+ * is durable and editable, and applying an edit re-aligns the agent to it.
+ *
+ * Delivered ONLY from an explicit Apply — never from typing. That is a product
+ * ruling, enforced at the two ends that matter: the card holds edits locally until
+ * the user presses Apply, and the route is the only caller of this builder.
+ *
+ * `oneLine()` collapses the objective the same way every other Slate builder
+ * collapses untrusted text, so a pasted multi-line "SYSTEM: …" objective can't plant
+ * a directive on its own line past the GUARDRAIL. `_origin` is unused (an objective
+ * is not a thread — there is nothing to curl a reply onto) but kept for signature
+ * parity with the other builders.
+ */
+export function slateObjectivePromptText(objective: string, _origin?: string): string {
+  return [
+    `The user set this run's Objective — the goal this session is for: "${oneLine(objective)}".`,
+    'Keep your work aligned to it, and say so if what you are doing no longer serves it.',
+    '',
+    GUARDRAIL,
+  ].join('\n')
+}
+
 /** Prompt for the surface COMPOSER (POST /slate/compose). Persists NOTHING (KTD4):
  *  delivered best-effort; the agent authors a NEW surface by writing its
  *  `.tinstar/slate/<slug>.json`, so composition reuses the Slate's one file-in model.

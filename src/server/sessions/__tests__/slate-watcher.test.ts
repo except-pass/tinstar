@@ -141,6 +141,68 @@ describe('SlateWatcher', () => {
     expect(inputs.map((p) => p.headline)).toEqual(['good'])
   })
 
+  // The Objective (S2) is USER-owned and lives at a RESERVED id. The file-in channel
+  // is the AGENT's; letting it author that id would let a repo file hijack the user's
+  // goal — and, since file points are retractable, delete it on the next projection.
+  it('DROPS a file entry claiming the reserved `objective` id, keeping its siblings', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [
+      { id: 'objective', headline: 'I am the goal now', content: validContent },
+      { id: 'real', headline: 'an ordinary surface' },
+    ])
+
+    await harness.watcher.pollOnce()
+
+    const inputs = harness.applyRunSlateProjection.mock.calls[0]![1]
+    expect(inputs.map((p) => p.id)).toEqual(['real'])
+  })
+
+  it('treats a file of ONLY an objective entry as unusable — retains, never projects it', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [{ headline: 'seeded', id: 'seeded' }])
+    await harness.watcher.pollOnce()
+    expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1)
+
+    // Zero valid entries + something dropped ⇒ the same retain path a torn file takes:
+    // the prior projection stands, and no `objective` point is ever created.
+    writeSurfaces(harness.slateDir, 'a.json', [{ id: 'objective', headline: 'hijack' }])
+    await harness.watcher.pollOnce()
+
+    expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1) // no second call
+  })
+
+  // The drop must not be SILENT: an author whose surface simply never appears has no
+  // error, no exit code, nothing to find. But polling is every few seconds, so the warn
+  // is once-per-file, not once-per-poll.
+  it('WARNS about the reserved id — once, not on every poll', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    try {
+      writeSurfaces(harness.slateDir, 'a.json', [
+        { id: 'objective', headline: 'hijack' },
+        { id: 'real', headline: 'an ordinary surface' },
+      ])
+
+      await harness.watcher.pollOnce()
+      await harness.watcher.pollOnce()
+      await harness.watcher.pollOnce()
+
+      const reserved = warn.mock.calls.filter(c => String(c[1]).includes('RESERVED'))
+      expect(reserved).toHaveLength(1)
+      expect(String(reserved[0]![1])).toContain('a.json')
+
+      // Fixing the file and regressing warns again — the ledger tracks the CURRENT state.
+      writeSurfaces(harness.slateDir, 'a.json', [{ id: 'real', headline: 'an ordinary surface' }])
+      await harness.watcher.pollOnce()
+      writeSurfaces(harness.slateDir, 'a.json', [
+        { id: 'objective', headline: 'hijack again' },
+        { id: 'real', headline: 'an ordinary surface' },
+      ])
+      await harness.watcher.pollOnce()
+
+      expect(warn.mock.calls.filter(c => String(c[1]).includes('RESERVED'))).toHaveLength(2)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('skips an oversized file by stat but keeps the valid siblings (R10)', async () => {
     const big = 'x'.repeat(40 * 1024)
     writeSurfaces(harness.slateDir, 'big.json', JSON.stringify([{ headline: 'huge', misc: big }]))

@@ -476,6 +476,50 @@ export interface A2uiContent {
   components: A2uiComponent[]
 }
 
+/**
+ * The RESERVED point id that carries a run's Objective — the user's standing
+ * statement of what this session is for (S2). Exactly one per run, enforced
+ * structurally: the point store keys on `(runId, id)`, so a PUT always amends the
+ * same point rather than creating a second objective.
+ *
+ * It is USER-owned. Two guards keep it that way, and both are unit-tested:
+ *   · the file watcher DROPS a `.tinstar/slate/*.json` entry claiming this id, so
+ *     an agent-authored file can neither hijack nor retract it, and
+ *   · `projectRunToSlate` gates the `'objective'` kind on `source === 'user'`, so
+ *     even a file point that somehow carried this id renders as an ordinary surface.
+ *
+ * Shared by server and client so the literal exists in exactly one place.
+ */
+export const OBJECTIVE_POINT_ID = 'objective'
+
+/**
+ * The `SlateSurface.order` the objective is projected with, pinning it ahead of
+ * every other surface (S2).
+ *
+ * MUST BE FINITE. `-Infinity` would serialize to `null` over SSE
+ * (`JSON.stringify(-Infinity) === 'null'`), and a consumer sorting `run.slate` treats
+ * a missing `order` as *last* — the pin would land at the bottom, which is worse than
+ * having no sentinel at all. Every other surface's order is either an epoch-ms
+ * `createdAt` or a reorder slot derived from one (`assignOrderSlots` only ever reuses
+ * or increments existing values), so any negative number sorts first; -1 is the
+ * smallest one that still reads as "before everything" at a glance.
+ *
+ * DEFENSIVE, not load-bearing for the run card today: `SlatePanel` lifts the objective
+ * out of the grid by `kind` and never passes it through its sort, so the pin's on-screen
+ * position comes from being rendered above the scroll body. The value is here for every
+ * OTHER consumer of `run.slate` — plugins, future renderers, anything that sorts the
+ * array as given — and so the ordering never depends on which one is reading.
+ *
+ * The projection FORCES this value rather than storing it on the point, so a user
+ * reorder (`PUT /slate/points/order`, which assigns slots from `createdAt`) can
+ * never strand the objective in the middle of the column.
+ */
+export const OBJECTIVE_ORDER = -1
+
+/** How long an objective may be (characters). Longer than a point headline (200):
+ *  an objective is a sentence or three of prose, not a one-line title. */
+export const OBJECTIVE_MAX = 600
+
 /** One surface on a run's Slate (see The Slate in CONCEPTS.md): a small,
  *  scoped, agent/user/process-authored panel rendered in the run workspace card.
  *  This is the client-facing PROJECTION the run card renders — assembled by the
@@ -490,9 +534,11 @@ export interface SlateSurface {
   id: string
   /** Who authored the surface body — agent, the user, or a local process. */
   author: 'agent' | 'user' | 'process'
-  /** Surface kind, drives which renderer the Slate panel picks. Derived from the
-   *  anchor by projectRunToSlate: anchor.kind==='surface' → 'diagram' (a standalone
-   *  card + thread); no/other anchor → 'open-point' (grouped list). */
+  /** Surface kind, drives which renderer the Slate panel picks. Derived by
+   *  projectRunToSlate: a `source:'user'` point with the reserved
+   *  {@link OBJECTIVE_POINT_ID} → 'objective' (the pinned goal card, S2);
+   *  anchor.kind==='surface' → 'diagram' (a standalone card + thread); no/other
+   *  anchor → 'open-point' (grouped list). */
   kind: string
   /** Sort order within the Slate; ties broken by createdAt. */
   order?: number

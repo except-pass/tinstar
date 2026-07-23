@@ -92,7 +92,9 @@ describe('SlatePanel (U5)', () => {
       />,
     )
     const rendered = screen.getByText('alpha').closest('[data-testid^="slate-surface-"]')
-    const scroll = document.querySelector('[data-scrollable]')!
+    // `[data-columns]` names the grid unambiguously — `[data-scrollable]` is shared with
+    // the pinned objective's prose block, which sits earlier in the tree.
+    const scroll = document.querySelector('[data-columns]')!
     const ids = Array.from(scroll.querySelectorAll('[data-testid^="slate-surface-"]')).map(
       (el) => el.getAttribute('data-testid'),
     )
@@ -107,7 +109,7 @@ describe('SlatePanel reflow (U1/R2)', () => {
     const { container } = render(
       <SlatePanel runId="run-1" surfaces={[surface('s1', 'a')]} width={300} />,
     )
-    const scroll = container.querySelector('[data-scrollable]')!
+    const scroll = container.querySelector('[data-columns]')!
     expect(scroll.className).toContain('grid-cols-1')
     expect(scroll.className).not.toContain('grid-cols-2')
     expect(scroll.getAttribute('data-columns')).toBe('1')
@@ -115,14 +117,14 @@ describe('SlatePanel reflow (U1/R2)', () => {
     // No width prop → still single-column.
     cleanup()
     const { container: c2 } = render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'a')]} />)
-    expect(c2.querySelector('[data-scrollable]')!.getAttribute('data-columns')).toBe('1')
+    expect(c2.querySelector('[data-columns]')!.getAttribute('data-columns')).toBe('1')
   })
 
   it('renders two grid columns for a wide width', () => {
     const { container } = render(
       <SlatePanel runId="run-1" surfaces={[surface('s1', 'a')]} width={500} />,
     )
-    const scroll = container.querySelector('[data-scrollable]')!
+    const scroll = container.querySelector('[data-columns]')!
     expect(scroll.className).toContain('grid-cols-2')
     expect(scroll.getAttribute('data-columns')).toBe('2')
     // The #126 layout guards must survive the grid switch.
@@ -766,5 +768,78 @@ describe('SlatePanel refresh (U3)', () => {
     expect(
       screen.getByTestId('slate-surface-norecipe').querySelector('[data-testid="fast-path-badge"]'),
     ).toBeNull()
+  })
+})
+
+// The Objective (S2) is pinned OUT of the grid: above the scroll body, outside the
+// search/count/refresh/hide machinery the authored surfaces share.
+describe('SlatePanel — the pinned Objective (S2)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    cleanup()
+    apiFetch.mockReset()
+    apiFetch.mockImplementation(() => okDelivered(true))
+  })
+
+  function objective(headline = 'Ship the objective surface'): SlateSurface {
+    return { id: 'objective', author: 'user', kind: 'objective', order: -1, headline, createdAt: 99, amendedAt: 99 }
+  }
+
+  it('renders the objective ONCE, above the scroll body, not as a grid card', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'a surface'), objective()]} />)
+
+    const card = screen.getByTestId('objective-surface')
+    expect(card).toBeTruthy()
+    expect(screen.getAllByTestId('objective-surface')).toHaveLength(1)
+    // Outside the scroll body — it stays put while the surfaces below scroll. Target the
+    // GRID by `[data-columns]`, not `[data-scrollable]`: the objective's own prose block
+    // also carries `data-scrollable` and renders EARLIER in the tree, so a bare
+    // `querySelector('[data-scrollable]')` would return a descendant of `card` and make
+    // `.contains(card)` trivially false — passing even if the pin moved into the grid.
+    const scrollBody = document.querySelector('[data-columns]')!
+    expect(scrollBody.contains(card)).toBe(false)
+    expect(scrollBody.hasAttribute('data-scrollable')).toBe(true)
+    // …and it never renders through the generic surface shell.
+    expect(screen.queryByTestId('slate-surface-objective')).toBeNull()
+  })
+
+  it('keeps the objective out of the surface count and the refresh-all fan-out', async () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'a surface'), objective()]} />)
+
+    // The header counter reports the grid, not the pin.
+    expect(screen.getByText('1')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('slate-refresh-all'))
+    await waitFor(() => expect(apiFetch).toHaveBeenCalled())
+    const refreshed = apiFetch.mock.calls.map((c) => c[0] as string)
+    expect(refreshed.some((p) => p.includes('/slate/surfaces/objective/refresh'))).toBe(false)
+  })
+
+  it('holds the column open on its own (an objective is enough to render)', () => {
+    render(<SlatePanel runId="run-1" surfaces={[objective()]} />)
+    expect(screen.getByTestId('objective-surface')).toBeTruthy()
+    // No Close: the panel would immediately re-render itself while run.slate is
+    // non-empty, so offering one would lie.
+    expect(screen.queryByTestId('slate-close')).toBeNull()
+  })
+
+  it('offers the "set an objective" affordance when the run has none', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'a surface')]} />)
+    expect(screen.getByTestId('objective-set')).toBeTruthy()
+    expect(screen.queryByTestId('objective-surface')).toBeNull()
+  })
+
+  it('is not filtered away by the search (it is the goal, not a hit)', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'a surface'), objective()]} />)
+    fireEvent.click(screen.getByTestId('slate-search-open'))
+    fireEvent.change(screen.getByTestId('slate-search'), { target: { value: 'zzz-no-match' } })
+
+    expect(screen.getByTestId('slate-no-matches')).toBeTruthy()
+    expect(screen.getByTestId('objective-surface')).toBeTruthy()
+  })
+
+  it('still renders nothing at all when there is neither a surface nor an objective', () => {
+    const { container } = render(<SlatePanel runId="run-1" surfaces={[]} />)
+    expect(container.firstChild).toBeNull()
   })
 })

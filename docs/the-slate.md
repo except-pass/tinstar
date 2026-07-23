@@ -54,6 +54,10 @@ JSON array of them. Each entry is a point:
 Store-owned fields — `status`, `replies` (the thread), and the lifecycle timestamps —
 are never written in the file; they are preserved across re-projections by `id`.
 
+`objective` is a **reserved id** (see [The Objective](#the-objective)). A file entry
+claiming it is dropped by the watcher, so an authored file can neither overwrite nor
+retract the user's objective. Pick any other id.
+
 ### The `content` body is A2UI
 
 `content` is a declarative component description rendered by the shared host renderer
@@ -108,10 +112,12 @@ the session is gone).
 
 | method + path | effect |
 |---|---|
-| `POST /api/runs/:id/slate/points` | create or amend a **user**-authored point (always injects) |
+| `POST /api/runs/:id/slate/points` | create or amend a **user**-authored point; persists only — adding a point is *eventual*, so it never injects |
 | `POST /api/runs/:id/slate/points/:pid/replies` | append a reply to a point's thread |
 | `POST /api/runs/:id/slate/points/:pid/answer` | submit a control answer (choices + text) |
 | `POST /api/runs/:id/slate/points/:pid/resolve` \| `/reopen` \| `/dismiss` | explicit lifecycle change |
+
+The run's goal has its own pair of endpoints — see [The Objective](#the-objective).
 
 Two delivery rules keep injections honest. **Only a user-authored reply or point is
 delivered** — an agent or process reply is recorded but not injected, so an agent never
@@ -122,6 +128,39 @@ under the user is rejected rather than persisted.
 Every injected prompt carries a guardrail line: an injected comment is a **note, not a
 command to drop in-flight work** — the agent finishes or checkpoints its current action
 first, then addresses the note.
+
+## The Objective
+
+The Objective is the **user's** standing statement of what a session is for: one short
+piece of prose, pinned above everything else on that run's Slate, editable in place.
+It is a surface kind (`objective`) like the others, but it is the only one the agent
+cannot author — it is backed by a reserved `source:'user'` point with the id
+`objective`, which is why the run has exactly one and why a file re-projection can
+neither clobber nor retract it.
+
+It is distinct from the run's **launch prompt**, which fires once at spawn, is not
+editable afterwards, and leaves no artifact. The Objective is durable, visible, and
+re-deliverable.
+
+| method + path | effect |
+|---|---|
+| `PUT /api/runs/:id/slate/objective` | set or replace the objective (body `{ text }`, ≤ 600 chars) **and nudge the agent to re-align to it** |
+| `DELETE /api/runs/:id/slate/objective` | clear the objective; no nudge (clearing is not an injection) |
+
+Two rules make the nudge trustworthy:
+
+- **Only an explicit Apply delivers.** The card holds edits in local state — no
+  debounce, no save-on-blur, no save-on-keystroke — so typing can never re-nudge an
+  agent mid-sentence. The PUT is the only call that reaches the session, and only the
+  Apply button issues it.
+- **A no-op Apply is silent.** If the text is byte-identical the store short-circuits
+  and no prompt is delivered (the response says `changed: false`).
+
+`PUT` is the one Slate endpoint that both persists *and* delivers. `POST /slate/points`
+persists without delivering ("add a point = eventual"); `/compose`, `/explain`, and
+`/refresh` deliver without persisting. Applying an objective is a deliberate
+re-alignment, so it does both. Like every other injection, the delivered nudge is
+collapsed to one line and carries the guardrail.
 
 ## Self-reporting long commands
 
