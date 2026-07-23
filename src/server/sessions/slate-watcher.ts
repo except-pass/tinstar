@@ -398,7 +398,7 @@ export class SlateWatcher {
       if (entries === null) { sawUnusable = true; continue } // not an array/object — torn
 
       for (const rawEntry of entries) {
-        const entry = this.toPointInput(rawEntry)
+        const entry = toPointInput(rawEntry, this.parseContent)
         if (entry === null) { sawUnusable = true; continue } // schema-invalid entry — drop it
         inputs.push(entry)
       }
@@ -408,49 +408,59 @@ export class SlateWatcher {
     // Zero valid entries: retain if something was torn/dropped, else it's a genuine clear.
     return sawUnusable ? null : []
   }
+}
 
-  /**
-   * Validate one raw file entry as a `PointInput`. `headline` is required; `content`
-   * (when present) goes through the SAME `parseA2uiContent` funnel notices use, so a
-   * hostile surface is rejected before it ever reaches the store. Returns `null` (drop)
-   * on any failure.
-   */
-  private toPointInput(raw: unknown): PointInput | null {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
-    const r = raw as Record<string, unknown>
+/**
+ * Validate one raw surface-file entry as a `PointInput` — the gate that decides
+ * whether a `.tinstar/slate/*.json` entry ever becomes a visible surface. `headline`
+ * is required; `content` (when present) goes through the SAME `parseA2uiContent`
+ * funnel notices use, so a hostile surface is rejected before it reaches the store.
+ * Returns `null` (drop) on any failure.
+ *
+ * Module-level and EXPORTED rather than a private method: every rejection here is
+ * silent (the surface simply never appears), so anything that ships a committed
+ * example file — e.g. `docs/examples/slate/skill-progress-tracker.json` — needs to
+ * assert its envelope against this function itself. A test that re-states the rules
+ * by hand passes happily while the real gate has moved on.
+ */
+export function toPointInput(
+  raw: unknown,
+  parseContent: (value: unknown) => A2uiContent | null = parseA2uiContent,
+): PointInput | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
 
-    if (typeof r.headline !== 'string' || r.headline.length === 0) return null
-    const out: PointInput = { headline: r.headline }
+  if (typeof r.headline !== 'string' || r.headline.length === 0) return null
+  const out: PointInput = { headline: r.headline }
 
-    if (typeof r.id === 'string' && r.id.length > 0) out.id = r.id
+  if (typeof r.id === 'string' && r.id.length > 0) out.id = r.id
 
-    if (r.author !== undefined) {
-      if (r.author !== 'agent' && r.author !== 'user' && r.author !== 'process') return null
-      out.author = r.author as PointAuthor
-    }
-
-    if (r.anchor !== undefined) {
-      const anchor = toAnchor(r.anchor)
-      if (anchor === null) return null
-      out.anchor = anchor
-    }
-
-    if (r.content !== undefined) {
-      const content = this.parseContent(r.content)
-      if (content === null) return null // schema-invalid A2UI — drop this surface
-      out.content = content
-    }
-
-    // File-owned refresh recipe (plan U3): carried through verbatim. A non-string or
-    // empty recipe is simply dropped (the surface still refreshes via the bare nudge).
-    if (typeof r.refresh === 'string' && r.refresh.length > 0) out.refresh = r.refresh
-
-    if (typeof r.createdAt === 'number' && Number.isFinite(r.createdAt)) {
-      out.createdAt = r.createdAt
-    }
-
-    return out
+  if (r.author !== undefined) {
+    if (r.author !== 'agent' && r.author !== 'user' && r.author !== 'process') return null
+    out.author = r.author as PointAuthor
   }
+
+  if (r.anchor !== undefined) {
+    const anchor = toAnchor(r.anchor)
+    if (anchor === null) return null
+    out.anchor = anchor
+  }
+
+  if (r.content !== undefined) {
+    const content = parseContent(r.content)
+    if (content === null) return null // schema-invalid A2UI — drop this surface
+    out.content = content
+  }
+
+  // File-owned refresh recipe (plan U3): carried through verbatim. A non-string or
+  // empty recipe is simply dropped (the surface still refreshes via the bare nudge).
+  if (typeof r.refresh === 'string' && r.refresh.length > 0) out.refresh = r.refresh
+
+  if (typeof r.createdAt === 'number' && Number.isFinite(r.createdAt)) {
+    out.createdAt = r.createdAt
+  }
+
+  return out
 }
 
 function toAnchor(raw: unknown): PointAnchor | null {
