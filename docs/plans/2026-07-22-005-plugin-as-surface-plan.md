@@ -1,3 +1,17 @@
+> ## ⛔ PUNTED — DO NOT BUILD THIS
+>
+> **Ruling (2026-07-23, Will):** plugins and Slate surfaces stay **completely separate** for now.
+> This plan is retained as the record of *why*, not as work to pick up.
+>
+> The contract turned out far more entangled than it first appeared: a plugin surface needs its own
+> opt-in capability tag, a **second** shell-free render component (canvas widgets depend on
+> `CanvasWidgetShell` hooks that throw outside the shell), a new anchor kind plus a file-owned
+> `pluginData` threaded through every merge site, a server-side placement gate, and a new surface
+> kind — while leaving `Point` modelling something with no thread/status meaning. That is a second
+> widget framework in disguise, in exchange for one fleet-wide first rider.
+>
+> Reopen the `op-plugin` Slate point if plugin-backed surfaces are wanted later.
+
 # S5 — Plugin-as-Surface (implementation plan)
 
 > A `/lightsout` run builds, tests, and squash-merges this as ONE PR. No code here — only the plan.

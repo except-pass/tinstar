@@ -61,6 +61,8 @@ export const SLATE_AUTHOR_CONTRACT = [
   '           complex flow needs color to stay legible). Anything else falls back to "ink".',
   '           The diagram is scaled to fit the narrow column and the reader clicks it to expand, so a big',
   '           diagram is fine — but keep labels short, since they shrink with it.',
+  '           The host owns theming and sizing: `%%{init: ...}%%` directives and YAML front matter are STRIPPED',
+  '           from source. Pick the look with `theme`, not with mermaid config.',
   '- Stepper: { id, component:"Stepper", steps:[ { label, status, detail? }, ... ] }   (a status-colored progress rail)',
   '           status is one of: "pending" | "active" | "done" | "skipped"  (anything else is treated as "pending")',
   '           e.g. steps: [ {"label":"Plan","status":"done"}, {"label":"Build","status":"active","detail":"unit 2/4"},',
