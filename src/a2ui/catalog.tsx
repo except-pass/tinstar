@@ -92,15 +92,37 @@ interface ParsedStep {
 
 const STEP_STATUSES = new Set<string>(['pending', 'active', 'done', 'skipped'])
 
+/** Hard row cap. `steps` is the one catalog prop that expands a SINGLE A2UI node
+ *  into an unbounded number of DOM rows, and the renderer's MAX_NODES budget only
+ *  counts components — it cannot see inside a leaf's props. A surface posted
+ *  through the API is capped at 1 MiB, i.e. ~30k steps × ~5 elements each, which
+ *  would block the render thread. Past this many phases the rail has stopped
+ *  being readable anyway, so truncating is both the safe and the honest answer. */
+const MAX_STEPS = 60
+
+interface ParsedSteps {
+  /** The rows to draw — never more than MAX_STEPS. */
+  steps: ParsedStep[]
+  /** Raw entries never examined because the cap was hit (0 when nothing was cut). */
+  hidden: number
+}
+
 /** Coerce a passthrough `steps` prop into renderable rows. A2UI component props
  *  are `.passthrough()` / `unknown`, so this is the only gate between an agent's
  *  JSON and the DOM: it is TOTAL BY CONSTRUCTION — every branch returns, nothing
- *  throws, and garbage yields `[]` (the caller's degrade path) rather than a
- *  crash that would blank the whole surface (R16). */
-function parseSteps(value: unknown): ParsedStep[] {
-  if (!Array.isArray(value)) return []
+ *  throws, and garbage yields no rows (the caller's degrade path) rather than a
+ *  crash that would blank the whole surface (R16). It is also BOUNDED: at most
+ *  MAX_STEPS rows come out, with the untouched remainder reported as `hidden` so
+ *  the rail can say so out loud instead of silently lying about the count. */
+function parseSteps(value: unknown): ParsedSteps {
+  // A fresh object, not a shared module-level constant: the result is handed to a
+  // caller, and a shared one would let a single mutation poison every later parse.
+  if (!Array.isArray(value)) return { steps: [], hidden: 0 }
   const out: ParsedStep[] = []
-  for (const raw of value) {
+  let i = 0
+  for (; i < value.length; i++) {
+    if (out.length >= MAX_STEPS) break
+    const raw: unknown = value[i]
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
     const rec = raw as Record<string, unknown>
     // A row with no readable label has nothing to show — drop it, keep the rest.
@@ -113,7 +135,7 @@ function parseSteps(value: unknown): ParsedStep[] {
     const detail = str(rec.detail).trim()
     out.push(detail ? { label, status, detail } : { label, status })
   }
-  return out
+  return { steps: out, hidden: value.length - i }
 }
 
 // One tone per status, LITERAL class strings (no interpolated fragments) so
@@ -152,16 +174,25 @@ function stepGlyph(status: StepStatus): string {
   return status === 'done' ? '✓' : ''
 }
 
-function StepperRail({ steps }: { steps: ParsedStep[] }): ReactNode {
+function StepperRail({ steps, hidden }: ParsedSteps): ReactNode {
   return (
-    <div className="flex flex-col my-1" data-testid="stepper">
+    // role=list/listitem: without it a screen reader reads the rail as one run-on
+    // line of labels with no structure (and `display:flex` strips implicit list
+    // semantics anyway, so the explicit role is required, not decorative). The
+    // status itself is carried only by color + glow + a `✓` glyph, every one of
+    // which is invisible to assistive tech — so each row also states its status in
+    // a visually-hidden span. Without that, the component's whole reason for
+    // existing (the status vocabulary) is exactly what AT cannot perceive.
+    <div className="flex flex-col my-1" role="list" data-testid="stepper">
       {steps.map((step, i) => (
         <div
           key={`${i}-${step.label}`}
+          role="listitem"
           className="flex flex-row gap-2.5"
           data-testid="stepper-step"
           data-status={step.status}
         >
+          <span className="sr-only" data-testid="stepper-status-text">{`${step.status}: `}</span>
           {/* Rail column: the status node, plus the connector down to the next. */}
           <div className="flex flex-col items-center">
             <span
@@ -171,7 +202,7 @@ function StepperRail({ steps }: { steps: ParsedStep[] }): ReactNode {
             >
               {stepGlyph(step.status)}
             </span>
-            {i < steps.length - 1 && (
+            {(i < steps.length - 1 || hidden > 0) && (
               <span
                 className={`w-px flex-1 min-h-[10px] ${STEP_CONNECTOR[step.status]}`}
                 data-testid="stepper-connector"
@@ -182,7 +213,7 @@ function StepperRail({ steps }: { steps: ParsedStep[] }): ReactNode {
           {/* Content column: a mono label (meta, not prose) + an optional sans
               detail caption. `font-sans` on the detail is load-bearing — the run
               card defaults to mono, so reading prose must pin the sans face. */}
-          <div className={`min-w-0 ${i < steps.length - 1 ? 'pb-2' : ''}`}>
+          <div className={`min-w-0 ${i < steps.length - 1 || hidden > 0 ? 'pb-2' : ''}`}>
             <div
               className={`font-mono text-[11.5px] leading-[1.5] ${STEP_LABEL[step.status]}`}
               data-testid="stepper-label"
@@ -200,6 +231,18 @@ function StepperRail({ steps }: { steps: ParsedStep[] }): ReactNode {
           </div>
         </div>
       ))}
+      {/* The truncation notice is the rail's LAST ROW, not a footnote beside it —
+          so it stays inside the list for AT, and `pl-6` (node width + gap) lines it
+          up under the labels rather than under the rail. */}
+      {hidden > 0 && (
+        <div
+          role="listitem"
+          className="font-mono text-[11.5px] leading-[1.5] text-ink-low pl-6"
+          data-testid="stepper-overflow"
+        >
+          {`+${hidden} more not shown`}
+        </div>
+      )}
     </div>
   )
 }
@@ -306,16 +349,17 @@ export const CATALOG: Record<string, CatalogEntry> = {
   // `{ label, status, detail? }`. `steps` is passed RAW to `parseSteps`, which
   // is the single place that decides what counts as a valid row; anything else
   // (a string, an object, rows with no label, an unknown status) is coerced or
-  // dropped there. An entirely unusable `steps` degrades to a small inline
-  // amber marker, matching the renderer's NodeFallback tone — never a throw,
-  // never a blank surface (R16).
+  // dropped there, and the row count is capped at MAX_STEPS so one node can't
+  // expand into an unbounded DOM. An entirely unusable `steps` degrades to a
+  // small inline amber marker, matching the renderer's NodeFallback tone —
+  // never a throw, never a blank surface (R16).
   Stepper: {
     render: (node) => {
-      const steps = parseSteps(node.steps)
+      const { steps, hidden } = parseSteps(node.steps)
       if (steps.length === 0) {
         return <span className="text-xs italic text-amber-300/80">⚠ stepper: no steps to show</span>
       }
-      return <StepperRail steps={steps} />
+      return <StepperRail steps={steps} hidden={hidden} />
     },
   },
 }

@@ -9,7 +9,8 @@ const getSession = vi.hoisted(() => vi.fn())
 vi.mock('../session', () => ({ getSession: (...a: unknown[]) => getSession(...a) }))
 vi.mock('../../logger', () => ({ log: { info: () => {}, warn: () => {} } }))
 
-import { dispatchSurfaceAuthor } from '../surfaceAuthor'
+import { dispatchSurfaceAuthor, SLATE_AUTHOR_CONTRACT } from '../surfaceAuthor'
+import { CATALOG } from '../../../a2ui/catalog'
 
 function fakeChild() {
   return { on: vi.fn(), unref: vi.fn() }
@@ -65,5 +66,38 @@ describe('dispatchSurfaceAuthor', () => {
     spawn.mockImplementation(() => { throw new Error('ENOENT claude') })
     expect(() => dispatchSurfaceAuthor({ ...base, config: cfg })).not.toThrow()
     expect(dispatchSurfaceAuthor({ ...base, config: cfg }).dispatched).toBe(false)
+  })
+})
+
+// The code-spawned author is a fresh `claude -p` in a foreign repo with no Tinstar
+// skill: SLATE_AUTHOR_CONTRACT is the ONLY vocabulary it ever sees. So a primitive
+// that lives in CATALOG but not in the contract is dead code no agent will ever
+// emit — and until now nothing enforced that. Adding `Stepper` took five hand-edits
+// across the contract and four doc tables; this is the guard that fails loudly when
+// the NEXT primitive forgets step one.
+describe('SLATE_AUTHOR_CONTRACT covers the render catalog', () => {
+  // Types the contract deliberately withholds from a one-shot author:
+  //   Choice/TextInput/Submit — interactive controls. A file-authored surface is
+  //     read-only, so a form the author cannot wire up is worse than nothing.
+  //   FollowUp — a DECLARATION, not a body element (it renders null in the catalog).
+  const DELIBERATELY_UNDOCUMENTED = new Set(['Choice', 'TextInput', 'Submit', 'FollowUp'])
+
+  it('names every renderable catalog primitive, so none is unreachable dead code', () => {
+    const missing = Object.keys(CATALOG)
+      .filter(type => !DELIBERATELY_UNDOCUMENTED.has(type))
+      .filter(type => !SLATE_AUTHOR_CONTRACT.includes(`component:"${type}"`))
+    expect(missing).toEqual([])
+  })
+
+  it('does NOT teach the author the interactive controls (they cannot work from a file)', () => {
+    for (const type of DELIBERATELY_UNDOCUMENTED) {
+      expect(SLATE_AUTHOR_CONTRACT).not.toContain(`component:"${type}"`)
+    }
+  })
+
+  it('keeps the allowlist honest: every deliberately-omitted type still exists in CATALOG', () => {
+    for (const type of DELIBERATELY_UNDOCUMENTED) {
+      expect(Object.keys(CATALOG)).toContain(type)
+    }
   })
 })

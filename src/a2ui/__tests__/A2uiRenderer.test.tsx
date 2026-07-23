@@ -573,8 +573,92 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
     )
     expect(container.textContent).toContain('Pipeline')
     expect(rows(container)).toHaveLength(5)
-    // A leaf: the Stepper never resolves children of its own.
     expect(container.querySelectorAll('[data-testid="stepper"]')).toHaveLength(1)
+  })
+
+  it('is a LEAF: a children[] on a Stepper node is discarded, never drawn inside the rail', () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([
+          { id: 'root', component: 'Stepper', steps: CE_STEPS, children: ['t'] },
+          { id: 't', component: 'Text', text: 'smuggled child', variant: 'body' },
+        ])}
+      />,
+    )
+    // The rail draws exactly the authored steps...
+    expect(rows(container)).toHaveLength(CE_STEPS.length)
+    // ...and the child never reaches the DOM — not inside the stepper, not anywhere.
+    expect(container.querySelector('[data-testid="stepper"]')!.textContent).not.toContain('smuggled child')
+    expect(container.textContent).not.toContain('smuggled child')
+  })
+
+  it('caps a runaway steps array at MAX_STEPS and says so, instead of expanding one node into 30k rows', () => {
+    const many = Array.from({ length: 250 }, (_, i) => ({ label: `Phase ${i}`, status: 'pending' }))
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps: many }])} />,
+    )
+    expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
+    expect(rows(container)).toHaveLength(60)
+    // The truncation is VISIBLE — a runaway array degrades loudly, never silently —
+    // and it is the list's last ROW, so assistive tech hears it too.
+    const overflow = container.querySelector('[data-testid="stepper-overflow"]')!
+    expect(overflow.textContent).toBe('+190 more not shown')
+    expect(overflow.getAttribute('role')).toBe('listitem')
+    // The last drawn row still carries a connector, so the rail reads as "continues".
+    expect(container.querySelectorAll('[data-testid="stepper-connector"]')).toHaveLength(60)
+  })
+
+  it('draws no overflow marker when the array fits under the cap', () => {
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps: CE_STEPS }])} />,
+    )
+    expect(container.querySelector('[data-testid="stepper-overflow"]')).toBeNull()
+  })
+
+  // The cap is an off-by-one magnet: exactly-at-the-cap must NOT claim a hidden row,
+  // and one-over must claim exactly one.
+  it.each([
+    [60, 60, null],
+    [61, 60, '+1 more not shown'],
+  ])('steps=%i → %i rows, overflow %s', (given, drawn, marker) => {
+    const steps = Array.from({ length: given }, (_, i) => ({ label: `P${i}`, status: 'done' }))
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    expect(rows(container)).toHaveLength(drawn)
+    expect(container.querySelector('[data-testid="stepper-overflow"]')?.textContent ?? null).toBe(marker)
+  })
+
+  // The cap counts RENDERABLE rows, not raw entries — 200 junk entries followed by
+  // real ones must not eat the budget and blank the rail.
+  it('spends the cap on valid rows only, so leading junk does not starve the rail', () => {
+    const steps = [
+      ...Array.from({ length: 200 }, () => ({ status: 'done' })), // no label → dropped
+      { label: 'Survivor', status: 'active' },
+    ]
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    expect(rows(container)).toHaveLength(1)
+    expect(container.querySelector('[data-testid="stepper-label"]')!.textContent).toBe('Survivor')
+    expect(container.querySelector('[data-testid="stepper-overflow"]')).toBeNull()
+  })
+
+  it('exposes the status to assistive tech as text, not as color alone', () => {
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps: CE_STEPS }])} />,
+    )
+    // The rail is a list, so a screen reader announces structure instead of a run-on line.
+    expect(container.querySelector('[data-testid="stepper"]')!.getAttribute('role')).toBe('list')
+    expect(container.querySelectorAll('[role="listitem"]')).toHaveLength(CE_STEPS.length)
+    // The ✓/dot glyph and connector are decoration — hidden from AT.
+    expect(container.querySelector('[data-testid="stepper-node"]')!.getAttribute('aria-hidden')).toBe('true')
+    // ...so each row states its status in a visually-hidden span instead.
+    const spoken = Array.from(container.querySelectorAll('[data-testid="stepper-status-text"]')).map(
+      s => s.textContent,
+    )
+    expect(spoken).toEqual(['done: ', 'done: ', 'active: ', 'pending: ', 'pending: '])
+    expect(container.querySelector('[data-testid="stepper-status-text"]')!.className).toContain('sr-only')
   })
 
   it('draws a connector between rows but not after the last one', () => {
