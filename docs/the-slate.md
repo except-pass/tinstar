@@ -135,14 +135,18 @@ first, then addresses the note.
 When an agent needs several answers at once, it can lay the questions out **side by
 side** instead of stacking them. Write each question as its own point — its own `id`, its
 own `content` body of `Choice`/`TextInput`/`Submit` — and give every point in the set the
-**same** `group` string. Two or more points sharing a `group` render as a *workbench*: a
-horizontal band inside the open-points list, one question per column, labelled
-`Questions · N` with an `M of L answered` count beside it. `N` is the columns on screen;
-`L` is only the ones still being asked, so a **dismissed** question leaves both sides of
-the count and the band can always reach its ceiling. A lone grouped point stays an
-ordinary row — and a dismissed one doesn't hold a band open, so a two-question set with
-one dismissed degrades back to rows rather than leaving a single column with none of the
-row's chrome.
+**same** `group` string. Two or more **live** points sharing a `group` render as a
+*workbench*: a horizontal band inside the open-points list, one question per column,
+labelled `Questions · N` with an `M of L answered` count beside it. `N` is the columns on
+screen; `L` is only the ones still being asked, so a **dismissed** question leaves both
+sides of the count and the band can always reach its ceiling.
+
+A lone grouped point stays an ordinary row, and the two off-the-table cases have
+deliberately *different* rules. A **hidden** point never joins a band at all — a column
+carries no unhide, so it would be stranded there. A **dismissed** one doesn't hold a band
+open (a two-question set with one dismissed degrades back to rows rather than leaving a
+single column with none of the row's chrome) but does ride along, dimmed, in a band its
+live siblings already justify.
 
 ```json
 [
