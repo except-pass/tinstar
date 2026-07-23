@@ -174,6 +174,36 @@ describe('POST /api/runs/:id/slate/points', () => {
     expect(srv.docStore.getSlatePointsForRun(RUN)).toHaveLength(0)
   }))
 
+  // The Objective's id is RESERVED (S2). This route takes a caller-supplied id and any
+  // agent has `curl`, so without this gate the objective is one POST away from being
+  // overwritten through the side door — no nudge, no `changed`, and with a body the
+  // objective card doesn't render.
+  it("refuses the reserved 'objective' id (INVALID_PARAMS, nothing persisted)", withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/points`, {
+      method: 'POST', body: JSON.stringify({ id: 'objective', headline: 'I am the goal now' }),
+    })
+    expect(res.status).toBe(400)
+    const body = await res.json() as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('INVALID_PARAMS')
+    expect(body.error.message).toContain('reserved')
+    expect(srv.docStore.getSlatePoint(RUN, 'objective')).toBeUndefined()
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+
+  it("does NOT clobber an existing objective via the reserved id", withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    await srv.fetch(`/api/runs/${RUN}/slate/objective`, { method: 'PUT', body: JSON.stringify({ text: 'the real goal' }) })
+
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/points`, {
+      method: 'POST', body: JSON.stringify({ id: 'objective', headline: 'hijacked' }),
+    })
+    expect(res.status).toBe(400)
+    expect(srv.docStore.getSlatePoint(RUN, 'objective')!.headline).toBe('the real goal')
+  }))
+
   it('a user point SURVIVES a subsequent file re-projection (the reconciliation)', withServer(async srv => {
     seedRun(srv.docStore)
     const pid = await createPoint(srv, { headline: 'user added me' })
@@ -784,6 +814,32 @@ describe('PUT/DELETE /api/runs/:id/slate/objective', () => {
     expect(body.data.changed).toBe(false)
     expect(body.data.delivered).toBe(false)
     expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+
+  // UPGRADE PATH: a snapshot written before the watcher's reserved-id guard existed can
+  // already carry a `source:'file'` point at the reserved id (`objective` is a natural
+  // slug for an agent-authored goal surface). `addUserPoint` preserves `prior.source` on
+  // an amend, so without an explicit takeover the PUT would 200 and nudge while the
+  // projection still classified the point as an ordinary open-point — the card would
+  // keep showing "+ Set an objective" forever.
+  it('TAKES OVER a pre-existing FILE point at the reserved id (upgrade path)', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    // Seed the trap the way a pre-guard worktree would have: through the file channel.
+    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'objective', headline: 'agent-authored goal' }])
+    expect(srv.docStore.getSlatePoint(RUN, 'objective')!.source).toBe('file')
+    expect(srv.docStore.getRun(RUN)!.slate!.find(s => s.id === 'objective')!.kind).toBe('open-point')
+
+    const res = await putObjective(srv, 'the user’s real goal')
+    expect(res.status).toBe(200)
+
+    const point = srv.docStore.getSlatePoint(RUN, 'objective')!
+    expect(point.source).toBe('user')
+    expect(point.headline).toBe('the user’s real goal')
+    // …and it now projects as the pinned objective card, which is the whole point.
+    const projected = srv.docStore.getRun(RUN)!.slate!.filter(s => s.kind === 'objective')
+    expect(projected).toHaveLength(1)
+    expect(projected[0]!.headline).toBe('the user’s real goal')
   }))
 
   it('reports delivered:false on an unreachable session — still 200, still persisted', withServer(async srv => {

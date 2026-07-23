@@ -37,9 +37,16 @@ export function ObjectiveSurface({ runId, surface }: Props) {
   const [draft, setDraft] = useState(text)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Set only when an Apply that ACTUALLY changed the objective couldn't reach the
-  // session. A no-op Apply doesn't deliver, so it must not claim unreachability.
-  const [unreachable, setUnreachable] = useState(false)
+  // The objective text an Apply couldn't deliver, or null for "nothing to report". Set
+  // only when an Apply that ACTUALLY changed the objective couldn't reach the session —
+  // a no-op Apply doesn't deliver, so it must not claim unreachability.
+  //
+  // It holds the TEXT rather than a bare flag so the note can expire on its own: it
+  // describes one past Apply, and once the objective moves on to something else (a
+  // later Apply, another viewer, another tab) the note is no longer known to be true.
+  // Anchoring on the text is what lets the projection echo of *this* Apply land without
+  // instantly erasing the note it just earned.
+  const [unreachableFor, setUnreachableFor] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // The server projection is the source of truth while not editing: an objective
@@ -49,9 +56,16 @@ export function ObjectiveSurface({ runId, surface }: Props) {
     if (!editing) setDraft(text)
   }, [text, editing])
 
+  // Expire the note once the projection shows an objective the note isn't about. A
+  // stale "isn't reachable" that sits on the card through the session coming back is
+  // worse than silence; the ✕ covers the rest (there is no reachability poll here).
+  useEffect(() => {
+    setUnreachableFor(prev => (prev !== null && text !== prev ? null : prev))
+  }, [text])
+
   const startEditing = useCallback(() => {
     setError(null)
-    setUnreachable(false)
+    setUnreachableFor(null)
     setEditing(true)
     // The textarea mounts on the next frame.
     requestAnimationFrame(() => {
@@ -81,7 +95,7 @@ export function ObjectiveSurface({ runId, surface }: Props) {
       return
     }
     setError(null)
-    setUnreachable(false)
+    setUnreachableFor(null)
     setSubmitting(true)
     try {
       const res = await apiFetch(`/api/runs/${runId}/slate/objective`, {
@@ -95,7 +109,7 @@ export function ObjectiveSurface({ runId, surface }: Props) {
       if (!res.ok || !body?.ok) throw new Error(body?.error?.message || `apply failed (${res.status})`)
       // Persisted either way; an asleep run just reads it later. Say so quietly
       // rather than pretending the nudge landed.
-      if (body.data?.changed && body.data.delivered === false) setUnreachable(true)
+      if (body.data?.changed && body.data.delivered === false) setUnreachableFor(trimmed)
       setEditing(false)
     } catch {
       setError('Could not save the objective. Try again.')
@@ -107,7 +121,7 @@ export function ObjectiveSurface({ runId, surface }: Props) {
   const clear = useCallback(async () => {
     if (submitting) return
     setError(null)
-    setUnreachable(false)
+    setUnreachableFor(null)
     setSubmitting(true)
     try {
       const res = await apiFetch(`/api/runs/${runId}/slate/objective`, { method: 'DELETE' })
@@ -230,9 +244,21 @@ export function ObjectiveSurface({ runId, surface }: Props) {
         </p>
       )}
 
-      {unreachable && (
-        <div data-testid="objective-unreachable" className="mt-2 font-sans text-[11px] leading-snug text-ink-low">
-          Saved — but that session isn’t reachable right now. It’ll pick this up when it’s back.
+      {unreachableFor !== null && (
+        <div data-testid="objective-unreachable" className="mt-2 flex items-start gap-2 font-sans text-[11px] leading-snug text-ink-low">
+          <span className="min-w-0">
+            Saved — but that session isn’t reachable right now. It’ll pick this up when it’s back.
+          </span>
+          {/* Dismissable: the note is a snapshot of one Apply, and nothing here re-checks
+              reachability, so the user gets to decide when it has said its piece. */}
+          <button
+            data-testid="objective-unreachable-dismiss"
+            onClick={() => setUnreachableFor(null)}
+            title="Dismiss"
+            className="ml-auto shrink-0 font-mono text-2xs leading-none text-ink-ctrl hover:text-ink-high"
+          >
+            ✕
+          </button>
         </div>
       )}
       {error && <div data-testid="objective-error" className="mt-2 text-2xs text-hue-error">{error}</div>}

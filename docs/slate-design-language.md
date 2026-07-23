@@ -77,6 +77,19 @@ Every open point shares one grouped surface. Each row: author + status pill, a *
 - **Status track:** four dots, filled up to the current stage in the stage's hue; the terminal `resolved` dot goes emerald; unlit dots use `primary/12`. Dismissed = off-track, dimmed row.
 - **Do:** sink resolved/dismissed rows to the bottom and dim them; live points stay at top. **Don't:** make resolve destructive-looking — it's a soft checkbox; reopening is one click.
 
+## Objective — the pinned card
+
+The run's goal, and the only surface the **user** writes. Same shell as every other card (hairline, raised surface, 14px padding) — it earns its distinction from **position and voice**, not from a special frame.
+
+1. **Position** — pinned *between the header strip and the scroll body*, outside the grid. It never scrolls away under the surfaces it governs, and it sits outside the search / count / refresh-all / hide machinery: it is not an authored, refreshable surface.
+2. **Type ramp** — mono `Objective` label (caps, low ink) over **reading sans 14/1.6 at `ink.mid`**. The run card defaults to mono, so the prose *must* pin `font-sans` — otherwise a person's sentence renders as terminal output.
+3. **Empty state** — one dashed-hairline mono line, `+ Set an objective`. An empty card would be chrome with nothing to read (P1); a single quiet line is an invitation.
+4. **`unapplied`** — a mono marker beside the label the moment the draft diverges from the saved text. It is the visible half of the rule that typing never nudges the agent.
+5. **Apply is the only cyan on the card** — committing an objective is the one *generative* move here (P4), the same reason the composer's **Create** carries it. Edit / Cancel / clear stay at control ink. The helper line under the buttons — "Nothing reaches the agent until you Apply." — states the contract in the one place it matters.
+6. **Unreachable** — the same quiet note the authored surfaces use, plus a ✕: nothing re-checks reachability, so the user retires it.
+
+**Do:** keep the pin at the top and the voice human. **Don't:** give it an accent border, a second cyan, or a save-on-blur — the deliberate press *is* the design.
+
 ## Surface states (same shell across lifecycle; state signalled at the edges + freshness stamp, body never moves)
 - **Refreshing** — cyan glow = live (`0 0 14 rgba(0,240,255,.1)`), "refreshing…".
 - **Stale** — amber past 15m, "⚠ updated 47m ago".

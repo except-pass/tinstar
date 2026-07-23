@@ -90,7 +90,9 @@ describe('SlatePanel (U5)', () => {
       />,
     )
     const rendered = screen.getByText('alpha').closest('[data-testid^="slate-surface-"]')
-    const scroll = document.querySelector('[data-scrollable]')!
+    // `[data-columns]` names the grid unambiguously — `[data-scrollable]` is shared with
+    // the pinned objective's prose block, which sits earlier in the tree.
+    const scroll = document.querySelector('[data-columns]')!
     const ids = Array.from(scroll.querySelectorAll('[data-testid^="slate-surface-"]')).map(
       (el) => el.getAttribute('data-testid'),
     )
@@ -105,7 +107,7 @@ describe('SlatePanel reflow (U1/R2)', () => {
     const { container } = render(
       <SlatePanel runId="run-1" surfaces={[surface('s1', 'a')]} width={300} />,
     )
-    const scroll = container.querySelector('[data-scrollable]')!
+    const scroll = container.querySelector('[data-columns]')!
     expect(scroll.className).toContain('grid-cols-1')
     expect(scroll.className).not.toContain('grid-cols-2')
     expect(scroll.getAttribute('data-columns')).toBe('1')
@@ -113,14 +115,14 @@ describe('SlatePanel reflow (U1/R2)', () => {
     // No width prop → still single-column.
     cleanup()
     const { container: c2 } = render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'a')]} />)
-    expect(c2.querySelector('[data-scrollable]')!.getAttribute('data-columns')).toBe('1')
+    expect(c2.querySelector('[data-columns]')!.getAttribute('data-columns')).toBe('1')
   })
 
   it('renders two grid columns for a wide width', () => {
     const { container } = render(
       <SlatePanel runId="run-1" surfaces={[surface('s1', 'a')]} width={500} />,
     )
-    const scroll = container.querySelector('[data-scrollable]')!
+    const scroll = container.querySelector('[data-columns]')!
     expect(scroll.className).toContain('grid-cols-2')
     expect(scroll.getAttribute('data-columns')).toBe('2')
     // The #126 layout guards must survive the grid switch.
@@ -625,8 +627,14 @@ describe('SlatePanel — the pinned Objective (S2)', () => {
     const card = screen.getByTestId('objective-surface')
     expect(card).toBeTruthy()
     expect(screen.getAllByTestId('objective-surface')).toHaveLength(1)
-    // Outside the scroll body — it stays put while the surfaces below scroll.
-    expect(document.querySelector('[data-scrollable]')!.contains(card)).toBe(false)
+    // Outside the scroll body — it stays put while the surfaces below scroll. Target the
+    // GRID by `[data-columns]`, not `[data-scrollable]`: the objective's own prose block
+    // also carries `data-scrollable` and renders EARLIER in the tree, so a bare
+    // `querySelector('[data-scrollable]')` would return a descendant of `card` and make
+    // `.contains(card)` trivially false — passing even if the pin moved into the grid.
+    const scrollBody = document.querySelector('[data-columns]')!
+    expect(scrollBody.contains(card)).toBe(false)
+    expect(scrollBody.hasAttribute('data-scrollable')).toBe(true)
     // …and it never renders through the generic surface shell.
     expect(screen.queryByTestId('slate-surface-objective')).toBeNull()
   })

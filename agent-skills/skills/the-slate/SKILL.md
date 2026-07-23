@@ -218,10 +218,16 @@ A surface's `refresh` recipe is its **authoring contract**: when it's self-conta
 
 - **Author with files; answer with HTTP.** Write a file to make a surface; reply with a
   `curl` when the user talks back. Don't POST to *create* surfaces — that path
-  (`POST /slate/points`) is the **user's** add-a-point and always injects into your own
-  session.
+  (`POST /slate/points`) is the **user's** add-a-point.
 - **Keep `id`s stable.** Same id → an amend that preserves the thread. Changed/missing
   id → a duplicate with a fresh thread.
+- **`objective` is a RESERVED id — never use it.** It carries the *user's* Objective,
+  the standing statement of what the session is for, pinned at the top of the Slate.
+  It is theirs to write and yours to honour. A file entry claiming that id is **dropped
+  by the watcher** (your surface silently never appears, and a file whose only entry is
+  that one leaves the previous projection frozen in place) and `POST /slate/points`
+  refuses it outright. Pick any other id — `goal`, `session-goal`, `plan` — for a
+  surface of your own about the same subject.
 - **Write atomically, retract explicitly.** Temp + rename to write; unlink or `[]` to
   clear. Never a bare redirect over a live file.
 - **Retract what's resolved.** A stale surface on the card costs the user trust, same as

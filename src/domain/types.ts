@@ -497,11 +497,18 @@ export const OBJECTIVE_POINT_ID = 'objective'
  * every other surface (S2).
  *
  * MUST BE FINITE. `-Infinity` would serialize to `null` over SSE
- * (`JSON.stringify(-Infinity) === 'null'`) and the client's sort — which treats a
- * missing `order` as *last* — would flip the pin to the bottom. Every other
- * surface's order is either an epoch-ms `createdAt` or a reorder slot derived from
- * one, so any negative number sorts first; -1 is the smallest one that still reads
- * as "before everything" at a glance.
+ * (`JSON.stringify(-Infinity) === 'null'`), and a consumer sorting `run.slate` treats
+ * a missing `order` as *last* — the pin would land at the bottom, which is worse than
+ * having no sentinel at all. Every other surface's order is either an epoch-ms
+ * `createdAt` or a reorder slot derived from one (`assignOrderSlots` only ever reuses
+ * or increments existing values), so any negative number sorts first; -1 is the
+ * smallest one that still reads as "before everything" at a glance.
+ *
+ * DEFENSIVE, not load-bearing for the run card today: `SlatePanel` lifts the objective
+ * out of the grid by `kind` and never passes it through its sort, so the pin's on-screen
+ * position comes from being rendered above the scroll body. The value is here for every
+ * OTHER consumer of `run.slate` — plugins, future renderers, anything that sorts the
+ * array as given — and so the ordering never depends on which one is reading.
  *
  * The projection FORCES this value rather than storing it on the point, so a user
  * reorder (`PUT /slate/points/order`, which assigns slots from `createdAt`) can
