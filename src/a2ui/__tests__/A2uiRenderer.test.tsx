@@ -734,8 +734,9 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
     )
     expect(rows(container)).toHaveLength(1)
     const overflow = container.querySelector('[data-testid="stepper-overflow"]')!
-    expect(overflow.textContent).toContain('not scanned')
-    expect(overflow.textContent).not.toContain('not shown')
+    // Assert the whole string, not just the wording: a mis-derived `hidden`
+    // (value.length - limit instead of value.length - i) would pass a substring check.
+    expect(overflow.textContent).toBe(`+${steps.length - MAX_SCAN} entries not scanned`)
   })
 
   // ...and the converse: the row cap filled, so this is NOT a scan truncation.
@@ -745,8 +746,32 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
       <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
     )
     const overflow = container.querySelector('[data-testid="stepper-overflow"]')!
-    expect(overflow.textContent).toContain('not shown')
-    expect(overflow.textContent).not.toContain('not scanned')
+    expect(overflow.textContent).toBe('+190 more entries not shown')
+  })
+
+  // The exact boundary between the two causes. Attribution must come from whether
+  // the rail actually filled, not from which exit the parse loop happened to take:
+  // when the 60th row lands on the LAST scanned entry the loop falls out of its
+  // condition rather than breaking, and a flag-based rule reports "scan window"
+  // about a visibly full 60-row rail — the wrong-problem misdirection all of this
+  // exists to prevent. One entry earlier, both rules agree; that is the control.
+  it.each([
+    [MAX_SCAN - 1, 'the 60th row lands on the last scanned entry'],
+    [MAX_SCAN - 2, 'the 60th row lands one entry earlier (control)'],
+  ])('attributes a full rail to the ROW CAP when %i is the last valid index', (lastValidIndex) => {
+    const junkCount = lastValidIndex - MAX_STEPS + 1
+    const steps = [
+      ...Array.from({ length: junkCount }, () => 0),
+      ...Array.from({ length: MAX_STEPS }, (_, i) => ({ label: `P${i}`, status: 'done' })),
+      ...Array.from({ length: 500 }, () => 0), // a tail past MAX_SCAN, so something IS hidden
+    ]
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    expect(rows(container)).toHaveLength(MAX_STEPS) // the rail is visibly full...
+    const overflow = container.querySelector('[data-testid="stepper-overflow"]')!
+    expect(overflow.textContent).toContain('not shown')      // ...so trim the list,
+    expect(overflow.textContent).not.toContain('not scanned') // not "move rows forward"
   })
 
   it('reports nothing skipped when a genuinely malformed steps prop yields no rows', () => {

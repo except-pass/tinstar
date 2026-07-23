@@ -151,7 +151,6 @@ function parseSteps(value: unknown): ParsedSteps {
   // caller, and a shared one would let a single mutation poison every later parse.
   if (!Array.isArray(value)) return { steps: [], hidden: 0, scanStopped: false }
   const out: ParsedStep[] = []
-  let rowCapHit = false
   // Bounding the OUTPUT is not enough: an array whose entries are all dropped
   // (`[0,0,0,…]`) never reaches the row cap, so the loop would scan it end to end.
   // That is the hostile shape — a ~500k-entry array fits in one 1 MiB surface, the
@@ -162,7 +161,7 @@ function parseSteps(value: unknown): ParsedSteps {
   const limit = Math.min(value.length, MAX_SCAN)
   let i = 0
   for (; i < limit; i++) {
-    if (out.length >= MAX_STEPS) { rowCapHit = true; break }
+    if (out.length >= MAX_STEPS) break
     const raw: unknown = value[i]
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
     const rec = raw as Record<string, unknown>
@@ -176,10 +175,14 @@ function parseSteps(value: unknown): ParsedSteps {
     const detail = str(rec.detail).trim()
     out.push(detail ? { label, status, detail } : { label, status })
   }
-  // The row cap wins the attribution when both applied: it is the bound the author
-  // can act on (trim the list), whereas the scan window only ever hides entries
-  // that were already past 60 renderable rows.
-  return { steps: out, hidden: value.length - i, scanStopped: !rowCapHit && i < value.length }
+  // Attribution is derived from OBSERVABLE STATE, not from which exit the loop took.
+  // A flag set only by the `break` gets the boundary wrong: when the 60th row lands
+  // on the very last scanned entry, the loop leaves via the `i < limit` condition
+  // instead, so the flag would say "scan window" about a rail that is visibly full.
+  // A full `out` means the row cap bound us, wherever we stopped — and the row cap
+  // wins when both applied, since trimming the list is the advice the author can
+  // act on, whereas the window only hides entries already past 60 renderable rows.
+  return { steps: out, hidden: value.length - i, scanStopped: out.length < MAX_STEPS && i < value.length }
 }
 
 // One tone per status, LITERAL class strings (no interpolated fragments) so
