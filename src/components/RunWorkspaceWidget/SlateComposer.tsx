@@ -19,9 +19,15 @@ import { searchSurfaceCatalog, type SurfaceTemplate } from './surfaceCatalog'
 interface Props {
   runId: string
   onClose: () => void
+  /** Render as a PERMANENT part of the page rather than a popover (S6 U5 — the
+   *  inviting blank Slate). An inline composer has nothing to close back to, so
+   *  the self-close effects (Esc, outside-click) and the Cancel button are all
+   *  suppressed; without that it would vanish on the first stray click and leave
+   *  the empty Slate emptier than before. */
+  inline?: boolean
 }
 
-export function SlateComposer({ runId, onClose }: Props) {
+export function SlateComposer({ runId, onClose, inline = false }: Props) {
   const labelId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
@@ -43,23 +49,26 @@ export function SlateComposer({ runId, onClose }: Props) {
   // INVALID_PARAMS guard for an all-blank body).
   const canSubmit = !!selected || freeform.trim().length > 0
 
-  // Esc closes (capture, to win over anything focused inside).
+  // Esc closes (capture, to win over anything focused inside). Not when inline —
+  // there is nothing behind it to reveal.
   useEffect(() => {
+    if (inline) return
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') { e.preventDefault(); onCloseRef.current() }
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
-  }, [])
+  }, [inline])
 
-  // Outside-click closes.
+  // Outside-click closes. Also suppressed inline.
   useEffect(() => {
+    if (inline) return
     function onPointer(e: PointerEvent) {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) onCloseRef.current()
     }
     document.addEventListener('pointerdown', onPointer, true)
     return () => document.removeEventListener('pointerdown', onPointer, true)
-  }, [])
+  }, [inline])
 
   const submit = useCallback(async () => {
     if (submitting) return
@@ -103,7 +112,8 @@ export function SlateComposer({ runId, onClose }: Props) {
     <div
       ref={rootRef}
       data-testid="slate-composer"
-      className="flex flex-col gap-2 rounded border border-hairline bg-surface-raised p-3 shadow-lg"
+      data-inline={inline ? 'true' : undefined}
+      className={`flex flex-col gap-2 rounded border border-hairline bg-surface-raised p-3 ${inline ? '' : 'shadow-lg'}`}
     >
       <div id={labelId} className="text-2xs font-mono uppercase tracking-[0.12em] text-ink-low">
         Add a surface
@@ -184,14 +194,16 @@ export function SlateComposer({ runId, onClose }: Props) {
         >
           {submitting ? 'Sending…' : 'Add surface'}
         </button>
-        <button
-          data-testid="composer-cancel"
-          onClick={onClose}
-          disabled={submitting}
-          className="rounded px-2 py-1 text-xs text-ink-low hover:text-ink-high disabled:opacity-50"
-        >
-          Cancel
-        </button>
+        {!inline && (
+          <button
+            data-testid="composer-cancel"
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded px-2 py-1 text-xs text-ink-low hover:text-ink-high disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        )}
       </div>
 
       {unreachable && (

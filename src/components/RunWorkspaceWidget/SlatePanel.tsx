@@ -189,18 +189,22 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
               generative move — carries the cyan. */}
           <SlateExplainButton runId={runId} />
           {/* Open the composer to author a new surface. The other generative move —
-              cyan, like Explain. */}
-          <button
-            data-testid="slate-add-surface"
-            // Open-only: the composer closes itself (outside-click / cancel / escape).
-            // A toggle here fights its outside-pointerdown handler — that fires first and
-            // closes it, then the toggle flips it back open, so it could never close.
-            onClick={() => setComposerOpen(true)}
-            title="Add a surface"
-            className="text-2xs font-mono text-primary hover:text-primary/80"
-          >
-            + Add surface
-          </button>
+              cyan, like Explain. Suppressed on a BLANK Slate: there the composer is
+              already rendered inline in the body (S6 U5), and two composers on one
+              panel is the "double-open" this avoids. */}
+          {sorted.length > 0 && (
+            <button
+              data-testid="slate-add-surface"
+              // Open-only: the composer closes itself (outside-click / cancel / escape).
+              // A toggle here fights its outside-pointerdown handler — that fires first and
+              // closes it, then the toggle flips it back open, so it could never close.
+              onClick={() => setComposerOpen(true)}
+              title="Add a surface"
+              className="text-2xs font-mono text-primary hover:text-primary/80"
+            >
+              + Add surface
+            </button>
+          )}
           <span className="text-2xs font-mono text-ink-low">{sorted.length}</span>
           {/* Close only when nothing holds the column open (a blank, user-opened Slate). */}
           {sorted.length === 0 && onClose && (
@@ -216,8 +220,9 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
         </div>
       </div>
 
-      {/* The composer popover — anchored under the header (R7/U4). */}
-      {composerOpen && (
+      {/* The composer popover — anchored under the header (R7/U4). Only ever the
+          non-empty path; a blank Slate carries the inline composer instead. */}
+      {composerOpen && sorted.length > 0 && (
         <div className="absolute top-8 right-2 z-20 w-64 max-w-[calc(100%-1rem)]">
           <SlateComposer runId={runId} onClose={() => setComposerOpen(false)} />
         </div>
@@ -233,10 +238,19 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
         data-columns={columns}
         className={`flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin p-2 grid gap-2 items-start [overflow-wrap:anywhere] ${columns === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}
       >
+        {/* An open-but-empty Slate is an INVITATION, not a dead end (S6 U5): the
+            composer renders inline, right where the surfaces would be, so the first
+            move is already on screen. `inline` suppresses its popover self-close
+            (Esc / outside-click) and its Cancel — there is nothing to close back to.
+            The header's "+ Add surface" popover is still the path once surfaces
+            exist, so the two never both show. */}
         {sorted.length === 0 && (
-          <div data-testid="slate-empty-hint" className="col-span-full px-1 py-8 text-center font-sans text-[12px] text-ink-low leading-relaxed">
-            Nothing on the Slate yet.<br />
-            <span className="text-ink-mid">✦ Explain</span> the session, or <span className="text-ink-mid">+ Add a surface</span> to fill it.
+          <div data-testid="slate-blank-invite" className="col-span-full flex flex-col gap-2 px-1 pt-4">
+            <div className="text-center font-sans text-[12px] leading-relaxed text-ink-low">
+              Nothing on the Slate yet — describe a surface, or{' '}
+              <span className="text-ink-mid">✦ Explain</span> the session.
+            </div>
+            <SlateComposer runId={runId} inline onClose={() => {}} />
           </div>
         )}
         {sorted.map((surface, i) => {

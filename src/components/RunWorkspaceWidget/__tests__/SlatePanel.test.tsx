@@ -195,6 +195,53 @@ describe('SlatePanel hide surfaces (U2/R4)', () => {
   })
 })
 
+describe('SlatePanel blank-slate invitation (S6 U5)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    cleanup()
+    apiFetch.mockReset()
+    apiFetch.mockImplementation(() => okDelivered(true))
+  })
+
+  it('renders the composer INLINE on an open, empty Slate (not the dead hint)', () => {
+    render(<SlatePanel runId="run-1" surfaces={[]} open />)
+
+    expect(screen.getByTestId('slate-blank-invite')).toBeTruthy()
+    const composer = screen.getByTestId('slate-composer')
+    expect(composer.getAttribute('data-inline')).toBe('true')
+    // The old one-line hint is gone.
+    expect(screen.queryByTestId('slate-empty-hint')).toBeNull()
+    // No double-open path: the header "+ Add" is suppressed while the inline
+    // composer holds the body.
+    expect(screen.queryByTestId('slate-add-surface')).toBeNull()
+  })
+
+  it('gives the inline composer no self-close: Esc and an outside click leave it up', () => {
+    render(<SlatePanel runId="run-1" surfaces={[]} open />)
+    expect(screen.getByTestId('slate-composer')).toBeTruthy()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByTestId('slate-composer')).toBeTruthy()
+
+    fireEvent.pointerDown(document.body)
+    expect(screen.getByTestId('slate-composer')).toBeTruthy()
+    // Cancel would close to nothing, so it isn't offered inline.
+    expect(screen.queryByTestId('composer-cancel')).toBeNull()
+  })
+
+  it('does not render the inline composer once the Slate has surfaces', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'hello')]} />)
+    expect(screen.queryByTestId('slate-blank-invite')).toBeNull()
+    expect(screen.queryByTestId('slate-composer')).toBeNull()
+
+    // …and the header's popover path still works there.
+    fireEvent.click(screen.getByTestId('slate-add-surface'))
+    const composer = screen.getByTestId('slate-composer')
+    expect(composer.getAttribute('data-inline')).toBeNull()
+    expect(screen.getByTestId('composer-cancel')).toBeTruthy()
+  })
+})
+
 describe('SlatePanel refresh (U3)', () => {
   beforeEach(() => {
     localStorage.clear()
