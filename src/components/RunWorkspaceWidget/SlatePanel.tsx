@@ -28,7 +28,10 @@ import type { SlateSurface } from '../../types'
 import { A2uiRenderer, A2uiErrorBoundary } from '../../a2ui/A2uiRenderer'
 import { OpenPointsSurface } from './OpenPointsSurface'
 import { DiagramSurface } from './DiagramSurface'
-import { getHiddenSlateSurfaces, addHiddenSlateSurface, removeHiddenSlateSurface } from '../../lib/uiPrefs'
+import {
+  getHiddenSlateSurfaces, addHiddenSlateSurface, removeHiddenSlateSurface,
+  getMinimizedSlateSurfaces, addMinimizedSlateSurface, removeMinimizedSlateSurface,
+} from '../../lib/uiPrefs'
 import { useSlateRefresh, RefreshButton } from './slateRefresh'
 import { SlateComposer } from './SlateComposer'
 import { SlateExplainButton } from './SlateExplainButton'
@@ -100,12 +103,36 @@ function HideToggle({ id, hidden, onHide, onUnhide }: {
   )
 }
 
+/** A – minimize / + restore control (S6 U3). Distinct from ✕ hide: minimize keeps
+ *  the card in its slot, collapsed to its title; hide removes it from the view.
+ *  Both are per-browser view preferences, neither touches the agent's file. */
+function MinimizeToggle({ id, minimized, onMinimize, onRestore }: {
+  id: string
+  minimized: boolean
+  onMinimize: (id: string) => void
+  onRestore: (id: string) => void
+}) {
+  return (
+    <button
+      data-testid={minimized ? `restore-surface-${id}` : `minimize-surface-${id}`}
+      onClick={() => (minimized ? onRestore(id) : onMinimize(id))}
+      title={minimized ? 'Restore this surface' : 'Minimize to just the title (the surface stays on the Slate)'}
+      className="rounded px-1 text-[11px] leading-none text-ink-ctrl hover:text-ink-high"
+    >
+      {minimized ? '+' : '–'}
+    </button>
+  )
+}
+
 export function SlatePanel({ runId, surfaces = [], width, open = false, onClose }: Props) {
   // Hidden surfaces are a per-browser view preference; seed from the persisted
   // set and keep a React copy so mutations re-render. The filter is applied on
   // every render against this set, so an SSE re-projection never resurrects a
   // hidden surface (R4).
   const [hidden, setHidden] = useState<Set<string>>(() => getHiddenSlateSurfaces())
+  // Minimized surfaces (S6 U3) — the same per-browser view-preference contract as
+  // `hidden`, for a different state: collapsed to its title but still on the Slate.
+  const [minimized, setMinimized] = useState<Set<string>>(() => getMinimizedSlateSurfaces())
   const [showHidden, setShowHidden] = useState(false)
   const [composerOpen, setComposerOpen] = useState(false)
 
@@ -129,6 +156,24 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
   const unhide = useCallback((id: string) => {
     removeHiddenSlateSurface(id)
     setHidden((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }, [])
+
+  const minimize = useCallback((id: string) => {
+    addMinimizedSlateSurface(id)
+    setMinimized((prev) => {
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+  }, [])
+
+  const restore = useCallback((id: string) => {
+    removeMinimizedSlateSurface(id)
+    setMinimized((prev) => {
       const next = new Set(prev)
       next.delete(id)
       return next
@@ -282,11 +327,22 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
 
           const isRefreshing = refreshingIds.has(surface.id)
           const isUnreachable = unreachableIds.has(surface.id)
-          // The card's control cluster: refresh (⟳) then hide (✕), top-right.
+          // Minimize is orthogonal to hide (S6 U3); a hidden surface isn't rendered
+          // at all (or is rendered dimmed under "show hidden"), so hide wins.
+          const isMinimized = minimized.has(surface.id) && !isHidden
+          // The card's control cluster: refresh (⟳), minimize (–/+), hide (✕), top-right.
           const controls = (
             <div className="absolute top-1 right-1 z-10 flex items-center gap-1">
               {!isHidden && (
                 <RefreshButton id={surface.id} refreshing={isRefreshing} onClick={() => refresh(surface)} />
+              )}
+              {!isHidden && (
+                <MinimizeToggle
+                  id={surface.id}
+                  minimized={isMinimized}
+                  onMinimize={minimize}
+                  onRestore={restore}
+                />
               )}
               <HideToggle id={surface.id} hidden={isHidden} onHide={hide} onUnhide={unhide} />
             </div>
@@ -316,10 +372,44 @@ export function SlatePanel({ runId, surfaces = [], width, open = false, onClose 
           // tailwind.config keyframes are not bundled into that stylesheet), dimming
           // marks hidden — so the authored body never moves between states.
           const shellClass = [
-            'relative rounded border p-[14px] min-w-0 transition-shadow',
+            'relative rounded border min-w-0 transition-shadow',
+            isMinimized ? 'px-[14px] py-2' : 'p-[14px]',
             isRefreshing ? 'bg-surface-raised slate-surface-refreshing' : 'border-hairline bg-surface-raised',
             isHidden ? 'opacity-50' : '',
           ].join(' ')
+
+          // Minimized (S6 U3): the card keeps its slot and its edges — only the body
+          // goes. The title row (mono label, per the design language) plus the
+          // freshness stamp stay, so a collapsed surface still says what it is and
+          // how fresh it is, and the + in the control cluster brings it back. A
+          // minimized surface that's refreshing still pulses, since the pulse lives
+          // on the shell.
+          if (isMinimized) {
+            return (
+              <div
+                key={surface.id}
+                data-testid={`slate-surface-${surface.id}`}
+                data-minimized="true"
+                data-refreshing={isRefreshing ? 'true' : undefined}
+                className={shellClass}
+              >
+                {controls}
+                <div className="flex items-center gap-2 pr-16 min-w-0">
+                  <span
+                    data-testid={`slate-minimized-title-${surface.id}`}
+                    className="truncate font-mono text-[11px] uppercase tracking-[0.12em] text-ink-mid"
+                  >
+                    {surface.headline ?? surface.id}
+                  </span>
+                  <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                    {surface.refresh && <FastPathBadge className="text-[10px]" />}
+                    <SurfaceAge amendedAt={surface.amendedAt} now={now} />
+                  </span>
+                </div>
+              </div>
+            )
+          }
+
           return (
             <div
               key={surface.id}

@@ -14,7 +14,7 @@ vi.mock('../../../apiClient', () => ({
 
 import { SlatePanel } from '../SlatePanel'
 import { REFRESH_MAX_MS } from '../slateRefresh'
-import { getHiddenSlateSurfaces, familyKeys } from '../../../lib/uiPrefs'
+import { getHiddenSlateSurfaces, getMinimizedSlateSurfaces, familyKeys } from '../../../lib/uiPrefs'
 
 /** A resolved refresh/compose response envelope, matching the server shape. */
 function okDelivered(delivered: boolean) {
@@ -192,6 +192,69 @@ describe('SlatePanel hide surfaces (U2/R4)', () => {
     // 'a' was hidden in a prior session → not rendered; toggle shows 1 hidden.
     expect(screen.queryByText('alpha')).toBeNull()
     expect(screen.getByTestId('slate-hidden-toggle').textContent).toContain('1 hidden')
+  })
+})
+
+describe('SlatePanel minimize surfaces (S6 U3)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    cleanup()
+  })
+
+  it('collapses the body to a title but keeps the card, then restores', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'the body', { headline: 'A surface' })]} />)
+    expect(screen.getByText('the body')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('minimize-surface-s1'))
+
+    // The card is still in its slot, marked minimized, showing only its title.
+    const card = screen.getByTestId('slate-surface-s1')
+    expect(card.getAttribute('data-minimized')).toBe('true')
+    expect(screen.getByTestId('slate-minimized-title-s1').textContent).toBe('A surface')
+    expect(screen.queryByText('the body')).toBeNull()
+
+    // Restore brings the body back.
+    fireEvent.click(screen.getByTestId('restore-surface-s1'))
+    expect(screen.getByText('the body')).toBeTruthy()
+    expect(screen.getByTestId('slate-surface-s1').getAttribute('data-minimized')).toBeNull()
+  })
+
+  it('persists the minimized set per browser and seeds from it on mount', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'body one')]} />)
+    fireEvent.click(screen.getByTestId('minimize-surface-s1'))
+    expect([...getMinimizedSlateSurfaces()]).toContain('s1')
+    expect(localStorage.getItem(familyKeys.minimizedSlateSurfaces)).toContain('s1')
+
+    // A fresh mount reads the pref back.
+    cleanup()
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'body one')]} />)
+    expect(screen.getByTestId('slate-surface-s1').getAttribute('data-minimized')).toBe('true')
+    expect(screen.queryByText('body one')).toBeNull()
+  })
+
+  it('is distinct from hide — minimize keeps the card, hide removes it', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'alpha'), surface('b', 'beta')]} />)
+
+    fireEvent.click(screen.getByTestId('minimize-surface-a'))
+    fireEvent.click(screen.getByTestId('hide-surface-b'))
+
+    // Minimized: present, collapsed. Hidden: gone entirely.
+    expect(screen.getByTestId('slate-surface-a')).toBeTruthy()
+    expect(screen.queryByTestId('slate-surface-b')).toBeNull()
+    // The two prefs are separate stores — neither leaks into the other.
+    expect([...getMinimizedSlateSurfaces()]).toEqual(['a'])
+    expect([...getHiddenSlateSurfaces()]).toEqual(['b'])
+  })
+
+  it('keeps a minimized surface collapsed across an SSE re-projection', () => {
+    const surfaces = [surface('a', 'alpha')]
+    const { rerender } = render(<SlatePanel runId="run-1" surfaces={surfaces} />)
+    fireEvent.click(screen.getByTestId('minimize-surface-a'))
+    expect(screen.queryByText('alpha')).toBeNull()
+
+    rerender(<SlatePanel runId="run-1" surfaces={[...surfaces]} />)
+    expect(screen.queryByText('alpha')).toBeNull()
+    expect(screen.getByTestId('slate-surface-a').getAttribute('data-minimized')).toBe('true')
   })
 })
 

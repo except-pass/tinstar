@@ -90,6 +90,11 @@ export const familyKeys = {
   // re-projection can't resurrect a hidden surface (the filter reads this set on
   // every render). Mirrors `hiddenRuns`.
   hiddenSlateSurfaces: 'tinstar-hidden-slate-surfaces',
+  // S6 U3: per-browser set of MINIMIZED Slate surface ids. Distinct from hidden —
+  // a minimized surface keeps its slot and its title bar (with a restore control);
+  // a hidden one leaves the view entirely. Same non-destructive view-preference
+  // contract, same family shape.
+  minimizedSlateSurfaces: 'tinstar-minimized-slate-surfaces',
 } as const
 
 export function readJSON<T>(key: string, fallback: T): T {
@@ -227,4 +232,30 @@ export function removeHiddenSlateSurface(id: string): void {
   const ids = getHiddenSlateSurfaces()
   if (!ids.delete(id)) return
   writeJSON(familyKeys.hiddenSlateSurfaces, [...ids])
+}
+
+// --- Minimized Slate surfaces (S6 U3) ---
+//
+// The same per-browser, non-destructive view preference as the hidden set, for a
+// DIFFERENT state: a minimized surface collapses to just its title bar and keeps
+// its slot (with a restore control); a hidden surface leaves the view. A surface
+// can be neither, minimized, or hidden — hide wins if somehow both.
+
+export function getMinimizedSlateSurfaces(): Set<string> {
+  const arr = readJSON<string[]>(familyKeys.minimizedSlateSurfaces, [])
+  if (!Array.isArray(arr)) return new Set()
+  return new Set(arr.filter((v): v is string => typeof v === 'string'))
+}
+
+export function addMinimizedSlateSurface(id: string): void {
+  const ids = getMinimizedSlateSurfaces()
+  if (ids.has(id)) return
+  ids.add(id)
+  writeJSON(familyKeys.minimizedSlateSurfaces, [...ids])
+}
+
+export function removeMinimizedSlateSurface(id: string): void {
+  const ids = getMinimizedSlateSurfaces()
+  if (!ids.delete(id)) return
+  writeJSON(familyKeys.minimizedSlateSurfaces, [...ids])
 }

@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest'
-import { getPref, setPref, readJSON, writeJSON, familyKeys, migrateLegacyPrefs } from '../uiPrefs'
+import {
+  getPref, setPref, readJSON, writeJSON, familyKeys, migrateLegacyPrefs,
+  getHiddenSlateSurfaces, addHiddenSlateSurface,
+  getMinimizedSlateSurfaces, addMinimizedSlateSurface, removeMinimizedSlateSurface,
+} from '../uiPrefs'
 
 beforeEach(() => {
   localStorage.clear()
@@ -80,5 +84,36 @@ describe('migrateLegacyPrefs', () => {
     migrateLegacyPrefs()
     expect(getPref('hotkeysSidebarWidth')).toBeUndefined()
     expect(localStorage.getItem('tinstar-sidebar-hotkeys-width')).toBeNull()
+  })
+})
+
+describe('minimized Slate surfaces family (S6 U3)', () => {
+  it('round-trips add / remove and stays a separate store from hidden', () => {
+    expect([...getMinimizedSlateSurfaces()]).toEqual([])
+
+    addMinimizedSlateSurface('s1')
+    addMinimizedSlateSurface('s1') // idempotent
+    addMinimizedSlateSurface('s2')
+    expect([...getMinimizedSlateSurfaces()]).toEqual(['s1', 's2'])
+    expect(localStorage.getItem(familyKeys.minimizedSlateSurfaces)).toBe('["s1","s2"]')
+
+    // Minimize and hide are DIFFERENT states in DIFFERENT keys — minimizing must
+    // never hide, which is the whole point of the unit.
+    addHiddenSlateSurface('s3')
+    expect([...getMinimizedSlateSurfaces()]).toEqual(['s1', 's2'])
+    expect([...getHiddenSlateSurfaces()]).toEqual(['s3'])
+    expect(familyKeys.minimizedSlateSurfaces).not.toBe(familyKeys.hiddenSlateSurfaces)
+
+    removeMinimizedSlateSurface('s1')
+    expect([...getMinimizedSlateSurfaces()]).toEqual(['s2'])
+    removeMinimizedSlateSurface('nope') // no-op
+    expect([...getMinimizedSlateSurfaces()]).toEqual(['s2'])
+  })
+
+  it('survives a malformed persisted value', () => {
+    localStorage.setItem(familyKeys.minimizedSlateSurfaces, '{"not":"an array"}')
+    expect([...getMinimizedSlateSurfaces()]).toEqual([])
+    localStorage.setItem(familyKeys.minimizedSlateSurfaces, '["ok", 7, null]')
+    expect([...getMinimizedSlateSurfaces()]).toEqual(['ok'])
   })
 })
