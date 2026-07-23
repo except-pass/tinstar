@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { SlateStore, derivePointStatus, type SlateChange, type PointInput } from '../slate'
+import { SlateStore, derivePointStatus, assignOrderSlots, type SlateChange, type PointInput } from '../slate'
 import { DocumentStore } from '../document-store'
 import type { Point, Run } from '../../../domain/types'
 import type { Reply } from '../../../domain/pinSet'
@@ -428,5 +428,138 @@ describe('SlateStore - per-(runId, id) scoping (cross-run collision fix)', () =>
     expect(store.getPoint('run-A', 'blockers')!.runId).toBe('run-A')
     expect(store.getPoint('run-B', 'blockers')!.runId).toBe('run-B')
     expect(store.getPoint('run-B', 'blockers')!.content).toEqual(body('file B'))
+  })
+})
+
+// ── S6 U2: reorder ─────────────────────────────────────────────────────────
+//
+// `order` is a THREE-place flow: the store assigns it (reorderPoints), the merge
+// preserves it across a file re-projection (mergeFileOwned's `...prior`), and the
+// projection reads it (`p.order ?? p.createdAt` in projectRunToSlate). Miss any one
+// and the feature fails SILENTLY — the reorder appears to work and then quietly
+// reverts. Each test below fails if one of those three spots is backed out.
+
+describe('assignOrderSlots (S6 U2)', () => {
+  it('re-issues the same slots ascending so the group does not move as a whole', () => {
+    expect(assignOrderSlots([300, 100, 200])).toEqual([100, 200, 300])
+    expect(assignOrderSlots([])).toEqual([])
+    expect(assignOrderSlots([42])).toEqual([42])
+  })
+
+  it('forces strictly increasing values so an order tie cannot ignore the sequence', () => {
+    // Two points created in the same millisecond would otherwise share a slot, and
+    // the render sort's createdAt tiebreak would silently undo the reorder.
+    expect(assignOrderSlots([100, 100, 100])).toEqual([100, 101, 102])
+    expect(assignOrderSlots([100, 100, 105])).toEqual([100, 101, 105])
+  })
+})
+
+describe('SlateStore.reorderPoints (S6 U2)', () => {
+  it('permutes the listed points within the slots they already occupy', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('a', 'a')], 100)
+    store.applyProjection(RUN, [input('a', 'a'), input('b', 'b')], 200)
+    store.applyProjection(RUN, [input('a', 'a'), input('b', 'b'), input('c', 'c')], 300)
+    expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['a', 'b', 'c'])
+
+    store.reorderPoints(RUN, ['c', 'a', 'b'])
+
+    expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['c', 'a', 'b'])
+    // The slots themselves are unchanged — only who holds them. That's what keeps
+    // the group from jumping ahead of the run's other (unlisted) surfaces.
+    expect(store.getPointsForRun(RUN).map(p => p.order)).toEqual([100, 200, 300])
+  })
+
+  it('leaves points of the run that are NOT listed untouched', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('a', 'a')], 100)
+    store.applyProjection(RUN, [input('a', 'a'), input('b', 'b')], 200)
+    store.applyProjection(RUN, [input('a', 'a'), input('b', 'b'), input('keep', 'k')], 300)
+
+    store.reorderPoints(RUN, ['b', 'a'])
+
+    expect(store.getPoint(RUN, 'keep')!.order).toBeUndefined()
+    expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['b', 'a', 'keep'])
+  })
+
+  it('emits once per moved point, and nothing at all for an identical reorder', () => {
+    const { store, changes } = makeStore()
+    store.applyProjection(RUN, [input('a', 'a')], 100)
+    store.applyProjection(RUN, [input('a', 'a'), input('b', 'b')], 200)
+    changes.length = 0
+
+    store.reorderPoints(RUN, ['b', 'a'])
+    expect(changes.map(c => c.id).sort()).toEqual(['a', 'b'])
+
+    // Re-asserting the same sequence changes nothing → zero events (the storm guard).
+    changes.length = 0
+    store.reorderPoints(RUN, ['b', 'a'])
+    expect(changes).toHaveLength(0)
+  })
+
+  it('ignores unknown ids, duplicates, and a list too short to permute', () => {
+    const { store, changes } = makeStore()
+    store.applyProjection(RUN, [input('a', 'a')], 100)
+    store.applyProjection(RUN, [input('a', 'a'), input('b', 'b')], 200)
+    changes.length = 0
+
+    store.reorderPoints(RUN, ['nope'])           // unknown only → nothing to do
+    store.reorderPoints(RUN, ['a'])              // single id → nothing to permute
+    store.reorderPoints(RUN, ['a', 'a', 'a'])    // dedup collapses to one
+    expect(changes).toHaveLength(0)
+
+    store.reorderPoints(RUN, ['b', 'ghost', 'a'])  // unknown id is simply skipped
+    expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['b', 'a'])
+  })
+
+  it('does NOT bump amendedAt (a reorder is not a re-authoring)', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('a', 'a')], 100)
+    store.applyProjection(RUN, [input('a', 'a'), input('b', 'b')], 200)
+    const before = store.getPointsForRun(RUN).map(p => p.amendedAt)
+    store.reorderPoints(RUN, ['b', 'a'])
+    const after = store.getPointsForRun(RUN)
+      .sort((x, y) => x.createdAt - y.createdAt)
+      .map(p => p.amendedAt)
+    expect(after).toEqual(before)
+  })
+
+  it('SURVIVES a file re-projection that rewrites the point bodies', () => {
+    // The silent-failure guard: `order` is store-owned, so mergeFileOwned's
+    // `...prior` spread is the only thing preserving it. Back that out and this
+    // reverts to creation order with no error anywhere.
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('a', 'a')], 100)
+    store.applyProjection(RUN, [input('a', 'a'), input('b', 'b')], 200)
+    store.reorderPoints(RUN, ['b', 'a'])
+    expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['b', 'a'])
+
+    // The agent rewrites the file (new bodies, same ids).
+    store.applyProjection(RUN, [input('a', 'a2'), input('b', 'b2')], 900)
+
+    expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['b', 'a'])
+    expect(store.getPoint(RUN, 'a')!.content).toEqual(body('a2'))
+  })
+})
+
+describe('DocumentStore.reorderSlatePoints — the projection leg (S6 U2)', () => {
+  it('re-projects run.slate in the new order, with createdAt as the fallback', () => {
+    const store = new DocumentStore()
+    store.upsertRun('run-1', makeRun())
+    store.applyRunSlateProjection('run-1', [input('a', 'a')], 100)
+    store.applyRunSlateProjection('run-1', [input('a', 'a'), input('b', 'b')], 200)
+
+    // Before any reorder, surface.order IS createdAt — unchanged behavior.
+    const before = store.getRun('run-1')!.slate!
+    expect(before.map(s => s.id)).toEqual(['a', 'b'])
+    expect(before.map(s => s.order)).toEqual([100, 200])
+
+    store.reorderSlatePoints('run-1', ['b', 'a'])
+
+    // The third place: projectRunToSlate must read p.order, not p.createdAt. If it
+    // still read createdAt, run.slate would come back in the OLD order with no error.
+    const after = store.getRun('run-1')!.slate!
+    expect(after.map(s => s.id)).toEqual(['b', 'a'])
+    expect(after.map(s => s.order)).toEqual([100, 200])
   })
 })

@@ -166,6 +166,91 @@ describe('OpenPointsSurface (U6)', () => {
     expect(row.getAttribute('data-refreshing')).toBe('true')
   })
 
+  it('nudges a point up, optimistically and via the order PUT (S6 U2)', async () => {
+    const points = [point('p1'), point('p2'), point('p3')]
+    render(<OpenPointsSurface runId="run-1" points={points} />)
+    const idsInDom = () =>
+      Array.from(document.querySelectorAll('[data-testid^="point-"]')).map((el) =>
+        el.getAttribute('data-testid'),
+      )
+    expect(idsInDom()).toEqual(['point-p1', 'point-p2', 'point-p3'])
+
+    fireEvent.click(screen.getByTestId('reorder-up-p3'))
+
+    // Optimistic: the row moves at once, before any round trip.
+    expect(idsInDom()).toEqual(['point-p1', 'point-p3', 'point-p2'])
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith(
+        '/api/runs/run-1/slate/points/order',
+        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ order: ['p1', 'p3', 'p2'] }) }),
+      ),
+    )
+  })
+
+  it('disables the chevrons at the ends and omits the grip for a lone point', () => {
+    const { rerender } = render(
+      <OpenPointsSurface runId="run-1" points={[point('p1'), point('p2')]} />,
+    )
+    expect((screen.getByTestId('reorder-up-p1') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('reorder-down-p1') as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByTestId('reorder-down-p2') as HTMLButtonElement).disabled).toBe(true)
+
+    // One point → nothing to permute, so no grip at all.
+    rerender(<OpenPointsSurface runId="run-1" points={[point('p1')]} />)
+    expect(screen.queryByTestId('reorder-grip-p1')).toBeNull()
+  })
+
+  it('does not offer a grip on a resolved point (it sinks by rank instead)', () => {
+    render(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[point('p1'), point('p2'), point('done', { status: 'resolved' })]}
+      />,
+    )
+    expect(screen.getByTestId('reorder-grip-p1')).toBeTruthy()
+    expect(screen.queryByTestId('reorder-grip-done')).toBeNull()
+  })
+
+  it('reverts the optimistic order when the PUT fails', async () => {
+    apiFetch.mockImplementation(() =>
+      Promise.resolve({ ok: false, status: 500, json: async () => ({ ok: false, error: { message: 'nope' } }) } as unknown as Response),
+    )
+    render(<OpenPointsSurface runId="run-1" points={[point('p1'), point('p2')]} />)
+    const idsInDom = () =>
+      Array.from(document.querySelectorAll('[data-testid^="point-"]')).map((el) =>
+        el.getAttribute('data-testid'),
+      )
+
+    fireEvent.click(screen.getByTestId('reorder-down-p1'))
+    expect(idsInDom()).toEqual(['point-p2', 'point-p1'])
+
+    // The failure puts the list back exactly where it was, and says so.
+    await waitFor(() => expect(idsInDom()).toEqual(['point-p1', 'point-p2']))
+    expect(screen.getByText('Could not save the new order.')).toBeTruthy()
+  })
+
+  it('drops the optimistic order once the run delta carries the same sequence', async () => {
+    const points = [point('p1'), point('p2')]
+    const { rerender } = render(<OpenPointsSurface runId="run-1" points={points} />)
+    const idsInDom = () =>
+      Array.from(document.querySelectorAll('[data-testid^="point-"]')).map((el) =>
+        el.getAttribute('data-testid'),
+      )
+
+    fireEvent.click(screen.getByTestId('reorder-down-p1'))
+    expect(idsInDom()).toEqual(['point-p2', 'point-p1'])
+
+    // The SSE run delta arrives carrying the server's order. The optimistic override
+    // is dropped; the projection drives from here.
+    rerender(<OpenPointsSurface runId="run-1" points={[point('p2'), point('p1')]} />)
+    await waitFor(() => expect(idsInDom()).toEqual(['point-p2', 'point-p1']))
+
+    // Proof the override really let go: a LATER delta reordering them back is honored
+    // instead of being fought by a stuck optimistic list.
+    rerender(<OpenPointsSurface runId="run-1" points={[point('p1'), point('p2')]} />)
+    await waitFor(() => expect(idsInDom()).toEqual(['point-p1', 'point-p2']))
+  })
+
   it('filters a hidden point unless the reveal toggle is on', () => {
     const points = [point('p1'), point('p2')]
     const { rerender } = render(

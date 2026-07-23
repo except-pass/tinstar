@@ -563,6 +563,13 @@ export interface Point {
    *  delivers verbatim to regenerate this surface. Optional; a recipe-less surface
    *  still gets a bare nudge. Merged like the other file-owned fields (KTD3). */
   refresh?: string
+  /** STORE-OWNED sort order within the run's points (S6 U2). Absent until the user
+   *  reorders, in which case the projection falls back to `createdAt` — so an
+   *  un-reordered Slate keeps its creation order exactly as before. A file
+   *  re-projection never carries this field, so `mergeFileOwned`'s `...prior`
+   *  spread is what preserves it; see `projectRunToSlate`, which reads
+   *  `p.order ?? p.createdAt`. */
+  order?: number
   /** Derived from the thread unless `resolvedAt`/`dismissedAt` is set (explicit). */
   status: PointStatus
   /** Store-owned thread, append-only (mirrors pins/notes). Preserved across a

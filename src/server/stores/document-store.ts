@@ -955,6 +955,13 @@ export class DocumentStore {
     this.projectRunToSlate(runId)
   }
 
+  /** Reorder a run's points (S6 U2), then rebuild the render projection so the new
+   *  sequence rides the SSE `run` delta like every other Slate mutation. */
+  reorderSlatePoints(runId: string, ids: string[]): void {
+    this.slate.reorderPoints(runId, ids)
+    this.projectRunToSlate(runId)
+  }
+
   /** Server-side staleness backstop (plan R19): mark every process-authored point
    *  whose file writer stopped updating N minutes ago as stalled, then re-project
    *  the affected runs so the render channel (RunData.slate) reflects it. Driven by
@@ -974,7 +981,9 @@ export class DocumentStore {
       id: p.id,
       author: p.author,
       kind: p.anchor?.kind === 'surface' ? 'diagram' : 'open-point',
-      order: p.createdAt,
+      // S6 U2: a user reorder writes the store-owned `order`; everything else falls
+      // back to creation time, which is what `order` has always been implicitly.
+      order: p.order ?? p.createdAt,
       ...(p.content ? { body: p.content } : {}),
       ...(p.refresh ? { refresh: p.refresh } : {}),
       headline: p.headline,

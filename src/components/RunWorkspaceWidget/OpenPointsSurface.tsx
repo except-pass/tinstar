@@ -25,6 +25,7 @@ import { SurfaceThread } from './SurfaceThread'
 import { RefreshButton } from './slateRefresh'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
+import { moveItem } from './reorderUtil'
 
 /** The visible track stages, in order. `resolved` is terminal; `dismissed` is a
  *  side exit (rendered as a dimmed row, not a track position). */
@@ -74,9 +75,47 @@ const AUTHOR_TONE = 'bg-surface-hover text-ink-low'
 
 const EMPTY_SET: ReadonlySet<string> = new Set()
 
+/** The reorder affordance (S6 U2): a thumb-pad grip that reveals ▲/▼ to nudge the
+ *  point one slot. NOT pointer-drag — native DnD is unreliable on the zoom/pan
+ *  transformed canvas, and the chevrons reduce the interaction to pure index math
+ *  (`moveItem`) that a unit test can drive directly. Ends of the list are disabled
+ *  rather than hidden, so the row's shape doesn't jump as points move. */
+function ReorderGrip({ id, canMoveUp, canMoveDown, onMove }: {
+  id: string
+  canMoveUp: boolean
+  canMoveDown: boolean
+  onMove: (id: string, delta: -1 | 1) => void
+}) {
+  return (
+    <span data-testid={`reorder-grip-${id}`} className="flex shrink-0 items-center gap-0.5">
+      {/* Thumb-pad glyph: the "you can move this" cue. Purely decorative — the
+          chevrons do the work, so it isn't a focus target. */}
+      <span aria-hidden className="select-none text-[11px] leading-none text-ink-ctrl">⠿</span>
+      <button
+        data-testid={`reorder-up-${id}`}
+        onClick={() => onMove(id, -1)}
+        disabled={!canMoveUp}
+        title="Move this point up"
+        className="rounded px-0.5 text-[9px] leading-none text-ink-ctrl hover:text-ink-high disabled:opacity-30 disabled:hover:text-ink-ctrl"
+      >
+        ▲
+      </button>
+      <button
+        data-testid={`reorder-down-${id}`}
+        onClick={() => onMove(id, 1)}
+        disabled={!canMoveDown}
+        title="Move this point down"
+        className="rounded px-0.5 text-[9px] leading-none text-ink-ctrl hover:text-ink-high disabled:opacity-30 disabled:hover:text-ink-ctrl"
+      >
+        ▼
+      </button>
+    </span>
+  )
+}
+
 /** A single point row. Holds its own optimistic resolve + answer form state, keyed
  *  per control-component id, so multiple choice groups on one body stay independent. */
-function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refreshing = false, unreachable = false, onRefresh, now }: {
+function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refreshing = false, unreachable = false, onRefresh, now, reorder }: {
   runId: string
   surface: SlateSurface
   /** Slate v2 U2/R4 — this point is a hidden surface, rendered dimmed. */
@@ -90,6 +129,9 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
   onRefresh?: (surface: SlateSurface) => void
   /** Ticking clock from the panel — drives the row's "updated Xm ago" freshness. */
   now: number
+  /** S6 U2 — reorder controls. Absent on rows that don't participate (a resolved or
+   *  dismissed point sinks by rank, so nudging it would be a lie). */
+  reorder?: { canMoveUp: boolean; canMoveDown: boolean; onMove: (id: string, delta: -1 | 1) => void }
 }) {
   const [expanded, setExpanded] = useState(false)
   // Optimistic status override (null = trust the server value). Cleared only once
@@ -261,6 +303,15 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
             >
               {surface.headline ?? '(untitled point)'}
             </span>
+            {/* Reorder (⠿ ▲▼) — nudge this point one slot (S6 U2). */}
+            {!hidden && reorder && (
+              <ReorderGrip
+                id={surface.id}
+                canMoveUp={reorder.canMoveUp}
+                canMoveDown={reorder.canMoveDown}
+                onMove={reorder.onMove}
+              />
+            )}
             {/* Refresh (⟳) — re-run this point's author (U3). Hidden on a hidden row
                 (nothing to look at) but present on every visible one. */}
             {!hidden && onRefresh && (
@@ -443,16 +494,81 @@ interface Props {
 
 const EMPTY_HIDDEN: ReadonlySet<string> = new Set()
 
+/** A point that still participates in the ordering. Resolved/dismissed points sink
+ *  to the bottom by rank, so a reorder chevron on one would be a lie. */
+function isLive(s: SlateSurface): boolean {
+  return s.status !== 'resolved' && s.status !== 'dismissed'
+}
+
 export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, showHidden = false, onHide, onUnhide, refreshingIds = EMPTY_HIDDEN, unreachableIds = EMPTY_HIDDEN, onRefresh, now = Date.now() }: Props) {
+  // Optimistic reorder (S6 U2): the id sequence the user just asked for, held until
+  // the server's own sequence arrives on the SSE `run` delta and matches. `points`
+  // arrives from the panel already sorted by surface `order`, so "matches" is a
+  // straight comparison against the incoming order — the same reconcile-on-the-delta
+  // discipline the resolve/refresh paths use, rather than watching a raw field.
+  const [optimisticOrder, setOptimisticOrder] = useState<string[] | null>(null)
+  const [reorderError, setReorderError] = useState<string | null>(null)
+
   // Points sink once resolved/dismissed so the live ones stay at the top; hidden
   // ones are dropped unless the reveal toggle is on (R4 — the filter runs every
   // render so an SSE re-projection can't resurrect a hidden point).
   const ordered = useMemo(() => {
-    const rank = (s: SlateSurface) => (s.status === 'resolved' || s.status === 'dismissed' ? 1 : 0)
-    return [...points]
-      .filter((s) => showHidden || !hiddenIds.has(s.id))
-      .sort((a, b) => rank(a) - rank(b))
-  }, [points, hiddenIds, showHidden])
+    const rank = (s: SlateSurface) => (isLive(s) ? 0 : 1)
+    const visible = [...points].filter((s) => showHidden || !hiddenIds.has(s.id))
+    if (!optimisticOrder) return visible.sort((a, b) => rank(a) - rank(b))
+    // An id absent from the optimistic list (e.g. a point that arrived mid-flight)
+    // sinks below the ones being moved rather than jumping to the top.
+    const at = new Map(optimisticOrder.map((id, i) => [id, i]))
+    const slot = (s: SlateSurface) => at.get(s.id) ?? Number.POSITIVE_INFINITY
+    return visible.sort((a, b) => rank(a) - rank(b) || slot(a) - slot(b))
+  }, [points, hiddenIds, showHidden, optimisticOrder])
+
+  // The ids the chevrons actually permute: the live rows, in rendered order.
+  const liveIds = useMemo(() => ordered.filter(isLive).map((s) => s.id), [ordered])
+
+  // Reconcile: once the server's sequence for these ids equals what we asked for,
+  // drop the optimistic override and let the projection drive again.
+  useEffect(() => {
+    if (!optimisticOrder) return
+    const wanted = new Set(optimisticOrder)
+    const serverIds = points.filter((s) => wanted.has(s.id)).map((s) => s.id)
+    if (
+      serverIds.length === optimisticOrder.length &&
+      serverIds.every((id, i) => id === optimisticOrder[i])
+    ) {
+      setOptimisticOrder(null)
+    }
+  }, [points, optimisticOrder])
+
+  const move = useCallback(
+    (id: string, delta: -1 | 1) => {
+      const from = liveIds.indexOf(id)
+      if (from < 0) return
+      const next = moveItem(liveIds, from, from + delta)
+      if (next.every((v, i) => v === liveIds[i])) return // at an end — quiet no-op
+      const prev = optimisticOrder
+      setReorderError(null)
+      setOptimisticOrder(next)
+      void (async () => {
+        try {
+          const res = await apiFetch(`/api/runs/${runId}/slate/points/order`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order: next }),
+          })
+          const body = (await res.json().catch(() => null)) as
+            | { ok?: boolean; error?: { message?: string } }
+            | null
+          if (!res.ok || !body?.ok) throw new Error(body?.error?.message || `reorder failed (${res.status})`)
+          // Success: hold the optimistic order until the run delta carries it.
+        } catch {
+          setOptimisticOrder(prev) // put the list back exactly where it was
+          setReorderError('Could not save the new order.')
+        }
+      })()
+    },
+    [liveIds, optimisticOrder, runId],
+  )
 
   return (
     <div
@@ -460,20 +576,29 @@ export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, sho
       className="rounded border border-hairline bg-surface-raised p-[14px] space-y-2"
     >
       <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-low">Open points</div>
-      {ordered.map((surface) => (
-        <OpenPointRow
-          key={surface.id}
-          runId={runId}
-          surface={surface}
-          hidden={hiddenIds.has(surface.id)}
-          onHide={onHide}
-          onUnhide={onUnhide}
-          refreshing={refreshingIds.has(surface.id)}
-          unreachable={unreachableIds.has(surface.id)}
-          onRefresh={onRefresh}
-          now={now}
-        />
-      ))}
+      {ordered.map((surface) => {
+        const liveIdx = liveIds.indexOf(surface.id)
+        // Only live rows get a grip, and only when there's more than one of them.
+        const reorder = liveIdx >= 0 && liveIds.length > 1
+          ? { canMoveUp: liveIdx > 0, canMoveDown: liveIdx < liveIds.length - 1, onMove: move }
+          : undefined
+        return (
+          <OpenPointRow
+            key={surface.id}
+            runId={runId}
+            surface={surface}
+            hidden={hiddenIds.has(surface.id)}
+            onHide={onHide}
+            onUnhide={onUnhide}
+            refreshing={refreshingIds.has(surface.id)}
+            unreachable={unreachableIds.has(surface.id)}
+            onRefresh={onRefresh}
+            now={now}
+            reorder={reorder}
+          />
+        )
+      })}
+      {reorderError && <div className="text-[11px] text-hue-error">{reorderError}</div>}
       <AddPoint runId={runId} />
     </div>
   )

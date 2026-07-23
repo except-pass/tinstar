@@ -3378,6 +3378,34 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     return true
   }
 
+  // PUT /api/runs/:id/slate/points/order — reorder a run's points (S6 U2).
+  // Mirrors `PUT /api/projects/order`: the body names the DESIRED sequence and the
+  // store assigns the sort values. Points of the run not named are untouched, so the
+  // client can PUT just the open-points list. Matched BEFORE the greedy
+  // `PATCH /api/runs/` handler and before the `/slate/points/:pid/...` regexes (an
+  // anchored `/order$` can't collide with those, but ordering is the contract here).
+  if (method === 'PUT' && /^\/api\/runs\/[^/]+\/slate\/points\/order$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate/points/order'.length))
+    readBody(req).then(body => {
+      if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return }
+      let parsed: { order?: unknown }
+      try { parsed = JSON.parse(body) } catch { fail(res, 'BAD_REQUEST', 'Invalid request body'); return }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        fail(res, 'INVALID_PARAMS', 'body must be a JSON object'); return
+      }
+      const order = parsed.order
+      if (!Array.isArray(order) || order.some((v: unknown) => typeof v !== 'string' || v.length === 0)) {
+        fail(res, 'INVALID_PARAMS', 'order must be an array of non-empty point ids'); return
+      }
+      ctx.docStore.reorderSlatePoints(runId, order as string[])
+      // No delivery: a reorder is a view arrangement, not an injection (same posture
+      // as the lifecycle routes). The new sequence rides the SSE `run` delta.
+      ok(res, { order: ctx.docStore.getSlatePointsForRun(runId).map(p => p.id) })
+    }).catch(() => fail(res, 'BAD_REQUEST', 'Invalid request body'))
+    return true
+  }
+
   // POST /api/runs/:id/slate/points/:pid/answer — a control answer (choices + text).
   // Validate submitted choices against the point's CURRENT content (a stale choice
   // absent from the live surface is rejected, nothing persisted) and length-cap the
