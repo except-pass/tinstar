@@ -7,6 +7,7 @@ import { relocateWidgetTo } from '../domain/relocateWidget'
 import { moveSnapWidgetTo } from '../domain/moveSnapWidget'
 import { useCanvasCamera } from '../hooks/useCanvasCamera'
 import { useWidgetLayouts, preserveCohesion, MIN_WIDTH, MIN_HEIGHT } from '../hooks/useWidgetLayouts'
+import { RUN_WORKSPACE_DEFAULT_WIDTH } from '../widgets/runWorkspace'
 import { useSelection } from './SelectionProvider'
 import { CanvasWidgetShell } from '../widgets/CanvasWidgetShell'
 import { getWidgetComponent, toWidgetType, isSnappable } from '../widgets/widgetComponentRegistry'
@@ -1336,7 +1337,9 @@ export function InfiniteCanvas({ tree, runMap, editorWidgetMap = new Map(), brow
 
     const getLeafSize = (id: string) => {
       const l = layouts.get(id)
-      const w = l ? l.width : 1560
+      // Fall back to the run-workspace registration's own default rather than a
+      // magic number, so widening the default can't silently leave arrange behind.
+      const w = l ? l.width : RUN_WORKSPACE_DEFAULT_WIDTH
       return { w, h: leafHeight }
     }
 
