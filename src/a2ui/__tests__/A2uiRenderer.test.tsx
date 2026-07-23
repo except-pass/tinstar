@@ -677,6 +677,13 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
     // costs 1, each stepper costs 1 (visiting it) + MAX_STEPS (its rows), so
     // floor((500-1)/61) = 8 steppers fit and the 9th onward degrade.
     const fit = Math.floor((MAX_NODES - 1) / (1 + MAX_STEPS))
+    // Guard the derivation against going vacuous: a fully-derived expectation
+    // self-adjusts to ANY constants, including degenerate ones. If MAX_STEPS ever
+    // exceeded MAX_NODES - 2, fit would be 0 and this test would pass green while
+    // asserting nothing about steppers piling up. These two lines keep the
+    // scenario real — some steppers must fit, and not all of them.
+    expect(fit).toBeGreaterThan(1)
+    expect(fit).toBeLessThan(ids.length)
     expect(rows(container)).toHaveLength(fit * MAX_STEPS)
     // The surface degrades loudly rather than silently rendering a truncated tree.
     expect(container.textContent).toContain('content too large to render')
@@ -712,6 +719,34 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
       // Nothing was skipped, so the marker must not claim otherwise.
       expect(container.textContent).not.toContain('not scanned')
     }
+  })
+
+  // The mixed shape: rows DID render, and the scan window also ran out. The rail
+  // must name the cause it actually hit — saying "more entries not shown" here
+  // would send the author to trim a 60-row rail that only drew one.
+  it('names the SCAN as the cause when rows rendered but the window ran out', () => {
+    const steps = [
+      { label: 'Early', status: 'done' },
+      ...Array.from({ length: MAX_SCAN * 2 }, () => 0),
+    ]
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    expect(rows(container)).toHaveLength(1)
+    const overflow = container.querySelector('[data-testid="stepper-overflow"]')!
+    expect(overflow.textContent).toContain('not scanned')
+    expect(overflow.textContent).not.toContain('not shown')
+  })
+
+  // ...and the converse: the row cap filled, so this is NOT a scan truncation.
+  it('names the ROW CAP as the cause when 60 rows filled before the window ran out', () => {
+    const steps = Array.from({ length: 250 }, (_, i) => ({ label: `P${i}`, status: 'done' }))
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    const overflow = container.querySelector('[data-testid="stepper-overflow"]')!
+    expect(overflow.textContent).toContain('not shown')
+    expect(overflow.textContent).not.toContain('not scanned')
   })
 
   it('reports nothing skipped when a genuinely malformed steps prop yields no rows', () => {

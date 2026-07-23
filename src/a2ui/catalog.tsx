@@ -126,11 +126,16 @@ export const MAX_SCAN = MAX_STEPS * 20
 interface ParsedSteps {
   /** The rows to draw — never more than MAX_STEPS. */
   steps: ParsedStep[]
-  /** Raw array ENTRIES never examined because the cap was hit (0 when nothing was
+  /** Raw array ENTRIES never examined because a cap was hit (0 when nothing was
    *  cut). Deliberately not "rows dropped": the loop stops early rather than
    *  scanning a runaway array to classify what it would have rendered, so this is
    *  an upper bound on the loss. The marker says "entries" for that reason. */
   hidden: number
+  /** WHY the remainder went unexamined: `true` when the SCAN window ran out,
+   *  `false` when the row cap filled first. Two different stories for the author —
+   *  "the rail only draws 60" versus "we stopped looking after 1200" — and the
+   *  surface should not tell one when the other happened. */
+  scanStopped: boolean
 }
 
 /** Coerce a passthrough `steps` prop into renderable rows. A2UI component props
@@ -144,8 +149,9 @@ interface ParsedSteps {
 function parseSteps(value: unknown): ParsedSteps {
   // A fresh object, not a shared module-level constant: the result is handed to a
   // caller, and a shared one would let a single mutation poison every later parse.
-  if (!Array.isArray(value)) return { steps: [], hidden: 0 }
+  if (!Array.isArray(value)) return { steps: [], hidden: 0, scanStopped: false }
   const out: ParsedStep[] = []
+  let rowCapHit = false
   // Bounding the OUTPUT is not enough: an array whose entries are all dropped
   // (`[0,0,0,…]`) never reaches the row cap, so the loop would scan it end to end.
   // That is the hostile shape — a ~500k-entry array fits in one 1 MiB surface, the
@@ -156,7 +162,7 @@ function parseSteps(value: unknown): ParsedSteps {
   const limit = Math.min(value.length, MAX_SCAN)
   let i = 0
   for (; i < limit; i++) {
-    if (out.length >= MAX_STEPS) break
+    if (out.length >= MAX_STEPS) { rowCapHit = true; break }
     const raw: unknown = value[i]
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
     const rec = raw as Record<string, unknown>
@@ -170,7 +176,10 @@ function parseSteps(value: unknown): ParsedSteps {
     const detail = str(rec.detail).trim()
     out.push(detail ? { label, status, detail } : { label, status })
   }
-  return { steps: out, hidden: value.length - i }
+  // The row cap wins the attribution when both applied: it is the bound the author
+  // can act on (trim the list), whereas the scan window only ever hides entries
+  // that were already past 60 renderable rows.
+  return { steps: out, hidden: value.length - i, scanStopped: !rowCapHit && i < value.length }
 }
 
 // One tone per status, LITERAL class strings (no interpolated fragments) so
@@ -203,13 +212,23 @@ const STEP_CONNECTOR: Record<StepStatus, string> = {
   skipped: 'bg-hue-dismissed/30',
 }
 
+/** How the surface states truncation. The two causes read differently on purpose:
+ *  "not shown" means the rail drew its 60 and there was more, which the author
+ *  fixes by trimming; "not scanned" means we stopped reading the array early,
+ *  which the author fixes by moving real rows nearer the front. Reporting one
+ *  when the other happened sends them after the wrong problem. */
+function truncationNote({ hidden, scanStopped }: Pick<ParsedSteps, 'hidden' | 'scanStopped'>): string {
+  const unit = hidden === 1 ? 'entry' : 'entries'
+  return `+${hidden} ${scanStopped ? `${unit} not scanned` : `more ${unit} not shown`}`
+}
+
 /** The glyph inside a step node. Only `done` earns a mark; the rest are dots,
  *  so the rail reads as progress rather than as four different icons. */
 function stepGlyph(status: StepStatus): string {
   return status === 'done' ? '✓' : ''
 }
 
-function StepperRail({ steps, hidden }: ParsedSteps): ReactNode {
+function StepperRail({ steps, hidden, scanStopped }: ParsedSteps): ReactNode {
   return (
     // role=list/listitem: without it a screen reader reads the rail as one run-on
     // line of labels with no structure (and `display:flex` strips implicit list
@@ -275,7 +294,7 @@ function StepperRail({ steps, hidden }: ParsedSteps): ReactNode {
           className="font-mono text-[11.5px] leading-[1.5] text-ink-low pl-6"
           data-testid="stepper-overflow"
         >
-          {`+${hidden} more ${hidden === 1 ? 'entry' : 'entries'} not shown`}
+          {truncationNote({ hidden, scanStopped })}
         </div>
       )}
     </div>
@@ -393,7 +412,7 @@ export const CATALOG: Record<string, CatalogEntry> = {
     // count — that is what keeps the ceiling per SURFACE and not merely per node.
     cost: (node) => parseSteps(node.steps).steps.length,
     render: (node) => {
-      const { steps, hidden } = parseSteps(node.steps)
+      const { steps, hidden, scanStopped } = parseSteps(node.steps)
       if (steps.length === 0) {
         // The zero-row degrade still reports truncation. Without this, the scan cap
         // is INVISIBLE in exactly the case it creates — an author whose valid rows
@@ -402,11 +421,11 @@ export const CATALOG: Record<string, CatalogEntry> = {
         // looking". The rail's own overflow row can't say it: there is no rail.
         return (
           <span className="text-xs italic text-amber-300/80">
-            {`⚠ stepper: no steps to show${hidden > 0 ? ` (+${hidden} ${hidden === 1 ? 'entry' : 'entries'} not scanned)` : ''}`}
+            {`⚠ stepper: no steps to show${hidden > 0 ? ` (${truncationNote({ hidden, scanStopped })})` : ''}`}
           </span>
         )
       }
-      return <StepperRail steps={steps} hidden={hidden} />
+      return <StepperRail steps={steps} hidden={hidden} scanStopped={scanStopped} />
     },
   },
 }
