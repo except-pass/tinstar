@@ -114,12 +114,14 @@ const STEP_STATUSES = new Set<string>(['pending', 'active', 'done', 'skipped'])
  *  still multiply out to tens of thousands of rows. The second bound is the
  *  `cost` hook on this entry, which charges a stepper's rows to that shared
  *  budget — that is what makes the ceiling per SURFACE. Neither is redundant. */
-const MAX_STEPS = 60
+export const MAX_STEPS = 60
 
 /** Hard cap on entries EXAMINED, as distinct from rows emitted. Generous enough
  *  that a real tracker padded with junk rows still fills its 60, small enough that
- *  a hostile array can't turn each visit into a long synchronous scan. */
-const MAX_SCAN = MAX_STEPS * 20
+ *  a hostile array can't turn each visit into a long synchronous scan.
+ *  Exported (with MAX_STEPS) so tests derive their expectations from the real
+ *  constants instead of hard-coding numbers that drift silently. */
+export const MAX_SCAN = MAX_STEPS * 20
 
 interface ParsedSteps {
   /** The rows to draw — never more than MAX_STEPS. */
@@ -393,7 +395,16 @@ export const CATALOG: Record<string, CatalogEntry> = {
     render: (node) => {
       const { steps, hidden } = parseSteps(node.steps)
       if (steps.length === 0) {
-        return <span className="text-xs italic text-amber-300/80">⚠ stepper: no steps to show</span>
+        // The zero-row degrade still reports truncation. Without this, the scan cap
+        // is INVISIBLE in exactly the case it creates — an author whose valid rows
+        // sit past the scan window would see "no steps to show" and read it as "my
+        // JSON was malformed", with nothing to distinguish that from "we stopped
+        // looking". The rail's own overflow row can't say it: there is no rail.
+        return (
+          <span className="text-xs italic text-amber-300/80">
+            {`⚠ stepper: no steps to show${hidden > 0 ? ` (+${hidden} ${hidden === 1 ? 'entry' : 'entries'} not scanned)` : ''}`}
+          </span>
+        )
       }
       return <StepperRail steps={steps} hidden={hidden} />
     },

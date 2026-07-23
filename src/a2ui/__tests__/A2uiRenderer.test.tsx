@@ -9,7 +9,7 @@ import {
   MAX_NODES,
   extractReadableText,
 } from '../A2uiRenderer'
-import { isSupported } from '../catalog'
+import { isSupported, CATALOG, MAX_STEPS, MAX_SCAN } from '../catalog'
 
 // The catalog's Mermaid entry dynamically imports 'mermaid'; mock it so the
 // async render resolves deterministically (no fixed timeouts — CI is slower).
@@ -649,6 +649,19 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
   // without charging rows to the shared budget a surface could stack ~500 steppers
   // of 60 rows each and reach tens of thousands of rows — arithmetically the same
   // render load the per-node cap exists to prevent. The bound must be per SURFACE.
+  // Assert the CHARGE itself, not just its consequence. Going through the budget
+  // alone is insensitive: floor() flattens it, so any cost from 55 to 61 still
+  // fits 8 steppers and renders 480 rows. This is what actually pins the off-by-one.
+  it('charges a stepper exactly one budget unit per rendered row', () => {
+    const cost = CATALOG.Stepper!.cost!
+    expect(cost({ id: 'x', component: 'Stepper', steps: CE_STEPS })).toBe(CE_STEPS.length)
+    // Capped, so the charge can never exceed what the rail can actually draw.
+    const many = Array.from({ length: 250 }, (_, i) => ({ label: `P${i}`, status: 'done' }))
+    expect(cost({ id: 'x', component: 'Stepper', steps: many })).toBe(MAX_STEPS)
+    // Nothing renderable costs nothing.
+    expect(cost({ id: 'x', component: 'Stepper', steps: 'nope' })).toBe(0)
+  })
+
   it('charges stepper rows against the surface-wide node budget, so many steppers cannot pile up', () => {
     const sixty = Array.from({ length: 60 }, (_, i) => ({ label: `P${i}`, status: 'done' }))
     const ids = Array.from({ length: 40 }, (_, i) => `st${i}`)
@@ -660,15 +673,11 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
         ])}
       />,
     )
-    // 40 x 60 = 2400 rows if the cap were per node. Assert the EXACT count, not a
-    // range: a range still passes if the charge is off by one (e.g. steps.length-1,
-    // or charged after the guard). Derivation — the root Column costs 1, each
-    // stepper costs 1 (visiting it) + 60 (its rows), so floor((500-1)/61) = 8
-    // steppers fit and the 9th onward degrade.
-    const perStepper = 1 + 60
-    const fit = Math.floor((MAX_NODES - 1) / perStepper)
-    expect(rows(container)).toHaveLength(fit * 60)
-    expect(fit * 60).toBe(480) // pins the arithmetic itself, so a silent constant drift is visible
+    // 40 x 60 = 2400 rows if the cap were per node. Derivation: the root Column
+    // costs 1, each stepper costs 1 (visiting it) + MAX_STEPS (its rows), so
+    // floor((500-1)/61) = 8 steppers fit and the 9th onward degrade.
+    const fit = Math.floor((MAX_NODES - 1) / (1 + MAX_STEPS))
+    expect(rows(container)).toHaveLength(fit * MAX_STEPS)
     // The surface degrades loudly rather than silently rendering a truncated tree.
     expect(container.textContent).toContain('content too large to render')
     expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
@@ -682,9 +691,9 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
   // nothing. The scan window is MAX_STEPS * 20 = 1200 entries, so a valid row
   // sitting just past it is provably never reached — and one just inside it is.
   it.each([
-    [1200, 'TooLate', 0],  // first entry outside the window — dropped
-    [1199, 'JustInTime', 1], // last entry inside it — rendered
-  ])('bounds the SCAN at 1200 entries (junk=%i)', (junkCount, label, expectedRows) => {
+    [MAX_SCAN, 'TooLate', 0],      // first entry OUTSIDE the window — never reached
+    [MAX_SCAN - 1, 'JustInTime', 1], // last entry inside it — rendered
+  ])('bounds the SCAN at MAX_SCAN entries (junk=%i)', (junkCount, label, expectedRows) => {
     const steps = [...Array.from({ length: junkCount }, () => 0), { label, status: 'done' }]
     const { container } = render(
       <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
@@ -692,11 +701,28 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
     expect(rows(container)).toHaveLength(expectedRows)
     expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
     if (expectedRows === 0) {
-      // Zero renderable rows in the window degrades to the marker, never a throw.
+      // Zero renderable rows in the window degrades to the marker, never a throw —
+      // and the marker SAYS we stopped looking, so "malformed" and "truncated" are
+      // distinguishable. There is no rail here, so the overflow row can't carry it.
       expect(container.textContent).toContain('stepper: no steps to show')
+      expect(container.textContent).toContain('(+1 entry not scanned)')
+      expect(container.textContent).not.toContain(label)
     } else {
       expect(container.textContent).toContain(label)
+      // Nothing was skipped, so the marker must not claim otherwise.
+      expect(container.textContent).not.toContain('not scanned')
     }
+  })
+
+  it('reports nothing skipped when a genuinely malformed steps prop yields no rows', () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([{ id: 'root', component: 'Stepper', steps: [{ status: 'done' }] }])}
+      />,
+    )
+    // Malformed, not truncated — the marker must not imply we gave up early.
+    expect(container.textContent).toContain('stepper: no steps to show')
+    expect(container.textContent).not.toContain('not scanned')
   })
 
   it('exposes the status to assistive tech as text, not as color alone', () => {
