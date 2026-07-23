@@ -415,6 +415,12 @@ export class SlateWatcher {
           if (!this.warnedReservedId.has(path)) {
             log.warn('slate-watcher', `${name}: entry id '${OBJECTIVE_POINT_ID}' is RESERVED for the user's Objective — entry dropped, pick another id`)
           }
+          // Counts as UNUSABLE, deliberately — so a dir that yields nothing else RETAINS
+          // the last-valid projection instead of clearing it. The alternative (treat it
+          // as a skip, letting an empty result read as a genuine clear) would retract
+          // every file-owned point of the run because one entry used a bad id, turning a
+          // typo into data loss. Retaining is the recoverable failure: fix the id and the
+          // next poll re-projects. The warn above is what makes it findable.
           sawUnusable = true
           continue
         }

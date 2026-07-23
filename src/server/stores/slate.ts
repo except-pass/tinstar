@@ -387,6 +387,26 @@ export class SlateStore {
     return true
   }
 
+  /**
+   * Flip a point's provenance to USER, IN PLACE (S2 — taking over the reserved
+   * `objective` id). Everything the store has accumulated on the point survives: its
+   * thread, its lifecycle status, its timestamps.
+   *
+   * This exists because {@link addUserPoint} deliberately preserves `prior.source` on
+   * an amend, so a point that arrived through the file channel stays `source:'file'`
+   * forever — and the objective projection gates on `source === 'user'`. Deleting and
+   * re-adding would also flip it, but it would silently discard the thread, breaking
+   * the Slate's core promise that re-authoring under the same identity AMENDS rather
+   * than replaces. Returns false when the point is absent or already user-owned (no
+   * emit either way — the zero-change posture every mutator here keeps).
+   */
+  claimPointForUser(runId: string, id: string): boolean {
+    const prior = this.points.get(this.k(runId, id))
+    if (!prior || prior.source === 'user') return false
+    this.mutate(runId, id, p => ({ ...p, source: 'user' as const }))
+    return true
+  }
+
   /** Drop every point of a run, emitting a retract per point (deleteRun cascade). */
   pruneRun(runId: string): void {
     for (const [mapKey, p] of this.points) {

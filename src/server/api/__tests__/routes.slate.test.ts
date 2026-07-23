@@ -827,7 +827,8 @@ describe('PUT/DELETE /api/runs/:id/slate/objective', () => {
     getSession.mockReturnValue({ name: RUN })
     // Seed the trap the way a pre-guard worktree would have: through the file channel.
     srv.docStore.applyRunSlateProjection(RUN, [{ id: 'objective', headline: 'agent-authored goal' }])
-    expect(srv.docStore.getSlatePoint(RUN, 'objective')!.source).toBe('file')
+    const before = srv.docStore.getSlatePoint(RUN, 'objective')!
+    expect(before.source).toBe('file')
     expect(srv.docStore.getRun(RUN)!.slate!.find(s => s.id === 'objective')!.kind).toBe('open-point')
 
     const res = await putObjective(srv, 'the user’s real goal')
@@ -836,10 +837,50 @@ describe('PUT/DELETE /api/runs/:id/slate/objective', () => {
     const point = srv.docStore.getSlatePoint(RUN, 'objective')!
     expect(point.source).toBe('user')
     expect(point.headline).toBe('the user’s real goal')
+    // Claimed IN PLACE, not deleted and re-added: the identity is amended, so anything
+    // the store accumulated on the point survives (see the thread test below).
+    expect(point.createdAt).toBe(before.createdAt)
     // …and it now projects as the pinned objective card, which is the whole point.
     const projected = srv.docStore.getRun(RUN)!.slate!.filter(s => s.kind === 'objective')
     expect(projected).toHaveLength(1)
     expect(projected[0]!.headline).toBe('the user’s real goal')
+  }))
+
+  // The takeover must AMEND, not replace. A pre-guard file point at the reserved id is
+  // exactly the kind of surface a user may already have replied on, and the Slate's
+  // standing promise is that the same identity keeps what has accumulated on it.
+  it('the takeover PRESERVES the prior point’s thread', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'objective', headline: 'agent-authored goal' }])
+    srv.docStore.addSlateReply(RUN, 'objective', {
+      id: 'r1', author: 'user', text: 'why this goal?', createdAt: 1,
+    })
+    expect(srv.docStore.getSlatePoint(RUN, 'objective')!.replies).toHaveLength(1)
+
+    await putObjective(srv, 'the user’s real goal')
+
+    const point = srv.docStore.getSlatePoint(RUN, 'objective')!
+    expect(point.source).toBe('user')
+    expect(point.replies).toHaveLength(1)
+    expect(point.replies![0]!.text).toBe('why this goal?')
+  }))
+
+  // The reserved id is reachable from the other `/slate/points/:pid/...` mutators too.
+  // They can't rewrite the goal, but a dismiss must not make the pinned card disappear —
+  // the panel selects the objective by KIND, never by status. Pin that.
+  it('resolve/dismiss on the reserved id cannot retract the pinned card', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    await putObjective(srv, 'stay the course')
+
+    for (const action of ['resolve', 'dismiss'] as const) {
+      const res = await srv.fetch(`/api/runs/${RUN}/slate/points/objective/${action}`, { method: 'POST' })
+      expect(res.status).toBe(200)
+      const projected = srv.docStore.getRun(RUN)!.slate!.filter(s => s.kind === 'objective')
+      expect(projected).toHaveLength(1)
+      expect(projected[0]!.headline).toBe('stay the course')
+    }
   }))
 
   it('reports delivered:false on an unreachable session — still 200, still persisted', withServer(async srv => {

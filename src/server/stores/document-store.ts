@@ -945,6 +945,15 @@ export class DocumentStore {
     return deleted
   }
 
+  /** Flip a point's provenance to USER in place, preserving its thread and status
+   *  (S2 — taking over the reserved Objective id), then rebuild the projection so the
+   *  surface re-derives its kind. False when absent or already user-owned. */
+  claimSlatePointForUser(runId: string, pointId: string): boolean {
+    const claimed = this.slate.claimPointForUser(runId, pointId)
+    if (claimed) this.projectRunToSlate(runId)
+    return claimed
+  }
+
   addSlateReply(runId: string, pointId: string, reply: Reply): void {
     this.slate.addReply(runId, pointId, reply)
     this.projectRunToSlate(runId)

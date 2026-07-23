@@ -3454,9 +3454,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       // before the watcher guard existed) would otherwise survive the amend —
       // `addUserPoint` preserves `prior.source`, so the projection's `source === 'user'`
       // gate would keep rendering it as an ordinary open-point and the objective card
-      // would stay empty while the route still reported 200/changed and nudged. Drop it
-      // first so the amend creates a genuinely user-owned point.
-      if (prior && prior.source !== 'user') ctx.docStore.deleteSlatePoint(runId, OBJECTIVE_POINT_ID)
+      // would stay empty while the route still reported 200/changed and nudged.
+      //
+      // Claim it IN PLACE rather than delete-then-re-add: the point may already carry a
+      // thread the user replied on, and the Slate's standing promise is that the same
+      // identity is amended, never silently replaced.
+      if (prior && prior.source !== 'user') ctx.docStore.claimSlatePointForUser(runId, OBJECTIVE_POINT_ID)
       const objective = ctx.docStore.addUserSlatePoint(runId, {
         id: OBJECTIVE_POINT_ID,
         author: 'user',

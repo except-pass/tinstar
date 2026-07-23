@@ -591,6 +591,40 @@ describe('SlateStore.deletePoint (S2 — clearing the Objective)', () => {
     expect(store.getPoint('other-run', 'objective')?.headline).toBe('theirs')
   })
 
+  it('claimPointForUser flips provenance IN PLACE, keeping the thread and status', () => {
+    const { store, emit, changes } = makeStore()
+    store.applyProjection(RUN, [input('objective', 'agent-authored goal')])
+    store.addReply(RUN, 'objective', { id: 'r1', author: 'user', text: 'why?', createdAt: 1 })
+    store.resolve(RUN, 'objective', 5)
+    const before = store.getPoint(RUN, 'objective')!
+    expect(before.source).toBe('file')
+    emit.mockClear()
+    changes.length = 0
+
+    expect(store.claimPointForUser(RUN, 'objective')).toBe(true)
+
+    const after = store.getPoint(RUN, 'objective')!
+    expect(after.source).toBe('user')
+    // Everything the store accumulated survives — this is an amend, not a replace.
+    expect(after.replies).toHaveLength(1)
+    expect(after.replies![0]!.text).toBe('why?')
+    expect(after.resolvedAt).toBe(5)
+    expect(after.createdAt).toBe(before.createdAt)
+    // One update emit, not a retract + re-add.
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(changes[0]).toMatchObject({ entity: 'slatePoint', id: 'objective', runId: RUN })
+    expect(changes[0]!.data).not.toBeNull()
+  })
+
+  it('claimPointForUser is a no-op on an absent or already-user point', () => {
+    const { store, emit } = makeStore()
+    expect(store.claimPointForUser(RUN, 'nope')).toBe(false)
+    store.addUserPoint(RUN, { id: 'objective', headline: 'mine' })
+    emit.mockClear()
+    expect(store.claimPointForUser(RUN, 'objective')).toBe(false)
+    expect(emit).not.toHaveBeenCalled()
+  })
+
   it('deleting an absent point is a no-op — false, no emit', () => {
     const { store, emit } = makeStore()
     expect(store.deletePoint(RUN, 'nope')).toBe(false)

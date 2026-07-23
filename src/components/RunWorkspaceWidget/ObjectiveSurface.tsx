@@ -104,12 +104,24 @@ export function ObjectiveSurface({ runId, surface }: Props) {
         body: JSON.stringify({ text: trimmed }),
       })
       const body = (await res.json().catch(() => null)) as
-        | { ok?: boolean; data?: { delivered?: boolean; changed?: boolean }; error?: { message?: string } }
+        | {
+            ok?: boolean
+            data?: { delivered?: boolean; changed?: boolean; objective?: { headline?: string } }
+            error?: { message?: string }
+          }
         | null
       if (!res.ok || !body?.ok) throw new Error(body?.error?.message || `apply failed (${res.status})`)
       // Persisted either way; an asleep run just reads it later. Say so quietly
       // rather than pretending the nudge landed.
-      if (body.data?.changed && body.data.delivered === false) setUnreachableFor(trimmed)
+      //
+      // Anchor the note on the headline the SERVER persisted, not the local `trimmed`.
+      // They agree today (the route stores `text.trim()` verbatim), but the anchor's
+      // whole job is to match the value that comes back over SSE — so it has to be the
+      // server's, or any future normalisation there would silently expire the note on
+      // the very echo it was built to survive.
+      if (body.data?.changed && body.data.delivered === false) {
+        setUnreachableFor(body.data.objective?.headline ?? trimmed)
+      }
       setEditing(false)
     } catch {
       setError('Could not save the objective. Try again.')
@@ -254,6 +266,9 @@ export function ObjectiveSurface({ runId, surface }: Props) {
           <button
             data-testid="objective-unreachable-dismiss"
             onClick={() => setUnreachableFor(null)}
+            // The glyph is not an accessible name — a screen reader would announce
+            // "multiplication x, button" without this.
+            aria-label="Dismiss this note"
             title="Dismiss"
             className="ml-auto shrink-0 font-mono text-2xs leading-none text-ink-ctrl hover:text-ink-high"
           >

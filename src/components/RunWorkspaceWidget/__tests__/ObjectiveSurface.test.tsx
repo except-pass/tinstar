@@ -137,6 +137,28 @@ describe('ObjectiveSurface (S2)', () => {
     expect(screen.getByTestId('objective-unreachable')).toBeTruthy()
   })
 
+  // The anchor must be the SERVER's headline, not the locally-trimmed draft — the value
+  // that comes back over SSE is the server's, so anchoring on the local one would expire
+  // the note on its own echo the moment the route ever normalises text further.
+  it('anchors the unreachable note on the headline the server persisted', async () => {
+    apiFetch.mockImplementation(() => Promise.resolve({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: { delivered: false, changed: true, objective: { headline: 'server normalised goal' } },
+      }),
+    } as unknown as Response))
+    const { rerender } = render(<ObjectiveSurface runId="run-1" surface={objective('old goal')} />)
+    fireEvent.click(screen.getByTestId('objective-edit'))
+    fireEvent.change(screen.getByTestId('objective-input'), { target: { value: 'typed goal' } })
+    fireEvent.click(screen.getByTestId('objective-apply'))
+    await waitFor(() => expect(screen.getByTestId('objective-unreachable')).toBeTruthy())
+
+    // The echo carries what the SERVER stored — the note must recognise it as its own.
+    rerender(<ObjectiveSurface runId="run-1" surface={objective('server normalised goal')} />)
+    expect(screen.getByTestId('objective-unreachable')).toBeTruthy()
+  })
+
   it('the unreachable note EXPIRES when the objective moves on to something else', async () => {
     apiFetch.mockImplementation(() => okApply({ delivered: false, changed: true }))
     const { rerender } = render(<ObjectiveSurface runId="run-1" surface={objective('old goal')} />)
