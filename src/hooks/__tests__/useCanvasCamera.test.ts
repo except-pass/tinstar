@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
-import { canConsumeWheel, findWheelYieldTarget, type ScrollMetrics } from '../useCanvasCamera'
+import { renderHook, act } from '@testing-library/react'
+import { canConsumeWheel, findWheelYieldTarget, useCanvasCamera, type ScrollMetrics } from '../useCanvasCamera'
 
 const M = (p: Partial<ScrollMetrics>): ScrollMetrics => ({
   scrollTop: 0, scrollHeight: 0, clientHeight: 0,
@@ -99,18 +100,6 @@ describe('findWheelYieldTarget — nested data-scrollable chain', () => {
     expect(findWheelYieldTarget(plain, 0, 50)).toBeNull()
   })
 
-  // OPEN ITEM pin (see the findWheelYieldTarget docstring). This function is delta-only
-  // — it cannot see ctrl/⌘ — and the caller consults it BEFORE its zoom branch, so a
-  // yield here means a zoom gesture over a scroller reaches the browser instead of the
-  // canvas. True of every [data-scrollable] panel, and now of the workbench band too.
-  // Pinned so that changing it is a deliberate flip, not a silent one.
-  it('a zoom gesture over a scroller still yields — the ctrl/⌘ case is the caller’s', () => {
-    const { outer, band, column } = slate(PANEL, BAND)
-    // Whatever the modifier, these are the same deltas, so the same target comes back.
-    expect(findWheelYieldTarget(column, 0, 50)).toBe(outer)
-    expect(findWheelYieldTarget(column, 40, 0)).toBe(band)
-  })
-
   it('a lone vertical panel behaves exactly as before (including a deltaY of 0)', () => {
     const el = document.createElement('div')
     el.setAttribute('data-scrollable', '')
@@ -118,5 +107,62 @@ describe('findWheelYieldTarget — nested data-scrollable chain', () => {
     metrics(el, PANEL)
     expect(findWheelYieldTarget(el, 0, 50)).toBe(el)
     expect(findWheelYieldTarget(el, 30, 0)).toBe(el) // unchanged no-op, not a canvas pan
+  })
+})
+
+// The OPEN ITEM named in the `findWheelYieldTarget` docstring. It has to be pinned HERE,
+// at the caller, because that is where the decision lives: `findWheelYieldTarget` is
+// delta-only and never sees a modifier, so asserting against it can't distinguish a
+// zoom gesture from a scroll and would stay green through the very flip it claims to
+// guard. `handleWheel` computes `isZoomGesture`, already spends it on the Monaco bypass,
+// and then deliberately does NOT spend it on the yield check.
+describe('handleWheel — ctrl/⌘ over a scroller yields instead of zooming (OPEN ITEM)', () => {
+  /** Dispatch a real wheel event so `currentTarget` is set the way the DOM sets it. */
+  function wheelOver(el: HTMLElement, handler: (e: WheelEvent) => void, init: WheelEventInit) {
+    const host = el.closest('[data-canvas-host]') as HTMLElement
+    host.addEventListener('wheel', handler as EventListener)
+    const ev = new WheelEvent('wheel', { bubbles: true, cancelable: true, ...init })
+    // act() so the camera setState the zoom branch fires is flushed into `result.current`.
+    act(() => { el.dispatchEvent(ev) })
+    host.removeEventListener('wheel', handler as EventListener)
+    return ev
+  }
+
+  function mount() {
+    const host = document.createElement('div')
+    host.setAttribute('data-canvas-host', '')
+    const panel = document.createElement('div')
+    panel.setAttribute('data-scrollable', '')
+    const inner = document.createElement('div')
+    panel.appendChild(inner)
+    host.appendChild(panel)
+    document.body.appendChild(host)
+    metrics(panel, { scrollTop: 100, scrollHeight: 800, clientHeight: 400 })
+    return { host, panel, inner }
+  }
+
+  it('does not preventDefault (so it never reaches the zoom branch)', () => {
+    const { inner } = mount()
+    const { result } = renderHook(() => useCanvasCamera())
+    const before = result.current.camera
+
+    const ev = wheelOver(inner, result.current.handleWheel, { ctrlKey: true, deltaY: -50 })
+
+    // BACK-OUT GUARD: change the caller to `!isZoomGesture && findWheelYieldTarget(...)`
+    // and this fails — the handler falls through, preventDefaults, and zooms the canvas.
+    expect(ev.defaultPrevented).toBe(false)
+    expect(result.current.camera).toEqual(before)
+  })
+
+  it('still zooms when the pointer is NOT over a scroller', () => {
+    const { host } = mount()
+    const bare = document.createElement('div')
+    host.appendChild(bare)
+    const { result } = renderHook(() => useCanvasCamera())
+
+    const ev = wheelOver(bare, result.current.handleWheel, { ctrlKey: true, deltaY: -50 })
+
+    expect(ev.defaultPrevented).toBe(true)
+    expect(result.current.camera.zoom).toBeGreaterThan(1)
   })
 })

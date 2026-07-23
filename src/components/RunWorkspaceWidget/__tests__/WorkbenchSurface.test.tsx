@@ -257,7 +257,10 @@ describe('WorkbenchSurface (S4 U3)', () => {
     )
   })
 
-  it('omits the progress count when every question has been dismissed', () => {
+  // A DIRECT-RENDER invariant, not a state the panel can reach: `partitionWorkbenches`
+  // no longer opens a band without a live member, so this pins the component's own
+  // contract rather than a path through the Slate.
+  it('omits the progress count when every question has been dismissed (direct render)', () => {
     render(
       <WorkbenchSurface
         runId="run-1"

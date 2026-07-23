@@ -139,10 +139,10 @@ own `content` body of `Choice`/`TextInput`/`Submit` — and give every point in 
 horizontal band inside the open-points list, one question per column, labelled
 `Questions · N` with an `M of L answered` count beside it. `N` is the columns on screen;
 `L` is only the ones still being asked, so a **dismissed** question leaves both sides of
-the count and the band can always reach its ceiling (with every question dismissed the
-count is dropped entirely). A lone grouped point stays an ordinary row — and a dismissed
-one doesn't hold a band open, so a two-question set with one dismissed degrades back to
-rows rather than leaving a single column with none of the row's chrome.
+the count and the band can always reach its ceiling. A lone grouped point stays an
+ordinary row — and a dismissed one doesn't hold a band open, so a two-question set with
+one dismissed degrades back to rows rather than leaving a single column with none of the
+row's chrome.
 
 ```json
 [

@@ -69,8 +69,10 @@ function findScrollableAncestor(el: Element | null, deltaX: number, deltaY: numb
  * rather than leaving it an accidental zoom hole. Making ctrl+wheel bypass the yield
  * outright is probably the right end state, but it changes zoom behavior over EVERY
  * scrollable panel in the app, so it belongs to its own change. The current outcome is
- * PINNED by a test ("a zoom gesture over a scroller still yields") so that flip has to
- * be deliberate rather than silent.
+ * pinned in `useCanvasCamera.test.ts` — at `handleWheel`, NOT here, because this
+ * function is delta-only and cannot see a modifier, so a test against it could not tell
+ * the two cases apart. Making the flip (`!isZoomGesture && findWheelYieldTarget(…)`)
+ * fails that test, which is the point: deliberate, not silent.
  *
  * Exported for tests; jsdom reports every scroll metric as 0, so a test defines them.
  */

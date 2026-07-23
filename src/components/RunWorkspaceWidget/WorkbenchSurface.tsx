@@ -166,6 +166,10 @@ export function WorkbenchSurface({ runId, group, points }: Props) {
         <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-low">
           Questions · {points.length}
         </span>
+        {/* DEFENSIVE, not a reachable state through the render path: `partitionWorkbenches`
+            no longer opens a band without at least two live members, so a rendered band
+            always has one. Kept because it's a single comparison and the alternative is
+            "0 of 0 answered" for anyone rendering this component directly. */}
         {live.length > 0 && (
           <span
             data-testid={`workbench-progress-${group}`}
