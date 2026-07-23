@@ -142,10 +142,10 @@ screen; `L` is only the ones still being asked, so a **dismissed** question leav
 sides of the count and the band can always reach its ceiling.
 
 A lone grouped point stays an ordinary row, and the two off-the-table cases have
-deliberately *different* rules. A **hidden** point never joins a band at all — a column
-carries no unhide, so it would be stranded there. A **dismissed** one doesn't hold a band
-open (a two-question set with one dismissed degrades back to rows rather than leaving a
-single column with none of the row's chrome) but does ride along, dimmed, in a band its
+deliberately *different* rules. A **hidden** point never joins a band at all, so it never
+counts toward the two (the reason is below). A **dismissed** one doesn't hold a band
+open — a two-question set with one dismissed degrades back to rows rather than leaving a
+single column with none of the row's chrome — but does ride along, dimmed, in a band its
 live siblings already justify.
 
 ```json
