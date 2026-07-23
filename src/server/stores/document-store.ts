@@ -929,9 +929,13 @@ export class DocumentStore {
 
   /** Create or amend a USER-authored point (source:'user'), then rebuild the run's
    *  render projection. A user point survives a subsequent file re-projection (the
-   *  reconciliation the U7 HTTP layer relies on). Returns the resulting point. */
-  addUserSlatePoint(runId: string, input: PointInput): Point {
-    const point = this.slate.addUserPoint(runId, input)
+   *  reconciliation the U7 HTTP layer relies on). Returns the resulting point.
+   *
+   *  `claim` (S2 — the reserved Objective id) makes an amend TAKE OVER a point that
+   *  arrived through the file channel: source and author both become the user's, in
+   *  one mutation, while the thread and lifecycle stamps survive. */
+  addUserSlatePoint(runId: string, input: PointInput, opts: { claim?: boolean } = {}): Point {
+    const point = this.slate.addUserPoint(runId, input, Date.now(), opts)
     this.projectRunToSlate(runId)
     return point
   }
@@ -943,15 +947,6 @@ export class DocumentStore {
     const deleted = this.slate.deletePoint(runId, pointId)
     if (deleted) this.projectRunToSlate(runId)
     return deleted
-  }
-
-  /** Flip a point's provenance to USER in place, preserving its thread and status
-   *  (S2 — taking over the reserved Objective id), then rebuild the projection so the
-   *  surface re-derives its kind. False when absent or already user-owned. */
-  claimSlatePointForUser(runId: string, pointId: string): boolean {
-    const claimed = this.slate.claimPointForUser(runId, pointId)
-    if (claimed) this.projectRunToSlate(runId)
-    return claimed
   }
 
   addSlateReply(runId: string, pointId: string, reply: Reply): void {

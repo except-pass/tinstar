@@ -826,9 +826,13 @@ describe('PUT/DELETE /api/runs/:id/slate/objective', () => {
     seedRun(srv.docStore)
     getSession.mockReturnValue({ name: RUN })
     // Seed the trap the way a pre-guard worktree would have: through the file channel.
-    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'objective', headline: 'agent-authored goal' }])
+    // Seed with an EXPLICIT `now` so "was it amended or re-added?" is provable: a
+    // delete-and-re-add stamps Date.now(), which is ~1.7e12 away from this.
+    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'objective', headline: 'agent-authored goal' }], 1000)
     const before = srv.docStore.getSlatePoint(RUN, 'objective')!
     expect(before.source).toBe('file')
+    expect(before.author).toBe('agent')
+    expect(before.createdAt).toBe(1000)
     expect(srv.docStore.getRun(RUN)!.slate!.find(s => s.id === 'objective')!.kind).toBe('open-point')
 
     const res = await putObjective(srv, 'the user’s real goal')
@@ -836,10 +840,12 @@ describe('PUT/DELETE /api/runs/:id/slate/objective', () => {
 
     const point = srv.docStore.getSlatePoint(RUN, 'objective')!
     expect(point.source).toBe('user')
+    // The user's own words must not ship under the agent's name — `mergeFileOwned` does
+    // not read `input.author`, so this only holds because the claim sets it.
+    expect(point.author).toBe('user')
     expect(point.headline).toBe('the user’s real goal')
-    // Claimed IN PLACE, not deleted and re-added: the identity is amended, so anything
-    // the store accumulated on the point survives (see the thread test below).
-    expect(point.createdAt).toBe(before.createdAt)
+    // Claimed IN PLACE, not deleted and re-added — provable against the seeded stamp.
+    expect(point.createdAt).toBe(1000)
     // …and it now projects as the pinned objective card, which is the whole point.
     const projected = srv.docStore.getRun(RUN)!.slate!.filter(s => s.kind === 'objective')
     expect(projected).toHaveLength(1)

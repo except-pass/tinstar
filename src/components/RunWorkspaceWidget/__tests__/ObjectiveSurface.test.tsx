@@ -159,6 +159,21 @@ describe('ObjectiveSurface (S2)', () => {
     expect(screen.getByTestId('objective-unreachable')).toBeTruthy()
   })
 
+  // Defensive fallback: the route always returns `objective`, but if it ever stops, the
+  // note must still appear (an undelivered Apply is worth saying) — just anchored on the
+  // weaker local value. Pinned so the degradation is visible rather than silent.
+  it('still shows the note when the response omits the objective, anchored locally', async () => {
+    apiFetch.mockImplementation(() => okApply({ delivered: false, changed: true }))
+    const { rerender } = render(<ObjectiveSurface runId="run-1" surface={objective('old goal')} />)
+    fireEvent.click(screen.getByTestId('objective-edit'))
+    fireEvent.change(screen.getByTestId('objective-input'), { target: { value: 'a new goal' } })
+    fireEvent.click(screen.getByTestId('objective-apply'))
+
+    await waitFor(() => expect(screen.getByTestId('objective-unreachable')).toBeTruthy())
+    rerender(<ObjectiveSurface runId="run-1" surface={objective('a new goal')} />)
+    expect(screen.getByTestId('objective-unreachable')).toBeTruthy()
+  })
+
   it('the unreachable note EXPIRES when the objective moves on to something else', async () => {
     apiFetch.mockImplementation(() => okApply({ delivered: false, changed: true }))
     const { rerender } = render(<ObjectiveSurface runId="run-1" surface={objective('old goal')} />)

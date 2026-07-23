@@ -263,12 +263,28 @@ export class SlateStore {
    * generated id. Emits one change (or none if a byte-identical amend). Returns the
    * resulting point.
    */
-  addUserPoint(runId: string, input: PointInput, now: number = Date.now()): Point {
+  addUserPoint(runId: string, input: PointInput, now: number = Date.now(), opts: { claim?: boolean } = {}): Point {
     const id = input.id && input.id.length > 0 ? input.id : 'pt-user-' + randomUUID().slice(0, 12)
     // Scoped to THIS run by the composite key — a prior hit is always this run's point.
     const prior = this.points.get(this.k(runId, id))
     const next = prior
-      ? { ...mergeFileOwned(prior, input, now), source: prior.source ?? 'user' as const }
+      ? {
+          ...mergeFileOwned(prior, input, now),
+          // `claim` (S2 — the reserved Objective id) makes the amend TAKE OWNERSHIP
+          // instead of inheriting it: both the provenance the projection gates on and
+          // the attribution the render channel publishes. Without it the amend keeps
+          // `prior.source` (so a pre-guard file point stays `source:'file'` and never
+          // projects as the objective) AND keeps `prior.author` — `mergeFileOwned` does
+          // not read `input.author`, so a file point created as `author:'agent'` would
+          // ship the user's own words under the agent's name.
+          //
+          // Done here rather than as a separate flip-then-amend so it is ONE mutation
+          // and ONE emit: two calls would publish an intermediate frame where the card
+          // is already the Objective but still carries the agent's headline and body.
+          ...(opts.claim
+            ? { source: 'user' as const, author: input.author ?? 'user' }
+            : { source: prior.source ?? 'user' as const }),
+        }
       : createPoint(runId, id, { author: 'user', ...input }, now, 'user')
     if (prior && pointEqual(prior, next)) return prior
     this.points.set(this.k(runId, id), next)
@@ -387,25 +403,6 @@ export class SlateStore {
     return true
   }
 
-  /**
-   * Flip a point's provenance to USER, IN PLACE (S2 — taking over the reserved
-   * `objective` id). Everything the store has accumulated on the point survives: its
-   * thread, its lifecycle status, its timestamps.
-   *
-   * This exists because {@link addUserPoint} deliberately preserves `prior.source` on
-   * an amend, so a point that arrived through the file channel stays `source:'file'`
-   * forever — and the objective projection gates on `source === 'user'`. Deleting and
-   * re-adding would also flip it, but it would silently discard the thread, breaking
-   * the Slate's core promise that re-authoring under the same identity AMENDS rather
-   * than replaces. Returns false when the point is absent or already user-owned (no
-   * emit either way — the zero-change posture every mutator here keeps).
-   */
-  claimPointForUser(runId: string, id: string): boolean {
-    const prior = this.points.get(this.k(runId, id))
-    if (!prior || prior.source === 'user') return false
-    this.mutate(runId, id, p => ({ ...p, source: 'user' as const }))
-    return true
-  }
 
   /** Drop every point of a run, emitting a retract per point (deleteRun cascade). */
   pruneRun(runId: string): void {

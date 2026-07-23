@@ -260,6 +260,61 @@ describe('SlateStore.addUserPoint (U7)', () => {
     store.addUserPoint(RUN, { id: 'up1', headline: 'same' })
     expect(emit).not.toHaveBeenCalled()
   })
+
+  // `claim` (S2 — taking over the reserved Objective id). The plain amend inherits the
+  // prior point's provenance AND its author; claim takes both, in ONE mutation, without
+  // discarding what the store has accumulated on the point.
+  it('claim TAKES source and author from a file point, keeping thread and stamps', () => {
+    const { store, emit, changes } = makeStore()
+    // A file point is created author:'agent' — the exact attribution that must not stick.
+    store.applyProjection(RUN, [input('objective', 'agent-authored goal')], 1000)
+    store.addReply(RUN, 'objective', { id: 'r1', author: 'user', text: 'why?', createdAt: 1 })
+    store.resolve(RUN, 'objective', 5)
+    expect(store.getPoint(RUN, 'objective')!.source).toBe('file')
+    expect(store.getPoint(RUN, 'objective')!.author).toBe('agent')
+    emit.mockClear()
+    changes.length = 0
+
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'the real goal' }, 2000, { claim: true })
+
+    const after = store.getPoint(RUN, 'objective')!
+    expect(after.source).toBe('user')
+    expect(after.author).toBe('user') // NOT the file point's 'agent'
+    expect(after.headline).toBe('the real goal')
+    // An amend, not a replace: everything store-owned survives.
+    expect(after.replies).toHaveLength(1)
+    expect(after.resolvedAt).toBe(5)
+    expect(after.createdAt).toBe(1000) // a re-add would stamp `now` (2000)
+    // ONE emit — a flip-then-amend would publish an intermediate frame carrying the
+    // agent's headline under the objective's identity.
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(changes[0]!.data).not.toBeNull()
+  })
+
+  it('claim also drops the file-owned body (the agent’s A2UI is not the goal)', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [{ id: 'objective', headline: 'agent goal', content: body('a') }])
+    expect(store.getPoint(RUN, 'objective')!.content).toBeDefined()
+
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'the real goal' }, 2000, { claim: true })
+
+    expect(store.getPoint(RUN, 'objective')!.content).toBeUndefined()
+  })
+
+  it('claim on an already-user point that changes nothing still emits nothing', () => {
+    const { store, emit } = makeStore()
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'same' })
+    emit.mockClear()
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'same' }, Date.now(), { claim: true })
+    expect(emit).not.toHaveBeenCalled()
+  })
+
+  it('without claim, an amend still INHERITS the prior provenance (unchanged behaviour)', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('fp', 'from a file')])
+    store.addUserPoint(RUN, { id: 'fp', author: 'user', headline: 'amended' })
+    expect(store.getPoint(RUN, 'fp')!.source).toBe('file')
+  })
 })
 
 // --- DocumentStore integration: prune cascade + persistence ---
@@ -589,40 +644,6 @@ describe('SlateStore.deletePoint (S2 — clearing the Objective)', () => {
 
     expect(store.getPoint(RUN, 'objective')).toBeUndefined()
     expect(store.getPoint('other-run', 'objective')?.headline).toBe('theirs')
-  })
-
-  it('claimPointForUser flips provenance IN PLACE, keeping the thread and status', () => {
-    const { store, emit, changes } = makeStore()
-    store.applyProjection(RUN, [input('objective', 'agent-authored goal')])
-    store.addReply(RUN, 'objective', { id: 'r1', author: 'user', text: 'why?', createdAt: 1 })
-    store.resolve(RUN, 'objective', 5)
-    const before = store.getPoint(RUN, 'objective')!
-    expect(before.source).toBe('file')
-    emit.mockClear()
-    changes.length = 0
-
-    expect(store.claimPointForUser(RUN, 'objective')).toBe(true)
-
-    const after = store.getPoint(RUN, 'objective')!
-    expect(after.source).toBe('user')
-    // Everything the store accumulated survives — this is an amend, not a replace.
-    expect(after.replies).toHaveLength(1)
-    expect(after.replies![0]!.text).toBe('why?')
-    expect(after.resolvedAt).toBe(5)
-    expect(after.createdAt).toBe(before.createdAt)
-    // One update emit, not a retract + re-add.
-    expect(emit).toHaveBeenCalledTimes(1)
-    expect(changes[0]).toMatchObject({ entity: 'slatePoint', id: 'objective', runId: RUN })
-    expect(changes[0]!.data).not.toBeNull()
-  })
-
-  it('claimPointForUser is a no-op on an absent or already-user point', () => {
-    const { store, emit } = makeStore()
-    expect(store.claimPointForUser(RUN, 'nope')).toBe(false)
-    store.addUserPoint(RUN, { id: 'objective', headline: 'mine' })
-    emit.mockClear()
-    expect(store.claimPointForUser(RUN, 'objective')).toBe(false)
-    expect(emit).not.toHaveBeenCalled()
   })
 
   it('deleting an absent point is a no-op — false, no emit', () => {

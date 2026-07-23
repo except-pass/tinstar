@@ -3449,22 +3449,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
       const text = parsed.text.trim()
       const prior = ctx.docStore.getSlatePoint(runId, OBJECTIVE_POINT_ID)
-      // The reserved id is USER-owned, unconditionally. A point already sitting there
-      // with any other provenance (a `source:'file'` point from a snapshot written
-      // before the watcher guard existed) would otherwise survive the amend —
-      // `addUserPoint` preserves `prior.source`, so the projection's `source === 'user'`
-      // gate would keep rendering it as an ordinary open-point and the objective card
-      // would stay empty while the route still reported 200/changed and nudged.
+      // `claim` makes the reserved id USER-owned unconditionally. A point already
+      // sitting there with another provenance (a `source:'file'` point from a snapshot
+      // written before the watcher guard existed) would otherwise survive the amend:
+      // a plain `addUserPoint` inherits `prior.source`, so the projection's
+      // `source === 'user'` gate would keep rendering it as an ordinary open-point and
+      // the objective card would stay empty while this route reported 200/changed and
+      // nudged. It also inherits `prior.author`, which would ship the user's own words
+      // under the agent's name.
       //
-      // Claim it IN PLACE rather than delete-then-re-add: the point may already carry a
-      // thread the user replied on, and the Slate's standing promise is that the same
-      // identity is amended, never silently replaced.
-      if (prior && prior.source !== 'user') ctx.docStore.claimSlatePointForUser(runId, OBJECTIVE_POINT_ID)
+      // It is an AMEND, not a delete-and-re-add: the point may already carry a thread
+      // the user replied on, and the Slate's standing promise is that the same identity
+      // keeps what has accumulated on it.
       const objective = ctx.docStore.addUserSlatePoint(runId, {
         id: OBJECTIVE_POINT_ID,
         author: 'user',
         headline: text,
-      })
+      }, { claim: true })
       // Identity, not deep-equality: the store hands back the prior object itself when
       // nothing changed. An Apply that changed no text is not a re-alignment, so it
       // must not re-nudge an agent mid-turn.

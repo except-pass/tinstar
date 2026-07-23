@@ -17,6 +17,14 @@
 // same reason the composer's Create carries it), while edit/cancel/clear stay at
 // control ink. The prose pins `font-sans` — the run card defaults to mono, so an
 // unpinned objective would render as terminal text instead of something a person wrote.
+//
+// SCOPE NOTE — the objective's THREAD is not rendered here. The underlying point can
+// carry replies (the reserved id is reachable from the reply route, and a takeover of a
+// pre-guard file point inherits whatever was on it), and the store preserves them, but
+// this card paints `headline` only and `clear` deletes the point outright. So replies on
+// an objective are currently write-only: durable in the store, invisible on the card, and
+// dropped on clear. Surfacing them (a "N replies" affordance, or reusing SurfaceThread)
+// is a deliberate follow-up, not an oversight — don't assume the thread is reachable.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch } from '../../apiClient'
 import type { SlateSurface } from '../../types'
@@ -119,6 +127,11 @@ export function ObjectiveSurface({ runId, surface }: Props) {
       // whole job is to match the value that comes back over SSE — so it has to be the
       // server's, or any future normalisation there would silently expire the note on
       // the very echo it was built to survive.
+      //
+      // The route always sends `objective`, so the fallback is defensive only. It keeps
+      // the note (an undelivered Apply is worth saying) at the cost of the weaker local
+      // anchor — losing the note entirely would be the worse failure, and the test below
+      // pins this shape so the degradation can't go unnoticed.
       if (body.data?.changed && body.data.delivered === false) {
         setUnreachableFor(body.data.objective?.headline ?? trimmed)
       }
