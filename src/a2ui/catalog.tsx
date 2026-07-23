@@ -9,12 +9,15 @@
 // never a throw, never a blank. Standard A2UI names (Text, Column, Row, List,
 // Card, Divider) are honored; `Link` and `Code` are host additions in the
 // "roundup" catalog for the two static-content shapes the base vocabulary lacks.
+// `Mermaid` is a host addition too — the one async/stateful (yet still read-only)
+// entry, drawing an agent-supplied diagram string as a themed SVG (Slate S1).
 //
 // Classes mirror the markdown styling slice 1 applied in RoundupWidget, so the
 // A2UI output is visually identical to the markdown it replaces.
 import type { ReactNode } from 'react'
 import type { A2uiComponent } from '../domain/types'
 import { ChoiceControl, TextInputControl, SubmitControl } from './controlComponents'
+import { MermaidComponent } from './MermaidComponent'
 
 /** A catalog entry renders one node given its already-resolved, already-rendered
  *  child elements (the renderer owns tree-walking, ref resolution, and cycle
@@ -147,6 +150,22 @@ export const CATALOG: Record<string, CatalogEntry> = {
   // draw a "⚠ unsupported" marker at the user) and renders nothing in place.
   FollowUp: {
     render: () => null,
+  },
+  // Mermaid: the one async/stateful — but still read-only — catalog entry. It
+  // turns an agent-supplied Mermaid `source` string into a host-themed SVG
+  // diagram (a picture, not an answered form). Rendering lives in
+  // MermaidComponent (mermaid is client-only, dynamically imported into its own
+  // lazy chunk — it must never reach the React-free server bundle). Like every
+  // other entry it self-degrades: a bad/empty source becomes a small inline
+  // amber notice, never a throw. `str()` coerces a missing/non-string source to
+  // '' → the empty-diagram degrade path.
+  //
+  // `theme` is the author's per-diagram treatment choice ('ink' monochrome by
+  // default, 'hue' for the semantic palette). It is passed through RAW, not via
+  // `str()`, because MermaidComponent's own `normalizeTheme` is the single place
+  // that decides what counts as valid — anything unknown falls back to 'ink'.
+  Mermaid: {
+    render: (node) => <MermaidComponent source={str(node.source)} theme={node.theme} />,
   },
 }
 

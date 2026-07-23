@@ -65,8 +65,9 @@ plus a `root` reference:
   fields. Containers reference children by id, never nested inline.
 
 The rendered vocabulary is `Text`, `Column`, `Row`, `List`, `Card`, `Divider`, `Link`,
-and `Code` for layout and prose, plus `Choice`, `TextInput`, and `Submit` for
-interactive controls. Content outside this set, or a malformed tree, degrades to a
+and `Code` for layout and prose, `Mermaid` (a `source` definition string drawn as a
+themed diagram, with an optional `theme` of `ink`/`hue`) for flows and pipelines, plus
+`Choice`, `TextInput`, and `Submit` for interactive controls. Content outside this set, or a malformed tree, degrades to a
 readable "couldn't render" fallback within a per-surface error boundary and node budget,
 so one hostile or malformed surface cannot hang or blank the card. A `javascript:` or
 `data:` URL on a `Link` degrades to plain text.

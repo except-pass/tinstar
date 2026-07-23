@@ -63,7 +63,10 @@ The base unit every non-list surface inherits: a quiet shell around agent-author
 - **Card** — nested container, one child; nested cards step to `surface.hover` so nesting reads by lightness.
 - **Divider / Link** — rule; safe href (only http(s) / same-origin resolve to a link, else plain text).
 - **Code** — monospace block.
-- **Don't** fake a diagram with ASCII inside Code — it's the known gap; flag for a real Mermaid/Graph primitive.
+- **Mermaid** — `{ source, theme? }`, a Mermaid definition string rendered to a themed SVG. Nodes always fill `surface.hover` with `ink.high` labels; the author picks the accent treatment per diagram: **`ink` (default) keeps borders and edges neutral `ink.low`**, `hue` opts into the semantic `hue.*` palette for complex flows that need color to stay legible. **Neither may use cyan** — P4 reserves it for the live edge. Unknown `theme` values fall back to `ink`.
+- **Diagram sizing** — the column is 260–560px, so a diagram renders **scaled to fit** it, never at natural size and never with a horizontal scrollbar (the #126 guard). Clicking opens an expanded view at readable size, portaled to `document.body` so the canvas transform doesn't displace it. A bad, empty, or over-long source degrades to a small inline amber line (like any other node fallback), never a crash.
+- **The host owns the diagram's look** — mermaid lets a definition carry its own config, via `%%{init: …}%%` directives and YAML front matter. Both are **stripped from `source`**: either one could otherwise reintroduce the reserved cyan or turn off scale-to-fit (which makes `overflow-hidden` clip the diagram instead of shrinking it). The author picks a look with `theme`, and only with `theme`.
+- **Don't** fake a diagram with ASCII inside Code — use **Mermaid**. (This was the known gap; it's now closed.)
 
 ## Interactive controls
 Read-only until the surface is answerable; the chosen/focused accent is the **live cyan**. A read-only control shows static at **55% opacity**, no cyan. **FollowUp** renders nothing inline — it becomes a chip in the ask panel beside the surface.
