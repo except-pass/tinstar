@@ -60,20 +60,33 @@ let mermaidRenderQueue: Promise<void> = Promise.resolve()
  *  unsettled forever — and a strictly serial chain would then strand every later
  *  diagram on "Rendering diagram…". The slot releases after this either way. The
  *  released render still finishes and still paints; it just stops blocking. */
-const QUEUE_SLOT_TIMEOUT_MS = 10_000
+export const QUEUE_SLOT_TIMEOUT_MS = 10_000
 
 /** Run `task` after every previously-enqueued mermaid render has settled (or
- *  timed out of its slot). */
-function enqueueMermaidRender(task: () => Promise<void>): Promise<void> {
-  const run = mermaidRenderQueue.then(task, task)
-  // Swallow on the chain itself so one failure can't poison every later render.
-  mermaidRenderQueue = new Promise<void>((advance) => {
-    const slot = setTimeout(advance, QUEUE_SLOT_TIMEOUT_MS)
-    void run.then(() => undefined, () => undefined).then(() => {
-      clearTimeout(slot)
-      advance()
-    })
-  })
+ *  timed out of its slot).
+ *
+ *  Exported for its own unit test only — the slot-timing semantics are the whole
+ *  point of this helper and are impractical to drive through the component (fake
+ *  timers and React's async `act` don't compose). Nothing else should call it. */
+export function enqueueMermaidRender(task: () => Promise<void>): Promise<void> {
+  const prev = mermaidRenderQueue
+  const run = prev.then(task, task)
+  // The slot timer ARMS WHEN THE SLOT IS ACQUIRED, not at enqueue — hence the
+  // extra `prev.then(...)` hop. Arming it at the call site would start every
+  // backlogged diagram's clock at the same instant, so one stall would expire
+  // all of them at once and release the whole backlog concurrently — the exact
+  // interleave this queue exists to prevent. Swallow on the chain itself so one
+  // failure can't poison every later render.
+  mermaidRenderQueue = prev.then(
+    () => new Promise<void>((advance) => {
+      const slot = setTimeout(advance, QUEUE_SLOT_TIMEOUT_MS)
+      void run.then(() => undefined, () => undefined).then(() => {
+        clearTimeout(slot)
+        advance()
+      })
+    }),
+    () => undefined,
+  )
   return run
 }
 
@@ -115,24 +128,36 @@ const FRONT_MATTER_RE = /^([^\S\n\r]*)-{3}\s*[\n\r](.*?)[\n\r]\1-{3}\s*[\n\r]+/s
 //    Slate author has no business with any of them.
 const DIRECTIVE_RE = /%{2}\{\s*(?:(\w+)\s*:|(\w+))\s*(?:(\w+)|((?:(?!\}%{2}).|\r?\n)*))?\s*(?:\}%{2})?/gi
 
-/** Strip both author-controlled config channels from a definition.
+/** How many strip passes are allowed before a source is declared hostile. Real
+ *  content converges in one pass (a second only confirms nothing changed).
+ *  A cap is needed because the loop is superlinear on adversarial input:
+ *  FRONT_MATTER_RE is anchored and removes ONE block per pass, so ~5.5k stacked
+ *  `---\na\n---` blocks inside MAX_SOURCE_LENGTH would otherwise mean ~5.5k
+ *  full re-scans and re-allocations of a 50KB string — seconds of synchronous
+ *  main-thread freeze, from agent-authored content, in a UI whose contract is
+ *  that sluggishness is a bug. */
+const STRIP_PASS_LIMIT = 64
+
+/** Strip both author-controlled config channels from a definition. Returns null
+ *  when the source doesn't converge within STRIP_PASS_LIMIT passes — treat that
+ *  as hostile and degrade rather than render it.
  *
  *  Runs to a FIXED POINT, not once. Both patterns are position-sensitive —
  *  front matter only counts at index 0 — so a single pass can *promote* a
  *  second block into a position mermaid would then honour: strip the leading
  *  front matter of `---…---\n---config:…---\ngraph TD` and the second block is
- *  suddenly at index 0. Repeat until nothing changes. Each pass strictly
- *  shortens the string, and MAX_SOURCE_LENGTH bounds the input, so it terminates.
+ *  suddenly at index 0. Repeat until nothing changes.
  *
  *  Within a pass the order matches mermaid's preprocessDiagram (front matter,
  *  then directives). */
-export function stripAuthorConfig(source: string): string {
+export function stripAuthorConfig(source: string): string | null {
   let out = source
-  for (;;) {
+  for (let pass = 0; pass < STRIP_PASS_LIMIT; pass++) {
     const next = out.replace(FRONT_MATTER_RE, '').replace(DIRECTIVE_RE, '')
     if (next === out) return out
     out = next
   }
+  return null
 }
 
 /** The diagram treatments an author can pick between, per diagram. */
@@ -318,6 +343,10 @@ export function MermaidComponent({
 
     // The host owns theming and sizing — an author's own config does not.
     const definition = stripAuthorConfig(source)
+    if (definition === null) {
+      setErrorMsg('unreadable diagram source')
+      return cleanup
+    }
 
     // Empty/whitespace source: degrade immediately, don't call mermaid.render
     // (it would throw on empty input anyway).
@@ -371,7 +400,13 @@ export function MermaidComponent({
           setErrorMsg(err instanceof Error ? err.message : 'invalid mermaid syntax')
         }
       })
-    })()
+    })().catch(() => {
+      // The queued task already degrades on its own failures; this is the
+      // last-resort net so nothing here can escape as an unhandled rejection
+      // (which under vitest fails the suite instead of the assertion).
+      if (cancelled) return
+      setErrorMsg('invalid mermaid syntax')
+    })
 
     return cleanup
   }, [source, resolvedTheme])

@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react'
-import { MAX_SOURCE_LENGTH, MermaidComponent, normalizeTheme, stripAuthorConfig } from '../MermaidComponent'
+import {
+  MAX_SOURCE_LENGTH,
+  MermaidComponent,
+  QUEUE_SLOT_TIMEOUT_MS,
+  enqueueMermaidRender,
+  normalizeTheme,
+  stripAuthorConfig,
+} from '../MermaidComponent'
 
 // MermaidComponent dynamically imports 'mermaid'; mock it so the async render()
 // outcome can be driven explicitly (no fixed timeouts — CI is slower than local).
@@ -189,6 +196,31 @@ describe('MermaidComponent — author config is stripped from the definition', (
   it('leaves an ordinary definition (and ordinary %% comments) untouched', () => {
     const source = 'graph TD\n%% a plain comment\n  A --> B'
     expect(stripAuthorConfig(source)).toBe(source)
+  })
+
+  // DELIBERATE: the strip is mermaid's own directiveRegex, the one its
+  // removeDirectives() runs over the diagram body. A `%%{`-prefixed comment is
+  // therefore eaten here exactly as mermaid eats it — verified byte-identical
+  // against mermaid 11.16. Narrowing our pattern to "save" such a comment would
+  // DIVERGE from the parse and hand mermaid text it strips anyway, so parity is
+  // the contract. These pin that choice so it can't drift silently.
+  it.each([
+    ['an unterminated %%{ comment', 'graph TD\n%%{note}\n  A --> B', 'graph TD\n'],
+    ['a keyed %%{ comment', 'graph TD\n%%{legacy: keeping this note}\n  A --> B', 'graph TD\nthis note}\n  A --> B'],
+  ])('treats %s exactly as mermaid removeDirectives does', (_label, source, expected) => {
+    expect(stripAuthorConfig(source)).toBe(expected)
+  })
+
+  // The loop is superlinear on stacked blocks (anchored front matter removes one
+  // per pass), so it is capped. Real content converges in one pass; a source that
+  // doesn't is hostile and degrades rather than freezing the main thread.
+  it('degrades a source that will not converge instead of grinding on it', () => {
+    const stacked = '---\na\n---\n'.repeat(200)
+    expect(stripAuthorConfig(stacked)).toBeNull()
+
+    const { container } = render(<MermaidComponent source={stacked} />)
+    expect(container.textContent).toContain('unreadable diagram source')
+    expect(renderMock).not.toHaveBeenCalled()
   })
 
   // Front matter is only front matter at the very start, exactly as mermaid's own
@@ -531,5 +563,55 @@ describe('MermaidComponent — concurrent diagrams keep their own palette', () =
     })
     const lines = [...container.querySelectorAll('svg[data-line]')].map((el) => el.getAttribute('data-line'))
     expect(lines).toEqual(['#5c6b74', '#6fcff6']) // ink.low, then hue.waiting
+  })
+
+  // mermaid lazily imports a chunk per diagram TYPE from inside render(), so a
+  // stalled network can leave one render unsettled forever. A strictly serial
+  // chain would then strand every later diagram on the placeholder. The slot
+  // releases after a timeout — but ONE AT A TIME: the timer arms when a task
+  // acquires the slot, not when it is enqueued. Arming at enqueue would start
+  // every backlogged clock at once, so a single stall would dump the whole
+  // backlog into mermaid concurrently — reintroducing the very interleave the
+  // queue exists to prevent.
+  it('releases a stuck render one slot at a time, never the whole backlog at once', async () => {
+    const started: number[] = []
+    const settle: Array<(() => void) | undefined> = []
+    const task = (n: number) => () => {
+      started.push(n)
+      return new Promise<void>((resolve) => { settle[n] = resolve })
+    }
+
+    // Drain anything an earlier test left on the module-global chain (real timers).
+    await enqueueMermaidRender(async () => {})
+
+    vi.useFakeTimers()
+    try {
+      void enqueueMermaidRender(task(0)) // this one never settles — the stall
+      void enqueueMermaidRender(task(1))
+      void enqueueMermaidRender(task(2))
+      await vi.advanceTimersByTimeAsync(0)
+
+      // Serial: only the head is running.
+      expect(started).toEqual([0])
+
+      // One slot expiry releases exactly ONE waiter.
+      await vi.advanceTimersByTimeAsync(QUEUE_SLOT_TIMEOUT_MS)
+      expect(started).toEqual([0, 1])
+
+      // ...and NOT the one behind it. Arming every timer at enqueue instead of at
+      // slot acquisition would have dumped 1 and 2 in together right here, which
+      // is the interleave the queue exists to prevent.
+      await vi.advanceTimersByTimeAsync(QUEUE_SLOT_TIMEOUT_MS - 1)
+      expect(started).toEqual([0, 1])
+
+      // A normal finish hands the slot on immediately.
+      settle[1]!()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(started).toEqual([0, 1, 2])
+    } finally {
+      settle[0]?.()
+      settle[2]?.()
+      vi.useRealTimers()
+    }
   })
 })
