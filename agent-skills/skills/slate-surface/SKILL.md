@@ -1,5 +1,5 @@
 ---
-name: the-slate
+name: slate-surface
 description: Author a run's Slate — the per-run region of its workspace card where you paint small interactive surfaces (an open-points list, a diagram, a form, a live progress card) by writing files into your worktree. Use when you want to show the user something richer than a line of transcript for THIS run — a decision to make, a picture to react to, the live state of a long command. You author by writing `.tinstar/slate/*.json`; the user answers back over HTTP and you receive their reply as an injected note.
 ---
 
