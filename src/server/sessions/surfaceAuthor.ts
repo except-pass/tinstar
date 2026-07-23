@@ -63,9 +63,17 @@ export const SLATE_AUTHOR_CONTRACT = [
   '           diagram is fine — but keep labels short, since they shrink with it.',
   '           The host owns theming and sizing: `%%{init: ...}%%` directives and YAML front matter are STRIPPED',
   '           from source. Pick the look with `theme`, not with mermaid config.',
+  '- Stepper: { id, component:"Stepper", steps:[ { label, status, detail? }, ... ] }   (a status-colored progress rail)',
+  '           status is one of: "pending" | "active" | "done" | "skipped"  (anything else is treated as "pending")',
+  '           e.g. steps: [ {"label":"Plan","status":"done"}, {"label":"Build","status":"active","detail":"unit 2/4"},',
+  '                         {"label":"Ship","status":"pending"} ]',
+  '           Use it for phases/checklists/pipeline progress instead of writing "[x] / [ ]" in a Text or List — it is',
+  '           the ONLY way to color a step by state (done=green, active=live cyan, skipped=dimmed). Keep labels short;',
+  '           put the running commentary in `detail` on the one active step. A step with no `label` is dropped, and',
+  '           only the first 60 VALID steps are drawn (the rest collapse into a "+N more entries not shown" row).',
   'RULES: every id in a children[]/child MUST exist in components; `root` MUST name a component id. There is NO image',
-  'or markdown component — use Text/List/Code (and Mermaid for diagrams). INVALID content is SILENTLY DROPPED (no',
-  'surface appears), so keep it minimal and valid. Write ONLY the file; output nothing else.',
+  'or markdown component — use Text/List/Code (Mermaid for diagrams, Stepper for progress). INVALID content is',
+  'SILENTLY DROPPED (no surface appears), so keep it minimal and valid. Write ONLY the file; output nothing else.',
 ].join('\n')
 
 /**

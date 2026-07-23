@@ -1,0 +1,22 @@
+{
+  "id": "ce-pipeline",
+  "headline": "Compound Engineering",
+  "author": "agent",
+  "anchor": { "kind": "surface" },
+  "content": {
+    "root": "root",
+    "components": [
+      {
+        "id": "root",
+        "component": "Stepper",
+        "steps": [
+          { "label": "Brainstorm", "status": "done" },
+          { "label": "Plan", "status": "done" },
+          { "label": "Work", "status": "active", "detail": "implementing unit 2/4" },
+          { "label": "Review", "status": "pending" },
+          { "label": "Compound", "status": "pending" }
+        ]
+      }
+    ]
+  }
+}

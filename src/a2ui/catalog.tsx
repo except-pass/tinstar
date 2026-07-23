@@ -11,6 +11,10 @@
 // "roundup" catalog for the two static-content shapes the base vocabulary lacks.
 // `Mermaid` is a host addition too — the one async/stateful (yet still read-only)
 // entry, drawing an agent-supplied diagram string as a themed SVG (Slate S1).
+// `Stepper` is a host addition as well — the status-colored progress rail (Slate
+// S3). It exists because A2UI's contract is "JSON carries structure, never
+// color": no authored Column/Text combination can say "this phase is DONE and
+// that one is LIVE", so the status vocabulary has to live in the catalog.
 //
 // Classes mirror the markdown styling slice 1 applied in RoundupWidget, so the
 // A2UI output is visually identical to the markdown it replaces.
@@ -24,6 +28,16 @@ import { MermaidComponent } from './MermaidComponent'
  *  guarding; entries stay pure and presentational). */
 export interface CatalogEntry {
   render(node: A2uiComponent, children: ReactNode[]): ReactNode
+  /** EXTRA node budget this entry's own expansion consumes, beyond the 1 the
+   *  renderer already charges for visiting it. Default 0 — most entries render a
+   *  fixed handful of elements. It exists for entries that turn ONE component into
+   *  N elements from a prop: without it the renderer's MAX_NODES budget counts
+   *  components only, so a surface could stack many individually-bounded leaves and
+   *  still blow past any per-node cap. Charging here is what makes the bound per
+   *  SURFACE. `Stepper` is currently the only entry that charges — `Mermaid` also
+   *  expands a prop into arbitrarily many SVG elements and is NOT yet charged, so
+   *  the per-surface ceiling does not cover it. */
+  cost?(node: A2uiComponent): number
 }
 
 /** Read a string-valued prop, coercing anything dynamic (a data binding or
@@ -68,6 +82,226 @@ function textVariantClass(variant: unknown): string {
     // the display face.
     default: return 'font-sans text-[14px] leading-[1.6] text-ink-mid my-1'
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stepper (Slate S3) — a status-colored vertical progress rail.
+//
+// The four statuses are deliberately NOT `PointStatus`: a progress phase is not
+// a point lifecycle. `pending` (not started) · `active` (the live edge) · `done`
+// (finished) · `skipped` (deliberately not run).
+// ---------------------------------------------------------------------------
+
+type StepStatus = 'pending' | 'active' | 'done' | 'skipped'
+
+interface ParsedStep {
+  label: string
+  status: StepStatus
+  detail?: string
+}
+
+const STEP_STATUSES = new Set<string>(['pending', 'active', 'done', 'skipped'])
+
+/** Hard row cap — the first of THREE bounds this entry needs (rows out, entries
+ *  scanned, share of the surface budget). `steps` expands a SINGLE A2UI node into
+ *  an unbounded number of DOM rows: a surface posted through the API is capped at
+ *  1 MiB, i.e. ~30k steps × ~5 elements each, which would block the render thread.
+ *  Past this many phases the rail has stopped being readable anyway, so truncating
+ *  is both the safe and the honest answer.
+ *
+ *  This cap alone is NOT the guarantee, because it is per node and the renderer's
+ *  MAX_NODES budget counts components: ~500 individually-capped steppers would
+ *  still multiply out to tens of thousands of rows. The second bound is the
+ *  `cost` hook on this entry, which charges a stepper's rows to that shared
+ *  budget — that is what makes the ceiling per SURFACE. Neither is redundant. */
+export const MAX_STEPS = 60
+
+/** Hard cap on entries EXAMINED, as distinct from rows emitted. Generous enough
+ *  that a real tracker padded with junk rows still fills its 60, small enough that
+ *  a hostile array can't turn each visit into a long synchronous scan.
+ *  Exported (with MAX_STEPS) so tests derive their expectations from the real
+ *  constants instead of hard-coding numbers that drift silently. */
+export const MAX_SCAN = MAX_STEPS * 20
+
+interface ParsedSteps {
+  /** The rows to draw — never more than MAX_STEPS. */
+  steps: ParsedStep[]
+  /** Raw array ENTRIES never examined because a cap was hit (0 when nothing was
+   *  cut). Deliberately not "rows dropped": the loop stops early rather than
+   *  scanning a runaway array to classify what it would have rendered, so this is
+   *  an upper bound on the loss. The marker says "entries" for that reason. */
+  hidden: number
+  /** WHY the remainder went unexamined: `true` when the SCAN window ran out,
+   *  `false` when the row cap filled first. Two different stories for the author —
+   *  "the rail only draws 60" versus "we stopped looking after 1200" — and the
+   *  surface should not tell one when the other happened. */
+  scanStopped: boolean
+}
+
+/** Coerce a passthrough `steps` prop into renderable rows. A2UI component props
+ *  are `.passthrough()` / `unknown`, so this is the only gate between an agent's
+ *  JSON and the DOM: it is TOTAL BY CONSTRUCTION — every branch returns, nothing
+ *  throws, and garbage yields no rows (the caller's degrade path) rather than a
+ *  crash that would blank the whole surface (R16). It is also BOUNDED in BOTH
+ *  directions — output AND work. At most MAX_STEPS rows come out, and at most
+ *  MAX_SCAN entries are examined, with the untouched remainder reported as
+ *  `hidden` so the rail says so out loud instead of silently lying. */
+function parseSteps(value: unknown): ParsedSteps {
+  // A fresh object, not a shared module-level constant: the result is handed to a
+  // caller, and a shared one would let a single mutation poison every later parse.
+  if (!Array.isArray(value)) return { steps: [], hidden: 0, scanStopped: false }
+  const out: ParsedStep[] = []
+  // Bounding the OUTPUT is not enough: an array whose entries are all dropped
+  // (`[0,0,0,…]`) never reaches the row cap, so the loop would scan it end to end.
+  // That is the hostile shape — a ~500k-entry array fits in one 1 MiB surface, the
+  // walker may re-visit the same node many times (`seen` tracks ancestors, not
+  // visits), and this runs twice per visit (once for `cost`, once for `render`).
+  // Unbounded iteration there is a multi-second main-thread freeze, which is
+  // exactly the "cannot hang a card" promise. So cap the SCAN too.
+  const limit = Math.min(value.length, MAX_SCAN)
+  let i = 0
+  for (; i < limit; i++) {
+    if (out.length >= MAX_STEPS) break
+    const raw: unknown = value[i]
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const rec = raw as Record<string, unknown>
+    // A row with no readable label has nothing to show — drop it, keep the rest.
+    const label = str(rec.label).trim()
+    if (!label) continue
+    const status: StepStatus =
+      typeof rec.status === 'string' && STEP_STATUSES.has(rec.status)
+        ? (rec.status as StepStatus)
+        : 'pending'
+    const detail = str(rec.detail).trim()
+    out.push(detail ? { label, status, detail } : { label, status })
+  }
+  // Attribution is derived from OBSERVABLE STATE, not from which exit the loop took.
+  // A flag set only by the `break` gets the boundary wrong: when the 60th row lands
+  // on the very last scanned entry, the loop leaves via the `i < limit` condition
+  // instead, so the flag would say "scan window" about a rail that is visibly full.
+  // A full `out` means the row cap bound us, wherever we stopped — and the row cap
+  // wins when both applied, since trimming the list is the advice the author can
+  // act on, whereas the window only hides entries already past 60 renderable rows.
+  return { steps: out, hidden: value.length - i, scanStopped: out.length < MAX_STEPS && i < value.length }
+}
+
+// One tone per status, LITERAL class strings (no interpolated fragments) so
+// Tailwind's JIT actually emits them — the same discipline OpenPointsSurface's
+// PILL_TONE uses. `done` → hue.resolved (emerald, settled). `active` → primary
+// cyan + the live glow, the one legitimate cyan use (P4 · cyan means live: the
+// active phase IS the live edge). `pending` → the faint resting rail.
+// `skipped` → hue.dismissed (slate, off-track).
+const STEP_NODE: Record<StepStatus, string> = {
+  done: 'bg-hue-resolved text-surface-base',
+  active: 'bg-primary text-surface-base shadow-[0_0_14px_rgba(0,240,255,0.10)]',
+  pending: 'bg-primary/12 text-ink-low',
+  skipped: 'bg-hue-dismissed text-surface-base',
+}
+
+// Label ink tracks importance, not just status: the live phase is the only one
+// at high ink; finished work sits at mid; not-yet and never-ran sit at low.
+const STEP_LABEL: Record<StepStatus, string> = {
+  done: 'text-ink-mid',
+  active: 'text-ink-high',
+  pending: 'text-ink-low',
+  skipped: 'text-ink-low line-through',
+}
+
+// The connector below a row: emerald once the phase is behind us, faint ahead.
+const STEP_CONNECTOR: Record<StepStatus, string> = {
+  done: 'bg-hue-resolved/40',
+  active: 'bg-primary/25',
+  pending: 'bg-primary/12',
+  skipped: 'bg-hue-dismissed/30',
+}
+
+/** How the surface states truncation. The two causes read differently on purpose:
+ *  "not shown" means the rail drew its 60 and there was more, which the author
+ *  fixes by trimming; "not scanned" means we stopped reading the array early,
+ *  which the author fixes by moving real rows nearer the front. Reporting one
+ *  when the other happened sends them after the wrong problem. */
+function truncationNote({ hidden, scanStopped }: Pick<ParsedSteps, 'hidden' | 'scanStopped'>): string {
+  const unit = hidden === 1 ? 'entry' : 'entries'
+  return `+${hidden} ${scanStopped ? `${unit} not scanned` : `more ${unit} not shown`}`
+}
+
+/** The glyph inside a step node. Only `done` earns a mark; the rest are dots,
+ *  so the rail reads as progress rather than as four different icons. */
+function stepGlyph(status: StepStatus): string {
+  return status === 'done' ? '✓' : ''
+}
+
+function StepperRail({ steps, hidden, scanStopped }: ParsedSteps): ReactNode {
+  return (
+    // role=list/listitem: without it a screen reader reads the rail as one run-on
+    // line of labels with no structure (and `display:flex` strips implicit list
+    // semantics anyway, so the explicit role is required, not decorative). The
+    // status itself is carried only by color + glow + a `✓` glyph, every one of
+    // which is invisible to assistive tech — so each row also states its status in
+    // a visually-hidden span. Without that, the component's whole reason for
+    // existing (the status vocabulary) is exactly what AT cannot perceive.
+    <div className="flex flex-col my-1" role="list" data-testid="stepper">
+      {steps.map((step, i) => (
+        <div
+          key={`${i}-${step.label}`}
+          role="listitem"
+          className="flex flex-row gap-2.5"
+          data-testid="stepper-step"
+          data-status={step.status}
+        >
+          <span className="sr-only" data-testid="stepper-status-text">{`${step.status}: `}</span>
+          {/* Rail column: the status node, plus the connector down to the next. */}
+          <div className="flex flex-col items-center">
+            <span
+              className={`mt-[3px] h-3.5 w-3.5 shrink-0 rounded-full flex items-center justify-center font-mono text-[9px] leading-none ${STEP_NODE[step.status]}`}
+              data-testid="stepper-node"
+              aria-hidden="true"
+            >
+              {stepGlyph(step.status)}
+            </span>
+            {(i < steps.length - 1 || hidden > 0) && (
+              <span
+                className={`w-px flex-1 min-h-[10px] ${STEP_CONNECTOR[step.status]}`}
+                data-testid="stepper-connector"
+                aria-hidden="true"
+              />
+            )}
+          </div>
+          {/* Content column: a mono label (meta, not prose) + an optional sans
+              detail caption. `font-sans` on the detail is load-bearing — the run
+              card defaults to mono, so reading prose must pin the sans face. */}
+          <div className={`min-w-0 ${i < steps.length - 1 || hidden > 0 ? 'pb-2' : ''}`}>
+            <div
+              className={`font-mono text-[11.5px] leading-[1.5] ${STEP_LABEL[step.status]}`}
+              data-testid="stepper-label"
+            >
+              {step.label}
+            </div>
+            {step.detail && (
+              <div
+                className="font-sans text-[12.5px] leading-[1.5] text-ink-low mt-0.5"
+                data-testid="stepper-detail"
+              >
+                {step.detail}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+      {/* The truncation notice is the rail's LAST ROW, not a footnote beside it —
+          so it stays inside the list for AT, and `pl-6` (node width + gap) lines it
+          up under the labels rather than under the rail. */}
+      {hidden > 0 && (
+        <div
+          role="listitem"
+          className="font-mono text-[11.5px] leading-[1.5] text-ink-low pl-6"
+          data-testid="stepper-overflow"
+        >
+          {truncationNote({ hidden, scanStopped })}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export const CATALOG: Record<string, CatalogEntry> = {
@@ -166,6 +400,36 @@ export const CATALOG: Record<string, CatalogEntry> = {
   // that decides what counts as valid — anything unknown falls back to 'ink'.
   Mermaid: {
     render: (node) => <MermaidComponent source={str(node.source)} theme={node.theme} />,
+  },
+  // Stepper: a read-only, status-colored vertical progress rail. A leaf — it
+  // takes no children and reads only its passthrough `steps` array of
+  // `{ label, status, detail? }`. `steps` is passed RAW to `parseSteps`, which
+  // is the single place that decides what counts as a valid row; anything else
+  // (a string, an object, rows with no label, an unknown status) is coerced or
+  // dropped there, and the row count is capped at MAX_STEPS so one node can't
+  // expand into an unbounded DOM. An entirely unusable `steps` degrades to a
+  // small inline amber marker, matching the renderer's NodeFallback tone —
+  // never a throw, never a blank surface (R16).
+  Stepper: {
+    // One Stepper node draws one row per step, so it costs the walker its row
+    // count — that is what keeps the ceiling per SURFACE and not merely per node.
+    cost: (node) => parseSteps(node.steps).steps.length,
+    render: (node) => {
+      const { steps, hidden, scanStopped } = parseSteps(node.steps)
+      if (steps.length === 0) {
+        // The zero-row degrade still reports truncation. Without this, the scan cap
+        // is INVISIBLE in exactly the case it creates — an author whose valid rows
+        // sit past the scan window would see "no steps to show" and read it as "my
+        // JSON was malformed", with nothing to distinguish that from "we stopped
+        // looking". The rail's own overflow row can't say it: there is no rail.
+        return (
+          <span className="text-xs italic text-amber-300/80">
+            {`⚠ stepper: no steps to show${hidden > 0 ? ` (${truncationNote({ hidden, scanStopped })})` : ''}`}
+          </span>
+        )
+      }
+      return <StepperRail steps={steps} hidden={hidden} scanStopped={scanStopped} />
+    },
   },
 }
 
