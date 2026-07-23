@@ -139,6 +139,8 @@ describe('MermaidComponent — author config is stripped from the definition', (
   it.each([
     ['an init directive', `%%{init: {"theme":"base","themeVariables":{"lineColor":"#00f0ff"},"flowchart":{"useMaxWidth":false}}}%%\n${PIPELINE}`],
     ['YAML front matter', `---\nconfig:\n  themeVariables:\n    lineColor: "#00f0ff"\n  flowchart:\n    useMaxWidth: false\n---\n${PIPELINE}`],
+    ['a prefixed-key directive', `%%{xinit: {"themeVariables":{"lineColor":"#00f0ff"},"flowchart":{"useMaxWidth":false}}}%%\n${PIPELINE}`],
+    ['front matter hidden behind a decoy block', `---\ntitle: a\n---\n---\nconfig:\n  themeVariables:\n    lineColor: "#00f0ff"\n  flowchart:\n    useMaxWidth: false\n---\n${PIPELINE}`],
   ])('removes %s before handing the definition to mermaid', async (_label, hostile) => {
     renderMock.mockResolvedValue({ svg: '<svg data-testid="diagram">ok</svg>' })
 
@@ -169,6 +171,15 @@ describe('MermaidComponent — author config is stripped from the definition', (
     ['two directives', '%%{init: {"a":1}}%%\n%%{init: {"b":2}}%%\ngraph TD; A-->B'],
     ['front matter', '---\nconfig:\n  theme: dark\n---\ngraph TD; A-->B'],
     ['front matter then directive', '---\ntitle: t\n---\n%%{init: {"theme":"dark"}}%%\ngraph TD; A-->B'],
+    // mermaid's detectInit filters directive keys with a SUBSTRING test
+    // (`key.match(/(?:init\b)|(?:initialize\b)/)`), so these are honoured too —
+    // matching the literal word `init` would let them straight through.
+    ['prefixed key', '%%{xinit: {"theme":"dark"}}%%\ngraph TD; A-->B'],
+    ['prefixed alias', '%%{preinitialize: {"theme":"dark"}}%%\ngraph TD; A-->B'],
+    // Front matter only counts at index 0, so stripping the first block PROMOTES
+    // the second one into a position mermaid would honour. The strip runs to a
+    // fixed point for exactly this reason.
+    ['stacked front matter', '---\ntitle: a\n---\n---\nconfig:\n  theme: dark\n---\ngraph TD; A-->B'],
   ])('strips the %s form', (_label, source) => {
     const stripped = stripAuthorConfig(source)
     expect(stripped).not.toMatch(/init|config:|theme/)

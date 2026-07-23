@@ -53,14 +53,28 @@ let mermaidIdCounter = 0
 // default — the same value we pin — and mermaid keeps securityLevel /
 // suppressErrorRendering / maxTextSize on its `secure` list, which neither an
 // author directive nor a config merge can weaken.
-let mermaidRenderQueue: Promise<unknown> = Promise.resolve()
+let mermaidRenderQueue: Promise<void> = Promise.resolve()
 
-/** Run `task` after every previously-enqueued mermaid render has settled. */
+/** Longest a single render may hold the queue. mermaid lazily imports a chunk per
+ *  diagram TYPE from inside render(), so a stalled network can leave one render
+ *  unsettled forever — and a strictly serial chain would then strand every later
+ *  diagram on "Rendering diagram…". The slot releases after this either way. The
+ *  released render still finishes and still paints; it just stops blocking. */
+const QUEUE_SLOT_TIMEOUT_MS = 10_000
+
+/** Run `task` after every previously-enqueued mermaid render has settled (or
+ *  timed out of its slot). */
 function enqueueMermaidRender(task: () => Promise<void>): Promise<void> {
-  const next = mermaidRenderQueue.then(task, task)
+  const run = mermaidRenderQueue.then(task, task)
   // Swallow on the chain itself so one failure can't poison every later render.
-  mermaidRenderQueue = next.then(() => undefined, () => undefined)
-  return next
+  mermaidRenderQueue = new Promise<void>((advance) => {
+    const slot = setTimeout(advance, QUEUE_SLOT_TIMEOUT_MS)
+    void run.then(() => undefined, () => undefined).then(() => {
+      clearTimeout(slot)
+      advance()
+    })
+  })
+  return run
 }
 
 /** Hard ceiling on an authored definition, mirroring mermaid's own default
@@ -90,19 +104,35 @@ export const MAX_SOURCE_LENGTH = 50_000
 //    the block ends. The block also carries `title:`, which goes with it — the
 //    Slate authoring contract never offered front matter in the first place.
 const FRONT_MATTER_RE = /^([^\S\n\r]*)-{3}\s*[\n\r](.*?)[\n\r]\1-{3}\s*[\n\r]+/s
-// 2. `%%{init: ...}%%` directives, anywhere in the definition. Shaped after
-//    mermaid's directive grammar (utils.detectDirective): `%%{`, an
-//    `init`/`initialize` key, then everything up to the first `}%%` — or to the
-//    end when unterminated, which is what mermaid's own regex consumes too.
-//    Optional quotes are tolerated even though mermaid ignores that form today,
-//    so a future mermaid that honours it can't reopen the hole.
-const INIT_DIRECTIVE_RE = /%%\{\s*["']?init(?:ialize)?["']?\s*[:}][\s\S]*?(?:\}%%|$)/gi
+// 2. `%%{…}%%` directives, anywhere in the definition. Mermaid's own
+//    directiveRegex, verbatim — the same one its removeDirectives() uses to clear
+//    directives out of the diagram body, so this strip and mermaid's parse agree
+//    exactly on what a directive is (including that an unterminated one runs to
+//    the end). Matching the KEY instead would be wrong: mermaid's detectInit
+//    filters keys with `key.match(/(?:init\b)|(?:initialize\b)/)`, a SUBSTRING
+//    test, so `%%{xinit: …}%%` and `%%{preinitialize: …}%%` are honoured too.
+//    Every directive goes; mermaid only honours init/initialize and wrap, and a
+//    Slate author has no business with any of them.
+const DIRECTIVE_RE = /%{2}\{\s*(?:(\w+)\s*:|(\w+))\s*(?:(\w+)|((?:(?!\}%{2}).|\r?\n)*))?\s*(?:\}%{2})?/gi
 
-/** Strip both author-controlled config channels from a definition. Order matches
- *  mermaid's preprocessDiagram (front matter, then directives) so this never
- *  removes text mermaid would have kept as diagram body. */
+/** Strip both author-controlled config channels from a definition.
+ *
+ *  Runs to a FIXED POINT, not once. Both patterns are position-sensitive —
+ *  front matter only counts at index 0 — so a single pass can *promote* a
+ *  second block into a position mermaid would then honour: strip the leading
+ *  front matter of `---…---\n---config:…---\ngraph TD` and the second block is
+ *  suddenly at index 0. Repeat until nothing changes. Each pass strictly
+ *  shortens the string, and MAX_SOURCE_LENGTH bounds the input, so it terminates.
+ *
+ *  Within a pass the order matches mermaid's preprocessDiagram (front matter,
+ *  then directives). */
 export function stripAuthorConfig(source: string): string {
-  return source.replace(FRONT_MATTER_RE, '').replace(INIT_DIRECTIVE_RE, '')
+  let out = source
+  for (;;) {
+    const next = out.replace(FRONT_MATTER_RE, '').replace(DIRECTIVE_RE, '')
+    if (next === out) return out
+    out = next
+  }
 }
 
 /** The diagram treatments an author can pick between, per diagram. */
@@ -200,6 +230,12 @@ function MermaidExpanded({
     // Move focus into the dialog on open and hand it back to the trigger on close,
     // so a keyboard user who expanded a diagram lands back where they were instead
     // of on document.body (where the next Escape/arrow goes to the canvas).
+    //
+    // Restoration covers USER-INITIATED closes (Escape / backdrop / close button),
+    // which is the whole keyboard path. On the auto-refresh close the trigger
+    // unmounts in the same commit, so the ref is already detached and this is a
+    // no-op — deliberately: yanking focus onto a replacement element the user
+    // never touched would be focus-stealing on a background refresh.
     closeButtonRef.current?.focus()
     return () => { restoreFocusTo.current?.focus() }
   }, [restoreFocusTo])
@@ -292,11 +328,24 @@ export function MermaidComponent({
 
     const id = `a2ui-mermaid-${++mermaidIdCounter}`
 
-    import('mermaid').then((mod) => {
-      if (cancelled) return undefined
-      const mermaid = mod.default
+    void (async () => {
+      let mermaid: (typeof import('mermaid'))['default']
+      try {
+        mermaid = (await import('mermaid')).default
+      } catch (err) {
+        // The mermaid chunk itself failed to load (e.g. a stale /assets/*.js after
+        // a rebuild). Without this catch the block hangs on "Rendering diagram…"
+        // forever — surface a reload hint instead. Scoped to the IMPORT alone, so a
+        // failure inside render() can't be mislabelled as a chunk-load failure.
+        if (cancelled) return
+        const detail = err instanceof Error ? err.message : 'unknown error'
+        setErrorMsg(`couldn't load the diagram renderer (${detail}) — try reloading the page`)
+        return
+      }
+      if (cancelled) return
+
       // initialize() + render() must stay adjacent — see the queue note up top.
-      return enqueueMermaidRender(async () => {
+      await enqueueMermaidRender(async () => {
         if (cancelled) return
         try {
           mermaid.initialize({
@@ -322,14 +371,7 @@ export function MermaidComponent({
           setErrorMsg(err instanceof Error ? err.message : 'invalid mermaid syntax')
         }
       })
-    }).catch((err) => {
-      // The mermaid chunk itself failed to load (e.g. a stale /assets/*.js after
-      // a rebuild). Without this catch the block hangs on "Rendering diagram…"
-      // forever — surface a reload hint instead.
-      if (cancelled) return
-      const detail = err instanceof Error ? err.message : 'unknown error'
-      setErrorMsg(`couldn't load the diagram renderer (${detail}) — try reloading the page`)
-    })
+    })()
 
     return cleanup
   }, [source, resolvedTheme])
