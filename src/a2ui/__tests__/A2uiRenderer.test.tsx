@@ -6,6 +6,7 @@ import {
   A2uiRenderer,
   A2uiErrorBoundary,
   MALFORMED_SIGNAL,
+  MAX_NODES,
   extractReadableText,
 } from '../A2uiRenderer'
 import { isSupported } from '../catalog'
@@ -659,13 +660,43 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
         ])}
       />,
     )
-    // 40 x 60 = 2400 rows if the cap were per node; the shared budget stops it well short.
-    const drawn = rows(container).length
-    expect(drawn).toBeGreaterThan(0)           // the surface still renders what it can
-    expect(drawn).toBeLessThanOrEqual(500)     // ...but never more than the whole-surface budget
+    // 40 x 60 = 2400 rows if the cap were per node. Assert the EXACT count, not a
+    // range: a range still passes if the charge is off by one (e.g. steps.length-1,
+    // or charged after the guard). Derivation — the root Column costs 1, each
+    // stepper costs 1 (visiting it) + 60 (its rows), so floor((500-1)/61) = 8
+    // steppers fit and the 9th onward degrade.
+    const perStepper = 1 + 60
+    const fit = Math.floor((MAX_NODES - 1) / perStepper)
+    expect(rows(container)).toHaveLength(fit * 60)
+    expect(fit * 60).toBe(480) // pins the arithmetic itself, so a silent constant drift is visible
     // The surface degrades loudly rather than silently rendering a truncated tree.
     expect(container.textContent).toContain('content too large to render')
     expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
+  })
+
+  // Bounding the OUTPUT is not the same as bounding the WORK. An array whose
+  // entries all get dropped never reaches the row cap, so an unbounded loop would
+  // scan it end to end — twice per visit, once for cost() and once for render().
+  // Asserted by OBSERVABLE effect, not by a stopwatch: a wall-clock bound would
+  // pass with the cap removed (40k cheap iterations are still fast), proving
+  // nothing. The scan window is MAX_STEPS * 20 = 1200 entries, so a valid row
+  // sitting just past it is provably never reached — and one just inside it is.
+  it.each([
+    [1200, 'TooLate', 0],  // first entry outside the window — dropped
+    [1199, 'JustInTime', 1], // last entry inside it — rendered
+  ])('bounds the SCAN at 1200 entries (junk=%i)', (junkCount, label, expectedRows) => {
+    const steps = [...Array.from({ length: junkCount }, () => 0), { label, status: 'done' }]
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    expect(rows(container)).toHaveLength(expectedRows)
+    expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
+    if (expectedRows === 0) {
+      // Zero renderable rows in the window degrades to the marker, never a throw.
+      expect(container.textContent).toContain('stepper: no steps to show')
+    } else {
+      expect(container.textContent).toContain(label)
+    }
   })
 
   it('exposes the status to assistive tech as text, not as color alone', () => {

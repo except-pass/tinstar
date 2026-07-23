@@ -34,7 +34,7 @@ const MAX_DEPTH = 32
  *  visit (including re-visits of a shared ref). This — not depth — is what stops
  *  a tiny hostile description like `c_i.children = [c_{i+1}, c_{i+1}]` from
  *  forcing 2^N renders and hanging the tab (R16: a bad notice can't hang it). */
-const MAX_NODES = 500
+export const MAX_NODES = 500
 
 /** Keys whose string values are human-readable content. Used by the degrade path
  *  to salvage something readable out of an invalid description. */

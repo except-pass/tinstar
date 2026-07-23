@@ -29,12 +29,14 @@ import { MermaidComponent } from './MermaidComponent'
 export interface CatalogEntry {
   render(node: A2uiComponent, children: ReactNode[]): ReactNode
   /** EXTRA node budget this entry's own expansion consumes, beyond the 1 the
-   *  renderer already charges for visiting it. Default 0 — nearly every entry
-   *  renders a fixed handful of elements. It exists for the entries that turn ONE
-   *  component into N rows from a prop (`Stepper`): without it the renderer's
-   *  MAX_NODES budget counts components only, so a surface could stack many
-   *  self-bounded leaves and still blow past any per-node cap. Charging here is
-   *  what makes the bound per SURFACE. */
+   *  renderer already charges for visiting it. Default 0 — most entries render a
+   *  fixed handful of elements. It exists for entries that turn ONE component into
+   *  N elements from a prop: without it the renderer's MAX_NODES budget counts
+   *  components only, so a surface could stack many individually-bounded leaves and
+   *  still blow past any per-node cap. Charging here is what makes the bound per
+   *  SURFACE. `Stepper` is currently the only entry that charges — `Mermaid` also
+   *  expands a prop into arbitrarily many SVG elements and is NOT yet charged, so
+   *  the per-surface ceiling does not cover it. */
   cost?(node: A2uiComponent): number
 }
 
@@ -100,11 +102,12 @@ interface ParsedStep {
 
 const STEP_STATUSES = new Set<string>(['pending', 'active', 'done', 'skipped'])
 
-/** Hard row cap — the FIRST of two bounds. `steps` is the one catalog prop that
- *  expands a SINGLE A2UI node into an unbounded number of DOM rows: a surface
- *  posted through the API is capped at 1 MiB, i.e. ~30k steps × ~5 elements each,
- *  which would block the render thread. Past this many phases the rail has stopped
- *  being readable anyway, so truncating is both the safe and the honest answer.
+/** Hard row cap — the first of THREE bounds this entry needs (rows out, entries
+ *  scanned, share of the surface budget). `steps` expands a SINGLE A2UI node into
+ *  an unbounded number of DOM rows: a surface posted through the API is capped at
+ *  1 MiB, i.e. ~30k steps × ~5 elements each, which would block the render thread.
+ *  Past this many phases the rail has stopped being readable anyway, so truncating
+ *  is both the safe and the honest answer.
  *
  *  This cap alone is NOT the guarantee, because it is per node and the renderer's
  *  MAX_NODES budget counts components: ~500 individually-capped steppers would
@@ -112,6 +115,11 @@ const STEP_STATUSES = new Set<string>(['pending', 'active', 'done', 'skipped'])
  *  `cost` hook on this entry, which charges a stepper's rows to that shared
  *  budget — that is what makes the ceiling per SURFACE. Neither is redundant. */
 const MAX_STEPS = 60
+
+/** Hard cap on entries EXAMINED, as distinct from rows emitted. Generous enough
+ *  that a real tracker padded with junk rows still fills its 60, small enough that
+ *  a hostile array can't turn each visit into a long synchronous scan. */
+const MAX_SCAN = MAX_STEPS * 20
 
 interface ParsedSteps {
   /** The rows to draw — never more than MAX_STEPS. */
@@ -127,16 +135,25 @@ interface ParsedSteps {
  *  are `.passthrough()` / `unknown`, so this is the only gate between an agent's
  *  JSON and the DOM: it is TOTAL BY CONSTRUCTION — every branch returns, nothing
  *  throws, and garbage yields no rows (the caller's degrade path) rather than a
- *  crash that would blank the whole surface (R16). It is also BOUNDED: at most
- *  MAX_STEPS rows come out, with the untouched remainder reported as `hidden` so
- *  the rail can say so out loud instead of silently lying about the count. */
+ *  crash that would blank the whole surface (R16). It is also BOUNDED in BOTH
+ *  directions — output AND work. At most MAX_STEPS rows come out, and at most
+ *  MAX_SCAN entries are examined, with the untouched remainder reported as
+ *  `hidden` so the rail says so out loud instead of silently lying. */
 function parseSteps(value: unknown): ParsedSteps {
   // A fresh object, not a shared module-level constant: the result is handed to a
   // caller, and a shared one would let a single mutation poison every later parse.
   if (!Array.isArray(value)) return { steps: [], hidden: 0 }
   const out: ParsedStep[] = []
+  // Bounding the OUTPUT is not enough: an array whose entries are all dropped
+  // (`[0,0,0,…]`) never reaches the row cap, so the loop would scan it end to end.
+  // That is the hostile shape — a ~500k-entry array fits in one 1 MiB surface, the
+  // walker may re-visit the same node many times (`seen` tracks ancestors, not
+  // visits), and this runs twice per visit (once for `cost`, once for `render`).
+  // Unbounded iteration there is a multi-second main-thread freeze, which is
+  // exactly the "cannot hang a card" promise. So cap the SCAN too.
+  const limit = Math.min(value.length, MAX_SCAN)
   let i = 0
-  for (; i < value.length; i++) {
+  for (; i < limit; i++) {
     if (out.length >= MAX_STEPS) break
     const raw: unknown = value[i]
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
