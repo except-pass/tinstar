@@ -225,7 +225,7 @@ killed wrapper cannot leave a permanently live spinner.
 ## Authoring guidance for agents
 
 Agents author Slate surfaces by writing files, not by calling an endpoint. The
-`the-slate` agent skill (under `agent-skills/skills/the-slate/`) is the authoring guide —
+`slate-surface` agent skill (under `agent-skills/skills/slate-surface/`) is the authoring guide —
 the file schema, atomic-write and retract discipline, the reply flow, and the injection
 guardrail. It is installed alongside the other Tinstar agent skills via
 `tinstar install-skills`.
