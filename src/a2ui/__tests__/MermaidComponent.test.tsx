@@ -2,12 +2,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react'
 import {
+  MAX_EXPANDED_UPSCALE,
   MAX_SOURCE_LENGTH,
   MermaidComponent,
   QUEUE_SLOT_TIMEOUT_MS,
   STRIP_PASS_LIMIT,
   enqueueMermaidRender,
+  expandedWidthCss,
   normalizeTheme,
+  readSvgIntrinsicSize,
   stripAuthorConfig,
 } from '../MermaidComponent'
 
@@ -385,9 +388,55 @@ describe('MermaidComponent — click to expand', () => {
     // The expanded copy carries the same SVG, at readable natural size.
     const panel = screen.getByTestId('mermaid-expanded-panel')
     expect(panel.querySelector('[data-testid="diagram"]')).not.toBeNull()
-    expect(panel.querySelector('div')!.className).toContain('[&_svg]:max-w-none')
+    // `!` matters — see the sizing describe below.
+    expect(panel.querySelector('div')!.className).toContain('[&_svg]:!max-w-none')
     // The inline copy is still mounted underneath (the lightbox is additive).
     expect(container.querySelector('[data-testid="diagram"]')).not.toBeNull()
+  })
+
+  it('sizes the expanded diagram from its viewBox instead of letting it collapse', async () => {
+    // REGRESSION (expanded view rendered at 300px). Mermaid emits `width="100%"`
+    // with no height and only an inline `style="max-width:<natural>px"`. An SVG
+    // with a viewBox has an intrinsic RATIO but no intrinsic SIZE, so `width:100%`
+    // inside the shrink-to-fit centred panel is circular — the box wants the
+    // content's width, the content wants the box's. CSS breaks the tie with the
+    // 300px default object size, and a 1368x165 flowchart painted 300x36: 22% of
+    // natural, which is what "unreadably small even after I click on it" was.
+    //
+    // jsdom does no layout, so this asserts the CAUSE (a definite width derived
+    // from the viewBox) rather than the pixels. The pixels were verified in a
+    // real browser: 300x36 before, 1486x179 after, at a 1600px viewport.
+    renderMock.mockResolvedValue({
+      svg: '<svg data-testid="diagram" width="100%" viewBox="0 0 1367.92 164.71" style="max-width: 1367.92px;">ok</svg>',
+    })
+    render(<MermaidComponent source={PIPELINE} />)
+    await waitFor(() => {
+      expect(screen.getAllByTestId('diagram').length).toBeGreaterThan(0)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand diagram' }))
+
+    const sizer = screen.getByTestId('mermaid-expanded-sizer')
+    // A definite width, floored at natural size and capped at the upscale limit.
+    // Read off the custom property, not `style.width` — jsdom drops `max(…)`.
+    const width = sizer.style.getPropertyValue('--mermaid-expanded-width')
+    expect(width).toContain('1367.92px')
+    expect(width).toContain(`${1367.92 * MAX_EXPANDED_UPSCALE}px`)
+    // The svg fills that width, and the important modifier is what lets it grow
+    // past mermaid's own inline max-width (a plain class loses to inline style).
+    expect(sizer.className).toContain('[&_svg]:!max-w-none')
+    expect(sizer.className).toContain('[&_svg]:w-full')
+  })
+
+  it('leaves width alone when there is no viewBox to size from', async () => {
+    // Don't invent a number: an unsized svg keeps whatever it brought.
+    renderMock.mockResolvedValue({ svg: '<svg data-testid="diagram">ok</svg>' })
+    render(<MermaidComponent source={PIPELINE} />)
+    await waitFor(() => {
+      expect(screen.getAllByTestId('diagram').length).toBeGreaterThan(0)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand diagram' }))
+    const sizer = screen.getByTestId('mermaid-expanded-sizer')
+    expect(sizer.style.getPropertyValue('--mermaid-expanded-width')).toBe('')
   })
 
   it('portals the expanded view to document.body, escaping the canvas transform', async () => {
@@ -627,5 +676,34 @@ describe('MermaidComponent — concurrent diagrams keep their own palette', () =
       settle.forEach((release) => release?.())
       vi.useRealTimers()
     }
+  })
+})
+
+describe('MermaidComponent — expanded sizing helpers', () => {
+  it('reads the intrinsic size out of a viewBox, whitespace- or comma-separated', () => {
+    expect(readSvgIntrinsicSize('<svg viewBox="0 0 1367.92 164.71">')).toEqual({ width: 1367.92, height: 164.71 })
+    expect(readSvgIntrinsicSize("<svg viewBox='0,0,100,50'>")).toEqual({ width: 100, height: 50 })
+    // Mermaid really does emit a tiny negative min-y; only w/h are taken.
+    expect(readSvgIntrinsicSize('<svg viewBox="0 -0.5 800 600">')).toEqual({ width: 800, height: 600 })
+  })
+
+  it('returns null for anything it cannot trust, rather than guessing', () => {
+    expect(readSvgIntrinsicSize('<svg width="100%">')).toBeNull()
+    expect(readSvgIntrinsicSize('<svg viewBox="0 0 100">')).toBeNull()
+    expect(readSvgIntrinsicSize('<svg viewBox="0 0 abc 50">')).toBeNull()
+    expect(readSvgIntrinsicSize('<svg viewBox="0 0 0 50">')).toBeNull()
+    expect(readSvgIntrinsicSize('<svg viewBox="0 0 -100 50">')).toBeNull()
+  })
+
+  it('floors at natural size and caps the upscale, fitting both axes', () => {
+    const css = expandedWidthCss({ width: 400, height: 200 })
+    // Floor: never smaller than natural — a diagram too big to fit scrolls
+    // instead of shrinking back into illegibility.
+    expect(css.startsWith('max(400px,')).toBe(true)
+    // Cap: 2x, so a two-node diagram doesn't fit to 6.6x and render 72px labels.
+    expect(css).toContain('800px')
+    // Fits the viewport on BOTH axes — the height term carries the aspect ratio.
+    expect(css).toContain('calc(100vw - (7rem + 2px))')
+    expect(css).toContain('calc((100vh - (7rem + 2px)) * 2)')
   })
 })

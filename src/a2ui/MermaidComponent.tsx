@@ -214,7 +214,66 @@ const SHARED_THEME_VARIABLES = {
   fontSize: '11px',
 }
 
-/** The expanded ("lightbox") view of a diagram, at readable natural size.
+/** Read a rendered diagram's intrinsic pixel size out of its `viewBox`.
+ *
+ *  Needed because mermaid emits `width="100%"` with NO height and only a
+ *  `style="max-width:<natural>px"` cap. An SVG carrying a viewBox has an
+ *  intrinsic *ratio* but no intrinsic *size*, so `width:100%` inside a
+ *  shrink-to-fit box (the centred lightbox panel) is circular: the box wants the
+ *  content's width, the content wants the box's width. CSS resolves that with
+ *  the default object size — 300px — and the diagram paints at 300px wide no
+ *  matter how big it really is. Measured on the real thing: a 1367.9×164.7
+ *  flowchart rendered 299.9×36.1 in the expanded view, i.e. 22% of natural size.
+ *  Giving the wrapper a definite width from the viewBox breaks the cycle.
+ *
+ *  Returns null when there's no usable viewBox (caller then leaves sizing alone
+ *  rather than inventing a number). */
+export function readSvgIntrinsicSize(svg: string): { width: number; height: number } | null {
+  const match = /\bviewBox\s*=\s*["']([^"']+)["']/.exec(svg)
+  const raw = match?.[1]
+  if (raw === undefined) return null
+  // viewBox is "min-x min-y width height", separated by whitespace and/or commas.
+  const parts = raw.trim().split(/[\s,]+/).map(Number)
+  if (parts.length !== 4) return null
+  const width = parts[2]
+  const height = parts[3]
+  if (width === undefined || height === undefined) return null
+  // Rejects NaN as well as non-positive values — a zero or negative extent has
+  // no usable ratio, and dividing by it would poison the fit expression.
+  if (!(width > 0) || !(height > 0)) return null
+  return { width, height }
+}
+
+/** Everything between the viewport edge and the diagram, on one axis: the
+ *  backdrop's `p-8` (2rem a side) plus the panel's `p-6` (1.5rem a side) plus
+ *  its 1px border a side. Kept as a constant next to the classes it mirrors —
+ *  when they disagree the panel grows a stray 2px scrollbar, which is exactly
+ *  what the browser probe caught when the border was left out of this sum. */
+const EXPANDED_CHROME = '7rem + 2px'
+
+/** How far past natural size the expanded view may scale up. Upscaling exists
+ *  to USE the lightbox, not to fill it at any cost: unbounded, a two-node
+ *  diagram fits to 6.6× and renders 11px labels at 72px. 2× puts them at a
+ *  comfortable 22px and leaves small diagrams looking deliberate. */
+export const MAX_EXPANDED_UPSCALE = 2
+
+/** The CSS `width` for the expanded diagram's wrapper: as large as usefully
+ *  fits the viewport, but never smaller than natural size.
+ *
+ *  Innermost `min(…)` is the largest width that still fits the panel on BOTH
+ *  axes and stays within the upscale cap. The outer `max(naturalWidth, …)` puts
+ *  a floor under it: a diagram too big to fit is shown at natural size and the
+ *  panel scrolls, rather than being shrunk back into illegibility — shrinking is
+ *  what the inline thumbnail already does, and escaping it is the entire point
+ *  of expanding. */
+export function expandedWidthCss({ width, height }: { width: number; height: number }): string {
+  const ratio = width / height
+  const fitsWidth = `calc(100vw - (${EXPANDED_CHROME}))`
+  const fitsHeight = `calc((100vh - (${EXPANDED_CHROME})) * ${ratio})`
+  return `max(${width}px, min(${width * MAX_EXPANDED_UPSCALE}px, ${fitsWidth}, ${fitsHeight}))`
+}
+
+/** The expanded ("lightbox") view of a diagram, at readable size.
  *
  *  PORTALED TO document.body ON PURPOSE — do not inline it. The Slate lives
  *  inside the infinite canvas, which applies `transform: translate(...) scale(...)`
@@ -232,6 +291,7 @@ function MermaidExpanded({
   restoreFocusTo: React.RefObject<HTMLElement | null>
 }): React.ReactElement {
   const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const intrinsic = readSvgIntrinsicSize(svg)
 
   useEffect(() => {
     // CAPTURE PHASE + stopPropagation, matching EntitySettingsDialog. InfiniteCanvas
@@ -279,7 +339,11 @@ function MermaidExpanded({
         // element opts out, so the expanded diagram keeps its own scroll.
         data-scrollable
         data-testid="mermaid-expanded-panel"
-        className="relative max-h-[90vh] max-w-[90vw] overflow-auto scrollbar-thin rounded border border-hairline bg-surface-raised p-6"
+        // max-h/max-w-full, NOT 90vh/90vw: the backdrop's own p-8 already insets
+        // the panel, so `full` here is exactly (viewport − backdrop padding) and
+        // the fit expression's chrome arithmetic stays exact. With 90vw the two
+        // caps disagree by a few percent and the panel gains a stray scrollbar.
+        className="relative max-h-full max-w-full overflow-auto scrollbar-thin rounded border border-hairline bg-surface-raised p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -291,9 +355,34 @@ function MermaidExpanded({
         >
           <span className="material-symbols-outlined text-base">close</span>
         </button>
-        {/* max-w-none: readable natural size here, unlike the scaled-to-fit inline
-            view. The panel scrolls if the diagram is bigger than the viewport. */}
-        <div className="[&_svg]:max-w-none [&_svg]:h-auto" dangerouslySetInnerHTML={{ __html: svg }} />
+        {/* Readable size here, unlike the scaled-to-fit inline view. Three parts,
+            all load-bearing:
+              - the wrapper's definite `width` (see expandedWidthCss) gives the
+                svg's `width="100%"` something real to resolve against; without
+                it the whole thing collapses to the 300px default object size;
+              - `!max-w-none` needs the important modifier to beat mermaid's own
+                INLINE `style="max-width:<natural>px"` — a plain class loses to
+                it, so the previous `max-w-none` here was silently a no-op and
+                capped any scale-up at natural size;
+              - `w-full` + `h-auto` then fill that width and take the height from
+                the viewBox ratio.
+            The panel scrolls if the diagram is bigger than the viewport. */}
+        <div
+          data-testid="mermaid-expanded-sizer"
+          // Via a custom property rather than a bare `width` for one reason: jsdom
+          // silently DROPS `width: max(…)` (cssstyle validates and rejects the CSS
+          // functions) but preserves custom properties verbatim, so the regression
+          // test can assert the computed value. Real browsers take either form.
+          // When there's no viewBox the property is simply absent, `var()` is then
+          // invalid at computed-value time, and width falls back to `auto` — the
+          // old behaviour, which is the right thing to do rather than invent a size.
+          style={{
+            ...(intrinsic === null ? {} : { '--mermaid-expanded-width': expandedWidthCss(intrinsic) }),
+            width: 'var(--mermaid-expanded-width)',
+          } as React.CSSProperties}
+          className="[&_svg]:!max-w-none [&_svg]:w-full [&_svg]:h-auto"
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
       </div>
     </div>,
     document.body,
