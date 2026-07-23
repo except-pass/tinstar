@@ -107,6 +107,7 @@ JSON object with:
 | `Divider` | — | a horizontal rule |
 | `Link` | `text`, `url` | a themed link (a `javascript:`/`data:` URL degrades to plain text) |
 | `Code` | `text` | a monospace block |
+| `Mermaid` | `source` | a Mermaid definition string drawn as a themed diagram — e.g. `graph TD\n  A --> B\n  B -->\|yes\| C`. Use it for any flow/pipeline/state picture instead of ASCII art in a `Code` block. A bad or empty `source` degrades to a small inline notice. |
 | `Choice` | `mode` (`single` \| `multi`), `options` (`{ id, label }[]`) | radios or checkboxes |
 | `TextInput` | `label?`, `placeholder?` | a free-text box |
 | `Submit` | `label?` | the submit button (a control surface needs one) |

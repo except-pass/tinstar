@@ -63,7 +63,8 @@ The base unit every non-list surface inherits: a quiet shell around agent-author
 - **Card** — nested container, one child; nested cards step to `surface.hover` so nesting reads by lightness.
 - **Divider / Link** — rule; safe href (only http(s) / same-origin resolve to a link, else plain text).
 - **Code** — monospace block.
-- **Don't** fake a diagram with ASCII inside Code — it's the known gap; flag for a real Mermaid/Graph primitive.
+- **Mermaid** — `{ source }`, a Mermaid definition string rendered to a themed SVG. Nodes fill `surface.hover`; **borders and edges are neutral `ink.low` — never cyan**, because P4 reserves cyan for the live edge and a diagram is static. Wide diagrams scroll inside their own box. A bad or empty source degrades to a small inline amber line (like any other node fallback), never a crash.
+- **Don't** fake a diagram with ASCII inside Code — use **Mermaid**. (This was the known gap; it's now closed.)
 
 ## Interactive controls
 Read-only until the surface is answerable; the chosen/focused accent is the **live cyan**. A read-only control shows static at **55% opacity**, no cyan. **FollowUp** renders nothing inline — it becomes a chip in the ask panel beside the surface.

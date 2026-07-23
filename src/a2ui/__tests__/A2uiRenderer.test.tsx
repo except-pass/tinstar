@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import type { A2uiContent } from '../../domain/types'
 import {
   A2uiRenderer,
@@ -8,6 +8,22 @@ import {
   MALFORMED_SIGNAL,
   extractReadableText,
 } from '../A2uiRenderer'
+import { isSupported } from '../catalog'
+
+// The catalog's Mermaid entry dynamically imports 'mermaid'; mock it so the
+// async render resolves deterministically (no fixed timeouts — CI is slower).
+const mermaidRenderMock = vi.fn()
+vi.mock('mermaid', () => ({
+  default: {
+    initialize: vi.fn(),
+    render: (...a: unknown[]) => mermaidRenderMock(...a),
+  },
+}))
+
+beforeEach(() => {
+  mermaidRenderMock.mockReset()
+  mermaidRenderMock.mockResolvedValue({ svg: '<svg data-testid="diagram">ok</svg>' })
+})
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -282,6 +298,100 @@ describe('A2uiRenderer — interactive controls (U2/U3)', () => {
       />,
     )
     expect((screen.getByRole('radio', { name: 'Alpha' }) as HTMLInputElement).disabled).toBe(true)
+  })
+})
+
+describe('A2uiRenderer — Mermaid diagram component (Slate S1)', () => {
+  // The vppOps acceptance case: a 7-step pipeline with a fork at ROUTE. Before
+  // this component the only way to draw it was ASCII art inside a `Code` block.
+  const VPP_PIPELINE = [
+    'graph TD',
+    '  INGEST --> NORMALIZE',
+    '  NORMALIZE --> ENRICH',
+    '  ENRICH --> ROUTE',
+    '  ROUTE -->|matched| DISPATCH',
+    '  ROUTE -->|unmatched| DROP',
+    '  DISPATCH --> SETTLE',
+  ].join('\n')
+
+  it('knows the Mermaid type (isSupported), so it never hits the unsupported fallback', () => {
+    expect(isSupported('Mermaid')).toBe(true)
+  })
+
+  it('renders a Mermaid node through the component, not an "unsupported component" marker', async () => {
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'm', component: 'Mermaid', source: 'graph TD; A-->B' }])} />,
+    )
+    expect(container.textContent).not.toContain('unsupported component')
+    // The component mounts in its async loading state before mermaid resolves.
+    expect(container.textContent).toContain('Rendering diagram')
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="diagram"]')).not.toBeNull()
+    })
+  })
+
+  // Acceptance: the fork example renders as a real diagram, not a Code block.
+  it('renders the vppOps pipeline (with the ROUTE fork) as a diagram', async () => {
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'm', component: 'Mermaid', source: VPP_PIPELINE }])} />,
+    )
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="diagram"]')).not.toBeNull()
+    })
+    // The agent's fork syntax reached mermaid verbatim.
+    expect(mermaidRenderMock).toHaveBeenCalledWith(expect.any(String), VPP_PIPELINE)
+    expect(container.querySelector('pre')).toBeNull() // not a Code block
+  })
+
+  it('renders a Mermaid node alongside a sibling Text inside a Column (walk intact)', async () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([
+          { id: 'root', component: 'Column', children: ['m', 't'] },
+          { id: 'm', component: 'Mermaid', source: 'graph TD; A-->B' },
+          { id: 't', component: 'Text', text: 'the sibling survived', variant: 'body' },
+        ])}
+      />,
+    )
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="diagram"]')).not.toBeNull()
+    })
+    // The diagram did not consume its sibling.
+    expect(container.textContent).toContain('the sibling survived')
+  })
+
+  it('degrades a Mermaid node with a missing/non-string source instead of crashing the surface', () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([
+          { id: 'root', component: 'Column', children: ['m', 't'] },
+          { id: 'm', component: 'Mermaid' }, // no source at all
+          { id: 't', component: 'Text', text: 'still here', variant: 'body' },
+        ])}
+      />,
+    )
+    expect(container.textContent).toContain('empty diagram')
+    expect(container.textContent).toContain('still here')
+    expect(container.textContent).not.toContain(MALFORMED_SIGNAL) // the card didn't crash
+  })
+
+  it('degrades a Mermaid node whose source fails to parse, keeping siblings (R6)', async () => {
+    mermaidRenderMock.mockRejectedValueOnce(new Error('Parse error on line 1'))
+    const { container } = render(
+      <A2uiRenderer
+        content={content([
+          { id: 'root', component: 'Column', children: ['m', 't'] },
+          { id: 'm', component: 'Mermaid', source: 'this is not mermaid' },
+          { id: 't', component: 'Text', text: 'still here', variant: 'body' },
+        ])}
+      />,
+    )
+    await waitFor(() => {
+      expect(container.textContent).toContain('Parse error on line 1')
+    })
+    expect(container.textContent).toContain('still here')
+    // A bad diagram is an inline notice, never a tripped error boundary.
+    expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
   })
 })
 

@@ -84,6 +84,7 @@ The host catalog (`a2ui/catalog.tsx`) is a bounded, read-only set. A `component`
 | `Divider` | — | — | Horizontal rule |
 | `Link` | — | `url`, `text` | Anchor **only** for `http(s)` or same-origin (`/`- or `#`-leading) urls; anything else (e.g. `javascript:`, `data:`) renders as a plain non-link span. See `safeHref`. |
 | `Code` | — | `text` | Preformatted code block |
+| `Mermaid` | — | `source` | A Mermaid definition string rendered to a dark-themed SVG diagram (client-only, lazily imported). Borders/edges use neutral `ink.low` — never the cyan reserved for the live edge. A bad, empty, or non-string `source` degrades to a small inline amber notice; it never throws. |
 | `Choice` | — | control props | Host-themed choice control (interactive) |
 | `TextInput` | — | control props | Host-themed text input (interactive) |
 | `Submit` | — | control props | Host-themed submit control (interactive) |

@@ -60,6 +60,7 @@ components.
 | `Divider` | — | a horizontal rule |
 | `Link` | `text` (label), `url` | a themed link out to a PR, dashboard, or file |
 | `Code` | `text` | a monospace code block |
+| `Mermaid` | `source` (a Mermaid definition string) | a themed diagram — e.g. `graph TD\n  A --> B\n  B -->\|yes\| C`. Reach for it instead of drawing a flow as ASCII art in a `Code` block. A bad or empty `source` degrades to a small inline notice. |
 
 Anything outside this set (or a malformed `content`) **degrades**: the headline still
 shows, plus a "couldn't render" signal — the user always reaches you, but a garbled
