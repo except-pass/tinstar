@@ -602,7 +602,7 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
     // The truncation is VISIBLE — a runaway array degrades loudly, never silently —
     // and it is the list's last ROW, so assistive tech hears it too.
     const overflow = container.querySelector('[data-testid="stepper-overflow"]')!
-    expect(overflow.textContent).toBe('+190 more not shown')
+    expect(overflow.textContent).toBe('+190 more entries not shown')
     expect(overflow.getAttribute('role')).toBe('listitem')
     // The last drawn row still carries a connector, so the rail reads as "continues".
     expect(container.querySelectorAll('[data-testid="stepper-connector"]')).toHaveLength(60)
@@ -619,7 +619,7 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
   // and one-over must claim exactly one.
   it.each([
     [60, 60, null],
-    [61, 60, '+1 more not shown'],
+    [61, 60, '+1 more entry not shown'], // singular — the marker is read by humans
   ])('steps=%i → %i rows, overflow %s', (given, drawn, marker) => {
     const steps = Array.from({ length: given }, (_, i) => ({ label: `P${i}`, status: 'done' }))
     const { container } = render(
@@ -642,6 +642,30 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
     expect(rows(container)).toHaveLength(1)
     expect(container.querySelector('[data-testid="stepper-label"]')!.textContent).toBe('Survivor')
     expect(container.querySelector('[data-testid="stepper-overflow"]')).toBeNull()
+  })
+
+  // The per-node cap alone is not the guarantee: MAX_NODES counts COMPONENTS, so
+  // without charging rows to the shared budget a surface could stack ~500 steppers
+  // of 60 rows each and reach tens of thousands of rows — arithmetically the same
+  // render load the per-node cap exists to prevent. The bound must be per SURFACE.
+  it('charges stepper rows against the surface-wide node budget, so many steppers cannot pile up', () => {
+    const sixty = Array.from({ length: 60 }, (_, i) => ({ label: `P${i}`, status: 'done' }))
+    const ids = Array.from({ length: 40 }, (_, i) => `st${i}`)
+    const { container } = render(
+      <A2uiRenderer
+        content={content([
+          { id: 'root', component: 'Column', children: ids },
+          ...ids.map(id => ({ id, component: 'Stepper', steps: sixty })),
+        ])}
+      />,
+    )
+    // 40 x 60 = 2400 rows if the cap were per node; the shared budget stops it well short.
+    const drawn = rows(container).length
+    expect(drawn).toBeGreaterThan(0)           // the surface still renders what it can
+    expect(drawn).toBeLessThanOrEqual(500)     // ...but never more than the whole-surface budget
+    // The surface degrades loudly rather than silently rendering a truncated tree.
+    expect(container.textContent).toContain('content too large to render')
+    expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
   })
 
   it('exposes the status to assistive tech as text, not as color alone', () => {

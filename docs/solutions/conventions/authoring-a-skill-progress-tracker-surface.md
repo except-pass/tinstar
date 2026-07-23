@@ -65,7 +65,7 @@ The full field table for the envelope lives in the [surface authoring contract](
 
 | Prop | Type | Notes |
 |------|------|-------|
-| `steps` | `Array<{ label, status, detail? }>` | The rows, top to bottom. Capped at **60**; beyond that the rail draws a `+N more not shown` marker. A tracker that long has stopped being readable anyway. |
+| `steps` | `Array<{ label, status, detail? }>` | The rows, top to bottom. Capped at **60** renderable rows; beyond that the rail draws a `+N more entries not shown` marker. A tracker that long has stopped being readable anyway. |
 | `steps[].label` | string (non-empty) | The phase name. Short — it renders as a mono label, not prose. A row with no label is **dropped**. |
 | `steps[].status` | `'pending' \| 'active' \| 'done' \| 'skipped'` | Anything else (or absent) coerces to `pending`. |
 | `steps[].detail` | string, optional | A one-line caption under the label. Put running commentary here, on the **active** step only. |
@@ -106,7 +106,7 @@ The CE pipeline is the first rider, but nothing here is CE-specific: a release c
 
 **A stale tracker is worse than none.** The panel is a claim about the present. A skill that writes the tracker at start and never updates it asserts "we're still on Brainstorm" for the rest of the run, and the user trusts it. If your skill can't reliably rewrite on every transition, don't ship the tracker.
 
-**The `Stepper` degrades, it doesn't crash.** A2UI props are passthrough (`unknown`), so `steps` gets a total, never-throwing parse: non-object rows and label-less rows are dropped, unknown statuses coerce to `pending`, and a `steps` that is missing, not an array, or entirely unusable renders one small inline amber marker with the rest of the surface intact. It is also **bounded** — one `Stepper` node is the only catalog prop that expands into an unbounded number of DOM rows, and the renderer's node budget can't see inside a leaf's props, so the parse stops at 60 rows and says how many it cut. You will not blank or hang a card by getting the JSON slightly wrong — but you may silently lose rows, so validate against the example.
+**The `Stepper` degrades, it doesn't crash.** A2UI props are passthrough (`unknown`), so `steps` gets a total, never-throwing parse: non-object rows and label-less rows are dropped, unknown statuses coerce to `pending`, and a `steps` that is missing, not an array, or entirely unusable renders one small inline amber marker with the rest of the surface intact. It is also **bounded twice over**, which matters because `steps` is the only catalog prop that turns one component into an unbounded number of DOM rows. Per node, the parse stops at 60 rows and reports how many entries it never reached. Per *surface*, a `Stepper` also charges its row count against the renderer's whole-surface node budget — so a body packed with steppers exhausts that budget and degrades to `content too large to render` rather than piling up tens of thousands of rows. The per-node cap alone would not give you that: the budget counts components, so N self-bounded steppers would still multiply out. You will not blank or hang a card by getting the JSON slightly wrong — but you may silently lose rows, so validate against the example.
 
 ## Related
 

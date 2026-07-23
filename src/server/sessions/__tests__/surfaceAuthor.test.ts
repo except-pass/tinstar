@@ -100,4 +100,15 @@ describe('SLATE_AUTHOR_CONTRACT covers the render catalog', () => {
       expect(Object.keys(CATALOG)).toContain(type)
     }
   })
+
+  // The mirror image, and the nastier direction: a contract line naming a type the
+  // catalog no longer has. Every code-spawned author would keep emitting the dead
+  // type, and each surface would degrade to the inline "unsupported component"
+  // marker — silent vocabulary drift again, just pointing the other way.
+  it('names no type the catalog cannot render, so a rename/removal cannot strand authors', () => {
+    const named = [...SLATE_AUTHOR_CONTRACT.matchAll(/component:"([^"]+)"/g)].map(m => m[1]!)
+    expect(named.length).toBeGreaterThan(0) // the regex still matches the contract's shape
+    const unrenderable = [...new Set(named)].filter(type => !(type in CATALOG))
+    expect(unrenderable).toEqual([])
+  })
 })

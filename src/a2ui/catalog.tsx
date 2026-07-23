@@ -28,6 +28,14 @@ import { MermaidComponent } from './MermaidComponent'
  *  guarding; entries stay pure and presentational). */
 export interface CatalogEntry {
   render(node: A2uiComponent, children: ReactNode[]): ReactNode
+  /** EXTRA node budget this entry's own expansion consumes, beyond the 1 the
+   *  renderer already charges for visiting it. Default 0 — nearly every entry
+   *  renders a fixed handful of elements. It exists for the entries that turn ONE
+   *  component into N rows from a prop (`Stepper`): without it the renderer's
+   *  MAX_NODES budget counts components only, so a surface could stack many
+   *  self-bounded leaves and still blow past any per-node cap. Charging here is
+   *  what makes the bound per SURFACE. */
+  cost?(node: A2uiComponent): number
 }
 
 /** Read a string-valued prop, coercing anything dynamic (a data binding or
@@ -92,18 +100,26 @@ interface ParsedStep {
 
 const STEP_STATUSES = new Set<string>(['pending', 'active', 'done', 'skipped'])
 
-/** Hard row cap. `steps` is the one catalog prop that expands a SINGLE A2UI node
- *  into an unbounded number of DOM rows, and the renderer's MAX_NODES budget only
- *  counts components — it cannot see inside a leaf's props. A surface posted
- *  through the API is capped at 1 MiB, i.e. ~30k steps × ~5 elements each, which
- *  would block the render thread. Past this many phases the rail has stopped
- *  being readable anyway, so truncating is both the safe and the honest answer. */
+/** Hard row cap — the FIRST of two bounds. `steps` is the one catalog prop that
+ *  expands a SINGLE A2UI node into an unbounded number of DOM rows: a surface
+ *  posted through the API is capped at 1 MiB, i.e. ~30k steps × ~5 elements each,
+ *  which would block the render thread. Past this many phases the rail has stopped
+ *  being readable anyway, so truncating is both the safe and the honest answer.
+ *
+ *  This cap alone is NOT the guarantee, because it is per node and the renderer's
+ *  MAX_NODES budget counts components: ~500 individually-capped steppers would
+ *  still multiply out to tens of thousands of rows. The second bound is the
+ *  `cost` hook on this entry, which charges a stepper's rows to that shared
+ *  budget — that is what makes the ceiling per SURFACE. Neither is redundant. */
 const MAX_STEPS = 60
 
 interface ParsedSteps {
   /** The rows to draw — never more than MAX_STEPS. */
   steps: ParsedStep[]
-  /** Raw entries never examined because the cap was hit (0 when nothing was cut). */
+  /** Raw array ENTRIES never examined because the cap was hit (0 when nothing was
+   *  cut). Deliberately not "rows dropped": the loop stops early rather than
+   *  scanning a runaway array to classify what it would have rendered, so this is
+   *  an upper bound on the loss. The marker says "entries" for that reason. */
   hidden: number
 }
 
@@ -240,7 +256,7 @@ function StepperRail({ steps, hidden }: ParsedSteps): ReactNode {
           className="font-mono text-[11.5px] leading-[1.5] text-ink-low pl-6"
           data-testid="stepper-overflow"
         >
-          {`+${hidden} more not shown`}
+          {`+${hidden} more ${hidden === 1 ? 'entry' : 'entries'} not shown`}
         </div>
       )}
     </div>
@@ -354,6 +370,9 @@ export const CATALOG: Record<string, CatalogEntry> = {
   // small inline amber marker, matching the renderer's NodeFallback tone —
   // never a throw, never a blank surface (R16).
   Stepper: {
+    // One Stepper node draws one row per step, so it costs the walker its row
+    // count — that is what keeps the ceiling per SURFACE and not merely per node.
+    cost: (node) => parseSteps(node.steps).steps.length,
     render: (node) => {
       const { steps, hidden } = parseSteps(node.steps)
       if (steps.length === 0) {
