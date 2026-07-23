@@ -63,7 +63,8 @@ The base unit every non-list surface inherits: a quiet shell around agent-author
 - **Card** — nested container, one child; nested cards step to `surface.hover` so nesting reads by lightness.
 - **Divider / Link** — rule; safe href (only http(s) / same-origin resolve to a link, else plain text).
 - **Code** — monospace block.
-- **Mermaid** — `{ source }`, a Mermaid definition string rendered to a themed SVG. Nodes fill `surface.hover`; **borders and edges are neutral `ink.low` — never cyan**, because P4 reserves cyan for the live edge and a diagram is static. Wide diagrams scroll inside their own box. A bad or empty source degrades to a small inline amber line (like any other node fallback), never a crash.
+- **Mermaid** — `{ source, theme? }`, a Mermaid definition string rendered to a themed SVG. Nodes always fill `surface.hover` with `ink.high` labels; the author picks the accent treatment per diagram: **`ink` (default) keeps borders and edges neutral `ink.low`**, `hue` opts into the semantic `hue.*` palette for complex flows that need color to stay legible. **Neither may use cyan** — P4 reserves it for the live edge. Unknown `theme` values fall back to `ink`.
+- **Diagram sizing** — the column is 260–560px, so a diagram renders **scaled to fit** it, never at natural size and never with a horizontal scrollbar (the #126 guard). Clicking opens an expanded view at readable size, portaled to `document.body` so the canvas transform doesn't displace it. A bad or empty source degrades to a small inline amber line (like any other node fallback), never a crash.
 - **Don't** fake a diagram with ASCII inside Code — use **Mermaid**. (This was the known gap; it's now closed.)
 
 ## Interactive controls

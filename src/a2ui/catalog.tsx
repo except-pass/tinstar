@@ -152,15 +152,20 @@ export const CATALOG: Record<string, CatalogEntry> = {
     render: () => null,
   },
   // Mermaid: the one async/stateful — but still read-only — catalog entry. It
-  // turns an agent-supplied Mermaid `source` string into a dark-themed SVG
+  // turns an agent-supplied Mermaid `source` string into a host-themed SVG
   // diagram (a picture, not an answered form). Rendering lives in
   // MermaidComponent (mermaid is client-only, dynamically imported into its own
   // lazy chunk — it must never reach the React-free server bundle). Like every
   // other entry it self-degrades: a bad/empty source becomes a small inline
   // amber notice, never a throw. `str()` coerces a missing/non-string source to
   // '' → the empty-diagram degrade path.
+  //
+  // `theme` is the author's per-diagram treatment choice ('ink' monochrome by
+  // default, 'hue' for the semantic palette). It is passed through RAW, not via
+  // `str()`, because MermaidComponent's own `normalizeTheme` is the single place
+  // that decides what counts as valid — anything unknown falls back to 'ink'.
   Mermaid: {
-    render: (node) => <MermaidComponent source={str(node.source)} />,
+    render: (node) => <MermaidComponent source={str(node.source)} theme={node.theme} />,
   },
 }
 

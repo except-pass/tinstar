@@ -13,15 +13,17 @@ import { isSupported } from '../catalog'
 // The catalog's Mermaid entry dynamically imports 'mermaid'; mock it so the
 // async render resolves deterministically (no fixed timeouts — CI is slower).
 const mermaidRenderMock = vi.fn()
+const mermaidInitMock = vi.fn()
 vi.mock('mermaid', () => ({
   default: {
-    initialize: vi.fn(),
+    initialize: (...a: unknown[]) => mermaidInitMock(...a),
     render: (...a: unknown[]) => mermaidRenderMock(...a),
   },
 }))
 
 beforeEach(() => {
   mermaidRenderMock.mockReset()
+  mermaidInitMock.mockReset()
   mermaidRenderMock.mockResolvedValue({ svg: '<svg data-testid="diagram">ok</svg>' })
 })
 
@@ -373,6 +375,36 @@ describe('A2uiRenderer — Mermaid diagram component (Slate S1)', () => {
     expect(container.textContent).toContain('empty diagram')
     expect(container.textContent).toContain('still here')
     expect(container.textContent).not.toContain(MALFORMED_SIGNAL) // the card didn't crash
+  })
+
+  // The catalog must hand the authored `theme` through to the component; without
+  // this wiring the prop exists in the docs but does nothing.
+  it("passes an authored theme:'hue' through the catalog to the renderer", async () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([{ id: 'm', component: 'Mermaid', source: 'graph TD; A-->B', theme: 'hue' }])}
+      />,
+    )
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="diagram"]')).not.toBeNull()
+    })
+    const vars = (mermaidInitMock.mock.calls[0]![0] as Record<string, unknown>)
+      .themeVariables as Record<string, string>
+    expect(vars.primaryBorderColor).toBe('#818cf8') // hue.open, not ink.low
+  })
+
+  it('falls back to the ink treatment when the authored theme is garbage', async () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([{ id: 'm', component: 'Mermaid', source: 'graph TD; A-->B', theme: { path: '/t' } }])}
+      />,
+    )
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="diagram"]')).not.toBeNull()
+    })
+    const vars = (mermaidInitMock.mock.calls[0]![0] as Record<string, unknown>)
+      .themeVariables as Record<string, string>
+    expect(vars.primaryBorderColor).toBe('#5c6b74') // ink.low
   })
 
   it('degrades a Mermaid node whose source fails to parse, keeping siblings (R6)', async () => {
