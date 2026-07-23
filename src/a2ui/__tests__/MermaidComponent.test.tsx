@@ -5,6 +5,7 @@ import {
   MAX_SOURCE_LENGTH,
   MermaidComponent,
   QUEUE_SLOT_TIMEOUT_MS,
+  STRIP_PASS_LIMIT,
   enqueueMermaidRender,
   normalizeTheme,
   stripAuthorConfig,
@@ -213,13 +214,23 @@ describe('MermaidComponent — author config is stripped from the definition', (
 
   // The loop is superlinear on stacked blocks (anchored front matter removes one
   // per pass), so it is capped. Real content converges in one pass; a source that
-  // doesn't is hostile and degrades rather than freezing the main thread.
-  it('degrades a source that will not converge instead of grinding on it', () => {
-    const stacked = '---\na\n---\n'.repeat(200)
-    expect(stripAuthorConfig(stacked)).toBeNull()
+  // doesn't is hostile and degrades rather than freezing the main thread. Both
+  // sides of the boundary are pinned so the cap can't be tightened into rejecting
+  // content the strip is supposed to handle.
+  const stackedBlocks = (n: number) => '---\na\n---\n'.repeat(n)
 
-    const { container } = render(<MermaidComponent source={stacked} />)
-    expect(container.textContent).toContain('unreadable diagram source')
+  it('still converges just under the pass limit', () => {
+    // n blocks need n passes to remove plus one to confirm no change.
+    expect(stripAuthorConfig(`${stackedBlocks(STRIP_PASS_LIMIT - 1)}graph TD; A-->B`))
+      .toBe('graph TD; A-->B')
+  })
+
+  it('degrades a source that will not converge instead of grinding on it', () => {
+    const hostile = `${stackedBlocks(STRIP_PASS_LIMIT)}graph TD; A-->B`
+    expect(stripAuthorConfig(hostile)).toBeNull()
+
+    const { container } = render(<MermaidComponent source={hostile} />)
+    expect(container.textContent).toContain('too many stacked config blocks')
     expect(renderMock).not.toHaveBeenCalled()
   })
 
@@ -609,8 +620,11 @@ describe('MermaidComponent — concurrent diagrams keep their own palette', () =
       await vi.advanceTimersByTimeAsync(0)
       expect(started).toEqual([0, 1, 2])
     } finally {
-      settle[0]?.()
-      settle[2]?.()
+      // Release EVERYTHING, unconditionally and before the clock goes back to
+      // real: a failed assertion above would otherwise strand a task, and
+      // uninstalling the fake clock destroys its pending slot timer — leaving the
+      // module-global queue permanently blocked for the rest of the file.
+      settle.forEach((release) => release?.())
       vi.useRealTimers()
     }
   })

@@ -136,7 +136,7 @@ const DIRECTIVE_RE = /%{2}\{\s*(?:(\w+)\s*:|(\w+))\s*(?:(\w+)|((?:(?!\}%{2}).|\r
  *  full re-scans and re-allocations of a 50KB string — seconds of synchronous
  *  main-thread freeze, from agent-authored content, in a UI whose contract is
  *  that sluggishness is a bug. */
-const STRIP_PASS_LIMIT = 64
+export const STRIP_PASS_LIMIT = 64
 
 /** Strip both author-controlled config channels from a definition. Returns null
  *  when the source doesn't converge within STRIP_PASS_LIMIT passes — treat that
@@ -344,7 +344,9 @@ export function MermaidComponent({
     // The host owns theming and sizing — an author's own config does not.
     const definition = stripAuthorConfig(source)
     if (definition === null) {
-      setErrorMsg('unreadable diagram source')
+      // Name the cause: the only way here is stacked config blocks past the pass
+      // cap, and an author iterating on a surface needs to know what to remove.
+      setErrorMsg(`couldn't normalize the diagram source (too many stacked config blocks; limit ${STRIP_PASS_LIMIT})`)
       return cleanup
     }
 
@@ -400,12 +402,16 @@ export function MermaidComponent({
           setErrorMsg(err instanceof Error ? err.message : 'invalid mermaid syntax')
         }
       })
-    })().catch(() => {
-      // The queued task already degrades on its own failures; this is the
-      // last-resort net so nothing here can escape as an unhandled rejection
-      // (which under vitest fails the suite instead of the assertion).
+    })().catch((err) => {
+      // Last-resort net so nothing escapes as an unhandled rejection (which under
+      // vitest fails the suite instead of the assertion). Unreachable by
+      // construction — the queued task catches its own failures and the chunk load
+      // has its own branch — so anything landing here is OUR defect, not bad
+      // authored syntax. Say so rather than blaming the source, and keep the real
+      // cause in the console since no degrade line can carry it usefully.
+      console.warn('[a2ui] mermaid render pipeline failed unexpectedly', err)
       if (cancelled) return
-      setErrorMsg('invalid mermaid syntax')
+      setErrorMsg('diagram renderer failed unexpectedly')
     })
 
     return cleanup
