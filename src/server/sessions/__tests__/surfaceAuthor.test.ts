@@ -77,10 +77,16 @@ describe('dispatchSurfaceAuthor', () => {
 // the NEXT primitive forgets step one.
 describe('SLATE_AUTHOR_CONTRACT covers the render catalog', () => {
   // Types the contract deliberately withholds from a one-shot author:
-  //   Choice/TextInput/Submit — interactive controls. A file-authored surface is
-  //     read-only, so a form the author cannot wire up is worse than nothing.
   //   FollowUp — a DECLARATION, not a body element (it renders null in the catalog).
-  const DELIBERATELY_UNDOCUMENTED = new Set(['Choice', 'TextInput', 'Submit', 'FollowUp'])
+  //
+  // Choice/TextInput/Submit USED to sit in this set, on the reasoning that a
+  // file-authored surface is read-only so a form the author cannot wire up is worse
+  // than nothing. S4 (the workbench) retired that premise: an OPEN-POINT entry is
+  // answerable — it owns `POST …/points/<id>/answer`, and a workbench column is
+  // nothing but that route per question — so the contract now teaches all three,
+  // scoped to open-point entries (on an anchored card they render permanently
+  // disabled, which the contract says in as many words).
+  const DELIBERATELY_UNDOCUMENTED = new Set(['FollowUp'])
 
   it('names every renderable catalog primitive, so none is unreachable dead code', () => {
     const missing = Object.keys(CATALOG)
@@ -89,7 +95,7 @@ describe('SLATE_AUTHOR_CONTRACT covers the render catalog', () => {
     expect(missing).toEqual([])
   })
 
-  it('does NOT teach the author the interactive controls (they cannot work from a file)', () => {
+  it('does NOT teach the author a type that is not a body element', () => {
     for (const type of DELIBERATELY_UNDOCUMENTED) {
       expect(SLATE_AUTHOR_CONTRACT).not.toContain(`component:"${type}"`)
     }

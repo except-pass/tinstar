@@ -49,6 +49,7 @@ JSON array of them. Each entry is a point:
 | `content` | no | file | the surface body as an A2UI component tree (`{ root, components }`) |
 | `author` | no | file | `agent` (default) \| `user` \| `process` |
 | `anchor` | no | file | `{ kind: "none" \| "decision" \| "surface", ref? }` |
+| `group` | no | file | workbench set id — give the **same** string to a set of related questions and they render side-by-side, one per column (see [The workbench](#the-workbench-asking-a-series-of-questions)) |
 | `createdAt` | no | file | epoch ms; the server stamps one on first projection if omitted |
 
 Store-owned fields — `status`, `replies` (the thread), and the lifecycle timestamps —
@@ -128,6 +129,53 @@ under the user is rejected rather than persisted.
 Every injected prompt carries a guardrail line: an injected comment is a **note, not a
 command to drop in-flight work** — the agent finishes or checkpoints its current action
 first, then addresses the note.
+
+## The workbench: asking a series of questions
+
+When an agent needs several answers at once, it can lay the questions out **side by
+side** instead of stacking them. Write each question as its own point — its own `id`, its
+own `content` body of `Choice`/`TextInput`/`Submit` — and give every point in the set the
+**same** `group` string. Two or more **live** points sharing a `group` render as a
+*workbench*: a horizontal band inside the open-points list, one question per column,
+labelled `Questions · N` with an `M of L answered` count beside it. `N` is the columns on
+screen; `L` is only the ones still being asked, so a **dismissed** question leaves both
+sides of the count and the band can always reach its ceiling.
+
+A lone grouped point stays an ordinary row, and the two off-the-table cases have
+deliberately *different* rules. A **hidden** point never joins a band at all, so it never
+counts toward the two (the reason is below). A **dismissed** one doesn't hold a band
+open — a two-question set with one dismissed degrades back to rows rather than leaving a
+single column with none of the row's chrome — but does ride along, dimmed, in a band its
+live siblings already justify.
+
+```json
+[
+  { "id": "q-token-scope", "headline": "Refresh token, or access only?", "group": "auth-decisions",
+    "content": { "root": "root", "components": [
+      { "id": "root", "component": "Column", "children": ["c", "s"] },
+      { "id": "c", "component": "Choice", "mode": "single",
+        "options": [ { "id": "both", "label": "Both" }, { "id": "access", "label": "Access only" } ] },
+      { "id": "s", "component": "Submit", "label": "Answer" } ] } },
+  { "id": "q-migration-owner", "headline": "Who owns the migration?", "group": "auth-decisions",
+    "content": { "root": "root", "components": [
+      { "id": "root", "component": "Column", "children": ["t", "s"] },
+      { "id": "t", "component": "TextInput", "label": "Name" },
+      { "id": "s", "component": "Submit", "label": "Answer" } ] } }
+]
+```
+
+Each column is a real, independent point, which is what makes the workbench work:
+a column submits through **its own** `POST …/points/<id>/answer`, gets its own
+"✓ Answered" lock, and keeps its own thread. Answering one column never disturbs the
+others, and the agent receives one prompt per answered question rather than one
+combined blob. Dropping `group` from the file on a later write dissolves the workbench
+back into ordinary rows without touching any thread.
+
+The column is deliberately the **question only** — headline, body, controls. The thread,
+the soft resolve, the reorder grip and the hide ✕ all stay on the vertical row, which is
+where a point goes back to living once the file drops its `group`. So a *hidden* point is
+never pulled into a band (it would lose its only unhide affordance), and a reply the agent
+writes back onto a workbenched question is read on the row, not in the column.
 
 ## The Objective
 

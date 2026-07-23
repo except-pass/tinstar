@@ -352,4 +352,153 @@ describe('OpenPointsSurface (U6)', () => {
     fireEvent.click(screen.getByTestId('unhide-surface-p1'))
     expect(onUnhide).toHaveBeenCalledWith('p1')
   })
+
+  // ── S4: the multi-question workbench ────────────────────────────────────
+  // A grouped set is pulled OUT of the vertical list and into a horizontal band.
+  // The trap this guards: a grouped point rendering in BOTH places would give the
+  // user two live answer affordances for the same question.
+  it('pulls a grouped set into a workbench and out of the row list', () => {
+    render(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[
+          point('r1'),
+          point('g1', { group: 'launch-qs' }),
+          point('g2', { group: 'launch-qs' }),
+        ]}
+      />,
+    )
+
+    expect(screen.getByTestId('workbench-launch-qs')).toBeTruthy()
+    expect(screen.getByTestId('workbench-column-g1')).toBeTruthy()
+    expect(screen.getByTestId('workbench-column-g2')).toBeTruthy()
+    // Grouped points are NOT also rows; the ungrouped one still is.
+    expect(screen.queryByTestId('point-g1')).toBeNull()
+    expect(screen.queryByTestId('point-g2')).toBeNull()
+    expect(screen.getByTestId('point-r1')).toBeTruthy()
+  })
+
+  it('renders no workbench when nothing is grouped (backward compatible)', () => {
+    render(<OpenPointsSurface runId="run-1" points={[point('p1'), point('p2')]} />)
+    expect(document.querySelector('[data-testid^="workbench-"]')).toBeNull()
+    expect(screen.getByTestId('point-p1')).toBeTruthy()
+    expect(screen.getByTestId('point-p2')).toBeTruthy()
+  })
+
+  // S6's reorder chevrons permute the ROWS. A chevron whose index math counted a
+  // workbenched point would step "up" past something invisible and look like a dead
+  // click, so the reorder payload must name only the rows.
+  it('reorder chevrons ignore workbenched points', async () => {
+    render(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[
+          point('r1'),
+          point('g1', { group: 'set' }),
+          point('g2', { group: 'set' }),
+          point('r2'),
+        ]}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('reorder-down-r1'))
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalled())
+    const call = apiFetch.mock.calls.find(([url]) => String(url).endsWith('/points/order'))!
+    expect(JSON.parse(String((call[1] as RequestInit).body))).toEqual({ order: ['r2', 'r1'] })
+  })
+
+  // A column renders none of the row's hide chrome. Revealing a hidden point INTO a
+  // band would therefore strand it — the "N hidden · show" toggle would surface
+  // something it could not restore. So a hidden point always stays a row.
+  it('a revealed hidden point stays a row (with its unhide) instead of joining the band', () => {
+    const onUnhide = vi.fn()
+    render(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[
+          point('g1', { group: 'set' }),
+          point('g2', { group: 'set' }),
+          point('g3', { group: 'set' }),
+        ]}
+        hiddenIds={new Set(['g2'])}
+        showHidden
+        onUnhide={onUnhide}
+      />,
+    )
+
+    // g1 + g3 still form the band; g2 is a row and keeps its way back.
+    expect(screen.getByTestId('workbench-column-g1')).toBeTruthy()
+    expect(screen.getByTestId('workbench-column-g3')).toBeTruthy()
+    expect(screen.queryByTestId('workbench-column-g2')).toBeNull()
+    expect(screen.getByTestId('point-g2')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('unhide-surface-g2'))
+    expect(onUnhide).toHaveBeenCalledWith('g2')
+  })
+
+  // The S4 U2 extraction split one `error` slot into two (lifecycle + answer form).
+  // They must still behave like ONE slot: the last failure is the one shown, or a
+  // failed resolve silently hides behind a stale validation message and reads as a
+  // click that did nothing.
+  it('a lifecycle failure is visible even after a stale answer-validation error', async () => {
+    const body = {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Column', children: ['s'] },
+        { id: 's', component: 'Submit', label: 'Send' },
+      ],
+    }
+    render(
+      <OpenPointsSurface runId="run-1" points={[point('p1', { body: body as never })]} />,
+    )
+
+    // 1. Submit with nothing picked → the answer slot holds a validation message.
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.getByText(/pick an option/i)).toBeTruthy())
+
+    // 2. Now a resolve that fails. Its message must REPLACE the stale one.
+    apiFetch.mockImplementation(() =>
+      Promise.resolve({ ok: false, status: 500, json: async () => ({ ok: false }) } as unknown as Response),
+    )
+    fireEvent.click(screen.getByTestId('resolve-p1'))
+
+    await waitFor(() => expect(screen.getByText(/could not resolve this point/i)).toBeTruthy())
+    expect(screen.queryByText(/pick an option/i)).toBeNull()
+  })
+
+  // The concurrent window: only the resolve checkbox is gated on `busy` — the A2UI
+  // Submit is not — so a Submit can populate the answer slot AFTER lifecycle cleared
+  // it and BEFORE the resolve rejects. Clearing only at the start isn't enough.
+  it('a lifecycle failure still wins over an answer error raised mid-flight', async () => {
+    const body = {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Column', children: ['s'] },
+        { id: 's', component: 'Submit', label: 'Send' },
+      ],
+    }
+    // Hold the resolve POST open until we say so.
+    let releaseResolve!: () => void
+    const gate = new Promise<void>((r) => { releaseResolve = r })
+    apiFetch.mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/resolve')) {
+        await gate
+        return { ok: false, status: 500, json: async () => ({ ok: false }) } as unknown as Response
+      }
+      return ok()
+    })
+
+    render(<OpenPointsSurface runId="run-1" points={[point('p1', { body: body as never })]} />)
+
+    fireEvent.click(screen.getByTestId('resolve-p1'))       // in flight
+    fireEvent.click(screen.getByRole('button', { name: 'Send' })) // sets the answer slot
+    await waitFor(() => expect(screen.getByText(/pick an option/i)).toBeTruthy())
+
+    releaseResolve()
+
+    // BACK-OUT GUARD: remove `setAnswerError(null)` from lifecycle's catch and this
+    // fails — the stale validation message hides the real failure.
+    await waitFor(() => expect(screen.getByText(/could not resolve this point/i)).toBeTruthy())
+    expect(screen.queryByText(/pick an option/i)).toBeNull()
+  })
 })

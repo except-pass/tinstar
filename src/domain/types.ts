@@ -549,6 +549,11 @@ export interface SlateSurface {
    *  regenerate this surface. Absent when the surface carries no recipe (refresh
    *  still nudges). Carried from the file through the store onto `run.slate`. */
   refresh?: string
+  /** File-owned WORKBENCH set id (S4). Open-points sharing a non-empty `group` are
+   *  pulled out of the vertical list and rendered as one horizontal workbench band —
+   *  one question per column, each answering independently through its own point's
+   *  `/answer` route. Absent for an ordinary point (which renders as a row, as before). */
+  group?: string
   /** Point render fields — present when this surface is a store-backed point
    *  (open-points list, threaded surface). DocumentStore projects the run's
    *  SlateStore points into RunData.slate so the client renders ONE channel
@@ -609,6 +614,12 @@ export interface Point {
    *  delivers verbatim to regenerate this surface. Optional; a recipe-less surface
    *  still gets a bare nudge. Merged like the other file-owned fields (KTD3). */
   refresh?: string
+  /** File-owned WORKBENCH set id (S4): points sharing a non-empty `group` render
+   *  side-by-side as a multi-question workbench (one question per column) instead
+   *  of as rows in the vertical open-points list. Optional and purely presentational
+   *  — an omitted `group` is today's behavior exactly. Rides the file→store→bridge
+   *  path like `refresh`: overwritten on projection, cleared when omitted. */
+  group?: string
   /** STORE-OWNED sort order within the run's points (S6 U2). Absent until the user
    *  reorders, in which case the projection falls back to `createdAt` — so an
    *  un-reordered Slate keeps its creation order exactly as before. A file

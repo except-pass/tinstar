@@ -496,6 +496,12 @@ export function toPointInput(
   // empty recipe is simply dropped (the surface still refreshes via the bare nudge).
   if (typeof r.refresh === 'string' && r.refresh.length > 0) out.refresh = r.refresh
 
+  // File-owned workbench set id (S4): points sharing a non-empty `group` render
+  // side-by-side as one multi-question workbench. A non-string or empty value is
+  // simply ignored (the point still renders as an ordinary row) — never an error,
+  // matching the `refresh` posture.
+  if (typeof r.group === 'string' && r.group.length > 0) out.group = r.group
+
   if (typeof r.createdAt === 'number' && Number.isFinite(r.createdAt)) {
     out.createdAt = r.createdAt
   }

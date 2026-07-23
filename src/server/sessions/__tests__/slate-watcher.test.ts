@@ -282,6 +282,35 @@ describe('SlateWatcher', () => {
     expect(inputs.map((p) => p.headline)).toEqual(['real']) // symlink ignored
   })
 
+  // S4 — the workbench set id. `group` parses exactly like `refresh`: a non-empty
+  // string is carried verbatim; anything else is ignored rather than dropping the
+  // entry (a malformed group must never cost the user the question itself).
+  it('carries a string `group` through as a PointInput field (S4)', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [
+      { id: 'q1', headline: 'Which path?', group: 'launch-qs' },
+      { id: 'q2', headline: 'Who owns it?', group: 'launch-qs' },
+    ])
+
+    await harness.watcher.pollOnce()
+
+    const inputs = harness.applyRunSlateProjection.mock.calls[0]![1]
+    expect(inputs.map((p) => p.group)).toEqual(['launch-qs', 'launch-qs'])
+  })
+
+  it('ignores a non-string or empty `group` without dropping the entry (S4)', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [
+      { id: 'q1', headline: 'number group', group: 7 },
+      { id: 'q2', headline: 'empty group', group: '' },
+      { id: 'q3', headline: 'object group', group: { set: 'x' } },
+    ])
+
+    await harness.watcher.pollOnce()
+
+    const inputs = harness.applyRunSlateProjection.mock.calls[0]![1]
+    expect(inputs.map((p) => p.id)).toEqual(['q1', 'q2', 'q3']) // none dropped
+    expect(inputs.every((p) => p.group === undefined)).toBe(true)
+  })
+
   it('treats a missing slate dir as no error (ENOENT is normal)', async () => {
     rmSync(join(harness.workdir, '.tinstar'), { recursive: true, force: true })
     await expect(harness.watcher.pollOnce()).resolves.toBeUndefined()

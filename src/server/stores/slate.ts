@@ -37,6 +37,10 @@ export interface PointInput {
    *  regenerate this surface. Optional — a recipe-less surface still gets a bare nudge.
    *  Rides the file→store→bridge path exactly like `headline`/`content`/`anchor`. */
   refresh?: string
+  /** File-owned WORKBENCH set id (S4): points sharing a non-empty `group` render
+   *  side-by-side as one multi-question workbench. Rides the same file→store→bridge
+   *  path as `refresh` — overwritten on projection, cleared when the file omits it. */
+  group?: string
   /** Server stamps `createdAt` on first projection; a file may seed it. */
   createdAt?: number
 }
@@ -69,7 +73,13 @@ export function derivePointStatus(
 
 /** Stable id for a file entry that omits its own `id`. Hashes the run + the
  *  file-owned content so the SAME surface yields the SAME id regardless of which
- *  file authored it — a rename cannot orphan the thread. */
+ *  file authored it — a rename cannot orphan the thread.
+ *
+ *  The basis deliberately holds only the fields that IDENTIFY the surface. `refresh`
+ *  and `group` (S4) are excluded on purpose: they describe how a surface is
+ *  regenerated and where it is laid out, not which surface it is, so folding them in
+ *  would re-id the point the moment an agent grouped it — orphaning the very thread
+ *  this hash exists to preserve. */
 function synthesizeId(runId: string, input: PointInput): string {
   const basis = JSON.stringify({
     runId,
@@ -90,6 +100,10 @@ function fileOwnedChanged(prior: Point, input: PointInput): boolean {
   return (
     prior.headline !== input.headline ||
     (prior.refresh ?? undefined) !== (input.refresh ?? undefined) ||
+    // LOAD-BEARING (S4): without this comparison an amend that changes ONLY `group`
+    // short-circuits on `pointEqual` and never re-projects — the workbench would
+    // silently never form. Guard-tested in slate.test.ts.
+    (prior.group ?? undefined) !== (input.group ?? undefined) ||
     JSON.stringify(prior.content ?? null) !== JSON.stringify(input.content ?? null) ||
     JSON.stringify(prior.anchor ?? null) !== JSON.stringify(input.anchor ?? null)
   )
@@ -112,6 +126,7 @@ function createPoint(
     headline: input.headline,
     ...(input.content ? { content: input.content } : {}),
     ...(input.refresh ? { refresh: input.refresh } : {}),
+    ...(input.group ? { group: input.group } : {}),
     status: 'open',
     createdAt,
     amendedAt: createdAt,
@@ -145,6 +160,10 @@ function mergeFileOwned(prior: Point, input: PointInput, now: number): Point {
   // File owns the refresh recipe too: overwrite on projection, clear when omitted.
   if (input.refresh) next.refresh = input.refresh
   else delete next.refresh
+  // File owns the workbench set id (S4) too: overwrite on projection, clear when
+  // omitted — so removing `group` from the file dissolves the workbench.
+  if (input.group) next.group = input.group
+  else delete next.group
   if (input.anchor) next.anchor = input.anchor
   // status recomputes, but replies/resolvedAt/dismissedAt are untouched, so a
   // pure body change never disturbs a live thread or an explicit resolve.

@@ -481,6 +481,80 @@ describe('SlateStore — refresh recipe (U3 file-owned field)', () => {
   })
 })
 
+// S4 — the workbench set id. `group` is a FILE-OWNED passthrough with the same
+// overwrite/clear semantics as `refresh`, and the same silent-failure trap: miss the
+// `fileOwnedChanged` comparison and a group-only amend is swallowed by the zero-change
+// short-circuit; miss the projection spread and the field never reaches the client.
+// Each test below fails if exactly one leg is backed out.
+describe('SlateStore — workbench `group` (S4 file-owned field)', () => {
+  it('a projection carrying `group` sets it on the point', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('p1', 'body', { group: 'rollout-qs' })], 100)
+    expect(store.getPoint(RUN, 'p1')!.group).toBe('rollout-qs')
+  })
+
+  it('re-projecting an UNCHANGED group emits ZERO change (short-circuit holds)', () => {
+    const { store, emit } = makeStore()
+    store.applyProjection(RUN, [input('p1', 'body', { group: 'g1' })], 100)
+    emit.mockClear()
+    store.applyProjection(RUN, [input('p1', 'body', { group: 'g1' })], 200)
+    expect(emit).not.toHaveBeenCalled()
+    expect(store.getPoint(RUN, 'p1')!.amendedAt).toBe(100)
+  })
+
+  // BACK-OUT GUARD: delete the `group` line from `fileOwnedChanged` and this fails.
+  it('a group-ONLY change DOES emit, updates the point, and bumps amendedAt', () => {
+    const { store, emit } = makeStore()
+    store.applyProjection(RUN, [input('p1', 'body', { group: 'g1' })], 100)
+    emit.mockClear()
+    // headline + content + refresh identical — ONLY the group changes.
+    store.applyProjection(RUN, [input('p1', 'body', { group: 'g2' })], 200)
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(store.getPoint(RUN, 'p1')!.group).toBe('g2')
+    expect(store.getPoint(RUN, 'p1')!.amendedAt).toBe(200)
+  })
+
+  // BACK-OUT GUARD: drop the `else delete next.group` branch in mergeFileOwned and a
+  // re-projection would inherit the STALE group (the undefined-drop trap).
+  it('clears `group` when a later projection omits it (workbench dissolves)', () => {
+    const { store, emit } = makeStore()
+    store.applyProjection(RUN, [input('p1', 'body', { group: 'g1' })], 100)
+    emit.mockClear()
+    store.applyProjection(RUN, [input('p1', 'body')], 200)
+    expect(store.getPoint(RUN, 'p1')!.group).toBeUndefined()
+    expect(emit).toHaveBeenCalledTimes(1) // the clear is a real change, not a no-op
+  })
+
+  it('grouping a point never disturbs its store-owned thread or resolve', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('p1', 'body')], 100)
+    store.addReply(RUN, 'p1', reply('user', 'my answer', 110))
+    store.resolve(RUN, 'p1', 120)
+
+    store.applyProjection(RUN, [input('p1', 'body', { group: 'g1' })], 200)
+
+    const p = store.getPoint(RUN, 'p1')!
+    expect(p.group).toBe('g1')
+    expect(p.replies).toHaveLength(1)
+    expect(p.status).toBe('resolved')
+  })
+
+  // BACK-OUT GUARD: drop the `...(p.group ? { group: p.group } : {})` spread in
+  // projectRunToSlate and this fails — the field never reaches run.slate.
+  it('projects `group` onto run.slate, and a group-only change updates the surface', () => {
+    const store = new DocumentStore()
+    store.upsertRun('run-1', makeRun())
+    store.applyRunSlateProjection('run-1', [input('p1', 'body', { group: 'g1' })], 100)
+    expect(store.getRun('run-1')!.slate![0]!.group).toBe('g1')
+
+    store.applyRunSlateProjection('run-1', [input('p1', 'body', { group: 'g2' })], 200)
+    expect(store.getRun('run-1')!.slate![0]!.group).toBe('g2')
+
+    store.applyRunSlateProjection('run-1', [input('p1', 'body')], 300)
+    expect(store.getRun('run-1')!.slate![0]!.group).toBeUndefined()
+  })
+})
+
 // A compile-time nod that Point stays the source of truth for the store shape.
 const _typecheck: Point['status'] = 'open'
 void _typecheck
