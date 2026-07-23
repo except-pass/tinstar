@@ -206,7 +206,12 @@ string. Two or more points sharing a `group` render as a **workbench**: a horizo
 inside the open-points list, one question per column, each with its own controls, its own
 `POST …/points/<id>/answer`, its own "✓ Answered" lock, and its own thread. The band shows an
 "M of N answered" count. A *lone* grouped point falls back to an ordinary row — a one-column
-band is just a row with less affordance.
+band is just a row with less affordance, and the same fallback is why a *hidden* point never
+joins a band (a column carries no unhide button).
+
+A column shows the question only. The thread, the soft resolve, the reorder grip and the
+hide ✕ live on the vertical row — so an agent reply to a workbenched question is read on
+the row the point returns to, not inside the column.
 
 ```json
 [

@@ -45,6 +45,45 @@ function findScrollableAncestor(el: Element | null, deltaX: number, deltaY: numb
   return null
 }
 
+/**
+ * The `[data-scrollable]` element (if any) that should be handed this wheel instead of
+ * the canvas camera — walking OUT through the whole chain, not just the nearest one.
+ *
+ * Testing only the nearest marked ancestor is wrong once scrollers nest: the Slate's
+ * workbench band is a HORIZONTAL-only scroller sitting inside the panel's vertical
+ * scroll body, and a short `max-h` prose block is a vertical scroller that isn't
+ * overflowing yet. Either one is the nearest match and can't take the wheel, and
+ * stopping there pans the canvas out from under an outer panel that could have
+ * scrolled perfectly well.
+ *
+ * The first (vertical) test is kept as-is rather than folded into `canConsumeWheel`
+ * because it treats a zero `deltaY` as "yield anyway" — a pure horizontal swipe over a
+ * vertical-only panel has always been a no-op rather than a canvas pan, and that is
+ * not this change's call to make.
+ *
+ * Exported for tests; jsdom reports every scroll metric as 0, so a test defines them.
+ */
+export function findWheelYieldTarget(
+  target: Element | null,
+  deltaX: number,
+  deltaY: number,
+): HTMLElement | null {
+  for (
+    let el = target?.closest('[data-scrollable]') as HTMLElement | null;
+    el;
+    el = el.parentElement?.closest('[data-scrollable]') as HTMLElement | null
+  ) {
+    if (el.scrollHeight > el.clientHeight) {
+      const atTop = el.scrollTop <= 0 && deltaY < 0
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1 && deltaY > 0
+      if (!atTop && !atBottom) return el
+    }
+    // The horizontal leg — the case the vertical test above structurally cannot see.
+    if (canConsumeWheel(el, deltaX, deltaY)) return el
+  }
+  return null
+}
+
 export function useCanvasCamera() {
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, zoom: 1 })
   const cameraRef = useRef(camera)
@@ -157,13 +196,9 @@ export function useCanvasCamera() {
     // Monaco code editor (file widget) manages its own wheel scroll; don't let the canvas hijack it.
     if (!isZoomGesture && target?.closest('.monaco-editor')) return
 
-    // Let scrollable children handle their own scroll — but only if they can actually scroll
-    const scrollable = target?.closest('[data-scrollable]') as HTMLElement | null
-    if (scrollable && scrollable.scrollHeight > scrollable.clientHeight) {
-      const atTop = scrollable.scrollTop <= 0 && e.deltaY < 0
-      const atBottom = scrollable.scrollTop + scrollable.clientHeight >= scrollable.scrollHeight - 1 && e.deltaY > 0
-      if (!atTop && !atBottom) return
-    }
+    // Let scrollable children handle their own scroll — but only if one of them can
+    // actually consume this wheel (see `findWheelYieldTarget`).
+    if (findWheelYieldTarget(target, e.deltaX, e.deltaY)) return
 
     e.preventDefault()
     const cam = cameraRef.current

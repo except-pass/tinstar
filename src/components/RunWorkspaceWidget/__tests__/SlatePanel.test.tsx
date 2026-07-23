@@ -249,6 +249,31 @@ describe('SlatePanel keyboard surface (S6 U1)', () => {
     expect(focusedId()).toBe('slate-surface-card')
   })
 
+  // S4: a workbenched point is NOT a row — it renders as a column inside a band, with
+  // no focus ring and none of the x/r chrome the ring implies. j/k must step straight
+  // over it. BACK-OUT GUARD: drop `partitionWorkbenches` from `focusRows` and the ring
+  // lands on `point-g1`, which isn't in the document.
+  it('j / k skip points swallowed by a workbench', () => {
+    const ref = renderWithHandle([
+      surface('p1', '', { kind: 'open-point', headline: 'first', status: 'open' }),
+      surface('g1', '', { kind: 'open-point', headline: 'q one', status: 'open', group: 'qs' }),
+      surface('g2', '', { kind: 'open-point', headline: 'q two', status: 'open', group: 'qs' }),
+      surface('p2', '', { kind: 'open-point', headline: 'last', status: 'open' }),
+    ])
+
+    // The band exists and the grouped points are not rows.
+    expect(screen.getByTestId('workbench-qs')).toBeTruthy()
+    expect(screen.queryByTestId('point-g1')).toBeNull()
+
+    act(() => ref.current!.focusNext())
+    expect(focusedId()).toBe('point-p1')
+    act(() => ref.current!.focusNext())
+    expect(focusedId()).toBe('point-p2')
+    // Clamped at the end — traversal never strands focus on an invisible column.
+    act(() => ref.current!.focusNext())
+    expect(focusedId()).toBe('point-p2')
+  })
+
   it('x hides the focused surface and moves focus to the next row', () => {
     const ref = renderWithHandle([surface('a', 'alpha'), surface('b', 'beta')])
     act(() => ref.current!.focusNext())

@@ -279,7 +279,9 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
    *
    * S4: a point swallowed by a workbench is NOT a row, so `partitionWorkbenches`
    * drops it here too. Traversing into a column would put the focus ring — and the
-   * x/r that follow it — on something that isn't on screen as a row.
+   * x/r that follow it — on something that isn't on screen as a row. `hidden` is
+   * passed as the exclusion set for the SAME reason OpenPointsSurface passes it: a
+   * hidden point never joins a band, so it stays a row here and stays reachable.
    */
   const focusRows = useMemo(() => {
     const rows: SlateSurface[] = []
@@ -287,7 +289,9 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
     matched.forEach((s, i) => {
       if (s.kind === 'open-point') {
         if (i !== firstIdx) return
-        rows.push(...partitionWorkbenches(orderOpenPoints(openPoints, hidden, showHidden)).ungrouped)
+        rows.push(
+          ...partitionWorkbenches(orderOpenPoints(openPoints, hidden, showHidden), hidden).ungrouped,
+        )
         return
       }
       if (hidden.has(s.id) && !showHidden) return

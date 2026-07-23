@@ -149,6 +149,10 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
   // hook (S4 U2) so this row and a workbench column answer through ONE code path —
   // same POST target, same optimistic answered-lock, same validation guard.
   const answer = usePointAnswerForm(runId, surface.id)
+  // Destructured because it goes in a dep array: it is the hook's raw `useState`
+  // setter, so its identity is stable even though `answer` itself is rebuilt each
+  // render.
+  const { setError: setAnswerError } = answer
 
   useEffect(() => {
     if (optimisticStatus === null) return
@@ -164,6 +168,12 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
     async (action: 'resolve' | 'reopen' | 'dismiss', nextStatus: PointStatus | null) => {
       if (busy) return
       setError(null)
+      // The row shows ONE error line, and before the S4 U2 extraction one `error`
+      // slot held both failures, so the LAST action always won. Clearing the answer
+      // slot here restores that: without it a stale "Pick an option…" would outrank
+      // — and completely hide — a real "Could not resolve this point.", making the
+      // failed resolve look like a click that never happened.
+      setAnswerError(null)
       setBusy(true)
       const prev = optimisticStatus
       // `null` for reopen: the server re-derives status from the thread
@@ -188,7 +198,7 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
         setBusy(false)
       }
     },
-    [busy, runId, surface.id, optimisticStatus],
+    [busy, runId, surface.id, optimisticStatus, setAnswerError],
   )
 
   const toggleResolve = useCallback(() => {
@@ -208,8 +218,11 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
     [answer.form],
   )
 
-  // The row shows ONE error line; the answer form's message wins while it's set
-  // (it's the more recent, more local failure) — same single-slot behavior as before.
+  // The row shows ONE error line. The two slots clear EACH OTHER at the start of
+  // every action (submit clears the lifecycle slot, `lifecycle` clears the answer
+  // slot), so at most one is set at a time and "last failure wins" — exactly the
+  // single-slot behavior this row had before the S4 U2 extraction. The `??` is just
+  // the tiebreak for the impossible case.
   const shownError = answer.error ?? error
 
   const threadCount = surface.thread?.length ?? 0
@@ -505,8 +518,13 @@ export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, sho
 
   // S4 — pull grouped question sets out of the vertical list and into workbench bands.
   // A grouped point renders in EXACTLY one place (its column), never both, or the user
-  // would face two live answer affordances for the same question.
-  const { groups, ungrouped } = useMemo(() => partitionWorkbenches(ordered), [ordered])
+  // would face two live answer affordances for the same question. HIDDEN points are
+  // excluded from the bands: a column carries no unhide button, so a revealed-but-hidden
+  // point promoted into one would be stranded with no way back.
+  const { groups, ungrouped } = useMemo(
+    () => partitionWorkbenches(ordered, hiddenIds),
+    [ordered, hiddenIds],
+  )
 
   // The ids the chevrons actually permute: the live ROWS, in rendered order. Derived
   // from `ungrouped`, not `ordered` — a chevron that stepped over an invisible

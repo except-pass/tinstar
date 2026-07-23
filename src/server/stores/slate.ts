@@ -73,7 +73,13 @@ export function derivePointStatus(
 
 /** Stable id for a file entry that omits its own `id`. Hashes the run + the
  *  file-owned content so the SAME surface yields the SAME id regardless of which
- *  file authored it — a rename cannot orphan the thread. */
+ *  file authored it — a rename cannot orphan the thread.
+ *
+ *  The basis deliberately holds only the fields that IDENTIFY the surface. `refresh`
+ *  and `group` (S4) are excluded on purpose: they describe how a surface is
+ *  regenerated and where it is laid out, not which surface it is, so folding them in
+ *  would re-id the point the moment an agent grouped it — orphaning the very thread
+ *  this hash exists to preserve. */
 function synthesizeId(runId: string, input: PointInput): string {
   const basis = JSON.stringify({
     runId,

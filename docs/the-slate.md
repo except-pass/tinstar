@@ -163,6 +163,12 @@ others, and the agent receives one prompt per answered question rather than one
 combined blob. Dropping `group` from the file on a later write dissolves the workbench
 back into ordinary rows without touching any thread.
 
+The column is deliberately the **question only** — headline, body, controls. The thread,
+the soft resolve, the reorder grip and the hide ✕ all stay on the vertical row, which is
+where a point goes back to living once the file drops its `group`. So a *hidden* point is
+never pulled into a band (it would lose its only unhide affordance), and a reply the agent
+writes back onto a workbenched question is read on the row, not in the column.
+
 ## The Objective
 
 The Objective is the **user's** standing statement of what a session is for: one short

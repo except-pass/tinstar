@@ -182,6 +182,48 @@ describe('WorkbenchSurface (S4 U3)', () => {
     )
   })
 
+  // The FAILURE path — the one every other test mocks away. A rejected delivery
+  // reverts the column's optimistic lock, so the band's count MUST come back down
+  // with it: a count that only ever climbs claims the series is done in exactly the
+  // case where the user still owes an answer.
+  it('a failed delivery unlocks the column AND takes the progress count back down', async () => {
+    apiFetch.mockImplementation(() => Promise.reject(new Error('offline')))
+    render(<WorkbenchSurface runId="run-1" group="launch-qs" points={[q('a'), q('b')]} />)
+
+    expect(screen.getByTestId('workbench-progress-launch-qs').textContent).toBe('0 of 2 answered')
+
+    const colA = screen.getByTestId('workbench-column-a')
+    fireEvent.click(within(colA).getByRole('radio', { name: 'Yes' }))
+    fireEvent.click(within(colA).getByRole('button', { name: 'Send' }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-error-a').textContent).toMatch(/could not deliver/i),
+    )
+    // Controls are usable again — the user can retry right where they are.
+    expect(screen.getByTestId('workbench-column-a').getAttribute('data-answered')).toBeNull()
+    expect((within(colA).getByRole('radio', { name: 'Yes' }) as HTMLInputElement).disabled).toBe(false)
+    expect((within(colA).getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false)
+    // BACK-OUT GUARD: make `onAnswered` one-way again and this line fails.
+    expect(screen.getByTestId('workbench-progress-launch-qs').textContent).toBe('0 of 2 answered')
+  })
+
+  // A point taken off the table reads as off the table, rather than as one more live
+  // question the band is asking for.
+  it('a dismissed column is dimmed and carries its status', () => {
+    render(
+      <WorkbenchSurface
+        runId="run-1"
+        group="launch-qs"
+        points={[q('a'), q('b', { status: 'dismissed' })]}
+      />,
+    )
+
+    const colB = screen.getByTestId('workbench-column-b')
+    expect(colB.getAttribute('data-status')).toBe('dismissed')
+    expect(colB.className).toContain('opacity-50')
+    expect(screen.getByTestId('workbench-column-a').className).not.toContain('opacity-50')
+  })
+
   it('a column with a prose-only body renders read-only — no submit', () => {
     render(
       <WorkbenchSurface runId="run-1" group="launch-qs" points={[q('a'), q('b', { body: prose })]} />,
@@ -233,6 +275,28 @@ describe('partitionWorkbenches (S4)', () => {
       row('a2', { group: 'earlier', createdAt: 90 }),
     ])
     expect(groups.map((g) => g.group)).toEqual(['earlier', 'later'])
+  })
+
+  // A column carries no unhide button, so a hidden point promoted into a band would be
+  // stranded: the panel's "N hidden · show" toggle would reveal something it can't
+  // restore. Excluded points stay rows, in position, and don't count toward the set.
+  it('never swallows an EXCLUDED (hidden) point — it stays a row in position', () => {
+    const { groups, ungrouped } = partitionWorkbenches(
+      [row('g1', { group: 'set-a' }), row('r1'), row('g2', { group: 'set-a' })],
+      new Set(['g1']),
+    )
+    expect(groups).toHaveLength(0) // one live member left → degrades to a row
+    expect(ungrouped.map((s) => s.id)).toEqual(['g1', 'r1', 'g2'])
+  })
+
+  it('an excluded member does not count toward the 2-member threshold', () => {
+    const { groups, ungrouped } = partitionWorkbenches(
+      [row('g1', { group: 'set-a' }), row('g2', { group: 'set-a' }), row('g3', { group: 'set-a' })],
+      new Set(['g2']),
+    )
+    expect(groups).toHaveLength(1)
+    expect(groups[0]!.points.map((s) => s.id)).toEqual(['g1', 'g3'])
+    expect(ungrouped.map((s) => s.id)).toEqual(['g2'])
   })
 
   it('treats a whitespace-only group as ungrouped', () => {

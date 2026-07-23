@@ -329,4 +329,62 @@ describe('OpenPointsSurface (U6)', () => {
     const call = apiFetch.mock.calls.find(([url]) => String(url).endsWith('/points/order'))!
     expect(JSON.parse(String((call[1] as RequestInit).body))).toEqual({ order: ['r2', 'r1'] })
   })
+
+  // A column renders none of the row's hide chrome. Revealing a hidden point INTO a
+  // band would therefore strand it — the "N hidden · show" toggle would surface
+  // something it could not restore. So a hidden point always stays a row.
+  it('a revealed hidden point stays a row (with its unhide) instead of joining the band', () => {
+    const onUnhide = vi.fn()
+    render(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[
+          point('g1', { group: 'set' }),
+          point('g2', { group: 'set' }),
+          point('g3', { group: 'set' }),
+        ]}
+        hiddenIds={new Set(['g2'])}
+        showHidden
+        onUnhide={onUnhide}
+      />,
+    )
+
+    // g1 + g3 still form the band; g2 is a row and keeps its way back.
+    expect(screen.getByTestId('workbench-column-g1')).toBeTruthy()
+    expect(screen.getByTestId('workbench-column-g3')).toBeTruthy()
+    expect(screen.queryByTestId('workbench-column-g2')).toBeNull()
+    expect(screen.getByTestId('point-g2')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('unhide-surface-g2'))
+    expect(onUnhide).toHaveBeenCalledWith('g2')
+  })
+
+  // The S4 U2 extraction split one `error` slot into two (lifecycle + answer form).
+  // They must still behave like ONE slot: the last failure is the one shown, or a
+  // failed resolve silently hides behind a stale validation message and reads as a
+  // click that did nothing.
+  it('a lifecycle failure is visible even after a stale answer-validation error', async () => {
+    const body = {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Column', children: ['s'] },
+        { id: 's', component: 'Submit', label: 'Send' },
+      ],
+    }
+    render(
+      <OpenPointsSurface runId="run-1" points={[point('p1', { body: body as never })]} />,
+    )
+
+    // 1. Submit with nothing picked → the answer slot holds a validation message.
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(screen.getByText(/pick an option/i)).toBeTruthy())
+
+    // 2. Now a resolve that fails. Its message must REPLACE the stale one.
+    apiFetch.mockImplementation(() =>
+      Promise.resolve({ ok: false, status: 500, json: async () => ({ ok: false }) } as unknown as Response),
+    )
+    fireEvent.click(screen.getByTestId('resolve-p1'))
+
+    await waitFor(() => expect(screen.getByText(/could not resolve this point/i)).toBeTruthy())
+    expect(screen.queryByText(/pick an option/i)).toBeNull()
+  })
 })

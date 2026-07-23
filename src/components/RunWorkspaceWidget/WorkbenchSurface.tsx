@@ -37,11 +37,17 @@ function durablyAnswered(s: SlateSurface): boolean {
 function WorkbenchColumn({ runId, surface, onAnswered }: {
   runId: string
   surface: SlateSurface
-  /** Told once, when this column's optimistic answered-lock flips on, so the band can
-   *  move its progress count. Deliberately a one-way notification: hoisting the form
-   *  itself would re-render every sibling on every keystroke, which is the coupling
-   *  this layout exists to avoid. */
-  onAnswered: (id: string) => void
+  /** Told whenever this column's optimistic answered-lock CHANGES, in either
+   *  direction, so the band's progress count can follow it. Two-way on purpose: a
+   *  failed delivery reverts the lock (`usePointAnswerForm` catch), and a one-way
+   *  notification would leave the band claiming an answer the user still owes. It
+   *  also self-heals a remount — a fresh column reports `false` on mount, which
+   *  prunes a stale id left behind by a re-projection.
+   *
+   *  Still only a NOTIFICATION, not hoisted state: lifting the form itself would
+   *  re-render every sibling on every keystroke, which is the coupling this layout
+   *  exists to avoid. */
+  onAnswered: (id: string, answered: boolean) => void
 }) {
   const answer = usePointAnswerForm(runId, surface.id)
   // A body with no Choice/TextInput/Submit is prose: render it static (no form
@@ -49,7 +55,7 @@ function WorkbenchColumn({ runId, surface, onAnswered }: {
   const interactive = isAnswerable(surface.body)
 
   useEffect(() => {
-    if (answer.answered) onAnswered(surface.id)
+    onAnswered(surface.id, answer.answered)
   }, [answer.answered, surface.id, onAnswered])
 
   // VISUAL answered posture only. The control LOCK stays driven by `answer.form.answered`
@@ -57,17 +63,24 @@ function WorkbenchColumn({ runId, surface, onAnswered }: {
   // the race the row model deliberately avoids, and a thread reply that isn't an answer
   // shouldn't take the controls away.
   const answered = answer.answered || durablyAnswered(surface)
+  // A point taken off the table reads as off the table — the same 50% dim the row
+  // wears for `dismissed` (design language: "Dismissed = off-track, dimmed row"), so
+  // the column can't invite an answer to a question that's already closed. Kept
+  // purely visual: the controls stay exactly as live as they are on the row, because
+  // the row and the column deliberately share one answer path.
+  const dismissed = surface.status === 'dismissed'
 
   return (
     <div
       data-testid={`workbench-column-${surface.id}`}
       data-answered={answered ? 'true' : undefined}
+      data-status={surface.status}
       // The same hairline card shell every Slate row wears (P3: sharp radius, hairline
       // border, one lightness step) — an answered column swaps the hairline for the
       // resolved hue rather than dimming, so it reads as DONE, not as disabled.
       className={`w-[240px] shrink-0 rounded border bg-surface-hover p-2.5 [overflow-wrap:anywhere] ${
         answered ? 'border-hue-resolved/30' : 'border-hairline'
-      }`}
+      } ${dismissed ? 'opacity-50' : ''}`}
     >
       {/* The question itself. Display face for a surface headline; it is the only thing
           distinguishing one column from the next, so it wraps rather than truncating. */}
@@ -110,12 +123,23 @@ interface Props {
 /** A grouped question set, rendered as a horizontal band of independent columns. */
 export function WorkbenchSurface({ runId, group, points }: Props) {
   // Which columns have optimistically locked. Held here ONLY to move the progress
-  // count; the answer state itself still lives in each column's own hook.
+  // count; the answer state itself still lives in each column's own hook. Two-way —
+  // a delivery that fails un-locks its column, and the count MUST follow it back
+  // down, or the one number the user scans to decide whether the series is done
+  // lies in exactly the case where it isn't.
   const [optimistic, setOptimistic] = useState<ReadonlySet<string>>(() => new Set())
-  const markAnswered = useCallback((id: string) => {
-    setOptimistic((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
+  const markAnswered = useCallback((id: string, answered: boolean) => {
+    setOptimistic((prev) => {
+      if (prev.has(id) === answered) return prev
+      const next = new Set(prev)
+      if (answered) next.add(id)
+      else next.delete(id)
+      return next
+    })
   }, [])
 
+  // Counted over `points`, never over the set itself, so an id that has left the
+  // group (re-projection, group cleared) can't inflate the total.
   const answeredCount = useMemo(
     () => points.filter((s) => durablyAnswered(s) || optimistic.has(s.id)).length,
     [points, optimistic],
@@ -163,6 +187,8 @@ function groupKey(s: SlateSurface): string {
   return typeof s.group === 'string' ? s.group.trim() : ''
 }
 
+const EMPTY_EXCLUDED: ReadonlySet<string> = new Set()
+
 /**
  * Split points into workbench SETS and ordinary rows.
  *
@@ -171,29 +197,41 @@ function groupKey(s: SlateSurface): string {
  * a lone grouped point falls back to a row — IN ITS ORIGINAL POSITION, which is why the
  * counts are taken in a first pass rather than appending stragglers at the end.
  *
- * Sets are ordered by the earliest `createdAt` among their members, so a workbench holds
- * the position its first question would have held; a set can't jump the queue because a
- * later question was amended. Members keep the caller's order (the Slate's
- * `order`/`createdAt` sort), so S6's reorder still decides what sits leftmost.
+ * `excluded` names points that must NEVER be swallowed into a band regardless of their
+ * `group` — in practice the HIDDEN ones. A column renders none of the row's hide chrome,
+ * so a hidden point promoted to a column would lose its only unhide affordance and be
+ * stranded: the panel's "N hidden · show" toggle would reveal something it could not
+ * restore. Excluding them also means the composition of a band no longer changes when
+ * the reveal toggle flips. An excluded point doesn't count toward its group's size, so
+ * a two-member set with one hidden member correctly degrades to a single row.
+ *
+ * Bands are emitted BEFORE the rows (a question series is the thing the user is being
+ * asked to work through, so it sits above the standing list rather than buried in it);
+ * `earliest` therefore only orders bands relative to EACH OTHER, it does not interleave
+ * them into the row list.
  *
  * Exported so tests — and any future caller that needs to know which rows the workbench
  * swallowed — use the SAME rule the render does instead of re-deriving it.
  */
-export function partitionWorkbenches(points: SlateSurface[]): {
+export function partitionWorkbenches(
+  points: SlateSurface[],
+  excluded: ReadonlySet<string> = EMPTY_EXCLUDED,
+): {
   groups: Array<{ group: string; points: SlateSurface[] }>
   ungrouped: SlateSurface[]
 } {
+  const groupable = (s: SlateSurface) => groupKey(s) !== '' && !excluded.has(s.id)
+
   const counts = new Map<string, number>()
   for (const s of points) {
-    const g = groupKey(s)
-    if (g) counts.set(g, (counts.get(g) ?? 0) + 1)
+    if (groupable(s)) counts.set(groupKey(s), (counts.get(groupKey(s)) ?? 0) + 1)
   }
 
   const byGroup = new Map<string, SlateSurface[]>()
   const ungrouped: SlateSurface[] = []
   for (const s of points) {
     const g = groupKey(s)
-    if (!g || (counts.get(g) ?? 0) < 2) {
+    if (!groupable(s) || (counts.get(g) ?? 0) < 2) {
       ungrouped.push(s)
       continue
     }
