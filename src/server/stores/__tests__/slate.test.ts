@@ -291,14 +291,34 @@ describe('SlateStore.addUserPoint (U7)', () => {
     expect(changes[0]!.data).not.toBeNull()
   })
 
-  it('claim also drops the file-owned body (the agent’s A2UI is not the goal)', () => {
+  it('claim drops the file-owned body AND anchor (the agent’s pointer is not the goal)', () => {
     const { store } = makeStore()
-    store.applyProjection(RUN, [{ id: 'objective', headline: 'agent goal', content: body('a') }])
-    expect(store.getPoint(RUN, 'objective')!.content).toBeDefined()
+    store.applyProjection(RUN, [{
+      id: 'objective',
+      headline: 'agent goal',
+      content: body('a'),
+      anchor: { kind: 'surface', ref: 'some-surface' },
+    }])
+    const seeded = store.getPoint(RUN, 'objective')!
+    expect(seeded.content).toBeDefined()
+    expect(seeded.anchor).toBeDefined()
 
     store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'the real goal' }, 2000, { claim: true })
 
-    expect(store.getPoint(RUN, 'objective')!.content).toBeUndefined()
+    const after = store.getPoint(RUN, 'objective')!
+    expect(after.content).toBeUndefined()
+    // `mergeFileOwned` only ever SETS anchor, so this only holds because claim clears it.
+    expect(after.anchor).toBeUndefined()
+  })
+
+  // `claim` means USER-ownership, so the author is not the caller's to choose — otherwise
+  // it could mint a retraction-exempt point attributed to the agent.
+  it('claim ignores a caller-supplied non-user author', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('objective', 'agent goal')])
+    store.addUserPoint(RUN, { id: 'objective', author: 'agent', headline: 'the real goal' }, 2000, { claim: true })
+    expect(store.getPoint(RUN, 'objective')!.author).toBe('user')
+    expect(store.getPoint(RUN, 'objective')!.source).toBe('user')
   })
 
   it('claim on an already-user point that changes nothing still emits nothing', () => {

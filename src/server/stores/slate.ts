@@ -267,25 +267,35 @@ export class SlateStore {
     const id = input.id && input.id.length > 0 ? input.id : 'pt-user-' + randomUUID().slice(0, 12)
     // Scoped to THIS run by the composite key — a prior hit is always this run's point.
     const prior = this.points.get(this.k(runId, id))
-    const next = prior
-      ? {
-          ...mergeFileOwned(prior, input, now),
-          // `claim` (S2 — the reserved Objective id) makes the amend TAKE OWNERSHIP
-          // instead of inheriting it: both the provenance the projection gates on and
-          // the attribution the render channel publishes. Without it the amend keeps
-          // `prior.source` (so a pre-guard file point stays `source:'file'` and never
-          // projects as the objective) AND keeps `prior.author` — `mergeFileOwned` does
-          // not read `input.author`, so a file point created as `author:'agent'` would
-          // ship the user's own words under the agent's name.
-          //
-          // Done here rather than as a separate flip-then-amend so it is ONE mutation
-          // and ONE emit: two calls would publish an intermediate frame where the card
-          // is already the Objective but still carries the agent's headline and body.
-          ...(opts.claim
-            ? { source: 'user' as const, author: input.author ?? 'user' }
-            : { source: prior.source ?? 'user' as const }),
-        }
-      : createPoint(runId, id, { author: 'user', ...input }, now, 'user')
+    let next: Point
+    if (!prior) {
+      next = createPoint(runId, id, { author: 'user', ...input }, now, 'user')
+    } else if (opts.claim) {
+      // `claim` (S2 — the reserved Objective id) makes the amend TAKE OWNERSHIP instead
+      // of inheriting it. Without it the amend keeps `prior.source` (so a pre-guard file
+      // point stays `source:'file'` and never projects as the objective) AND keeps
+      // `prior.author` — `mergeFileOwned` does not read `input.author`, so a file point
+      // created as `author:'agent'` would ship the user's own words under the agent's
+      // name.
+      //
+      // `author` is HARD-CODED, not taken from the caller: the option means user-
+      // ownership, so the author is not the caller's to choose. Letting it through would
+      // make `claim` able to mint a retraction-exempt point attributed to the agent —
+      // the same mixup inverted.
+      //
+      // Done here rather than as a separate flip-then-amend so it is ONE mutation and
+      // ONE emit: two calls would publish an intermediate frame where the card is
+      // already the Objective but still carries the agent's headline and body.
+      next = { ...mergeFileOwned(prior, input, now), source: 'user', author: 'user' }
+      // The anchor is file-owned like `content` and `refresh`, but `mergeFileOwned` only
+      // ever SETS it — so a claimed point would otherwise inherit the agent's pointer
+      // (e.g. `{kind:'surface', ref:…}`) onto a point that is now unconditionally the
+      // user's. Clear it on the same terms as the body: gone unless this input supplies
+      // one. Inert on the render channel today, but by coincidence rather than design.
+      if (!input.anchor) delete next.anchor
+    } else {
+      next = { ...mergeFileOwned(prior, input, now), source: prior.source ?? 'user' }
+    }
     if (prior && pointEqual(prior, next)) return prior
     this.points.set(this.k(runId, id), next)
     this.emit({ entity: 'slatePoint', id, runId, data: next })
