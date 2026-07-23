@@ -138,28 +138,47 @@ export function WorkbenchSurface({ runId, group, points }: Props) {
     })
   }, [])
 
-  // Counted over `points`, never over the set itself, so an id that has left the
-  // group (re-projection, group cleared) can't inflate the total.
+  // The questions still ON the table. A `dismissed` point is off it — it can never
+  // become `waiting`/`resolved`, so leaving it in the DENOMINATOR would pin the count
+  // below its ceiling forever ("1 of 2 answered" on a series with nothing left to
+  // answer), which is the same lie as a count that can't come back down. It is
+  // dropped from BOTH sides rather than counted as answered, because "answered" is
+  // not what happened to it. Reachable: a point can be dismissed as a row and then
+  // grouped by a later file write, and a column carries no dismiss chrome to undo it.
+  const live = useMemo(() => points.filter((s) => s.status !== 'dismissed'), [points])
+
+  // Counted over `live`, never over the optimistic set itself, so an id that has left
+  // the group (re-projection, group cleared, dismissal) can't inflate the total.
   const answeredCount = useMemo(
-    () => points.filter((s) => durablyAnswered(s) || optimistic.has(s.id)).length,
-    [points, optimistic],
+    () => live.filter((s) => durablyAnswered(s) || optimistic.has(s.id)).length,
+    [live, optimistic],
   )
 
   if (points.length === 0) return null
 
   return (
     <div data-testid={`workbench-${group}`} data-group={group} className="space-y-1.5">
-      {/* Band label: mono caps meta, with the progress count on the right. */}
+      {/* Band label: mono caps meta, with the progress count on the right. The label
+          counts every COLUMN (what's on screen); the progress counts only the live
+          ones (what's still being asked). They differ exactly when a question has
+          been dismissed — which is what the dimmed column is showing. */}
       <div className="flex items-baseline justify-between gap-2">
         <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-low">
           Questions · {points.length}
         </span>
-        <span
-          data-testid={`workbench-progress-${group}`}
-          className="shrink-0 font-mono text-[10px] text-ink-ctrl"
-        >
-          {answeredCount} of {points.length} answered
-        </span>
+        {live.length > 0 && (
+          <span
+            data-testid={`workbench-progress-${group}`}
+            title={
+              live.length === points.length
+                ? undefined
+                : `${points.length - live.length} dismissed — not counted`
+            }
+            className="shrink-0 font-mono text-[10px] text-ink-ctrl"
+          >
+            {answeredCount} of {live.length} answered
+          </span>
+        )}
       </div>
       {/* The scroller. `data-scrollable` makes the canvas wheel handler yield the wheel
           to this band; its OWN overflow-x-auto keeps the horizontal scroll off the panel

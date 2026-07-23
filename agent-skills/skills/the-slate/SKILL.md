@@ -58,6 +58,8 @@ Each entry is a **point** — the primitive the Slate is built from:
 | `content` | no | file | the surface body: an **A2UI component tree** (see below) |
 | `author` | no | file | `agent` (default) \| `user` \| `process` |
 | `anchor` | no | file | `{ kind: "none" \| "decision" \| "surface", ref? }` — attach the point to a decision or another surface by id |
+| `refresh` | no | file | the self-contained instruction a fresh author re-runs to regenerate this surface (see "the vacuum test" below) |
+| `group` | no | file | **workbench set id** — give the *same* string to 2+ **question** points and they render side by side, one per column (see below). Open-point entries only; ignored on a `kind: "surface"` anchor |
 | `createdAt` | no | file | epoch ms; the server stamps one on first projection if you omit it |
 
 Everything else about a point — its **discussion thread** (`replies`), its **lifecycle
@@ -119,6 +121,37 @@ surface (each surface has its own render budget and error boundary). Stick to th
 
 An entry whose `content` fails validation is **dropped** (the file's other entries still
 project); an entry with no `content` is a valid **bare headline point**.
+
+### Asking several questions at once: the `group` workbench
+
+**A surface has exactly ONE answer.** One free-text draft and one `Submit` are shared by
+everything in its body, so two `TextInput`s in one entry write to the same box and two
+`Submit`s send the same single answer. Never pack a questionnaire into one entry.
+
+Write **one entry per question** and give every entry in the set the same `group`:
+
+```json
+[
+  { "id": "q-token-scope", "headline": "Refresh token, or access only?", "group": "auth-decisions",
+    "content": { "root": "root", "components": [
+      { "id": "root", "component": "Column", "children": ["c", "s"] },
+      { "id": "c", "component": "Choice", "mode": "single",
+        "options": [ { "id": "both", "label": "Both" }, { "id": "access", "label": "Access only" } ] },
+      { "id": "s", "component": "Submit", "label": "Answer" } ] } },
+  { "id": "q-migration-owner", "headline": "Who owns the migration?", "group": "auth-decisions",
+    "content": { "root": "root", "components": [
+      { "id": "root", "component": "Column", "children": ["t", "s"] },
+      { "id": "t", "component": "TextInput", "label": "Name" },
+      { "id": "s", "component": "Submit", "label": "Answer" } ] } }
+]
+```
+
+Two or more points sharing a `group` render as a **workbench**: a horizontal band inside
+the open-points list, one question per column, each answered on its own. You get **one
+note per answered question**, not one combined blob. A lone grouped point is just an
+ordinary row. `group` is presentational and fully additive — omit it and nothing changes,
+and dropping it from a later write dissolves the band back into rows without touching a
+single thread or status.
 
 ## Write atomically, and rewrite to amend
 

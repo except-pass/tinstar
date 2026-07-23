@@ -16,7 +16,7 @@ vi.mock('../../../apiClient', () => ({
 import { SlatePanel, type SlatePanelHandle } from '../SlatePanel'
 import { SLATE_HOTKEYS } from '../slateHotkeys'
 import { REFRESH_MAX_MS } from '../slateRefresh'
-import { getHiddenSlateSurfaces, getMinimizedSlateSurfaces, familyKeys } from '../../../lib/uiPrefs'
+import { getHiddenSlateSurfaces, addHiddenSlateSurface, getMinimizedSlateSurfaces, familyKeys } from '../../../lib/uiPrefs'
 
 /** A resolved refresh/compose response envelope, matching the server shape. */
 function okDelivered(delivered: boolean) {
@@ -272,6 +272,42 @@ describe('SlatePanel keyboard surface (S6 U1)', () => {
     // Clamped at the end — traversal never strands focus on an invisible column.
     act(() => ref.current!.focusNext())
     expect(focusedId()).toBe('point-p2')
+  })
+
+  // The OTHER half of the same change: `hidden` is the exclusion set, so a revealed
+  // hidden grouped point drops OUT of the band and back into the row list — and must
+  // therefore be reachable by j/k again. BACK-OUT GUARD: drop the second argument at
+  // the `partitionWorkbenches` call in `focusRows` and this fails — OpenPointsSurface
+  // still renders the hidden point as a row, but j/k steps straight past it and x/r
+  // can never reach it.
+  it('j / k still reach a revealed hidden point that a workbench let go', () => {
+    const qs = [
+      surface('g1', '', { kind: 'open-point', headline: 'q one', status: 'open', group: 'qs' }),
+      surface('h1', '', { kind: 'open-point', headline: 'hidden q', status: 'open', group: 'qs' }),
+      surface('g2', '', { kind: 'open-point', headline: 'q two', status: 'open', group: 'qs' }),
+    ]
+    const ref = renderWithHandle(qs)
+
+    // All three grouped and visible → all three are columns, so there is no row to
+    // focus at all.
+    act(() => ref.current!.focusNext())
+    expect(focusedId()).toBeNull()
+
+    // Hide the middle question, then reveal hidden surfaces.
+    act(() => ref.current!.hideFocused()) // no-op (nothing focused) — hide via the ✕ instead
+    cleanup()
+    addHiddenSlateSurface('h1')
+    const ref2 = renderWithHandle(qs)
+    fireEvent.click(screen.getByTestId('slate-hidden-toggle'))
+
+    // The band keeps the two live ones; the hidden one is back to being a row.
+    expect(screen.getByTestId('workbench-column-g1')).toBeTruthy()
+    expect(screen.queryByTestId('workbench-column-h1')).toBeNull()
+    expect(screen.getByTestId('point-h1')).toBeTruthy()
+
+    // ...and j/k must reach it, or x/r could never act on a visible row.
+    act(() => ref2.current!.focusNext())
+    expect(focusedId()).toBe('point-h1')
   })
 
   it('x hides the focused surface and moves focus to the next row', () => {

@@ -224,6 +224,46 @@ describe('WorkbenchSurface (S4 U3)', () => {
     expect(screen.getByTestId('workbench-column-a').className).not.toContain('opacity-50')
   })
 
+  // A dismissed question can never become waiting/resolved, so leaving it in the
+  // DENOMINATOR would pin the count below its ceiling forever — the same "the count
+  // lies about whether you're done" failure as a count that can't come back down.
+  it('a dismissed question leaves BOTH sides of the count, so the band can complete', async () => {
+    render(
+      <WorkbenchSurface
+        runId="run-1"
+        group="launch-qs"
+        points={[q('a'), q('b', { status: 'dismissed' }), q('c')]}
+      />,
+    )
+
+    // Three columns on screen, two still being asked.
+    expect(screen.getByText('Questions · 3')).toBeTruthy()
+    expect(screen.getByTestId('workbench-progress-launch-qs').textContent).toBe('0 of 2 answered')
+
+    for (const id of ['a', 'c']) {
+      const col = screen.getByTestId(`workbench-column-${id}`)
+      fireEvent.click(within(col).getByRole('radio', { name: 'Yes' }))
+      fireEvent.click(within(col).getByRole('button', { name: 'Send' }))
+    }
+
+    // Reaches its ceiling — with the dismissed one counted it would stall at "2 of 3".
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-progress-launch-qs').textContent).toBe('2 of 2 answered'),
+    )
+  })
+
+  it('omits the progress count when every question has been dismissed', () => {
+    render(
+      <WorkbenchSurface
+        runId="run-1"
+        group="launch-qs"
+        points={[q('a', { status: 'dismissed' }), q('b', { status: 'dismissed' })]}
+      />,
+    )
+    expect(screen.getByText('Questions · 2')).toBeTruthy()
+    expect(screen.queryByTestId('workbench-progress-launch-qs')).toBeNull()
+  })
+
   it('a column with a prose-only body renders read-only — no submit', () => {
     render(
       <WorkbenchSurface runId="run-1" group="launch-qs" points={[q('a'), q('b', { body: prose })]} />,

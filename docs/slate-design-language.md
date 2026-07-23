@@ -77,20 +77,20 @@ Every open point shares one grouped surface. Each row: author + status pill, a *
 - **Status track:** four dots, filled up to the current stage in the stage's hue; the terminal `resolved` dot goes emerald; unlit dots use `primary/12`. Dismissed = off-track, dimmed row.
 - **Do:** sink resolved/dismissed rows to the bottom and dim them; live points stay at top. **Don't:** make resolve destructive-looking — it's a soft checkbox; reopening is one click.
 
-## Workbench — a question SERIES, laid out sideways
-A set of related open-points (same file-owned `group`, 2+ members) leaves the vertical list and becomes one horizontal band inside it. The band is layout, not a new surface kind: every column is an ordinary point with its own answer form.
-- **Band label:** the mono-caps meta ramp — `Questions · N` low ink at left, an `M of N answered` progress count in **control ink** (`#4f5e67`) at right. The count is the only running state the band owns, so it must track the columns in **both** directions — a failed submit unlocks its column and the count goes back down with it.
-- **Column:** a fixed `240px`, `shrink-0` card in the standard shell (radius 4, hairline, `surface.hover`), long tokens wrapping inside it (`overflow-wrap: anywhere`) rather than pushing the panel sideways. Headline is Chakra 13/600; body is the authored A2UI.
-- **Answered posture:** swap the hairline for `hue.resolved/30` — **not** a dim. A dim reads *disabled*; an answered question is **done**, and the two must not look alike. Dimming to 50% stays reserved for `dismissed` / hidden, exactly as on the row.
-- **Scroll (#126):** the band owns its own `overflow-x-auto` and carries `data-scrollable`. The panel's scroll body is `overflow-x-hidden`, so a horizontal scrollbar on a child of it would be unreachable — and the canvas wheel handler yields the wheel to the nearest `data-scrollable` ancestor that can actually consume it, so a vertical wheel over the band still scrolls the panel instead of panning the canvas.
-- **Do:** keep the column to the question — headline, body, controls. **Don't:** rebuild the row inside it (thread, resolve, reorder, hide all stay on the row, which is where the point lives once the file drops its `group`); a hidden point therefore never joins a band.
-
 ## Surface states (same shell across lifecycle; state signalled at the edges + freshness stamp, body never moves)
 - **Refreshing** — cyan glow = live (`0 0 14 rgba(0,240,255,.1)`), "refreshing…".
 - **Stale** — amber past 15m, "⚠ updated 47m ago".
 - **Unreachable** — a note, not an error: "Sent — but that session isn't reachable right now."
 - **Hidden** — dimmed to 50%, revealed only via the header toggle.
 - **Empty** — an invitation, never a dead end: "Nothing on the Slate yet. ✦ Explain the session, or + Add a surface to fill it."
+
+## Workbench — a question SERIES, laid out sideways
+A set of related open-points (same file-owned `group`, 2+ members) leaves the vertical list and becomes one horizontal band inside it. The band is layout, not a new surface kind: every column is an ordinary point with its own answer form.
+- **Band label:** the mono-caps meta ramp — `Questions · N` low ink at left, an `M of L answered` progress count in **control ink** (`#4f5e67`) at right. `N` counts the columns on screen; `L` counts only the ones still being asked, so a dismissed question leaves **both** sides and the count can always reach its ceiling. The count is the only running state the band owns, so it must also track the columns in **both directions** — a failed submit unlocks its column and the count goes back down with it.
+- **Column:** a fixed `240px`, `shrink-0` card in the standard shell (radius 4, hairline, `surface.hover`), long tokens wrapping inside it (`overflow-wrap: anywhere`) rather than pushing the panel sideways. Headline is Chakra 13/600; body is the authored A2UI.
+- **Answered posture:** swap the hairline for `hue.resolved/30` — **not** a dim. A dim reads *disabled*; an answered question is **done**, and the two must not look alike. Dimming to 50% stays reserved for `dismissed` / hidden, exactly as on the row.
+- **Scroll (#126):** the band owns its own `overflow-x-auto` and carries `data-scrollable`. The panel's scroll body is `overflow-x-hidden`, so a horizontal scrollbar on a child of it would be unreachable — and the canvas wheel handler walks out through the `data-scrollable` chain for one that can actually consume the wheel, so a vertical wheel over the band still scrolls the panel instead of panning the canvas.
+- **Do:** keep the column to the question — headline, body, controls. **Don't:** rebuild the row inside it (thread, resolve, reorder, hide all stay on the row, which is where the point lives once the file drops its `group`); a hidden point therefore never joins a band.
 
 ## Panel chrome
 The column's header strip is the only always-visible chrome: a mono label left, quiet actions right; the composer opens as a popover beneath. **Do:** keep header actions mono + low-contrast; give only **✦ Explain** and the primary **Create** the cyan (the generative moves). **Don't:** pack the strip with icon buttons — text actions read faster and survive the 260px collapsed width.

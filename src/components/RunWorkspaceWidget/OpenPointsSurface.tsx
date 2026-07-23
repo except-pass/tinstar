@@ -193,6 +193,11 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
         // value until then so the track doesn't flicker back.
       } catch {
         setOptimisticStatus(prev) // revert to the pre-click override (usually null)
+        // Clear the answer slot HERE too, not only at the start: only the resolve
+        // checkbox is gated on `busy` — the A2UI Submit is not — so a Submit fired
+        // while this request is still in flight can populate the answer slot in
+        // between, and it would outrank the failure we are about to report.
+        setAnswerError(null)
         setError(`Could not ${action} this point.`)
       } finally {
         setBusy(false)
@@ -218,11 +223,13 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
     [answer.form],
   )
 
-  // The row shows ONE error line. The two slots clear EACH OTHER at the start of
-  // every action (submit clears the lifecycle slot, `lifecycle` clears the answer
-  // slot), so at most one is set at a time and "last failure wins" — exactly the
-  // single-slot behavior this row had before the S4 U2 extraction. The `??` is just
-  // the tiebreak for the impossible case.
+  // The row shows ONE error line, and the two slots clear EACH OTHER — the wrapped
+  // submit clears the lifecycle slot, and `lifecycle` clears the answer slot both at
+  // its start AND in its catch (a Submit is not gated on `busy`, so one can land
+  // mid-flight). Net effect: the LAST failure is the one shown, exactly the
+  // single-slot behavior this row had before the S4 U2 extraction. The `??` orders
+  // the residual case, where a submit's validation lands after a lifecycle failure —
+  // there the answer message IS the newer one, so it correctly wins.
   const shownError = answer.error ?? error
 
   const threadCount = surface.thread?.length ?? 0

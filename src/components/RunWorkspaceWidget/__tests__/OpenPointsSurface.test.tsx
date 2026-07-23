@@ -387,4 +387,40 @@ describe('OpenPointsSurface (U6)', () => {
     await waitFor(() => expect(screen.getByText(/could not resolve this point/i)).toBeTruthy())
     expect(screen.queryByText(/pick an option/i)).toBeNull()
   })
+
+  // The concurrent window: only the resolve checkbox is gated on `busy` — the A2UI
+  // Submit is not — so a Submit can populate the answer slot AFTER lifecycle cleared
+  // it and BEFORE the resolve rejects. Clearing only at the start isn't enough.
+  it('a lifecycle failure still wins over an answer error raised mid-flight', async () => {
+    const body = {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Column', children: ['s'] },
+        { id: 's', component: 'Submit', label: 'Send' },
+      ],
+    }
+    // Hold the resolve POST open until we say so.
+    let releaseResolve!: () => void
+    const gate = new Promise<void>((r) => { releaseResolve = r })
+    apiFetch.mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/resolve')) {
+        await gate
+        return { ok: false, status: 500, json: async () => ({ ok: false }) } as unknown as Response
+      }
+      return ok()
+    })
+
+    render(<OpenPointsSurface runId="run-1" points={[point('p1', { body: body as never })]} />)
+
+    fireEvent.click(screen.getByTestId('resolve-p1'))       // in flight
+    fireEvent.click(screen.getByRole('button', { name: 'Send' })) // sets the answer slot
+    await waitFor(() => expect(screen.getByText(/pick an option/i)).toBeTruthy())
+
+    releaseResolve()
+
+    // BACK-OUT GUARD: remove `setAnswerError(null)` from lifecycle's catch and this
+    // fails — the stale validation message hides the real failure.
+    await waitFor(() => expect(screen.getByText(/could not resolve this point/i)).toBeTruthy())
+    expect(screen.queryByText(/pick an option/i)).toBeNull()
+  })
 })

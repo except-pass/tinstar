@@ -61,6 +61,14 @@ function findScrollableAncestor(el: Element | null, deltaX: number, deltaY: numb
  * vertical-only panel has always been a no-op rather than a canvas pan, and that is
  * not this change's call to make.
  *
+ * ZOOM PATH, deliberately unchanged here: the caller runs this check BEFORE the
+ * ctrl/⌘+wheel zoom branch, so yielding also forfeits the canvas zoom to the browser's
+ * own ctrl+wheel handling. That is already true of every `[data-scrollable]` panel;
+ * widening the yield brings a one-axis scroller (the workbench band) into line with its
+ * own parent rather than leaving it an accidental zoom hole. Making ctrl+wheel bypass
+ * the yield entirely would be an improvement, but it changes zoom behavior over EVERY
+ * scrollable panel in the app and belongs to its own change.
+ *
  * Exported for tests; jsdom reports every scroll metric as 0, so a test defines them.
  */
 export function findWheelYieldTarget(
