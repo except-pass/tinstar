@@ -293,8 +293,8 @@ describe('SlatePanel keyboard surface (S6 U1)', () => {
     act(() => ref.current!.focusNext())
     expect(focusedId()).toBeNull()
 
-    // Hide the middle question, then reveal hidden surfaces.
-    act(() => ref.current!.hideFocused()) // no-op (nothing focused) — hide via the ✕ instead
+    // Hide the middle question (it has no ✕ of its own while it's a column, which is
+    // the whole point), then remount and reveal hidden surfaces.
     cleanup()
     addHiddenSlateSurface('h1')
     const ref2 = renderWithHandle(qs)

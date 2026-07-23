@@ -203,8 +203,13 @@ describe('WorkbenchSurface (S4 U3)', () => {
     expect(screen.getByTestId('workbench-column-a').getAttribute('data-answered')).toBeNull()
     expect((within(colA).getByRole('radio', { name: 'Yes' }) as HTMLInputElement).disabled).toBe(false)
     expect((within(colA).getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false)
-    // BACK-OUT GUARD: make `onAnswered` one-way again and this line fails.
-    expect(screen.getByTestId('workbench-progress-launch-qs').textContent).toBe('0 of 2 answered')
+    // BACK-OUT GUARD: make `onAnswered` one-way again and this times out at "1 of 2".
+    // Polled, not asserted outright: the column tells the band through an EFFECT, so
+    // the band's re-render lands one tick after the column's own — asserting straight
+    // after the error text is a race that only loses on a slow machine.
+    await waitFor(() =>
+      expect(screen.getByTestId('workbench-progress-launch-qs').textContent).toBe('0 of 2 answered'),
+    )
   })
 
   // A point taken off the table reads as off the table, rather than as one more live
@@ -327,6 +332,31 @@ describe('partitionWorkbenches (S4)', () => {
     )
     expect(groups).toHaveLength(0) // one live member left → degrades to a row
     expect(ungrouped.map((s) => s.id)).toEqual(['g1', 'r1', 'g2'])
+  })
+
+  // A dismissed question is off the table, so it must not be what keeps a one-question
+  // set in the sideways layout — the survivor would be a lone column with none of the
+  // row's chrome (thread, resolve, reorder, hide).
+  it('a dismissed member does not hold a two-member band open', () => {
+    const { groups, ungrouped } = partitionWorkbenches([
+      row('g1', { group: 'set-a' }),
+      row('g2', { group: 'set-a', status: 'dismissed' }),
+    ])
+    expect(groups).toHaveLength(0)
+    expect(ungrouped.map((s) => s.id)).toEqual(['g1', 'g2'])
+  })
+
+  // ...but it still rides along in a band its LIVE siblings already justify, so the
+  // set stays legible as a set (dimmed, and out of both sides of the count).
+  it('a dismissed member still joins a band two live questions justify', () => {
+    const { groups, ungrouped } = partitionWorkbenches([
+      row('g1', { group: 'set-a' }),
+      row('g2', { group: 'set-a', status: 'dismissed' }),
+      row('g3', { group: 'set-a' }),
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0]!.points.map((s) => s.id)).toEqual(['g1', 'g2', 'g3'])
+    expect(ungrouped).toHaveLength(0)
   })
 
   it('an excluded member does not count toward the 2-member threshold', () => {

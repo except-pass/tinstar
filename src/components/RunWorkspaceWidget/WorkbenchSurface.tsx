@@ -224,6 +224,11 @@ const EMPTY_EXCLUDED: ReadonlySet<string> = new Set()
  * the reveal toggle flips. An excluded point doesn't count toward its group's size, so
  * a two-member set with one hidden member correctly degrades to a single row.
  *
+ * A `dismissed` point is the weaker version of the same idea: it doesn't count toward
+ * the two-member threshold (a lone live question must not be left as a single column),
+ * but unlike an excluded one it still joins a band its live siblings already justify —
+ * dimmed, and dropped from both sides of the progress count.
+ *
  * Bands are emitted BEFORE the rows (a question series is the thing the user is being
  * asked to work through, so it sits above the standing list rather than buried in it);
  * `earliest` therefore only orders bands relative to EACH OTHER, it does not interleave
@@ -241,9 +246,18 @@ export function partitionWorkbenches(
 } {
   const groupable = (s: SlateSurface) => groupKey(s) !== '' && !excluded.has(s.id)
 
+  // Only a question still ON the table argues for a band. A `dismissed` member is
+  // off it — the band's progress count already drops it from both sides — so it must
+  // not be what keeps a one-question set in the sideways layout: the survivor would
+  // be a lone column, and a column carries none of the row's chrome. Same rule as
+  // `excluded`, one step weaker: a dismissed point doesn't hold a band OPEN, but it
+  // still rides along (dimmed) in a band its live siblings already justify, so the
+  // set stays visible as a set.
   const counts = new Map<string, number>()
   for (const s of points) {
-    if (groupable(s)) counts.set(groupKey(s), (counts.get(groupKey(s)) ?? 0) + 1)
+    if (groupable(s) && s.status !== 'dismissed') {
+      counts.set(groupKey(s), (counts.get(groupKey(s)) ?? 0) + 1)
+    }
   }
 
   const byGroup = new Map<string, SlateSurface[]>()

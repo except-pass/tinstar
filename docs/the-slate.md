@@ -136,9 +136,13 @@ When an agent needs several answers at once, it can lay the questions out **side
 side** instead of stacking them. Write each question as its own point — its own `id`, its
 own `content` body of `Choice`/`TextInput`/`Submit` — and give every point in the set the
 **same** `group` string. Two or more points sharing a `group` render as a *workbench*: a
-horizontal band inside the open-points list, one question per column, with an
-"M of N answered" count. A lone grouped point stays an ordinary row (a one-column band
-would just be a row with extra chrome).
+horizontal band inside the open-points list, one question per column, labelled
+`Questions · N` with an `M of L answered` count beside it. `N` is the columns on screen;
+`L` is only the ones still being asked, so a **dismissed** question leaves both sides of
+the count and the band can always reach its ceiling (with every question dismissed the
+count is dropped entirely). A lone grouped point stays an ordinary row — and a dismissed
+one doesn't hold a band open, so a two-question set with one dismissed degrades back to
+rows rather than leaving a single column with none of the row's chrome.
 
 ```json
 [

@@ -99,6 +99,18 @@ describe('findWheelYieldTarget — nested data-scrollable chain', () => {
     expect(findWheelYieldTarget(plain, 0, 50)).toBeNull()
   })
 
+  // OPEN ITEM pin (see the findWheelYieldTarget docstring). This function is delta-only
+  // — it cannot see ctrl/⌘ — and the caller consults it BEFORE its zoom branch, so a
+  // yield here means a zoom gesture over a scroller reaches the browser instead of the
+  // canvas. True of every [data-scrollable] panel, and now of the workbench band too.
+  // Pinned so that changing it is a deliberate flip, not a silent one.
+  it('a zoom gesture over a scroller still yields — the ctrl/⌘ case is the caller’s', () => {
+    const { outer, band, column } = slate(PANEL, BAND)
+    // Whatever the modifier, these are the same deltas, so the same target comes back.
+    expect(findWheelYieldTarget(column, 0, 50)).toBe(outer)
+    expect(findWheelYieldTarget(column, 40, 0)).toBe(band)
+  })
+
   it('a lone vertical panel behaves exactly as before (including a deltaY of 0)', () => {
     const el = document.createElement('div')
     el.setAttribute('data-scrollable', '')
