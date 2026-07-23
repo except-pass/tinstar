@@ -269,7 +269,17 @@ export class SlateStore {
     const prior = this.points.get(this.k(runId, id))
     let next: Point
     if (!prior) {
-      next = createPoint(runId, id, { author: 'user', ...input }, now, 'user')
+      // `...input` spreads AFTER the default, so a caller-supplied `author` normally
+      // wins here. Under `claim` it must not: the option means user-ownership, and a
+      // create is just as capable of minting a retraction-exempt, agent-attributed
+      // point as an amend is. Forced on both branches so the guarantee has no seam.
+      next = createPoint(
+        runId,
+        id,
+        { author: 'user', ...input, ...(opts.claim ? { author: 'user' as const } : {}) },
+        now,
+        'user',
+      )
     } else if (opts.claim) {
       // `claim` (S2 — the reserved Objective id) makes the amend TAKE OWNERSHIP instead
       // of inheriting it. Without it the amend keeps `prior.source` (so a pre-guard file

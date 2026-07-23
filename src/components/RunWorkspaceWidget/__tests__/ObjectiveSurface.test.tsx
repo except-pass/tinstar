@@ -124,6 +124,12 @@ describe('ObjectiveSurface (S2)', () => {
   // The note is a snapshot of ONE Apply. Nothing re-checks reachability, so it must not
   // sit on the card forever — through the session coming back, which is exactly the
   // event that makes it false.
+  //
+  // `okApply` omits `objective`, so this also covers the defensive local-anchor fallback
+  // in `apply` (`body.data.objective?.headline ?? trimmed`). Optional chaining collapses
+  // "no `objective`" and "`objective` without a `headline`" into the same evaluation, so
+  // there is one branch here, not two — a separate test for the second shape would pin
+  // a distinction the code does not draw.
   it('the unreachable note SURVIVES the projection echo of its own Apply', async () => {
     apiFetch.mockImplementation(() => okApply({ delivered: false, changed: true }))
     const { rerender } = render(<ObjectiveSurface runId="run-1" surface={objective('old goal')} />)
@@ -156,27 +162,6 @@ describe('ObjectiveSurface (S2)', () => {
 
     // The echo carries what the SERVER stored — the note must recognise it as its own.
     rerender(<ObjectiveSurface runId="run-1" surface={objective('server normalised goal')} />)
-    expect(screen.getByTestId('objective-unreachable')).toBeTruthy()
-  })
-
-  // Defensive fallback. The "no `objective` at all" shape is already the only path the
-  // survives-own-echo test above takes (the shared okApply helper omits the field), so
-  // the genuinely unpinned shape is `objective` PRESENT but `headline` missing — which
-  // also lands on the local anchor. The note must still show: an undelivered Apply is
-  // worth saying, and losing it entirely is the worse failure.
-  it('falls back to the local anchor when objective.headline is missing', async () => {
-    apiFetch.mockImplementation(() => Promise.resolve({
-      ok: true,
-      json: async () => ({ ok: true, data: { delivered: false, changed: true, objective: {} } }),
-    } as unknown as Response))
-    const { rerender } = render(<ObjectiveSurface runId="run-1" surface={objective('old goal')} />)
-    fireEvent.click(screen.getByTestId('objective-edit'))
-    fireEvent.change(screen.getByTestId('objective-input'), { target: { value: 'a new goal' } })
-    fireEvent.click(screen.getByTestId('objective-apply'))
-
-    await waitFor(() => expect(screen.getByTestId('objective-unreachable')).toBeTruthy())
-    // Anchored on the locally-trimmed draft, so the echo still counts as its own.
-    rerender(<ObjectiveSurface runId="run-1" surface={objective('a new goal')} />)
     expect(screen.getByTestId('objective-unreachable')).toBeTruthy()
   })
 

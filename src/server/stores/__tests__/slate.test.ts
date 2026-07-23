@@ -313,12 +313,29 @@ describe('SlateStore.addUserPoint (U7)', () => {
 
   // `claim` means USER-ownership, so the author is not the caller's to choose — otherwise
   // it could mint a retraction-exempt point attributed to the agent.
-  it('claim ignores a caller-supplied non-user author', () => {
+  it('claim ignores a caller-supplied non-user author — on the AMEND path', () => {
     const { store } = makeStore()
     store.applyProjection(RUN, [input('objective', 'agent goal')])
     store.addUserPoint(RUN, { id: 'objective', author: 'agent', headline: 'the real goal' }, 2000, { claim: true })
     expect(store.getPoint(RUN, 'objective')!.author).toBe('user')
     expect(store.getPoint(RUN, 'objective')!.source).toBe('user')
+  })
+
+  // …and on the CREATE path, where `...input` would otherwise let the caller's author
+  // win over the default. A create can mint a retraction-exempt agent-attributed point
+  // just as easily as an amend, so the guarantee must not have a seam.
+  it('claim ignores a caller-supplied non-user author — on the CREATE path', () => {
+    const { store } = makeStore()
+    store.addUserPoint(RUN, { id: 'objective', author: 'agent', headline: 'the real goal' }, 2000, { claim: true })
+    const p = store.getPoint(RUN, 'objective')!
+    expect(p.author).toBe('user')
+    expect(p.source).toBe('user')
+  })
+
+  it('WITHOUT claim, a create still honours a caller-supplied author', () => {
+    const { store } = makeStore()
+    store.addUserPoint(RUN, { id: 'p1', author: 'process', headline: 'from a wrapper' })
+    expect(store.getPoint(RUN, 'p1')!.author).toBe('process')
   })
 
   it('claim on an already-user point that changes nothing still emits nothing', () => {
