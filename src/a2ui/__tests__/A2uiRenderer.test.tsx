@@ -427,6 +427,164 @@ describe('A2uiRenderer — Mermaid diagram component (Slate S1)', () => {
   })
 })
 
+describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
+  // The compound-engineering pipeline, the convention's first rider.
+  const CE_STEPS = [
+    { label: 'Brainstorm', status: 'done' },
+    { label: 'Plan', status: 'done' },
+    { label: 'Work', status: 'active', detail: 'implementing unit 2/4' },
+    { label: 'Review', status: 'pending' },
+    { label: 'Compound', status: 'pending' },
+  ]
+
+  /** Every rendered step row, in document order. */
+  function rows(container: HTMLElement): HTMLElement[] {
+    return Array.from(container.querySelectorAll<HTMLElement>('[data-testid="stepper-step"]'))
+  }
+
+  it('knows the Stepper type (isSupported), so it never hits the unsupported fallback', () => {
+    expect(isSupported('Stepper')).toBe(true)
+  })
+
+  it('renders one row per step, labelled in authored order', () => {
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps: CE_STEPS }])} />,
+    )
+    expect(container.textContent).not.toContain('unsupported component')
+    const labels = rows(container).map(r => r.querySelector('[data-testid="stepper-label"]')!.textContent)
+    expect(labels).toEqual(['Brainstorm', 'Plan', 'Work', 'Review', 'Compound'])
+  })
+
+  it('gives a done step the emerald hue.resolved token and a ✓', () => {
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps: CE_STEPS }])} />,
+    )
+    const done = rows(container)[0]!
+    expect(done.dataset.status).toBe('done')
+    const node = done.querySelector('[data-testid="stepper-node"]')!
+    expect(node.className).toContain('bg-hue-resolved')
+    expect(node.textContent).toBe('✓')
+    // Finished work sits at mid ink — present, not shouting.
+    expect(done.querySelector('[data-testid="stepper-label"]')!.className).toContain('text-ink-mid')
+  })
+
+  it('gives the active step the live cyan token, the glow, and high-ink label (P4)', () => {
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps: CE_STEPS }])} />,
+    )
+    const active = rows(container).find(r => r.dataset.status === 'active')!
+    const node = active.querySelector('[data-testid="stepper-node"]')!
+    expect(node.className).toContain('bg-primary')
+    expect(node.className).toContain('shadow-[0_0_14px_rgba(0,240,255,0.10)]')
+    expect(active.querySelector('[data-testid="stepper-label"]')!.className).toContain('text-ink-high')
+  })
+
+  it('renders a pending step low-ink on the faint rail, and a skipped step dimmed + struck through', () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([
+          {
+            id: 'root',
+            component: 'Stepper',
+            steps: [
+              { label: 'Later', status: 'pending' },
+              { label: 'Never', status: 'skipped' },
+            ],
+          },
+        ])}
+      />,
+    )
+    const [pending, skipped] = rows(container)
+    expect(pending!.querySelector('[data-testid="stepper-node"]')!.className).toContain('bg-primary/12')
+    expect(pending!.querySelector('[data-testid="stepper-label"]')!.className).toContain('text-ink-low')
+    expect(skipped!.querySelector('[data-testid="stepper-node"]')!.className).toContain('bg-hue-dismissed')
+    expect(skipped!.querySelector('[data-testid="stepper-label"]')!.className).toContain('line-through')
+  })
+
+  it('coerces an unknown status to pending instead of throwing', () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([
+          { id: 'root', component: 'Stepper', steps: [{ label: 'Mystery', status: 'whatever' }] },
+        ])}
+      />,
+    )
+    expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
+    expect(rows(container)[0]!.dataset.status).toBe('pending')
+  })
+
+  it('degrades a missing/non-array/empty steps prop to an inline marker, keeping siblings (R16)', () => {
+    for (const steps of [undefined, 'brainstorm, plan, work', {}, [], [{ status: 'done' }]]) {
+      const { container, unmount } = render(
+        <A2uiRenderer
+          content={content([
+            { id: 'root', component: 'Column', children: ['s', 't'] },
+            { id: 's', component: 'Stepper', ...(steps === undefined ? {} : { steps }) },
+            { id: 't', component: 'Text', text: 'still here', variant: 'body' },
+          ])}
+        />,
+      )
+      expect(container.textContent).toContain('stepper: no steps to show')
+      // The sibling still renders and the error boundary never trips.
+      expect(container.textContent).toContain('still here')
+      expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
+      expect(rows(container)).toHaveLength(0)
+      unmount()
+    }
+  })
+
+  it('drops label-less and non-object rows but keeps the valid ones, and renders a detail caption', () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([
+          {
+            id: 'root',
+            component: 'Stepper',
+            steps: [
+              'not an object',
+              null,
+              { status: 'done' },
+              { label: '   ', status: 'done' },
+              { label: 'Work', status: 'active', detail: 'implementing unit 2/4' },
+            ],
+          },
+        ])}
+      />,
+    )
+    const row = rows(container)
+    expect(row).toHaveLength(1)
+    expect(row[0]!.querySelector('[data-testid="stepper-label"]')!.textContent).toBe('Work')
+    // The detail is reading prose, so it pins the sans face (the card is mono).
+    const detail = row[0]!.querySelector('[data-testid="stepper-detail"]')!
+    expect(detail.textContent).toBe('implementing unit 2/4')
+    expect(detail.className).toContain('font-sans')
+  })
+
+  it('composes as a normal leaf inside a Column/Card body', () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([
+          { id: 'root', component: 'Column', children: ['head', 'card'] },
+          { id: 'head', component: 'Text', text: 'Pipeline', variant: 'h3' },
+          { id: 'card', component: 'Card', child: 'st' },
+          { id: 'st', component: 'Stepper', steps: CE_STEPS },
+        ])}
+      />,
+    )
+    expect(container.textContent).toContain('Pipeline')
+    expect(rows(container)).toHaveLength(5)
+    // A leaf: the Stepper never resolves children of its own.
+    expect(container.querySelectorAll('[data-testid="stepper"]')).toHaveLength(1)
+  })
+
+  it('draws a connector between rows but not after the last one', () => {
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps: CE_STEPS }])} />,
+    )
+    expect(container.querySelectorAll('[data-testid="stepper-connector"]')).toHaveLength(CE_STEPS.length - 1)
+  })
+})
+
 describe('extractReadableText', () => {
   it('salvages readable strings from a nested description and skips non-readable keys', () => {
     const value = {

@@ -11,6 +11,10 @@
 // "roundup" catalog for the two static-content shapes the base vocabulary lacks.
 // `Mermaid` is a host addition too — the one async/stateful (yet still read-only)
 // entry, drawing an agent-supplied diagram string as a themed SVG (Slate S1).
+// `Stepper` is a host addition as well — the status-colored progress rail (Slate
+// S3). It exists because A2UI's contract is "JSON carries structure, never
+// color": no authored Column/Text combination can say "this phase is DONE and
+// that one is LIVE", so the status vocabulary has to live in the catalog.
 //
 // Classes mirror the markdown styling slice 1 applied in RoundupWidget, so the
 // A2UI output is visually identical to the markdown it replaces.
@@ -68,6 +72,136 @@ function textVariantClass(variant: unknown): string {
     // the display face.
     default: return 'font-sans text-[14px] leading-[1.6] text-ink-mid my-1'
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stepper (Slate S3) — a status-colored vertical progress rail.
+//
+// The four statuses are deliberately NOT `PointStatus`: a progress phase is not
+// a point lifecycle. `pending` (not started) · `active` (the live edge) · `done`
+// (finished) · `skipped` (deliberately not run).
+// ---------------------------------------------------------------------------
+
+type StepStatus = 'pending' | 'active' | 'done' | 'skipped'
+
+interface ParsedStep {
+  label: string
+  status: StepStatus
+  detail?: string
+}
+
+const STEP_STATUSES = new Set<string>(['pending', 'active', 'done', 'skipped'])
+
+/** Coerce a passthrough `steps` prop into renderable rows. A2UI component props
+ *  are `.passthrough()` / `unknown`, so this is the only gate between an agent's
+ *  JSON and the DOM: it is TOTAL BY CONSTRUCTION — every branch returns, nothing
+ *  throws, and garbage yields `[]` (the caller's degrade path) rather than a
+ *  crash that would blank the whole surface (R16). */
+function parseSteps(value: unknown): ParsedStep[] {
+  if (!Array.isArray(value)) return []
+  const out: ParsedStep[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const rec = raw as Record<string, unknown>
+    // A row with no readable label has nothing to show — drop it, keep the rest.
+    const label = str(rec.label).trim()
+    if (!label) continue
+    const status: StepStatus =
+      typeof rec.status === 'string' && STEP_STATUSES.has(rec.status)
+        ? (rec.status as StepStatus)
+        : 'pending'
+    const detail = str(rec.detail).trim()
+    out.push(detail ? { label, status, detail } : { label, status })
+  }
+  return out
+}
+
+// One tone per status, LITERAL class strings (no interpolated fragments) so
+// Tailwind's JIT actually emits them — the same discipline OpenPointsSurface's
+// PILL_TONE uses. `done` → hue.resolved (emerald, settled). `active` → primary
+// cyan + the live glow, the one legitimate cyan use (P4 · cyan means live: the
+// active phase IS the live edge). `pending` → the faint resting rail.
+// `skipped` → hue.dismissed (slate, off-track).
+const STEP_NODE: Record<StepStatus, string> = {
+  done: 'bg-hue-resolved text-surface-base',
+  active: 'bg-primary text-surface-base shadow-[0_0_14px_rgba(0,240,255,0.10)]',
+  pending: 'bg-primary/12 text-ink-low',
+  skipped: 'bg-hue-dismissed text-surface-base',
+}
+
+// Label ink tracks importance, not just status: the live phase is the only one
+// at high ink; finished work sits at mid; not-yet and never-ran sit at low.
+const STEP_LABEL: Record<StepStatus, string> = {
+  done: 'text-ink-mid',
+  active: 'text-ink-high',
+  pending: 'text-ink-low',
+  skipped: 'text-ink-low line-through',
+}
+
+// The connector below a row: emerald once the phase is behind us, faint ahead.
+const STEP_CONNECTOR: Record<StepStatus, string> = {
+  done: 'bg-hue-resolved/40',
+  active: 'bg-primary/25',
+  pending: 'bg-primary/12',
+  skipped: 'bg-hue-dismissed/30',
+}
+
+/** The glyph inside a step node. Only `done` earns a mark; the rest are dots,
+ *  so the rail reads as progress rather than as four different icons. */
+function stepGlyph(status: StepStatus): string {
+  return status === 'done' ? '✓' : ''
+}
+
+function StepperRail({ steps }: { steps: ParsedStep[] }): ReactNode {
+  return (
+    <div className="flex flex-col my-1" data-testid="stepper">
+      {steps.map((step, i) => (
+        <div
+          key={`${i}-${step.label}`}
+          className="flex flex-row gap-2.5"
+          data-testid="stepper-step"
+          data-status={step.status}
+        >
+          {/* Rail column: the status node, plus the connector down to the next. */}
+          <div className="flex flex-col items-center">
+            <span
+              className={`mt-[3px] h-3.5 w-3.5 shrink-0 rounded-full flex items-center justify-center font-mono text-[9px] leading-none ${STEP_NODE[step.status]}`}
+              data-testid="stepper-node"
+              aria-hidden="true"
+            >
+              {stepGlyph(step.status)}
+            </span>
+            {i < steps.length - 1 && (
+              <span
+                className={`w-px flex-1 min-h-[10px] ${STEP_CONNECTOR[step.status]}`}
+                data-testid="stepper-connector"
+                aria-hidden="true"
+              />
+            )}
+          </div>
+          {/* Content column: a mono label (meta, not prose) + an optional sans
+              detail caption. `font-sans` on the detail is load-bearing — the run
+              card defaults to mono, so reading prose must pin the sans face. */}
+          <div className={`min-w-0 ${i < steps.length - 1 ? 'pb-2' : ''}`}>
+            <div
+              className={`font-mono text-[11.5px] leading-[1.5] ${STEP_LABEL[step.status]}`}
+              data-testid="stepper-label"
+            >
+              {step.label}
+            </div>
+            {step.detail && (
+              <div
+                className="font-sans text-[12.5px] leading-[1.5] text-ink-low mt-0.5"
+                data-testid="stepper-detail"
+              >
+                {step.detail}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 export const CATALOG: Record<string, CatalogEntry> = {
@@ -166,6 +300,23 @@ export const CATALOG: Record<string, CatalogEntry> = {
   // that decides what counts as valid — anything unknown falls back to 'ink'.
   Mermaid: {
     render: (node) => <MermaidComponent source={str(node.source)} theme={node.theme} />,
+  },
+  // Stepper: a read-only, status-colored vertical progress rail. A leaf — it
+  // takes no children and reads only its passthrough `steps` array of
+  // `{ label, status, detail? }`. `steps` is passed RAW to `parseSteps`, which
+  // is the single place that decides what counts as a valid row; anything else
+  // (a string, an object, rows with no label, an unknown status) is coerced or
+  // dropped there. An entirely unusable `steps` degrades to a small inline
+  // amber marker, matching the renderer's NodeFallback tone — never a throw,
+  // never a blank surface (R16).
+  Stepper: {
+    render: (node) => {
+      const steps = parseSteps(node.steps)
+      if (steps.length === 0) {
+        return <span className="text-xs italic text-amber-300/80">⚠ stepper: no steps to show</span>
+      }
+      return <StepperRail steps={steps} />
+    },
   },
 }
 

@@ -61,9 +61,16 @@ export const SLATE_AUTHOR_CONTRACT = [
   '           complex flow needs color to stay legible). Anything else falls back to "ink".',
   '           The diagram is scaled to fit the narrow column and the reader clicks it to expand, so a big',
   '           diagram is fine — but keep labels short, since they shrink with it.',
+  '- Stepper: { id, component:"Stepper", steps:[ { label, status, detail? }, ... ] }   (a status-colored progress rail)',
+  '           status is one of: "pending" | "active" | "done" | "skipped"  (anything else is treated as "pending")',
+  '           e.g. steps: [ {"label":"Plan","status":"done"}, {"label":"Build","status":"active","detail":"unit 2/4"},',
+  '                         {"label":"Ship","status":"pending"} ]',
+  '           Use it for phases/checklists/pipeline progress instead of writing "[x] / [ ]" in a Text or List — it is',
+  '           the ONLY way to color a step by state (done=green, active=live cyan, skipped=dimmed). Keep labels short;',
+  '           put the running commentary in `detail` on the one active step. A step with no `label` is dropped.',
   'RULES: every id in a children[]/child MUST exist in components; `root` MUST name a component id. There is NO image',
-  'or markdown component — use Text/List/Code (and Mermaid for diagrams). INVALID content is SILENTLY DROPPED (no',
-  'surface appears), so keep it minimal and valid. Write ONLY the file; output nothing else.',
+  'or markdown component — use Text/List/Code (Mermaid for diagrams, Stepper for progress). INVALID content is',
+  'SILENTLY DROPPED (no surface appears), so keep it minimal and valid. Write ONLY the file; output nothing else.',
 ].join('\n')
 
 /**
