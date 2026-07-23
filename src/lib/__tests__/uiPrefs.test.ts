@@ -88,32 +88,53 @@ describe('migrateLegacyPrefs', () => {
 })
 
 describe('minimized Slate surfaces family (S6 U3)', () => {
-  it('round-trips add / remove and stays a separate store from hidden', () => {
-    expect([...getMinimizedSlateSurfaces()]).toEqual([])
+  const RUN = 'run-A'
 
-    addMinimizedSlateSurface('s1')
-    addMinimizedSlateSurface('s1') // idempotent
-    addMinimizedSlateSurface('s2')
-    expect([...getMinimizedSlateSurfaces()]).toEqual(['s1', 's2'])
-    expect(localStorage.getItem(familyKeys.minimizedSlateSurfaces)).toBe('["s1","s2"]')
+  it('round-trips add / remove and stays a separate store from hidden', () => {
+    expect([...getMinimizedSlateSurfaces(RUN)]).toEqual([])
+
+    addMinimizedSlateSurface(RUN, 's1')
+    addMinimizedSlateSurface(RUN, 's1') // idempotent
+    addMinimizedSlateSurface(RUN, 's2')
+    expect([...getMinimizedSlateSurfaces(RUN)]).toEqual(['s1', 's2'])
+    expect(localStorage.getItem(familyKeys.minimizedSlateSurfaces))
+      .toBe(JSON.stringify([`${RUN}\u001Fs1`, `${RUN}\u001Fs2`]))
 
     // Minimize and hide are DIFFERENT states in DIFFERENT keys — minimizing must
     // never hide, which is the whole point of the unit.
     addHiddenSlateSurface('s3')
-    expect([...getMinimizedSlateSurfaces()]).toEqual(['s1', 's2'])
+    expect([...getMinimizedSlateSurfaces(RUN)]).toEqual(['s1', 's2'])
     expect([...getHiddenSlateSurfaces()]).toEqual(['s3'])
     expect(familyKeys.minimizedSlateSurfaces).not.toBe(familyKeys.hiddenSlateSurfaces)
 
-    removeMinimizedSlateSurface('s1')
-    expect([...getMinimizedSlateSurfaces()]).toEqual(['s2'])
-    removeMinimizedSlateSurface('nope') // no-op
-    expect([...getMinimizedSlateSurfaces()]).toEqual(['s2'])
+    removeMinimizedSlateSurface(RUN, 's1')
+    expect([...getMinimizedSlateSurfaces(RUN)]).toEqual(['s2'])
+    removeMinimizedSlateSurface(RUN, 'nope') // no-op
+    expect([...getMinimizedSlateSurfaces(RUN)]).toEqual(['s2'])
   })
 
-  it('survives a malformed persisted value', () => {
+  it('scopes by run — the same surface id on another run is untouched', () => {
+    // Surface ids come from the author's file and the contract asks for a stable
+    // slug, so `decisions` on run A and `decisions` on run B are DIFFERENT surfaces.
+    // Minimizing one must not collapse the other on its next mount.
+    addMinimizedSlateSurface('run-A', 'decisions')
+
+    expect([...getMinimizedSlateSurfaces('run-A')]).toEqual(['decisions'])
+    expect([...getMinimizedSlateSurfaces('run-B')]).toEqual([])
+
+    addMinimizedSlateSurface('run-B', 'decisions')
+    removeMinimizedSlateSurface('run-A', 'decisions')
+    expect([...getMinimizedSlateSurfaces('run-A')]).toEqual([])
+    expect([...getMinimizedSlateSurfaces('run-B')]).toEqual(['decisions'])
+  })
+
+  it('survives a malformed persisted value, and ignores legacy un-scoped entries', () => {
     localStorage.setItem(familyKeys.minimizedSlateSurfaces, '{"not":"an array"}')
-    expect([...getMinimizedSlateSurfaces()]).toEqual([])
-    localStorage.setItem(familyKeys.minimizedSlateSurfaces, '["ok", 7, null]')
-    expect([...getMinimizedSlateSurfaces()]).toEqual(['ok'])
+    expect([...getMinimizedSlateSurfaces(RUN)]).toEqual([])
+    localStorage.setItem(
+      familyKeys.minimizedSlateSurfaces,
+      JSON.stringify([`${RUN}\u001Fok`, 7, null, 'legacy-unscoped', `${RUN}\u001F`]),
+    )
+    expect([...getMinimizedSlateSurfaces(RUN)]).toEqual(['ok'])
   })
 })

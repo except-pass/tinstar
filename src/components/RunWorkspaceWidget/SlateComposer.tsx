@@ -25,9 +25,13 @@ interface Props {
    *  suppressed; without that it would vanish on the first stray click and leave
    *  the empty Slate emptier than before. */
   inline?: boolean
+  /** Fires whenever the composer starts or stops holding an unsent draft. The blank
+   *  Slate uses it to withhold its ✕ (which would collapse the column and destroy
+   *  the draft) while there is something to lose. */
+  onDraftChange?: (dirty: boolean) => void
 }
 
-export function SlateComposer({ runId, onClose, inline = false }: Props) {
+export function SlateComposer({ runId, onClose, inline = false, onDraftChange }: Props) {
   const labelId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
@@ -43,11 +47,23 @@ export function SlateComposer({ runId, onClose, inline = false }: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [unreachable, setUnreachable] = useState(false)
+  // Inline only: the popover's confirmation IS the popover vanishing, but an inline
+  // composer stays put, so a successful submit needs its own acknowledgement.
+  const [sent, setSent] = useState(false)
 
   const matches = useMemo(() => searchSurfaceCatalog(query), [query])
   // Submit needs at least a template or some freeform text (mirrors the server's
   // INVALID_PARAMS guard for an all-blank body).
   const canSubmit = !!selected || freeform.trim().length > 0
+
+  // An unsent draft — anything the user would lose if the composer went away.
+  const dirty = canSubmit || recipe.trim().length > 0
+  const onDraftChangeRef = useRef(onDraftChange)
+  useEffect(() => { onDraftChangeRef.current = onDraftChange }, [onDraftChange])
+  useEffect(() => {
+    onDraftChangeRef.current?.(dirty)
+    return () => onDraftChangeRef.current?.(false)
+  }, [dirty])
 
   // Esc closes (capture, to win over anything focused inside). Not when inline —
   // there is nothing behind it to reveal.
@@ -79,6 +95,7 @@ export function SlateComposer({ runId, onClose, inline = false }: Props) {
     }
     setError(null)
     setUnreachable(false)
+    setSent(false)
     setSubmitting(true)
     try {
       const res = await apiFetch(`/api/runs/${runId}/slate/compose`, {
@@ -100,13 +117,25 @@ export function SlateComposer({ runId, onClose, inline = false }: Props) {
         setUnreachable(true)
         return
       }
+      // Inline: there is no popover to vanish, so clear the form and SAY it went.
+      // Without this a successful submit looks like a dead button for the seconds
+      // it takes the author to write the file, and the obvious recovery (click it
+      // again) composes the same surface twice.
+      if (inline) {
+        setSelected(null)
+        setFreeform('')
+        setRecipe('')
+        setQuery('')
+        setSent(true)
+        return
+      }
       onClose() // delivered — the surface will arrive over the SSE run delta.
     } catch {
       setError('Could not send your request. Try again.')
     } finally {
       setSubmitting(false)
     }
-  }, [submitting, selected, freeform, recipe, runId, onClose])
+  }, [submitting, selected, freeform, recipe, runId, onClose, inline])
 
   return (
     <div
@@ -206,6 +235,13 @@ export function SlateComposer({ runId, onClose, inline = false }: Props) {
         )}
       </div>
 
+      {/* Drops away the moment a NEW draft starts — it acknowledges the last send,
+          it isn't a standing status line. */}
+      {sent && !dirty && (
+        <div data-testid="composer-sent" className="text-2xs text-ink-low">
+          Sent — the agent is authoring it. It’ll appear here in a moment.
+        </div>
+      )}
       {unreachable && (
         <div data-testid="composer-unreachable" className="text-2xs text-ink-low">
           Sent — but that session isn’t reachable right now. It’ll pick this up when it’s back.

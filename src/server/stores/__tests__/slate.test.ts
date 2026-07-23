@@ -562,7 +562,7 @@ describe('SlateStore.reorderPoints (S6 U2)', () => {
     expect(store.getPointsForRun(RUN).map(p => p.order)).toEqual([100, 200, 300])
   })
 
-  it('leaves points of the run that are NOT listed untouched', () => {
+  it('leaves points of the run that are NOT listed exactly where they were', () => {
     const { store } = makeStore()
     store.applyProjection(RUN, [input('a', 'a')], 100)
     store.applyProjection(RUN, [input('a', 'a'), input('b', 'b')], 200)
@@ -570,8 +570,32 @@ describe('SlateStore.reorderPoints (S6 U2)', () => {
 
     store.reorderPoints(RUN, ['b', 'a'])
 
+    // Its slot needs no nudge, so it isn't even re-stamped — `order` stays implicit.
     expect(store.getPoint(RUN, 'keep')!.order).toBeUndefined()
     expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['b', 'a', 'keep'])
+  })
+
+  it('cannot let an unlisted point sharing a createdAt slide into the reordered group', () => {
+    // The common real case: ONE file projection stamps every point it creates with
+    // the same `now`, so `d` (unlisted) shares a slot with the three being moved.
+    // Deconflicting only against the listed subset would spread a,b,c to T,T+1,T+2
+    // and leave d at T — where the id tiebreak drops it in the MIDDLE of the group.
+    const { store } = makeStore()
+    store.applyProjection(
+      RUN,
+      [input('a', 'a'), input('b', 'b'), input('c', 'c'), input('d', 'd')],
+      500,
+    )
+    expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['a', 'b', 'c', 'd'])
+
+    store.reorderPoints(RUN, ['c', 'a', 'b'])
+
+    expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['c', 'a', 'b', 'd'])
+    // And the effective order is now a TOTAL axis — no two points share a slot, so
+    // nothing downstream (the client's `order` sort has no id tiebreak) can re-tie it.
+    const eff = store.getPointsForRun(RUN).map(p => p.order ?? p.createdAt)
+    expect(new Set(eff).size).toBe(eff.length)
+    expect([...eff].sort((x, y) => x - y)).toEqual(eff)
   })
 
   it('emits once per moved point, and nothing at all for an identical reorder', () => {

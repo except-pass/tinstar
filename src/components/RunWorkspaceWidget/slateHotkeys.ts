@@ -58,6 +58,9 @@ export interface SlateKeyEvent {
   ctrlKey: boolean
   metaKey: boolean
   altKey: boolean
+  /** The PRINTED character (`KeyboardEvent.key`). Optional — only the shifted keys
+   *  consult it (see below). */
+  key?: string
 }
 
 /**
@@ -69,9 +72,14 @@ export interface SlateKeyEvent {
 export function keyToSlateAction(e: SlateKeyEvent): SlateHotkeyAction | null {
   if (e.ctrlKey || e.metaKey || e.altKey) return null
   for (const h of SLATE_HOTKEYS) {
-    if (h.code !== e.code) continue
-    if (Boolean(h.shift) !== e.shiftKey) continue
-    return h.action
+    // The physical, layout-independent match — what the context router normalizes on.
+    if (h.code === e.code && Boolean(h.shift) === e.shiftKey) return h.action
+    // …plus the printed character, for the SHIFTED keys only. `?` is Shift+Slash on a
+    // US layout and something else elsewhere, and the global command palette this
+    // shim exists to beat matches on `e.key === '?'`. Without this branch, a layout
+    // where the two disagree would hand `?` to the palette even with the Slate
+    // focused — the one outcome the shim is there to prevent.
+    if (h.shift && e.key !== undefined && e.key === h.key) return h.action
   }
   return null
 }

@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { createRef } from 'react'
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
 import type { A2uiContent, SlateSurface } from '../../../types'
@@ -376,6 +378,66 @@ describe('SlatePanel keyboard surface (S6 U1)', () => {
     fireEvent.click(screen.getByTestId('slate-cheatsheet'))
     expect(screen.queryByTestId('slate-cheatsheet')).toBeNull()
   })
+
+  it('closes the cheatsheet when the Slate zone loses focus', () => {
+    // Otherwise the overlay is stranded: its `?` toggle has unmounted, so `?` would
+    // open the command palette BEHIND it — and its capture-phase Esc handler would
+    // go on swallowing Escape for the whole app.
+    const { rerender } = render(<SlatePanel runId="run-1" surfaces={[surface('a', 'x')]} focused />)
+    fireEvent.keyDown(window, { code: 'Slash', key: '?', shiftKey: true })
+    expect(screen.getByTestId('slate-cheatsheet')).toBeTruthy()
+
+    rerender(<SlatePanel runId="run-1" surfaces={[surface('a', 'x')]} />)
+    expect(screen.queryByTestId('slate-cheatsheet')).toBeNull()
+
+    // …and with the overlay gone, Escape reaches whoever else wants it.
+    const other = vi.fn()
+    window.addEventListener('keydown', other)
+    try {
+      fireEvent.keyDown(window, { key: 'Escape' })
+      expect(other).toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('keydown', other)
+    }
+  })
+
+  it('searches the RENDERED body text, not just the fields the card never shows', () => {
+    // An expanded card never renders `headline` — the visible title is whatever the
+    // agent put in the A2UI body. A haystack of headline/id/kind alone means typing
+    // a word plainly visible on a card matches nothing.
+    const ref = renderWithHandle([
+      surface('a', 'the rollback plan for staging', { headline: 'zzz-invisible' }),
+      surface('b', 'unrelated prose'),
+    ])
+    act(() => ref.current!.focusSearch())
+    fireEvent.change(screen.getByTestId('slate-search'), { target: { value: 'rollback' } })
+
+    expect(screen.getByTestId('slate-surface-a')).toBeTruthy()
+    expect(screen.queryByTestId('slate-surface-b')).toBeNull()
+  })
+
+  it('x cannot hide a surface the filter has removed from the view', () => {
+    const ref = renderWithHandle([surface('a', 'alpha'), surface('b', 'beta')])
+    act(() => ref.current!.focusNext())
+    expect(focusedId()).toBe('slate-surface-a')
+
+    // Filter 'a' out of the view. Its focus is now stale, so x must be inert rather
+    // than hiding something invisible.
+    act(() => ref.current!.focusSearch())
+    fireEvent.change(screen.getByTestId('slate-search'), { target: { value: 'beta' } })
+    act(() => ref.current!.hideFocused())
+
+    expect([...getHiddenSlateSurfaces()]).toEqual([])
+  })
+
+  it('x on the LAST row falls back to the previous one', () => {
+    const ref = renderWithHandle([surface('a', 'alpha'), surface('b', 'beta')])
+    act(() => { ref.current!.focusNext(); ref.current!.focusNext() })
+    expect(focusedId()).toBe('slate-surface-b')
+
+    act(() => ref.current!.hideFocused())
+    expect(focusedId()).toBe('slate-surface-a')
+  })
 })
 
 describe('SlatePanel minimize surfaces (S6 U3)', () => {
@@ -405,7 +467,7 @@ describe('SlatePanel minimize surfaces (S6 U3)', () => {
   it('persists the minimized set per browser and seeds from it on mount', () => {
     render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'body one')]} />)
     fireEvent.click(screen.getByTestId('minimize-surface-s1'))
-    expect([...getMinimizedSlateSurfaces()]).toContain('s1')
+    expect([...getMinimizedSlateSurfaces('run-1')]).toContain('s1')
     expect(localStorage.getItem(familyKeys.minimizedSlateSurfaces)).toContain('s1')
 
     // A fresh mount reads the pref back.
@@ -413,6 +475,20 @@ describe('SlatePanel minimize surfaces (S6 U3)', () => {
     render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'body one')]} />)
     expect(screen.getByTestId('slate-surface-s1').getAttribute('data-minimized')).toBe('true')
     expect(screen.queryByText('body one')).toBeNull()
+  })
+
+  it('does NOT collapse the same surface id on a different run', () => {
+    // Surface ids come from the author's file and the contract asks for a stable
+    // slug, so generic ids (`decisions`, `blockers`) recur across runs by design.
+    // An un-scoped pref would collapse every run's copy on its next mount.
+    render(<SlatePanel runId="run-A" surfaces={[surface('decisions', 'A body')]} />)
+    fireEvent.click(screen.getByTestId('minimize-surface-decisions'))
+    expect(screen.queryByText('A body')).toBeNull()
+
+    cleanup()
+    render(<SlatePanel runId="run-B" surfaces={[surface('decisions', 'B body')]} />)
+    expect(screen.getByText('B body')).toBeTruthy()
+    expect(screen.getByTestId('slate-surface-decisions').getAttribute('data-minimized')).toBeNull()
   })
 
   it('is distinct from hide — minimize keeps the card, hide removes it', () => {
@@ -425,8 +501,46 @@ describe('SlatePanel minimize surfaces (S6 U3)', () => {
     expect(screen.getByTestId('slate-surface-a')).toBeTruthy()
     expect(screen.queryByTestId('slate-surface-b')).toBeNull()
     // The two prefs are separate stores — neither leaks into the other.
-    expect([...getMinimizedSlateSurfaces()]).toEqual(['a'])
+    expect([...getMinimizedSlateSurfaces('run-1')]).toEqual(['a'])
     expect([...getHiddenSlateSurfaces()]).toEqual(['b'])
+  })
+
+  it('hide WINS when a surface is somehow in both sets', () => {
+    // `isMinimized` carries an `&& !isHidden` clause. Without it, a revealed hidden
+    // surface would render as a collapsed row instead of its dimmed body, and the
+    // unhide affordance would be the only thing left to look at.
+    localStorage.setItem(familyKeys.hiddenSlateSurfaces, JSON.stringify(['a']))
+    localStorage.setItem(
+      familyKeys.minimizedSlateSurfaces,
+      JSON.stringify([`run-1\u001Fa`]),
+    )
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'alpha'), surface('b', 'beta')]} />)
+
+    fireEvent.click(screen.getByTestId('slate-hidden-toggle'))
+    const card = screen.getByTestId('slate-surface-a')
+    expect(card.getAttribute('data-minimized')).toBeNull()
+    expect(screen.getByText('alpha')).toBeTruthy()
+    // A hidden surface offers unhide only — no minimize control to confuse it with.
+    expect(screen.queryByTestId('minimize-surface-a')).toBeNull()
+    expect(screen.getByTestId('unhide-surface-a')).toBeTruthy()
+  })
+
+  it('keeps the refresh pulse and its failure note reachable while minimized', async () => {
+    apiFetch.mockReset()
+    apiFetch.mockImplementation(() => okDelivered(false)) // the run is asleep
+    render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'body', { headline: 'S1' })]} />)
+    fireEvent.click(screen.getByTestId('minimize-surface-s1'))
+
+    fireEvent.click(screen.getByTestId('refresh-surface-s1'))
+    // The pulse lives on the SHELL, so a collapsed card still shows work in flight.
+    const card = screen.getByTestId('slate-surface-s1')
+    expect(card.getAttribute('data-minimized')).toBe('true')
+    expect(card.getAttribute('data-refreshing')).toBe('true')
+    expect(card.className).toContain('slate-surface-refreshing')
+
+    // …and the ONE failure mode of that still-live control has to be reachable here
+    // too, or "sent to a session that isn't there" is swallowed entirely.
+    await waitFor(() => expect(screen.getByTestId('refresh-unreachable-s1')).toBeTruthy())
   })
 
   it('keeps a minimized surface collapsed across an SSE re-projection', () => {
@@ -462,7 +576,10 @@ describe('SlatePanel blank-slate invitation (S6 U5)', () => {
     expect(screen.queryByTestId('slate-add-surface')).toBeNull()
   })
 
-  it('gives the inline composer no self-close: Esc and an outside click leave it up', () => {
+  it('leaves the inline composer standing through Esc and an outside click', () => {
+    // Integration only — the composer here is rendered unconditionally and its
+    // onClose is a no-op, so this can't distinguish a working `inline` guard from a
+    // deleted one. SlateComposer.test.tsx drives the component directly for that.
     render(<SlatePanel runId="run-1" surfaces={[]} open />)
     expect(screen.getByTestId('slate-composer')).toBeTruthy()
 
@@ -473,6 +590,32 @@ describe('SlatePanel blank-slate invitation (S6 U5)', () => {
     expect(screen.getByTestId('slate-composer')).toBeTruthy()
     // Cancel would close to nothing, so it isn't offered inline.
     expect(screen.queryByTestId('composer-cancel')).toBeNull()
+  })
+
+  it('withholds the ✕ while the inline composer holds a draft', () => {
+    // ✕ collapses the whole column, which would destroy the draft with no way back.
+    render(<SlatePanel runId="run-1" surfaces={[]} open onClose={vi.fn()} />)
+    expect(screen.getByTestId('slate-close')).toBeTruthy()
+
+    fireEvent.change(screen.getByTestId('composer-freeform'), { target: { value: 'a burndown' } })
+    expect(screen.queryByTestId('slate-close')).toBeNull()
+
+    // Clearing the draft gives it back.
+    fireEvent.change(screen.getByTestId('composer-freeform'), { target: { value: '' } })
+    expect(screen.getByTestId('slate-close')).toBeTruthy()
+  })
+
+  it('drops a stale open-composer flag when the Slate empties out', () => {
+    // Otherwise the popover would pop back open, unrequested, over the next surface
+    // to arrive — including the one authored from the inline composer.
+    const { rerender } = render(<SlatePanel runId="run-1" surfaces={[surface('s1', 'hello')]} />)
+    fireEvent.click(screen.getByTestId('slate-add-surface'))
+    expect(screen.getByTestId('slate-composer').getAttribute('data-inline')).toBeNull()
+
+    rerender(<SlatePanel runId="run-1" surfaces={[]} open />)
+    rerender(<SlatePanel runId="run-1" surfaces={[surface('s2', 'later')]} />)
+
+    expect(screen.queryByTestId('slate-composer')).toBeNull()
   })
 
   it('does not render the inline composer once the Slate has surfaces', () => {
@@ -584,9 +727,30 @@ describe('SlatePanel refresh (U3)', () => {
     expect(card.getAttribute('data-refreshing')).toBe('true')
     // The static glow it replaces must be gone (one cue, not two stacked).
     expect(card.className).not.toContain('shadow-[0_0_14px')
+    // The resting border colour stays a UTILITY, so it never depends on a plain CSS
+    // rule out-ranking Tailwind by source order.
+    expect(card.className).toContain('border-primary/40')
     // A sibling that isn't refreshing keeps the resting hairline.
     expect(screen.getByTestId('slate-surface-s2').className).toContain('border-hairline')
     expect(screen.getByTestId('slate-surface-s2').className).not.toContain('slate-surface-refreshing')
+  })
+
+  it('the pulse class the TSX names actually exists in the stylesheet', () => {
+    // jsdom never applies src/index.css, so every other assertion here is about a
+    // class NAME. Delete the stylesheet block and the whole suite stays green while
+    // the cue silently disappears — worse than the static glow it replaced, since
+    // the utility that provided that was removed from the TSX.
+    // `import.meta.url` is an http:// URL under the jsdom environment, so resolve
+    // from the vitest root instead.
+    const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8')
+    expect(css).toContain('.slate-surface-refreshing')
+    expect(css).toContain('@keyframes slate-refresh-pulse')
+    expect(css).toContain('animation: slate-refresh-pulse')
+    // …and a reduced-motion user must keep the signal, losing only the motion.
+    const reduced = css.slice(css.indexOf('prefers-reduced-motion'))
+    expect(reduced).toContain('.slate-surface-refreshing')
+    expect(reduced).toContain('animation: none')
+    expect(reduced).toContain('box-shadow')
   })
 
   it('shows the ⚡ fast-path badge only on surfaces carrying a refresh recipe', () => {

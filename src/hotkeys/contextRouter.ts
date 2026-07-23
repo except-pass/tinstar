@@ -96,11 +96,15 @@ export function useContextRouter(handlers: RouterHandlers) {
       const binding = def.bindings.find(b => b.key === key && !b.chord)
       if (binding) {
         if (isEditable(active)) return
+        // Dispatch FIRST. A widget can decline an action that its current state makes
+        // meaningless (the Slate's j/k/x/r/c// while another zone holds focus), and a
+        // declined key must fall through untouched: no preventDefault, and no
+        // confirmation flash — the flash is the acknowledgement that the key DID the
+        // thing, so firing it on a no-op inverts its meaning.
+        const handled = tail ? dispatchAction(tail.id, binding.action) : true
+        if (!handled) return
         e.preventDefault()
-        if (tail) {
-          h.onChordAction?.(tail.id)
-          dispatchAction(tail.id, binding.action)
-        }
+        if (tail) h.onChordAction?.(tail.id)
         emitBindingFired(binding.key)
         return
       }

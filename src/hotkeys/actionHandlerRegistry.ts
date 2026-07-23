@@ -1,6 +1,11 @@
 // src/hotkeys/actionHandlerRegistry.ts
 
-type ActionHandler = (action: string) => void
+/** A widget's action handler. Returning `false` means "I did not handle that" — the
+ *  router then leaves the keystroke alone (no preventDefault, no confirmation flash)
+ *  so the key isn't swallowed by a binding that was inert in the current state.
+ *  Returning anything else (including `undefined`) means handled, which is what
+ *  every pre-existing handler does implicitly. */
+type ActionHandler = (action: string) => void | boolean
 
 const handlers = new Map<string, ActionHandler>()
 
@@ -12,8 +17,12 @@ export function deregisterActionHandler(widgetId: string): void {
   handlers.delete(widgetId)
 }
 
-export function dispatchAction(widgetId: string, action: string): void {
-  handlers.get(widgetId)?.(action)
+/** Dispatch and report whether the widget claimed the action. A widget with no
+ *  registered handler counts as handled, preserving the pre-existing behavior. */
+export function dispatchAction(widgetId: string, action: string): boolean {
+  const fn = handlers.get(widgetId)
+  if (!fn) return true
+  return fn(action) !== false
 }
 
 type FlourishFn = () => void

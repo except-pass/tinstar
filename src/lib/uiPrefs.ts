@@ -90,10 +90,18 @@ export const familyKeys = {
   // re-projection can't resurrect a hidden surface (the filter reads this set on
   // every render). Mirrors `hiddenRuns`.
   hiddenSlateSurfaces: 'tinstar-hidden-slate-surfaces',
-  // S6 U3: per-browser set of MINIMIZED Slate surface ids. Distinct from hidden —
-  // a minimized surface keeps its slot and its title bar (with a restore control);
-  // a hidden one leaves the view entirely. Same non-destructive view-preference
-  // contract, same family shape.
+  // S6 U3: per-browser set of MINIMIZED Slate surfaces, stored as RUN-SCOPED keys
+  // (`<runId>\u001F<surfaceId>`). Distinct from hidden — a minimized surface keeps
+  // its slot and its title bar (with a restore control); a hidden one leaves the view
+  // entirely. Same non-destructive view-preference contract.
+  //
+  // The run scope is load-bearing and mirrors the server store's own composite key
+  // (`SlateStore.k`): a surface id is only unique WITHIN a run, and the author
+  // contract asks agents for a stable slug, so the generic ids they reach for
+  // (`decisions`, `blockers`, `session-arc`) collide across runs by design.
+  // Minimizing `decisions` on one run must not collapse `decisions` on every other.
+  // NOTE: `hiddenSlateSurfaces` above still has the un-scoped shape and should follow;
+  // changing it is a data migration, so it's deliberately left for its own change.
   minimizedSlateSurfaces: 'tinstar-minimized-slate-surfaces',
 } as const
 
@@ -240,22 +248,50 @@ export function removeHiddenSlateSurface(id: string): void {
 // DIFFERENT state: a minimized surface collapses to just its title bar and keeps
 // its slot (with a restore control); a hidden surface leaves the view. A surface
 // can be neither, minimized, or hidden — hide wins if somehow both.
+//
+// Keyed by (runId, surfaceId), because a surface id is only unique within a run —
+// see the note on `familyKeys.minimizedSlateSurfaces`. The joiner is a unit-separator
+// (U+001F), which can't appear in a runId (a tmux session name) or an author's slug,
+// so the split is unambiguous. Written as a JS escape, never a raw control byte.
+const MINIMIZED_JOINER = '\u001F'
 
-export function getMinimizedSlateSurfaces(): Set<string> {
+function minimizedKey(runId: string, id: string): string {
+  return runId + MINIMIZED_JOINER + id
+}
+
+/** The minimized surface ids for ONE run. Entries from other runs (and legacy
+ *  un-scoped entries written before the key gained a run) are ignored, so a stale
+ *  set can never collapse a surface the user never touched. */
+export function getMinimizedSlateSurfaces(runId: string): Set<string> {
+  const arr = readJSON<string[]>(familyKeys.minimizedSlateSurfaces, [])
+  if (!Array.isArray(arr)) return new Set()
+  const prefix = runId + MINIMIZED_JOINER
+  const out = new Set<string>()
+  for (const v of arr) {
+    if (typeof v !== 'string' || !v.startsWith(prefix)) continue
+    const id = v.slice(prefix.length)
+    if (id) out.add(id)
+  }
+  return out
+}
+
+/** Every stored key, including other runs' — the read/modify/write basis. */
+function allMinimizedKeys(): Set<string> {
   const arr = readJSON<string[]>(familyKeys.minimizedSlateSurfaces, [])
   if (!Array.isArray(arr)) return new Set()
   return new Set(arr.filter((v): v is string => typeof v === 'string'))
 }
 
-export function addMinimizedSlateSurface(id: string): void {
-  const ids = getMinimizedSlateSurfaces()
-  if (ids.has(id)) return
-  ids.add(id)
-  writeJSON(familyKeys.minimizedSlateSurfaces, [...ids])
+export function addMinimizedSlateSurface(runId: string, id: string): void {
+  const keys = allMinimizedKeys()
+  const key = minimizedKey(runId, id)
+  if (keys.has(key)) return
+  keys.add(key)
+  writeJSON(familyKeys.minimizedSlateSurfaces, [...keys])
 }
 
-export function removeMinimizedSlateSurface(id: string): void {
-  const ids = getMinimizedSlateSurfaces()
-  if (!ids.delete(id)) return
-  writeJSON(familyKeys.minimizedSlateSurfaces, [...ids])
+export function removeMinimizedSlateSurface(runId: string, id: string): void {
+  const keys = allMinimizedKeys()
+  if (!keys.delete(minimizedKey(runId, id))) return
+  writeJSON(familyKeys.minimizedSlateSurfaces, [...keys])
 }

@@ -735,6 +735,10 @@ describe('PUT /api/runs/:id/slate/points/order (S6 U2)', () => {
   }))
 
   it('ignores unknown ids and leaves unlisted points where they were', withServer(async srv => {
+    // Deterministic even when all three land in the same millisecond: the store
+    // deconflicts against the WHOLE run, so an unlisted point sharing a slot with the
+    // reordered ones is nudged out of the tie rather than sorting into the middle of
+    // them by id. (See the "cannot let an unlisted point slide in" store test.)
     seedRun(srv.docStore)
     const [a, b, c] = await seedPoints(srv, 3)
     const res = await putOrder(srv, [b, 'ghost', a]) // c is not mentioned at all
