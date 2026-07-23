@@ -61,6 +61,8 @@ export const SLATE_AUTHOR_CONTRACT = [
   '           complex flow needs color to stay legible). Anything else falls back to "ink".',
   '           The diagram is scaled to fit the narrow column and the reader clicks it to expand, so a big',
   '           diagram is fine — but keep labels short, since they shrink with it.',
+  '           The host owns theming and sizing: `%%{init: ...}%%` directives and YAML front matter are STRIPPED',
+  '           from source. Pick the look with `theme`, not with mermaid config.',
   'RULES: every id in a children[]/child MUST exist in components; `root` MUST name a component id. There is NO image',
   'or markdown component — use Text/List/Code (and Mermaid for diagrams). INVALID content is SILENTLY DROPPED (no',
   'surface appears), so keep it minimal and valid. Write ONLY the file; output nothing else.',

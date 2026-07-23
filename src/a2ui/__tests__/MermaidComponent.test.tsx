@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
-import { MermaidComponent, normalizeTheme } from '../MermaidComponent'
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { MAX_SOURCE_LENGTH, MermaidComponent, normalizeTheme, stripAuthorConfig } from '../MermaidComponent'
 
 // MermaidComponent dynamically imports 'mermaid'; mock it so the async render()
 // outcome can be driven explicitly (no fixed timeouts — CI is slower than local).
@@ -97,6 +97,94 @@ describe('MermaidComponent — degrade, never throw (D8)', () => {
     const { container } = render(<MermaidComponent source={source} />)
     expect(container.textContent).toContain('empty diagram')
     expect(renderMock).not.toHaveBeenCalled()
+  })
+
+  // render() can reject with anything — mermaid throws Errors today, but the
+  // source is agent-authored and mermaid is a third-party dependency, so the
+  // non-Error branch is a real user-visible string, not dead code.
+  it('degrades to a generic line when render() rejects with a non-Error value', async () => {
+    renderMock.mockRejectedValue('boom')
+
+    const { container } = render(<MermaidComponent source={'not a diagram'} />)
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('invalid mermaid syntax')
+    })
+    const line = container.firstElementChild as HTMLElement
+    expect(line.className).toContain('text-amber-300/80')
+  })
+
+  // A runaway definition must not reach mermaid's synchronous layout pass. The
+  // ceiling mirrors mermaid's own maxTextSize, but degrading here keeps the
+  // failure on this component's amber-line contract instead of mermaid's picture.
+  it('degrades a source past the length ceiling without calling render', () => {
+    const huge = `graph TD\n${'  A --> B\n'.repeat(6000)}`
+    expect(huge.length).toBeGreaterThan(MAX_SOURCE_LENGTH)
+
+    const { container } = render(<MermaidComponent source={huge} />)
+
+    expect(container.textContent).toContain('diagram too large')
+    expect(renderMock).not.toHaveBeenCalled()
+  })
+})
+
+// The host owns theming and sizing. A mermaid definition carries TWO author
+// config channels — `%%{init}%%` directives and YAML front matter's `config:` —
+// and both merge OVER the host config for every non-secure key. Left in, an
+// author could reintroduce the reserved live-edge cyan, or set
+// flowchart.useMaxWidth:false — which swaps mermaid's width="100%" for a fixed
+// pixel width, and the inline wrapper's overflow-hidden then CLIPS the diagram
+// instead of scaling it (the #126 failure).
+describe('MermaidComponent — author config is stripped from the definition', () => {
+  it.each([
+    ['an init directive', `%%{init: {"theme":"base","themeVariables":{"lineColor":"#00f0ff"},"flowchart":{"useMaxWidth":false}}}%%\n${PIPELINE}`],
+    ['YAML front matter', `---\nconfig:\n  themeVariables:\n    lineColor: "#00f0ff"\n  flowchart:\n    useMaxWidth: false\n---\n${PIPELINE}`],
+  ])('removes %s before handing the definition to mermaid', async (_label, hostile) => {
+    renderMock.mockResolvedValue({ svg: '<svg data-testid="diagram">ok</svg>' })
+
+    const { container } = render(<MermaidComponent source={hostile} />)
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="diagram"]')).not.toBeNull()
+    })
+
+    const [, definition] = renderMock.mock.calls[0]! as [string, string]
+    expect(definition).not.toContain('#00f0ff') // the reserved live-edge cyan (P4)
+    expect(definition).not.toContain('useMaxWidth') // the scale-to-fit guard (#126)
+    // The actual diagram survives the strip — only the config comes out.
+    expect(definition).toContain('graph TD; A-->B')
+  })
+
+  it('degrades when the source is nothing but config', () => {
+    const { container } = render(<MermaidComponent source={'%%{init: {"theme":"dark"}}%%'} />)
+    expect(container.textContent).toContain('empty diagram')
+    expect(renderMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['plain directive', '%%{init: {"theme":"dark"}}%%\ngraph TD; A-->B'],
+    ['single quotes', "%%{init: {'theme':'dark'}}%%\ngraph TD; A-->B"],
+    ['spaced key', '%%{ init : {"theme":"dark"} }%%\ngraph TD; A-->B'],
+    ['initialize alias', '%%{initialize: {"theme":"dark"}}%%\ngraph TD; A-->B'],
+    ['mid-definition', 'graph TD; A-->B\n%%{init: {"theme":"dark"}}%%\n'],
+    ['two directives', '%%{init: {"a":1}}%%\n%%{init: {"b":2}}%%\ngraph TD; A-->B'],
+    ['front matter', '---\nconfig:\n  theme: dark\n---\ngraph TD; A-->B'],
+    ['front matter then directive', '---\ntitle: t\n---\n%%{init: {"theme":"dark"}}%%\ngraph TD; A-->B'],
+  ])('strips the %s form', (_label, source) => {
+    const stripped = stripAuthorConfig(source)
+    expect(stripped).not.toMatch(/init|config:|theme/)
+    expect(stripped).toContain('graph TD; A-->B')
+  })
+
+  it('leaves an ordinary definition (and ordinary %% comments) untouched', () => {
+    const source = 'graph TD\n%% a plain comment\n  A --> B'
+    expect(stripAuthorConfig(source)).toBe(source)
+  })
+
+  // Front matter is only front matter at the very start, exactly as mermaid's own
+  // anchored regex reads it — a `---` inside the body is diagram text.
+  it('leaves a mid-definition --- alone (that is diagram text, not front matter)', () => {
+    const source = 'graph TD\n  A --- B\n  B --- C'
+    expect(stripAuthorConfig(source)).toBe(source)
   })
 })
 
@@ -244,7 +332,8 @@ describe('MermaidComponent — click to expand', () => {
     const panel = screen.getByTestId('mermaid-expanded-panel')
     expect(panel.querySelector('[data-testid="diagram"]')).not.toBeNull()
     expect(panel.querySelector('div')!.className).toContain('[&_svg]:max-w-none')
-    expect(container).toBeTruthy()
+    // The inline copy is still mounted underneath (the lightbox is additive).
+    expect(container.querySelector('[data-testid="diagram"]')).not.toBeNull()
   })
 
   it('portals the expanded view to document.body, escaping the canvas transform', async () => {
@@ -296,19 +385,140 @@ describe('MermaidComponent — click to expand', () => {
     expect(screen.queryByTestId('mermaid-expanded')).toBeNull()
   })
 
+  // InfiniteCanvas keeps its own bubble-phase window Escape handler that cancels
+  // drags, DESELECTS EVERYTHING and refocuses the canvas. Dismissing a diagram
+  // must not also wipe the user's canvas selection — so the overlay listens in
+  // the CAPTURE phase and stops propagation, getting in front of it.
+  it('swallows Escape so the canvas-level handler never runs (no silent deselect)', async () => {
+    const canvasEscape = vi.fn()
+    // Registered BEFORE the overlay mounts, exactly like InfiniteCanvas's.
+    window.addEventListener('keydown', canvasEscape)
+    try {
+      await renderDiagram()
+      fireEvent.click(screen.getByRole('button', { name: 'Expand diagram' }))
+
+      // Real keydowns target the focused element, not window.
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+
+      expect(screen.queryByTestId('mermaid-expanded')).toBeNull()
+      expect(canvasEscape).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('keydown', canvasEscape)
+    }
+  })
+
+  it('is a labelled modal dialog and hands focus in on open, back to the trigger on close', async () => {
+    await renderDiagram()
+    const trigger = screen.getByRole('button', { name: 'Expand diagram' })
+    fireEvent.click(trigger)
+
+    const overlay = screen.getByTestId('mermaid-expanded')
+    expect(overlay.getAttribute('role')).toBe('dialog')
+    expect(overlay.getAttribute('aria-modal')).toBe('true')
+    // Focus moves into the dialog, so Escape/arrows go to it and not the canvas.
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close diagram' }))
+
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('closes the expanded view when the source changes (no blink-back, no stale lightbox)', async () => {
+    const { rerender } = await renderDiagram()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand diagram' }))
+    expect(screen.getByTestId('mermaid-expanded')).toBeTruthy()
+
+    rerender(<MermaidComponent source={'graph TD; X-->Y'} />)
+
+    expect(screen.queryByTestId('mermaid-expanded')).toBeNull()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Expand diagram' })).toBeInTheDocument()
+    })
+    // It stays closed once the new diagram lands — it does not pop back open.
+    expect(screen.queryByTestId('mermaid-expanded')).toBeNull()
+  })
+
   it('unbinds the Escape listener on unmount (no leak, no stray close)', async () => {
-    const removeSpy = vi.spyOn(window, 'removeEventListener')
     const { unmount } = await renderDiagram()
     fireEvent.click(screen.getByRole('button', { name: 'Expand diagram' }))
+    expect(screen.getByTestId('mermaid-expanded')).toBeTruthy()
+
     unmount()
-    expect(removeSpy).toHaveBeenCalledWith('keydown', expect.any(Function))
     expect(screen.queryByTestId('mermaid-expanded')).toBeNull()
-    removeSpy.mockRestore()
+
+    // Behavioural leak check: a canvas-level handler registered after unmount must
+    // see Escape again. A leaked capture listener would swallow it (and throw on
+    // its already-unmounted state).
+    const afterUnmount = vi.fn()
+    window.addEventListener('keydown', afterUnmount)
+    try {
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+      expect(afterUnmount).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('keydown', afterUnmount)
+    }
   })
 
   it('offers no expand affordance while degraded (nothing to expand)', () => {
     const { container } = render(<MermaidComponent source={'  '} />)
     expect(container.textContent).toContain('empty diagram')
     expect(screen.queryByRole('button', { name: 'Expand diagram' })).toBeNull()
+  })
+})
+
+// mermaid's config is module-global: initialize() rewrites it wholesale and
+// render() re-reads it across its own awaits. Now that the theme is per-diagram,
+// two diagrams mounting together would both land on whichever palette
+// initialized last unless each initialize+render pair is serialized.
+describe('MermaidComponent — concurrent diagrams keep their own palette', () => {
+  it('never lets a second diagram initialize while the first is rendering', async () => {
+    let liveConfig: Record<string, unknown> | null = null
+    initializeMock.mockImplementation((cfg: Record<string, unknown>) => { liveConfig = cfg })
+
+    // Each render resolves LATER, reading whatever config is live at that moment —
+    // which is how mermaid actually behaves (it re-reads config past its awaits).
+    const pending: Array<() => void> = []
+    renderMock.mockImplementation((id: string) => new Promise<{ svg: string }>((resolve) => {
+      pending.push(() => {
+        const vars = liveConfig!.themeVariables as Record<string, string>
+        resolve({ svg: `<svg data-testid="${id}" data-line="${vars.lineColor}">ok</svg>` })
+      })
+    }))
+
+    // Mount the ink diagram ALONE first, and only then add the hue one. Two
+    // first-time dynamic imports of the same mocked specifier in flight at once
+    // race inside vitest 2.x — one of them resolves to the REAL mermaid — so the
+    // first import has to settle before the second component mounts.
+    const { container, rerender } = render(
+      <>
+        <MermaidComponent source={PIPELINE} theme="ink" />
+      </>,
+    )
+    await waitFor(() => { expect(pending).toHaveLength(1) })
+
+    // A second diagram, with a different palette, mounts while the first is
+    // mid-render.
+    rerender(
+      <>
+        <MermaidComponent source={PIPELINE} theme="ink" />
+        <MermaidComponent source={PIPELINE} theme="hue" />
+      </>,
+    )
+    // Let its dynamic import settle (cached, so it resolves off the same
+    // registry entry the component is waiting on).
+    await act(async () => { await import('mermaid') })
+
+    // Serialized: the newcomer has NOT touched the global config yet.
+    expect(initializeMock).toHaveBeenCalledTimes(1)
+    expect(renderMock).toHaveBeenCalledTimes(1)
+
+    pending[0]!() // ink resolves against the ink config, as initialized
+    await waitFor(() => { expect(pending).toHaveLength(2) })
+    pending[1]!()
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('svg[data-line]')).toHaveLength(2)
+    })
+    const lines = [...container.querySelectorAll('svg[data-line]')].map((el) => el.getAttribute('data-line'))
+    expect(lines).toEqual(['#5c6b74', '#6fcff6']) // ink.low, then hue.waiting
   })
 })

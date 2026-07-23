@@ -25,13 +25,85 @@
 //      NOT introduce a horizontal scrollbar or overflow at natural size. Inline it
 //      is scaled to fit the column; clicking opens a portaled expanded view at
 //      readable size.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 // Module-scoped monotonic id so each rendered diagram gets a unique DOM id
 // (mermaid.render needs a unique id per call). Kept out of component state so a
 // re-render doesn't churn it.
 let mermaidIdCounter = 0
+
+// SHARED-GLOBAL HAZARD (read before touching the effect below).
+// mermaid's config is *module-global*: `initialize()` rewrites its siteConfig
+// from scratch (mermaid's own setSiteConfig starts from defaultConfig, so an
+// initialize elsewhere DROPS whatever we set), and `render()` re-reads that
+// config at several points across its own awaits. Two initialize+render pairs
+// that interleave therefore repaint each other. Since the author now picks a
+// theme PER DIAGRAM, two Slate diagrams mounting in the same commit would
+// otherwise both land on whichever palette initialized last.
+//
+// Fix: every initialize+render pair goes through this one promise chain, so a
+// pair is never in flight while another one initializes.
+//
+// This can only serialize OUR calls. The file-editor's MermaidBlock
+// (src/plugins/file-editor/src/MarkdownRenderer.tsx) initializes the same global
+// with its own cyan theme and is not on this chain, so a concurrently-rendering
+// file-editor diagram can still tint a Slate diagram. Security is NOT at risk:
+// that component leaves `securityLevel` unset, which is mermaid's `'strict'`
+// default — the same value we pin — and mermaid keeps securityLevel /
+// suppressErrorRendering / maxTextSize on its `secure` list, which neither an
+// author directive nor a config merge can weaken.
+let mermaidRenderQueue: Promise<unknown> = Promise.resolve()
+
+/** Run `task` after every previously-enqueued mermaid render has settled. */
+function enqueueMermaidRender(task: () => Promise<void>): Promise<void> {
+  const next = mermaidRenderQueue.then(task, task)
+  // Swallow on the chain itself so one failure can't poison every later render.
+  mermaidRenderQueue = next.then(() => undefined, () => undefined)
+  return next
+}
+
+/** Hard ceiling on an authored definition, mirroring mermaid's own default
+ *  `maxTextSize`. mermaid would swap a bigger definition for its own
+ *  "maximum text size exceeded" *picture*; degrading here instead keeps the
+ *  failure on this component's amber-line contract, and bounds the work the
+ *  directive strip below has to do on a hostile source. */
+export const MAX_SOURCE_LENGTH = 50_000
+
+// A mermaid definition carries TWO author-controlled config channels, and both
+// merge OVER the host config for every key that isn't on mermaid's `secure` list
+// (mermaid's preprocessDiagram: front matter first, then directives). `source` is
+// agent-authored, so without this strip an author could:
+//   - set `themeVariables` and reintroduce the reserved live-edge cyan, which the
+//     P4 guard test can't see (it inspects the config object, not the SVG);
+//   - set `flowchart.useMaxWidth:false`, which makes mermaid emit a fixed pixel
+//     width instead of `width="100%"`. The inline wrapper's `overflow-hidden`
+//     would then CLIP the diagram rather than scale it — silently cutting off the
+//     right side with no scrollbar, i.e. the #126 failure this component exists
+//     to prevent.
+// The host owns theming and sizing, so both channels come out. (securityLevel,
+// suppressErrorRendering and maxTextSize are on mermaid's `secure` list and were
+// never reachable this way — this is about theming and sizing, not security.)
+//
+// 1. YAML front matter, whose `config:` key is a full config override. Mermaid's
+//    own frontMatterRegex, verbatim, so the strip and the parse agree on where
+//    the block ends. The block also carries `title:`, which goes with it — the
+//    Slate authoring contract never offered front matter in the first place.
+const FRONT_MATTER_RE = /^([^\S\n\r]*)-{3}\s*[\n\r](.*?)[\n\r]\1-{3}\s*[\n\r]+/s
+// 2. `%%{init: ...}%%` directives, anywhere in the definition. Shaped after
+//    mermaid's directive grammar (utils.detectDirective): `%%{`, an
+//    `init`/`initialize` key, then everything up to the first `}%%` — or to the
+//    end when unterminated, which is what mermaid's own regex consumes too.
+//    Optional quotes are tolerated even though mermaid ignores that form today,
+//    so a future mermaid that honours it can't reopen the hole.
+const INIT_DIRECTIVE_RE = /%%\{\s*["']?init(?:ialize)?["']?\s*[:}][\s\S]*?(?:\}%%|$)/gi
+
+/** Strip both author-controlled config channels from a definition. Order matches
+ *  mermaid's preprocessDiagram (front matter, then directives) so this never
+ *  removes text mermaid would have kept as diagram body. */
+export function stripAuthorConfig(source: string): string {
+  return source.replace(FRONT_MATTER_RE, '').replace(INIT_DIRECTIVE_RE, '')
+}
 
 /** The diagram treatments an author can pick between, per diagram. */
 export type MermaidTheme = 'ink' | 'hue'
@@ -95,16 +167,49 @@ const SHARED_THEME_VARIABLES = {
  *  transformed ancestor instead of the viewport, so a fixed overlay rendered in
  *  place lands displaced and scaled, far from the cursor. The portal escapes the
  *  transform. (Same reasoning as FileUploadConfirmModal.) */
-function MermaidExpanded({ svg, onClose }: { svg: string; onClose: () => void }): React.ReactElement {
+function MermaidExpanded({
+  svg,
+  onClose,
+  restoreFocusTo,
+}: {
+  svg: string
+  onClose: () => void
+  restoreFocusTo: React.RefObject<HTMLElement | null>
+}): React.ReactElement {
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    // CAPTURE PHASE + stopPropagation, matching EntitySettingsDialog. InfiniteCanvas
+    // keeps a bubble-phase window Escape handler that cancels drags, DESELECTS
+    // EVERYTHING and refocuses the canvas (InfiniteCanvas.tsx). Both listeners sit
+    // on `window`, so stopPropagation from a second bubble-phase listener would do
+    // nothing — the canvas one registered first and would already have run.
+    // Listening in the capture phase is what actually gets us in front of it, so
+    // dismissing a diagram doesn't silently blow away the user's selection.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      onClose()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
+
+  useEffect(() => {
+    // Move focus into the dialog on open and hand it back to the trigger on close,
+    // so a keyboard user who expanded a diagram lands back where they were instead
+    // of on document.body (where the next Escape/arrow goes to the canvas).
+    closeButtonRef.current?.focus()
+    return () => { restoreFocusTo.current?.focus() }
+  }, [restoreFocusTo])
 
   return createPortal(
     <div
       data-testid="mermaid-expanded"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Expanded diagram"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-8"
       onClick={onClose}
     >
@@ -118,6 +223,7 @@ function MermaidExpanded({ svg, onClose }: { svg: string; onClose: () => void })
       >
         <button
           type="button"
+          ref={closeButtonRef}
           onClick={onClose}
           aria-label="Close diagram"
           className="absolute top-2 right-2 text-ink-ctrl hover:text-ink-high transition-colors"
@@ -156,46 +262,66 @@ export function MermaidComponent({
 
   const resolvedTheme = normalizeTheme(theme)
   const close = useCallback(() => setExpanded(false), [])
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     let cancelled = false
+    const cleanup = () => { cancelled = true }
     setSvg(null)
     setErrorMsg(null)
+    // A surface that refreshes itself would otherwise blink the reader's expanded
+    // diagram closed (svg → null unmounts it) and pop it back open when the new
+    // SVG lands — or re-open it later behind a degrade line. Reset with the render.
+    setExpanded(false)
+
+    // Bound the work before touching an agent-authored string (see MAX_SOURCE_LENGTH).
+    if (source.length > MAX_SOURCE_LENGTH) {
+      setErrorMsg(`diagram too large (${source.length} characters; limit ${MAX_SOURCE_LENGTH})`)
+      return cleanup
+    }
+
+    // The host owns theming and sizing — an author's own config does not.
+    const definition = stripAuthorConfig(source)
 
     // Empty/whitespace source: degrade immediately, don't call mermaid.render
     // (it would throw on empty input anyway).
-    if (source.trim() === '') {
+    if (definition.trim() === '') {
       setErrorMsg('empty diagram')
-      return
+      return cleanup
     }
 
     const id = `a2ui-mermaid-${++mermaidIdCounter}`
 
-    import('mermaid').then(async (mod) => {
-      if (cancelled) return
+    import('mermaid').then((mod) => {
+      if (cancelled) return undefined
       const mermaid = mod.default
-      mermaid.initialize({
-        startOnLoad: false,
-        // Without this a parse failure makes mermaid paint its "bomb" graphic
-        // into document.body (we pass no container) and orphan it over the canvas.
-        // We catch the throw and render our own degrade line, so suppress it.
-        suppressErrorRendering: true,
-        // Content is agent-authored / untrusted. 'strict' encodes HTML in labels,
-        // disables click-handlers/JS directives, and runs mermaid's internal
-        // DOMPurify sanitize. NOT 'sandbox' — that renders into an iframe and
-        // breaks host theming/sizing. Unchanged by the author's theme choice.
-        securityLevel: 'strict',
-        theme: 'base',
-        themeVariables: { ...SHARED_THEME_VARIABLES, ...MERMAID_THEMES[resolvedTheme] },
+      // initialize() + render() must stay adjacent — see the queue note up top.
+      return enqueueMermaidRender(async () => {
+        if (cancelled) return
+        try {
+          mermaid.initialize({
+            startOnLoad: false,
+            // Without this a parse failure makes mermaid paint its "bomb" graphic
+            // into document.body (we pass no container) and orphan it over the canvas.
+            // We catch the throw and render our own degrade line, so suppress it.
+            suppressErrorRendering: true,
+            // Content is agent-authored / untrusted. 'strict' encodes HTML in labels,
+            // disables click-handlers/JS directives, and runs mermaid's internal
+            // DOMPurify sanitize. NOT 'sandbox' — that renders into an iframe and
+            // breaks host theming/sizing. Unchanged by the author's theme choice,
+            // and on mermaid's `secure` list so no directive can weaken it.
+            securityLevel: 'strict',
+            theme: 'base',
+            themeVariables: { ...SHARED_THEME_VARIABLES, ...MERMAID_THEMES[resolvedTheme] },
+          })
+          const { svg: rendered } = await mermaid.render(id, definition)
+          if (cancelled) return
+          setSvg(rendered)
+        } catch (err) {
+          if (cancelled) return
+          setErrorMsg(err instanceof Error ? err.message : 'invalid mermaid syntax')
+        }
       })
-      try {
-        const { svg: rendered } = await mermaid.render(id, source)
-        if (cancelled) return
-        setSvg(rendered)
-      } catch (err) {
-        if (cancelled) return
-        setErrorMsg(err instanceof Error ? err.message : 'invalid mermaid syntax')
-      }
     }).catch((err) => {
       // The mermaid chunk itself failed to load (e.g. a stale /assets/*.js after
       // a rebuild). Without this catch the block hangs on "Rendering diagram…"
@@ -205,7 +331,7 @@ export function MermaidComponent({
       setErrorMsg(`couldn't load the diagram renderer (${detail}) — try reloading the page`)
     })
 
-    return () => { cancelled = true }
+    return cleanup
   }, [source, resolvedTheme])
 
   if (errorMsg !== null) {
@@ -225,6 +351,7 @@ export function MermaidComponent({
           wrapper is the belt-and-braces guard. Click opens the readable view. */}
       <button
         type="button"
+        ref={triggerRef}
         onClick={() => setExpanded(true)}
         aria-label="Expand diagram"
         title="Click to expand"
@@ -232,7 +359,7 @@ export function MermaidComponent({
       >
         <div className="[&_svg]:max-w-full [&_svg]:h-auto" dangerouslySetInnerHTML={{ __html: svg }} />
       </button>
-      {expanded && <MermaidExpanded svg={svg} onClose={close} />}
+      {expanded && <MermaidExpanded svg={svg} onClose={close} restoreFocusTo={triggerRef} />}
     </>
   )
 }
