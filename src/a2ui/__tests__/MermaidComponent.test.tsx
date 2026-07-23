@@ -230,7 +230,7 @@ describe('MermaidComponent — author config is stripped from the definition', (
     expect(stripAuthorConfig(hostile)).toBeNull()
 
     const { container } = render(<MermaidComponent source={hostile} />)
-    expect(container.textContent).toContain('too many stacked config blocks')
+    expect(container.textContent).toContain(`didn't resolve within ${STRIP_PASS_LIMIT} passes`)
     expect(renderMock).not.toHaveBeenCalled()
   })
 

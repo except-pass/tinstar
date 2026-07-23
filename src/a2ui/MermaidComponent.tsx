@@ -344,9 +344,12 @@ export function MermaidComponent({
     // The host owns theming and sizing — an author's own config does not.
     const definition = stripAuthorConfig(source)
     if (definition === null) {
-      // Name the cause: the only way here is stacked config blocks past the pass
-      // cap, and an author iterating on a surface needs to know what to remove.
-      setErrorMsg(`couldn't normalize the diagram source (too many stacked config blocks; limit ${STRIP_PASS_LIMIT})`)
+      // Name the cause so an author iterating on a surface knows what to remove.
+      // Stated in PASSES, the unit the loop actually counts: n stacked blocks cost
+      // n+1 passes (n removals plus the one that confirms no change), so quoting a
+      // block limit would be off by one and send them to trim to a size that fails
+      // again. It also avoids over-committing to front matter as the only cause.
+      setErrorMsg(`couldn't normalize the diagram source (stacked config blocks didn't resolve within ${STRIP_PASS_LIMIT} passes)`)
       return cleanup
     }
 
