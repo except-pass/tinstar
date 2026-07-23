@@ -141,6 +141,34 @@ describe('SlateWatcher', () => {
     expect(inputs.map((p) => p.headline)).toEqual(['good'])
   })
 
+  // The Objective (S2) is USER-owned and lives at a RESERVED id. The file-in channel
+  // is the AGENT's; letting it author that id would let a repo file hijack the user's
+  // goal — and, since file points are retractable, delete it on the next projection.
+  it('DROPS a file entry claiming the reserved `objective` id, keeping its siblings', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [
+      { id: 'objective', headline: 'I am the goal now', content: validContent },
+      { id: 'real', headline: 'an ordinary surface' },
+    ])
+
+    await harness.watcher.pollOnce()
+
+    const inputs = harness.applyRunSlateProjection.mock.calls[0]![1]
+    expect(inputs.map((p) => p.id)).toEqual(['real'])
+  })
+
+  it('treats a file of ONLY an objective entry as unusable — retains, never projects it', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [{ headline: 'seeded', id: 'seeded' }])
+    await harness.watcher.pollOnce()
+    expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1)
+
+    // Zero valid entries + something dropped ⇒ the same retain path a torn file takes:
+    // the prior projection stands, and no `objective` point is ever created.
+    writeSurfaces(harness.slateDir, 'a.json', [{ id: 'objective', headline: 'hijack' }])
+    await harness.watcher.pollOnce()
+
+    expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1) // no second call
+  })
+
   it('skips an oversized file by stat but keeps the valid siblings (R10)', async () => {
     const big = 'x'.repeat(40 * 1024)
     writeSurfaces(harness.slateDir, 'big.json', JSON.stringify([{ headline: 'huge', misc: big }]))

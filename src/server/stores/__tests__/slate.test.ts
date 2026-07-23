@@ -563,3 +563,50 @@ describe('DocumentStore.reorderSlatePoints — the projection leg (S6 U2)', () =
     expect(after.map(s => s.order)).toEqual([100, 200])
   })
 })
+
+describe('SlateStore.deletePoint (S2 — clearing the Objective)', () => {
+  it('removes only the targeted (runId, id) and emits ONE retract', () => {
+    const { store, emit, changes } = makeStore()
+    store.addUserPoint(RUN, { id: 'objective', headline: 'ship S2' })
+    store.applyProjection(RUN, [input('other', 'x')])
+    emit.mockClear()
+    changes.length = 0
+
+    expect(store.deletePoint(RUN, 'objective')).toBe(true)
+
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(changes[0]).toMatchObject({ entity: 'slatePoint', id: 'objective', runId: RUN, data: null })
+    expect(store.getPoint(RUN, 'objective')).toBeUndefined()
+    expect(store.getPoint(RUN, 'other')).toBeDefined() // sibling untouched
+  })
+
+  it("leaves ANOTHER run's point with the same id alone (composite-key scoping)", () => {
+    const { store } = makeStore()
+    store.addUserPoint(RUN, { id: 'objective', headline: 'mine' })
+    store.addUserPoint('other-run', { id: 'objective', headline: 'theirs' })
+
+    store.deletePoint(RUN, 'objective')
+
+    expect(store.getPoint(RUN, 'objective')).toBeUndefined()
+    expect(store.getPoint('other-run', 'objective')?.headline).toBe('theirs')
+  })
+
+  it('deleting an absent point is a no-op — false, no emit', () => {
+    const { store, emit } = makeStore()
+    expect(store.deletePoint(RUN, 'nope')).toBe(false)
+    expect(emit).not.toHaveBeenCalled()
+  })
+
+  it('DocumentStore.deleteSlatePoint re-projects run.slate (and is inert when absent)', () => {
+    const store = new DocumentStore()
+    store.upsertRun('run-1', makeRun())
+    store.addUserSlatePoint('run-1', { id: 'objective', author: 'user', headline: 'the goal' })
+    expect(store.getRun('run-1')!.slate).toHaveLength(1)
+
+    expect(store.deleteSlatePoint('run-1', 'objective')).toBe(true)
+    // An empty projection clears the field entirely (setRunSlate's own convention).
+    expect(store.getRun('run-1')!.slate).toBeUndefined()
+
+    expect(store.deleteSlatePoint('run-1', 'objective')).toBe(false)
+  })
+})

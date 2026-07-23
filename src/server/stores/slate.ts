@@ -368,6 +368,25 @@ export class SlateStore {
     })
   }
 
+  /**
+   * Drop ONE point of a run, emitting the same `{ data: null }` retract `pruneRun`
+   * emits per point. Scoped by the composite key, so another run's point with the
+   * same id is untouched. A no-op (and no emit) when the point is absent — the
+   * zero-change posture every other mutator here keeps.
+   *
+   * Added for the Objective (S2): clearing the objective is a single-point delete,
+   * which the file-in path can't express (the objective is user-owned, so no file
+   * projection retracts it) and `pruneRun` is far too blunt for.
+   */
+  deletePoint(runId: string, id: string): boolean {
+    const mapKey = this.k(runId, id)
+    const prior = this.points.get(mapKey)
+    if (!prior) return false
+    this.points.delete(mapKey)
+    this.emit({ entity: 'slatePoint', id, runId, data: null })
+    return true
+  }
+
   /** Drop every point of a run, emitting a retract per point (deleteRun cascade). */
   pruneRun(runId: string): void {
     for (const [mapKey, p] of this.points) {

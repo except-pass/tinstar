@@ -723,3 +723,147 @@ describe('PUT /api/runs/:id/slate/points/order (S6 U2)', () => {
     expect(orderRoute).toBeLessThan(patchRuns)
   })
 })
+
+// --- The Objective (S2) ---
+//
+// The one Slate write that BOTH persists and delivers — and the delivery is the whole
+// point of it, so these tests are mostly about when `sendPrompt` fires and when it
+// must not. `getSession` is stubbed, so `delivered` is a real assertion here.
+describe('PUT/DELETE /api/runs/:id/slate/objective', () => {
+  const putObjective = (srv: Harness, text: unknown) =>
+    srv.fetch(`/api/runs/${RUN}/slate/objective`, { method: 'PUT', body: JSON.stringify({ text }) })
+
+  it('sets the objective as the reserved user point and NUDGES the agent', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN }) // session reachable
+
+    const res = await putObjective(srv, '  Ship the objective surface  ')
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; data: { objective: Point; delivered: boolean; changed: boolean } }
+    expect(body.ok).toBe(true)
+    expect(body.data.objective.id).toBe('objective')
+    expect(body.data.objective.source).toBe('user')
+    expect(body.data.objective.author).toBe('user')
+    expect(body.data.objective.headline).toBe('Ship the objective surface') // trimmed
+    expect(body.data.delivered).toBe(true)
+    expect(body.data.changed).toBe(true)
+
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+    const prompt = sendPrompt.mock.calls[0]![2]
+    expect(prompt).toContain('"Ship the objective surface"')
+    expect(prompt).toContain('not a command to drop what you are doing') // the GUARDRAIL
+
+    // It rides run.slate as its own kind — no new RunData field.
+    const slate = srv.docStore.getRun(RUN)!.slate!
+    expect(slate.filter(s => s.kind === 'objective')).toHaveLength(1)
+  }))
+
+  it('a second PUT AMENDS the same point (never a second objective) and re-nudges', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    await putObjective(srv, 'v1')
+    sendPrompt.mockClear()
+
+    const res = await putObjective(srv, 'v2')
+    expect(res.status).toBe(200)
+    expect(srv.docStore.getSlatePointsForRun(RUN).filter(p => p.id === 'objective')).toHaveLength(1)
+    expect(srv.docStore.getSlatePoint(RUN, 'objective')!.headline).toBe('v2')
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+    expect(sendPrompt.mock.calls[0]![2]).toContain('"v2"')
+  }))
+
+  it('an IDENTICAL PUT changes nothing and does NOT re-nudge', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    await putObjective(srv, 'stay the course')
+    sendPrompt.mockClear()
+
+    const res = await putObjective(srv, 'stay the course')
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: { changed: boolean; delivered: boolean } }
+    expect(body.data.changed).toBe(false)
+    expect(body.data.delivered).toBe(false)
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+
+  it('reports delivered:false on an unreachable session — still 200, still persisted', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue(null) // asleep / gone
+    const res = await putObjective(srv, 'keep going')
+    expect(res.status).toBe(200)
+    const body = await res.json() as { data: { delivered: boolean; changed: boolean } }
+    expect(body.data.delivered).toBe(false)
+    expect(body.data.changed).toBe(true)
+    expect(srv.docStore.getSlatePoint(RUN, 'objective')).toBeDefined()
+  }))
+
+  it('rejects blank / non-string text (INVALID_PARAMS, nothing persisted, no nudge)', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    for (const bad of ['   ', '', 42, null, { a: 1 }, ['x']]) {
+      const res = await putObjective(srv, bad)
+      expect(res.status).toBe(400)
+      expect((await res.json() as { error: { code: string } }).error.code).toBe('INVALID_PARAMS')
+    }
+    expect(srv.docStore.getSlatePoint(RUN, 'objective')).toBeUndefined()
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+
+  it('413s an oversized objective (nothing persisted, no nudge)', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    const res = await putObjective(srv, 'x'.repeat(601))
+    expect(res.status).toBe(413)
+    expect(srv.docStore.getSlatePoint(RUN, 'objective')).toBeUndefined()
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+
+  it('404s on an unknown run', withServer(async srv => {
+    const res = await putObjective(srv, 'nowhere')
+    expect(res.status).toBe(404)
+  }))
+
+  it('rejects a body that is not a JSON object', withServer(async srv => {
+    seedRun(srv.docStore)
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/objective`, { method: 'PUT', body: 'not json' })
+    expect(res.status).toBe(400)
+  }))
+
+  it('DELETE clears the objective off the projection, WITHOUT a nudge', withServer(async srv => {
+    seedRun(srv.docStore)
+    getSession.mockReturnValue({ name: RUN })
+    await putObjective(srv, 'temporary')
+    sendPrompt.mockClear()
+
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/objective`, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { cleared: boolean } }).data.cleared).toBe(true)
+    expect(srv.docStore.getSlatePoint(RUN, 'objective')).toBeUndefined()
+    expect(srv.docStore.getRun(RUN)!.slate?.some(s => s.kind === 'objective')).toBeFalsy()
+    expect(sendPrompt).not.toHaveBeenCalled()
+  }))
+
+  it('DELETE on a run with no objective is idempotent (200, cleared:false)', withServer(async srv => {
+    seedRun(srv.docStore)
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/objective`, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { cleared: boolean } }).data.cleared).toBe(false)
+  }))
+
+  it('DELETE 404s on an unknown run', withServer(async srv => {
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/objective`, { method: 'DELETE' })
+    expect(res.status).toBe(404)
+  }))
+
+  // THE ROUTE-ORDERING GUARD — the objective routes are sub-resources under
+  // `/api/runs/:id` and must be registered above the greedy PATCH handler, or a
+  // PUT/DELETE could fall through to a generic handler that silently wins.
+  it('is registered BEFORE the greedy startsWith PATCH /api/runs/ handler', () => {
+    const src = readFileSync(new URL('../routes.ts', import.meta.url), 'utf8')
+    const objectiveRoute = src.indexOf('slate\\/objective$/')
+    const patchRuns = src.indexOf("method === 'PATCH' && url.startsWith('/api/runs/')")
+    expect(objectiveRoute).toBeGreaterThan(-1)
+    expect(patchRuns).toBeGreaterThan(-1)
+    expect(objectiveRoute).toBeLessThan(patchRuns)
+  })
+})

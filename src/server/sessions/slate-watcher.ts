@@ -39,7 +39,7 @@ import { basename, join, sep } from 'node:path'
 import { log } from '../logger'
 import { parseA2uiContent } from '../../a2ui/schema'
 import type { PointInput } from '../stores/slate'
-import type { PointAnchor, PointAuthor, A2uiContent } from '../../domain/types'
+import { OBJECTIVE_POINT_ID, type PointAnchor, type PointAuthor, type A2uiContent } from '../../domain/types'
 
 /** A live run and the worktree the watcher resolves its slate dir from. */
 export interface LiveRun {
@@ -421,6 +421,12 @@ export class SlateWatcher {
 
     if (typeof r.headline !== 'string' || r.headline.length === 0) return null
     const out: PointInput = { headline: r.headline }
+
+    // The Objective (S2) is USER-owned and lives at a RESERVED id. A file claiming it
+    // would merge into the user's objective — and, as a file point, become retractable
+    // by the next projection that omits it. Drop the entry entirely (same posture as a
+    // schema-invalid one) so the file-in channel can neither hijack nor delete it.
+    if (r.id === OBJECTIVE_POINT_ID) return null
 
     if (typeof r.id === 'string' && r.id.length > 0) out.id = r.id
 
