@@ -24,6 +24,15 @@ describe('keyToSlateAction (S6 U1)', () => {
     expect(keyToSlateAction(ev({ code: 'KeyJ', shiftKey: true }))).toBeNull()
   })
 
+  it('recognises ? by its PRINTED character too, not only Shift+Slash', () => {
+    // The global command palette matches `e.key === '?'`, which is layout-aware. On a
+    // layout where ? is not Shift+Slash, a code-only match would let the palette win
+    // over a focused Slate — the exact collision the capture shim exists to prevent.
+    expect(keyToSlateAction(ev({ code: 'Minus', shiftKey: true, key: '?' }))).toBe('cheatsheet')
+    // The bare keys stay physical: Shift+J is still not `?`, and not `focus-next`.
+    expect(keyToSlateAction(ev({ code: 'KeyJ', shiftKey: true, key: 'J' }))).toBeNull()
+  })
+
   it('refuses anything carrying Ctrl / Meta / Alt', () => {
     // Ctrl+R must stay "reload the page", not "refresh the focused surface".
     expect(keyToSlateAction(ev({ code: 'KeyR', ctrlKey: true }))).toBeNull()

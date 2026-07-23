@@ -929,9 +929,13 @@ export class DocumentStore {
 
   /** Create or amend a USER-authored point (source:'user'), then rebuild the run's
    *  render projection. A user point survives a subsequent file re-projection (the
-   *  reconciliation the U7 HTTP layer relies on). Returns the resulting point. */
-  addUserSlatePoint(runId: string, input: PointInput): Point {
-    const point = this.slate.addUserPoint(runId, input)
+   *  reconciliation the U7 HTTP layer relies on). Returns the resulting point.
+   *
+   *  `claim` (S2 — the reserved Objective id) makes an amend TAKE OVER a point that
+   *  arrived through the file channel: source and author both become the user's, in
+   *  one mutation, while the thread and lifecycle stamps survive. */
+  addUserSlatePoint(runId: string, input: PointInput, opts: { claim?: boolean } = {}): Point {
+    const point = this.slate.addUserPoint(runId, input, Date.now(), opts)
     this.projectRunToSlate(runId)
     return point
   }

@@ -260,6 +260,98 @@ describe('SlateStore.addUserPoint (U7)', () => {
     store.addUserPoint(RUN, { id: 'up1', headline: 'same' })
     expect(emit).not.toHaveBeenCalled()
   })
+
+  // `claim` (S2 — taking over the reserved Objective id). The plain amend inherits the
+  // prior point's provenance AND its author; claim takes both, in ONE mutation, without
+  // discarding what the store has accumulated on the point.
+  it('claim TAKES source and author from a file point, keeping thread and stamps', () => {
+    const { store, emit, changes } = makeStore()
+    // A file point is created author:'agent' — the exact attribution that must not stick.
+    store.applyProjection(RUN, [input('objective', 'agent-authored goal')], 1000)
+    store.addReply(RUN, 'objective', { id: 'r1', author: 'user', text: 'why?', createdAt: 1 })
+    store.resolve(RUN, 'objective', 5)
+    expect(store.getPoint(RUN, 'objective')!.source).toBe('file')
+    expect(store.getPoint(RUN, 'objective')!.author).toBe('agent')
+    emit.mockClear()
+    changes.length = 0
+
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'the real goal' }, 2000, { claim: true })
+
+    const after = store.getPoint(RUN, 'objective')!
+    expect(after.source).toBe('user')
+    expect(after.author).toBe('user') // NOT the file point's 'agent'
+    expect(after.headline).toBe('the real goal')
+    // An amend, not a replace: everything store-owned survives.
+    expect(after.replies).toHaveLength(1)
+    expect(after.resolvedAt).toBe(5)
+    expect(after.createdAt).toBe(1000) // a re-add would stamp `now` (2000)
+    // ONE emit — a flip-then-amend would publish an intermediate frame carrying the
+    // agent's headline under the objective's identity.
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(changes[0]!.data).not.toBeNull()
+  })
+
+  it('claim drops the file-owned body AND anchor (the agent’s pointer is not the goal)', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [{
+      id: 'objective',
+      headline: 'agent goal',
+      content: body('a'),
+      anchor: { kind: 'surface', ref: 'some-surface' },
+    }])
+    const seeded = store.getPoint(RUN, 'objective')!
+    expect(seeded.content).toBeDefined()
+    expect(seeded.anchor).toBeDefined()
+
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'the real goal' }, 2000, { claim: true })
+
+    const after = store.getPoint(RUN, 'objective')!
+    expect(after.content).toBeUndefined()
+    // `mergeFileOwned` only ever SETS anchor, so this only holds because claim clears it.
+    expect(after.anchor).toBeUndefined()
+  })
+
+  // `claim` means USER-ownership, so the author is not the caller's to choose — otherwise
+  // it could mint a retraction-exempt point attributed to the agent.
+  it('claim ignores a caller-supplied non-user author — on the AMEND path', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('objective', 'agent goal')])
+    store.addUserPoint(RUN, { id: 'objective', author: 'agent', headline: 'the real goal' }, 2000, { claim: true })
+    expect(store.getPoint(RUN, 'objective')!.author).toBe('user')
+    expect(store.getPoint(RUN, 'objective')!.source).toBe('user')
+  })
+
+  // …and on the CREATE path, where `...input` would otherwise let the caller's author
+  // win over the default. A create can mint a retraction-exempt agent-attributed point
+  // just as easily as an amend, so the guarantee must not have a seam.
+  it('claim ignores a caller-supplied non-user author — on the CREATE path', () => {
+    const { store } = makeStore()
+    store.addUserPoint(RUN, { id: 'objective', author: 'agent', headline: 'the real goal' }, 2000, { claim: true })
+    const p = store.getPoint(RUN, 'objective')!
+    expect(p.author).toBe('user')
+    expect(p.source).toBe('user')
+  })
+
+  it('WITHOUT claim, a create still honours a caller-supplied author', () => {
+    const { store } = makeStore()
+    store.addUserPoint(RUN, { id: 'p1', author: 'process', headline: 'from a wrapper' })
+    expect(store.getPoint(RUN, 'p1')!.author).toBe('process')
+  })
+
+  it('claim on an already-user point that changes nothing still emits nothing', () => {
+    const { store, emit } = makeStore()
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'same' })
+    emit.mockClear()
+    store.addUserPoint(RUN, { id: 'objective', author: 'user', headline: 'same' }, Date.now(), { claim: true })
+    expect(emit).not.toHaveBeenCalled()
+  })
+
+  it('without claim, an amend still INHERITS the prior provenance (unchanged behaviour)', () => {
+    const { store } = makeStore()
+    store.applyProjection(RUN, [input('fp', 'from a file')])
+    store.addUserPoint(RUN, { id: 'fp', author: 'user', headline: 'amended' })
+    expect(store.getPoint(RUN, 'fp')!.source).toBe('file')
+  })
 })
 
 // --- DocumentStore integration: prune cascade + persistence ---
@@ -544,7 +636,7 @@ describe('SlateStore.reorderPoints (S6 U2)', () => {
     expect(store.getPointsForRun(RUN).map(p => p.order)).toEqual([100, 200, 300])
   })
 
-  it('leaves points of the run that are NOT listed untouched', () => {
+  it('leaves points of the run that are NOT listed exactly where they were', () => {
     const { store } = makeStore()
     store.applyProjection(RUN, [input('a', 'a')], 100)
     store.applyProjection(RUN, [input('a', 'a'), input('b', 'b')], 200)
@@ -552,8 +644,32 @@ describe('SlateStore.reorderPoints (S6 U2)', () => {
 
     store.reorderPoints(RUN, ['b', 'a'])
 
+    // Its slot needs no nudge, so it isn't even re-stamped — `order` stays implicit.
     expect(store.getPoint(RUN, 'keep')!.order).toBeUndefined()
     expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['b', 'a', 'keep'])
+  })
+
+  it('cannot let an unlisted point sharing a createdAt slide into the reordered group', () => {
+    // The common real case: ONE file projection stamps every point it creates with
+    // the same `now`, so `d` (unlisted) shares a slot with the three being moved.
+    // Deconflicting only against the listed subset would spread a,b,c to T,T+1,T+2
+    // and leave d at T — where the id tiebreak drops it in the MIDDLE of the group.
+    const { store } = makeStore()
+    store.applyProjection(
+      RUN,
+      [input('a', 'a'), input('b', 'b'), input('c', 'c'), input('d', 'd')],
+      500,
+    )
+    expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['a', 'b', 'c', 'd'])
+
+    store.reorderPoints(RUN, ['c', 'a', 'b'])
+
+    expect(store.getPointsForRun(RUN).map(p => p.id)).toEqual(['c', 'a', 'b', 'd'])
+    // And the effective order is now a TOTAL axis — no two points share a slot, so
+    // nothing downstream (the client's `order` sort has no id tiebreak) can re-tie it.
+    const eff = store.getPointsForRun(RUN).map(p => p.order ?? p.createdAt)
+    expect(new Set(eff).size).toBe(eff.length)
+    expect([...eff].sort((x, y) => x - y)).toEqual(eff)
   })
 
   it('emits once per moved point, and nothing at all for an identical reorder', () => {

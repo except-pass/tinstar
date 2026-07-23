@@ -4,18 +4,25 @@
 // `docs/solutions/conventions/authoring-a-skill-progress-tracker-surface.md`
 // tells skill authors to copy: `docs/examples/slate/skill-progress-tracker.json`.
 //
-// Every gate in the real pipeline fails SILENTLY — a surface file with an invalid
-// `content` is dropped by the watcher and simply never appears. So a doc example
-// can rot into something that renders nothing, and nobody finds out until a skill
-// author copies it. This test runs the committed example through the same gates
-// the runtime uses (`parseA2uiContent`, then `A2uiRenderer`), so the example
-// can't silently go invalid.
+// Every gate in the real pipeline fails SILENTLY — a surface file the watcher
+// rejects is simply dropped and never appears. So a doc example can rot into
+// something that renders nothing, and nobody finds out until a skill author copies
+// it. This test runs the committed example through the REAL gates the runtime uses,
+// in pipeline order:
+//
+//   1. `toPointInput` — the watcher's own envelope validator (id/headline/author/
+//      anchor/refresh). Called directly, NOT re-stated by hand here: a test that
+//      restates the envelope rules passes happily after the real rules move on,
+//      which is the exact silent failure this file exists to prevent.
+//   2. `parseA2uiContent` — the A2UI body funnel notices share.
+//   3. `A2uiRenderer` — the actual DOM.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createElement } from 'react'
 import { render } from '@testing-library/react'
 import { parseA2uiContent } from '../schema'
+import { toPointInput } from '../../server/sessions/slate-watcher'
 import { A2uiRenderer, MALFORMED_SIGNAL } from '../A2uiRenderer'
 
 // Resolved off the vitest root (the repo root) rather than `import.meta.url` —
@@ -43,25 +50,22 @@ function loadExample(): ExampleFile {
 }
 
 describe('docs/examples/slate/skill-progress-tracker.json — the committed reference example', () => {
-  it('is valid JSON with a non-empty headline and a stable id', () => {
-    const example = loadExample()
-    expect(typeof example.headline).toBe('string')
-    expect((example.headline as string).trim().length).toBeGreaterThan(0)
-    // The stable id is what makes a per-phase rewrite AMEND the panel (merge-by-id)
-    // instead of spawning a duplicate one.
-    expect(example.id).toBe('ce-pipeline')
-  })
-
-  it("declares anchor.kind 'surface' so it projects as a standalone diagram card", () => {
-    expect(loadExample().anchor?.kind).toBe('surface')
-  })
-
-  it("is authored by 'agent' and carries NO refresh recipe (it is session-derived)", () => {
-    const example = loadExample()
-    expect(example.author).toBe('agent')
+  it('survives the watcher\'s OWN envelope gate (toPointInput), not a hand-copy of its rules', () => {
+    // This is the assertion that actually proves the example would appear on a
+    // Slate: if `toPointInput` ever tightens (a new required field, a narrowed
+    // author/anchor vocabulary), the committed example fails HERE instead of
+    // silently vanishing in production.
+    const point = toPointInput(loadExample())
+    expect(point).not.toBeNull()
+    // ...and the projected point carries the envelope the convention promises.
+    expect(point!.id).toBe('ce-pipeline')       // stable id → per-phase rewrites AMEND (merge-by-id)
+    expect(point!.headline.trim().length).toBeGreaterThan(0)
+    expect(point!.author).toBe('agent')
+    expect(point!.anchor?.kind).toBe('surface') // standalone card, not an open-point row
+    expect(point!.content).not.toBeUndefined()  // the A2UI body survived the funnel
     // The vacuum test: a fresh, context-free author cannot reproduce "how far along
     // is this skill", so the tracker must NOT ship a self-contained recipe.
-    expect(example.refresh).toBeUndefined()
+    expect(point!.refresh).toBeUndefined()
   })
 
   it('passes parseA2uiContent — the same gate the watcher and renderer use', () => {

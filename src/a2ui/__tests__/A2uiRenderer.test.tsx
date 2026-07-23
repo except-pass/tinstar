@@ -6,9 +6,10 @@ import {
   A2uiRenderer,
   A2uiErrorBoundary,
   MALFORMED_SIGNAL,
+  MAX_NODES,
   extractReadableText,
 } from '../A2uiRenderer'
-import { isSupported } from '../catalog'
+import { isSupported, CATALOG, MAX_STEPS, MAX_SCAN } from '../catalog'
 
 // The catalog's Mermaid entry dynamically imports 'mermaid'; mock it so the
 // async render resolves deterministically (no fixed timeouts — CI is slower).
@@ -573,8 +574,232 @@ describe('A2uiRenderer — Stepper progress rail (Slate S3)', () => {
     )
     expect(container.textContent).toContain('Pipeline')
     expect(rows(container)).toHaveLength(5)
-    // A leaf: the Stepper never resolves children of its own.
     expect(container.querySelectorAll('[data-testid="stepper"]')).toHaveLength(1)
+  })
+
+  it('is a LEAF: a children[] on a Stepper node is discarded, never drawn inside the rail', () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([
+          { id: 'root', component: 'Stepper', steps: CE_STEPS, children: ['t'] },
+          { id: 't', component: 'Text', text: 'smuggled child', variant: 'body' },
+        ])}
+      />,
+    )
+    // The rail draws exactly the authored steps...
+    expect(rows(container)).toHaveLength(CE_STEPS.length)
+    // ...and the child never reaches the DOM — not inside the stepper, not anywhere.
+    expect(container.querySelector('[data-testid="stepper"]')!.textContent).not.toContain('smuggled child')
+    expect(container.textContent).not.toContain('smuggled child')
+  })
+
+  it('caps a runaway steps array at MAX_STEPS and says so, instead of expanding one node into 30k rows', () => {
+    const many = Array.from({ length: 250 }, (_, i) => ({ label: `Phase ${i}`, status: 'pending' }))
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps: many }])} />,
+    )
+    expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
+    expect(rows(container)).toHaveLength(60)
+    // The truncation is VISIBLE — a runaway array degrades loudly, never silently —
+    // and it is the list's last ROW, so assistive tech hears it too.
+    const overflow = container.querySelector('[data-testid="stepper-overflow"]')!
+    expect(overflow.textContent).toBe('+190 more entries not shown')
+    expect(overflow.getAttribute('role')).toBe('listitem')
+    // The last drawn row still carries a connector, so the rail reads as "continues".
+    expect(container.querySelectorAll('[data-testid="stepper-connector"]')).toHaveLength(60)
+  })
+
+  it('draws no overflow marker when the array fits under the cap', () => {
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps: CE_STEPS }])} />,
+    )
+    expect(container.querySelector('[data-testid="stepper-overflow"]')).toBeNull()
+  })
+
+  // The cap is an off-by-one magnet: exactly-at-the-cap must NOT claim a hidden row,
+  // and one-over must claim exactly one.
+  it.each([
+    [60, 60, null],
+    [61, 60, '+1 more entry not shown'], // singular — the marker is read by humans
+  ])('steps=%i → %i rows, overflow %s', (given, drawn, marker) => {
+    const steps = Array.from({ length: given }, (_, i) => ({ label: `P${i}`, status: 'done' }))
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    expect(rows(container)).toHaveLength(drawn)
+    expect(container.querySelector('[data-testid="stepper-overflow"]')?.textContent ?? null).toBe(marker)
+  })
+
+  // The cap counts RENDERABLE rows, not raw entries — 200 junk entries followed by
+  // real ones must not eat the budget and blank the rail.
+  it('spends the cap on valid rows only, so leading junk does not starve the rail', () => {
+    const steps = [
+      ...Array.from({ length: 200 }, () => ({ status: 'done' })), // no label → dropped
+      { label: 'Survivor', status: 'active' },
+    ]
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    expect(rows(container)).toHaveLength(1)
+    expect(container.querySelector('[data-testid="stepper-label"]')!.textContent).toBe('Survivor')
+    expect(container.querySelector('[data-testid="stepper-overflow"]')).toBeNull()
+  })
+
+  // The per-node cap alone is not the guarantee: MAX_NODES counts COMPONENTS, so
+  // without charging rows to the shared budget a surface could stack ~500 steppers
+  // of 60 rows each and reach tens of thousands of rows — arithmetically the same
+  // render load the per-node cap exists to prevent. The bound must be per SURFACE.
+  // Assert the CHARGE itself, not just its consequence. Going through the budget
+  // alone is insensitive: floor() flattens it, so any cost from 55 to 61 still
+  // fits 8 steppers and renders 480 rows. This is what actually pins the off-by-one.
+  it('charges a stepper exactly one budget unit per rendered row', () => {
+    const cost = CATALOG.Stepper!.cost!
+    expect(cost({ id: 'x', component: 'Stepper', steps: CE_STEPS })).toBe(CE_STEPS.length)
+    // Capped, so the charge can never exceed what the rail can actually draw.
+    const many = Array.from({ length: 250 }, (_, i) => ({ label: `P${i}`, status: 'done' }))
+    expect(cost({ id: 'x', component: 'Stepper', steps: many })).toBe(MAX_STEPS)
+    // Nothing renderable costs nothing.
+    expect(cost({ id: 'x', component: 'Stepper', steps: 'nope' })).toBe(0)
+  })
+
+  it('charges stepper rows against the surface-wide node budget, so many steppers cannot pile up', () => {
+    const sixty = Array.from({ length: 60 }, (_, i) => ({ label: `P${i}`, status: 'done' }))
+    const ids = Array.from({ length: 40 }, (_, i) => `st${i}`)
+    const { container } = render(
+      <A2uiRenderer
+        content={content([
+          { id: 'root', component: 'Column', children: ids },
+          ...ids.map(id => ({ id, component: 'Stepper', steps: sixty })),
+        ])}
+      />,
+    )
+    // 40 x 60 = 2400 rows if the cap were per node. Derivation: the root Column
+    // costs 1, each stepper costs 1 (visiting it) + MAX_STEPS (its rows), so
+    // floor((500-1)/61) = 8 steppers fit and the 9th onward degrade.
+    const fit = Math.floor((MAX_NODES - 1) / (1 + MAX_STEPS))
+    // Guard the derivation against going vacuous: a fully-derived expectation
+    // self-adjusts to ANY constants, including degenerate ones. If MAX_STEPS ever
+    // exceeded MAX_NODES - 2, fit would be 0 and this test would pass green while
+    // asserting nothing about steppers piling up. These two lines keep the
+    // scenario real — some steppers must fit, and not all of them.
+    expect(fit).toBeGreaterThan(1)
+    expect(fit).toBeLessThan(ids.length)
+    expect(rows(container)).toHaveLength(fit * MAX_STEPS)
+    // The surface degrades loudly rather than silently rendering a truncated tree.
+    expect(container.textContent).toContain('content too large to render')
+    expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
+  })
+
+  // Bounding the OUTPUT is not the same as bounding the WORK. An array whose
+  // entries all get dropped never reaches the row cap, so an unbounded loop would
+  // scan it end to end — twice per visit, once for cost() and once for render().
+  // Asserted by OBSERVABLE effect, not by a stopwatch: a wall-clock bound would
+  // pass with the cap removed (40k cheap iterations are still fast), proving
+  // nothing. The scan window is MAX_STEPS * 20 = 1200 entries, so a valid row
+  // sitting just past it is provably never reached — and one just inside it is.
+  it.each([
+    [MAX_SCAN, 'TooLate', 0],      // first entry OUTSIDE the window — never reached
+    [MAX_SCAN - 1, 'JustInTime', 1], // last entry inside it — rendered
+  ])('bounds the SCAN at MAX_SCAN entries (junk=%i)', (junkCount, label, expectedRows) => {
+    const steps = [...Array.from({ length: junkCount }, () => 0), { label, status: 'done' }]
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    expect(rows(container)).toHaveLength(expectedRows)
+    expect(container.textContent).not.toContain(MALFORMED_SIGNAL)
+    if (expectedRows === 0) {
+      // Zero renderable rows in the window degrades to the marker, never a throw —
+      // and the marker SAYS we stopped looking, so "malformed" and "truncated" are
+      // distinguishable. There is no rail here, so the overflow row can't carry it.
+      expect(container.textContent).toContain('stepper: no steps to show')
+      expect(container.textContent).toContain('(+1 entry not scanned)')
+      expect(container.textContent).not.toContain(label)
+    } else {
+      expect(container.textContent).toContain(label)
+      // Nothing was skipped, so the marker must not claim otherwise.
+      expect(container.textContent).not.toContain('not scanned')
+    }
+  })
+
+  // The mixed shape: rows DID render, and the scan window also ran out. The rail
+  // must name the cause it actually hit — saying "more entries not shown" here
+  // would send the author to trim a 60-row rail that only drew one.
+  it('names the SCAN as the cause when rows rendered but the window ran out', () => {
+    const steps = [
+      { label: 'Early', status: 'done' },
+      ...Array.from({ length: MAX_SCAN * 2 }, () => 0),
+    ]
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    expect(rows(container)).toHaveLength(1)
+    const overflow = container.querySelector('[data-testid="stepper-overflow"]')!
+    // Assert the whole string, not just the wording: a mis-derived `hidden`
+    // (value.length - limit instead of value.length - i) would pass a substring check.
+    expect(overflow.textContent).toBe(`+${steps.length - MAX_SCAN} entries not scanned`)
+  })
+
+  // ...and the converse: the row cap filled, so this is NOT a scan truncation.
+  it('names the ROW CAP as the cause when 60 rows filled before the window ran out', () => {
+    const steps = Array.from({ length: 250 }, (_, i) => ({ label: `P${i}`, status: 'done' }))
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    const overflow = container.querySelector('[data-testid="stepper-overflow"]')!
+    expect(overflow.textContent).toBe('+190 more entries not shown')
+  })
+
+  // The exact boundary between the two causes. Attribution must come from whether
+  // the rail actually filled, not from which exit the parse loop happened to take:
+  // when the 60th row lands on the LAST scanned entry the loop falls out of its
+  // condition rather than breaking, and a flag-based rule reports "scan window"
+  // about a visibly full 60-row rail — the wrong-problem misdirection all of this
+  // exists to prevent. One entry earlier, both rules agree; that is the control.
+  it.each([
+    [MAX_SCAN - 1, 'the 60th row lands on the last scanned entry'],
+    [MAX_SCAN - 2, 'the 60th row lands one entry earlier (control)'],
+  ])('attributes a full rail to the ROW CAP when %i is the last valid index', (lastValidIndex) => {
+    const junkCount = lastValidIndex - MAX_STEPS + 1
+    const steps = [
+      ...Array.from({ length: junkCount }, () => 0),
+      ...Array.from({ length: MAX_STEPS }, (_, i) => ({ label: `P${i}`, status: 'done' })),
+      ...Array.from({ length: 500 }, () => 0), // a tail past MAX_SCAN, so something IS hidden
+    ]
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps }])} />,
+    )
+    expect(rows(container)).toHaveLength(MAX_STEPS) // the rail is visibly full...
+    const overflow = container.querySelector('[data-testid="stepper-overflow"]')!
+    expect(overflow.textContent).toContain('not shown')      // ...so trim the list,
+    expect(overflow.textContent).not.toContain('not scanned') // not "move rows forward"
+  })
+
+  it('reports nothing skipped when a genuinely malformed steps prop yields no rows', () => {
+    const { container } = render(
+      <A2uiRenderer
+        content={content([{ id: 'root', component: 'Stepper', steps: [{ status: 'done' }] }])}
+      />,
+    )
+    // Malformed, not truncated — the marker must not imply we gave up early.
+    expect(container.textContent).toContain('stepper: no steps to show')
+    expect(container.textContent).not.toContain('not scanned')
+  })
+
+  it('exposes the status to assistive tech as text, not as color alone', () => {
+    const { container } = render(
+      <A2uiRenderer content={content([{ id: 'root', component: 'Stepper', steps: CE_STEPS }])} />,
+    )
+    // The rail is a list, so a screen reader announces structure instead of a run-on line.
+    expect(container.querySelector('[data-testid="stepper"]')!.getAttribute('role')).toBe('list')
+    expect(container.querySelectorAll('[role="listitem"]')).toHaveLength(CE_STEPS.length)
+    // The ✓/dot glyph and connector are decoration — hidden from AT.
+    expect(container.querySelector('[data-testid="stepper-node"]')!.getAttribute('aria-hidden')).toBe('true')
+    // ...so each row states its status in a visually-hidden span instead.
+    const spoken = Array.from(container.querySelectorAll('[data-testid="stepper-status-text"]')).map(
+      s => s.textContent,
+    )
+    expect(spoken).toEqual(['done: ', 'done: ', 'active: ', 'pending: ', 'pending: '])
+    expect(container.querySelector('[data-testid="stepper-status-text"]')!.className).toContain('sr-only')
   })
 
   it('draws a connector between rows but not after the last one', () => {

@@ -36,7 +36,7 @@ This page is the convention any skill copies to get a live progress tracker.
 
 ### The file
 
-One object, written to `<run-workdir>/.tinstar/slate/<slug>.json`, rewritten in place on every phase transition. The canonical copy-me version lives at **[`docs/examples/slate/skill-progress-tracker.json`](../../examples/slate/skill-progress-tracker.json)** (a test validates it against the real gates, so it can't rot):
+One object, written to `<run-workdir>/.tinstar/slate/<slug>.json`, rewritten in place on every phase transition. The canonical copy-me version lives at **[`docs/examples/slate/skill-progress-tracker.json`](../../examples/slate/skill-progress-tracker.json)**. A test drives it through the three real gates in pipeline order — the watcher's own `toPointInput` envelope validator, then `parseA2uiContent`, then `A2uiRenderer` — calling each one rather than restating its rules, so the example can't rot into something that silently never appears:
 
 ```json
 {
@@ -65,7 +65,7 @@ The full field table for the envelope lives in the [surface authoring contract](
 
 | Prop | Type | Notes |
 |------|------|-------|
-| `steps` | `Array<{ label, status, detail? }>` | The rows, top to bottom. |
+| `steps` | `Array<{ label, status, detail? }>` | The rows, top to bottom. Capped at **60** renderable rows; beyond that the rail draws a `+N more entries not shown` marker. A tracker that long has stopped being readable anyway. |
 | `steps[].label` | string (non-empty) | The phase name. Short — it renders as a mono label, not prose. A row with no label is **dropped**. |
 | `steps[].status` | `'pending' \| 'active' \| 'done' \| 'skipped'` | Anything else (or absent) coerces to `pending`. |
 | `steps[].detail` | string, optional | A one-line caption under the label. Put running commentary here, on the **active** step only. |
@@ -106,7 +106,7 @@ The CE pipeline is the first rider, but nothing here is CE-specific: a release c
 
 **A stale tracker is worse than none.** The panel is a claim about the present. A skill that writes the tracker at start and never updates it asserts "we're still on Brainstorm" for the rest of the run, and the user trusts it. If your skill can't reliably rewrite on every transition, don't ship the tracker.
 
-**The `Stepper` degrades, it doesn't crash.** A2UI props are passthrough (`unknown`), so `steps` gets a total, never-throwing parse: non-object rows and label-less rows are dropped, unknown statuses coerce to `pending`, and a `steps` that is missing, not an array, or entirely unusable renders one small inline amber marker with the rest of the surface intact. You will not blank a card by getting the JSON slightly wrong — but you may silently lose rows, so validate against the example.
+**The `Stepper` degrades, it doesn't crash.** A2UI props are passthrough (`unknown`), so `steps` gets a total, never-throwing parse: non-object rows and label-less rows are dropped, unknown statuses coerce to `pending`, and a `steps` that is missing, not an array, or entirely unusable renders one small inline amber marker with the rest of the surface intact. It is also **bounded three ways**, which matters because `steps` turns one component into arbitrarily many DOM rows. Per node, the parse stops at 60 rows *and* stops scanning after 1200 entries — bounding the output alone would let an array of all-invalid entries be scanned end to end. Truncation is always stated on the surface, and it names **which** cap it hit: `+N more entries not shown` when the rail drew its 60 and there was more (trim the list), `+N entries not scanned` when the window ran out first (move the real rows nearer the front). The row-cap wording can only appear once rows have rendered (filling the rail takes 60 of them), so when nothing rendered the marker always names the scan: `no steps to show (+N entries not scanned)`. Between them, "your JSON was malformed", "the rail is full", and "we stopped looking" are three distinguishable messages rather than one. Per *surface*, a `Stepper` charges its row count against the renderer's whole-surface node budget, so a body packed with steppers exhausts that budget and degrades to `content too large to render` instead of piling up tens of thousands of rows. The per-node cap alone would not give you that: the budget counts components, so N individually-capped steppers would still multiply out. You will not blank or hang a card with a malformed `steps` — but you may silently lose rows, so validate against the example. (`Mermaid` is not yet charged against the surface budget; that ceiling covers steppers only.)
 
 ## Related
 

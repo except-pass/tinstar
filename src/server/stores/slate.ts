@@ -175,13 +175,17 @@ function mergeFileOwned(prior: Point, input: PointInput, now: number): Point {
  * Given the order values a set of points CURRENTLY occupies, return the same set of
  * slots re-issued in ascending order and forced strictly increasing (S6 U2).
  *
- * Reusing the existing slots is what keeps a reorder local: the group as a whole
- * stays exactly where it was on the Slate's single `order` axis, and only its
- * internal sequence changes. Strictly-increasing matters because the render sort
- * tiebreaks equal `order` on `createdAt` — two points sharing a slot (both falling
- * back to the same `createdAt`, say) would otherwise silently ignore the new
- * sequence. Ties are broken by nudging up by 1, which can push the last slot at
- * most `n` past its original value: negligible against millisecond timestamps.
+ * Reusing the existing slots is what keeps a reorder local: the run as a whole stays
+ * exactly where it was on the Slate's single `order` axis, and only the sequence
+ * within it changes. Strictly-increasing matters because the render sort tiebreaks
+ * equal `order` on `createdAt`/id — points sharing a slot (which is the COMMON case:
+ * one file projection stamps every point it creates with the same `now`) would
+ * otherwise silently ignore the new sequence. Ties are broken by nudging up by 1,
+ * which can push the last slot at most `n` past its original value: negligible
+ * against millisecond timestamps.
+ *
+ * Callers must pass the slots of the WHOLE run, not just the points being permuted —
+ * see {@link SlateStore.reorderPoints} for why.
  */
 export function assignOrderSlots(current: number[]): number[] {
   const slots = [...current].sort((a, b) => a - b)
@@ -282,13 +286,49 @@ export class SlateStore {
    * generated id. Emits one change (or none if a byte-identical amend). Returns the
    * resulting point.
    */
-  addUserPoint(runId: string, input: PointInput, now: number = Date.now()): Point {
+  addUserPoint(runId: string, input: PointInput, now: number = Date.now(), opts: { claim?: boolean } = {}): Point {
     const id = input.id && input.id.length > 0 ? input.id : 'pt-user-' + randomUUID().slice(0, 12)
     // Scoped to THIS run by the composite key — a prior hit is always this run's point.
     const prior = this.points.get(this.k(runId, id))
-    const next = prior
-      ? { ...mergeFileOwned(prior, input, now), source: prior.source ?? 'user' as const }
-      : createPoint(runId, id, { author: 'user', ...input }, now, 'user')
+    let next: Point
+    if (!prior) {
+      // `...input` spreads AFTER the default, so a caller-supplied `author` normally
+      // wins here. Under `claim` it must not: the option means user-ownership, and a
+      // create is just as capable of minting a retraction-exempt, agent-attributed
+      // point as an amend is. Forced on both branches so the guarantee has no seam.
+      next = createPoint(
+        runId,
+        id,
+        { author: 'user', ...input, ...(opts.claim ? { author: 'user' as const } : {}) },
+        now,
+        'user',
+      )
+    } else if (opts.claim) {
+      // `claim` (S2 — the reserved Objective id) makes the amend TAKE OWNERSHIP instead
+      // of inheriting it. Without it the amend keeps `prior.source` (so a pre-guard file
+      // point stays `source:'file'` and never projects as the objective) AND keeps
+      // `prior.author` — `mergeFileOwned` does not read `input.author`, so a file point
+      // created as `author:'agent'` would ship the user's own words under the agent's
+      // name.
+      //
+      // `author` is HARD-CODED, not taken from the caller: the option means user-
+      // ownership, so the author is not the caller's to choose. Letting it through would
+      // make `claim` able to mint a retraction-exempt point attributed to the agent —
+      // the same mixup inverted.
+      //
+      // Done here rather than as a separate flip-then-amend so it is ONE mutation and
+      // ONE emit: two calls would publish an intermediate frame where the card is
+      // already the Objective but still carries the agent's headline and body.
+      next = { ...mergeFileOwned(prior, input, now), source: 'user', author: 'user' }
+      // The anchor is file-owned like `content` and `refresh`, but `mergeFileOwned` only
+      // ever SETS it — so a claimed point would otherwise inherit the agent's pointer
+      // (e.g. `{kind:'surface', ref:…}`) onto a point that is now unconditionally the
+      // user's. Clear it on the same terms as the body: gone unless this input supplies
+      // one. Inert on the render channel today, but by coincidence rather than design.
+      if (!input.anchor) delete next.anchor
+    } else {
+      next = { ...mergeFileOwned(prior, input, now), source: prior.source ?? 'user' }
+    }
     if (prior && pointEqual(prior, next)) return prior
     this.points.set(this.k(runId, id), next)
     this.emit({ entity: 'slatePoint', id, runId, data: next })
@@ -343,15 +383,24 @@ export class SlateStore {
   }
 
   /**
-   * Reorder a run's points (S6 U2). `ids` is the desired sequence; points of this
-   * run not named in `ids` are untouched.
+   * Reorder a run's points (S6 U2). `ids` is the desired sequence; points of this run
+   * not named in `ids` keep exactly the position they had.
    *
-   * The assigned values REUSE the slots the listed points already occupy (see
+   * The assigned values REUSE the slots the run's points already occupy (see
    * {@link assignOrderSlots}) rather than being 0,1,2… That matters: `order` is one
    * shared axis for the whole Slate, so numbering the open points 0..n-1 would
    * yank them ahead of every diagram/generic surface the moment anything was
-   * reordered once. Reusing their own slots keeps the group exactly where it was
+   * reordered once. Reusing the run's own slots keeps the group exactly where it was
    * relative to everything else and only permutes it internally.
+   *
+   * DECONFLICTING AGAINST THE WHOLE RUN (not just the listed subset) is load-bearing.
+   * A single file projection stamps EVERY point it creates with the same `now`, so a
+   * listed and an unlisted point routinely share one effective slot. Re-issuing slots
+   * for the listed points alone would spread them to T, T+1, T+2… while an unlisted
+   * point stayed at T — and the id tiebreak could then slide that unlisted surface
+   * into the middle of a group it was never part of. So the walk below covers the
+   * run's full sequence, and an unlisted point is re-stamped ONLY when leaving it
+   * implicit would let it drift (its effective order has to change).
    *
    * `amendedAt` is deliberately NOT bumped — a reorder is not a re-authoring, and
    * bumping it would reset the freshness clock and clear an in-flight refresh
@@ -367,10 +416,20 @@ export class SlateStore {
       if (p) targets.push(p)
     }
     if (targets.length < 2) return // nothing to permute
-    const slots = assignOrderSlots(targets.map(p => p.order ?? p.createdAt))
-    targets.forEach((p, i) => {
+    const targetIds = new Set(targets.map(p => p.id))
+    // The run's CURRENT sequence, with the listed points swapped into the desired
+    // order at exactly the positions they collectively already held.
+    const all = this.getPointsForRun(runId)
+    let taken = 0
+    const sequence = all.map(p => (targetIds.has(p.id) ? targets[taken++]! : p))
+    const slots = assignOrderSlots(all.map(p => p.order ?? p.createdAt))
+    sequence.forEach((p, i) => {
       const order = slots[i]!
-      this.mutate(runId, p.id, prior => (prior.order === order ? prior : { ...prior, order }))
+      this.mutate(runId, p.id, prior =>
+        // Already effectively at this slot → leave it alone, so an unlisted point
+        // that needs no nudge keeps its implicit (createdAt-derived) order.
+        (prior.order ?? prior.createdAt) === order ? prior : { ...prior, order },
+      )
     })
   }
 
@@ -405,6 +464,7 @@ export class SlateStore {
     this.emit({ entity: 'slatePoint', id, runId, data: null })
     return true
   }
+
 
   /** Drop every point of a run, emitting a retract per point (deleteRun cascade). */
   pruneRun(runId: string): void {

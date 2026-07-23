@@ -109,7 +109,7 @@ JSON object with:
 | `Divider` | — | a horizontal rule |
 | `Link` | `text`, `url` | a themed link (a `javascript:`/`data:` URL degrades to plain text) |
 | `Code` | `text` | a monospace block |
-| `Mermaid` | `source`, `theme?` | a Mermaid definition string drawn as a themed diagram — e.g. `graph TD\n  A --> B\n  B -->\|yes\| C`. Use it for any flow/pipeline/state picture instead of ASCII art in a `Code` block. `theme` is `ink` (default, neutral monochrome — prefer it) or `hue` (semantic colors, for complex flows that need color to stay legible); anything else falls back to `ink`. The diagram is **scaled to fit** the narrow column and expands on click, so size is fine — but keep labels short, since they shrink too. A bad or empty `source` degrades to a small inline notice. |
+| `Mermaid` | `source`, `theme?` | a Mermaid definition string drawn as a themed diagram — e.g. `graph TD\n  A --> B\n  B -->\|yes\| C`. Use it for any flow/pipeline/state picture instead of ASCII art in a `Code` block. `theme` is `ink` (default, neutral monochrome — prefer it) or `hue` (semantic colors, for complex flows that need color to stay legible); anything else falls back to `ink`. The diagram is **scaled to fit** the narrow column and expands on click, so size is fine — but keep labels short, since they shrink too. Pick the look with `theme`, not with mermaid config: `%%{init: …}%%` directives and YAML front matter are stripped from `source`. A bad, empty, or over-long `source` degrades to a small inline notice. |
 | `Stepper` | `steps` (`{ label, status, detail? }[]`) | a status-colored vertical phase track. `status` is `pending` \| `active` \| `done` \| `skipped` (anything else → `pending`): `done` is emerald with a ✓, `active` is the live cyan, `skipped` is dimmed and struck through. Use it for phases/checklists/pipeline progress instead of writing `[x]`/`[ ]` into a Text or List — it's the only way to color a step by state. Keep exactly one step `active`, keep labels short, and put running commentary in `detail` on that active step. Rows with no `label` are dropped; unusable `steps` degrade to a small inline notice. For a live tracker a skill rewrites per phase, see `docs/solutions/conventions/authoring-a-skill-progress-tracker-surface.md`. |
 | `Choice` | `mode` (`single` \| `multi`), `options` (`{ id, label }[]`) | radios or checkboxes |
 | `TextInput` | `label?`, `placeholder?` | a free-text box |
@@ -251,10 +251,16 @@ A surface's `refresh` recipe is its **authoring contract**: when it's self-conta
 
 - **Author with files; answer with HTTP.** Write a file to make a surface; reply with a
   `curl` when the user talks back. Don't POST to *create* surfaces — that path
-  (`POST /slate/points`) is the **user's** add-a-point and always injects into your own
-  session.
+  (`POST /slate/points`) is the **user's** add-a-point.
 - **Keep `id`s stable.** Same id → an amend that preserves the thread. Changed/missing
   id → a duplicate with a fresh thread.
+- **`objective` is a RESERVED id — never use it.** It carries the *user's* Objective,
+  the standing statement of what the session is for, pinned at the top of the Slate.
+  It is theirs to write and yours to honour. A file entry claiming that id is **dropped
+  by the watcher** (your surface silently never appears, and a file whose only entry is
+  that one leaves the previous projection frozen in place) and `POST /slate/points`
+  refuses it outright. Pick any other id — `goal`, `session-goal`, `plan` — for a
+  surface of your own about the same subject.
 - **Write atomically, retract explicitly.** Temp + rename to write; unlink or `[]` to
   clear. Never a bare redirect over a live file.
 - **Retract what's resolved.** A stale surface on the card costs the user trust, same as

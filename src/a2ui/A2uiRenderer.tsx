@@ -34,7 +34,7 @@ const MAX_DEPTH = 32
  *  visit (including re-visits of a shared ref). This — not depth — is what stops
  *  a tiny hostile description like `c_i.children = [c_{i+1}, c_{i+1}]` from
  *  forcing 2^N renders and hanging the tab (R16: a bad notice can't hang it). */
-const MAX_NODES = 500
+export const MAX_NODES = 500
 
 /** Keys whose string values are human-readable content. Used by the degrade path
  *  to salvage something readable out of an invalid description. */
@@ -93,11 +93,18 @@ function walkNode(
   if (!isSupported(node.component)) {
     return <NodeFallback label={`unsupported component "${node.component}"`} />
   }
+  // Charge entries that expand ONE component into many rows (Stepper) against the
+  // SAME budget, before walking children. Without this the cap would be per node:
+  // a surface could stack ~500 individually-bounded steppers and still reach tens
+  // of thousands of rows — the very load the per-node cap exists to prevent.
+  const entry = CATALOG[node.component]!
+  budget.remaining -= entry.cost?.(node) ?? 0
+  if (budget.remaining < 0) return <NodeFallback label="content too large to render" />
   const nextSeen = new Set(seen).add(id)
   const children = childIdsOf(node).map((childId, i) => (
     <WalkKey key={childId || i}>{walkNode(childId, byId, nextSeen, depth + 1, budget)}</WalkKey>
   ))
-  return CATALOG[node.component]!.render(node, children)
+  return entry.render(node, children)
 }
 
 /** Keyed wrapper so sibling children carry stable React keys without the catalog

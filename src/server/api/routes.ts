@@ -3337,6 +3337,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       if (parsed.id !== undefined && (typeof parsed.id !== 'string' || parsed.id.length === 0)) {
         fail(res, 'INVALID_PARAMS', 'id must be a non-empty string when provided'); return
       }
+      // The Objective (S2) lives at a RESERVED id with its own endpoint. Refuse it here
+      // for the same reason the watcher drops it out of the file-in channel: this route
+      // takes a caller-supplied id, and an agent with `curl` would otherwise overwrite
+      // the user's goal through the side door — no nudge, no `changed` bookkeeping, and
+      // with a `content`/`anchor` body the objective card never renders.
+      if (parsed.id === OBJECTIVE_POINT_ID) {
+        fail(res, 'INVALID_PARAMS', `'${OBJECTIVE_POINT_ID}' is a reserved id — use PUT /api/runs/:id/slate/objective`); return
+      }
       // Optional A2UI body — validated through the v0_9 schema so a malformed
       // description is rejected at the boundary (KTD4), never persisted.
       let content: A2uiContent | undefined
@@ -3441,11 +3449,23 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
       }
       const text = parsed.text.trim()
       const prior = ctx.docStore.getSlatePoint(runId, OBJECTIVE_POINT_ID)
+      // `claim` makes the reserved id USER-owned unconditionally. A point already
+      // sitting there with another provenance (a `source:'file'` point from a snapshot
+      // written before the watcher guard existed) would otherwise survive the amend:
+      // a plain `addUserPoint` inherits `prior.source`, so the projection's
+      // `source === 'user'` gate would keep rendering it as an ordinary open-point and
+      // the objective card would stay empty while this route reported 200/changed and
+      // nudged. It also inherits `prior.author`, which would ship the user's own words
+      // under the agent's name.
+      //
+      // It is an AMEND, not a delete-and-re-add: the point may already carry a thread
+      // the user replied on, and the Slate's standing promise is that the same identity
+      // keeps what has accumulated on it.
       const objective = ctx.docStore.addUserSlatePoint(runId, {
         id: OBJECTIVE_POINT_ID,
         author: 'user',
         headline: text,
-      })
+      }, { claim: true })
       // Identity, not deep-equality: the store hands back the prior object itself when
       // nothing changed. An Apply that changed no text is not a re-alignment, so it
       // must not re-nudge an agent mid-turn.

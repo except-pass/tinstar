@@ -153,6 +153,10 @@ export class SlateWatcher {
   private readonly dirty = new Set<string>()
   /** Runs currently in the retain (invalid) state, for log-once-on-transition. */
   private readonly retained = new Set<string>()
+  /** Slate files last seen claiming the RESERVED objective id. Polling is every few
+   *  seconds, so the warn is log-once-per-file (same log-on-transition posture as
+   *  {@link retained}) — a lingering bad file must not turn the log into a drum. */
+  private readonly warnedReservedId = new Set<string>()
 
   constructor(opts: SlateWatcherOpts) {
     this.opts = opts
@@ -358,6 +362,10 @@ export class SlateWatcher {
 
     const inputs: PointInput[] = []
     let sawUnusable = false // a file that INTENDED to contribute but couldn't
+    // Files caught claiming the reserved objective id THIS pass — becomes the new
+    // warn-once ledger below, so a file that stops offending can warn again if it
+    // regresses, and one that keeps offending only ever logs once.
+    const reservedNow = new Set<string>()
 
     for (const name of jsonNames) {
       const path = join(slateDir, name)
@@ -398,71 +406,115 @@ export class SlateWatcher {
       if (entries === null) { sawUnusable = true; continue } // not an array/object — torn
 
       for (const rawEntry of entries) {
-        const entry = this.toPointInput(rawEntry)
+        // `toPointInput` drops the reserved objective id too (it is the validator, and
+        // the guard belongs there). Detect it here as well, purely so the drop is not
+        // SILENT: an author whose surface simply never appears otherwise has nothing to
+        // find — no error, no exit code, no trace.
+        if (isReservedObjectiveEntry(rawEntry)) {
+          reservedNow.add(path)
+          if (!this.warnedReservedId.has(path)) {
+            log.warn('slate-watcher', `${name}: entry id '${OBJECTIVE_POINT_ID}' is RESERVED for the user's Objective — entry dropped, pick another id`)
+          }
+          // Counts as UNUSABLE, deliberately — so a dir that yields nothing else RETAINS
+          // the last-valid projection instead of clearing it. The alternative (treat it
+          // as a skip, letting an empty result read as a genuine clear) would retract
+          // every file-owned point of the run because one entry used a bad id, turning a
+          // typo into data loss. Retaining is the recoverable failure: fix the id and the
+          // next poll re-projects. The warn above is what makes it findable.
+          sawUnusable = true
+          continue
+        }
+        const entry = toPointInput(rawEntry, this.parseContent)
         if (entry === null) { sawUnusable = true; continue } // schema-invalid entry — drop it
         inputs.push(entry)
       }
     }
 
+    // Refresh the warn-once ledger for THIS dir only. `readSlateDir` runs once per run,
+    // so replacing the whole set would let two simultaneously-offending runs keep
+    // evicting each other's entry and re-warn on every poll.
+    for (const p of this.warnedReservedId) {
+      if (p.startsWith(slateDir + sep) && !reservedNow.has(p)) this.warnedReservedId.delete(p)
+    }
+    for (const p of reservedNow) this.warnedReservedId.add(p)
+
     if (inputs.length > 0) return inputs // keep the valid ones (mixed valid + invalid)
     // Zero valid entries: retain if something was torn/dropped, else it's a genuine clear.
     return sawUnusable ? null : []
   }
+}
 
-  /**
-   * Validate one raw file entry as a `PointInput`. `headline` is required; `content`
-   * (when present) goes through the SAME `parseA2uiContent` funnel notices use, so a
-   * hostile surface is rejected before it ever reaches the store. Returns `null` (drop)
-   * on any failure.
-   */
-  private toPointInput(raw: unknown): PointInput | null {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
-    const r = raw as Record<string, unknown>
+/**
+ * Validate one raw surface-file entry as a `PointInput` — the gate that decides
+ * whether a `.tinstar/slate/*.json` entry ever becomes a visible surface. `headline`
+ * is required; `content` (when present) goes through the SAME `parseA2uiContent`
+ * funnel notices use, so a hostile surface is rejected before it reaches the store.
+ * Returns `null` (drop) on any failure.
+ *
+ * Module-level and EXPORTED rather than a private method: every rejection here is
+ * silent (the surface simply never appears), so anything that ships a committed
+ * example file — e.g. `docs/examples/slate/skill-progress-tracker.json` — needs to
+ * assert its envelope against this function itself. A test that re-states the rules
+ * by hand passes happily while the real gate has moved on.
+ */
+export function toPointInput(
+  raw: unknown,
+  parseContent: (value: unknown) => A2uiContent | null = parseA2uiContent,
+): PointInput | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
 
-    if (typeof r.headline !== 'string' || r.headline.length === 0) return null
-    const out: PointInput = { headline: r.headline }
+  if (typeof r.headline !== 'string' || r.headline.length === 0) return null
+  const out: PointInput = { headline: r.headline }
 
-    // The Objective (S2) is USER-owned and lives at a RESERVED id. A file claiming it
-    // would merge into the user's objective — and, as a file point, become retractable
-    // by the next projection that omits it. Drop the entry entirely (same posture as a
-    // schema-invalid one) so the file-in channel can neither hijack nor delete it.
-    if (r.id === OBJECTIVE_POINT_ID) return null
+  // The Objective (S2) is USER-owned and lives at a RESERVED id. A file claiming it
+  // would merge into the user's objective — and, as a file point, become retractable
+  // by the next projection that omits it. Drop the entry entirely (same posture as a
+  // schema-invalid one) so the file-in channel can neither hijack nor delete it.
+  if (r.id === OBJECTIVE_POINT_ID) return null
 
-    if (typeof r.id === 'string' && r.id.length > 0) out.id = r.id
+  if (typeof r.id === 'string' && r.id.length > 0) out.id = r.id
 
-    if (r.author !== undefined) {
-      if (r.author !== 'agent' && r.author !== 'user' && r.author !== 'process') return null
-      out.author = r.author as PointAuthor
-    }
-
-    if (r.anchor !== undefined) {
-      const anchor = toAnchor(r.anchor)
-      if (anchor === null) return null
-      out.anchor = anchor
-    }
-
-    if (r.content !== undefined) {
-      const content = this.parseContent(r.content)
-      if (content === null) return null // schema-invalid A2UI — drop this surface
-      out.content = content
-    }
-
-    // File-owned refresh recipe (plan U3): carried through verbatim. A non-string or
-    // empty recipe is simply dropped (the surface still refreshes via the bare nudge).
-    if (typeof r.refresh === 'string' && r.refresh.length > 0) out.refresh = r.refresh
-
-    // File-owned workbench set id (S4): points sharing a non-empty `group` render
-    // side-by-side as one multi-question workbench. A non-string or empty value is
-    // simply ignored (the point still renders as an ordinary row) — never an error,
-    // matching the `refresh` posture.
-    if (typeof r.group === 'string' && r.group.length > 0) out.group = r.group
-
-    if (typeof r.createdAt === 'number' && Number.isFinite(r.createdAt)) {
-      out.createdAt = r.createdAt
-    }
-
-    return out
+  if (r.author !== undefined) {
+    if (r.author !== 'agent' && r.author !== 'user' && r.author !== 'process') return null
+    out.author = r.author as PointAuthor
   }
+
+  if (r.anchor !== undefined) {
+    const anchor = toAnchor(r.anchor)
+    if (anchor === null) return null
+    out.anchor = anchor
+  }
+
+  if (r.content !== undefined) {
+    const content = parseContent(r.content)
+    if (content === null) return null // schema-invalid A2UI — drop this surface
+    out.content = content
+  }
+
+  // File-owned refresh recipe (plan U3): carried through verbatim. A non-string or
+  // empty recipe is simply dropped (the surface still refreshes via the bare nudge).
+  if (typeof r.refresh === 'string' && r.refresh.length > 0) out.refresh = r.refresh
+
+  // File-owned workbench set id (S4): points sharing a non-empty `group` render
+  // side-by-side as one multi-question workbench. A non-string or empty value is
+  // simply ignored (the point still renders as an ordinary row) — never an error,
+  // matching the `refresh` posture.
+  if (typeof r.group === 'string' && r.group.length > 0) out.group = r.group
+
+  if (typeof r.createdAt === 'number' && Number.isFinite(r.createdAt)) {
+    out.createdAt = r.createdAt
+  }
+
+  return out
+}
+
+/** True when a raw file entry claims the RESERVED objective id (S2). Mirrors the drop
+ *  inside `toPointInput` — this one exists so the drop can be LOGGED with the file it
+ *  came from, which `toPointInput` (a pure per-entry validator) has no way to name. */
+function isReservedObjectiveEntry(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false
+  return (raw as Record<string, unknown>).id === OBJECTIVE_POINT_ID
 }
 
 function toAnchor(raw: unknown): PointAnchor | null {
