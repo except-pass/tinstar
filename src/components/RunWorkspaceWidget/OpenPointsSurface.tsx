@@ -26,6 +26,8 @@ import { RefreshButton } from './slateRefresh'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
 import { moveItem } from './reorderUtil'
+import { usePointAnswerForm } from './usePointAnswerForm'
+import { WorkbenchSurface, partitionWorkbenches } from './WorkbenchSurface'
 
 /** The visible track stages, in order. `resolved` is terminal; `dismissed` is a
  *  side exit (rendered as a dimmed row, not a track position). */
@@ -72,8 +74,6 @@ const PILL_TONE: Record<PointStatus, string> = {
 // user / process; color is reserved for status (P1, and P4 forbids the old cyan
 // `process` badge — cyan is the live edge only).
 const AUTHOR_TONE = 'bg-surface-hover text-ink-low'
-
-const EMPTY_SET: ReadonlySet<string> = new Set()
 
 /** The reorder affordance (S6 U2): a thumb-pad grip that reveals ▲/▼ to nudge the
  *  point one slot. NOT pointer-drag — native DnD is unreliable on the zoom/pan
@@ -145,11 +145,10 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Answer form (only wired when the body declares controls).
-  const [selected, setSelected] = useState<Map<string, Set<string>>>(new Map())
-  const [text, setText] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [optimisticAnswered, setOptimisticAnswered] = useState(false)
+  // Answer form (only wired when the body declares controls). Lives in the shared
+  // hook (S4 U2) so this row and a workbench column answer through ONE code path —
+  // same POST target, same optimistic answered-lock, same validation guard.
+  const answer = usePointAnswerForm(runId, surface.id)
 
   useEffect(() => {
     if (optimisticStatus === null) return
@@ -196,69 +195,22 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
     void lifecycle(resolved ? 'reopen' : 'resolve', resolved ? null : 'resolved')
   }, [resolved, lifecycle])
 
-  const toggleOption = useCallback((choiceId: string, optionId: string, mode: 'single' | 'multi') => {
-    setSelected((prev) => {
-      const next = new Map(prev)
-      const group = new Set(prev.get(choiceId) ?? [])
-      if (mode === 'single') {
-        next.set(choiceId, new Set([optionId]))
-      } else {
-        if (group.has(optionId)) group.delete(optionId)
-        else group.add(optionId)
-        next.set(choiceId, group)
-      }
-      return next
-    })
-  }, [])
-
-  const selectedFor = useCallback(
-    (choiceId: string): ReadonlySet<string> => selected.get(choiceId) ?? EMPTY_SET,
-    [selected],
+  // Submitting an answer also clears any lingering lifecycle (resolve/reopen) error,
+  // exactly as the pre-extraction `submitAnswer` did when the two shared one `error`.
+  const form: NoticeFormState = useMemo(
+    () => ({
+      ...answer.form,
+      submit: () => {
+        setError(null)
+        answer.form.submit()
+      },
+    }),
+    [answer.form],
   )
 
-  const submitAnswer = useCallback(async () => {
-    if (submitting || optimisticAnswered) return
-    const choices = [...new Set([...selected.values()].flatMap((g) => [...g]))]
-    const trimmed = text.trim()
-    if (choices.length === 0 && !trimmed) {
-      setError('Pick an option or add a note before submitting.')
-      return
-    }
-    setError(null)
-    setSubmitting(true)
-    setOptimisticAnswered(true)
-    try {
-      const res = await apiFetch(`/api/runs/${runId}/slate/points/${surface.id}/answer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...(choices.length ? { choices } : {}),
-          ...(trimmed ? { text: trimmed } : {}),
-        }),
-      })
-      const body = (await res.json().catch(() => null)) as
-        | { ok?: boolean; error?: { message?: string } }
-        | null
-      if (!res.ok || !body?.ok) throw new Error(body?.error?.message || `answer failed (${res.status})`)
-      // The answer persists as a thread reply and arrives on the next run delta.
-    } catch {
-      setOptimisticAnswered(false)
-      setError('Could not deliver your answer. Try again.')
-    } finally {
-      setSubmitting(false)
-    }
-  }, [submitting, optimisticAnswered, selected, text, runId, surface.id])
-
-  const form: NoticeFormState = {
-    interactive: true,
-    answered: optimisticAnswered,
-    submitting,
-    selectedFor,
-    text,
-    toggleOption,
-    setText,
-    submit: submitAnswer,
-  }
+  // The row shows ONE error line; the answer form's message wins while it's set
+  // (it's the more recent, more local failure) — same single-slot behavior as before.
+  const shownError = answer.error ?? error
 
   const threadCount = surface.thread?.length ?? 0
 
@@ -406,7 +358,7 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
               Sent — but that session isn’t reachable right now.
             </div>
           )}
-          {error && <div className="mt-1 text-[11px] text-hue-error">{error}</div>}
+          {shownError && <div className="mt-1 text-[11px] text-hue-error">{shownError}</div>}
           {/* Freshness: "updated Xm ago", ambering when the point has gone untended. */}
           <div className="mt-1 flex justify-end">
             <SurfaceAge amendedAt={surface.amendedAt} now={now} />
@@ -551,8 +503,15 @@ export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, sho
     return base.sort((a, b) => rank(a) - rank(b) || slot(a) - slot(b))
   }, [points, hiddenIds, showHidden, optimisticOrder])
 
-  // The ids the chevrons actually permute: the live rows, in rendered order.
-  const liveIds = useMemo(() => ordered.filter(isLive).map((s) => s.id), [ordered])
+  // S4 — pull grouped question sets out of the vertical list and into workbench bands.
+  // A grouped point renders in EXACTLY one place (its column), never both, or the user
+  // would face two live answer affordances for the same question.
+  const { groups, ungrouped } = useMemo(() => partitionWorkbenches(ordered), [ordered])
+
+  // The ids the chevrons actually permute: the live ROWS, in rendered order. Derived
+  // from `ungrouped`, not `ordered` — a chevron that stepped over an invisible
+  // workbenched point would look like a dead click.
+  const liveIds = useMemo(() => ungrouped.filter(isLive).map((s) => s.id), [ungrouped])
 
   // Reconcile: once the server's sequence for these ids equals what we asked for,
   // drop the optimistic override and let the projection drive again.
@@ -604,7 +563,13 @@ export function OpenPointsSurface({ runId, points, hiddenIds = EMPTY_HIDDEN, sho
       className="rounded border border-hairline bg-surface-raised p-[14px] space-y-2"
     >
       <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-ink-low">Open points</div>
-      {ordered.map((surface) => {
+      {/* Workbenches first (S4): a question SERIES is the thing the user is being asked
+          to work through, so it sits above the standing rows rather than buried in
+          them. Each band owns its own horizontal scroll. */}
+      {groups.map(({ group, points: members }) => (
+        <WorkbenchSurface key={group} runId={runId} group={group} points={members} />
+      ))}
+      {ungrouped.map((surface) => {
         const liveIdx = liveIds.indexOf(surface.id)
         // Only live rows get a grip, and only when there's more than one of them.
         const reorder = liveIdx >= 0 && liveIds.length > 1

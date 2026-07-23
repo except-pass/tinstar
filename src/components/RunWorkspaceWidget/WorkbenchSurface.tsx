@@ -1,0 +1,209 @@
+// The multi-question WORKBENCH (S4 U3) — a set of related open-points laid out one
+// per COLUMN instead of one per row, so the user can see the whole series at once and
+// answer each independently.
+//
+// What it is NOT: a new A2UI component, a new surface `kind`, or a new answer route.
+// The interactive form state A2UI's controls read (`NoticeFormState`) is SURFACE-scoped
+// — one `text`, one `submit()` per provider — so a single A2UI surface holding N
+// question cards would bind every TextInput to the same draft and every Submit to the
+// same call. Per-question independence therefore has to come from N independent points,
+// which the Slate already has: each column is one existing open-point with its own
+// `usePointAnswerForm`, its own `POST …/points/<id>/answer`, and its own answered-lock.
+// The workbench is purely the LAYOUT over that, tied together by the file-owned `group`
+// string.
+//
+// Layout (#126 guard): the band is its own `overflow-x-auto` scroller marked
+// `data-scrollable`. The Slate's scroll body is `overflow-x-hidden`, so a horizontal
+// scrollbar on a child of it would be unreachable — the band must own its scroll, and
+// the canvas wheel handler must yield to it rather than panning the canvas. Columns are
+// fixed-width and `shrink-0` with `[overflow-wrap:anywhere]`, so a long token wraps
+// inside its column instead of forcing the panel itself to scroll sideways.
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { SlateSurface } from '../../types'
+import { A2uiRenderer } from '../../a2ui/A2uiRenderer'
+import { isAnswerable } from '../../a2ui/controls'
+import { usePointAnswerForm } from './usePointAnswerForm'
+
+/** A point whose thread already carries the user's answer. `waiting` means the last
+ *  reply is the user's (the agent owes a response) — which is exactly what a submitted
+ *  answer leaves behind; `resolved` is the explicit terminal. This is the DURABLE
+ *  signal, so an answered column survives a reload. */
+function durablyAnswered(s: SlateSurface): boolean {
+  return s.status === 'waiting' || s.status === 'resolved'
+}
+
+/** One question. Owns its OWN answer form — nothing here is shared with a sibling
+ *  column, which is the whole point: submitting this column can't touch that one. */
+function WorkbenchColumn({ runId, surface, onAnswered }: {
+  runId: string
+  surface: SlateSurface
+  /** Told once, when this column's optimistic answered-lock flips on, so the band can
+   *  move its progress count. Deliberately a one-way notification: hoisting the form
+   *  itself would re-render every sibling on every keystroke, which is the coupling
+   *  this layout exists to avoid. */
+  onAnswered: (id: string) => void
+}) {
+  const answer = usePointAnswerForm(runId, surface.id)
+  // A body with no Choice/TextInput/Submit is prose: render it static (no form
+  // provider) so nothing is ever half-wired into an un-submittable control.
+  const interactive = isAnswerable(surface.body)
+
+  useEffect(() => {
+    if (answer.answered) onAnswered(surface.id)
+  }, [answer.answered, surface.id, onAnswered])
+
+  // VISUAL answered posture only. The control LOCK stays driven by `answer.form.answered`
+  // (the local optimistic flag) — second-guessing the reconciled status mid-flight is
+  // the race the row model deliberately avoids, and a thread reply that isn't an answer
+  // shouldn't take the controls away.
+  const answered = answer.answered || durablyAnswered(surface)
+
+  return (
+    <div
+      data-testid={`workbench-column-${surface.id}`}
+      data-answered={answered ? 'true' : undefined}
+      // The same hairline card shell every Slate row wears (P3: sharp radius, hairline
+      // border, one lightness step) — an answered column swaps the hairline for the
+      // resolved hue rather than dimming, so it reads as DONE, not as disabled.
+      className={`w-[240px] shrink-0 rounded border bg-surface-hover p-2.5 [overflow-wrap:anywhere] ${
+        answered ? 'border-hue-resolved/30' : 'border-hairline'
+      }`}
+    >
+      {/* The question itself. Display face for a surface headline; it is the only thing
+          distinguishing one column from the next, so it wraps rather than truncating. */}
+      <div className="font-display text-[13px] font-semibold leading-snug text-ink-high">
+        {surface.headline ?? '(untitled question)'}
+      </div>
+      {surface.body && (
+        <div className="mt-2 text-[13px] text-ink-mid">
+          <A2uiRenderer content={surface.body} form={interactive ? answer.form : undefined} />
+        </div>
+      )}
+      {/* A prose-only column has nothing to submit — say so quietly, in the read-only
+          register (55%-weight control ink), rather than leaving the reader hunting for
+          a control that was never authored. */}
+      {!interactive && (
+        <div
+          data-testid={`workbench-readonly-${surface.id}`}
+          className="mt-2 font-mono text-[9px] uppercase tracking-[0.1em] text-ink-ctrl"
+        >
+          read-only
+        </div>
+      )}
+      {answer.error && (
+        <div data-testid={`workbench-error-${surface.id}`} className="mt-1 text-[11px] text-hue-error">
+          {answer.error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface Props {
+  runId: string
+  /** The file-owned set id these points share. Also the band's test id suffix. */
+  group: string
+  /** The points in this set, already ordered by the caller. */
+  points: SlateSurface[]
+}
+
+/** A grouped question set, rendered as a horizontal band of independent columns. */
+export function WorkbenchSurface({ runId, group, points }: Props) {
+  // Which columns have optimistically locked. Held here ONLY to move the progress
+  // count; the answer state itself still lives in each column's own hook.
+  const [optimistic, setOptimistic] = useState<ReadonlySet<string>>(() => new Set())
+  const markAnswered = useCallback((id: string) => {
+    setOptimistic((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
+  }, [])
+
+  const answeredCount = useMemo(
+    () => points.filter((s) => durablyAnswered(s) || optimistic.has(s.id)).length,
+    [points, optimistic],
+  )
+
+  if (points.length === 0) return null
+
+  return (
+    <div data-testid={`workbench-${group}`} data-group={group} className="space-y-1.5">
+      {/* Band label: mono caps meta, with the progress count on the right. */}
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-low">
+          Questions · {points.length}
+        </span>
+        <span
+          data-testid={`workbench-progress-${group}`}
+          className="shrink-0 font-mono text-[10px] text-ink-ctrl"
+        >
+          {answeredCount} of {points.length} answered
+        </span>
+      </div>
+      {/* The scroller. `data-scrollable` makes the canvas wheel handler yield the wheel
+          to this band; its OWN overflow-x-auto keeps the horizontal scroll off the panel
+          body (which is overflow-x-hidden, so a scrollbar there would be unreachable). */}
+      <div
+        data-scrollable
+        data-testid={`workbench-scroller-${group}`}
+        className="flex flex-row items-start gap-2 overflow-x-auto scrollbar-thin pb-1"
+      >
+        {points.map((surface) => (
+          <WorkbenchColumn
+            key={surface.id}
+            runId={runId}
+            surface={surface}
+            onAnswered={markAnswered}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** The set id a surface belongs to, or '' for an ungrouped point. */
+function groupKey(s: SlateSurface): string {
+  return typeof s.group === 'string' ? s.group.trim() : ''
+}
+
+/**
+ * Split points into workbench SETS and ordinary rows.
+ *
+ * A set needs at least TWO members: a one-column band is just a row with extra chrome,
+ * and the vertical row carries strictly more (thread, soft resolve, reorder, hide), so
+ * a lone grouped point falls back to a row — IN ITS ORIGINAL POSITION, which is why the
+ * counts are taken in a first pass rather than appending stragglers at the end.
+ *
+ * Sets are ordered by the earliest `createdAt` among their members, so a workbench holds
+ * the position its first question would have held; a set can't jump the queue because a
+ * later question was amended. Members keep the caller's order (the Slate's
+ * `order`/`createdAt` sort), so S6's reorder still decides what sits leftmost.
+ *
+ * Exported so tests — and any future caller that needs to know which rows the workbench
+ * swallowed — use the SAME rule the render does instead of re-deriving it.
+ */
+export function partitionWorkbenches(points: SlateSurface[]): {
+  groups: Array<{ group: string; points: SlateSurface[] }>
+  ungrouped: SlateSurface[]
+} {
+  const counts = new Map<string, number>()
+  for (const s of points) {
+    const g = groupKey(s)
+    if (g) counts.set(g, (counts.get(g) ?? 0) + 1)
+  }
+
+  const byGroup = new Map<string, SlateSurface[]>()
+  const ungrouped: SlateSurface[] = []
+  for (const s of points) {
+    const g = groupKey(s)
+    if (!g || (counts.get(g) ?? 0) < 2) {
+      ungrouped.push(s)
+      continue
+    }
+    const members = byGroup.get(g)
+    if (members) members.push(s)
+    else byGroup.set(g, [s])
+  }
+
+  const groups = [...byGroup].map(([group, members]) => ({ group, points: members }))
+  const earliest = (g: { points: SlateSurface[] }) => Math.min(...g.points.map((s) => s.createdAt))
+  groups.sort((a, b) => earliest(a) - earliest(b) || (a.group < b.group ? -1 : 1))
+  return { groups, ungrouped }
+}

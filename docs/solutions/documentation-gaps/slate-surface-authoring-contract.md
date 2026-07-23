@@ -55,6 +55,7 @@ Each entry is validated by `toPointInput` (`slate-watcher.ts`). Only `headline` 
 | `anchor` | `{ kind, ref? }` | No | `kind` must be `'none' \| 'decision' \| 'surface'`; any other value drops the entry. Drives the `kind` projection (below). `ref` is an optional string. |
 | `content` | A2UI content object | No | Validated by `parseA2uiContent`; **invalid content drops the entry** (not just the body). |
 | `refresh` | string (non-empty) | No | The prompt the agent re-runs to regenerate this surface. Carried verbatim onto `run.slate`. A non-string/empty recipe is silently dropped (the surface still refreshes via a bare nudge). |
+| `group` | string (non-empty) | No | **Workbench set id.** Give two or more question entries the *same* `group` and they render side-by-side, one per column, instead of as stacked rows (below). A non-string/empty value is silently dropped (the point renders as an ordinary row) — it never drops the entry. |
 | `createdAt` | finite number (epoch millis) | No | Sort/ordering hint. |
 
 ### The A2UI content shape
@@ -192,6 +193,43 @@ for (const e of entries) {
   }
 }
 ```
+
+### Asking a SERIES of questions: the `group` workbench
+
+When you need several answers at once, do **not** pack them into one surface. A surface has
+exactly **one** answer form: one free-text draft and one `Submit` shared by everything in its
+body (`NoticeFormState` is surface-scoped). Two `TextInput`s in one entry write to the same
+draft, and two `Submit`s both send the same single answer.
+
+Write **one file entry per question** and give every entry in the set the same `group`
+string. Two or more points sharing a `group` render as a **workbench**: a horizontal band
+inside the open-points list, one question per column, each with its own controls, its own
+`POST …/points/<id>/answer`, its own "✓ Answered" lock, and its own thread. The band shows an
+"M of N answered" count. A *lone* grouped point falls back to an ordinary row — a one-column
+band is just a row with less affordance.
+
+```json
+[
+  { "id": "q-token-scope", "headline": "Refresh token, or access only?", "author": "agent",
+    "group": "auth-decisions",
+    "content": { "root": "root", "components": [
+      { "id": "root", "component": "Column", "children": ["c", "s"] },
+      { "id": "c", "component": "Choice", "mode": "single",
+        "options": [ { "id": "both", "label": "Both" }, { "id": "access", "label": "Access only" } ] },
+      { "id": "s", "component": "Submit", "label": "Answer" } ] } },
+  { "id": "q-migration-owner", "headline": "Who owns the migration?", "author": "agent",
+    "group": "auth-decisions",
+    "content": { "root": "root", "components": [
+      { "id": "root", "component": "Column", "children": ["t", "s"] },
+      { "id": "t", "component": "TextInput", "label": "Name" },
+      { "id": "s", "component": "Submit", "label": "Answer" } ] } }
+]
+```
+
+The `group` is presentational and fully additive: omitting it is today's behavior exactly,
+and dropping it from a later write dissolves the workbench back into rows **without touching
+any thread or status** (it is a file-owned field, merged by id like `headline`/`content`).
+The agent receives one delivered prompt per answered question, not one combined blob.
 
 ## Keeping a surface fresh (a reply is not an update)
 

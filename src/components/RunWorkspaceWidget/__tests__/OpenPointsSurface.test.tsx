@@ -274,4 +274,59 @@ describe('OpenPointsSurface (U6)', () => {
     fireEvent.click(screen.getByTestId('unhide-surface-p1'))
     expect(onUnhide).toHaveBeenCalledWith('p1')
   })
+
+  // ── S4: the multi-question workbench ────────────────────────────────────
+  // A grouped set is pulled OUT of the vertical list and into a horizontal band.
+  // The trap this guards: a grouped point rendering in BOTH places would give the
+  // user two live answer affordances for the same question.
+  it('pulls a grouped set into a workbench and out of the row list', () => {
+    render(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[
+          point('r1'),
+          point('g1', { group: 'launch-qs' }),
+          point('g2', { group: 'launch-qs' }),
+        ]}
+      />,
+    )
+
+    expect(screen.getByTestId('workbench-launch-qs')).toBeTruthy()
+    expect(screen.getByTestId('workbench-column-g1')).toBeTruthy()
+    expect(screen.getByTestId('workbench-column-g2')).toBeTruthy()
+    // Grouped points are NOT also rows; the ungrouped one still is.
+    expect(screen.queryByTestId('point-g1')).toBeNull()
+    expect(screen.queryByTestId('point-g2')).toBeNull()
+    expect(screen.getByTestId('point-r1')).toBeTruthy()
+  })
+
+  it('renders no workbench when nothing is grouped (backward compatible)', () => {
+    render(<OpenPointsSurface runId="run-1" points={[point('p1'), point('p2')]} />)
+    expect(document.querySelector('[data-testid^="workbench-"]')).toBeNull()
+    expect(screen.getByTestId('point-p1')).toBeTruthy()
+    expect(screen.getByTestId('point-p2')).toBeTruthy()
+  })
+
+  // S6's reorder chevrons permute the ROWS. A chevron whose index math counted a
+  // workbenched point would step "up" past something invisible and look like a dead
+  // click, so the reorder payload must name only the rows.
+  it('reorder chevrons ignore workbenched points', async () => {
+    render(
+      <OpenPointsSurface
+        runId="run-1"
+        points={[
+          point('r1'),
+          point('g1', { group: 'set' }),
+          point('g2', { group: 'set' }),
+          point('r2'),
+        ]}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('reorder-down-r1'))
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalled())
+    const call = apiFetch.mock.calls.find(([url]) => String(url).endsWith('/points/order'))!
+    expect(JSON.parse(String((call[1] as RequestInit).body))).toEqual({ order: ['r2', 'r1'] })
+  })
 })

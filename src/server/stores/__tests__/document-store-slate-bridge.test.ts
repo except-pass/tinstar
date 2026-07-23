@@ -70,6 +70,41 @@ describe('DocumentStore — Slate points bridge to run.slate', () => {
     store.applyRunSlateProjection(run.id, []) // file emptied → retract
     expect(store.getRun(run.id)?.slate).toBeUndefined()
   })
+
+  // S4 — the workbench set id must survive the bridge. This is the leg that fails
+  // SILENTLY: without the `group` spread in projectRunToSlate the store holds the
+  // field, the server tests all pass, and the client just never sees a workbench.
+  it('carries a point\'s `group` onto run.slate (workbench set id, S4)', () => {
+    const store = new DocumentStore()
+    const run = makeRun()
+    store.upsertRun(run.id, run)
+
+    store.applyRunSlateProjection(run.id, [
+      { id: 'q1', headline: 'Which rollback path?', group: 'launch-qs' },
+      { id: 'q2', headline: 'Who owns the migration?', group: 'launch-qs' },
+      { id: 'q3', headline: 'An ordinary point' },
+    ])
+
+    const slate = store.getRun(run.id)!.slate!
+    expect(slate.find(s => s.id === 'q1')!.group).toBe('launch-qs')
+    expect(slate.find(s => s.id === 'q2')!.group).toBe('launch-qs')
+    expect(slate.find(s => s.id === 'q3')!.group).toBeUndefined()
+    // Grouping is presentational only — the kind is still an ordinary open-point,
+    // so nothing about dispatch/reorder/pinning changes.
+    expect(slate.every(s => s.kind === 'open-point')).toBe(true)
+  })
+
+  it('a grouped point still sorts by `order`, so the objective pin survives grouping', () => {
+    const store = new DocumentStore()
+    const run = makeRun()
+    store.upsertRun(run.id, run)
+    store.applyRunSlateProjection(run.id, [{ id: 'q1', headline: 'a', group: 'g' }], 100)
+    store.addUserSlatePoint(run.id, { id: OBJECTIVE_POINT_ID, author: 'user', headline: 'the goal' })
+
+    const slate = store.getRun(run.id)!.slate!
+    expect(Math.min(...slate.map(s => s.order!))).toBe(OBJECTIVE_ORDER)
+    expect(slate.find(s => s.id === 'q1')!.group).toBe('g')
+  })
 })
 
 // The Objective (S2) rides this same bridge — it is a reserved USER point, projected

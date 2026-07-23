@@ -49,6 +49,7 @@ JSON array of them. Each entry is a point:
 | `content` | no | file | the surface body as an A2UI component tree (`{ root, components }`) |
 | `author` | no | file | `agent` (default) \| `user` \| `process` |
 | `anchor` | no | file | `{ kind: "none" \| "decision" \| "surface", ref? }` |
+| `group` | no | file | workbench set id — give the **same** string to a set of related questions and they render side-by-side, one per column (see [The workbench](#the-workbench-asking-a-series-of-questions)) |
 | `createdAt` | no | file | epoch ms; the server stamps one on first projection if omitted |
 
 Store-owned fields — `status`, `replies` (the thread), and the lifecycle timestamps —
@@ -128,6 +129,39 @@ under the user is rejected rather than persisted.
 Every injected prompt carries a guardrail line: an injected comment is a **note, not a
 command to drop in-flight work** — the agent finishes or checkpoints its current action
 first, then addresses the note.
+
+## The workbench: asking a series of questions
+
+When an agent needs several answers at once, it can lay the questions out **side by
+side** instead of stacking them. Write each question as its own point — its own `id`, its
+own `content` body of `Choice`/`TextInput`/`Submit` — and give every point in the set the
+**same** `group` string. Two or more points sharing a `group` render as a *workbench*: a
+horizontal band inside the open-points list, one question per column, with an
+"M of N answered" count. A lone grouped point stays an ordinary row (a one-column band
+would just be a row with extra chrome).
+
+```json
+[
+  { "id": "q-token-scope", "headline": "Refresh token, or access only?", "group": "auth-decisions",
+    "content": { "root": "root", "components": [
+      { "id": "root", "component": "Column", "children": ["c", "s"] },
+      { "id": "c", "component": "Choice", "mode": "single",
+        "options": [ { "id": "both", "label": "Both" }, { "id": "access", "label": "Access only" } ] },
+      { "id": "s", "component": "Submit", "label": "Answer" } ] } },
+  { "id": "q-migration-owner", "headline": "Who owns the migration?", "group": "auth-decisions",
+    "content": { "root": "root", "components": [
+      { "id": "root", "component": "Column", "children": ["t", "s"] },
+      { "id": "t", "component": "TextInput", "label": "Name" },
+      { "id": "s", "component": "Submit", "label": "Answer" } ] } }
+]
+```
+
+Each column is a real, independent point, which is what makes the workbench work:
+a column submits through **its own** `POST …/points/<id>/answer`, gets its own
+"✓ Answered" lock, and keeps its own thread. Answering one column never disturbs the
+others, and the agent receives one prompt per answered question rather than one
+combined blob. Dropping `group` from the file on a later write dissolves the workbench
+back into ordinary rows without touching any thread.
 
 ## The Objective
 

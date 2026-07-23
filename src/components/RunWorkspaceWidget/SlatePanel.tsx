@@ -30,6 +30,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import type { SlateSurface } from '../../types'
 import { A2uiRenderer, A2uiErrorBoundary } from '../../a2ui/A2uiRenderer'
 import { OpenPointsSurface, orderOpenPoints } from './OpenPointsSurface'
+import { partitionWorkbenches } from './WorkbenchSurface'
 import { DiagramSurface } from './DiagramSurface'
 import { ObjectiveSurface } from './ObjectiveSurface'
 import {
@@ -275,6 +276,10 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
    * most useful) followed by each visible card, interleaved exactly as rendered.
    * `orderOpenPoints` is imported from OpenPointsSurface rather than re-derived, so
    * this can't drift out of step with what that component actually renders.
+   *
+   * S4: a point swallowed by a workbench is NOT a row, so `partitionWorkbenches`
+   * drops it here too. Traversing into a column would put the focus ring — and the
+   * x/r that follow it — on something that isn't on screen as a row.
    */
   const focusRows = useMemo(() => {
     const rows: SlateSurface[] = []
@@ -282,7 +287,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
     matched.forEach((s, i) => {
       if (s.kind === 'open-point') {
         if (i !== firstIdx) return
-        rows.push(...orderOpenPoints(openPoints, hidden, showHidden))
+        rows.push(...partitionWorkbenches(orderOpenPoints(openPoints, hidden, showHidden)).ungrouped)
         return
       }
       if (hidden.has(s.id) && !showHidden) return

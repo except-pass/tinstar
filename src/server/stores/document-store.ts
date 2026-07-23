@@ -1003,6 +1003,11 @@ export class DocumentStore {
         order: isObjective ? OBJECTIVE_ORDER : p.order ?? p.createdAt,
         ...(p.content ? { body: p.content } : {}),
         ...(p.refresh ? { refresh: p.refresh } : {}),
+        // S4 workbench set id — LOAD-BEARING: drop this spread and `group` never
+        // reaches the client, so a grouped set silently renders as ordinary rows.
+        // (setRunSlate's JSON.stringify compare picks the field up once it is IN
+        // the projected object, so no equality change is needed — only this line.)
+        ...(p.group ? { group: p.group } : {}),
         headline: p.headline,
         status: p.status,
         ...(p.replies ? { thread: p.replies } : {}),
