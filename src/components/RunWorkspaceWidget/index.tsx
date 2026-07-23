@@ -25,6 +25,20 @@ const SLATE_MIN_WIDTH = 260
 const SLATE_MAX_WIDTH = 900
 const SLATE_DEFAULT_WIDTH = 320
 
+/** The six registry actions the Slate answers to (S6 U1), mapped to the panel's
+ *  imperative handle. A table rather than switch cases so the "is this a Slate
+ *  action?" test — which decides whether the widget DECLINES the keystroke when the
+ *  Slate zone isn't focused — is one lookup that can't drift from the list. `?` is
+ *  absent on purpose: it never reaches the registry (see slateHotkeys.ts). */
+const SLATE_ACTIONS: Record<string, ((h: SlatePanelHandle) => void) | undefined> = {
+  'slate-focus-next': h => h.focusNext(),
+  'slate-focus-prev': h => h.focusPrev(),
+  'slate-hide-focused': h => h.hideFocused(),
+  'slate-refresh-focused': h => h.refreshFocused(),
+  'slate-compose': h => h.openComposer(),
+  'slate-search': h => h.focusSearch(),
+}
+
 interface Props {
   run: RunData
   className?: string
@@ -175,6 +189,22 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
       }
       // All other widget hotkeys suspended when terminal has focus
       if (terminalFocused) return
+      // The Slate's keys (S6 U1). Each is gated on the Slate zone holding focus, so
+      // j/k/x/r/c// stay inert while the file list or the session pane is focused.
+      // Returning FALSE when the gate is shut is what keeps them inert rather than
+      // merely silent: the router leaves the keystroke alone and skips the sidebar
+      // confirmation flash, instead of swallowing the key and flashing a
+      // confirmation for something that did nothing. (On a run card whose Slate is
+      // never opened, the Slate zone isn't even in ZONES, so this is permanent.)
+      // The router already blocks all of them inside an editable element, so typing
+      // in the composer / search / add-a-point input is safe. `?` never reaches here
+      // — it's the capture-shim exception inside SlatePanel.
+      const slate = SLATE_ACTIONS[action]
+      if (slate) {
+        if (focusZone !== 'slate' || !slatePanelRef.current) return false
+        slate(slatePanelRef.current)
+        return true
+      }
       switch (action) {
         case 'focus-next':      onFocusNext();                                    break
         case 'focus-prev':      onFocusPrev();                                    break
@@ -185,18 +215,8 @@ export function RunWorkspaceWidget({ run, className = '', compact = false, zoom 
         case 'activate':        /* no-op for now */                               break
         case 'toggle-prompt':   setPromptComposerExpanded(e => !e);              break
         case 'fit-viewport':    fitWidgetToViewport(`run-${run.id}`);            break
-        // The Slate's keys (S6 U1). Each is gated on the Slate zone holding focus,
-        // so j/k/x/r/c// stay inert while the file list or the session pane is
-        // focused. The router already blocks all of them inside an editable element,
-        // so typing in the composer / search / add-a-point input is safe. `?` never
-        // reaches here — it's the capture-shim exception inside SlatePanel.
-        case 'slate-focus-next':      if (focusZone === 'slate') slatePanelRef.current?.focusNext();      break
-        case 'slate-focus-prev':      if (focusZone === 'slate') slatePanelRef.current?.focusPrev();      break
-        case 'slate-hide-focused':    if (focusZone === 'slate') slatePanelRef.current?.hideFocused();    break
-        case 'slate-refresh-focused': if (focusZone === 'slate') slatePanelRef.current?.refreshFocused(); break
-        case 'slate-compose':         if (focusZone === 'slate') slatePanelRef.current?.openComposer();   break
-        case 'slate-search':          if (focusZone === 'slate') slatePanelRef.current?.focusSearch();    break
       }
+      return true
     })
     return () => deregisterActionHandler(run.id)
   })

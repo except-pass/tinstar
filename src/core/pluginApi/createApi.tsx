@@ -133,7 +133,13 @@ export function createPluginApi(record: PluginRecord): TinstarPluginAPI {
 
   const hotkeys = {
     onAction(widgetId: string, handler: (action: string) => void): Disposable {
-      registerActionHandler(widgetId, handler)
+      // Wrapped, not passed through: the internal handler protocol treats a literal
+      // `false` return as "not handled" (the router then leaves the keystroke alone).
+      // The PUBLIC plugin signature is `=> void`, and TypeScript happily assigns a
+      // boolean-returning function to it — so a plugin written as
+      // `onAction(id, a => a === 'x' && doThing())` would start silently declining
+      // its own keys. Swallowing the return keeps the published contract exact.
+      registerActionHandler(widgetId, (action) => { handler(action) })
       const d: Disposable = { dispose: () => deregisterActionHandler(widgetId) }
       record.disposables.push(d)
       return d

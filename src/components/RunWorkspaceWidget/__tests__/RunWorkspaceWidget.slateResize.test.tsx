@@ -17,7 +17,12 @@ vi.mock('../FileTreePanel', () => ({ FileTreePanel: () => null }))
 vi.mock('../RunSessionPanel', () => ({ RunSessionPanel: () => null }))
 vi.mock('../TelemetryPanel', () => ({ TelemetryPanel: () => null }))
 vi.mock('../HandsPanel', () => ({ HandsPanel: () => null }))
-vi.mock('../SlatePanel', () => ({ SlatePanel: () => null }))
+// forwardRef, not a bare function: the widget hands the panel an imperative ref
+// (S6 U1), and a plain function component logs a React warning when given one.
+vi.mock('../SlatePanel', async () => {
+  const { forwardRef } = await import('react')
+  return { SlatePanel: forwardRef(function MockSlatePanel() { return null }) }
+})
 
 import { RunWorkspaceWidget } from '../index'
 

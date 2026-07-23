@@ -39,6 +39,7 @@ import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
 import { useNow } from '../../hooks/useNow'
 import { SLATE_HOTKEYS, keyToSlateAction } from './slateHotkeys'
+import { surfaceHaystack } from './slateSearch'
 import { isEditable } from '../../hotkeys/isEditable'
 
 /** Column width (px) at/above which surfaces reflow into two columns (R2). Kept
@@ -186,9 +187,24 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
   const [hidden, setHidden] = useState<Set<string>>(() => getHiddenSlateSurfaces())
   // Minimized surfaces (S6 U3) — the same per-browser view-preference contract as
   // `hidden`, for a different state: collapsed to its title but still on the Slate.
-  const [minimized, setMinimized] = useState<Set<string>>(() => getMinimizedSlateSurfaces())
+  // Keyed by (runId, surfaceId) in storage — a surface id is only unique WITHIN a
+  // run, so an un-scoped set would collapse `decisions` on every run the moment it
+  // was minimized on one. The in-memory copy holds bare ids for this run.
+  const [minimized, setMinimized] = useState<Set<string>>(() => getMinimizedSlateSurfaces(runId))
   const [showHidden, setShowHidden] = useState(false)
   const [composerOpen, setComposerOpen] = useState(false)
+  // The inline composer holds a draft the ✕ would silently destroy (S6 U5).
+  const [composerDirty, setComposerDirty] = useState(false)
+
+  // A panel instance is normally pinned to one run, but re-seed if it is ever reused
+  // for another — otherwise it would show run A's minimized set on run B. Guarded by
+  // the seeded id so the mount pass doesn't burn a second render on an identical set.
+  const seededRunId = useRef(runId)
+  useEffect(() => {
+    if (seededRunId.current === runId) return
+    seededRunId.current = runId
+    setMinimized(getMinimizedSlateSurfaces(runId))
+  }, [runId])
 
   // Sorted once, above the early return, so the refresh hook (which must run
   // unconditionally) can watch the same list the render uses.
@@ -217,22 +233,22 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
   }, [])
 
   const minimize = useCallback((id: string) => {
-    addMinimizedSlateSurface(id)
+    addMinimizedSlateSurface(runId, id)
     setMinimized((prev) => {
       const next = new Set(prev)
       next.add(id)
       return next
     })
-  }, [])
+  }, [runId])
 
   const restore = useCallback((id: string) => {
-    removeMinimizedSlateSurface(id)
+    removeMinimizedSlateSurface(runId, id)
     setMinimized((prev) => {
       const next = new Set(prev)
       next.delete(id)
       return next
     })
-  }, [])
+  }, [runId])
 
   // ── Keyboard surface (S6 U1) ────────────────────────────────────────────
   // Search (`/`), the cheatsheet (`?`), and the focused row (j/k). "Focus" here is
@@ -246,14 +262,17 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
   const rootRef = useRef<HTMLDivElement>(null)
 
   const q = query.trim().toLowerCase()
-  /** The surfaces the body renders — everything, or the search hits. */
+  /** The surfaces the body renders — everything, or the search hits.
+   *
+   *  The haystack per surface includes its RENDERED body text, not just
+   *  headline/id/kind — an expanded card never shows its `headline`, so a haystack of
+   *  invisible fields would report "no match" about a surface the user is looking
+   *  straight at (see slateSearch.ts). Built inside this memo rather than alongside
+   *  `sorted`, so the walk costs nothing on the overwhelmingly common no-filter path
+   *  (it would otherwise re-run on every SSE run delta). */
   const matched = useMemo(() => {
     if (!q) return sorted
-    return sorted.filter((s) =>
-      (s.headline ?? '').toLowerCase().includes(q) ||
-      s.id.toLowerCase().includes(q) ||
-      s.kind.toLowerCase().includes(q),
-    )
+    return sorted.filter((s) => surfaceHaystack(s).includes(q))
   }, [sorted, q])
 
   const openPoints = useMemo(() => matched.filter((s) => s.kind === 'open-point'), [matched])
@@ -337,6 +356,32 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
     toggleCheatsheet,
   }), [moveFocus, hideFocused, refreshFocused, openComposer, focusSearch, toggleCheatsheet])
 
+  // Keep the focused row on screen. The body is a scroll container, so without this
+  // `j` past the last visible card moves the ring off-screen and the panel looks
+  // dead — and `x` would then hide a surface the user can't see.
+  useEffect(() => {
+    if (!focusedSurfaceId) return
+    const el = rootRef.current?.querySelector('[data-focused="true"]')
+    // jsdom has no layout, so scrollIntoView is not always defined there.
+    if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+      (el as HTMLElement).scrollIntoView({ block: 'nearest' })
+    }
+  }, [focusedSurfaceId])
+
+  // The cheatsheet belongs to the focused Slate. Leaving it up after focus moves
+  // away would strand an overlay whose `?` toggle has unmounted — and whose Esc
+  // handler (below) would go on swallowing Escape for the whole app.
+  useEffect(() => {
+    if (!focused) setCheatsheetOpen(false)
+  }, [focused])
+
+  // The composer popover is the non-empty path only; if the last surface goes away
+  // while it's open, clear the flag so it can't pop back up unrequested when the
+  // next surface arrives.
+  useEffect(() => {
+    if (sorted.length === 0) setComposerOpen(false)
+  }, [sorted.length])
+
   // The `?` shim — the ONE key that can't ride the binding registry. `useGlobalHotkeys`
   // claims `?` for the command palette on a bubble-phase window listener guarded only
   // by `isEditable`; it has no idea about focus zones. So we listen in the CAPTURE
@@ -357,17 +402,21 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
   }, [focused])
 
   // Esc dismisses the cheatsheet (capture, to beat anything focused underneath).
+  // Narrow on purpose: it only claims Escape while the overlay is up AND the Slate
+  // holds focus, and never while the caret is in a field — an Escape a text input
+  // owns (clearing the search, closing a popover) must still reach it.
   useEffect(() => {
-    if (!cheatsheetOpen) return
+    if (!cheatsheetOpen || !focused) return
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return
+      if (isEditable(document.activeElement)) return
       e.preventDefault()
       e.stopImmediatePropagation()
       setCheatsheetOpen(false)
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [cheatsheetOpen])
+  }, [cheatsheetOpen, focused])
 
   // Additive: no surfaces → render nothing (card layout unchanged) UNLESS the user
   // opened the Slate blank on purpose (`open`), in which case we render the header so
@@ -441,7 +490,11 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
             data-testid="slate-refresh-all"
             onClick={() => refreshAll(visibleSurfaces)}
             disabled={bulkRefreshing}
-            title="Refresh every surface — re-run each one’s author"
+            // While a filter is on, this fans out over the MATCHES only — say so,
+            // rather than promising "every surface" and quietly skipping the rest.
+            title={q
+              ? `Refresh the ${visibleSurfaces.length} matching surface${visibleSurfaces.length === 1 ? '' : 's'} — re-run each one’s author`
+              : 'Refresh every surface — re-run each one’s author'}
             className="text-ink-ctrl hover:text-ink-high disabled:opacity-70 leading-none"
           >
             <span className={bulkRefreshing ? 'inline-block animate-spin' : 'inline-block'}>⟳</span>
@@ -467,8 +520,11 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
             </button>
           )}
           <span className="text-2xs font-mono text-ink-low">{sorted.length}</span>
-          {/* Close only when nothing holds the column open (a blank, user-opened Slate). */}
-          {sorted.length === 0 && onClose && (
+          {/* Close only when nothing holds the column open (a blank, user-opened
+              Slate) AND the inline composer isn't holding a draft — collapsing the
+              column would destroy typed text with no way back to it. The ✕ returns
+              as soon as the draft is cleared or sent. */}
+          {sorted.length === 0 && !composerDirty && onClose && (
             <button
               data-testid="slate-close"
               onClick={onClose}
@@ -515,7 +571,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
               Nothing on the Slate yet — describe a surface, or{' '}
               <span className="text-ink-mid">✦ Explain</span> the session.
             </div>
-            <SlateComposer runId={runId} inline onClose={() => {}} />
+            <SlateComposer runId={runId} inline onClose={() => {}} onDraftChange={setComposerDirty} />
           </div>
         )}
         {/* A search that matches nothing says so, rather than looking like an empty
@@ -606,17 +662,18 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           const shellClass = [
             'relative rounded border min-w-0 transition-shadow',
             isMinimized ? 'px-[14px] py-2' : 'p-[14px]',
-            isRefreshing ? 'bg-surface-raised slate-surface-refreshing' : 'border-hairline bg-surface-raised',
+            isRefreshing ? 'border-primary/40 bg-surface-raised slate-surface-refreshing' : 'border-hairline bg-surface-raised',
             isFocused ? 'ring-1 ring-primary/70' : '',
             isHidden ? 'opacity-50' : '',
           ].join(' ')
 
           // Minimized (S6 U3): the card keeps its slot and its edges — only the body
-          // goes. The title row (mono label, per the design language) plus the
-          // freshness stamp stay, so a collapsed surface still says what it is and
-          // how fresh it is, and the + in the control cluster brings it back. A
-          // minimized surface that's refreshing still pulses, since the pulse lives
-          // on the shell.
+          // goes. The title row (the meta-label type ramp: mono 11 caps, deliberately
+          // NOT the surface headline ramp — a collapsed card is a label, not a
+          // heading) plus the freshness stamp stay, so a collapsed surface still says
+          // what it is and how fresh it is, and the + in the control cluster brings it
+          // back. A minimized surface that's refreshing still pulses, since the pulse
+          // lives on the shell.
           if (isMinimized) {
             return (
               <div
@@ -629,6 +686,19 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
               >
                 {controls}
                 <div className="flex items-center gap-2 pr-16 min-w-0">
+                  {/* The ⟳ stays live while collapsed, so its ONE failure mode has to
+                      be reachable here too — otherwise "sent to a session that isn't
+                      there" is swallowed entirely. Same testid as the expanded note,
+                      compacted to a marker with the message on hover. */}
+                  {isUnreachable && (
+                    <span
+                      data-testid={`refresh-unreachable-${surface.id}`}
+                      title="Sent — but that session isn’t reachable right now."
+                      className="shrink-0 text-[10px] leading-none text-ink-low"
+                    >
+                      ⚠
+                    </span>
+                  )}
                   <span
                     data-testid={`slate-minimized-title-${surface.id}`}
                     className="truncate font-mono text-[11px] uppercase tracking-[0.12em] text-ink-mid"

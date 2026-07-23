@@ -93,3 +93,70 @@ describe('SlateComposer (U4)', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 })
+
+// The `inline` flag (S6 U5) is what makes the composer safe to leave standing on a
+// blank Slate. Driving the component DIRECTLY is the only way to test it: rendered
+// inside SlatePanel its visibility isn't derived from any state and its onClose is a
+// no-op, so a panel-level test of "it didn't close" passes with the guards deleted.
+describe('SlateComposer inline mode (S6 U5)', () => {
+  beforeEach(() => {
+    apiFetch.mockReset()
+    apiFetch.mockImplementation(() => okDelivered(true))
+  })
+
+  it('suppresses Esc / outside-click self-close and the Cancel button', () => {
+    const onClose = vi.fn()
+    render(<SlateComposer runId="run-1" inline onClose={onClose} />)
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.pointerDown(document.body)
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('composer-cancel')).toBeNull()
+  })
+
+  it('…and the popover path still self-closes on both (the other direction)', () => {
+    const onClose = vi.fn()
+    const { unmount } = render(<SlateComposer runId="run-1" onClose={onClose} />)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    unmount()
+
+    const onClose2 = vi.fn()
+    render(<SlateComposer runId="run-1" onClose={onClose2} />)
+    fireEvent.pointerDown(document.body)
+    expect(onClose2).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('composer-cancel')).toBeTruthy()
+  })
+
+  it('acknowledges a successful inline submit and clears the form', async () => {
+    // The popover's confirmation IS the popover vanishing. Inline there is nothing to
+    // vanish, so without this a successful click looks like a dead button — and the
+    // obvious recovery (click it again) composes the same surface twice.
+    const onClose = vi.fn()
+    render(<SlateComposer runId="run-1" inline onClose={onClose} />)
+
+    fireEvent.change(screen.getByTestId('composer-freeform'), { target: { value: 'a burndown' } })
+    fireEvent.click(screen.getByTestId('composer-submit'))
+
+    await waitFor(() => expect(screen.getByTestId('composer-sent')).toBeTruthy())
+    expect(onClose).not.toHaveBeenCalled()
+    expect((screen.getByTestId('composer-freeform') as HTMLTextAreaElement).value).toBe('')
+    // Cleared form → the submit button is disabled, so a second click can't duplicate.
+    expect((screen.getByTestId('composer-submit') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('reports whether it is holding an unsent draft', async () => {
+    const onDraftChange = vi.fn()
+    render(<SlateComposer runId="run-1" inline onClose={vi.fn()} onDraftChange={onDraftChange} />)
+    expect(onDraftChange).toHaveBeenLastCalledWith(false)
+
+    fireEvent.change(screen.getByTestId('composer-freeform'), { target: { value: 'something' } })
+    expect(onDraftChange).toHaveBeenLastCalledWith(true)
+
+    // A recipe alone is still a draft worth protecting.
+    fireEvent.change(screen.getByTestId('composer-freeform'), { target: { value: '' } })
+    fireEvent.change(screen.getByTestId('composer-recipe'), { target: { value: 're-run it' } })
+    expect(onDraftChange).toHaveBeenLastCalledWith(true)
+  })
+})
