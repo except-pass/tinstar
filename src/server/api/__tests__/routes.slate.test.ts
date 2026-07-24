@@ -29,7 +29,7 @@ beforeEach(() => {
   dispatchSurfaceAuthor.mockReturnValue({ dispatched: false })
 })
 
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
@@ -40,6 +40,8 @@ import type { Point, Run } from '../../../domain/types'
 
 interface Harness {
   docStore: DocumentStore
+  /** The temp config root, so a test can plant a worktree the routes will read. */
+  root: string
   fetch(path: string, init?: RequestInit): Promise<Response>
   close(): Promise<void>
 }
@@ -79,6 +81,7 @@ function createTestServer(root: string): Harness {
   }))
   return {
     docStore,
+    root,
     async fetch(path, init) {
       await ready
       const headers = { 'Content-Type': 'application/json', ...(init?.headers as Record<string, string> ?? {}) }
@@ -973,4 +976,100 @@ describe('PUT/DELETE /api/runs/:id/slate/objective', () => {
     expect(patchRuns).toBeGreaterThan(-1)
     expect(objectiveRoute).toBeLessThan(patchRuns)
   })
+})
+
+// DELETE /api/runs/:id/slate — "clean the slate". Clears BOTH authoring channels
+// (the agent's files and the store's points), because clearing either alone does
+// not stick: the watcher re-projects files into the store on a poll.
+describe('DELETE /api/runs/:id/slate', () => {
+  const clean = (srv: Harness) => srv.fetch(`/api/runs/${RUN}/slate`, { method: 'DELETE' })
+
+  /** Give the run a session whose worktree really exists, with surface files in it. */
+  function seedWorktree(root: string, names: string[]): string {
+    const workdir = join(root, 'wt')
+    mkdirSync(join(workdir, '.tinstar', 'slate'), { recursive: true })
+    for (const n of names) writeFileSync(join(workdir, '.tinstar', 'slate', n), '{}')
+    getSession.mockReturnValue({ name: RUN, workspace: { path: workdir } })
+    return workdir
+  }
+
+  it('clears the store points and deletes the surface files', withServer(async srv => {
+    seedRun(srv.docStore)
+    const workdir = seedWorktree(srv.root, ['goal.json', 'steps.json'])
+    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'q1', headline: 'a' }, { id: 'q2', headline: 'b' }], 100)
+
+    const res = await clean(srv)
+    expect(res.status).toBe(200)
+    const body = await res.json() as { ok: boolean; data: { files: number; points: number } }
+    expect(body.data).toEqual({ files: 2, points: 2 })
+
+    expect(srv.docStore.getRun(RUN)!.slate ?? []).toEqual([])
+    expect(existsSync(join(workdir, '.tinstar', 'slate', 'goal.json'))).toBe(false)
+    // The DIRECTORY survives — the watcher's fs.watch is armed on it.
+    expect(existsSync(join(workdir, '.tinstar', 'slate'))).toBe(true)
+  }))
+
+  it('keeps the Objective standing', withServer(async srv => {
+    seedRun(srv.docStore)
+    seedWorktree(srv.root, ['goal.json'])
+    await srv.fetch(`/api/runs/${RUN}/slate/objective`, { method: 'PUT', body: JSON.stringify({ text: 'the goal' }) })
+    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'q1', headline: 'a' }], 100)
+
+    await clean(srv)
+
+    expect(srv.docStore.getSlatePoint(RUN, 'objective')!.headline).toBe('the goal')
+    expect(srv.docStore.getRun(RUN)!.slate!.map(s => s.id)).toEqual(['objective'])
+  }))
+
+  it('is idempotent — a second clean is a 200 with zero counts', withServer(async srv => {
+    seedRun(srv.docStore)
+    seedWorktree(srv.root, ['goal.json'])
+    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'q1', headline: 'a' }], 100)
+
+    await clean(srv)
+    const res = await clean(srv)
+    expect(res.status).toBe(200)
+    expect((await res.json() as { data: { files: number; points: number } }).data).toEqual({ files: 0, points: 0 })
+  }))
+
+  it('still clears the store when the run has no reachable worktree', withServer(async srv => {
+    // A run that never started, or whose worktree is gone: nothing to unlink, but
+    // its points must still go — otherwise the button is dead for that run.
+    seedRun(srv.docStore)
+    getSession.mockReturnValue(null)
+    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'q1', headline: 'a' }], 100)
+
+    const res = await clean(srv)
+    expect((await res.json() as { data: { files: number; points: number } }).data).toEqual({ files: 0, points: 1 })
+    expect(srv.docStore.getRun(RUN)!.slate ?? []).toEqual([])
+  }))
+
+  it('NEVER delivers a prompt — clearing is not an injection', withServer(async srv => {
+    seedRun(srv.docStore)
+    seedWorktree(srv.root, ['goal.json'])
+    srv.docStore.applyRunSlateProjection(RUN, [{ id: 'q1', headline: 'a' }], 100)
+
+    await clean(srv)
+
+    expect(sendPrompt).not.toHaveBeenCalled()
+    expect(dispatchSurfaceAuthor).not.toHaveBeenCalled()
+  }))
+
+  it('404s when the run does not exist', withServer(async srv => {
+    const res = await srv.fetch('/api/runs/nope/slate', { method: 'DELETE' })
+    expect(res.status).toBe(404)
+  }))
+
+  it('does not shadow the /slate/objective sub-route', withServer(async srv => {
+    // The clean regex is anchored (`\/slate$`). If it ever loses its anchor it
+    // would swallow every slate sub-route, and DELETE objective would report
+    // clean's envelope instead of its own.
+    seedRun(srv.docStore)
+    await srv.fetch(`/api/runs/${RUN}/slate/objective`, { method: 'PUT', body: JSON.stringify({ text: 'g' }) })
+
+    const res = await srv.fetch(`/api/runs/${RUN}/slate/objective`, { method: 'DELETE' })
+    const body = await res.json() as { data: Record<string, unknown> }
+    expect(body.data).toHaveProperty('cleared')
+    expect(body.data).not.toHaveProperty('files')
+  }))
 })
