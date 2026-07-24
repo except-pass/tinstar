@@ -61,6 +61,7 @@ import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
 import { slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText, slateObjectivePromptText } from '../../slate/slatePrompt'
 import { dispatchSurfaceAuthor } from '../sessions/surfaceAuthor'
+import { deleteSlateFiles } from '../sessions/slate-clean'
 import type { PointInput } from '../stores/slate'
 import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID } from '../../domain/types'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
@@ -3489,6 +3490,38 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return true }
     const cleared = ctx.docStore.deleteSlatePoint(runId, OBJECTIVE_POINT_ID)
     ok(res, { cleared })
+    return true
+  }
+
+  // DELETE /api/runs/:id/slate — "clean the slate": clear the run's whole Slate.
+  //
+  // Clears BOTH authoring channels, because clearing one alone doesn't stick:
+  //   · the agent's `.tinstar/slate/*.json` files, and
+  //   · every store point except the user's Objective (see `clearSlateForRun`).
+  //
+  // ORDER IS LOAD-BEARING — files first, store second. The watcher projects files
+  // INTO the store on a poll, so clearing the store while the files still exist
+  // means the very next poll re-projects every surface and the clear visibly
+  // undoes itself within a second. Files-first leaves the watcher reading an
+  // empty dir, which it treats as a genuine clear, so both channels agree.
+  //
+  // No delivery: clearing is not an injection (same posture as the objective and
+  // resolve/dismiss routes) — the agent is not told its Slate was cleaned.
+  //
+  // Idempotent: cleaning an empty Slate is a 200 with zero counts, and a run whose
+  // worktree is gone counts as already-clean rather than an error. The regex is
+  // ANCHORED (`\/slate$`) so it cannot shadow `/slate/objective` or any other
+  // slate sub-route.
+  if (method === 'DELETE' && /^\/api\/runs\/[^/]+\/slate$/.test(url.split('?')[0] ?? '')) {
+    const path = url.split('?')[0] ?? url
+    const runId = decodeURIComponent(path.slice('/api/runs/'.length, -'/slate'.length))
+    if (!ctx.docStore.getRun(runId)) { fail(res, 'NOT_FOUND', `Run ${runId} not found`); return true }
+    // A run with no live session (never started, or torn down) has no worktree to
+    // clean — its store points are still cleared below.
+    const workdir = getSession(ctx.sessionConfig?.dirs.sessions ?? '', runId)?.workspace?.path
+    const files = workdir ? await deleteSlateFiles(workdir) : 0
+    const points = ctx.docStore.clearSlateForRun(runId)
+    ok(res, { files, points })
     return true
   }
 
