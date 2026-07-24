@@ -949,6 +949,34 @@ export class DocumentStore {
     return deleted
   }
 
+  /** "Clean the Slate" — drop EVERY point of a run except the user's Objective,
+   *  then rebuild the projection once. Returns how many were dropped.
+   *
+   *  The Objective survives by design: it is the run's pinned goal, it already has
+   *  its own explicit clear (DELETE /slate/objective), and it sits outside the
+   *  surface machinery everywhere else (search, count, refresh-all, hide). Wiping
+   *  it as a side effect of clearing surface clutter would be an expensive
+   *  surprise.
+   *
+   *  This clears the STORE only. File-authored surfaces also need their files
+   *  deleted (see `deleteSlateFiles`) or the watcher's next poll re-projects them
+   *  straight back — the store is downstream of the files, not the source of
+   *  truth for them. The HTTP layer owns that ordering.
+   *
+   *  One projection at the END, not one per point: each `projectRunToSlate` emits
+   *  to the event bus, so per-point projection would fire N renders and make the
+   *  card visibly dissolve a row at a time instead of clearing at once. */
+  clearSlateForRun(runId: string): number {
+    const points = this.slate.getPointsForRun(runId)
+    let cleared = 0
+    for (const point of points) {
+      if (point.id === OBJECTIVE_POINT_ID) continue
+      if (this.slate.deletePoint(runId, point.id)) cleared++
+    }
+    if (cleared > 0) this.projectRunToSlate(runId)
+    return cleared
+  }
+
   addSlateReply(runId: string, pointId: string, reply: Reply): void {
     this.slate.addReply(runId, pointId, reply)
     this.projectRunToSlate(runId)

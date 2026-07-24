@@ -40,6 +40,7 @@ import {
 import { useSlateRefresh, RefreshButton } from './slateRefresh'
 import { SlateComposer } from './SlateComposer'
 import { SlateExplainButton } from './SlateExplainButton'
+import { SlateCleanButton } from './SlateCleanButton'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
 import { useNow } from '../../hooks/useNow'
@@ -261,6 +262,22 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
       return next
     })
   }, [runId])
+
+  /** Drop the per-browser VIEW state (hidden / minimized ids) for the surfaces a
+   *  clean just destroyed. Both are keyed by surface id in uiPrefs and survive a
+   *  re-projection by design — which is right for hide (a file rewrite must not
+   *  resurrect what you dismissed) but wrong after a clean: the ids now name
+   *  surfaces that no longer exist, so the header would keep offering a
+   *  "2 hidden · show" toggle that reveals nothing. Clears only ids the panel is
+   *  currently showing, so another run's prefs are untouched. */
+  const forgetSurfaceViewState = useCallback(() => {
+    for (const surface of gridSurfaces) {
+      removeHiddenSlateSurface(surface.id)
+      removeMinimizedSlateSurface(runId, surface.id)
+    }
+    setHidden(new Set())
+    setMinimized(new Set())
+  }, [gridSurfaces, runId])
 
   // ── Keyboard surface (S6 U1) ────────────────────────────────────────────
   // Search (`/`), the cheatsheet (`?`), and the focused row (j/k). "Focus" here is
@@ -519,6 +536,15 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           >
             <span className={bulkRefreshing ? 'inline-block animate-spin' : 'inline-block'}>⟳</span>
           </button>
+          {/* Wipe the whole Slate (files + points, Objective survives). Destructive,
+              so it confirms first — and it takes EVERY surface, not the filtered
+              subset refresh-all fans out over. */}
+          <SlateCleanButton
+            runId={runId}
+            surfaceCount={sorted.length}
+            hasObjective={objective !== undefined}
+            onCleaned={forgetSurfaceViewState}
+          />
           {/* One-click: ask the agent to (re-)explain the session as surfaces. A
               generative move — carries the cyan. */}
           <SlateExplainButton runId={runId} />

@@ -904,3 +904,118 @@ describe('SlatePanel — the pinned Objective (S2)', () => {
     expect(container.firstChild).toBeNull()
   })
 })
+
+// "Clean the Slate" (🧹) — the Slate-level wipe. Unlike the per-surface ✕ (a
+// per-browser view preference), this DELETES the agent's files and the user's
+// points, so it must confirm first and must never fire on a stray click.
+describe('SlatePanel — clean the slate', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    apiFetch.mockReset()
+    cleanup()
+  })
+
+  const okCleaned = () =>
+    Promise.resolve({ ok: true, json: async () => ({ ok: true, data: { files: 2, points: 2 } }) } as unknown as Response)
+
+  it('offers no broom when there is nothing to clean', () => {
+    // A destructive control that does nothing is a trap: you click, confirm, and
+    // learn nothing about why it was a no-op.
+    render(<SlatePanel runId="run-1" surfaces={[]} open />)
+    expect(screen.queryByTestId('slate-clean')).toBeNull()
+  })
+
+  it('does not delete on the first click — it asks first', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'alpha')]} />)
+    fireEvent.click(screen.getByTestId('slate-clean'))
+
+    expect(screen.getByTestId('slate-clean-confirm')).toBeTruthy()
+    expect(apiFetch).not.toHaveBeenCalled()
+  })
+
+  it('cancelling deletes nothing', () => {
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'alpha')]} />)
+    fireEvent.click(screen.getByTestId('slate-clean'))
+    fireEvent.click(screen.getByTestId('slate-clean-cancel'))
+
+    expect(screen.queryByTestId('slate-clean-confirm')).toBeNull()
+    expect(apiFetch).not.toHaveBeenCalled()
+  })
+
+  it('confirming DELETEs the run-scoped slate endpoint exactly once', async () => {
+    apiFetch.mockReturnValue(okCleaned())
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'alpha'), surface('b', 'beta')]} />)
+    fireEvent.click(screen.getByTestId('slate-clean'))
+    fireEvent.click(screen.getByTestId('slate-clean-go'))
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1))
+    const [url, init] = apiFetch.mock.calls[0]!
+    expect(url).toBe('/api/runs/run-1/slate')
+    expect((init as RequestInit).method).toBe('DELETE')
+    await waitFor(() => expect(screen.queryByTestId('slate-clean-confirm')).toBeNull())
+  })
+
+  it('counts EVERY surface, not the filtered subset', async () => {
+    // refresh-all deliberately fans out over matches only; clean must not — a
+    // destructive action can't silently depend on a transient view filter.
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'alpha'), surface('b', 'beta'), surface('c', 'gamma')]} />)
+    fireEvent.click(screen.getByTestId('slate-search-open'))
+    fireEvent.change(screen.getByTestId('slate-search'), { target: { value: 'alpha' } })
+
+    fireEvent.click(screen.getByTestId('slate-clean'))
+    expect(screen.getByTestId('slate-clean-confirm').textContent).toContain('3 surfaces')
+  })
+
+  it('swallows Escape so the canvas-level handler never runs (no silent deselect)', () => {
+    // InfiniteCanvas keeps a BUBBLE-phase window Escape that deselects everything.
+    // It registered first, so only a CAPTURE-phase listener can get in front of it.
+    const canvasEscape = vi.fn()
+    window.addEventListener('keydown', canvasEscape)
+    try {
+      render(<SlatePanel runId="run-1" surfaces={[surface('a', 'alpha')]} />)
+      fireEvent.click(screen.getByTestId('slate-clean'))
+      fireEvent.keyDown(window, { key: 'Escape' })
+
+      expect(screen.queryByTestId('slate-clean-confirm')).toBeNull()
+      expect(canvasEscape).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('keydown', canvasEscape)
+    }
+  })
+
+  it('portals the dialog to document.body, escaping the canvas transform', () => {
+    // A CSS transform on a canvas ancestor re-roots position:fixed, so an inline
+    // overlay lands displaced and scaled far from the cursor.
+    const { container } = render(<SlatePanel runId="run-1" surfaces={[surface('a', 'alpha')]} />)
+    fireEvent.click(screen.getByTestId('slate-clean'))
+
+    const dialog = screen.getByTestId('slate-clean-confirm')
+    expect(container.contains(dialog)).toBe(false)
+    expect(dialog.parentElement).toBe(document.body)
+  })
+
+  it('forgets hidden ids for surfaces the clean destroyed', async () => {
+    // Hiding survives a re-projection by design; after a clean those ids name
+    // surfaces that no longer exist, so the "N hidden · show" toggle would
+    // reveal nothing.
+    apiFetch.mockReturnValue(okCleaned())
+    addHiddenSlateSurface('a')
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'alpha'), surface('b', 'beta')]} />)
+    expect(getHiddenSlateSurfaces().has('a')).toBe(true)
+
+    fireEvent.click(screen.getByTestId('slate-clean'))
+    fireEvent.click(screen.getByTestId('slate-clean-go'))
+
+    await waitFor(() => expect(getHiddenSlateSurfaces().has('a')).toBe(false))
+  })
+
+  it('keeps the dialog open when the request fails, so the user can retry', async () => {
+    apiFetch.mockRejectedValue(new Error('offline'))
+    render(<SlatePanel runId="run-1" surfaces={[surface('a', 'alpha')]} />)
+    fireEvent.click(screen.getByTestId('slate-clean'))
+    fireEvent.click(screen.getByTestId('slate-clean-go'))
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalled())
+    expect(screen.getByTestId('slate-clean-confirm')).toBeTruthy()
+  })
+})

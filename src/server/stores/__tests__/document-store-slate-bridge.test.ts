@@ -186,3 +186,63 @@ describe('DocumentStore — the Objective projection (S2)', () => {
     expect(objectives[0]!.headline).toBe('v2')
   })
 })
+
+// "Clean the Slate" (the 🧹 button) wipes the run's points in one shot. The
+// Objective is the deliberate survivor: it is the run's pinned goal, it has its
+// own explicit clear, and it sits outside the surface machinery everywhere else.
+describe('DocumentStore — clearSlateForRun ("clean the slate")', () => {
+  it('drops every surface point but keeps the Objective', () => {
+    const store = new DocumentStore()
+    const run = makeRun()
+    store.upsertRun(run.id, run)
+    store.applyRunSlateProjection(run.id, [
+      { id: 'q1', headline: 'file surface a' },
+      { id: 'q2', headline: 'file surface b' },
+    ], 100)
+    store.addUserSlatePoint(run.id, { id: 'mine', author: 'user', headline: 'my own point' })
+    store.addUserSlatePoint(run.id, { id: OBJECTIVE_POINT_ID, author: 'user', headline: 'the goal' })
+
+    // Three go (two file-authored + one user-authored); the objective stays.
+    expect(store.clearSlateForRun(run.id)).toBe(3)
+
+    const slate = store.getRun(run.id)!.slate!
+    expect(slate.map(s => s.id)).toEqual([OBJECTIVE_POINT_ID])
+    expect(slate[0]!.kind).toBe('objective')
+  })
+
+  it('is idempotent — a second clean is a no-op that reports zero', () => {
+    const store = new DocumentStore()
+    const run = makeRun()
+    store.upsertRun(run.id, run)
+    store.applyRunSlateProjection(run.id, [{ id: 'q1', headline: 'a' }], 100)
+
+    expect(store.clearSlateForRun(run.id)).toBe(1)
+    expect(store.clearSlateForRun(run.id)).toBe(0)
+    expect(store.getRun(run.id)!.slate ?? []).toEqual([])
+  })
+
+  it('cleans a run that only ever had an Objective without touching it', () => {
+    const store = new DocumentStore()
+    const run = makeRun()
+    store.upsertRun(run.id, run)
+    store.addUserSlatePoint(run.id, { id: OBJECTIVE_POINT_ID, author: 'user', headline: 'the goal' })
+
+    expect(store.clearSlateForRun(run.id)).toBe(0)
+    expect(store.getRun(run.id)!.slate!.map(s => s.id)).toEqual([OBJECTIVE_POINT_ID])
+  })
+
+  it('clears only the named run, never a neighbour\'s Slate', () => {
+    const store = new DocumentStore()
+    const a = makeRun({ id: 'ra', sessionId: 'ra' })
+    const b = makeRun({ id: 'rb', sessionId: 'rb' })
+    store.upsertRun(a.id, a)
+    store.upsertRun(b.id, b)
+    store.applyRunSlateProjection(a.id, [{ id: 'q1', headline: 'a' }], 100)
+    store.applyRunSlateProjection(b.id, [{ id: 'q2', headline: 'b' }], 100)
+
+    store.clearSlateForRun(a.id)
+
+    expect(store.getRun(a.id)!.slate ?? []).toEqual([])
+    expect(store.getRun(b.id)!.slate!.map(s => s.id)).toEqual(['q2'])
+  })
+})
