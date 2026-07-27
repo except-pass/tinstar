@@ -6,6 +6,8 @@ topic: recursive-collaborative-surfaces
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 product_contract_source: ce-brainstorm
+reviewed: ce-doc-review 2026-07-27 (7 personas, 37 findings, 8 author rulings applied)
+product_contract_revised: 2026-07-27 (see Product Contract Preservation)
 execution: code
 ---
 
@@ -295,7 +297,16 @@ flowchart TB
 
 ### Product Contract Preservation
 
-Product Contract unchanged.
+Product Contract REVISED on 2026-07-27, by author ruling during a ce-doc-review pass. Recorded here because a plan that silently rewrites its own contract is worse than one that never had a contract.
+
+- **Key Decision replaced.** "User-owned view and destruction state" (agents suggest, users control minimize/hide/delete) became "Recoverable action over gated action" (agents act directly; safety comes from recoverability). Approval prompts made the Slate feel like paperwork, and fluidity is the product goal.
+- **R26 rewritten** from suggest-and-await-acceptance to act-directly, with the constraint narrowed to per-user view state, which agents still may not write.
+- **R31 added** for the recovery store that makes deletion reversible.
+- **R30 narrowed** to the escape-hatch guarantee alone; its measurement clause was dropped because the metric was self-inverting.
+- **AE10 rewritten** to assert escape-hatch behaviour rather than the existence of a report.
+- **Success criteria**: the direct-interaction ratio was replaced by an observable outcome.
+
+Everything else in the Product Contract stands as brainstormed.
 
 ### Implementation Scope
 
