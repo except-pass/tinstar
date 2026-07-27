@@ -120,6 +120,23 @@ function killAndWait(pid: number, timeoutMs = 3_000): void {
   try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
 }
 
+/**
+ * Read-only view of the singleton marker at `path`: the pid of the LIVE owner, or
+ * `null` when no marker exists or its owner is gone.
+ *
+ * Exists so a component that DEPENDS on single-writer (the Surface sidecar) can
+ * assert the guard is held without acquiring anything. Calling
+ * `acquireBackendSingleton` for that check would be wrong twice over: it creates
+ * the marker when none exists (turning "nobody guarded this" into a silent pass)
+ * and it STEALS a dead owner's marker (turning a boot-ordering bug into a silent
+ * pass). This is a read, not a second lock.
+ */
+export function backendSingletonOwner(path: string): number | null {
+  const dir = markerDir(path)
+  if (!isOwnerAlive(dir)) return null
+  return readOwnerPid(dir)
+}
+
 export interface SingletonResult {
   acquired: boolean
   action: SingletonAction
