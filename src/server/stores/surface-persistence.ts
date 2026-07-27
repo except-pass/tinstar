@@ -129,6 +129,33 @@ export interface SurfaceLoadOutcome {
   fault?: SurfaceStoreFault
 }
 
+/** What a read-only inspection of the sidecar files found. See
+ *  {@link inspectSurfaceSidecar}. */
+export interface SurfaceSidecarInspection {
+  paths: SurfaceSidecarPaths
+  outcome: SurfaceLoadOutcome
+  /** The line the server WOULD have logged for this outcome (recovery warning,
+   *  fault error). Present only when the outcome is not plainly healthy — an
+   *  inspection returns it instead of printing it, so the caller decides. */
+  log?: { level: 'warn' | 'error'; message: string }
+}
+
+/**
+ * Read the sidecar files and report what a boot would make of them — WITHOUT
+ * opening the store.
+ *
+ * `SurfaceSidecar.open` asserts the backend singleton and creates its directory.
+ * Both are wrong for a diagnostics tool, which has to be runnable while the
+ * server is up and must not leave a trace. This runs exactly the load half of
+ * `hydrate` — same files, same order, same verdict — and returns it. It creates
+ * nothing, writes nothing, and consults no lock.
+ */
+export function inspectSurfaceSidecar(dir: string = getConfigRoot()): SurfaceSidecarInspection {
+  const paths = surfaceSidecarPaths(dir)
+  const h = hydrateSidecarFiles(paths)
+  return { paths, outcome: h.outcome, ...(h.log ? { log: h.log } : {}) }
+}
+
 /** The steps of the atomic write, in execution order. Named as a type so tests can
  *  simulate a crash at an exact point instead of racing a timer. */
 export type SidecarWriteStep =
@@ -359,6 +386,79 @@ function readSnapshotFile(path: string): ReadResult {
   return { ok: true, records, idempotency, quarantined }
 }
 
+interface SidecarHydration {
+  outcome: SurfaceLoadOutcome
+  idempotency: IdempotencyEntry[]
+  primaryIsKnownGood: boolean
+  log?: { level: 'warn' | 'error'; message: string }
+}
+
+/**
+ * Decide the load outcome from the two snapshot files. PURE with respect to the
+ * store: it reads, it never writes, and it never logs — the caller does both.
+ * Shared by `SurfaceSidecar.hydrate` and {@link inspectSurfaceSidecar} so a
+ * diagnostics dump can never disagree with what the server would actually do.
+ */
+function hydrateSidecarFiles(paths: SurfaceSidecarPaths): SidecarHydration {
+  const primary = readSnapshotFile(paths.primary)
+  if (primary.ok) {
+    return {
+      outcome: { health: 'healthy', from: 'primary', records: primary.records, quarantined: primary.quarantined },
+      idempotency: primary.idempotency,
+      primaryIsKnownGood: true,
+    }
+  }
+
+  const backup = readSnapshotFile(paths.backup)
+  if (backup.ok) {
+    // Covers both "primary is corrupt" and "we crashed after rotation but before
+    // the rename" — in either case the backup is the newest readable snapshot.
+    return {
+      outcome: { health: 'recovered', from: 'backup', records: backup.records, quarantined: backup.quarantined },
+      idempotency: backup.idempotency,
+      primaryIsKnownGood: false,
+      log: {
+        level: 'warn',
+        message:
+          `[surfaces] primary snapshot unusable (${primary.problem.kind}: ${primary.problem.detail}); ` +
+          `recovered ${backup.records.length} record(s) from ${paths.backup}`,
+      },
+    }
+  }
+
+  if (primary.problem.kind === 'missing' && backup.problem.kind === 'missing') {
+    // First boot. Not a fault: there is no evidence to preserve, so persistence
+    // stays enabled and the first commit creates the file.
+    return {
+      outcome: { health: 'healthy', from: 'empty', records: [], quarantined: 0 },
+      idempotency: [],
+      primaryIsKnownGood: false,
+    }
+  }
+
+  // At least one file exists and neither can be read. Refuse everything and keep
+  // both files exactly as they are — a human (or a later repair tool) can still
+  // salvage them, and nothing this process does may make that harder.
+  return {
+    outcome: {
+      health: 'faulted-read-only',
+      from: 'none',
+      records: [],
+      quarantined: 0,
+      fault: { primary: primary.problem, backup: backup.problem },
+    },
+    idempotency: [],
+    primaryIsKnownGood: false,
+    log: {
+      level: 'error',
+      message:
+        `[surfaces] canonical Surface store is FAULTED (read-only): ` +
+        `primary ${primary.problem.kind} — ${primary.problem.detail}; ` +
+        `backup ${backup.problem.kind} — ${backup.problem.detail}`,
+    },
+  }
+}
+
 /**
  * The durable half of the canonical Surface store.
  *
@@ -486,49 +586,17 @@ export class SurfaceSidecar {
   // --- Internals ---
 
   private hydrate(): SurfaceLoadOutcome {
-    const primary = readSnapshotFile(this.paths.primary)
-    if (primary.ok) {
-      this.install(primary.records, primary.idempotency)
-      this.primaryIsKnownGood = true
-      return { health: 'healthy', from: 'primary', records: this.durableRecords(), quarantined: primary.quarantined }
+    const h = hydrateSidecarFiles(this.paths)
+    if (h.log) (h.log.level === 'warn' ? console.warn : console.error)(h.log.message)
+    // Only a snapshot that actually supplied records is installed. An `empty` or
+    // `faulted` load deliberately leaves `lastSerialized` null, so the no-op
+    // short-circuit cannot mistake "we have never written" for "the file already
+    // says this".
+    if (h.outcome.from === 'primary' || h.outcome.from === 'backup') {
+      this.install(h.outcome.records, h.idempotency)
     }
-
-    const backup = readSnapshotFile(this.paths.backup)
-    if (backup.ok) {
-      // Covers both "primary is corrupt" and "we crashed after rotation but before
-      // the rename" — in either case the backup is the newest readable snapshot.
-      this.install(backup.records, backup.idempotency)
-      this.primaryIsKnownGood = false
-      console.warn(
-        `[surfaces] primary snapshot unusable (${primary.problem.kind}: ${primary.problem.detail}); ` +
-        `recovered ${backup.records.length} record(s) from ${this.paths.backup}`,
-      )
-      return { health: 'recovered', from: 'backup', records: this.durableRecords(), quarantined: backup.quarantined }
-    }
-
-    if (primary.problem.kind === 'missing' && backup.problem.kind === 'missing') {
-      // First boot. Not a fault: there is no evidence to preserve, so persistence
-      // stays enabled and the first commit creates the file.
-      this.primaryIsKnownGood = false
-      return { health: 'healthy', from: 'empty', records: [], quarantined: 0 }
-    }
-
-    // At least one file exists and neither can be read. Refuse everything and keep
-    // both files exactly as they are — a human (or a later repair tool) can still
-    // salvage them, and nothing this process does may make that harder.
-    console.error(
-      `[surfaces] canonical Surface store is FAULTED (read-only): ` +
-      `primary ${primary.problem.kind} — ${primary.problem.detail}; ` +
-      `backup ${backup.problem.kind} — ${backup.problem.detail}`,
-    )
-    this.primaryIsKnownGood = false
-    return {
-      health: 'faulted-read-only',
-      from: 'none',
-      records: [],
-      quarantined: 0,
-      fault: { primary: primary.problem, backup: backup.problem },
-    }
+    this.primaryIsKnownGood = h.primaryIsKnownGood
+    return h.outcome
   }
 
   private install(records: Surface[], idempotency: IdempotencyEntry[]): void {
