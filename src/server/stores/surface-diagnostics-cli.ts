@@ -13,6 +13,7 @@
 // `npm run dev:backend` uses, keeps it honest — it exercises the real source, not
 // a stale build.
 
+import { isAbsolute, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   collectMigrationDiagnostics,
@@ -105,9 +106,15 @@ export function runDiagnosticsCli(
     return 0
   }
   const { docstorePath, sidecarDir, all, json, color } = parsed.options
+  // `npm run` executes its scripts from the package root, not from where the
+  // operator typed the command — so a relative `--docstore ./copy.json` would
+  // quietly resolve against the repo instead of their shell. npm records the real
+  // invocation directory in INIT_CWD; honour it, or a relative path is a trap.
+  const base = process.env.INIT_CWD || process.cwd()
+  const here = (p: string) => (isAbsolute(p) ? p : resolve(base, p))
   const diagnostics = collectMigrationDiagnostics({
-    ...(docstorePath ? { docstorePath } : {}),
-    ...(sidecarDir ? { sidecarDir } : {}),
+    ...(docstorePath ? { docstorePath: here(docstorePath) } : {}),
+    ...(sidecarDir ? { sidecarDir: here(sidecarDir) } : {}),
   })
   io.out(
     json

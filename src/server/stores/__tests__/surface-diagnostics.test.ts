@@ -446,6 +446,25 @@ describe('the command', () => {
     })
   })
 
+  it('resolves a relative path against where the operator typed it, not the repo root', () => {
+    withDir(ctx => {
+      ctx.write([run('CLD-a')], [point('CLD-a', 'objective')])
+      const lines: string[] = []
+      const io = { out: (s: string) => lines.push(s), err: (s: string) => lines.push(s) }
+      // `npm run` executes from the package root; INIT_CWD is where the shell was.
+      const prior = process.env.INIT_CWD
+      process.env.INIT_CWD = ctx.dir
+      try {
+        expect(runDiagnosticsCli(['--docstore', 'docstore.json', '--sidecar-dir', '.'], io)).toBe(0)
+      } finally {
+        if (prior === undefined) delete process.env.INIT_CWD
+        else process.env.INIT_CWD = prior
+      }
+      expect(lines[0]).toContain(join(ctx.dir, 'docstore.json'))
+      expect(lines[0]).not.toContain('could not be read')
+    })
+  })
+
   it('emits machine-readable JSON under --json, with the human form still the default', () => {
     withDir(ctx => {
       ctx.write([run('CLD-a')], [point('CLD-a', 'objective'), point('CLD-a', 'bad', { headline: '' })])
