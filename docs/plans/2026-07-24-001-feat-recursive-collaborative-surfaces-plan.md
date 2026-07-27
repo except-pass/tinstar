@@ -899,6 +899,16 @@ Parent child dispatches reuse one intent ID.
 
 **Delivery position:** This is the FIRST user-visible unit, shipped after U2 and before the recursive Canvas work. Its freshness state renders in the existing Run Workspace Slate panel, so automatic currentness is usable without any recursive UI. Add `src/components/RunWorkspaceWidget/SlatePanel.tsx` to this unit's Files for that surfacing.
 
+**Worker concurrency and port safety.** KTD11 launches a full managed session per autonomous refresh, and every managed session claims a ttyd port. `findPort` in `src/server/sessions/backends/tmux.ts` scans exactly 100 ports from 8681 and throws past that, and user-initiated sessions draw from the same pool — so an unbounded trigger fan-out can make the user's own `POST /api/sessions` fail. The plan's only stated bound is one job per Surface, which does not bound the fleet.
+
+Two composed guards, and they are chosen so that WIDENING THE PORT RANGE IS NEVER NEEDED:
+- A configurable global cap on concurrently-running background refresh workers. Jobs beyond the cap stay `queued` rather than launching; the cap is the fleet-wide bound the per-Surface rule does not provide.
+- A dedicated port window for autonomous refresh workers, disjoint from the window interactive sessions draw from. `findPort` takes an explicit window rather than an implicit 100 from a start offset, so the two pools cannot overlap.
+
+The cap defaults comfortably below the size of the refresh window. That is the invariant: cap < refresh-window size means refresh workers can never exhaust even their own slice, and they can never touch the interactive slice at all, so a user session is unstarvable by background work regardless of trigger volume. Widening the total range would only raise a ceiling this design never reaches.
+
+Add `src/server/sessions/backends/tmux.ts` to this unit's Files for the window split.
+
 **Requirements:** R13-R18; F4; AE3, AE7; KTD4, KTD6, KTD10-KTD11.
 
 **Dependencies:** U2, U3.
@@ -968,8 +978,13 @@ Startup reconstructs queued and running jobs, marks vanished workers failed or r
 - Trigger matching ignores arbitrary NATS payload strings and unsupported executable watcher declarations.
 - Identical freshness state writes emit no SSE or persistence storm.
 
+- A trigger fan-out exceeding the concurrent-worker cap leaves the excess jobs `queued` and launches no session for them.
+- With every refresh worker slot occupied, an interactive `POST /api/sessions` still acquires a port, because the two windows are disjoint.
+- Refresh workers never claim a port from the interactive window, and `findPort` rejects a window that overlaps it.
+
 **Verification:** Deterministic state-machine tests, session lifecycle integration tests, and restart tests prove honest currentness under failure and supersession.
 A user running only U1, U3, U2 and U6 sees surfaces stay current without prompting an agent, in today's Slate panel.
+A trigger fan-out larger than the cap queues rather than launching, and never consumes a port an interactive session could have used.
 
 ### U7. Presence, bounded activity, and the Attention Rail
 
