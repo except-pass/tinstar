@@ -50,7 +50,7 @@ The product needs one composable work-artifact model that can grow from a card i
 - **Stable Living Stack with a collapsible Attention Rail.** (session-settled: user-directed — chosen over an inbox-first workspace or automatic priority reordering: many surfaces should remain visible without losing spatial memory.) Urgency is projected through a rail rather than by moving the underlying surfaces.
 - **Ambient per-surface presence.** (session-settled: user-directed — chosen over typing lines, presence footers, and separate participant rails: one activity halo and compact avatar cluster remain consistent at every depth.) Presence reveals that work is happening without exposing detailed agent activity.
 - **Event-driven freshness ownership.** (session-settled: user-directed — chosen over coordinator discipline or timer-only refreshes: the Slate must stay current without the user nagging an agent.) A refresh recipe defines how to rebuild a surface; an owner and declarative triggers define who updates it and when.
-- **User-owned view and destruction state.** (session-settled: user-approved — chosen over automatic cleanup: silent minimization, hiding, or deletion would violate the do-no-harm fallback.) Agents may update content and suggest cleanup, but users control minimize, hide, and delete.
+- **Recoverable action over gated action.** (session-settled: user-directed — REPLACES an earlier approval-gated decision: approval prompts made the Slate feel like paperwork, and fluidity is the point.) Agents may create, group, reparent, and delete surfaces directly, with no proposal or approval step. Safety comes from recoverability rather than permission: every destructive operation is reversible from a lightweight recovery store. Per-user view state — minimize and hide — stays personal and is never written by an agent, because it is a preference rather than a destructive act.
 - **Gradual coexistence.** (session-settled: user-approved — chosen over a big-bang canvas replacement: the new experience must prove itself without disrupting today's workflow.) Existing widgets and Run Workspace remain usable while surfaces expand onto the canvas.
 - **Personal views over shared destruction.** Placement, filtering, minimize, and hide are per-user; grouping, content, threads, freshness, and provenance are shared; delete requires explicit shared authority.
 - **Bounded product identity.** Surfaces are agent-authored work outputs from a fixed catalog, not user-defined pages, databases, schemas, workflows, or board columns.
@@ -154,7 +154,8 @@ flowchart TB
 **Lifecycle and safety**
 
 - R25. Minimize keeps a surface compact, hide removes it from one user's view, and delete is a shared destructive action that requires authority, confirmation, and descendant disposition.
-- R26. Agents may place and group their own newly created, not-yet-human-arranged surfaces; otherwise agents and automation may suggest changes but must not alter per-user view state or shared grouping and deletion without explicit acceptance.
+- R31. Deleting a surface moves it and its descendants to a recovery store that retains identity, authored content, thread, provenance, and former home, and restores them to that home on request. Retention is bounded and stated; a purge past the bound is the only irreversible path, and the recovery store survives restart.
+- R26. Agents and automation may create, group, reparent, and delete any surface directly, without proposing or awaiting acceptance. They must not write another actor's per-user view state (minimize, hide, placement), which is personal preference rather than shared structure. Every agent-performed destructive operation must be recoverable under R31.
 
 **Canvas coexistence and migration**
 
@@ -310,17 +311,19 @@ Each phase remains usable if later phases are delayed.
 - **KTD1 — `Surface` becomes the canonical work-artifact entity.** (session-settled: user-directed — chosen over separate leaf and container entities: one recursive primitive prevents shared behavior from diverging.) A global, non-reusable Surface ID owns authored content, thread, provenance, owner, freshness, activity links, and revision. `Point` and `SlateSurface` become compatibility shapes rather than independent sources of truth.
 - **KTD2 — Home is store-owned and singular.** (session-settled: user-directed — chosen over linked multi-parent cards: one home keeps movement, deletion, prompting, and provenance understandable.) Each Surface home is Canvas or another Surface, exactly as required by R2. Children are derived from those home references, and all topology mutations reject cycles and cross-space parentage. Run Workspace membership is a compatibility presentation alias, never a third home.
 - **KTD3 — Run Workspace remains a projection over canonical Surfaces.** (session-settled: user-approved — chosen over a big-bang replacement: existing widgets and session workflows must remain safe during migration.) Migration creates one normal canonical root Surface per run, marks that root `compatibility-only`, and homes legacy children under it. Compatibility-only is migration presentation metadata, not a second container type; the root retains the standard Surface model but is excluded from ordinary Canvas projection. A separate alias maps a Surface to one or more run or workspace fallback buckets and controls whether each legacy presentation is visible. Promotion atomically reparents a child from its run-root Surface to Canvas without changing identity or removing its fallback alias. `Run.slate` delegates reads and writes through aliases, so Canvas and Run Workspace never receive separate writable copies. Closing a legacy presentation only hides its alias; disabling recursive mode overrides that visibility and exposes every alias as a flat compatibility list, including a workspace recovery bucket for Surfaces without a source run.
-- **KTD4 — Authored content has one explicit authority.** Each Surface persists a `source-binding` or `canonical-direct` content authority. An authoritative source binding may replace headline, A2UI content, author-declared recipe, and source evidence; direct API content edits must update that source through its adapter or explicitly transfer authority. Canonical-direct content ignores later file changes except to report divergence. Refresh results commit through the active authority adapter. Neither authority can replace home, thread, lifecycle, permissions, approvals, freshness history, or deletion. Authority transfer is explicit, revision-checked, and restart-stable.
-- **KTD5 — Persistence uses a bounded versioned Surface sidecar, not event sourcing.** Canonical Surfaces, compatibility aliases, topology revision, source observation generations, refresh jobs, proposals, and activity records live in one serialized `getConfigRoot()` sidecar that excludes large artifact payloads and unrelated document state. Legacy Slate data remains in the existing document snapshot as migration evidence but is no longer rewritten by canonical Surface mutations. Load returns `healthy`, `recovered`, or `faulted-read-only`; a faulted Surface store rejects mutations and persistence before session rehydration can overwrite evidence. One store-owned transaction queue validates a complete temporary sidecar, fsyncs it, rotates the last-known-good backup, renames it over the primary, and fsyncs the containing directory. A mutation log is deferred because atomic snapshots and revisions satisfy the current single-process deployment.
+- **KTD4 — Authored content has one explicit authority.** Each Surface persists a `source-binding` or `canonical-direct` content authority. An authoritative source binding may replace headline, A2UI content, author-declared recipe, and source evidence; direct API content edits must update that source through its adapter or explicitly transfer authority. Canonical-direct content ignores later file changes except to report divergence. Refresh results commit through the active authority adapter. Neither authority can replace home, thread, lifecycle, permissions, freshness history, or deletion. Authority transfer is explicit, revision-checked, and restart-stable.
+- **KTD5 — Persistence uses a bounded versioned Surface sidecar, not event sourcing.** Canonical Surfaces, compatibility aliases, topology revision, source observation generations, refresh jobs, recovery-store records, and activity records live in one serialized `getConfigRoot()` sidecar that excludes large artifact payloads and unrelated document state. Legacy Slate data remains in the existing document snapshot as migration evidence but is no longer rewritten by canonical Surface mutations. Load returns `healthy`, `recovered`, or `faulted-read-only`; a faulted Surface store rejects mutations and persistence before session rehydration can overwrite evidence. One store-owned transaction queue validates a complete temporary sidecar, fsyncs it, rotates the last-known-good backup, renames it over the primary, and fsyncs the containing directory. A mutation log is deferred because atomic snapshots and revisions satisfy the current single-process deployment.
 - **KTD6 — The first release has one trusted local human actor.** (session-settled: user-approved — chosen over making authenticated multi-human identity a prerequisite: Tinstar has no human authentication or authorization layer today.) A stable browser actor ID namespaces view state and audit entries. Managed sessions, host jobs, and processes receive distinct principal IDs. These identities enforce product-level routing and approval rules without claiming hostile local-process isolation.
-- **KTD7 — Shared mutations use durable revisions, idempotency keys, and atomic batches.** Content writes compare a Surface revision; grouping, reparenting, and subtree deletion compare the workspace topology revision and affected Surface revisions. The service constructs and validates a candidate snapshot, durably commits it, installs it in memory, emits one ordered `surface.batch`, and only then acknowledges the caller. Failure before durable commit changes nothing; a crash after commit is recovered from the snapshot; a crash after SSE but before response is resolved by the persisted idempotency result. Agent operations on human-arranged Surfaces create expiring proposals whose approvals bind the exact operation and revisions.
+- **KTD7 — Shared mutations use durable revisions, idempotency keys, and atomic batches.** Content writes compare a Surface revision; grouping, reparenting, and subtree deletion compare the workspace topology revision and affected Surface revisions. The service constructs and validates a candidate snapshot, durably commits it, installs it in memory, emits one ordered `surface.batch`, and only then acknowledges the caller. Failure before durable commit changes nothing; a crash after commit is recovered from the snapshot; a crash after SSE but before response is resolved by the persisted idempotency result. Agents perform these operations directly; there is no proposal or approval step. Deletion is a move into the recovery store within the same durable transaction, so a delete and its undo are ordinary revision-checked mutations rather than a separate mechanism.
 - **KTD8 — Recursion is navigated as scoped workspaces.** (session-settled: user-directed — chosen over expanding every descendant inline: the UI model may be infinitely recursive without rendering an unreadable hall of mirrors.) Canvas shows top-level Surfaces and legacy widgets. Opening a parent focuses its immediate children, reuses the same Surface shell in the workspace header, and shows ancestor breadcrumbs. Layouts are stored per actor, space, and home scope.
 - **KTD9 — Contextual prompting persists one human intent before dispatch.** A leaf intent routes to its authorized owner or coordinator. A parent intent creates bounded, per-child dispatches and one aggregate result, preserving blocked and partial outcomes. Every dispatch carries the same origin and idempotency identity so fan-out counts as one human interaction.
 - **KTD10 — Freshness is a durable host-owned job lifecycle.** (session-settled: user-directed — chosen over timer-only refreshes and relying on agents to remember: currentness must survive owner exit and server restart.) Every source binding has a persisted, host-owned monotonic observation generation; content hashes, Git SHAs, and process IDs remain evidence and are never ordered as time. Typed events advance that generation and mark a Surface possibly stale. Before claiming current, the coordinator performs an authoritative observation barrier, advances any changed generations, and compares the Surface revision and generation in the same durable transaction. Newer or delayed observations schedule one successor rather than allowing an old result to claim current.
 - **KTD11 — Inspectable agent refreshes use managed background sessions and staged results.** The current fire-and-forget `claude -p --dangerously-skip-permissions` author is retired for autonomous agent refreshes. A live owner may receive serialized work directly; otherwise the host launches a background managed session in the authorized worktree, tracks it as a contributor, and retires it through the normal Graveyard path. Workers write only to a job-specific staging artifact outside watched Slate source paths. The coordinator validates and commits that artifact through KTD10 and the active content-authority adapter. Non-agent processes remain evidence-only contributors.
-- **KTD12 — Presence is ephemeral; ownership and activity are durable.** (session-settled: user-directed — chosen over typing lines and separate participant rails: the same ambient halo and avatar cluster must work at every depth.) Human focus and live participants use expiring leases. Surface ownership, refresh jobs, proposals, and bounded activity entries survive restart. Descendant rollups deduplicate participants and apply deterministic severity precedence.
+- **KTD12 — Presence is ephemeral; ownership and activity are durable.** (session-settled: user-directed — chosen over typing lines and separate participant rails: the same ambient halo and avatar cluster must work at every depth.) Human focus and live participants use expiring leases. Surface ownership, refresh jobs, recovery-store records, and bounded activity entries survive restart. Descendant rollups deduplicate participants and apply deterministic severity precedence.
 - **KTD13 — The existing right Canvas sidebar becomes a tabbed Attention Rail.** (session-settled: user-directed — chosen over automatic priority reordering: urgency should not destroy spatial memory.) Attention becomes the default tab when actionable work exists; existing Canvas tools remain available in a sibling tab. Selecting a row locates the Surface without mutating placement.
 - **KTD14 — Direct-use measurement is dropped for this release.** (session-settled: user-directed — chosen over shipping the measurement pipeline: the metric was self-inverting and the apparatus was heavier than a single-user release needs.) The proposed design counted unmarked human transcript prompts as direct use, but U6 delivers refresh work to a live owner through that same prompt path, so automatic freshness would have inflated the very number it was meant to drive down. Surface intents still carry a stable origin identity for idempotency and fan-out accounting under KTD9; that identity is NOT aggregated into a direct-versus-surface ratio, and no transcript scanning, dedup, or exclusion-disclosure machinery ships. If the question is revisited, the prerequisite is marking every host-originated prompt — refresh dispatches and notice replies included — not only Surface intents.
+
+- **KTD15 — Deletion is a move, not an erase.** (session-directed, replaces the proposal machinery.) `delete` reparents the target subtree into a per-space recovery store inside the same atomic transaction that would otherwise have destroyed it, preserving identity, revision lineage, thread, provenance, and former home reference. `restore` is the inverse and reuses the same topology validation, so a restore into a home that no longer exists lands in the workspace recovery bucket rather than failing. Retention is bounded by the same policy shape activity already uses; only an explicit purge is irreversible. This costs one extra subtree in the sidecar and removes proposals, approvals, expiry, and their UI entirely.
 
 ### High-Level Technical Design
 
@@ -370,10 +373,10 @@ sequenceDiagram
     G->>G: install full batch and bump topology revision
     G-->>E: publish one atomic Surface batch
     S-->>C: applied canonical records
-  else human approval required
-    G->>G: persist revision-bound proposal
-    G-->>E: publish Needs you activity
-    S-->>C: awaiting approval
+  else deletion
+    G->>G: move subtree to recovery store in the same transaction
+    G-->>E: publish one atomic Surface batch
+    S-->>C: deleted, restorable
   else conflict
     S-->>C: current revisions and unchanged topology
   end
@@ -411,10 +414,10 @@ The `overdue` node above is shorthand for idle and overdue; entering queued or r
 | Home and sibling order | Host topology | Changed only by atomic topology mutation |
 | Thread and discussion status | Host store | Persist first, then dispatch best-effort |
 | Provenance and contributors | Host store | Accumulates verified source, run, session, worktree, and process evidence |
-| Freshness policy and recipe | Host store with author proposal | Validated before activation; source omission cannot clear history |
+| Freshness policy and recipe | Host store with author-declared recipe | Validated before activation; source omission cannot clear history |
 | Freshness state and jobs | Refresh coordinator | Host observation generations, dueAt, barriers, and job transitions are authoritative |
 | View state | Browser actor namespace | Never overwritten by canonical or agent mutations |
-| Deletion and approvals | Host store | Revision-bound explicit operation only |
+| Deletion and recovery | Host store | Revision-bound explicit operation; delete moves to the recovery store, purge is the only erase |
 
 ### Agent-Native Action Parity
 
@@ -424,10 +427,11 @@ The `overdue` node above is shorthand for idle and overdue; entering queued or r
 | Create Surface | Composer or grouping | Create primitive | Agent-created state remains movable only until human arrangement |
 | Update authored content | Surface controls | Revision-checked update | A2UI validation, field whitelist, source authority |
 | Append thread intent | Contextual prompt | Append reply or result | Persist first; idempotent delivery |
-| Group or reparent | Selection and move controls | Direct when eligible, otherwise proposal | Atomic batch, cycle guard, revision check |
+| Group or reparent | Selection and move controls | Direct, always | Atomic batch, cycle guard, revision check |
 | Request refresh | Surface control or rail | Refresh request | Durable job and authorization snapshot |
 | Inspect contributors | Avatar or source affordance | Contributor-resolution result | Live ttyd, Graveyard transcript, process evidence, or explicit denial |
-| Delete | Confirmed shared action | Proposal only for agents | Exact descendant set, revision, one-time approval |
+| Delete | Confirmed shared action | Direct, always | Moves the subtree to the recovery store; restorable until purge |
+| Restore | Recovery affordance | Restore primitive | Reuses topology validation; missing home falls back to the recovery bucket |
 
 ### Sequencing
 
@@ -462,7 +466,7 @@ flowchart TB
 
 ### System-Wide Impact
 
-- **Persistence:** A dedicated SurfaceStore gains a bounded schema-versioned sidecar, serialized transaction queue, explicit load health, atomic replacement, fallback backup, canonical records, compatibility aliases, source generations, topology metadata, proposals, refresh jobs, and bounded activity. DocumentStore retains legacy migration evidence and large artifacts without joining Surface commit transactions.
+- **Persistence:** A dedicated SurfaceStore gains a bounded schema-versioned sidecar, serialized transaction queue, explicit load health, atomic replacement, fallback backup, canonical records, compatibility aliases, source generations, topology metadata, recovery-store records, refresh jobs, and bounded activity. DocumentStore retains legacy migration evidence and large artifacts without joining Surface commit transactions.
 - **Wire state:** `/api/state`, SSE snapshots, and client delta handling gain canonical Surface collections and one `surface.batch` delta containing `spaceId`, base and resulting topology revisions, ordered upserts, deletes, and explicit cleared fields. Clients with the wrong base revision discard the batch and request a snapshot.
 - **Canvas:** Workspace construction gains a Surface scope projection without replacing taxonomy trees or synthetic legacy widgets.
 - **Sessions:** Surface ownership and refresh work integrate with managed-session create, retire, ttyd, and Graveyard paths. Session deletion no longer cascades into promoted Surface deletion.
@@ -633,7 +637,7 @@ Session retirement changes contributor evidence but does not stop source reconci
 
 **Verification:** Current Slate tests remain green; per-file reconciliation proves no omission path can delete a promoted Surface.
 
-### U3. Surface mutation service, approvals, and agent parity
+### U3. Surface mutation service, recoverable deletion, and agent parity
 
 **Goal:** Expose one revision-safe mutation boundary for the UI, agents, CLI, and compatibility routes.
 
@@ -657,8 +661,9 @@ Session retirement changes contributor evidence but does not stop source reconci
 - Add `src/server/surfaces/__tests__/surface-service.test.ts`.
 - Add `tests/cli/tinstar-surfaces.test.ts`.
 
-**Approach:** Add primitive list, get-context, create, update-content, transfer-content-authority, append-thread, group, reparent, ungroup, refresh-request, contributor-resolution, proposal, approval, and delete operations.
-Return canonical revisions, effective capabilities, provenance, freshness, and proposal requirements so agents and UI consume the same contract.
+**Approach:** Add primitive list, get-context, create, update-content, transfer-content-authority, append-thread, group, reparent, ungroup, refresh-request, contributor-resolution, delete, restore, and purge operations.
+There is no proposal or approval operation: agents perform every structural mutation directly, and safety is provided by the recovery store rather than by a permission gate.
+Return canonical revisions, effective capabilities, provenance, and freshness so agents and UI consume the same contract.
 Whitelist mutable fields and validate A2UI at the boundary.
 Source-bound content updates route through the source adapter with an expected hash; canonical-direct updates use the canonical revision.
 Changing between those modes is a separate explicit operation.
@@ -676,9 +681,9 @@ Managed-session and host-job calls use server-resolved principal context.
 Direct local agent CLI calls use the managed session name as a trusted-local identity; documentation states that this is routing identity, not hardened authentication.
 Create assigns a source-run compatibility alias when available and otherwise assigns the workspace recovery alias, ensuring rollback reachability from the first durable commit.
 
-Mark agent-created Surfaces unarranged until a human moves, groups, or accepts them.
-The creating agent may organize only its own still-unarranged records.
-Other shared arrangement or deletion attempts create an expiring proposal, and the proposer cannot approve it.
+Agents may arrange and delete any Surface, not only their own — arrangement carries no ownership gate.
+Deletion moves the subtree into the per-space recovery store within the same transaction; `restore` returns it to its former home, falling back to the workspace recovery bucket when that home is gone.
+Only `purge` erases, and it is the single irreversible operation in the service.
 
 **Execution note:** Build service invariants test-first; route and CLI layers should remain thin adapters.
 
@@ -691,13 +696,13 @@ Other shared arrangement or deletion attempts create an expiring proposal, and t
 - Any invalid child, cycle, cross-space parent, or stale topology revision leaves no parent and moves no child.
 - Ungrouping and reparenting preserve identity, thread, provenance, freshness, and source bindings.
 - An agent can reorganize its own unarranged Surfaces.
-- A human-arranged or foreign Surface produces a proposal instead of moving.
-- Proposal approval fails after expiry, reuse, self-approval, revision change, or descendant-set change.
+- An agent moving a human-arranged Surface succeeds directly and emits one atomic batch.
+- A deleted subtree is restorable with identity, thread, provenance, and former home intact; restoring into a deleted home lands in the workspace recovery bucket.
 - Reparent-children deletion preserves every child record; subtree deletion removes exactly the approved set.
 - Duplicate idempotency keys return the prior result without duplicating a thread message or topology change.
 - Source-bound updates either atomically update the expected source or reject; canonical-direct updates cannot be overwritten by reconciliation.
 - A client with the wrong Surface batch base revision requests a full snapshot instead of partially applying the batch.
-- CLI commands and HTTP primitives report the same conflict and proposal states.
+- CLI commands and HTTP primitives report the same conflict and recovery states.
 - Invalid A2UI, raw identity fields, and unsupported trigger declarations are rejected before persistence.
 
 **Verification:** Service, route, OpenAPI, CLI, and skill contracts expose full agent/UI action parity with atomic shared mutations.
@@ -756,7 +761,7 @@ Adapt Canvas containment helpers to distinguish a node's rendered container role
 Surface cards are scope portals even when they have children; existing taxonomy containers retain current movement and sizing.
 
 Add selection-based group, move, ungroup, promotion, and deletion controls.
-Use optimistic feedback only after the service accepts the operation or returns a proposal; stale revisions restore the authoritative snapshot and show a conflict.
+Use optimistic feedback only after the service accepts the operation; stale revisions restore the authoritative snapshot and show the documented conflict treatment.
 
 Write the design-language sections for the new components BEFORE implementing them, not in U8.
 `docs/slate-design-language.md` is the authority every Slate component already answers to, so a section written after the component ships documents whatever was guessed rather than governing it.
@@ -885,7 +890,7 @@ Normalize observations onto the typed local EventBus with stable source identifi
 For every changed observation, durably increment the source binding's monotonic generation.
 The matcher records why a Surface may be stale and coalesces the highest host generation before scheduling; it never attempts to order content hashes or Git revisions.
 
-Persist refresh jobs with queued, running, completed, superseded, failed, cancelled, and awaiting-approval states.
+Persist refresh jobs with queued, running, completed, superseded, failed, and cancelled states.
 Each job records the target Surface revision, start and target observation generation, `dueAt`, owner lease, attempts, authorization snapshot, dispatch evidence, staged-result path, and result.
 Only one job executes per Surface.
 Workers write validated A2UI and evidence only to a job-specific staging path outside `.tinstar/slate`.
@@ -921,7 +926,7 @@ Startup reconstructs queued and running jobs, marks vanished workers failed or r
 - Owner exit transfers a queued job once; two workers cannot complete the same lease.
 - Restart reconstructs queued work and fails or retries vanished running workers without claiming current.
 - Automatic, mark-stale, and manual policies produce distinct visible outcomes.
-- An unauthorized mixed-worktree dispatch becomes blocked or awaiting approval.
+- An unauthorized mixed-worktree dispatch is reported as blocked with its reason.
 - A managed refresh worker is backgrounded, focus-neutral, visible as a contributor, and retires through Graveyard.
 - Worker output written to the staging artifact cannot bypass CAS through the Slate watcher.
 - Failure after each launcher provisioning stage compensates resources; restart adopts only the persisted matching incarnation.
@@ -964,9 +969,9 @@ The local browser heartbeats only while a Surface is focused or its prompt is ac
 Managed session and refresh job lifecycle updates agent leases.
 Leases expire independently from durable ownership so a disconnected avatar cannot imply active work.
 
-Record bounded activity for canonical updates, human intents, proposals, ownership transfer, refresh transitions, failures, and meaningful session evidence.
+Record bounded activity for canonical updates, human intents, deletions and restores, ownership transfer, refresh transitions, failures, and meaningful session evidence.
 Prune at 30 days or 10,000 records per space.
-Current Needs you derives from unresolved proposals, waiting threads, blocked prompt targets, failed manual recovery, and explicit agent requests.
+Current Needs you derives from waiting threads, blocked prompt targets, failed manual recovery, and explicit agent requests.
 Active derives from live leases and running jobs.
 Recent derives from retained activity.
 
@@ -984,7 +989,7 @@ Selecting an item changes focus and camera only; it does not mutate layout or ca
 - A live lease shows the halo and expires without changing ownership or content.
 - One participant active on several descendants appears once on the parent with the correct contributing count.
 - Failed refresh outranks ordinary recent activity; Needs you outranks Active.
-- A proposal creates a Needs you row and disappears after acceptance or rejection.
+- A deletion performed by an agent appears in Recent with a one-click restore, and never blocks in Needs you.
 - Hidden or minimized Surfaces still appear in the rail and can be located without changing their view state.
 - Selecting a rail row focuses or opens the correct scoped workspace while preserving placement.
 - Show-only filters temporarily and clearing it restores the stable workspace.
@@ -1063,7 +1068,7 @@ Update the agent skill so authors prefer canonical API and CLI operations while 
 | Full type safety | `npm run typecheck` | U1-U8 | App, E2E, and test projects report zero errors |
 | Canonical store and migration | `npx vitest run --exclude='e2e/**' src/server/stores/__tests__/surfaces.test.ts src/server/stores/__tests__/document-store-surface-migration.test.ts` | U1 | Deterministic identities, atomic recovery, and no-op emission guards pass |
 | Source and compatibility | `npx vitest run --exclude='e2e/**' src/server/sessions/__tests__/slate-watcher.test.ts src/server/sessions/__tests__/slate-clean.test.ts src/server/stores/__tests__/document-store-slate-bridge.test.ts` | U2 | Per-file ownership, last-valid retention, explicit deletion, and one canonical projection pass |
-| Mutation and agent parity | `npx vitest run --exclude='e2e/**' src/server/surfaces/__tests__ src/server/api/__tests__/routes.surfaces.test.ts tests/cli/tinstar-surfaces.test.ts` | U3, U5, U6, U7 | Revision, proposal, routing, refresh, presence, and CLI contracts pass |
+| Mutation and agent parity | `npx vitest run --exclude='e2e/**' src/server/surfaces/__tests__ src/server/api/__tests__/routes.surfaces.test.ts tests/cli/tinstar-surfaces.test.ts` | U3, U5, U6, U7 | Revision, recovery, routing, refresh, presence, and CLI contracts pass |
 | Recursive client behavior | `npx vitest run --exclude='e2e/**' src/components/SurfaceWorkspace src/components/CanvasSidebar src/domain/__tests__/surfaceTree.test.ts src/domain/__tests__/surfaceRollup.test.ts src/hooks/__tests__/useServerEvents.test.ts` | U4, U7 | Scoped recursion, rollups, view isolation, and serialized clear behavior pass |
 | Complete unit suite | `npx vitest run --exclude='e2e/**'` | U1-U8 | No existing unit or integration regression |
 | Targeted browser contract | `npx playwright test e2e/recursive-surfaces.spec.ts e2e/surface-migration.spec.ts e2e/surface-freshness.spec.ts e2e/surface-attention.spec.ts` | U8 | Coexistence, promotion, restart, attention, and drill-down journeys pass |
@@ -1083,7 +1088,7 @@ Any test that clears an optional field must cross a real JSON serialization boun
 - Legacy points migrate without losing body, thread, lifecycle, order, author, timestamps, or source evidence.
 - Run Workspace and Canvas presentations cannot diverge or create a second writable copy.
 - File omission, torn writes, session deletion, worker retirement, and feature rollback cannot silently delete a promoted Surface.
-- Grouping, reparenting, ungrouping, and subtree deletion are atomic, cycle-safe, revision-checked, and approval-aware.
+- Grouping, reparenting, ungrouping, and subtree deletion are atomic, cycle-safe, revision-checked, and reversible from the recovery store until purge.
 - Agent and human clients can perform equivalent primitive Surface actions and receive the same context and capabilities.
 - Per-browser placement, hide, minimize, focus, filters, and rail state never overwrite canonical shared state.
 - Parent prompting partitions mixed-worktree context, persists one intent, reports partial outcomes, and never expands authorization through ownership.
