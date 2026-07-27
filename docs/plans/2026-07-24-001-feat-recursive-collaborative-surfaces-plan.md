@@ -303,7 +303,11 @@ It introduces stable actor and view identifiers but does not claim authenticated
 Legacy widgets remain top-level Canvas peers during migration; placing legacy widgets inside a Surface workspace is deferred.
 
 Delivery is compatibility-first.
-Canonical identity, migration, and source reconciliation precede Canvas promotion; topology precedes recursive UI; durable jobs precede automatic freshness; activity and presence precede the Attention Rail.
+Canonical identity, migration, and source reconciliation precede everything.
+DELIVERY ORDER IS U1, U3, U2, U6 — freshness is the FIRST user-visible milestone, rendered in today's Run Workspace Slate panel before any recursive UI exists.
+This is deliberate and the dependency graph already permits it: U6 depends only on U2 and U3, never on U4.
+Staleness is the problem this plan exists to solve, so relieving it first means the effort has delivered its justifying win even if recursion is later delayed or abandoned; the reverse order would spend five units before the stated pain moves at all.
+Recursive Canvas, contextual prompts, and the Attention Rail follow, with activity and presence preceding the rail.
 Each phase remains usable if later phases are delayed.
 
 ### Key Technical Decisions
@@ -531,6 +535,8 @@ flowchart TB
 - Modify `src/domain/types.ts`.
 - Modify `src/server/stores/document-store.ts`.
 - Modify `src/server/index.ts`.
+- Modify `src/server/api/sse.ts`.
+- Modify `src/domain/api.ts`.
 - Add `src/server/stores/__tests__/surfaces.test.ts`.
 - Add `src/server/stores/__tests__/document-store-surface-migration.test.ts`.
 - Extend `src/server/stores/__tests__/document-store-slate-bridge.test.ts`.
@@ -542,11 +548,20 @@ For legacy migration, derive the incarnation deterministically from space, run I
 
 Persist Surface state through a schema-versioned sidecar under `getConfigRoot()` and one serialized Surface transaction queue.
 Do not include large artifact payloads or unrelated DocumentStore fields, and do not schedule a core document write for a canonical Surface mutation.
+Resolving the apparent conflict with the compatibility bridge: `Run.slate` is DERIVED at projection time, never stored by a canonical Surface mutation, and `DocumentStore` gains an explicit persist-exempt change emit used only for that derived projection.
+Today every `DocumentStore.changes` emit is wired unconditionally to `schedulePersist` (`document-store.ts:308`), which is why "keep `Run.slate` byte-equivalent" and "schedule no core document write" cannot both hold without this seam.
+The persist-exempt emit broadcasts to SSE and leaves `docstore.json` untouched.
+`SSEBroadcaster` today subscribes only to `DocumentStore.changes` and snapshots only that store, so this unit also wires the Surface store's change stream and snapshot contribution into it — the SSE path U1's own `surface.batch` emit and test scenarios depend on.
 Return explicit `healthy`, `recovered`, or `faulted-read-only` load outcomes before session rehydration starts.
+Define what a faulted store RENDERS, not only what it rejects: Run Workspace shows the frozen legacy document snapshot behind an explicit, non-dismissable degraded marker naming that snapshot's migration timestamp, and canonical Surface projection is empty rather than partial.
+Silently rendering the frozen legacy copy as if current would violate this plan's own success criterion that no surface presents stale data as current.
 Write and validate a complete temporary snapshot, fsync it, rotate the last-known-good backup, rename it over the primary, and fsync the containing directory.
 If both snapshots are unusable, expose a startup fault, reject mutations and persistence, and keep both files untouched rather than silently persisting an empty store.
 
-Migration loads canonical records when present.
+Migration is RE-ENTRANT, not one-shot.
+While the legacy bridge remains the write path — that is, for the whole window between this unit and U2 — every boot reconciles new and changed `slatePoints` into canonical records rather than skipping migration whenever any canonical record already exists.
+Without this, points and replies written after the first migration never reach the canonical store, and they disappear from view the moment U2 makes aliases authoritative.
+Migration loads canonical records when present and reconciles legacy input against them.
 Otherwise it reads legacy `slatePoints` as immutable migration input, creates one compatibility-only canonical run-root Surface, converts each point beneath that root, preserves every thread and lifecycle timestamp, records a run compatibility alias, and keeps `Run.slate` byte-equivalent through the existing bridge.
 Colliding or malformed legacy entries are quarantined and reported without deleting their old snapshot data.
 
@@ -554,6 +569,10 @@ Canonical Surface transactions build a candidate Surface sidecar snapshot withou
 After validation, they durably write the candidate and persisted idempotency result, atomically install it in memory, and emit one `surface.batch`.
 Persistence failure leaves live state and clients unchanged.
 A crash after durable commit is recovered from disk, while a retry after a lost response returns the persisted result.
+
+Cascade space and store lifecycle into the Surface store.
+`DocumentStore.clearSpace` already drops Slate points by ownership of a cleared run and `clear()` already calls `clearAll()`; moving ownership into a separate store silently drops both, leaving canonical Surfaces alive for runs that no longer exist and reachable only through the workspace recovery bucket.
+`clearSpace` and `clear` therefore delete canonical Surfaces owned by cleared runs and by the cleared space, and Surface sidecar persistence is enabled on the same gate as `docStore.enablePersistence`.
 
 **Execution note:** Establish characterization coverage for current `SlateStore` projection and persistence before moving ownership.
 
@@ -575,6 +594,10 @@ A crash after durable commit is recovered from disk, while a retry after a lost 
 - An alias collision quarantines the candidate and leaves the legacy Run Workspace usable.
 - A canonical snapshot reload reconstructs parent indexes and topology revision exactly.
 - Legacy incarnation derivation is deterministic; missing or duplicate `createdAt` inputs are quarantined.
+- A point and a thread reply written through the legacy bridge AFTER the first migration are reconciled into canonical records on the next boot, without duplicating identities.
+- A canonical Surface content change emits a run delta over SSE and schedules no `docstore.json` write.
+- A faulted load renders legacy Slate content behind the degraded marker and never presents it as current, while canonical projection stays empty.
+- Deleting a space leaves no orphan canonical Surfaces, and a FAST_SIM boot clear cascades identically.
 
 **Verification:** Existing Run Workspace projections remain unchanged while the snapshot contains canonical Surfaces; migration and persistence tests prove deterministic restart behavior.
 
@@ -865,6 +888,8 @@ Parent child dispatches reuse one intent ID.
 
 **Goal:** Keep refreshable Surfaces current through typed events, durable jobs, managed workers, and generation-safe completion.
 
+**Delivery position:** This is the FIRST user-visible unit, shipped after U2 and before the recursive Canvas work. Its freshness state renders in the existing Run Workspace Slate panel, so automatic currentness is usable without any recursive UI. Add `src/components/RunWorkspaceWidget/SlatePanel.tsx` to this unit's Files for that surfacing.
+
 **Requirements:** R13-R18; F4; AE3, AE7; KTD4, KTD6, KTD10-KTD11.
 
 **Dependencies:** U2, U3.
@@ -935,6 +960,7 @@ Startup reconstructs queued and running jobs, marks vanished workers failed or r
 - Identical freshness state writes emit no SSE or persistence storm.
 
 **Verification:** Deterministic state-machine tests, session lifecycle integration tests, and restart tests prove honest currentness under failure and supersession.
+A user running only U1, U3, U2 and U6 sees surfaces stay current without prompting an agent, in today's Slate panel.
 
 ### U7. Presence, bounded activity, and the Attention Rail
 
