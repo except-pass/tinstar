@@ -1,6 +1,7 @@
 import type { Plugin } from 'vite'
 import { EventBus } from './event-bus'
 import { DocumentStore, runNeedsStatusCorrection } from './stores/document-store'
+import { bootSurfaces } from './stores/surface-boot'
 import { OTelStore } from './stores/otel-store'
 import { DocumentProcessor } from './processors/document-processor'
 import { OTelProcessor } from './processors/otel-processor'
@@ -11,6 +12,8 @@ import { join } from 'node:path'
 import { readdirSync, existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { shortId } from './utils/shortId'
+import { getConfigRoot } from './configRoot'
+import { acquireBackendSingleton } from './infra/lock'
 import {
   loadConfig,
   ensureDirs,
@@ -235,6 +238,46 @@ export function initBackend(): RouteContext {
 
       // Enable file-backed persistence so data survives server restarts
       docStore.enablePersistence(join(sessionConfig.dirs.root, 'docstore.json'))
+
+      // Canonical Surfaces (U1) — SAME GATE as docStore.enablePersistence, and
+      // deliberately immediately after it: the migration reconciles the legacy
+      // `slatePoints` that call just hydrated, and a faulted sidecar has to be
+      // refusing writes before session rehydration below could overwrite the
+      // evidence. `bootSurfaces` handles all three load outcomes; the only work
+      // that finishes later is the migration's durable write.
+      try {
+        const surfaceBoot = bootSurfaces(docStore, { dir: sessionConfig.dirs.root })
+        if (surfaceBoot.outcome.health === 'faulted-read-only') {
+          log.error('surfaces', 'canonical Surface store is FAULTED (read-only) — canonical projection is empty and the Run Workspace is showing the frozen legacy snapshot', {
+            frozenAt: surfaceBoot.status.frozenAt,
+            detail: surfaceBoot.status.detail,
+          })
+        } else {
+          void surfaceBoot.migration
+            .then(({ report, commit }) => {
+              if (!report) return
+              if (commit && !commit.committed) {
+                log.warn('surfaces', `migration write refused: ${commit.reason}`, { detail: commit.detail })
+                return
+              }
+              log.info('surfaces', 'legacy Slate migration pass complete', {
+                health: surfaceBoot.outcome.health,
+                runsSeen: report.runsSeen,
+                created: report.surfacesCreated,
+                updated: report.surfacesUpdated,
+                unchanged: report.surfacesUnchanged,
+                quarantined: report.quarantined.length,
+              })
+            })
+            .catch(err => log.warn('surfaces', `migration failed: ${(err as Error).message}`))
+        }
+      } catch (err) {
+        // The sidecar's singleton assertion is the only thing that throws here.
+        // It means a boot path opened a store without the guard — a bug worth
+        // failing loudly for rather than degrading into a second backend.
+        log.error('surfaces', `canonical Surface store could not be opened: ${(err as Error).message}`)
+        throw err
+      }
 
       // Initialize spaces — ensure at least one exists
       const savedSpaceId = loadActiveSpaceId(sessionConfig.dirs.root)
@@ -528,11 +571,46 @@ export function initBackend(): RouteContext {
   return ctx
 }
 
+/**
+ * Take the backend singleton for the Vite plugin path.
+ *
+ * `standalone.ts` has enforced one backend per config dir since the ttyd
+ * port-war fix; the plugin path never did, so a dev server and a standalone
+ * backend could both own one config root — and, from U1 on, both open one
+ * Surface sidecar. This closes that hole with the SAME guard rather than a
+ * second lock: `acquireBackendSingleton` is the one owner, and the sidecar only
+ * ever ASSERTS it (`backendSingletonOwner`).
+ *
+ * Exported so the refusal is testable without booting Vite. Throws rather than
+ * `process.exit`ing, because a Vite plugin that killed the process would take
+ * down a dev server the user may be running for unrelated reasons — Vite surfaces
+ * the throw as a startup failure, which is the same outcome with a readable cause.
+ */
+export function acquireBackendSingletonForPlugin(configDir = getConfigRoot()): () => void {
+  const lockPath = join(configDir, 'server.lock')
+  const result = acquireBackendSingleton(lockPath)
+  if (!result.acquired) {
+    const who = result.ownerPid ? ` (pid ${result.ownerPid})` : ''
+    throw new Error(
+      `another tinstar backend is already running on ${configDir}${who}. ` +
+      `Stop it first, or run this one under a different TINSTAR_CONFIG_HOME.`,
+    )
+  }
+  // The marker outlives only this process; drop it on exit exactly as
+  // standalone.ts does, so the next start sees a clean (or stealable) lock.
+  const release = () => { try { rmSync(`${lockPath}.mark`, { recursive: true, force: true }) } catch { /* gone */ } }
+  process.on('exit', release)
+  return release
+}
+
 export function tinstarBackend(): Plugin {
   let ctx: RouteContext | null = null
   return {
     name: 'tinstar-backend',
     configureServer(server) {
+      // BEFORE initBackend: the Surface sidecar asserts this guard on open, and
+      // an unguarded boot is exactly the case that assertion exists to catch.
+      acquireBackendSingletonForPlugin()
       ctx = initBackend()
       server.middlewares.use((req, res, next) => {
         handleRequest(ctx!, req, res)

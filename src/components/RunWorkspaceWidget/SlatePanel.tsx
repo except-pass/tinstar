@@ -41,6 +41,7 @@ import { useSlateRefresh, RefreshButton } from './slateRefresh'
 import { SlateComposer } from './SlateComposer'
 import { SlateExplainButton } from './SlateExplainButton'
 import { SlateCleanButton } from './SlateCleanButton'
+import { SurfaceDegradedBanner } from './SurfaceDegradedBanner'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
 import { useNow } from '../../hooks/useNow'
@@ -584,6 +585,11 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           )}
         </div>
       </div>
+
+      {/* Degraded marker (U1) — directly under the header so it sits ABOVE every
+          surface it qualifies, including the pinned Objective. Renders nothing
+          unless the canonical Surface store faulted. */}
+      <SurfaceDegradedBanner />
 
       {/* The `?` cheatsheet (S6 U1) — an overlay over the column, dismissed by ?, Esc,
           or a click outside the card. */}

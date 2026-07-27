@@ -2,7 +2,7 @@
 declare global { var __TINSTAR_BACKEND_PORT__: string | undefined }
 
 import { useSyncExternalStore, useCallback } from 'react'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance } from '../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, SurfaceHealthStatus } from '../domain/types'
 import type { ConstellationGraph } from '../domain/constellationGraph'
 import type { PinSet } from '../domain/pinSet'
 import { isSystemSession, extractMarshal } from '../domain/system-sessions'
@@ -36,6 +36,9 @@ interface ServerState {
   pluginWidgets: PluginWidgetInstance[]
   constellationGraphs: ConstellationGraph[]
   pinSets: PinSet[]
+  /** Canonical Surface store health (U1). Only the `faulted-read-only` case
+   *  changes what anything renders — see {@link SurfaceHealthStatus}. */
+  surfaceHealth: SurfaceHealthStatus
 }
 
 const EMPTY_STATE: ServerState = {
@@ -55,6 +58,7 @@ const EMPTY_STATE: ServerState = {
   pluginWidgets: [],
   constellationGraphs: [],
   pinSets: [],
+  surfaceHealth: { health: 'healthy' },
 }
 
 // ─── Singleton SSE store ───────────────────────────────────────────────
@@ -215,6 +219,9 @@ function startSSE() {
       pluginWidgets: snapshot.pluginWidgets ?? [],
       constellationGraphs: snapshot.constellationGraphs ?? [],
       pinSets: snapshot.pinSets ?? [],
+      // A server that predates U1 sends no health; treat its silence as healthy
+      // rather than as a fault, or every older backend would raise the marker.
+      surfaceHealth: snapshot.surfaceHealth ?? { health: 'healthy' },
       // System sessions (e.g. marshal) have dedicated UI — never enter the
       // run set that feeds the canvas/hierarchy/sessions list. They live on
       // `marshal` instead.
@@ -415,6 +422,19 @@ export function applyOptimistic(entity: string, data: unknown): void {
   const item = data as { id: string }
   currentState = { ...prev, [mapping.stateKey]: upsertById(arr, item, item[mapping.key as keyof typeof item] as string, mapping.key as keyof typeof item) }
   pushState()
+}
+
+/**
+ * Subscribe to JUST the canonical Surface store's health.
+ *
+ * Narrow on purpose. Every run card mounts a degraded marker that renders
+ * nothing in the healthy case, and pulling the whole `ServerState` in for that
+ * would re-render one component per run on every SSE delta. `surfaceHealth` is
+ * replaced only when a snapshot arrives, so the reference is stable across
+ * deltas and `useSyncExternalStore` bails out of the re-render entirely.
+ */
+export function useSurfaceHealth(): SurfaceHealthStatus {
+  return useSyncExternalStore(subscribe, () => uiBundle.state.surfaceHealth)
 }
 
 // ─── React hook (all consumers share the single SSE connection) ────────

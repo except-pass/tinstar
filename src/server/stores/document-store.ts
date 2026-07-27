@@ -21,7 +21,7 @@ import { EventEmitter } from 'node:events'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { OBJECTIVE_ORDER, OBJECTIVE_POINT_ID } from '../../domain/types'
-import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone, Notice, SlateSurface, Point } from '../../domain/types'
+import type { Initiative, Epic, Task, Worktree, Run, Space, EditorWidget, BrowserWidget, ImageWidget, TopicMetadata, PluginWidgetInstance, AttentionState, SessionStatus, Artifact, Tombstone, Notice, SlateSurface, Point, Surface, SurfaceHealthStatus } from '../../domain/types'
 import type { CommitRecord } from '../commits'
 import type { RunStatus, TouchedFile, RecapEntry } from '../../types'
 import type { ConstellationGraph } from '../../domain/constellationGraph'
@@ -29,7 +29,34 @@ import { migrateSnapEdges } from '../../domain/constellationGraph'
 import { type PinSet, removePinsForNode, type Reply } from '../../domain/pinSet'
 import { migrateAllBrowserNotes } from '../migrations/migrateAllBrowserNotes'
 import { SlateStore, type PointInput } from './slate'
+import { SurfaceStore, type SurfaceBatch } from './surfaces'
+import type { SurfaceSidecar, SurfaceCommitResult } from './surface-persistence'
 import { sweepStalledProcessPoints } from '../sessions/slate-staleness'
+
+/**
+ * One entry on the `changes` stream.
+ *
+ * `persistExempt` is the U1 seam. Every emit on this stream is wired to
+ * `schedulePersist()` (see `enablePersistence`), which is why "keep `Run.slate`
+ * byte-equivalent through the existing bridge" and "schedule no core document
+ * write for a canonical Surface mutation" could not both hold before this flag
+ * existed. A persist-exempt change broadcasts to SSE exactly like any other and
+ * leaves `docstore.json` untouched.
+ *
+ * It is deliberately NOT a general-purpose "quiet write" switch. The only emitter
+ * allowed to set it is the DERIVED `Run.slate` projection driven by a canonical
+ * Surface mutation, whose durable home is the Surface sidecar — a second file, so
+ * nothing about that mutation belongs in `docstore.json`. Any other use would be
+ * a silent data-loss bug: the entity would live in `docstore.json` and stop being
+ * written to it.
+ */
+export interface DocumentChange {
+  entity: string
+  id: string
+  data: unknown
+  runId?: string
+  persistExempt?: boolean
+}
 
 /** Translate a non-background run's status into a default attention signal.
  *  Returns null when the inbox shouldn't surface the run. This is the
@@ -246,6 +273,27 @@ export class DocumentStore {
    *  emitter (SSE + persist) and share the run-scoped prune cascade. */
   private slate = new SlateStore(evt => this.changes.emit('change', evt))
 
+  /** The canonical Surface store (plan KTD1). Composed like `SlateStore` so the
+   *  wiring lives in one place, but its changes ride a SEPARATE stream: a Surface
+   *  batch is atomic and space-scoped, and flattening it into the per-entity
+   *  `changes` shape would lose both properties. */
+  private surfaces = new SurfaceStore(batch => this.onSurfaceBatch(batch))
+
+  /** Ordered canonical Surface batches (KTD7), for SSE. One `batch` event per
+   *  mutation — never one per record. */
+  readonly surfaceChanges = new EventEmitter()
+
+  /** The durable half. Null until {@link enableSurfacePersistence} — the SAME gate
+   *  as `enablePersistence`, so a store with no core snapshot has no sidecar
+   *  either and neither can outlive the other. */
+  private surfaceSidecar: SurfaceSidecar | null = null
+
+  /** Tail of the sidecar's fire-and-forget writes (the lifecycle cascade), so a
+   *  caller — or a test — can await them. */
+  private surfaceWriteTail: Promise<unknown> = Promise.resolve()
+
+  private surfaceStatus: SurfaceHealthStatus = { health: 'healthy' }
+
   private persistPath: string | null = null
   private persistTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -304,8 +352,15 @@ export class DocumentStore {
       // No file or corrupt — start fresh
     }
 
-    // Debounced save on every change
-    this.changes.on('change', () => this.schedulePersist())
+    // Debounced save on every change — EXCEPT a persist-exempt one. See
+    // {@link DocumentChange.persistExempt}: the derived `Run.slate` projection of
+    // a canonical Surface mutation is durable in the Surface sidecar, so writing
+    // `docstore.json` for it would put the same state in two files that can then
+    // disagree.
+    this.changes.on('change', (change: DocumentChange) => {
+      if (change?.persistExempt) return
+      this.schedulePersist()
+    })
 
     // One-time, idempotent: migrate legacy browser widget.notes → per-space pins.
     // Runs after all entities (browserWidgets AND pinSets) are hydrated AND after
@@ -1019,7 +1074,24 @@ export class DocumentStore {
    *  their threads/status without a separate client subscription to `slatePoint`.
    *  setRunSlate's by-value short-circuit keeps an unchanged projection from emitting. */
   private projectRunToSlate(runId: string): void {
-    const surfaces: SlateSurface[] = this.slate.getPointsForRun(runId).map(p => {
+    this.setRunSlate(runId, this.deriveRunSlate(runId))
+  }
+
+  /**
+   * THE `Run.slate` DERIVATION — the single place the Run Workspace projection is
+   * computed, whether the trigger is a legacy bridge mutation or a canonical
+   * Surface mutation.
+   *
+   * Its input is still the legacy `SlateStore`, and that is the whole reason U1 is
+   * invisible: "existing Run Workspace projections remain unchanged" is true BY
+   * CONSTRUCTION, not by a comparison someone has to keep re-running. U2 is the
+   * unit that swaps this function's input to canonical Surfaces through their
+   * compatibility aliases; until then the legacy bridge is still the write path,
+   * so deriving from canonical records here would render whatever the last boot's
+   * migration captured rather than what the agent just wrote.
+   */
+  private deriveRunSlate(runId: string): SlateSurface[] {
+    return this.slate.getPointsForRun(runId).map(p => {
       // The Objective (S2) is the reserved USER point — and only a user point: a file
       // that somehow carried the reserved id renders as an ordinary surface rather
       // than impersonating the user's goal (the watcher already drops it upstream).
@@ -1049,7 +1121,6 @@ export class DocumentStore {
         amendedAt: p.amendedAt,
       }
     })
-    this.setRunSlate(runId, surfaces)
   }
 
   getSlatePoint(runId: string, id: string): Point | undefined {
@@ -1062,6 +1133,180 @@ export class DocumentStore {
 
   getAllSlatePoints(): Point[] {
     return this.slate.getAllPoints()
+  }
+
+  // --- Canonical Surfaces (U1) ---
+  //
+  // The Surface store is composed here for the same reason `SlateStore` is: one
+  // place wires a plain data structure to SSE and to the lifecycle cascade. What
+  // is deliberately DIFFERENT is durability. Surfaces persist to their own
+  // sidecar, never to `docstore.json`, so a Surface commit and a core document
+  // write can never replace each other's snapshots.
+
+  /**
+   * Attach the durable Surface sidecar. Called on the SAME gate as
+   * {@link enablePersistence} — a backend with no `docstore.json` has no sidecar
+   * either. Without it the Surface store still works in memory (which is what
+   * every unit test and the `TINSTAR_NO_SESSIONS` path want) but nothing survives
+   * a restart.
+   *
+   * A FAULTED sidecar must not be passed here. `faulted-read-only` means both
+   * snapshots are unreadable and are being preserved as evidence; the boot path
+   * leaves persistence off and sets a degraded status instead.
+   */
+  enableSurfacePersistence(sidecar: SurfaceSidecar): void {
+    this.surfaceSidecar = sidecar
+  }
+
+  /** Hydrate canonical records from a snapshot. Emits nothing — hydration is not
+   *  a mutation and there is no client yet to tell. */
+  loadSurfaces(records: Surface[]): void {
+    this.surfaces.load(records)
+  }
+
+  getSurface(id: string): Surface | undefined {
+    return this.surfaces.getSurface(id)
+  }
+
+  getAllSurfaces(): Surface[] {
+    return this.surfaces.getAllSurfaces()
+  }
+
+  getSurfacesForSpace(spaceId: string): Surface[] {
+    return this.surfaces.getSurfacesForSpace(spaceId)
+  }
+
+  getSurfaceTopologyRev(spaceId: string): number {
+    return this.surfaces.getTopologyRev(spaceId)
+  }
+
+  /** The canonical store's health, as the client sees it on every snapshot. */
+  get surfaceHealth(): SurfaceHealthStatus {
+    return this.surfaceStatus
+  }
+
+  /**
+   * Record the boot load outcome. Only `faulted-read-only` changes what anything
+   * renders (see {@link SurfaceHealthStatus}); `recovered` is reported for
+   * completeness so an operator can tell a repaired boot from a clean one.
+   */
+  setSurfaceHealth(status: SurfaceHealthStatus): void {
+    this.surfaceStatus = status
+  }
+
+  /**
+   * One durable canonical Surface content mutation, in the KTD7 order: build and
+   * validate a candidate, make it durable, install it in memory, emit exactly one
+   * batch, and only then acknowledge the caller.
+   *
+   * The ordering is enforced by the sidecar rather than described here — the
+   * in-memory install rides `onDurable`, which the sidecar calls strictly after
+   * the bytes are fsynced, so a write failure returns with live state and every
+   * connected client untouched.
+   *
+   * With no sidecar attached (persistence disabled) the write is applied in
+   * memory only. That is the honest degradation for a store that was never given
+   * a durable home, and it keeps `TINSTAR_NO_SESSIONS` and the unit suites from
+   * needing a filesystem.
+   */
+  async commitSurfaceContent(
+    next: Surface,
+    opts: { idempotencyKey?: string } = {},
+  ): Promise<SurfaceCommitResult> {
+    const prior = this.surfaces.getSurface(next.id)
+    if (!prior) return { committed: false, reason: 'unknown-record', detail: `no canonical Surface ${next.id}` }
+    if (!this.surfaceSidecar) {
+      const applied = this.surfaces.upsertSurface(next)
+      return applied
+        ? { committed: true, replayed: false, wrote: false, records: [next] }
+        : { committed: false, reason: 'stale-revision', detail: `${next.id}: in-memory upsert refused` }
+    }
+    return this.surfaceSidecar.commit({
+      puts: [next],
+      expectedRevs: { [next.id]: prior.rev },
+      ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
+      onDurable: () => { this.surfaces.upsertSurface(next) },
+    })
+  }
+
+  /** Await any fire-and-forget sidecar writes (the lifecycle cascade). */
+  async flushSurfacePersistence(): Promise<void> {
+    await this.surfaceWriteTail
+  }
+
+  /**
+   * Fan a canonical batch out to both channels.
+   *
+   *   · `surface.batch` over SSE — the canonical stream, ordered and atomic;
+   *   · a PERSIST-EXEMPT `run` delta per aliased run — the compatibility stream,
+   *     so a client still rendering the legacy Run Workspace learns that the run
+   *     moved without the canonical mutation dragging a `docstore.json` write
+   *     along behind it.
+   *
+   * The run delta is emitted even when the derived projection is byte-identical,
+   * and that is not an oversight. In U1 the derivation still reads the legacy
+   * bridge (see {@link deriveRunSlate}), so a canonical-only change produces an
+   * identical projection every time — suppressing on equality would mean a
+   * canonical mutation was never observable on the run channel at all.
+   */
+  private onSurfaceBatch(batch: SurfaceBatch): void {
+    this.surfaceChanges.emit('batch', batch)
+    const runIds = new Set<string>()
+    for (const change of batch.changes) {
+      for (const alias of change.data.aliases ?? []) {
+        if (alias.bucket.kind === 'run') runIds.add(alias.bucket.runId)
+      }
+    }
+    for (const runId of runIds) this.emitDerivedRunSlate(runId)
+  }
+
+  /** Publish a run's DERIVED Slate projection without scheduling a core document
+   *  write. The projection is recomputed rather than read off the stored run, so
+   *  `Run.slate` is derived at projection time exactly as the plan requires; the
+   *  stored field is refreshed only when it actually moved, which keeps a later
+   *  SSE reconnect snapshot agreeing with the delta clients already saw. */
+  private emitDerivedRunSlate(runId: string): void {
+    const existing = this.runs.get(runId)
+    if (!existing) return
+    const derived = this.deriveRunSlate(runId)
+    const nextSlate = derived.length > 0 ? derived : undefined
+    const changed = JSON.stringify(existing.slate ?? null) !== JSON.stringify(nextSlate ?? null)
+    const next: Run = changed ? { ...existing, slate: nextSlate } : existing
+    if (changed) this.runs.set(runId, next)
+    this.changes.emit('change', { entity: 'run', id: runId, data: next, persistExempt: true })
+  }
+
+  /** Durably drop canonical records for the lifecycle cascade. Fire-and-forget
+   *  because `clearSpace`/`clear` are synchronous mutators; the promise is kept on
+   *  {@link surfaceWriteTail} so nothing is unobservable. A failed drop is logged
+   *  rather than swallowed — the records survive in the sidecar and reappear on
+   *  the next boot, which is visible but not silent. */
+  /** Drop every canonical record matching `doomed`, in memory and on disk. Silent
+   *  in-memory (the caller emits one `all` reset), durable on the sidecar. */
+  private cascadeSurfaces(doomed: (s: Surface) => boolean): void {
+    const ids = this.surfaces.getAllSurfaces().filter(doomed).map(s => s.id)
+    if (ids.length === 0) return
+    this.surfaces.deleteSilently(ids)
+    this.dropSurfacesDurably(ids)
+  }
+
+  private dropSurfacesDurably(ids: string[]): void {
+    const sidecar = this.surfaceSidecar
+    if (!sidecar || ids.length === 0) return
+    // Only ids the sidecar actually holds: a `drop` naming an unpersisted record
+    // rejects the WHOLE transaction, which would leave every other doomed record
+    // durable and resurrect them all on the next boot.
+    const durable = new Set(sidecar.durableRecords().map(r => r.id))
+    ids = ids.filter(id => durable.has(id))
+    if (ids.length === 0) return
+    this.surfaceWriteTail = this.surfaceWriteTail
+      .then(() => sidecar.commit({ drops: ids }))
+      .then(result => {
+        if (!result.committed) {
+          console.warn(`[surfaces] cascade drop of ${ids.length} record(s) failed: ${result.reason}`)
+        }
+      })
+      .catch(err => { console.warn(`[surfaces] cascade drop threw: ${(err as Error).message}`) })
   }
 
   // --- Snapshot (filtered by active space) ---
@@ -1089,6 +1334,12 @@ export class DocumentStore {
       // Run-scoped with no spaceId of their own, so there's nothing to filter
       // on — include them all (space membership rides the notice's run).
       notices: this.getAllNotices(),
+      // Canonical Surfaces (U1). Space-scoped by a required field, so the
+      // homeless-entity allowance above does not apply. Empty on a faulted boot
+      // by construction: the boot path never loads records into the store, so
+      // canonical projection stays EMPTY rather than partial.
+      surfaces: sid ? this.getSurfacesForSpace(sid) : this.getAllSurfaces(),
+      surfaceHealth: this.surfaceStatus,
     }
   }
 
@@ -1133,6 +1384,14 @@ export class DocumentStore {
     // Slate points are run-scoped with no spaceId — drop them by ownership of a
     // cleared run (silent; the `all` reset below tells clients to resync).
     this.slate.deleteRunsSilently(clearedRunIds)
+    // Canonical Surfaces cascade on BOTH coordinates. By space is the obvious
+    // half. By cleared run is the half that is easy to miss and expensive to get
+    // wrong: a run's Surfaces carry a run compatibility alias but live in
+    // whatever space they were migrated into — including the synthetic
+    // space-less bucket — so a space-only sweep leaves them alive for a run that
+    // no longer exists, reachable only through the workspace recovery bucket.
+    this.cascadeSurfaces(s => s.spaceId === spaceId
+      || (s.aliases ?? []).some(a => a.bucket.kind === 'run' && clearedRunIds.has(a.bucket.runId)))
     for (const [id, e] of this.editorWidgets) if (e.spaceId === spaceId) this.editorWidgets.delete(id)
     const clearedBrowserIds = new Set<string>()
     for (const [id, e] of this.browserWidgets) if (e.spaceId === spaceId) { this.browserWidgets.delete(id); clearedBrowserIds.add(id) }
@@ -1169,6 +1428,10 @@ export class DocumentStore {
       this.pinSets.clear()
       this.notices.clear()
       this.slate.clearAll()
+      // Same cascade as clearSpace, whole-store: `clearAll` is the no-active-space
+      // branch, so everything canonical goes with it. This is the branch FAST_SIM
+      // boot takes before seeding the simulator space.
+      this.cascadeSurfaces(() => true)
       // commits are append-only and intentionally preserved
       this.changes.emit('change', { entity: 'all', id: '*', data: null })
     }

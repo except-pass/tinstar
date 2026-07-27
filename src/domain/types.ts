@@ -848,6 +848,40 @@ export interface Surface {
   amendedAt: number
 }
 
+/** How the canonical Surface sidecar loaded at boot (plan KTD5). Mirrors
+ *  `SurfaceStoreHealth` in `src/server/stores/surface-persistence.ts`; declared
+ *  here because it crosses the wire in the SSE snapshot and the client renders
+ *  the degraded case. */
+export type SurfaceHealth = 'healthy' | 'recovered' | 'faulted-read-only'
+
+/**
+ * The canonical Surface store's health as the client sees it, carried on every
+ * SSE snapshot.
+ *
+ * It exists for one case: `faulted-read-only`. When neither Surface snapshot is
+ * readable the server keeps rendering the FROZEN legacy Slate (that is the user's
+ * only copy) but it must never present that copy as current — the plan's success
+ * criterion is that no surface presents stale data as current. So the client shows
+ * a non-dismissable degraded marker naming when the legacy snapshot was frozen,
+ * and the canonical projection stays EMPTY rather than partial.
+ */
+export interface SurfaceHealthStatus {
+  health: SurfaceHealth
+  /**
+   * ISO stamp of the frozen legacy document snapshot — the last time
+   * `docstore.json` was written before this faulted boot.
+   *
+   * NOT the canonical store's own migration timestamp, and deliberately so: when
+   * both sidecar snapshots are unreadable there is nothing left to read that
+   * timestamp OUT of, and inventing one would be exactly the "presented as
+   * current" failure this marker exists to prevent. The legacy snapshot's mtime is
+   * the newest honest answer available in the faulted state.
+   */
+  frozenAt?: string
+  /** One sentence naming what was wrong with each snapshot file, safe to render. */
+  detail?: string
+}
+
 /** Urgency of a widget's current attention request.
  *  Drives both color and sort order in the Inbox view. */
 export type AttentionLevel = 'urgent' | 'attention' | 'info'
