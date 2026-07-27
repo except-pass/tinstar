@@ -558,6 +558,18 @@ export class SurfaceStore {
     this.reindex()
   }
 
+  /** Silent drop of named records, for the `clearSpace` cascade. Emits nothing —
+   *  the caller emits one `all` reset, exactly as the Slate cascade does. This is
+   *  the retract shape the change type deliberately left unbuilt until a unit
+   *  needed one; note it is NOT a user "delete", which under KTD15 is a move into
+   *  the recovery store and stays an ordinary revision-checked mutation. This path
+   *  exists only for a space or run that no longer exists at all. */
+  deleteSilently(ids: Iterable<string>): void {
+    let removed = false
+    for (const id of ids) removed = this.surfaces.delete(id) || removed
+    if (removed) this.reindex()
+  }
+
   /** Silent clear of everything, for the no-active-space `clear()` branch. */
   clearAll(): void {
     this.surfaces.clear()

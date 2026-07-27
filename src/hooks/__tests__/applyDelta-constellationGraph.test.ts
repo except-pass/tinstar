@@ -27,6 +27,7 @@ const baseState = (() => {
     pluginWidgets: [],
     constellationGraphs: [],
     pinSets: [],
+    surfaceHealth: { health: 'healthy' },
   } as Parameters<typeof applyDelta>[0]
 })()
 

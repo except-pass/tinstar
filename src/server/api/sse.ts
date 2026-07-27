@@ -1,7 +1,13 @@
 import type { ServerResponse } from 'node:http'
 import type { DocumentStore } from '../stores/document-store'
+import type { SurfaceBatch } from '../stores/surfaces'
 import type { BusEventType } from '../types'
 import type { CorsHeaders } from './cors'
+
+/** The SSE event name carrying one atomic canonical Surface batch (plan KTD7).
+ *  Not a `BusEvent`: like `ready_queue_update` it is a named SSE channel with no
+ *  event-bus counterpart, so it needs no BusEventType entry. */
+export const SURFACE_BATCH_EVENT = 'surface.batch'
 
 export class SSEBroadcaster {
   private clients = new Set<ServerResponse>()
@@ -37,6 +43,18 @@ export class SSEBroadcaster {
           data: change.data,
         },
       })
+    })
+
+    // Canonical Surfaces ride their own stream (U1). Deliberately NOT flattened
+    // into the per-entity `change` shape above: a batch is ATOMIC and carries the
+    // space's post-mutation topology revision, and splitting it into one delta per
+    // record would let a client render the half-applied frame where a new parent
+    // exists but its children are still siblings.
+    this.store.surfaceChanges.on('batch', (batch: SurfaceBatch) => {
+      // Same active-space suppression the entity deltas get. A batch is
+      // single-space by construction, so one check covers the whole batch.
+      if (this.store.activeSpaceId && batch.spaceId !== this.store.activeSpaceId) return
+      this.broadcastEvent(SURFACE_BATCH_EVENT, batch)
     })
 
     this.heartbeatInterval = setInterval(() => {
