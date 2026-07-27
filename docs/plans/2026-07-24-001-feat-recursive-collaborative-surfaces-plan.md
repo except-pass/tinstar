@@ -164,7 +164,7 @@ flowchart TB
 
 **Measurement**
 
-- R30. Tinstar distinguishes surface-originated and direct human prompts, reports direct prompts divided by all human prompts for an explicit period with a rolling seven-day default, and preserves direct terminal work as a supported escape hatch.
+- R30. Tinstar preserves direct terminal work as a fully supported escape hatch, never degraded or discouraged to make surfaces look better by comparison. Measuring the ratio of surface-originated to direct prompts is explicitly OUT of scope for this release (see the Planning Resolutions note on the dropped direct-use metric).
 
 ### Key Flows
 
@@ -216,11 +216,11 @@ flowchart TB
 - AE7. **Covers R12, R16.** Given a parent spanning two worktrees, when its coordinator delegates an update, then each child keeps its own context and no write crosses a context without an authorized owner.
 - AE8. **Covers R27-R29.** Given a legacy presentation and recursive presentation of one promoted surface, when either changes it, then both reflect the same canonical mutation and no duplicate writable surface exists.
 - AE9. **Covers R7-R9, R24.** Given an agent-generated parent summary, when it renders, then it uses the fixed catalog, preserves its children as sources of truth, and reveals no private reasoning.
-- AE10. **Covers R30.** Given prompts sent through both a surface and ttyd, when a rolling seven-day report is generated, then both origins are distinguishable and direct use remains a valid escape path.
+- AE10. **Covers R30.** Given a user who prompts through ttyd instead of a surface, when they do so repeatedly, then nothing in the product degrades, warns, nags, or reduces capability relative to prompting through a surface.
 
 ### Success Criteria
 
-- The direct-interaction rate trends downward as the surface experience improves.
+- A normal run can be read, answered, and steered end to end without opening the transcript, while opening it remains equally capable.
 - Automatically refreshable surfaces update without human prompting, while mark-stale and manual surfaces honestly request action.
 - Users can understand what needs attention, what is actively changing, and what evidence each surface reflects without opening the transcript.
 - Users can manage many visible surfaces while preserving spatial memory and reducing reading fatigue.
@@ -320,7 +320,7 @@ Each phase remains usable if later phases are delayed.
 - **KTD11 — Inspectable agent refreshes use managed background sessions and staged results.** The current fire-and-forget `claude -p --dangerously-skip-permissions` author is retired for autonomous agent refreshes. A live owner may receive serialized work directly; otherwise the host launches a background managed session in the authorized worktree, tracks it as a contributor, and retires it through the normal Graveyard path. Workers write only to a job-specific staging artifact outside watched Slate source paths. The coordinator validates and commits that artifact through KTD10 and the active content-authority adapter. Non-agent processes remain evidence-only contributors.
 - **KTD12 — Presence is ephemeral; ownership and activity are durable.** (session-settled: user-directed — chosen over typing lines and separate participant rails: the same ambient halo and avatar cluster must work at every depth.) Human focus and live participants use expiring leases. Surface ownership, refresh jobs, proposals, and bounded activity entries survive restart. Descendant rollups deduplicate participants and apply deterministic severity precedence.
 - **KTD13 — The existing right Canvas sidebar becomes a tabbed Attention Rail.** (session-settled: user-directed — chosen over automatic priority reordering: urgency should not destroy spatial memory.) Attention becomes the default tab when actionable work exists; existing Canvas tools remain available in a sibling tab. Selecting a row locates the Surface without mutating placement.
-- **KTD14 — Direct-use measurement combines origin markers with transcript analysis.** Surface intents inject a stable machine-readable marker containing one intent ID. Reports count unique human intents, not child dispatches, over an explicit window with a rolling seven-day default. Unmarked human transcript prompts are direct-use candidates; reports disclose parse exclusions rather than claiming perfect attribution.
+- **KTD14 — Direct-use measurement is dropped for this release.** (session-settled: user-directed — chosen over shipping the measurement pipeline: the metric was self-inverting and the apparatus was heavier than a single-user release needs.) The proposed design counted unmarked human transcript prompts as direct use, but U6 delivers refresh work to a live owner through that same prompt path, so automatic freshness would have inflated the very number it was meant to drive down. Surface intents still carry a stable origin identity for idempotency and fan-out accounting under KTD9; that identity is NOT aggregated into a direct-versus-surface ratio, and no transcript scanning, dedup, or exclusion-disclosure machinery ships. If the question is revisited, the prerequisite is marking every host-originated prompt — refresh dispatches and notice replies included — not only Surface intents.
 
 ### High-Level Technical Design
 
@@ -796,13 +796,12 @@ The design-language sections for every component this unit introduces exist befo
 
 **Goal:** Make Surface threads the normal human-agent channel while preserving ttyd and Graveyard as complete drill-down paths.
 
-**Requirements:** R7-R12, R16, R24, R30; F1, F5; AE4, AE7, AE9, AE10; KTD6, KTD9, KTD12, KTD14.
+**Requirements:** R7-R12, R16, R24, R30; F1, F5; AE4, AE7, AE9, AE10; KTD6, KTD9, KTD12.
 
 **Dependencies:** U3, U4.
 
 **Files:**
 - Create `src/server/surfaces/surface-prompt-router.ts`.
-- Create `src/server/surfaces/surface-interaction-metrics.ts`.
 - Create `src/components/SurfaceWorkspace/ContributorDrilldown.tsx`.
 - Move or adapt `src/components/RunWorkspaceWidget/SurfaceThread.tsx` into `src/components/SurfaceWorkspace/SurfaceThread.tsx`.
 - Modify `src/components/SurfaceWorkspace/SurfaceCard.tsx`.
@@ -813,7 +812,6 @@ The design-language sections for every component this unit introduces exist befo
 - Modify `src/server/sessions/graveyard-snapshot.ts`.
 - Modify `src/widgets/primitives/TerminalPrimitive.tsx`.
 - Add `src/server/surfaces/__tests__/surface-prompt-router.test.ts`.
-- Add `src/server/surfaces/__tests__/surface-interaction-metrics.test.ts`.
 - Extend `src/server/api/__tests__/routes.surfaces.test.ts`.
 - Extend `src/server/api/__tests__/graveyard-route.test.ts`.
 - Add `src/components/SurfaceWorkspace/__tests__/ContributorDrilldown.test.tsx`.
@@ -856,7 +854,7 @@ Parent child dispatches reuse one intent ID.
 - Metrics count one parent intent, distinguish Surface and direct prompts, apply the requested window, and disclose excluded transcript records.
 - No prompt context includes private reasoning or unauthorized descendant content.
 
-**Verification:** A human can prompt, inspect partial delivery, open the correct underlying evidence, and calculate the direct-interaction rate without reading implementation state.
+**Verification:** A human can prompt, inspect partial delivery, and open the correct underlying evidence without reading implementation state.
 
 ### U6. Durable trigger and refresh engine
 
@@ -1001,7 +999,7 @@ Selecting an item changes focus and camera only; it does not mutate layout or ca
 
 **Goal:** Ship gradual adoption with a kill switch, migration diagnostics, complete browser flows, and updated authoring guidance.
 
-**Requirements:** R1-R30; F1-F6; AE1-AE10; KTD1-KTD14.
+**Requirements:** R1-R30; F1-F6; AE1-AE10; KTD1-KTD13.
 
 **Dependencies:** U4, U5, U6, U7.
 
@@ -1051,7 +1049,6 @@ Update the agent skill so authors prefer canonical API and CLI operations while 
 - Disabling the capability preserves canonical data and restores flat run and workspace fallback operation.
 - After grouping, closing the linked legacy panel, and restarting, disabled mode exposes every Surface through its flat run or workspace recovery alias with content and threads intact.
 - Restart during a queued or running refresh restores an honest job state.
-- The direct-interaction report distinguishes Surface and ttyd prompts after parent fan-out.
 - Migration diagnostics appear for a quarantined collision without mutating the old record.
 - The UI remains usable at narrow and wide viewports, with the rail collapsed and expanded.
 
@@ -1072,7 +1069,6 @@ Update the agent skill so authors prefer canonical API and CLI operations while 
 | Targeted browser contract | `npx playwright test e2e/recursive-surfaces.spec.ts e2e/surface-migration.spec.ts e2e/surface-freshness.spec.ts e2e/surface-attention.spec.ts` | U8 | Coexistence, promotion, restart, attention, and drill-down journeys pass |
 | Existing browser regression | `npx playwright test` | U8 | Existing Canvas, Run Workspace, terminal, and widget scenarios remain green |
 | Migration rehearsal | Start an isolated backend from a copied pre-Surface document snapshot, inspect migration diagnostics, promote and group Surfaces, restart, then disable recursive mode | U1, U2, U8 | IDs and threads remain stable; compatibility view remains usable; canonical data survives rollback |
-| Interaction metric smoke | Send one Surface prompt, one parent fan-out prompt, and one direct ttyd prompt, then request the rolling report | U5, U8 | Three human intents are counted; the parent fan-out counts once; the direct rate is one-third |
 
 Verification commands run on Node 22.12 or newer.
 Backend and frontend requests use isolated Tinstar config roots so tests never touch the primary workspace.
@@ -1095,7 +1091,7 @@ Any test that clears an optional field must cross a real JSON serialization boun
 - Automatic freshness survives restart, rejects stale completion, inherits orphaned work once, and never labels unknown data current.
 - Presence expires independently from ownership, and parent rollups deduplicate participants with deterministic drill-down.
 - The Attention Rail finds Needs you, Active, and Recent work without reordering the Canvas and preserves existing Canvas tools.
-- Prompt attribution reports unique human intents over an explicit window and does not inflate parent fan-out.
+- Direct terminal work remains fully supported and undegraded; no direct-versus-surface ratio is computed or reported.
 - Recursive Surface mode has a tested kill switch that preserves canonical data and exposes every Surface through flat run or workspace recovery aliases.
 - Authenticated multi-human identity and authorization remain clearly deferred; the shipped actor model is labeled trusted-local.
 - All Verification Contract gates pass.
