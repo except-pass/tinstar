@@ -646,6 +646,208 @@ export interface Point {
   stalledAt?: number
 }
 
+// --- Canonical Surfaces (recursive collaborative surfaces, U1) ---
+//
+// `Surface` is the CANONICAL work-artifact record (plan KTD1): one recursive
+// primitive that owns authored content, thread, provenance, owner, freshness, and
+// its own revision. A "container" is not a second entity — it is a Surface that
+// happens to have children, which is why the parent link lives on the CHILD
+// (`home`) and child indexes are DERIVED rather than stored. A Surface that gains
+// its first child is byte-identical to the one that had none.
+//
+// `Point` and `SlateSurface` above become compatibility shapes over this record
+// rather than independent sources of truth. Nothing reads these types yet: U1
+// introduces the model and its store; the migration, persistence, and projection
+// wiring are later units.
+
+/** Where a Surface lives. Exactly one home, always (plan KTD2/R2) — recursion is
+ *  a tree, not a general graph. Canvas is a HOME, not a Surface (R29), so the two
+ *  cases are structurally different rather than a nullable parent id.
+ *
+ *  Run Workspace membership is deliberately NOT a third case: it is a
+ *  compatibility PRESENTATION carried by {@link SurfaceCompatAlias}, so promoting
+ *  a run-scoped Surface onto the Canvas is an ordinary home change and never
+ *  produces a second writable copy (KTD3/R28). */
+export type SurfaceHome =
+  | { kind: 'canvas'; spaceId: string }
+  | { kind: 'surface'; surfaceId: string }
+
+/** Who or what acts on a Surface (plan KTD6). One trusted local human in this
+ *  release, but the identity seam is real: a stable browser actor id namespaces
+ *  view state and audit entries, while managed sessions, host refresh jobs, and
+ *  local processes each get their own principal so routing and freshness
+ *  ownership can distinguish them. This is product-level routing identity — it
+ *  does NOT claim isolation against a hostile local process. */
+export interface SurfacePrincipalRef {
+  kind: 'human' | 'session' | 'job' | 'process'
+  /** Stable within `kind`: a browser actor id, a managed session id, a job id, or
+   *  a process identity. */
+  id: string
+  /** Display label captured at reference time, so a retired session still renders
+   *  as a name rather than an opaque id. */
+  label?: string
+}
+
+/** Explicit provenance (R12): the project/repo/worktree/run context a Surface was
+ *  produced in. A source file's location may SEED these but never replace them —
+ *  a Surface that moves, or a parent spanning two worktrees, needs context that
+ *  outlives the path it happened to be authored at. */
+export interface SurfaceProvenance {
+  project?: string
+  repo?: string
+  worktreeId?: string
+  runId?: string
+  sessionId?: string
+}
+
+/** Which authority may replace authored content (plan KTD4). `source-binding`
+ *  means the bound source wins and a direct content edit must go back through its
+ *  adapter (or explicitly transfer authority); `canonical-direct` means the record
+ *  is authoritative and later file changes are reported as divergence rather than
+ *  applied. Persisted rather than inferred, because "who wins" must survive a
+ *  restart — inferring it from the presence of a binding would silently reassign
+ *  authority the first time a source disappeared. */
+export type SurfaceContentAuthority = 'source-binding' | 'canonical-direct'
+
+/** The external source a Surface's content is reconciled from (U2's adapters). */
+export interface SurfaceSourceBinding {
+  /** Which reconciler owns this source. `slate-file` is the only adapter the
+   *  legacy migration produces; left as an open string so a later adapter is a
+   *  registry entry rather than a schema migration. */
+  adapter: string
+  /** Adapter-scoped locator — for `slate-file`, the source path. */
+  locator: string
+  /** HOST-owned monotonic observation generation (plan KTD10). The freshness
+   *  barrier compares generations, never wall-clock time: content hashes, Git
+   *  SHAs, and process ids are EVIDENCE and are never ordered as time. */
+  generation: number
+  /** Opaque adapter evidence for the observation that produced current content
+   *  (content hash, Git SHA, mtime). Compared for equality only. */
+  watermark?: string
+}
+
+/** The execution phase of a Surface's freshness lifecycle (R18). Kept SEPARATE
+ *  from {@link PointStatus}: a resolved discussion says nothing about whether the
+ *  content still reflects its source. */
+export type SurfaceFreshnessPhase = 'current' | 'possibly-stale' | 'queued' | 'refreshing' | 'failed'
+
+/** What the host knows about whether a Surface still reflects its source. */
+export interface SurfaceFreshness {
+  phase: SurfaceFreshnessPhase
+  /** ORTHOGONAL to `phase`, not a sixth phase: entering `queued` or `refreshing`
+   *  retains the overdue badge until a verification actually succeeds, so a
+   *  retry loop cannot make an overdue Surface look attended-to. */
+  overdue: boolean
+  /** Epoch ms verification deadline. Absent when the Surface declares no policy. */
+  dueAt?: number
+  /** The source generation the CURRENT content reflects. A refresh that finishes
+   *  against an older generation than the source now has is superseded rather
+   *  than allowed to claim current (KTD10). */
+  observedGeneration?: number
+  /** Epoch ms of the last successful verification. */
+  verifiedAt?: number
+}
+
+/** A Surface's authored content — the part an authority may replace (KTD4). */
+export interface SurfaceContent {
+  /** One-line title. Always present: a Surface with no headline has nothing to
+   *  render in a rail row, a breadcrumb, or a collapsed parent preview. */
+  headline: string
+  /** A2UI body from the bounded component catalog (R7). Absent for a Surface that
+   *  is a bare headline plus thread. */
+  body?: A2uiContent
+  /** Author-declared refresh recipe (R13): the self-contained instruction that
+   *  rebuilds this Surface. Absent means refresh degrades to a bare nudge. */
+  recipe?: string
+}
+
+/** View-independent discussion state (R5/R8). Shared, never per-user: a thread is
+ *  what the collaboration is, so it may not live in a browser's view namespace.
+ *  Mirrors the Slate `Point` thread deliberately, so the compatibility projection
+ *  is a field rename rather than a lossy conversion. */
+export interface SurfaceThread {
+  /** Append-only, oldest first. */
+  replies: Reply[]
+  /** DERIVED from the thread unless `resolvedAt`/`dismissedAt` is set. Stored
+   *  rather than recomputed at read time so every reader — canonical, legacy
+   *  projection, rail rollup — agrees without re-deriving. */
+  status: PointStatus
+  /** Set only by an explicit resolve; survives a source re-projection. */
+  resolvedAt?: number
+  /** Set only by an explicit dismiss; survives a source re-projection. */
+  dismissedAt?: number
+}
+
+/** A legacy presentation of a canonical Surface (plan KTD3). NOT a home: the
+ *  alias controls where a Surface additionally SHOWS UP during migration and
+ *  whether that presentation is visible, while `home` stays the single answer to
+ *  where it lives. `workspace-recovery` is the fallback bucket for a Surface whose
+ *  source run no longer exists, so disabling recursive mode can still expose every
+ *  alias as a flat compatibility list. */
+export interface SurfaceCompatAlias {
+  bucket: { kind: 'run'; runId: string } | { kind: 'workspace-recovery' }
+  /** The legacy id inside that bucket — what `Run.slate` projects as its `id`, so
+   *  an existing client keeps addressing the point id it already knows. */
+  localId: string
+  /** False once the user closes the legacy presentation. Closing HIDES the alias;
+   *  it never deletes the canonical Surface. */
+  visible: boolean
+}
+
+/** The canonical work artifact (plan KTD1). One recursive primitive: leaves and
+ *  parents share this record, these affordances, and this lifecycle.
+ *
+ *  Identity is GLOBAL and NON-REUSABLE — unlike a `Point`, whose id is unique only
+ *  within its run. That is what lets a Surface move between homes without changing
+ *  identity, and it is why the migration derives ids from a run INCARNATION rather
+ *  than from the run name: deleting and recreating a run must not resurrect the
+ *  earlier Surface's thread under a new run that merely shares its name. */
+export interface Surface {
+  id: string
+  /** The space this Surface belongs to. IMMUTABLE once created, and the reason
+   *  cross-space parentage is a REJECTABLE error rather than an impossible state:
+   *  if space were derived by walking home links to Canvas, a cross-space move
+   *  would silently teleport a whole subtree instead of failing. */
+  spaceId: string
+  home: SurfaceHome
+  /** Sibling order within `home`. Host-owned topology (never source-authored).
+   *  Absent falls back to `createdAt`, so an unordered set keeps creation order. */
+  order?: number
+  content: SurfaceContent
+  contentAuthority: SurfaceContentAuthority
+  /** Present when content is reconciled from an external source. A Surface may
+   *  keep its binding while holding `canonical-direct` authority — that is exactly
+   *  the divergence-reporting case in KTD4. */
+  source?: SurfaceSourceBinding
+  provenance?: SurfaceProvenance
+  /** Who authored the current body — the compatibility counterpart of
+   *  {@link Point.author}. */
+  author: PointAuthor
+  /** Who is responsible for keeping this Surface fresh (R13/R16). Absent means
+   *  unowned, which is what makes coordinator inheritance detectable. */
+  owner?: SurfacePrincipalRef
+  thread: SurfaceThread
+  freshness: SurfaceFreshness
+  /** Legacy presentations. Plural because KTD3 maps a Surface to "one or more run
+   *  or workspace fallback buckets" — a promoted Surface keeps its run alias while
+   *  a run-less one gains the workspace recovery bucket. */
+  aliases?: SurfaceCompatAlias[]
+  /** Migration presentation metadata (KTD3), NOT a second container type: a
+   *  per-run root Surface carries the standard model but is excluded from ordinary
+   *  Canvas projection so migration does not dump a root card onto the canvas. */
+  compatibilityOnly?: boolean
+  /** Per-record revision. Monotonic, host-assigned, and compared by every
+   *  content write (KTD7) — never accepted from a mutable request field. */
+  rev: number
+  /** The SPACE topology revision in force when this record's `home` last changed.
+   *  Stamped on the record so a flat record list is sufficient to reconstruct the
+   *  per-space topology revision exactly on reload — one source of truth instead
+   *  of a snapshot-level counter that can drift from the records it describes. */
+  homeRev: number
+  createdAt: number
+  amendedAt: number
+}
+
 /** Urgency of a widget's current attention request.
  *  Drives both color and sort order in the Inbox view. */
 export type AttentionLevel = 'urgent' | 'attention' | 'info'
