@@ -47,5 +47,11 @@ A run's standing statement of what the session is for: one short piece of user-w
 ### Surface
 A single interactive panel on the Slate — the unit an agent, user, or process authors and the user touches independently. Each surface is an addressable point rendered as its own card: an open point in the grouped list, a standalone diagram, a form, or a progress panel. A surface's body is written in A2UI; its identity, discussion thread, and lifecycle status are owned by the store, so re-authoring a surface under the same identity amends it without discarding what has accumulated on it.
 
+### Container surface
+A surface that holds other surfaces. "Container" describes the surface's current structural role, not a separate entity or interaction model: it keeps the same title, content, prompt thread, presence, freshness, provenance, and minimize/hide/delete behavior as any other surface. A container may also carry its own authored summary or diagram. Each child surface has one home container, so recursive composition forms a tree rather than a multi-parent graph.
+
+### Attention rail
+A collapsible, scoped projection of surfaces that need the user, are actively changing, or changed recently. It helps the user search, filter, and jump to work without reordering the stable surface workspace; an explicit show-only action may temporarily filter the view.
+
 ### A2UI
 The bounded, host-rendered UI description language a surface's body is written in: a flat set of components — text, layout rows and columns, lists, cards, links, and interactive controls — referenced by id from one root. Closed vocabulary, open composition: an agent composes from a fixed catalog the host draws in its own theme, rather than shipping arbitrary markup or styles. A body that is not valid A2UI is rejected at the boundary and never renders.
