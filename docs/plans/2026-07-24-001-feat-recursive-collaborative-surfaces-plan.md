@@ -725,7 +725,10 @@ Other shared arrangement or deletion attempts create an expiring proposal, and t
 - Modify `src/widgets/index.ts`.
 - Modify `src/lib/uiPrefs.ts`.
 - Modify `src/lib/windowEvents.ts`.
+- Modify `src/a2ui/catalog.tsx`.
+- Modify `docs/slate-design-language.md`.
 - Add `src/domain/__tests__/surfaceTree.test.ts`.
+- Add `src/a2ui/__tests__/ChartComponent.test.tsx`.
 - Add `src/components/SurfaceWorkspace/__tests__/SurfaceCard.test.tsx`.
 - Add `src/components/SurfaceWorkspace/__tests__/SurfaceWorkspace.test.tsx`.
 - Extend `src/hooks/__tests__/useServerEvents.test.ts`.
@@ -755,7 +758,16 @@ Surface cards are scope portals even when they have children; existing taxonomy 
 Add selection-based group, move, ungroup, promotion, and deletion controls.
 Use optimistic feedback only after the service accepts the operation or returns a proposal; stale revisions restore the authoritative snapshot and show a conflict.
 
-**Patterns to follow:** Synthetic node injection in `WorkspaceShell`; recursive Canvas rendering in `InfiniteCanvas`; typed preferences in `uiPrefs`; hidden-run removal cleanup; host widget registration in `src/widgets/`.
+Write the design-language sections for the new components BEFORE implementing them, not in U8.
+`docs/slate-design-language.md` is the authority every Slate component already answers to, so a section written after the component ships documents whatever was guessed rather than governing it.
+The sections this unit adds must resolve, at minimum: the avatar cluster and presence halo (sizing, overflow past N participants, and a monochrome treatment that keeps the reserved live-edge cyan unspent, per P4); breadcrumb overflow at depth; what the user sees when an optimistic group or reparent is rejected by the service, using the existing honest-degradation vocabulary rather than a silent revert; distinct messages for each of the four grouping rejection reasons; and whether the existing panel keys extend to group, ungroup, and promote.
+U8 then reconciles the doc with what actually shipped instead of authoring it from scratch.
+
+Add a chart component to the A2UI catalog so R7 is satisfiable.
+R7 promises the bounded catalog covers charts, but the catalog registers fourteen components and none of them is a chart, and no other unit in this plan touches `src/a2ui`.
+The component is validated at the U3 boundary like every other catalog entry, degrades to an inline notice on unusable data exactly as `Mermaid` and `Stepper` already do, and takes its palette from the design language rather than carrying its own colors.
+
+**Patterns to follow:** Synthetic node injection in `WorkspaceShell`; recursive Canvas rendering in `InfiniteCanvas`; typed preferences in `uiPrefs`; hidden-run removal cleanup; host widget registration in `src/widgets/`; catalog registration and degrade-to-notice behavior of `Mermaid` and `Stepper` in `src/a2ui/catalog.tsx`.
 
 **Test scenarios:**
 - Canvas renders top-level canonical Surfaces beside run, editor, browser, image, and plugin widgets.
@@ -772,8 +784,13 @@ Use optimistic feedback only after the service accepts the operation or returns 
 - A large subtree arriving over SSE does not regenerate unrelated legacy widget layouts.
 - A stale optimistic topology action rolls back to the atomic server batch.
 - Set-to-clear nullable Surface fields disappear after serialized SSE round-trip.
+- A rejected optimistic group or reparent surfaces the documented conflict treatment rather than reverting silently.
+- Each of the four grouping rejection reasons produces its own distinct message.
+- A chart body renders through the catalog, and an unusable chart body degrades to an inline notice without blanking sibling surfaces.
+- No design-language value used by a new component contains the reserved live-edge cyan.
 
 **Verification:** Component and hook tests prove focused recursion, stable legacy placement, scoped preferences, and atomic client reconciliation.
+The design-language sections for every component this unit introduces exist before that component is implemented, and the catalog satisfies R7.
 
 ### U5. Contextual prompts, contributor drill-down, and interaction measurement
 
@@ -997,7 +1014,7 @@ Selecting an item changes focus and camera only; it does not mutate layout or ca
 - Modify `e2e/fixtures.ts`.
 - Add `e2e/fixtures/surface-server.ts`.
 - Modify `docs/the-slate.md`.
-- Modify `docs/slate-design-language.md`.
+- Modify `docs/slate-design-language.md` (reconcile with what shipped; the sections for U4's new components are authored in U4, before those components are built).
 - Modify `CONCEPTS.md`.
 - Add `e2e/recursive-surfaces.spec.ts`.
 - Add `e2e/surface-migration.spec.ts`.
