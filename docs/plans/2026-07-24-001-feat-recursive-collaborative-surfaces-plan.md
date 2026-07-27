@@ -234,6 +234,7 @@ flowchart TB
 
 **Deferred for later**
 
+- A sibling-reorder primitive. (session-settled: user-directed.) The Canonical Field Authority table places sibling `order` under "changed only by atomic topology mutation", but the three topology mutations this plan defines — set-home, group, reparent — cannot change it. So a Surface takes its position at creation and keeps it. This is a KNOWN gap, deliberately not closed in U3: `SlateStore.assignOrderSlots` exists because reordering turned out to be genuinely subtle the first time (dragging one row has to renumber its neighbours without churning the rest), and that is its own piece of work rather than a rider on the mutation service. Until a later unit adds it, surfaces cannot be reordered and the UI must not offer an affordance that silently does nothing.
 - Linked surfaces that appear in multiple containers.
 - A general-purpose custom trigger editor beyond inspecting and choosing supported trigger policies.
 - Automatic cleanup actions beyond suggestions and freshness-driven status.
