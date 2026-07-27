@@ -28,6 +28,7 @@ import { FastPathBadge } from './FastPathBadge'
 import { moveItem } from './reorderUtil'
 import { usePointAnswerForm } from './usePointAnswerForm'
 import { WorkbenchSurface, partitionWorkbenches } from './WorkbenchSurface'
+import { durablyAnswered } from './answeredState'
 
 /** The visible track stages, in order. `resolved` is terminal; `dismissed` is a
  *  side exit (rendered as a dimmed row, not a track position). */
@@ -215,17 +216,29 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
     void lifecycle(resolved ? 'reopen' : 'resolve', resolved ? null : 'resolved')
   }, [resolved, lifecycle])
 
+  // The DURABLE answered posture. `answer.answered` is the hook's optimistic lock —
+  // plain `useState`, so it dies on remount, and a row remounts on every re-projection
+  // and every reload. Without the durable half, a point the user answered five minutes
+  // ago comes back as blank controls inviting a second answer.
+  const answered = answer.answered || durablyAnswered(surface)
+
   // Submitting an answer also clears any lingering lifecycle (resolve/reopen) error,
   // exactly as the pre-extraction `submitAnswer` did when the two shared one `error`.
+  //
+  // `answered` overrides the hook's flag rather than sitting beside it: the A2UI
+  // controls read `form.answered` and nothing else, so the durable signal has to reach
+  // them through here or the Submit renders as a live button on an already-answered
+  // point. One-way — `||` never turns a locked form back on.
   const form: NoticeFormState = useMemo(
     () => ({
       ...answer.form,
+      answered,
       submit: () => {
         setError(null)
         answer.form.submit()
       },
     }),
-    [answer.form],
+    [answer.form, answered],
   )
 
   // The row shows ONE error line, and the two slots clear EACH OTHER — the wrapped
@@ -249,6 +262,9 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
     <div
       data-testid={`point-${surface.id}`}
       data-status={status}
+      // Mirrors the workbench column's marker so a test — and anyone reading the DOM —
+      // can tell "already answered" apart from `status`, which an agent reply moves.
+      data-answered={answered ? 'true' : undefined}
       data-refreshing={refreshing ? 'true' : undefined}
       data-focused={focused ? 'true' : undefined}
       className={`rounded border bg-surface-hover p-2.5 transition-shadow ${

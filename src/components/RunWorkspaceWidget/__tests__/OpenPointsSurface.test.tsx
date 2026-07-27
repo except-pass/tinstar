@@ -501,4 +501,95 @@ describe('OpenPointsSurface (U6)', () => {
     await waitFor(() => expect(screen.getByText(/could not resolve this point/i)).toBeTruthy())
     expect(screen.queryByText(/pick an option/i)).toBeNull()
   })
+
+  // ── The DURABLE answered posture (`durablyAnswered`) ────────────────────────────
+  // A row's only answered signal used to be `usePointAnswerForm`'s optimistic lock —
+  // plain `useState`, so it died on remount and the user came back to blank controls
+  // inviting a second answer to a question they'd already settled.
+  describe('durable answered state', () => {
+    /** Choice + Submit — enough to tell "locked" from "still asking". */
+    const askBody = {
+      root: 'root',
+      components: [
+        { id: 'root', component: 'Column', children: ['c', 's'] },
+        {
+          id: 'c',
+          component: 'Choice',
+          mode: 'single',
+          options: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }],
+        },
+        { id: 's', component: 'Submit', label: 'Send' },
+      ],
+    }
+
+    const userReply = { id: 'r1', author: 'user' as const, text: 'Yes — go with A.', createdAt: 10 }
+    const agentReply = { id: 'r2', author: 'agent' as const, text: 'On it.', createdAt: 20 }
+
+    it('an answered point still reads answered across a remount', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          points={[point('p1', { body: askBody as never, status: 'waiting', thread: [userReply] })]}
+        />,
+      )
+      // Nothing was clicked in this render — the state comes purely from the thread,
+      // which is the whole point: a reload lands here, not on blank controls.
+      expect(screen.getByTestId('point-p1').getAttribute('data-answered')).toBe('true')
+      expect(screen.getByText('✓ Answered')).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
+      expect((screen.getByRole('radio', { name: 'Yes' }) as HTMLInputElement).disabled).toBe(true)
+    })
+
+    // THE REGRESSION. Status is derived from WHO SPOKE LAST (`derivePointStatus`), so
+    // the agent's reply flips `waiting` → `discussing`. The old predicate read status,
+    // so the answered marker was erased at exactly the moment the answer was acted on.
+    // Back the predicate out to `status === 'waiting' || 'resolved'` and this fails.
+    it('stays answered after the agent replies to act on the answer', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          points={[
+            point('p1', {
+              body: askBody as never,
+              status: 'discussing', // ← the agent spoke last
+              thread: [userReply, agentReply],
+            }),
+          ]}
+        />,
+      )
+      expect(screen.getByTestId('point-p1').getAttribute('data-status')).toBe('discussing')
+      expect(screen.getByTestId('point-p1').getAttribute('data-answered')).toBe('true')
+      expect(screen.getByText('✓ Answered')).toBeTruthy()
+    })
+
+    // Monotonic, not just sticky: an agent-only thread is a conversation, not an answer,
+    // and must leave the controls live.
+    it('an agent-only thread leaves the point unanswered and its controls live', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          points={[point('p1', { body: askBody as never, status: 'discussing', thread: [agentReply] })]}
+        />,
+      )
+      expect(screen.getByTestId('point-p1').getAttribute('data-answered')).toBeNull()
+      expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false)
+      expect((screen.getByRole('radio', { name: 'Yes' }) as HTMLInputElement).disabled).toBe(false)
+    })
+
+    // `resolved` is the explicit terminal, and it survives a thread prune — so it stays
+    // a true on its own, with no reply to read.
+    it('a resolved point reads answered even with no thread at all', () => {
+      render(
+        <OpenPointsSurface runId="run-1" points={[point('p1', { body: askBody as never, status: 'resolved' })]} />,
+      )
+      expect(screen.getByTestId('point-p1').getAttribute('data-answered')).toBe('true')
+      expect(screen.getByText('✓ Answered')).toBeTruthy()
+    })
+
+    it('an untouched open point is not answered', () => {
+      render(<OpenPointsSurface runId="run-1" points={[point('p1', { body: askBody as never })]} />)
+      expect(screen.getByTestId('point-p1').getAttribute('data-answered')).toBeNull()
+      expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
+    })
+  })
 })

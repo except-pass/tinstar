@@ -23,14 +23,10 @@ import type { SlateSurface } from '../../types'
 import { A2uiRenderer } from '../../a2ui/A2uiRenderer'
 import { isAnswerable } from '../../a2ui/controls'
 import { usePointAnswerForm } from './usePointAnswerForm'
-
-/** A point whose thread already carries the user's answer. `waiting` means the last
- *  reply is the user's (the agent owes a response) — which is exactly what a submitted
- *  answer leaves behind; `resolved` is the explicit terminal. This is the DURABLE
- *  signal, so an answered column survives a reload. */
-function durablyAnswered(s: SlateSurface): boolean {
-  return s.status === 'waiting' || s.status === 'resolved'
-}
+// The DURABLE answered signal — shared with the open-points ROW so a point looks the
+// same answered whichever way it is rendered. See answeredState.ts for why it reads
+// the thread rather than `status`.
+import { durablyAnswered } from './answeredState'
 
 /** One question. Owns its OWN answer form — nothing here is shared with a sibling
  *  column, which is the whole point: submitting this column can't touch that one. */

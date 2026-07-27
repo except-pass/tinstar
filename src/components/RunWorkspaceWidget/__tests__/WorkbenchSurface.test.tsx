@@ -65,6 +65,18 @@ function q(id: string, extra: Partial<SlateSurface> = {}): SlateSurface {
   }
 }
 
+/** A thread that already carries the user's answer, optionally followed by the agent
+ *  reply that acts on it — the shape a real answered point has a minute later. */
+function answeredThread(withAgentReply: boolean): NonNullable<SlateSurface['thread']> {
+  const thread: NonNullable<SlateSurface['thread']> = [
+    { id: 'r1', author: 'user', text: 'Yes — go with A.', createdAt: 10 },
+  ]
+  if (withAgentReply) {
+    thread.push({ id: 'r2', author: 'agent', text: 'On it.', createdAt: 20 })
+  }
+  return thread
+}
+
 /** The answer POSTs this test run made, as [pointId, parsedBody] pairs. */
 function answerCalls(): Array<[string, Record<string, unknown>]> {
   return apiFetch.mock.calls
@@ -147,6 +159,51 @@ describe('WorkbenchSurface (S4 U3)', () => {
     expect((within(colB).getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
+  // THE REGRESSION. `durablyAnswered` used to read `status === 'waiting' || 'resolved'`,
+  // and the server derives status from WHO SPOKE LAST — so the instant the agent replied
+  // to act on the answer, status went `waiting` → `discussing` and the answered marker
+  // was erased. The marker survived right up until the thing it marks actually happened.
+  // Back the predicate out to the status test and this column reads unanswered again.
+  it('stays answered after the agent replies — status flips to discussing, the thread does not', () => {
+    render(
+      <WorkbenchSurface
+        runId="run-1"
+        group="launch-qs"
+        points={[
+          q('a', { status: 'discussing', thread: answeredThread(true) }),
+          q('b'),
+        ]}
+      />,
+    )
+
+    const colA = screen.getByTestId('workbench-column-a')
+    expect(colA.getAttribute('data-status')).toBe('discussing')
+    expect(colA.getAttribute('data-answered')).toBe('true')
+    // …and the count agrees: the agent's reply must not un-answer the series.
+    expect(screen.getByTestId('workbench-progress-launch-qs').textContent).toBe('1 of 2 answered')
+    expect(screen.getByTestId('workbench-column-b').getAttribute('data-answered')).toBeNull()
+  })
+
+  // The other half of monotonic: an agent-only thread is a conversation, not an answer.
+  it('an agent-only thread does NOT read as answered', () => {
+    render(
+      <WorkbenchSurface
+        runId="run-1"
+        group="launch-qs"
+        points={[
+          q('a', {
+            status: 'discussing',
+            thread: [{ id: 'r1', author: 'agent', text: 'Some context first.', createdAt: 5 }],
+          }),
+          q('b'),
+        ]}
+      />,
+    )
+
+    expect(screen.getByTestId('workbench-column-a').getAttribute('data-answered')).toBeNull()
+    expect(screen.getByTestId('workbench-progress-launch-qs').textContent).toBe('0 of 2 answered')
+  })
+
   it('submitting with neither a choice nor a note errors and never POSTs', async () => {
     render(<WorkbenchSurface runId="run-1" group="launch-qs" points={[q('a'), q('b')]} />)
 
@@ -166,8 +223,10 @@ describe('WorkbenchSurface (S4 U3)', () => {
       <WorkbenchSurface
         runId="run-1"
         group="launch-qs"
-        // `waiting` = the thread already ends with the user's reply, i.e. durably answered.
-        points={[q('a'), q('b'), q('c', { status: 'waiting' })]}
+        // A user reply in the thread = durably answered. (`waiting` rides along because
+        // that IS what the server derives from a thread ending in a user reply — but the
+        // thread, not the status, is what the predicate reads.)
+        points={[q('a'), q('b'), q('c', { status: 'waiting', thread: answeredThread(false) })]}
       />,
     )
 
