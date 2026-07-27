@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { PluginServerSpec } from '@tinstar/plugin-api'
 import { parseManifest, ManifestError } from '../../core/pluginHost/manifest'
 import { readPluginsConfig, type PluginsConfig } from '../../core/pluginHost/pluginsConfig'
+import { guestEnv } from '../sessions/guestEnv'
 
 export interface PluginServerEntry {
   pluginId: string
@@ -125,6 +126,11 @@ export function startServer(configRoot: string, pluginId: string): { started: tr
     detached: true,
     stdio: ['ignore', fd, fd],
     windowsHide: true,
+    // Guest boundary: a plugin server is third-party code with its own
+    // toolchain. Inheriting Tinstar's env hands it NODE_ENV=production, so a
+    // plugin whose start script runs `npm install` silently loses its
+    // devDependencies — the exact trap this module exists to close.
+    env: guestEnv(),
   })
   // A detached child whose spawn fails asynchronously (e.g. ENOENT on a bad cwd)
   // emits 'error'; with no listener that throws as an uncaught exception and takes

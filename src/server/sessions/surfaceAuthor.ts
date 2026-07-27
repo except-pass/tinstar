@@ -20,6 +20,7 @@
 // documented residual risk, not sandboxed here.
 import { spawn } from 'node:child_process'
 import { getSession } from './session'
+import { guestEnv } from './guestEnv'
 import { log } from '../logger'
 
 /** The `slate.author` config slice (see TinstarConfig in config.ts). */
@@ -125,7 +126,10 @@ export function dispatchSurfaceAuthor(params: {
     const child = spawn(
       'claude',
       ['-p', authorPrompt, '--model', config.model, '--dangerously-skip-permissions'],
-      { cwd: workdir, stdio: 'ignore', detached: false, timeout: config.timeoutMs },
+      // Guest boundary: this claude runs IN the run's workdir (someone else's
+      // repo) and can run that repo's tooling, so it must not inherit Tinstar's
+      // runtime config — same NODE_ENV trap as an agent pane. See ./guestEnv.ts.
+      { cwd: workdir, stdio: 'ignore', detached: false, timeout: config.timeoutMs, env: guestEnv() },
     )
     child.on('error', (err) =>
       log.warn('slate-author', 'spawn failed', { runId, label, err: err.message }))

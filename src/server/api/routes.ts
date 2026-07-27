@@ -22,6 +22,7 @@ import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
 import { readLatestModel, readLatestModelAt, findTranscriptByConvId, getTranscriptPath } from '../sessions/transcript-parser'
 import { buildCoversSummary } from '../sessions/covers-summary'
+import { guestEnv } from '../sessions/guestEnv'
 import { reviveFromTombstone } from '../sessions/necro'
 import { snapshotTranscript, hasGraveyardSnapshot, deleteGraveyardSnapshot, graveyardSnapshotPath, placeTranscriptAt, reviveWorkdir, deleteReviveWorkdir } from '../sessions/graveyard-snapshot'
 import {
@@ -4705,7 +4706,12 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // stale file that can out-rank the live window's, and `code -g` then
         // fails silently with ECONNREFUSED. resolveLiveIpcSocket probes for one
         // that actually accepts a connection. See editorIpc.ts.
-        const env = { ...process.env }
+        // Guest boundary, and the one with the longest reach: the editor this
+        // launches outlives the request and spawns its own integrated terminals,
+        // so anything inherited here leaks into every shell the user opens
+        // inside that editor — well outside tmux, where no later fix can reach
+        // it. Scope it to the guest allowlist. See sessions/guestEnv.ts.
+        const env: Record<string, string> = guestEnv()
         const liveSock = await resolveLiveIpcSocket()
         if (liveSock) env.VSCODE_IPC_HOOK_CLI = liveSock
 
