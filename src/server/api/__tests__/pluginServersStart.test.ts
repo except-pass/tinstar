@@ -8,6 +8,12 @@ const closeSyncMock = vi.fn()
 const appendFileSyncMock = vi.fn()
 
 vi.mock('node:child_process', () => ({ exec: vi.fn(), spawn: (...a: unknown[]) => (spawnMock as (...x: unknown[]) => unknown)(...a) }))
+// pluginServers imports the logger to report what the guest-env boundary
+// withheld; logger.ts mkdirSync's its log dir at MODULE LOAD, which this suite's
+// node:fs mock doesn't serve. Stub it — this suite is about spawn options.
+vi.mock('../../logger', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}))
 vi.mock('../../../core/pluginHost/pluginsConfig', () => ({
   readPluginsConfig: () => ({ disabled: [], external: [
     { name: 'who', path: '/p/who' },
@@ -43,6 +49,13 @@ describe('startServer', () => {
     expect(opts.detached).toBe(true)
     expect(opts.cwd).toBe('/p') // join('/p/who','..')
     expect(opts.stdio).toEqual(['ignore', 7, 7])
+    // GUEST BOUNDARY (see sessions/guestEnv.ts). Without this assertion, deleting
+    // `env:` from startServer silently restores the inherited environment — and
+    // a plugin whose start script runs `npm install` loses its devDependencies
+    // with no error. The env must be an explicit scoped object, never undefined.
+    const env = opts.env as Record<string, string> | undefined
+    expect(env).toBeDefined()
+    expect(env).not.toHaveProperty('NODE_ENV')
     expect(closeSyncMock).toHaveBeenCalledWith(7)
   })
 

@@ -22,6 +22,7 @@ import type { Session } from '../sessions/session'
 import { detectBranch } from '../sessions/session'
 import { readLatestModel, readLatestModelAt, findTranscriptByConvId, getTranscriptPath } from '../sessions/transcript-parser'
 import { buildCoversSummary } from '../sessions/covers-summary'
+import { guestEnv } from '../sessions/guestEnv'
 import { reviveFromTombstone } from '../sessions/necro'
 import { snapshotTranscript, hasGraveyardSnapshot, deleteGraveyardSnapshot, graveyardSnapshotPath, placeTranscriptAt, reviveWorkdir, deleteReviveWorkdir } from '../sessions/graveyard-snapshot'
 import {
@@ -3681,6 +3682,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         runId,
         prompt: slateRefreshPromptText(point, serverBase()),
         label: point.id,
+        // Inject credentials explicitly — the child gets a scoped env and has no
+        // login shell to re-export anything. Same source managed sessions use.
+        secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
       })
       if (dispatched) { ok(res, { dispatched: true }); return true }
       // Spawn declined (disabled mid-flight / no workdir / spawn error) → main-agent fallback.
@@ -3731,6 +3735,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           runId,
           prompt: composePrompt,
           label: 'compose',
+          secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
         })
         if (dispatched) { ok(res, { dispatched: true }); return }
       }
@@ -4095,7 +4100,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           fail(res, 'CONFLICT', 'Session has no active conversation')
           return true
         }
-        getDetailedUsage(session.conversation.id)
+        // Credentials injected explicitly — the sidecar gets a scoped env and no
+        // login shell, so nothing would re-export them. Same source as sessions.
+        getDetailedUsage(session.conversation.id, loadSecrets(cfg.dirs.secrets))
           .then(data => ok(res, data))
           .catch(err => {
             log.error('api', `context fetch failed for ${name}: ${(err as Error).message}`)
@@ -4705,9 +4712,20 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // stale file that can out-rank the live window's, and `code -g` then
         // fails silently with ECONNREFUSED. resolveLiveIpcSocket probes for one
         // that actually accepts a connection. See editorIpc.ts.
-        const env = { ...process.env }
+        // Guest boundary, and the one with the longest reach: the editor this
+        // launches outlives the request and spawns its own integrated terminals,
+        // so anything inherited here leaks into every shell the user opens
+        // inside that editor — well outside tmux, where no later fix can reach
+        // it. Scope it to the guest allowlist. See sessions/guestEnv.ts.
+        const env: Record<string, string> = guestEnv()
+        // Fall back to the INHERITED hook when probing finds nothing:
+        // resolveLiveIpcSocket only scans XDG_RUNTIME_DIR and returns null on
+        // non-Linux, and macOS is a shipped target. Before scoping, the
+        // inherited value was the only working path there — scoping the env
+        // without this fallback would silently break "Open in Editor" on macOS.
         const liveSock = await resolveLiveIpcSocket()
-        if (liveSock) env.VSCODE_IPC_HOOK_CLI = liveSock
+        const ipcHook = liveSock ?? process.env.VSCODE_IPC_HOOK_CLI
+        if (ipcHook) env.VSCODE_IPC_HOOK_CLI = ipcHook
 
         // Discover Remote-SSH `code` binaries (VS Code / Cursor / Windsurf install
         // them under ~/.<flavor>-server/bin/<arch>/<commit>/bin/remote-cli/). The

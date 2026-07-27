@@ -6,6 +6,7 @@ import type { Session, SessionNats } from '../session'
 import type { TinstarConfig, CliTemplate } from '../config'
 import { isCursorAgentTemplate, ensureCursorWorkspaceTrust } from '../cursor-trust'
 import { serializeByKey } from './serializeByKey'
+import { guestEnv, tmuxEnvRemovals, parseTmuxEnvNames, describeGuestEnvScoping } from '../guestEnv'
 import { log } from '../../logger'
 
 // NATS channel server paths come from config (see config.ts)
@@ -25,7 +26,7 @@ const TMUX_EXEC_TIMEOUT_MS = 10_000
 function execFileAsync(
   file: string,
   args: readonly string[],
-  opts: { timeout?: number; maxBuffer?: number } = {},
+  opts: { timeout?: number; maxBuffer?: number; env?: Record<string, string> } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   // No encoding option ⇒ stdout/stderr are utf8 strings (matches the prior behavior).
   return rawExecFileAsync(file, args as string[], { timeout: TMUX_EXEC_TIMEOUT_MS, ...opts }) as Promise<{ stdout: string; stderr: string }>
@@ -436,6 +437,106 @@ export function buildAgentCommand(opts: {
 
 // --- Tmux operations ---
 
+/**
+ * Guest environment for a process that must still find OUR tmux server.
+ *
+ * tmux resolves its socket path from `TMUX_TMPDIR` (then TMPDIR, then /tmp).
+ * That variable is deliberately NOT on the guest allowlist — it is a control
+ * knob for the tmux CLI, not something a guest shell needs. But a process we
+ * spawn to talk to tmux (the `new` that may start the server, and ttyd, which
+ * runs `tmux attach`) has to resolve the SAME socket as every other tmux call
+ * in this file — and those inherit the full env. Without this passthrough, a
+ * machine with TMUX_TMPDIR set would have Tinstar create sessions on one socket
+ * and look for them on another.
+ */
+function tmuxClientEnv(): Record<string, string> {
+  const pass: Record<string, string> = {}
+  // BOTH knobs, or these calls resolve a DIFFERENT server than the rest of this
+  // module. Every other tmux call here inherits Tinstar's full env; if Tinstar
+  // itself runs inside tmux (a dev server started from a pane), $TMUX is set and
+  // a client with $TMUX and no -L/-S uses THAT socket, ignoring TMUX_TMPDIR
+  // (verified, tmux 3.2a). Passing only TMUX_TMPDIR would create the session on
+  // one socket and configure/attach it on another.
+  if (process.env.TMUX_TMPDIR) pass.TMUX_TMPDIR = process.env.TMUX_TMPDIR
+  if (process.env.TMUX) pass.TMUX = process.env.TMUX
+  return guestEnv(pass)
+}
+
+/**
+ * Strip Tinstar's private runtime config from one tmux session's environment.
+ *
+ * Reads the server-global environment (which is exactly what a new pane
+ * inherits — verified by diffing `show-environment -g` against a live pane's
+ * /proc/<pid>/environ) and marks every non-allowlisted name for removal on THIS
+ * session with `set-environment -r`.
+ *
+ * `-r` means "delete this before starting any new process in this session", so:
+ *  - windows/panes created from here on come up without it, and
+ *  - the pane's EXISTING shell is corrected too, because the launch command
+ *    already starts with `eval "$(tmux show-environment -s)"` and `-r` makes
+ *    that emit `unset NAME;`.
+ *
+ * All removals go in ONE tmux invocation using `;` command separators —
+ * creating a session already costs ~15 tmux calls and this would otherwise add
+ * one per stripped variable.
+ *
+ * Best-effort: a failure here degrades to the old leaky behavior, which must not
+ * take down session creation.
+ */
+export async function scrubTmuxSessionEnv(
+  tmuxName: string,
+  sessionName: string,
+  /** Extra leading tmux args (e.g. ['-L', socket]). Production passes none —
+   * Tinstar uses the default socket. The integration test passes an isolated
+   * socket so it can exercise THIS function rather than a replica of it. */
+  socketArgs: readonly string[] = [],
+  /** Names in TINSTAR'S OWN env — the attribution filter (see tmuxEnvRemovals).
+   *  Overridable so tests can express "the Tinstar that started this server",
+   *  which is not the test runner's own process. */
+  tinstarEnvNames: readonly string[] = Object.keys(process.env),
+): Promise<void> {
+  try {
+    const [globalEnv, sessionEnv] = await Promise.all([
+      execFileAsync('tmux', [...socketArgs, 'show-environment', '-g']),
+      // Session-scoped entries are DELIBERATE — Tinstar's own injections
+      // (TINSTAR_SESSION_NAME, NATS/OTLP vars, per-session secrets) or the
+      // user's. `show-environment -t` lists only those, never the inherited
+      // global ones, so it is a self-maintaining exclusion set: it covers
+      // secrets whose names come from config and can't be hardcoded here.
+      //
+      // Load-bearing on the RESTART path. When Tinstar itself runs inside a
+      // Tinstar session, the global env holds the PARENT's TINSTAR_SESSION_NAME
+      // and secrets. Removing those names blindly replaces the child's own
+      // session-scoped values with removal markers — verified: the pane then
+      // has no TINSTAR_SESSION_NAME at all, destroying the session's identity.
+      execFileAsync('tmux', [...socketArgs, 'show-environment', '-t', `=${tmuxName}`]),
+    ])
+    const injected = parseTmuxEnvNames(sessionEnv.stdout)
+    // 4th arg is the ATTRIBUTION filter: only strip what Tinstar itself could
+    // have put in the server's global env. When the USER started the tmux
+    // server, that global env is their own login environment and none of it is
+    // ours to remove. See tmuxEnvRemovals in ../guestEnv.ts.
+    const removals = tmuxEnvRemovals(
+      parseTmuxEnvNames(globalEnv.stdout), injected, process.platform, tinstarEnvNames,
+    )
+    if (removals.length === 0) return
+
+    // `=name` is tmux's EXACT-match target syntax. A bare `-t name` matches by
+    // prefix, so a session that disappears mid-scrub could let these removals
+    // land on a different session whose name starts with the same characters.
+    const target = `=${tmuxName}`
+    const args: string[] = [...socketArgs]
+    for (const name of removals) {
+      if (args.length > socketArgs.length) args.push(';')
+      args.push('set-environment', '-t', target, '-r', name)
+    }
+    await execFileAsync('tmux', args)
+    log.info('tmux', `${sessionName}: ${describeGuestEnvScoping(removals)}`)
+  } catch (err) {
+    log.warn('tmux', `${sessionName}: guest env scoping failed, session may inherit Tinstar's env: ${(err as Error).message}`)
+  }
+}
+
 export async function createTmuxSession(
   config: TinstarConfig,
   opts: {
@@ -454,7 +555,17 @@ export async function createTmuxSession(
   if (opts.session.workspace?.path) {
     tmuxArgs.push('-c', opts.session.workspace.path)
   }
-  await execFileAsync('tmux', tmuxArgs)
+  // Scoped env, half 1 of 2: when NO tmux server is running yet, THIS call is
+  // what starts it — and tmux freezes the starting process's environment as its
+  // server-global environment, which every pane it ever creates inherits. Passing
+  // Tinstar's own `process.env` here (Node's default) is how NODE_ENV=production
+  // from the systemd unit ended up in every agent shell. See ../guestEnv.ts.
+  // When a server IS already running this env is simply unused — tmux just talks
+  // to the existing socket — so it is safe unconditionally.
+  await execFileAsync('tmux', tmuxArgs, { env: tmuxClientEnv() })
+  // (Half 2 of 2 — the repair for an already-running server — runs further down,
+  // after the deliberate injections below. Order matters: the scrub excludes
+  // session-scoped vars, so the injections must already be in place.)
 
   // Configure tmux
   await execFileAsync('tmux', ['set', '-t', tmuxName, 'status', 'off'])
@@ -510,6 +621,18 @@ export async function createTmuxSession(
       await execFileAsync('tmux', ['set-environment', '-t', tmuxName, key, value])
     }
   }
+
+  // Scoped env, half 2 of 2: repair for an already-running tmux server. The
+  // server is long-lived and SHARED (no -L/-S socket — see the SCOPE note
+  // above), so one that was started before this fix, or started by something
+  // other than Tinstar, still holds a polluted global environment that the
+  // scoped env on `tmux new` cannot reach. Strip the private vars for THIS
+  // session only, so Tinstar never mutates tmux sessions the user started.
+  //
+  // Runs AFTER the injections above so they are session-scoped by now and thus
+  // excluded from removal. The `eval "$(tmux show-environment -s)"` immediately
+  // below then applies the removals to the pane's live shell as `unset NAME;`.
+  await scrubTmuxSessionEnv(tmuxName, opts.session.name)
 
   // Build and send agent command
   const parts = ['eval "$(tmux show-environment -s)"']
@@ -584,6 +707,12 @@ export async function startTmuxSession(
   if (!exists) {
     return createTmuxSession(config, { ...opts, resume: true })
   }
+
+  // Re-scrub on restart: a session created before guest-env scoping existed
+  // still carries Tinstar's env, and restarting its agent is the one moment we
+  // can repair it in place. The `eval "$(tmux show-environment -s)"` below then
+  // applies the removals to the pane's live shell as `unset NAME;`.
+  await scrubTmuxSessionEnv(tmuxName, opts.session.name)
 
   // Tmux session exists but agent may have exited — re-send the command
   const parts = ['eval "$(tmux show-environment -s)"']
@@ -971,6 +1100,12 @@ export function startTtyd(opts: {
       'bash', '-c', `tmux attach -t ${opts.tmuxName}`,
     ], {
       stdio: 'ignore',
+      // ttyd is a guest boundary twice over: it is the tmux CLIENT that attaches
+      // the session (tmux's `update-environment` copies a listed subset of the
+      // client's env into the session on attach), and a user can drop to a plain
+      // shell inside the terminal it serves. Neither should see Tinstar's env.
+      // tmuxClientEnv, not guestEnv: its `tmux attach` must find our socket.
+      env: tmuxClientEnv(),
     })
 
     child.on('error', reject)

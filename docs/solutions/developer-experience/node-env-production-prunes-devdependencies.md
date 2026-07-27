@@ -139,6 +139,15 @@ env -u NODE_ENV npm run test:unit
 
 ## Related
 
+- **`docs/solutions/conventions/guest-env-boundary.md` — the root cause, fixed at the
+  source (2026-07-27).** Tinstar's systemd unit sets `NODE_ENV=production`; the tmux
+  server froze that into its global environment and every agent pane inherited it.
+  Sessions Tinstar spawns no longer inherit it.
+  **This does not make the workaround below unnecessary.** The fix covers *guest
+  processes Tinstar spawns*. A shell you opened yourself — SSH'd in directly, or one
+  whose own rc files or `/etc/environment` set `NODE_ENV` — is untouched, so
+  `env -u NODE_ENV` is still the right habit there. Check `echo $NODE_ENV` before
+  assuming which case you are in.
 - `docs/testing.md` — the project's testing guide; it documents the `vitest --exclude='e2e/**'`
   and `tsconfig.app.json` invocations but does **not** yet warn about the `NODE_ENV`
   trap. A one-line cross-reference there would make this fix discoverable at the point of use.
