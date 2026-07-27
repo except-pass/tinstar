@@ -107,8 +107,20 @@ export function dispatchSurfaceAuthor(params: {
   runId: string
   prompt: string
   label: string
+  /**
+   * Credentials to hand the child EXPLICITLY (`loadSecrets(cfg.dirs.secrets)`),
+   * exactly as createTmuxSession injects them into a managed session.
+   *
+   * This child is a guest boundary, so it gets a scoped env — and unlike an
+   * agent pane there is NO login shell to re-export anything. Relying on
+   * inheritance would mean hoping the ambient environment happens to carry a
+   * credential; if it did not, `claude` would fail to authenticate and, because
+   * this dispatch is fire-and-forget, that failure is indistinguishable from
+   * the author simply writing nothing. Pass what the child needs.
+   */
+  secrets?: Record<string, string>
 }): { dispatched: boolean } {
-  const { sessionsDir, config, runId, prompt, label } = params
+  const { sessionsDir, config, runId, prompt, label, secrets } = params
   if (!config.enabled) return { dispatched: false }
 
   // The author writes into the same dir the SlateWatcher watches: <workdir>/.tinstar/slate/.
@@ -129,7 +141,8 @@ export function dispatchSurfaceAuthor(params: {
       // Guest boundary: this claude runs IN the run's workdir (someone else's
       // repo) and can run that repo's tooling, so it must not inherit Tinstar's
       // runtime config — same NODE_ENV trap as an agent pane. See ./guestEnv.ts.
-      { cwd: workdir, stdio: 'ignore', detached: false, timeout: config.timeoutMs, env: guestEnv() },
+      // Credentials are INJECTED, not inherited (see `secrets` above).
+      { cwd: workdir, stdio: 'ignore', detached: false, timeout: config.timeoutMs, env: guestEnv(secrets ?? {}) },
     )
     child.on('error', (err) =>
       log.warn('slate-author', 'spawn failed', { runId, label, err: err.message }))

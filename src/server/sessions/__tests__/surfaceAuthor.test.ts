@@ -47,6 +47,22 @@ describe('dispatchSurfaceAuthor', () => {
     expect(opts.env).not.toHaveProperty('NODE_ENV')
   })
 
+  it('injects the caller-supplied credentials instead of hoping the ambient env has them', () => {
+    // This child has NO login shell to re-export anything, and the dispatch is
+    // fire-and-forget — so a missing credential would surface only as "the
+    // author wrote nothing", indistinguishable from success. Explicit beats
+    // implicit: the caller passes what the child needs.
+    dispatchSurfaceAuthor({
+      ...base,
+      config: cfg,
+      secrets: { ANTHROPIC_API_KEY: 'sk-test', CLAUDE_CODE_OAUTH_TOKEN: 'tok' },
+    })
+    const [, , opts] = spawn.mock.calls[0] as [string, string[], { env?: Record<string, string> }]
+    expect(opts.env!.ANTHROPIC_API_KEY).toBe('sk-test')
+    expect(opts.env!.CLAUDE_CODE_OAUTH_TOKEN).toBe('tok')
+    expect(opts.env).not.toHaveProperty('NODE_ENV')   // still scoped
+  })
+
   it('is fire-and-forget: unref() is called so the child never blocks the server loop', () => {
     const child = fakeChild()
     spawn.mockReturnValue(child)

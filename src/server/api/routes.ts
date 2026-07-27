@@ -3682,6 +3682,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         runId,
         prompt: slateRefreshPromptText(point, serverBase()),
         label: point.id,
+        // Inject credentials explicitly — the child gets a scoped env and has no
+        // login shell to re-export anything. Same source managed sessions use.
+        secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
       })
       if (dispatched) { ok(res, { dispatched: true }); return true }
       // Spawn declined (disabled mid-flight / no workdir / spawn error) → main-agent fallback.
@@ -3732,6 +3735,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           runId,
           prompt: composePrompt,
           label: 'compose',
+          secrets: loadSecrets(ctx.sessionConfig.dirs.secrets),
         })
         if (dispatched) { ok(res, { dispatched: true }); return }
       }
@@ -4096,7 +4100,9 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           fail(res, 'CONFLICT', 'Session has no active conversation')
           return true
         }
-        getDetailedUsage(session.conversation.id)
+        // Credentials injected explicitly — the sidecar gets a scoped env and no
+        // login shell, so nothing would re-export them. Same source as sessions.
+        getDetailedUsage(session.conversation.id, loadSecrets(cfg.dirs.secrets))
           .then(data => ok(res, data))
           .catch(err => {
             log.error('api', `context fetch failed for ${name}: ${(err as Error).message}`)

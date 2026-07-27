@@ -42,7 +42,14 @@ const cacheMap = new Map<string, CacheEntry>()
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
 
-export async function getDetailedUsage(conversationId: string): Promise<ContextData> {
+export async function getDetailedUsage(
+  conversationId: string,
+  /** Credentials handed to the child EXPLICITLY (`loadSecrets(cfg.dirs.secrets)`).
+   *  This spawn gets a scoped env and has no login shell to re-export anything,
+   *  so a credential must be injected rather than inherited from whatever the
+   *  ambient environment happens to carry. See ./guestEnv.ts. */
+  secrets: Record<string, string> = {},
+): Promise<ContextData> {
   // Return cached if fresh
   const cached = cacheMap.get(conversationId)
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.data
@@ -51,7 +58,7 @@ export async function getDetailedUsage(conversationId: string): Promise<ContextD
   const inflight = inflightMap.get(conversationId)
   if (inflight) return inflight
 
-  const promise = spawnSidecar(conversationId)
+  const promise = spawnSidecar(conversationId, secrets)
   inflightMap.set(conversationId, promise)
 
   try {
@@ -67,7 +74,7 @@ export async function getDetailedUsage(conversationId: string): Promise<ContextD
 /*  Sidecar                                                            */
 /* ------------------------------------------------------------------ */
 
-function spawnSidecar(conversationId: string): Promise<ContextData> {
+function spawnSidecar(conversationId: string, secrets: Record<string, string>): Promise<ContextData> {
   return new Promise((resolve, reject) => {
     let child: ChildProcess | null = null
     let settled = false
@@ -92,7 +99,8 @@ function spawnSidecar(conversationId: string): Promise<ContextData> {
     ], {
       stdio: ['pipe', 'pipe', 'pipe'],
       // Guest boundary — an agent CLI, not part of Tinstar's runtime.
-      env: guestEnvFor('context-usage', log.debug),
+      // Credentials injected, not inherited (see `secrets` above).
+      env: guestEnvFor('context-usage', log.debug, secrets),
     })
 
     // Send control request + throwaway user message (needed to flush the control_response)
