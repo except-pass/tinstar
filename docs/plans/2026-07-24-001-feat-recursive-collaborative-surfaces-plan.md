@@ -447,6 +447,7 @@ flowchart TB
   U3 --> U2
   U2 --> U4
   U3 --> U4
+  U3 --> U5
   U4 --> U5
   U2 --> U6
   U3 --> U6
@@ -552,7 +553,7 @@ A crash after durable commit is recovered from disk, while a retry after a lost 
 
 **Execution note:** Establish characterization coverage for current `SlateStore` projection and persistence before moving ownership.
 
-**Patterns to follow:** Equality-short-circuited mutators in `src/server/stores/document-store.ts`; revision gates in constellation and pin stores; merge-by-id ownership in `src/server/stores/slate.ts`.
+**Patterns to follow:** Equality-short-circuited mutators in `src/server/stores/document-store.ts`; the `DocumentStore.upsertConstellationGraph` and `DocumentStore.upsertPinSet` revision gates in `src/server/stores/document-store.ts`; merge-by-id ownership in `src/server/stores/slate.ts`.
 
 **Test scenarios:**
 - Migrating a file-authored point preserves body, thread, status, order, author, timestamps, and a deterministic alias across repeated boots.
