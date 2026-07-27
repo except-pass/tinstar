@@ -168,18 +168,28 @@ export function newSurfaceId(): string {
  * threads and provenance. Two runs that share a name at different times have
  * different creation stamps and therefore different incarnations.
  *
+ * SPACE IS DELIBERATELY NOT IN THE BASIS, though an early draft of the plan said
+ * it should be. Three reasons, any one of them sufficient:
+ *   · `Run.spaceId` is OPTIONAL, so requiring it would quarantine every space-less
+ *     run — the exact population migration exists to rescue;
+ *   · it adds no uniqueness. A run id is already unique across the install, so the
+ *     space is a function of the run, not an independent coordinate;
+ *   · it would make identity MOVABLE. If a run ever changed space, every Surface it
+ *     owns would derive a different id and the whole run would migrate again as a
+ *     duplicate set — precisely the "identity must never change" property this
+ *     derivation exists to guarantee.
+ *
  * Returns `null` when any input is missing, INSTEAD of substituting a placeholder.
  * The plan requires missing derivation inputs to be quarantined rather than
  * guessed, and a guessed incarnation is indistinguishable from a real one forever
  * after. The caller decides what quarantine means; this function only refuses.
  */
 export function deriveRunIncarnation(
-  spaceId: string | undefined,
   runId: string | undefined,
   createdAt: string | undefined,
 ): string | null {
-  if (!spaceId || !runId || !createdAt) return null
-  const basis = JSON.stringify({ spaceId, runId, createdAt })
+  if (!runId || !createdAt) return null
+  const basis = JSON.stringify({ runId, createdAt })
   return 'inc-' + createHash('sha256').update(basis).digest('hex').slice(0, 24)
 }
 

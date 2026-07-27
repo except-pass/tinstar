@@ -58,38 +58,37 @@ describe('identity derivation', () => {
   })
 
   it('derives a run incarnation deterministically', () => {
-    const a = deriveRunIncarnation(SPACE, 'CLD-run-1', '2026-07-13T00:00:00.000Z')
-    const b = deriveRunIncarnation(SPACE, 'CLD-run-1', '2026-07-13T00:00:00.000Z')
+    const a = deriveRunIncarnation('CLD-run-1', '2026-07-13T00:00:00.000Z')
+    const b = deriveRunIncarnation('CLD-run-1', '2026-07-13T00:00:00.000Z')
     expect(a).not.toBeNull()
     expect(a).toBe(b)
   })
 
   it('refuses (rather than guesses) an incarnation with a missing input', () => {
-    expect(deriveRunIncarnation(undefined, 'CLD-run-1', '2026-07-13T00:00:00.000Z')).toBeNull()
-    expect(deriveRunIncarnation(SPACE, '', '2026-07-13T00:00:00.000Z')).toBeNull()
-    expect(deriveRunIncarnation(SPACE, 'CLD-run-1', undefined)).toBeNull()
+    expect(deriveRunIncarnation('', '2026-07-13T00:00:00.000Z')).toBeNull()
+    expect(deriveRunIncarnation('CLD-run-1', undefined)).toBeNull()
   })
 
   // NAMED U1 SCENARIO. Agents reuse slugs (`decisions`, `blockers`, `objective`)
   // across runs; without the incarnation in the basis those would collide into one
   // global record and two unrelated runs would share a thread.
   it('gives two runs the same local slug DIFFERENT global ids', () => {
-    const one = deriveRunIncarnation(SPACE, 'CLD-run-1', '2026-07-13T00:00:00.000Z')!
-    const two = deriveRunIncarnation(SPACE, 'CLD-run-2', '2026-07-13T00:00:00.000Z')!
+    const one = deriveRunIncarnation('CLD-run-1', '2026-07-13T00:00:00.000Z')!
+    const two = deriveRunIncarnation('CLD-run-2', '2026-07-13T00:00:00.000Z')!
     expect(deriveLegacySurfaceId(one, 'blockers')).not.toBe(deriveLegacySurfaceId(two, 'blockers'))
   })
 
   // The reason `createdAt` is in the incarnation basis at all: a run id is a tmux
   // session name and a user may delete and recreate it.
   it('does not reuse an identity when a run name is deleted and recreated', () => {
-    const first = deriveRunIncarnation(SPACE, 'CLD-run-1', '2026-07-13T00:00:00.000Z')!
-    const reborn = deriveRunIncarnation(SPACE, 'CLD-run-1', '2026-07-20T09:15:00.000Z')!
+    const first = deriveRunIncarnation('CLD-run-1', '2026-07-13T00:00:00.000Z')!
+    const reborn = deriveRunIncarnation('CLD-run-1', '2026-07-20T09:15:00.000Z')!
     expect(first).not.toBe(reborn)
     expect(deriveLegacySurfaceId(first, 'objective')).not.toBe(deriveLegacySurfaceId(reborn, 'objective'))
   })
 
   it('is stable for the same incarnation + local id', () => {
-    const inc = deriveRunIncarnation(SPACE, 'CLD-run-1', '2026-07-13T00:00:00.000Z')!
+    const inc = deriveRunIncarnation('CLD-run-1', '2026-07-13T00:00:00.000Z')!
     expect(deriveLegacySurfaceId(inc, 'x')).toBe(deriveLegacySurfaceId(inc, 'x'))
     expect(deriveLegacySurfaceId(inc, 'x')).not.toBe(deriveLegacySurfaceId(inc, 'y'))
   })
