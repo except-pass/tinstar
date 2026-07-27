@@ -678,6 +678,58 @@ describe('snapshot reload', () => {
   })
 })
 
+describe('the recovery-store home is a first-class persisted shape (KTD15)', () => {
+  // U3 turns deletion into a MOVE: the root of a deleted subtree is an ordinary
+  // record whose `home.kind` is `recovery`. The shape guard originally knew only
+  // `canvas` and `surface`, which made this the worst kind of bug — deletion
+  // worked perfectly in memory and was refused at the durable boundary, and any
+  // recovery record that HAD reached disk would have been quarantined away on the
+  // next boot, erasing the only copy of the work the recovery store exists to
+  // keep. Both halves are pinned below.
+
+  it('accepts a recovery-homed record on commit', async () => {
+    await withConfigRoot(async ({ open }) => {
+      const sc = open()
+      const deleted = rec('sf-deleted', {
+        home: { kind: 'recovery', spaceId: SPACE },
+        deleted: { at: 5_000, formerHome: CANVAS, disposition: 'delete-subtree' },
+      })
+      const res = await sc.commit({ puts: [deleted] })
+      expect(res).toMatchObject({ committed: true })
+      expect(idsOf(sc.durableRecords())).toEqual(['sf-deleted'])
+    })
+  })
+
+  it('loads a recovery-homed record back rather than quarantining it', async () => {
+    await withConfigRoot(async ({ open, paths }) => {
+      const sc = open()
+      await sc.commit({
+        puts: [
+          rec('sf-live'),
+          rec('sf-deleted', {
+            home: { kind: 'recovery', spaceId: SPACE },
+            deleted: { at: 5_000, formerHome: CANVAS, disposition: 'reparent-children' },
+          }),
+        ],
+      })
+      expect(readPrimary(paths).records).toHaveLength(2)
+
+      const restarted = open()
+      expect(restarted.outcome.quarantined).toBe(0)
+      expect(idsOf(restarted.outcome.records)).toEqual(['sf-deleted', 'sf-live'])
+      expect(restarted.outcome.records.find(r => r.id === 'sf-deleted')!.deleted?.formerHome).toEqual(CANVAS)
+    })
+  })
+
+  it('still refuses a home kind that is not one of the three', async () => {
+    await withConfigRoot(async ({ open }) => {
+      const sc = open()
+      const bogus = rec('sf-bogus', { home: { kind: 'graveyard', spaceId: SPACE } as unknown as SurfaceHome })
+      expect(await sc.commit({ puts: [bogus] })).toMatchObject({ committed: false, reason: 'invalid-record' })
+    })
+  })
+})
+
 describe('the backend singleton assertion', () => {
   /** A throwaway config root with NO singleton acquired. */
   function withUnguardedRoot(body: (dir: string, lockPath: string) => void): void {

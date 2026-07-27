@@ -314,7 +314,13 @@ function isUsableRecord(r: unknown): r is Surface {
   if (typeof s.id !== 'string' || s.id.length === 0) return false
   if (typeof s.spaceId !== 'string' || s.spaceId.length === 0) return false
   if (!s.home || typeof s.home !== 'object') return false
-  if (s.home.kind === 'canvas') {
+  // All three home kinds, `recovery` included. It is not optional: under KTD15 a
+  // deleted subtree's root IS a record whose home is the recovery store, so a
+  // guard that knew only two kinds would reject every delete at the durable
+  // boundary — and, worse, would quarantine an already-persisted deleted record
+  // on the next boot, erasing the one copy of work the recovery store exists to
+  // keep.
+  if (s.home.kind === 'canvas' || s.home.kind === 'recovery') {
     if (typeof s.home.spaceId !== 'string') return false
   } else if (s.home.kind === 'surface') {
     if (typeof s.home.surfaceId !== 'string') return false

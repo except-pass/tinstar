@@ -22,6 +22,7 @@ export const spec = {
     { name: 'Editor', description: 'Open files in external editor' },
     { name: 'Observability', description: 'OpenTelemetry spans and metrics' },
     { name: 'Widgets', description: 'Canvas widgets — browser, file editor, image' },
+    { name: 'Surfaces', description: 'Canonical recursive Surfaces — the agent/UI parity primitives' },
     { name: 'Simulator', description: 'Mock data generator (dev/test only)' },
   ],
   paths: {
@@ -509,6 +510,227 @@ export const spec = {
       },
     },
 
+    // ── Surfaces ─────────────────────────────────────────
+    //
+    // The Agent-Native Action Parity contract: every action a human can take on
+    // a Surface has an endpoint here, so an agent is never second-class.
+    //
+    // Two things about this resource are easy to get wrong from the spec alone
+    // and are therefore spelled out in the descriptions below: DELETE is a MOVE
+    // into the recovery store and is undone by `restore`, while `purge` is the
+    // only irreversible operation; and there is NO approval or proposal step,
+    // because agents act directly and safety comes from recoverability.
+    '/api/surfaces': {
+      get: {
+        tags: ['Surfaces'],
+        summary: 'List a space\'s canonical Surfaces',
+        description: 'Deleted Surfaces are excluded unless `includeDeleted=true`; `recoveryIds` always reports that they exist.',
+        parameters: [
+          { name: 'spaceId', in: 'query', schema: { type: 'string' }, description: 'Defaults to the active space' },
+          { name: 'includeDeleted', in: 'query', schema: { type: 'boolean' } },
+        ],
+        responses: { 200: { description: 'Listing with capabilities, root ids, and recovery ids' } },
+      },
+      post: {
+        tags: ['Surfaces'],
+        summary: 'Create a Surface',
+        description:
+          'Identity, revisions, timestamps, freshness, aliases, and sibling order are HOST-owned and are rejected if supplied. '
+          + 'A compatibility alias is assigned automatically (the declared run, else the workspace-recovery bucket).',
+        requestBody: {
+          content: { 'application/json': { schema: {
+            type: 'object',
+            required: ['spaceId', 'home', 'content'],
+            properties: {
+              spaceId: { type: 'string' },
+              home: { $ref: '#/components/schemas/SurfaceHome' },
+              content: { $ref: '#/components/schemas/SurfaceContent' },
+              contentAuthority: { type: 'string', enum: ['source-binding', 'canonical-direct'] },
+              author: { type: 'string', enum: ['user', 'agent', 'process'] },
+              provenance: { type: 'object' },
+              owner: { type: 'object' },
+              source: { type: 'object' },
+              compatibilityOnly: { type: 'boolean' },
+            },
+          } } },
+        },
+        responses: { 201: { description: 'Created' }, 400: { description: 'Validation refused' } },
+      },
+    },
+    '/api/surfaces/group': {
+      post: {
+        tags: ['Surfaces'],
+        summary: 'Group siblings under one new parent',
+        description: 'Atomic. Every child must currently share one home. Direct — no approval step.',
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['childIds', 'content'],
+          properties: {
+            childIds: { type: 'array', items: { type: 'string' } },
+            content: { $ref: '#/components/schemas/SurfaceContent' },
+            expectedTopologyRev: { type: 'integer' },
+            expectedRevs: { type: 'object', additionalProperties: { type: 'integer' } },
+          },
+        } } } },
+        responses: { 200: { description: 'One atomic batch applied' }, 409: { description: 'Conflict; nothing moved' } },
+      },
+    },
+    '/api/surfaces/reparent': {
+      post: {
+        tags: ['Surfaces'],
+        summary: 'Move Surfaces to one home',
+        description: 'Atomic and cycle-checked. Also the "promote to Canvas" operation. Direct — no approval step.',
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['ids', 'home'],
+          properties: {
+            ids: { type: 'array', items: { type: 'string' } },
+            home: { $ref: '#/components/schemas/SurfaceHome' },
+            expectedTopologyRev: { type: 'integer' },
+            expectedRevs: { type: 'object', additionalProperties: { type: 'integer' } },
+          },
+        } } } },
+        responses: { 200: { description: 'One atomic batch applied' }, 409: { description: 'Conflict; nothing moved' } },
+      },
+    },
+    '/api/surfaces/{id}': {
+      get: {
+        tags: ['Surfaces'],
+        summary: 'One Surface and its effective capabilities',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Record and capabilities' }, 404: { description: 'Not found' } },
+      },
+      delete: {
+        tags: ['Surfaces'],
+        summary: 'Move a Surface into the recovery store',
+        description:
+          'NOT an erase. The subtree is moved into the per-space recovery store inside the same atomic transaction '
+          + 'and is restorable until purged. A Surface with descendants requires the EXACT descendant set the caller '
+          + 'displayed plus a disposition, so a stale confirmation cannot remove more than the human agreed to.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          properties: {
+            descendants: { type: 'array', items: { type: 'string' } },
+            disposition: { type: 'string', enum: ['reparent-children', 'delete-subtree'] },
+          },
+        } } } },
+        responses: { 200: { description: 'Moved to the recovery store' }, 409: { description: 'Descendant set or revision mismatch' } },
+      },
+    },
+    '/api/surfaces/{id}/context': {
+      get: {
+        tags: ['Surfaces'],
+        summary: 'Ancestors, immediate children, contributors, freshness, and capabilities',
+        description: 'Children are the immediate scope only; `descendantCount` carries the total. Child content outside the caller\'s worktree scope is withheld rather than hidden.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Context' }, 404: { description: 'Not found' } },
+      },
+    },
+    '/api/surfaces/{id}/contributors': {
+      get: {
+        tags: ['Surfaces'],
+        summary: 'Resolve contributors to ttyd, Graveyard, process evidence, or unavailable',
+        description: 'Only a live managed session sets `terminal: true`; a process or file source never offers a dead terminal.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Contributors' }, 404: { description: 'Not found' } },
+      },
+    },
+    '/api/surfaces/{id}/content': {
+      patch: {
+        tags: ['Surfaces'],
+        summary: 'Update authored content behind a revision gate',
+        description:
+          'Whitelisted to headline, body (validated A2UI), and recipe; `null` clears body or recipe. '
+          + 'When content authority is the source binding, the edit routes through that source\'s adapter with an '
+          + 'expected watermark, or is refused with instructions to transfer authority first.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['expectedRev'],
+          properties: {
+            expectedRev: { type: 'integer' },
+            headline: { type: 'string' },
+            body: { type: 'object', nullable: true },
+            recipe: { type: 'string', nullable: true },
+            expectedWatermark: { type: 'string' },
+          },
+        } } } },
+        responses: { 200: { description: 'Updated' }, 409: { description: 'Stale revision or source authority' } },
+      },
+    },
+    '/api/surfaces/{id}/authority': {
+      post: {
+        tags: ['Surfaces'],
+        summary: 'Transfer content authority between the source binding and the record',
+        description: 'Explicit, revision-checked, and restart-stable. The source binding survives the transfer so divergence can still be reported.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['to', 'expectedRev'],
+          properties: {
+            to: { type: 'string', enum: ['source-binding', 'canonical-direct'] },
+            expectedRev: { type: 'integer' },
+          },
+        } } } },
+        responses: { 200: { description: 'Transferred' }, 409: { description: 'Stale revision or already there' } },
+      },
+    },
+    '/api/surfaces/{id}/thread': {
+      post: {
+        tags: ['Surfaces'],
+        summary: 'Append one message to a Surface thread',
+        description: 'Persist-first. The author defaults from the calling principal: a browser posts as `user`, a managed session as `agent`.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          required: ['text'],
+          properties: {
+            text: { type: 'string' },
+            author: { type: 'string', enum: ['user', 'agent', 'process'] },
+            expectedRev: { type: 'integer' },
+          },
+        } } } },
+        responses: { 200: { description: 'Appended' } },
+      },
+    },
+    '/api/surfaces/{id}/refresh': {
+      post: {
+        tags: ['Surfaces'],
+        summary: 'Request a refresh',
+        description: 'Moves freshness to `queued`. An `overdue` flag is carried through, never cleared — only a successful verification clears it. Refused while a refresh is already queued or running.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Queued' }, 409: { description: 'Already queued or refreshing' } },
+      },
+    },
+    '/api/surfaces/{id}/ungroup': {
+      post: {
+        tags: ['Surfaces'],
+        summary: 'Dissolve a parent; its children move up to its home',
+        description: 'The exact inverse of group, in one transaction. The emptied parent goes to the recovery store, so an ungroup is undoable too. To move children out but KEEP the parent, use reparent.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Dissolved' }, 409: { description: 'Conflict; nothing moved' } },
+      },
+    },
+    '/api/surfaces/{id}/restore': {
+      post: {
+        tags: ['Surfaces'],
+        summary: 'Restore a deleted subtree',
+        description: 'Returns it to its former home. A former home that no longer exists does NOT fail the restore — the Surface lands on the Canvas with the workspace-recovery alias rather than becoming unreachable.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Restored' }, 409: { description: 'Not a deleted subtree root' } },
+      },
+    },
+    '/api/surfaces/{id}/purge': {
+      delete: {
+        tags: ['Surfaces'],
+        summary: 'ERASE a deleted subtree. Irreversible.',
+        description: 'The only irreversible operation on a Surface. Refused for anything not already in the recovery store, so a purge is always the second step of a decision.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { 200: { description: 'Erased' }, 409: { description: 'Not a deleted subtree root' } },
+      },
+    },
+
     // ── Widgets ────────────────────────────────────────────
     '/api/browser-widgets': {
       post: {
@@ -785,6 +1007,25 @@ export const spec = {
 
   components: {
     schemas: {
+      /** Exactly one home, always — recursion is a tree, not a graph. `recovery`
+       *  is READ-ONLY over the wire: a Surface gets there through DELETE and
+       *  leaves through restore, never by a caller naming it. */
+      SurfaceHome: {
+        oneOf: [
+          { type: 'object', required: ['kind', 'spaceId'], properties: { kind: { type: 'string', enum: ['canvas'] }, spaceId: { type: 'string' } } },
+          { type: 'object', required: ['kind', 'surfaceId'], properties: { kind: { type: 'string', enum: ['surface'] }, surfaceId: { type: 'string' } } },
+          { type: 'object', required: ['kind', 'spaceId'], properties: { kind: { type: 'string', enum: ['recovery'] }, spaceId: { type: 'string' } }, readOnly: true },
+        ],
+      },
+      SurfaceContent: {
+        type: 'object',
+        required: ['headline'],
+        properties: {
+          headline: { type: 'string' },
+          body: { type: 'object', description: 'A2UI content from the bounded component catalog; validated at the boundary' },
+          recipe: { type: 'string', description: 'Self-contained instruction that rebuilds this Surface. Absent means refresh degrades to a nudge.' },
+        },
+      },
       State: {
         type: 'object',
         properties: {

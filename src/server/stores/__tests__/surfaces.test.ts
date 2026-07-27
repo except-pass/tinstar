@@ -633,3 +633,193 @@ describe('lifecycle cascade', () => {
     expect(batches).toHaveLength(0)
   })
 })
+
+// --- U3: the plan/apply seam and the recovery store ---
+
+describe('the plan/apply seam (KTD7)', () => {
+  // The seam exists so a durable commit can sit BETWEEN validation and
+  // observation. If planning could be observed, "the service durably commits
+  // before replacing in-memory state or acknowledging" would be undeliverable:
+  // a failed write would already have been broadcast.
+  it('plans without installing, emitting, or moving the topology revision', () => {
+    const { store, batches } = makeStore()
+    const a = create(store, init('a'))
+    batches.length = 0
+
+    const planned = store.planReparent([a.id], { kind: 'canvas', spaceId: SPACE })
+    // A no-op move is still a plan-level decision, so use a real one.
+    expect(planned).toMatchObject({ applied: false, reason: 'no-change' })
+
+    const b = create(store, init('b'))
+    batches.length = 0
+    const move = store.planReparent([a.id], { kind: 'surface', surfaceId: b.id })
+    if (!move.applied) throw new Error(`plan rejected: ${move.reason}`)
+
+    expect(batches).toHaveLength(0)
+    expect(store.getSurface(a.id)!.home).toEqual(CANVAS)
+    expect(store.getTopologyRev(SPACE)).toBe(2)
+    expect(move.plan.baseTopologyRev).toBe(2)
+    expect(move.plan.topologyRev).toBe(3)
+    // The compare-and-swap the durable half will run, at the PRE-bump revision.
+    expect(move.plan.expectedRevs).toEqual({ [a.id]: 1 })
+
+    const written = store.applyPlan(move.plan)
+    expect(written.map(s => s.id)).toEqual([a.id])
+    expect(batches).toHaveLength(1)
+    expect(store.getSurface(a.id)!.home).toEqual({ kind: 'surface', surfaceId: b.id })
+    expect(store.getTopologyRev(SPACE)).toBe(3)
+  })
+
+  it('states expectedRev 0 for a create, so the durable half sees it as a create', () => {
+    const { store } = makeStore()
+    const planned = store.planCreate(init('a'))
+    if (!planned.applied) throw new Error('plan rejected')
+    expect(planned.plan.expectedRevs).toEqual({ [planned.plan.records[0]!.id]: 0 })
+  })
+
+  it('carries both revisions on every emitted batch', () => {
+    const { store, batches } = makeStore()
+    const a = create(store, init('a'))
+    expect(batches[0]).toMatchObject({ baseTopologyRev: 0, topologyRev: 1 })
+    batches.length = 0
+    // A content write moves no topology, so base and result are the same number.
+    store.upsertSurface({ ...store.getSurface(a.id)!, content: { headline: 'b' }, rev: 2 })
+    expect(batches[0]).toMatchObject({ baseTopologyRev: 1, topologyRev: 1 })
+  })
+})
+
+describe('recoverable deletion in the store (KTD15)', () => {
+  function tree() {
+    const made = makeStore()
+    const root = create(made.store, init('root'))
+    const kid = create(made.store, init('kid', { home: { kind: 'surface', surfaceId: root.id } }))
+    const grand = create(made.store, init('grand', { home: { kind: 'surface', surfaceId: kid.id } }))
+    return { ...made, root, kid, grand }
+  }
+
+  it('moves only the subtree ROOT and leaves descendants pointing at their own parents', () => {
+    const { store, batches, root, kid, grand } = tree()
+    batches.length = 0
+    const r = store.planDelete(root.id, {
+      descendants: [kid.id, grand.id], disposition: 'delete-subtree', at: 9_000,
+    })
+    if (!r.applied) throw new Error(`delete rejected: ${r.reason}`)
+    store.applyPlan(r.plan)
+
+    expect(batches).toHaveLength(1)
+    expect(batches[0]!.changes.map(c => c.id)).toEqual([root.id])
+    expect(store.getSurface(root.id)!.home).toEqual({ kind: 'recovery', spaceId: SPACE })
+    expect(store.getSurface(kid.id)!.home).toEqual({ kind: 'surface', surfaceId: root.id })
+    expect(store.getSurface(kid.id)!.rev).toBe(1)
+    expect(store.getRecoveryRoots(SPACE).map(s => s.id)).toEqual([root.id])
+    expect(store.recoveryRootFor(grand.id)!.id).toBe(root.id)
+  })
+
+  it('refuses a delete whose named descendant set is not the real one', () => {
+    const { store, root, kid } = tree()
+    const before = store.getAllSurfaces().map(s => ({ ...s }))
+    expect(store.planDelete(root.id, { descendants: [kid.id], disposition: 'delete-subtree' }))
+      .toMatchObject({ applied: false, reason: 'descendant-mismatch' })
+    expect(store.planDelete(root.id, { descendants: [] }))
+      .toMatchObject({ applied: false, reason: 'descendant-mismatch' })
+    expect(store.getAllSurfaces()).toEqual(before)
+  })
+
+  it('refuses to name the recovery store as an ordinary home', () => {
+    const { store, root } = tree()
+    expect(store.planReparent([root.id], { kind: 'recovery', spaceId: SPACE }))
+      .toMatchObject({ applied: false, reason: 'recovery-home' })
+    expect(store.planCreate(init('x', { home: { kind: 'recovery', spaceId: SPACE } })))
+      .toMatchObject({ applied: false, reason: 'recovery-home' })
+  })
+
+  it('restores into the Canvas with a workspace-recovery alias when the former home is gone', () => {
+    const { store, root, kid, grand } = tree()
+    const apply = (r: ReturnType<typeof store.planDelete>, what: string) => {
+      if (!r.applied) throw new Error(`setup ${what} rejected: ${r.reason}`)
+      store.applyPlan(r.plan)
+    }
+    // Delete the child first, so it becomes its OWN recovery root holding the
+    // parent as its former home. Then delete and purge the parent out from under
+    // it, which is the only way to make a former home genuinely disappear.
+    apply(store.planDelete(kid.id, { descendants: [grand.id], disposition: 'delete-subtree' }), 'kid delete')
+    apply(store.planDelete(root.id), 'root delete')
+    apply(store.planPurge(root.id), 'root purge')
+    expect(store.getSurface(root.id)).toBeUndefined()
+
+    const restore = store.planRestore(kid.id)
+    if (!restore.applied) throw new Error(`restore rejected: ${restore.reason}`)
+    store.applyPlan(restore.plan)
+
+    const restored = store.getSurface(kid.id)!
+    // Failing would have left a record nobody could ever reach again — the exact
+    // loss the recovery store exists to prevent (KTD15).
+    expect(restored.home).toEqual(CANVAS)
+    expect(restored).not.toHaveProperty('deleted')
+    expect(restored.aliases).toContainEqual({
+      bucket: { kind: 'workspace-recovery' }, localId: kid.id, visible: true,
+    })
+    // The grandchild came back attached, untouched.
+    expect(store.getChildren(kid.id).map(s => s.id)).toEqual([grand.id])
+    expect(store.getSurface(grand.id)!.rev).toBe(1)
+  })
+
+  it('restores to the former home when it is still there', () => {
+    const { store, root, kid, grand } = tree()
+    const del = store.planDelete(kid.id, { descendants: [grand.id], disposition: 'delete-subtree' })
+    if (!del.applied) throw new Error('setup delete rejected')
+    store.applyPlan(del.plan)
+    const back = store.planRestore(kid.id)
+    if (!back.applied) throw new Error(`restore rejected: ${back.reason}`)
+    store.applyPlan(back.plan)
+    expect(store.getSurface(kid.id)!.home).toEqual({ kind: 'surface', surfaceId: root.id })
+    expect(store.getSurface(kid.id)!.aliases).toBeUndefined()
+  })
+
+  it('erases only through purge, and never for a live Surface', () => {
+    const { store, batches, root, kid, grand } = tree()
+    expect(store.planPurge(root.id)).toMatchObject({ applied: false, reason: 'not-deleted' })
+
+    const del = store.planDelete(root.id, { descendants: [kid.id, grand.id], disposition: 'delete-subtree' })
+    if (!del.applied) throw new Error('setup delete rejected')
+    store.applyPlan(del.plan)
+    batches.length = 0
+
+    const purge = store.planPurge(root.id)
+    if (!purge.applied) throw new Error(`purge rejected: ${purge.reason}`)
+    expect(purge.plan.records).toEqual([])
+    expect(purge.plan.purged.sort()).toEqual([grand.id, kid.id, root.id].sort())
+    store.applyPlan(purge.plan)
+
+    expect(store.getAllSurfaces()).toEqual([])
+    expect(batches[0]!.deletes!.sort()).toEqual([grand.id, kid.id, root.id].sort())
+  })
+
+  it('a purge can LOWER the space topology revision, and live state still equals a reload', () => {
+    // Documented rather than asserted-away: `buildTopologyIndex` derives the
+    // revision as the maximum `homeRev` among surviving records, and purge is the
+    // one operation that erases records. Erasing the high-water record therefore
+    // moves the counter backwards. The property that must NOT break is that live
+    // state and a reload of the same records agree exactly — that is the reload
+    // contract everything else depends on. The non-monotonicity is a real, narrow
+    // ABA window and it is disclosed in the U3 report rather than papered over.
+    const { store } = makeStore()
+    const a = create(store, init('a'))
+    const b = create(store, init('b'))
+    const del = store.planDelete(b.id)
+    if (!del.applied) throw new Error('setup delete rejected')
+    store.applyPlan(del.plan)
+    const high = store.getTopologyRev(SPACE)
+    expect(high).toBe(3)
+
+    const purge = store.planPurge(b.id)
+    if (!purge.applied) throw new Error('setup purge rejected')
+    store.applyPlan(purge.plan)
+
+    expect(store.getTopologyRev(SPACE)).toBeLessThan(high)
+    const reloaded = new SurfaceStore(() => {})
+    reloaded.load(store.getAllSurfaces())
+    expect(reloaded.getTopologyRev(SPACE)).toBe(store.getTopologyRev(SPACE))
+    expect(reloaded.getRoots(SPACE).map(s => s.id)).toEqual([a.id])
+  })
+})

@@ -247,11 +247,67 @@ progress.)
 
 A surface's `refresh` recipe is its **authoring contract**: when it's self-contained, refreshing the surface spawns a *fresh, context-free* author (a headless child in the run's workdir) that re-runs the recipe and rewrites the file — off your (the main agent's) critical path. So write every living surface's recipe to pass the **vacuum test**: name its **source** (a PR, files, a query), its **derivation** (what to do with the source), and its **output** (what to rewrite). `"regenerate this surface"` fails — it assumes context a fresh author won't have. A surface whose only source is *this session* (e.g. "explain the session") is session-derived: it stays with you and needs no self-contained recipe. Capture the recipe at create time so the surface is born handoff-able.
 
+## Canonical Surfaces: the API and CLI you can also use
+
+Everything above is the **file-in** authoring path, and it still works exactly as
+described. Alongside it there is now a **canonical Surface API** — the same work
+artifact, addressed by a global id, with operations a human's UI and an agent both
+go through. Use it when the file path cannot express what you want:
+
+- you want to **organise**: fold several surfaces into one parent, move one, or take
+  a group apart;
+- you want to **delete something and be able to undo it**;
+- you want to **read the tree** — a surface's ancestors, its children, who worked on
+  it, and whether the host thinks it is still current;
+- you are not in a worktree with a `.tinstar/slate/` directory at all.
+
+There is **no approval step**. You create, group, reparent and delete directly. What
+makes that safe is that **delete is a move, not an erase**: the subtree goes into a
+per-space recovery store and `restore` brings it back with its identity, thread, and
+former home intact. `purge` is the only irreversible operation, and it refuses
+anything that is not already deleted.
+
+```bash
+tinstar surfaces list --space "$SPACE"          # what exists, and what is recoverable
+tinstar surfaces context <id>                   # ancestors, children, freshness, contributors
+tinstar surfaces create --space "$SPACE" --home canvas --headline "PR #212 review" \
+        --recipe "re-read the PR diff and rewrite this surface"
+tinstar surfaces group sf-a,sf-b --headline "Reliability"
+tinstar surfaces reparent sf-a --home sf-parent  # or --home canvas to promote
+tinstar surfaces ungroup sf-parent               # children move up; the box is recoverable
+tinstar surfaces delete sf-a                     # → recovery store
+tinstar surfaces restore sf-a                    # ← back where it was
+```
+
+The same operations are HTTP (`/api/surfaces`, `/api/surfaces/:id/context`,
+`/api/surfaces/group`, …); `tinstar help api` has the full spec. Four things are worth
+knowing before you use either:
+
+- **Writes are compare-and-swap.** A content update needs `--rev` (the revision you
+  read); a topology change may state `expectedTopologyRev`. A stale revision changes
+  nothing and hands you back the current record so you can re-read and retry.
+- **Deleting a parent needs the exact descendant list you saw**, plus
+  `--disposition reparent-children` or `--disposition delete-subtree`. That is on
+  purpose: a confirmation built before a child arrived must not take that child too.
+- **A file-authored surface belongs to its file.** Its content authority is the source
+  binding, so a direct API edit is refused with instructions rather than silently
+  overwritten — either rewrite the file, or take authority explicitly with
+  `tinstar surfaces authority <id> --to canonical-direct --rev <n>`.
+- **Retries are safe if you say so.** Pass `--idempotency-key <k>` (HTTP:
+  `Idempotency-Key`) and a repeat after a lost response replays instead of applying
+  twice. The output says `replayed` when that happens.
+
+Host-owned fields — `id`, `rev`, `homeRev`, timestamps, freshness state, aliases, and
+sibling order — are **rejected** if you try to supply them. That is not a formality:
+they are what keeps identity stable while a surface moves.
+
 ## The discipline that makes this work
 
 - **Author with files; answer with HTTP.** Write a file to make a surface; reply with a
   `curl` when the user talks back. Don't POST to *create* surfaces — that path
-  (`POST /slate/points`) is the **user's** add-a-point.
+  (`POST /slate/points`) is the **user's** add-a-point. The canonical
+  `POST /api/surfaces` above is a different thing: it is for surfaces that are not
+  file-authored, and for organising and lifecycle work the file path cannot express.
 - **Keep `id`s stable.** Same id → an amend that preserves the thread. Changed/missing
   id → a duplicate with a fresh thread.
 - **`objective` is a RESERVED id — never use it.** It carries the *user's* Objective,

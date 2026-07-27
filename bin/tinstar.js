@@ -40,7 +40,7 @@ async function ask(question) {
 const KNOWN_COMMANDS = [
   'doctor', 'install-skills', 'status',
   'install-service', 'uninstall-service', 'start', 'stop', 'restart', 'logs',
-  'workspaces', 'projects', 'sessions', 'tasks', 'templates', 'help',
+  'workspaces', 'projects', 'sessions', 'tasks', 'templates', 'surfaces', 'help',
 ]
 
 // Levenshtein edit distance — for "did you mean" suggestions on typos.
@@ -121,6 +121,10 @@ async function main() {
   }
   if (process.argv[2] === 'templates') {
     const { run } = await import('./tinstar/commands/templates.js')
+    return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
+  }
+  if (process.argv[2] === 'surfaces') {
+    const { run } = await import('./tinstar/commands/surfaces.js')
     return run(process.argv).catch(e => { console.error(e.message); process.exit(1) })
   }
 

@@ -12,6 +12,9 @@ export function httpJson(rawUrl, opts = {}) {
       headers: {
         'Content-Type': 'application/json',
         ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
+        // Caller-supplied headers last so a command can add identity or
+        // idempotency without this helper having to know about either.
+        ...(opts.headers ?? {}),
       },
       timeout: 5000,
     }, res => {
