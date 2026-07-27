@@ -65,11 +65,44 @@ session logs `guest env: withheld N var(s) as Tinstar-private: …`.
 **Target: a guest's environment should match what a fresh SSH login gets.**
 That is a real oracle, unlike "NODE_ENV is not production".
 
-Dropping a variable is safe because **tmux already starts pane shells as login
-shells** (argv[0] is `-bash`, verified). So `.profile` / `.bashrc` run and
-re-export PATH additions, version managers, and any tokens the user exports
-there. A dropped variable is not lost — the guest derives it the way an SSH
-session would.
+Dropping a variable is *mostly* safe because **tmux starts pane shells as login
+shells** (argv[0] is `-bash`, verified). So for **agent panes**, `.profile` /
+`.bashrc` run and re-export PATH additions, version managers, and any tokens the
+user exports there. A dropped variable is not lost there — the guest derives it
+the way an SSH session would.
+
+### The login-shell caveat — it covers ONE of the six boundaries
+
+That argument does **not** extend to the others, and must not be used to justify
+a narrow allowlist for them:
+
+| Boundary | Shell? | Rebuilds dropped vars? |
+|---|---|---|
+| agent tmux pane | login (`-bash`) | **yes** |
+| plugin server (start + health) | `/bin/sh -c` | no |
+| editor launch | none | no |
+| surfaceAuthor `claude -p` | none | no |
+| context-usage probe | none | no |
+
+For four of the five spawn types, whatever is dropped is simply **gone**. That is
+why the allowlist carries proxy/TLS (`HTTP_PROXY`, `NODE_EXTRA_CA_CERTS`, …) and
+interactive-tool entries a login shell would otherwise have rebuilt — `pam_env`
+supplies those to an SSH login from `/etc/environment`, and bash never reads that
+file.
+
+### Attribution — only strip what Tinstar could have put there
+
+The tmux server is **shared**. When the *user* started it, its global environment
+is their own **login environment** (`NVM_DIR`, `GPG_TTY`, `HTTP_PROXY`, their
+exported tokens) — none of which is Tinstar's to remove. Stripping it would make
+the agent **poorer than a fresh SSH login**, the exact opposite of the target; and
+because the launch line evals `show-environment -s` *after* `.bashrc` has run, it
+would actively unset what the login shell just rebuilt.
+
+`tmuxEnvRemovals` therefore removes a name only when it is **also present in
+Tinstar's own `process.env`**. A global name Tinstar does not have was not put
+there by Tinstar. `NODE_ENV` and friends are in Tinstar's env, so the real leak is
+still repaired.
 
 ## The audit — what crosses, and why
 
@@ -82,8 +115,10 @@ Tinstar's environment under systemd on the box where this was found (17 vars).
 | `HOME` `USER` `LOGNAME` `SHELL` `PATH` `PWD` `MAIL` `TMPDIR` `HOSTNAME` | Core POSIX identity/location. sshd sets these on any login. |
 | `TERM` `TZ` `LANG` `LANGUAGE` `LC_*` | Terminal + locale. sshd forwards `LANG`/`LC_*` (`AcceptEnv LANG LC_*`). |
 | `XDG_RUNTIME_DIR` `XDG_DATA_DIRS` `XDG_*` `DBUS_SESSION_BUS_ADDRESS` | Established by `pam_systemd` at login. Dropping `XDG_RUNTIME_DIR` breaks keyrings, user sockets, `systemctl --user`. |
-| `SSH_AUTH_SOCK` `SSH_AGENT_PID` `DISPLAY` `WAYLAND_DISPLAY` `XAUTHORITY` | Forwarded sockets a real SSH login can carry. An agent needs the agent socket to `git push`. |
-| `TINSTAR_CONFIG_HOME` | **Coordination, not private config.** A guest running the `tinstar` CLI must reach the backend that spawned it; without this, a session from a secondary backend would talk to the primary. |
+| `SSH_AUTH_SOCK` `SSH_AGENT_PID` `DISPLAY` `WAYLAND_DISPLAY` `XAUTHORITY` | Forwarded sockets a real SSH login can carry. An agent needs the agent socket to `git push`. **These are credential-bearing** — see the note below. |
+| `HTTP_PROXY` `HTTPS_PROXY` `NO_PROXY` `ALL_PROXY` (+lowercase) `NODE_EXTRA_CA_CERTS` `SSL_CERT_FILE` `SSL_CERT_DIR` `REQUESTS_CA_BUNDLE` | `pam_env` supplies these to an SSH login from `/etc/environment`; bash never reads that file, so no login shell rebuilds them. Withholding them behind a proxy costs a guest all network access with no diagnosable cause. |
+| `GPG_TTY` `EDITOR` `VISUAL` `PAGER` `LESS` `COLORTERM` | Interactive-tool plumbing a login shell would have. |
+| `TINSTAR_CONFIG_HOME` `TINSTAR_DASHBOARD_URL` `TINSTAR_DATA_DIR` | **Coordination, not private config.** A guest running the `tinstar` CLI must reach the backend that spawned it; without these, a session from a secondary backend or a dev server on 5280 talks to the primary. `TINSTAR_DASHBOARD_URL` is load-bearing for **every** agent skill (`TINSTAR_URL="${TINSTAR_DASHBOARD_URL:-…}"`) and inheritance is its **only** delivery path — nothing injects it. See [agent-skill-backend-url-env-var](./agent-skill-backend-url-env-var.md). |
 
 ### Withheld
 
@@ -122,6 +157,18 @@ plumbing never silently becomes another's allowance.
 first version of this module stripped `PATH` itself from every Windows guest.
 `isGuestEnvAllowed` compares case-insensitively on `win32` and exactly
 elsewhere, where `path` genuinely differs from `PATH`.
+
+> **This list is a hygiene / blast-radius boundary, NOT containment.** A guest with
+> `SSH_AUTH_SOCK` authenticates as the user to every host the agent holds keys for;
+> `DBUS_SESSION_BUS_ADDRESS` reaches the unlocked keyring via `org.freedesktop.secrets`;
+> `XAUTHORITY`+`DISPLAY` reach the X server. Keeping them is the right call — guests
+> previously inherited *everything*, agents genuinely need them, and a same-uid guest can
+> find these sockets on disk anyway, so withholding buys no real containment. But the
+> "matches a fresh SSH login" oracle is a **compatibility** property, not a safety one.
+> Do not cite it to justify the next addition as if it were a security argument.
+>
+> Also withheld and worth knowing: proxy/CA variables were originally stripped, which
+> *is* removing a security control. They are now allowed for exactly that reason.
 
 **Deliberately not synthesized:** `SSH_CLIENT` / `SSH_CONNECTION` / `SSH_TTY`.
 There is no SSH connection behind a Tinstar session; inventing them would be its

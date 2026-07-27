@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { guestEnv } from './guestEnv'
+import { guestEnvFor } from './guestEnv'
+import { log } from '../logger'
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -91,7 +92,7 @@ function spawnSidecar(conversationId: string): Promise<ContextData> {
     ], {
       stdio: ['pipe', 'pipe', 'pipe'],
       // Guest boundary — an agent CLI, not part of Tinstar's runtime.
-      env: guestEnv(),
+      env: guestEnvFor('context-usage', log.debug),
     })
 
     // Send control request + throwaway user message (needed to flush the control_response)

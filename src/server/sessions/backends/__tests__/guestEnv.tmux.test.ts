@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -57,19 +57,30 @@ const POLLUTED_ENV = {
   A_FUTURE_TINSTAR_SETTING: 'leaked',             // stands in for the NEXT var someone adds
 }
 
-let tmuxAvailable = false
+/**
+ * Probed SYNCHRONOUSLY at module load, not in beforeAll: `it.skipIf(...)` is
+ * evaluated at COLLECTION time, before any hook runs, so a flag set in
+ * beforeAll is still false when skipIf reads it and every test would skip
+ * permanently — silently reporting green with zero coverage, the exact failure
+ * this suite exists to prevent.
+ */
+const tmuxAvailable = (() => {
+  try { execFileSync('tmux', ['-V'], { timeout: 5_000, stdio: 'ignore' }); return true } catch { return false }
+})()
+
+/** The env of the "Tinstar" that started each polluted test server. The scrub's
+ *  attribution filter is relative to THIS, not to the vitest process (which has
+ *  no NODE_ENV — the suite runs under `env -u NODE_ENV`). */
+const POLLUTED_ENV_NAMES = () => Object.keys(POLLUTED_ENV)
+
 let scratch: string
 
-beforeAll(async () => {
-  try {
-    await execFileAsync('tmux', ['-V'], { timeout: 5_000 })
-    tmuxAvailable = true
-  } catch { tmuxAvailable = false }
+beforeAll(() => {
   scratch = mkdtempSync(join(tmpdir(), 'guestenv-'))
 })
 
 afterAll(async () => {
-  const dir = process.env.TMUX_TMPDIR || `/tmp/tmux-${process.getuid?.() ?? 0}`
+  const dir = join(process.env.TMUX_TMPDIR || '/tmp', `tmux-${process.getuid?.() ?? 0}`)
   for (const s of sockets) {
     // ALWAYS -L. TMUX_TMPDIR does not isolate when $TMUX is set (a client with
     // $TMUX set uses that socket and ignores it), and these tests run inside
@@ -121,8 +132,7 @@ async function paneEnv(
 }
 
 describe('guest env boundary (real tmux)', () => {
-  it('leaks Tinstar env without the fix — proves the test can detect the bug', async () => {
-    if (!tmuxAvailable) return
+  it.skipIf(!tmuxAvailable)('leaks Tinstar env without the fix — proves the test can detect the bug', async () => {
     // Guard against a vacuous suite: if this ever stops failing to leak, the
     // assertions below would pass for the wrong reason.
     const tmux = await startPollutedServer('leaky')
@@ -131,10 +141,9 @@ describe('guest env boundary (real tmux)', () => {
     expect(env.A_FUTURE_TINSTAR_SETTING).toBe('leaked')
   }, 60_000)
 
-  it('a guest shell has NO NODE_ENV once the session is scrubbed', async () => {
-    if (!tmuxAvailable) return
+  it.skipIf(!tmuxAvailable)('a guest shell has NO NODE_ENV once the session is scrubbed', async () => {
     const tmux = await startPollutedServer('scrubbed')
-    await scrubTmuxSessionEnv('scrubbed', 'scrubbed', ['-L', socketFor('scrubbed')])
+    await scrubTmuxSessionEnv('scrubbed', 'scrubbed', ['-L', socketFor('scrubbed')], POLLUTED_ENV_NAMES())
 
     const env = await paneEnv(tmux, 'scrubbed')
     // Absent entirely — not merely "not production". A guest project that sets
@@ -147,10 +156,9 @@ describe('guest env boundary (real tmux)', () => {
     expect(env).not.toHaveProperty('A_FUTURE_TINSTAR_SETTING')
   }, 60_000)
 
-  it('keeps what a login shell needs', async () => {
-    if (!tmuxAvailable) return
+  it.skipIf(!tmuxAvailable)('keeps what a login shell needs', async () => {
     const tmux = await startPollutedServer('keeps')
-    await scrubTmuxSessionEnv('keeps', 'keeps', ['-L', socketFor('keeps')])
+    await scrubTmuxSessionEnv('keeps', 'keeps', ['-L', socketFor('keeps')], POLLUTED_ENV_NAMES())
 
     const env = await paneEnv(tmux, 'keeps')
     expect(env.HOME).toBe(process.env.HOME)
@@ -158,8 +166,7 @@ describe('guest env boundary (real tmux)', () => {
     expect(env.USER).toBe(process.env.USER)
   }, 60_000)
 
-  it('never strips a session-scoped var — session identity survives', async () => {
-    if (!tmuxAvailable) return
+  it.skipIf(!tmuxAvailable)('never strips a session-scoped var — session identity survives', async () => {
     // The restart-path hazard: when Tinstar runs inside a Tinstar session, the
     // PARENT's TINSTAR_SESSION_NAME and secrets sit in the global env. Removing
     // those names blindly replaces the child's own session-scoped values with
@@ -172,7 +179,7 @@ describe('guest env boundary (real tmux)', () => {
     await tmux('set-environment', '-t', 'ident', 'TINSTAR_SESSION_NAME', 'child')
     await tmux('set-environment', '-t', 'ident', 'ANTHROPIC_API_KEY', 'child-key')
 
-    await scrubTmuxSessionEnv('ident', 'ident', ['-L', socketFor('ident')])
+    await scrubTmuxSessionEnv('ident', 'ident', ['-L', socketFor('ident')], POLLUTED_ENV_NAMES())
 
     const env = await paneEnv(tmux, 'ident')
     expect(env.TINSTAR_SESSION_NAME).toBe('child')
@@ -180,15 +187,14 @@ describe('guest env boundary (real tmux)', () => {
     expect(env).not.toHaveProperty('NODE_ENV')       // ...while still stripping the private ones
   }, 60_000)
 
-  it('corrects the ALREADY-RUNNING pane shell, not just new ones', async () => {
-    if (!tmuxAvailable) return
+  it.skipIf(!tmuxAvailable)('corrects the ALREADY-RUNNING pane shell, not just new ones', async () => {
     // A pane's environment is frozen at exec, so the shell that was already
     // running keeps the stale value in /proc. Tinstar's launch line starts with
     // `eval "$(tmux show-environment -s)"`, and a removal makes that emit
     // `unset NODE_ENV;` — which is what repairs the live shell.
     const tmux = await startPollutedServer('live')
     const socket = socketFor('live')
-    await scrubTmuxSessionEnv('live', 'live', ['-L', socket])
+    await scrubTmuxSessionEnv('live', 'live', ['-L', socket], POLLUTED_ENV_NAMES())
 
     const out = join(scratch, 'live-shell.env')
     await tmux('send-keys', '-t', 'live',

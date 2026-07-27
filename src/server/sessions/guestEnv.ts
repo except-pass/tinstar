@@ -23,12 +23,21 @@
  * silent. The allowlist below fails the other way: a variable nobody
  * anticipated is dropped, and `describeGuestEnvScoping()` says so in the log.
  *
- * WHY DROPPING IS SAFE. A login shell rebuilds the interesting parts of the
- * environment itself. tmux already starts pane shells as login shells (argv[0]
- * is `-bash`), so `.profile` / `.bashrc` run and re-export PATH additions,
- * version managers, and any tokens the user exports there. Dropping a variable
- * here does not mean the guest ends up without it — it means the guest derives
- * it the same way an SSH session would.
+ * WHY DROPPING IS MOSTLY SAFE — AND THE LOGIN SHELL CAVEAT. tmux starts pane
+ * shells as login shells (argv[0] is `-bash`, verified), so for AGENT PANES
+ * `.profile` / `.bashrc` run and re-export PATH additions, version managers,
+ * and any tokens the user exports there. A dropped variable is not lost there;
+ * the guest derives it the way an SSH session would.
+ *
+ * That argument does NOT extend to the other boundaries, and it must not be
+ * used to justify a narrow allowlist for them:
+ *   - plugin servers  — `spawn(cmd, { shell: true })` runs `/bin/sh -c`, a
+ *                       NON-login, NON-interactive shell. Nothing is sourced.
+ *   - editor launch   — spawned with no shell at all.
+ *   - surfaceAuthor / context-usage — `claude` spawned directly, no shell.
+ * For those four, whatever is dropped is simply GONE. That is why this list
+ * carries proxy/TLS and interactive-tool entries that a login shell would
+ * otherwise have rebuilt.
  *
  * NOT SYNTHESIZED: SSH_CLIENT / SSH_CONNECTION / SSH_TTY. There is no SSH
  * connection behind a Tinstar session, and inventing those values would be its
@@ -98,11 +107,32 @@ export const GUEST_ENV_ALLOW_EXACT: readonly string[] = [
   'WAYLAND_DISPLAY',
   'XAUTHORITY',
 
+  // --- Proxy / TLS trust. pam_env hands these to a real SSH login, and four of
+  // the six guest boundaries have NO login shell to rebuild them (see the
+  // LOGIN SHELL CAVEAT above). Withholding them behind a corporate proxy costs
+  // a guest all network access, with no diagnosable cause.
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+  'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
+  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE',
+
+  // --- Interactive-tool plumbing a login shell would have.
+  'GPG_TTY', 'EDITOR', 'VISUAL', 'PAGER', 'LESS', 'COLORTERM',
+
   // --- Tinstar coordination. NOT private runtime config: a guest that runs the
-  // `tinstar` CLI must reach the SAME backend that spawned it. Without this a
+  // `tinstar` CLI must reach the SAME backend that spawned it. Without these a
   // session spawned by a secondary backend (TINSTAR_CONFIG_HOME set, see
-  // docs/conventions.md) would silently talk to the primary instead.
+  // docs/conventions.md) or a dev server on 5280 would silently talk to the
+  // primary on 5273 instead.
+  //
+  // TINSTAR_DASHBOARD_URL is load-bearing for EVERY agent skill: they all open
+  // with `TINSTAR_URL="${TINSTAR_DASHBOARD_URL:-http://localhost:5273}"` (see
+  // agent-skills/skills/*/SKILL.md and
+  // docs/solutions/conventions/agent-skill-backend-url-env-var.md). Plain env
+  // inheritance is its ONLY delivery path — nothing injects it explicitly — so
+  // withholding it silently points every skill at the default backend.
   'TINSTAR_CONFIG_HOME',
+  'TINSTAR_DASHBOARD_URL',
+  'TINSTAR_DATA_DIR',   // legacy alias for the config root; same reasoning
 ]
 
 /**
@@ -234,12 +264,39 @@ export function tmuxEnvRemovals(
   globalEnvNames: readonly string[],
   injected: readonly string[] = [],
   platform: string = process.platform,
+  /** Names present in TINSTAR'S OWN environment — the attribution filter. */
+  tinstarEnvNames: readonly string[] = Object.keys(process.env),
 ): string[] {
   const keepAnyway = new Set(injected)
+  const attributable = new Set(tinstarEnvNames)
   return globalEnvNames
-    .filter((name) => !keepAnyway.has(name) && !isGuestEnvAllowed(name, platform))
+    .filter((name) => (
+      // Only strip what TINSTAR could have put there. The tmux server is shared:
+      // when the USER started it, its global environment is the user's own LOGIN
+      // environment (NVM_DIR, GPG_TTY, HTTP_PROXY, their exported tokens), not
+      // Tinstar's. Removing those makes the agent POORER than a fresh SSH login
+      // — the opposite of this module's target — and, because the launch line
+      // evals `show-environment -s` AFTER .bashrc has run, it actively unsets
+      // what the login shell just rebuilt.
+      //
+      // A global name absent from Tinstar's own process.env was not put there by
+      // Tinstar, so it is not Tinstar's to remove. NODE_ENV and friends are in
+      // Tinstar's env, so the actual leak is still repaired.
+      attributable.has(name)
+      && !keepAnyway.has(name)
+      && !isGuestEnvAllowed(name, platform)
+      // Defensive: only ever hand tmux a well-formed variable name. A global
+      // name ending in ';' would otherwise be split by tmux's command separator
+      // and mark a DIFFERENT variable for removal — a global named `PATH;`
+      // emits `-PATH` and leaves new panes with no PATH (verified, tmux 3.2a).
+      && VALID_ENV_NAME.test(name)
+    ))
     .sort()
 }
+
+/** POSIX portable variable name. Anything else is not safe to batch into a
+ *  `;`-separated tmux command list, and is not a name we put there anyway. */
+const VALID_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /**
  * Parse `tmux show-environment -g` output into variable names.
@@ -256,7 +313,10 @@ export function parseTmuxEnvNames(showEnvironmentOutput: string): string[] {
     if (!trimmed || trimmed.startsWith('-')) continue
     const eq = trimmed.indexOf('=')
     const name = eq === -1 ? trimmed : trimmed.slice(0, eq)
-    if (name) names.push(name)
+    // Only well-formed names. A VALUE may span lines (an exported bash function
+    // is the common case), and those continuation lines would otherwise be read
+    // as variable names and fed to `set-environment -r` as junk removals.
+    if (name && VALID_ENV_NAME.test(name)) names.push(name)
   }
   return names
 }
@@ -265,4 +325,25 @@ export function parseTmuxEnvNames(showEnvironmentOutput: string): string[] {
 export function describeGuestEnvScoping(stripped: readonly string[]): string {
   if (stripped.length === 0) return 'guest env: nothing withheld'
   return `guest env: withheld ${stripped.length} var(s) as Tinstar-private: ${stripped.join(', ')}`
+}
+
+/**
+ * `guestEnv()` plus a log line naming what was withheld, tagged with the
+ * boundary. Use this at every spawn site rather than bare `guestEnv()`.
+ *
+ * Withholding a variable a child actually needed produces a failure with no
+ * obvious cause — the same shape as the bug this module fixes. The tmux path
+ * logs via its own scrub; this gives the four non-tmux boundaries (plugin
+ * servers, editor, surfaceAuthor, context-usage) the same breadcrumb at the
+ * point of cause. Debug level: routine and noisy, but present when someone
+ * goes looking.
+ */
+export function guestEnvFor(
+  boundary: string,
+  logDebug: (scope: string, msg: string) => void,
+  extra: Record<string, string> = {},
+): Record<string, string> {
+  const { keep, stripped } = partitionGuestEnv()
+  logDebug('guest-env', `${boundary}: ${describeGuestEnvScoping(stripped)}`)
+  return { ...keep, ...extra }
 }

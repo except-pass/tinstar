@@ -30,7 +30,7 @@ describe('dispatchSurfaceAuthor', () => {
     const r = dispatchSurfaceAuthor({ ...base, config: cfg })
     expect(r.dispatched).toBe(true)
     expect(spawn).toHaveBeenCalledTimes(1)
-    const [bin, args, opts] = spawn.mock.calls[0] as [string, string[], { cwd?: string; timeout?: number }]
+    const [bin, args, opts] = spawn.mock.calls[0] as [string, string[], { cwd?: string; timeout?: number; env?: Record<string, string> }]
     expect(bin).toBe('claude')
     const promptArg = args[args.indexOf('-p') + 1]!
     expect(promptArg).toContain('AUTHOR THIS')                     // the caller's pre-built prompt
@@ -40,6 +40,11 @@ describe('dispatchSurfaceAuthor', () => {
     expect(args).toContain('sonnet')
     expect(opts.cwd).toBe('/wd')               // the run's workdir (where the watcher looks)
     expect(opts.timeout).toBe(1000)            // bounded — a wandering author is killed
+    // GUEST BOUNDARY: this claude runs in someone else's repo, so it must get a
+    // scoped env, not Tinstar's. Asserted here because deleting `env:` from
+    // surfaceAuthor.ts would otherwise pass this suite untouched.
+    expect(opts.env).toBeDefined()
+    expect(opts.env).not.toHaveProperty('NODE_ENV')
   })
 
   it('is fire-and-forget: unref() is called so the child never blocks the server loop', () => {

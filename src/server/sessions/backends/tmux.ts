@@ -450,8 +450,16 @@ export function buildAgentCommand(opts: {
  * and look for them on another.
  */
 function tmuxClientEnv(): Record<string, string> {
-  const tmpdir = process.env.TMUX_TMPDIR
-  return guestEnv(tmpdir ? { TMUX_TMPDIR: tmpdir } : {})
+  const pass: Record<string, string> = {}
+  // BOTH knobs, or these calls resolve a DIFFERENT server than the rest of this
+  // module. Every other tmux call here inherits Tinstar's full env; if Tinstar
+  // itself runs inside tmux (a dev server started from a pane), $TMUX is set and
+  // a client with $TMUX and no -L/-S uses THAT socket, ignoring TMUX_TMPDIR
+  // (verified, tmux 3.2a). Passing only TMUX_TMPDIR would create the session on
+  // one socket and configure/attach it on another.
+  if (process.env.TMUX_TMPDIR) pass.TMUX_TMPDIR = process.env.TMUX_TMPDIR
+  if (process.env.TMUX) pass.TMUX = process.env.TMUX
+  return guestEnv(pass)
 }
 
 /**
@@ -482,6 +490,10 @@ export async function scrubTmuxSessionEnv(
    * Tinstar uses the default socket. The integration test passes an isolated
    * socket so it can exercise THIS function rather than a replica of it. */
   socketArgs: readonly string[] = [],
+  /** Names in TINSTAR'S OWN env — the attribution filter (see tmuxEnvRemovals).
+   *  Overridable so tests can express "the Tinstar that started this server",
+   *  which is not the test runner's own process. */
+  tinstarEnvNames: readonly string[] = Object.keys(process.env),
 ): Promise<void> {
   try {
     const [globalEnv, sessionEnv] = await Promise.all([
@@ -497,16 +509,26 @@ export async function scrubTmuxSessionEnv(
       // and secrets. Removing those names blindly replaces the child's own
       // session-scoped values with removal markers — verified: the pane then
       // has no TINSTAR_SESSION_NAME at all, destroying the session's identity.
-      execFileAsync('tmux', [...socketArgs, 'show-environment', '-t', tmuxName]),
+      execFileAsync('tmux', [...socketArgs, 'show-environment', '-t', `=${tmuxName}`]),
     ])
     const injected = parseTmuxEnvNames(sessionEnv.stdout)
-    const removals = tmuxEnvRemovals(parseTmuxEnvNames(globalEnv.stdout), injected)
+    // 4th arg is the ATTRIBUTION filter: only strip what Tinstar itself could
+    // have put in the server's global env. When the USER started the tmux
+    // server, that global env is their own login environment and none of it is
+    // ours to remove. See tmuxEnvRemovals in ../guestEnv.ts.
+    const removals = tmuxEnvRemovals(
+      parseTmuxEnvNames(globalEnv.stdout), injected, process.platform, tinstarEnvNames,
+    )
     if (removals.length === 0) return
 
+    // `=name` is tmux's EXACT-match target syntax. A bare `-t name` matches by
+    // prefix, so a session that disappears mid-scrub could let these removals
+    // land on a different session whose name starts with the same characters.
+    const target = `=${tmuxName}`
     const args: string[] = [...socketArgs]
     for (const name of removals) {
       if (args.length > socketArgs.length) args.push(';')
-      args.push('set-environment', '-t', tmuxName, '-r', name)
+      args.push('set-environment', '-t', target, '-r', name)
     }
     await execFileAsync('tmux', args)
     log.info('tmux', `${sessionName}: ${describeGuestEnvScoping(removals)}`)

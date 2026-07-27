@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import type { PluginServerSpec } from '@tinstar/plugin-api'
 import { parseManifest, ManifestError } from '../../core/pluginHost/manifest'
 import { readPluginsConfig, type PluginsConfig } from '../../core/pluginHost/pluginsConfig'
-import { guestEnv } from '../sessions/guestEnv'
+import { guestEnvFor } from '../sessions/guestEnv'
+import { log } from '../logger'
 
 export interface PluginServerEntry {
   pluginId: string
@@ -68,6 +69,13 @@ export function checkHealthOnce(entry: PluginServerEntry): Promise<'up' | 'down'
       cwd: entry.cwd,
       timeout: entry.spec.healthTimeoutMs ?? 3000,
       windowsHide: true,
+      // Same guest boundary as startServer below: `entry.spec.health` is an
+      // arbitrary command from a third-party plugin manifest. It also runs far
+      // MORE often — every status refresh, started or not — so leaving it
+      // inheriting Tinstar's env left the most frequently executed
+      // plugin-authored path unscoped (including the NODE_ENV trap, for a
+      // health command that shells out to npm).
+      env: guestEnvFor(`plugin:${entry.pluginId}:health`, log.debug),
     }, (err) => resolve(err ? 'down' : 'up'))
   })
 }
@@ -130,7 +138,7 @@ export function startServer(configRoot: string, pluginId: string): { started: tr
     // toolchain. Inheriting Tinstar's env hands it NODE_ENV=production, so a
     // plugin whose start script runs `npm install` silently loses its
     // devDependencies — the exact trap this module exists to close.
-    env: guestEnv(),
+    env: guestEnvFor(`plugin:${entry.pluginId}:start`, log.debug),
   })
   // A detached child whose spawn fails asynchronously (e.g. ENOENT on a bad cwd)
   // emits 'error'; with no listener that throws as an uncaught exception and takes

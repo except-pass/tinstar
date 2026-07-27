@@ -4712,8 +4712,14 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         // inside that editor — well outside tmux, where no later fix can reach
         // it. Scope it to the guest allowlist. See sessions/guestEnv.ts.
         const env: Record<string, string> = guestEnv()
+        // Fall back to the INHERITED hook when probing finds nothing:
+        // resolveLiveIpcSocket only scans XDG_RUNTIME_DIR and returns null on
+        // non-Linux, and macOS is a shipped target. Before scoping, the
+        // inherited value was the only working path there — scoping the env
+        // without this fallback would silently break "Open in Editor" on macOS.
         const liveSock = await resolveLiveIpcSocket()
-        if (liveSock) env.VSCODE_IPC_HOOK_CLI = liveSock
+        const ipcHook = liveSock ?? process.env.VSCODE_IPC_HOOK_CLI
+        if (ipcHook) env.VSCODE_IPC_HOOK_CLI = ipcHook
 
         // Discover Remote-SSH `code` binaries (VS Code / Cursor / Windsurf install
         // them under ~/.<flavor>-server/bin/<arch>/<commit>/bin/remote-cli/). The
