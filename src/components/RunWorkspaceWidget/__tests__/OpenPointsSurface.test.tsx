@@ -504,8 +504,16 @@ describe('OpenPointsSurface (U6)', () => {
 
   // ── The DURABLE answered posture (`durablyAnswered`) ────────────────────────────
   // A row's only answered signal used to be `usePointAnswerForm`'s optimistic lock —
-  // plain `useState`, so it died on remount and the user came back to blank controls
-  // inviting a second answer to a question they'd already settled.
+  // plain `useState`, so it died on remount and the user came back to a row with no
+  // trace that they'd already settled the question.
+  //
+  // The signal is VISUAL ONLY, and that boundary is load-bearing. `Reply` carries no
+  // discriminator, and the answer route persists an answer as an ordinary user reply —
+  // identical in shape to a thread comment. So `durablyAnswered` cannot tell "answered
+  // the control" from "left a comment", and it must NEVER reach `form.answered`: doing
+  // so would lock the controls on a commented-but-undecided point and render it as
+  // decided. Every test below asserts BOTH halves — the marker is on, the controls are
+  // still live — because the second half is the one that would regress silently.
   describe('durable answered state', () => {
     /** Choice + Submit — enough to tell "locked" from "still asking". */
     const askBody = {
@@ -532,12 +540,16 @@ describe('OpenPointsSurface (U6)', () => {
           points={[point('p1', { body: askBody as never, status: 'waiting', thread: [userReply] })]}
         />,
       )
-      // Nothing was clicked in this render — the state comes purely from the thread,
-      // which is the whole point: a reload lands here, not on blank controls.
-      expect(screen.getByTestId('point-p1').getAttribute('data-answered')).toBe('true')
-      expect(screen.getByText('✓ Answered')).toBeTruthy()
-      expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
-      expect((screen.getByRole('radio', { name: 'Yes' }) as HTMLInputElement).disabled).toBe(true)
+      // Nothing was clicked in this render — the marker comes purely from the thread,
+      // which is the whole point: a reload lands here, not on a row with no trace of it.
+      const row = screen.getByTestId('point-p1')
+      expect(row.getAttribute('data-answered')).toBe('true')
+      expect(row.className).toContain('border-hue-resolved/30')
+      // …and the controls stay LIVE. The durable signal is visual; only a real submit
+      // locks the form.
+      expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false)
+      expect((screen.getByRole('radio', { name: 'Yes' }) as HTMLInputElement).disabled).toBe(false)
+      expect(screen.queryByText('✓ Answered')).toBeNull()
     })
 
     // THE REGRESSION. Status is derived from WHO SPOKE LAST (`derivePointStatus`), so
@@ -559,7 +571,31 @@ describe('OpenPointsSurface (U6)', () => {
       )
       expect(screen.getByTestId('point-p1').getAttribute('data-status')).toBe('discussing')
       expect(screen.getByTestId('point-p1').getAttribute('data-answered')).toBe('true')
-      expect(screen.getByText('✓ Answered')).toBeTruthy()
+      expect(screen.getByTestId('point-p1').className).toContain('border-hue-resolved/30')
+    })
+
+    // THE OTHER FAILURE MODE, and the reason the durable signal is visual only: a user
+    // who COMMENTS on a decision card without touching its radios has not decided. The
+    // row may show it has been engaged with, but the controls must stay live — locking
+    // here would claim a decision that was never made.
+    it('a user COMMENT does not lock the controls (a comment is not a decision)', () => {
+      render(
+        <OpenPointsSurface
+          runId="run-1"
+          points={[
+            point('p1', {
+              body: askBody as never,
+              status: 'waiting',
+              thread: [{ id: 'c1', author: 'user', text: 'What about option C?', createdAt: 10 }],
+            }),
+          ]}
+        />,
+      )
+      // BACK-OUT GUARD: feed `durablyAnswered` into `form.answered` and this fails —
+      // the Submit becomes "✓ Answered" on a question the user only asked about.
+      expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false)
+      expect((screen.getByRole('radio', { name: 'Yes' }) as HTMLInputElement).disabled).toBe(false)
+      expect(screen.queryByText('✓ Answered')).toBeNull()
     })
 
     // Monotonic, not just sticky: an agent-only thread is a conversation, not an answer,
@@ -583,13 +619,24 @@ describe('OpenPointsSurface (U6)', () => {
         <OpenPointsSurface runId="run-1" points={[point('p1', { body: askBody as never, status: 'resolved' })]} />,
       )
       expect(screen.getByTestId('point-p1').getAttribute('data-answered')).toBe('true')
-      expect(screen.getByText('✓ Answered')).toBeTruthy()
     })
 
     it('an untouched open point is not answered', () => {
       render(<OpenPointsSurface runId="run-1" points={[point('p1', { body: askBody as never })]} />)
-      expect(screen.getByTestId('point-p1').getAttribute('data-answered')).toBeNull()
+      const row = screen.getByTestId('point-p1')
+      expect(row.getAttribute('data-answered')).toBeNull()
+      expect(row.className).toContain('border-hairline')
       expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy()
+    })
+
+    // A real submit still locks — the optimistic path is untouched by all of the above.
+    it('submitting for real still locks the controls', async () => {
+      render(<OpenPointsSurface runId="run-1" points={[point('p1', { body: askBody as never })]} />)
+      fireEvent.click(screen.getByRole('radio', { name: 'Yes' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+      await waitFor(() => expect(screen.getByText('✓ Answered')).toBeTruthy())
+      expect((screen.getByRole('radio', { name: 'Yes' }) as HTMLInputElement).disabled).toBe(true)
     })
   })
 })

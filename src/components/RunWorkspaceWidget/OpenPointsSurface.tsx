@@ -216,29 +216,31 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
     void lifecycle(resolved ? 'reopen' : 'resolve', resolved ? null : 'resolved')
   }, [resolved, lifecycle])
 
-  // The DURABLE answered posture. `answer.answered` is the hook's optimistic lock —
-  // plain `useState`, so it dies on remount, and a row remounts on every re-projection
-  // and every reload. Without the durable half, a point the user answered five minutes
-  // ago comes back as blank controls inviting a second answer.
+  // VISUAL answered posture only — same contract as the workbench column. `answer.answered`
+  // is the hook's optimistic lock (plain `useState`, so it dies on remount); the durable
+  // half is what makes an answered point still LOOK answered after a reload.
+  //
+  // Deliberately NOT wired into `form.answered`. `Reply` is `{id, author, text, createdAt}`
+  // with no discriminator, and the answer route persists an answer as an ordinary user
+  // reply — indistinguishable in shape from a thread comment. So `durablyAnswered` cannot
+  // tell "answered the control" from "left a comment", and locking the controls on it
+  // would render a commented-but-undecided point as decided. That is a worse failure than
+  // the reload amnesia this fixes: it claims a decision the user never made. Making the
+  // LOCK durable needs answers tagged at the persistence layer first — a separate change.
   const answered = answer.answered || durablyAnswered(surface)
 
   // Submitting an answer also clears any lingering lifecycle (resolve/reopen) error,
   // exactly as the pre-extraction `submitAnswer` did when the two shared one `error`.
-  //
-  // `answered` overrides the hook's flag rather than sitting beside it: the A2UI
-  // controls read `form.answered` and nothing else, so the durable signal has to reach
-  // them through here or the Submit renders as a live button on an already-answered
-  // point. One-way — `||` never turns a locked form back on.
+  // The form's `answered` stays the hook's optimistic flag alone (see above).
   const form: NoticeFormState = useMemo(
     () => ({
       ...answer.form,
-      answered,
       submit: () => {
         setError(null)
         answer.form.submit()
       },
     }),
-    [answer.form, answered],
+    [answer.form],
   )
 
   // The row shows ONE error line, and the two slots clear EACH OTHER — the wrapped
@@ -267,8 +269,15 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
       data-answered={answered ? 'true' : undefined}
       data-refreshing={refreshing ? 'true' : undefined}
       data-focused={focused ? 'true' : undefined}
+      // An answered row swaps the hairline for the resolved hue — the SAME treatment the
+      // workbench column wears, so a point answered in a column and re-read as a row looks
+      // the same either way. Refreshing still wins (it's the live, moving state).
       className={`rounded border bg-surface-hover p-2.5 transition-shadow ${
-        refreshing ? 'border-primary/40 slate-surface-refreshing' : 'border-hairline'
+        refreshing
+          ? 'border-primary/40 slate-surface-refreshing'
+          : answered
+            ? 'border-hue-resolved/30'
+            : 'border-hairline'
       } ${focused ? 'ring-1 ring-primary/70' : ''} ${
         status === 'dismissed' || hidden ? 'opacity-50' : resolved ? 'opacity-70' : ''
       }`}
