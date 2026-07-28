@@ -15,7 +15,8 @@ import type { Run } from '../../../domain/types'
 import { seedRunSlate } from './seedRunSlate'
 import { RunSlateBridge } from '../../surfaces/run-slate-bridge'
 import { SurfaceService } from '../../surfaces/surface-service'
-import type { SurfacePrincipalRef } from '../../../domain/types'
+import type { Surface, SurfacePrincipalRef } from '../../../domain/types'
+import { inRunSlate } from '../run-slate-projection'
 
 const USER: SurfacePrincipalRef = { kind: 'human', id: 'actor-1' }
 
@@ -142,6 +143,33 @@ describe('Run.slate derives from canonical Surfaces', () => {
     const h = setup()
     await seedRunSlate(h.store, h.runId, [{ id: 'p1', headline: 'a', recipe: 'rebuild me' }])
     expect(h.slate()![0]!.refresh).toBe('rebuild me')
+  })
+})
+
+// `inRunSlate` is the gate the derivation and the point projection share. Tested
+// directly because its two exclusions are independent and, on a real store today,
+// overlap: every compatibility root also carries a hidden alias, so a store-level
+// test cannot tell which gate did the work.
+describe('inRunSlate', () => {
+  const surface = (over: Partial<Surface> = {}): Surface => ({
+    id: 'sf-1', spaceId: 'spc-a', home: { kind: 'canvas', spaceId: 'spc-a' },
+    content: { headline: 'h' }, contentAuthority: 'canonical-direct', author: 'agent',
+    thread: { replies: [], status: 'open' }, freshness: { phase: 'current', overdue: false },
+    rev: 1, homeRev: 1, createdAt: 1, amendedAt: 1, ...over,
+  })
+  const alias = { bucket: { kind: 'run' as const, runId: 'r1' }, localId: 'p1', visible: true }
+
+  it('admits a visible alias on an ordinary Surface', () => {
+    expect(inRunSlate(surface(), alias)).toBe(true)
+  })
+
+  it('excludes a compatibility root even when its alias is visible', () => {
+    expect(inRunSlate(surface({ compatibilityOnly: true }), alias)).toBe(false)
+  })
+
+  it('excludes a hidden alias, and a Surface with no alias for this run', () => {
+    expect(inRunSlate(surface(), { ...alias, visible: false })).toBe(false)
+    expect(inRunSlate(surface(), undefined)).toBe(false)
   })
 })
 

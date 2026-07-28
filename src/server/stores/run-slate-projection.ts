@@ -41,10 +41,12 @@ export function runAliasOf(s: Surface, runId: string): SurfaceCompatAlias | unde
 /**
  * Is this Surface part of the run's legacy Slate presentation?
  *
- * Two exclusions, both structural rather than cosmetic:
+ * Two INDEPENDENT exclusions:
  *   · `compatibilityOnly` — the per-run root. It is migration scaffolding that
  *     CONTAINS the run's surfaces; rendering it inside the list it contains would
- *     put a "run root" row into the user's Slate;
+ *     put a "run root" row into the user's Slate. Today every root also carries a
+ *     hidden alias, so either gate alone would exclude it; this one is on the
+ *     PROPERTY rather than on a flag a later mutation could flip;
  *   · an invisible alias — closing a legacy presentation hides the alias and never
  *     deletes the canonical Surface (KTD3).
  */

@@ -26,6 +26,9 @@ import { join } from 'node:path'
 import { DocumentStore, type DocumentChange } from '../document-store'
 import { SurfaceSidecar, surfaceSidecarPaths, type SidecarWriteStep } from '../surface-persistence'
 import { bootSurfaces } from '../surface-boot'
+import { seedRunSlate } from './seedRunSlate'
+import { RunSlateBridge } from '../../surfaces/run-slate-bridge'
+import { SurfaceService } from '../../surfaces/surface-service'
 import { acquireBackendSingleton } from '../../infra/lock'
 import type { Run, Surface, SurfaceHome } from '../../../domain/types'
 
@@ -336,6 +339,48 @@ describe('a faulted load', () => {
       expect(boot.sidecar).toBeNull()
       expect(readFileSync(paths.primary, 'utf-8')).toBe(primaryBytes)
       expect(readFileSync(paths.backup, 'utf-8')).toBe(backupBytes)
+    })
+  })
+
+  // THE DATA-LOSS GUARD. Between U1 and U2 the legacy bridge was still the write
+  // path, so every migration pass rebuilt existing canonical records from the legacy
+  // points. U2 makes canonical the write path and freezes the legacy snapshot — and a
+  // pass that still re-authored from that frozen copy would revert every reply typed
+  // and every body reconciled since, once per restart, with no error anywhere.
+  //
+  // BACK-OUT GUARD: drop `adoptOnly: true` in `surface-boot.ts` and this fails.
+  it('a second boot does NOT re-author canonical records from the frozen legacy points', async () => {
+    await withConfigRoot(async dir => {
+      const store = new DocumentStore()
+      store.enablePersistence(join(dir, 'docstore.json'))
+      store.upsertSpace(SPACE, { id: SPACE, name: 'A', createdAt: '2026-07-13T00:00:00.000Z' })
+      store.activeSpaceId = SPACE
+      store.upsertRun('r1', makeRun())
+      store.loadSlatePoints([{
+        id: 'p1', runId: 'r1', author: 'agent', source: 'file', headline: 'the frozen headline',
+        status: 'open', replies: [], createdAt: 1, amendedAt: 1,
+      }])
+
+      await bootSurfaces(store, { dir, now: 5_000 }).migration
+      const adopted = store.surfaceForRunAlias('r1', 'p1')!
+      expect(adopted.content.headline).toBe('the frozen headline')
+
+      // Real work lands on the canonical record: the agent rewrites the body through
+      // the file reconciler, and the user replies.
+      await seedRunSlate(store, 'r1', [{ id: 'p1', headline: 'what the agent wrote since' }], 6_000)
+      await new RunSlateBridge(store, new SurfaceService(store))
+        .appendReply('r1', 'p1', 'and what the user said', { kind: 'human', id: 'actor-1' })
+      expect(store.surfaceForRunAlias('r1', 'p1')!.thread.replies).toHaveLength(1)
+
+      // A restart. The legacy point on disk still says 'the frozen headline' and has
+      // no replies — and must not win.
+      await bootSurfaces(store, { dir, now: 7_000 }).migration
+
+      const after = store.surfaceForRunAlias('r1', 'p1')!
+      expect(after.content.headline).toBe('what the agent wrote since')
+      expect(after.thread.replies).toHaveLength(1)
+      expect(after.thread.replies[0]!.text).toBe('and what the user said')
+      expect(store.getRun('r1')!.slate!.map(s => s.headline)).toEqual(['what the agent wrote since'])
     })
   })
 

@@ -327,6 +327,22 @@ describe('legacy adapter interop', () => {
     expect(h.docStore.getSurface(id)!.rev).toBe(1)
   })
 
+  // Defence in depth: the reconciler already scopes its prior set by adapter, so
+  // this is asserted against the service directly — the layer that would have to
+  // hold if a future reconciler passed it the wrong binding.
+  it('refuses to mark a binding missing on behalf of an adapter that does not own it', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers')]))
+    const before = h.surface('blockers')!
+
+    const r = await h.svc.markSourceMissing(before.id, 'some-other-adapter', ctx(2_000))
+
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.error.message).toMatch(/only report on the bindings it owns/)
+    expect(h.surface('blockers')!.rev).toBe(before.rev)
+    expect(h.surface('blockers')!.source!.state).toBe('present')
+  })
+
   it('refuses a second real adapter taking over a bound Surface', async () => {
     const h = harness()
     await h.run(epoch([entry('blockers', 'Two blockers')]))
