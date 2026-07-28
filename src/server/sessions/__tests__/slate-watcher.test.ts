@@ -1,5 +1,7 @@
-// U4 — SlateWatcher. Reads `.tinstar/slate/*.json`, validates through the notices
-// `parseA2uiContent` funnel, and projects onto the run via applyRunSlateProjection.
+// SlateWatcher. Reads `.tinstar/slate/*.json`, validates through the notices
+// `parseA2uiContent` funnel, and hands the whole directory to the canonical source
+// reconciler as one epoch (plan U2). What the epoch then DOES is
+// `source-reconciler.test.ts`; this file is about what the filesystem produces.
 //
 // The tests use a real temp dir for file I/O (so the read/stat/JSON path is exercised
 // end-to-end) but inject the fs.watch + timer seams so events and the debounce are
@@ -11,8 +13,10 @@ import { readdir, lstat, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SlateWatcher, type SlateFs, type SlateTimers, type LiveRun } from '../slate-watcher'
-import type { PointInput } from '../../stores/slate'
+import type { SlateSourceEpoch } from '../../surfaces/source-reconciler'
 import { log } from '../../logger'
+import { synthesizeId } from '../../stores/slate'
+import { parseA2uiContent } from '../../../a2ui/schema'
 
 const validContent = {
   root: 'root',
@@ -54,22 +58,35 @@ function makeHarness(runs?: LiveRun[]) {
   }
   const fireDebounce = () => { const cb = timeoutCb; timeoutCb = null; cb?.() }
 
-  const applyRunSlateProjection = vi.fn<(runId: string, inputs: PointInput[], now?: number) => void>()
-  const docStore = { applyRunSlateProjection }
+  const epochs: SlateSourceEpoch[] = []
+  const applyEpoch = vi.fn<(e: SlateSourceEpoch) => Promise<unknown>>(async (e) => {
+    epochs.push(e)
+    return { observed: e.entries.length, created: 0, updated: 0, missing: 0, duplicates: [], refusals: [] }
+  })
 
   let liveRuns: LiveRun[] = runs ?? [{ runId, workdir }]
   const setLiveRuns = (r: LiveRun[]) => { liveRuns = r }
+  let boundRuns: LiveRun[] = []
+  const setBoundRuns = (r: LiveRun[]) => { boundRuns = r }
+  let context: { spaceId: string; incarnation: string; rootSurfaceId: string } | null =
+    { spaceId: 'spc-a', incarnation: 'inc-1', rootSurfaceId: 'sf-root' }
+  const setContext = (c: typeof context) => { context = c }
 
   const watcher = new SlateWatcher({
-    docStore,
     listLiveRuns: () => liveRuns,
+    listBoundRuns: () => boundRuns,
+    runContext: () => context,
+    applyEpoch,
     fs,
     timers,
   })
 
   return {
-    root, runId, workdir, slateDir, watcher, applyRunSlateProjection,
-    watchCbs, fireDebounce, setLiveRuns, getOpenWatches: () => openWatches,
+    root, runId, workdir, slateDir, watcher, applyEpoch, epochs,
+    watchCbs, fireDebounce, setLiveRuns, setBoundRuns, setContext,
+    getOpenWatches: () => openWatches,
+    last: () => epochs[epochs.length - 1]!,
+    headlines: (i = 0) => epochs[i]!.entries.map(e => e.content.headline),
   }
 }
 
@@ -90,15 +107,65 @@ describe('SlateWatcher', () => {
     rmSync(harness.root, { recursive: true, force: true })
   })
 
-  it('projects a valid surface file onto the run', async () => {
-    writeSurfaces(harness.slateDir, 'a.json', [{ headline: 'Ship it?', content: validContent }])
+  it('reconciles a valid surface file as one epoch, with a binding address per entry', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [{ id: 'ship', headline: 'Ship it?', content: validContent }])
 
     await harness.watcher.pollOnce()
 
-    expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1)
-    const [runId, inputs] = harness.applyRunSlateProjection.mock.calls[0]!
-    expect(runId).toBe(harness.runId)
-    expect(inputs).toEqual([{ headline: 'Ship it?', content: validContent }])
+    expect(harness.applyEpoch).toHaveBeenCalledTimes(1)
+    const epoch = harness.last()
+    expect(epoch.runId).toBe(harness.runId)
+    expect(epoch.worktree).toBe(harness.workdir)
+    expect(epoch.incarnation).toBe('inc-1')
+    expect(epoch.rootSurfaceId).toBe('sf-root')
+    expect(epoch.unreadable).toEqual([])
+    expect(epoch.entries).toHaveLength(1)
+    expect(epoch.entries[0]).toMatchObject({
+      localId: 'ship',
+      file: 'a.json',
+      author: 'agent',
+      content: { headline: 'Ship it?', body: validContent },
+    })
+    expect(epoch.entries[0]!.watermark).toMatch(/^sha256:/)
+  })
+
+  it('synthesizes the SAME local id the legacy projection did for an id-less entry', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [{ headline: 'no id here', content: validContent }])
+
+    await harness.watcher.pollOnce()
+
+    // Identity continuity across the U1->U2 upgrade depends on this exactly matching
+    // what `SlateStore.applyProjection` assigned, or every id-less surface arrives as
+    // a stranger with no thread. Hashed over the PARSED content, as the legacy path
+    // also was — it ran the same `toPointInput` gate first.
+    expect(harness.last().entries[0]!.localId).toBe(synthesizeId(harness.runId, {
+      headline: 'no id here',
+      content: parseA2uiContent(validContent)!,
+    }))
+  })
+
+  it('skips a run whose canonical context cannot be resolved, and says so once', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    harness.setContext(null)
+    writeSurfaces(harness.slateDir, 'a.json', [{ headline: 'x' }])
+
+    await harness.watcher.pollOnce()
+    await harness.watcher.pollOnce()
+
+    expect(harness.applyEpoch).not.toHaveBeenCalled()
+    expect(warn.mock.calls.filter(c => /no canonical context/.test(String(c[1])))).toHaveLength(1)
+    warn.mockRestore()
+  })
+
+  it('keeps watching a run that is no longer live but still has a persisted binding', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [{ id: 'x', headline: 'x' }])
+    harness.setLiveRuns([])
+    harness.setBoundRuns([{ runId: harness.runId, workdir: harness.workdir }])
+
+    await harness.watcher.pollOnce()
+
+    expect(harness.applyEpoch).toHaveBeenCalledTimes(1)
+    expect(harness.getOpenWatches()).toBe(1)
   })
 
   it('flattens multiple files by filename then array index (stable order)', async () => {
@@ -107,25 +174,48 @@ describe('SlateWatcher', () => {
 
     await harness.watcher.pollOnce()
 
-    const inputs = harness.applyRunSlateProjection.mock.calls[0]![1]
-    expect(inputs.map((p) => p.headline)).toEqual(['A1', 'B1', 'B2'])
+    expect(harness.headlines()).toEqual(['A1', 'B1', 'B2'])
   })
 
-  it('retains the prior projection on invalid JSON and logs once (R10)', async () => {
+  it('reconciles nothing on invalid JSON and logs once (R10)', async () => {
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
     writeSurfaces(harness.slateDir, 'a.json', [{ headline: 'valid' }])
     await harness.watcher.pollOnce()
-    expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1)
+    expect(harness.applyEpoch).toHaveBeenCalledTimes(1)
 
     writeSurfaces(harness.slateDir, 'a.json', '{ this is not json')
-    await harness.watcher.pollOnce() // torn → retain (no new projection), log once
+    await harness.watcher.pollOnce() // torn → retain (no epoch at all), log once
     await harness.watcher.pollOnce() // still torn → still retain, but do NOT log again
 
-    expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1) // retained, not cleared
+    expect(harness.applyEpoch).toHaveBeenCalledTimes(1) // no epoch: nothing marked missing
     const retainWarns = warn.mock.calls.filter(
       ([tag, msg]) => tag === 'slate-watcher' && /retaining last-valid/.test(String(msg)),
     )
     expect(retainWarns).toHaveLength(1)
+    warn.mockRestore()
+  })
+
+  it('names a file it could not read so its bindings are not treated as omitted', async () => {
+    writeSurfaces(harness.slateDir, 'good.json', [{ id: 'kept', headline: 'kept' }])
+    writeSurfaces(harness.slateDir, 'torn.json', '{ nope')
+
+    await harness.watcher.pollOnce()
+
+    const epoch = harness.last()
+    expect(epoch.entries.map(e => e.localId)).toEqual(['kept'])
+    expect(epoch.unreadable).toEqual(['torn.json'])
+  })
+
+  it('names the file of a schema-invalid ENTRY too, so its last-valid record survives', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [
+      { id: 'good', headline: 'good' },
+      { id: 'bad', headline: 'bad', content: { root: 'root', components: [] } },
+    ])
+
+    await harness.watcher.pollOnce()
+
+    expect(harness.last().entries.map(e => e.localId)).toEqual(['good'])
+    expect(harness.last().unreadable).toEqual(['a.json'])
   })
 
   it('drops a schema-invalid entry but keeps the valid ones (R10)', async () => {
@@ -137,8 +227,7 @@ describe('SlateWatcher', () => {
 
     await harness.watcher.pollOnce()
 
-    const inputs = harness.applyRunSlateProjection.mock.calls[0]![1]
-    expect(inputs.map((p) => p.headline)).toEqual(['good'])
+    expect(harness.headlines()).toEqual(['good'])
   })
 
   // The Objective (S2) is USER-owned and lives at a RESERVED id. The file-in channel
@@ -152,21 +241,20 @@ describe('SlateWatcher', () => {
 
     await harness.watcher.pollOnce()
 
-    const inputs = harness.applyRunSlateProjection.mock.calls[0]![1]
-    expect(inputs.map((p) => p.id)).toEqual(['real'])
+    expect(harness.last().entries.map(e => e.localId)).toEqual(['real'])
   })
 
-  it('treats a file of ONLY an objective entry as unusable — retains, never projects it', async () => {
+  it('treats a file of ONLY an objective entry as unusable — retains, never reconciles it', async () => {
     writeSurfaces(harness.slateDir, 'a.json', [{ headline: 'seeded', id: 'seeded' }])
     await harness.watcher.pollOnce()
-    expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1)
+    expect(harness.applyEpoch).toHaveBeenCalledTimes(1)
 
-    // Zero valid entries + something dropped ⇒ the same retain path a torn file takes:
-    // the prior projection stands, and no `objective` point is ever created.
+    // Zero valid entries + something dropped ⇒ the same retain path a torn file takes,
+    // and no `objective` Surface is ever created.
     writeSurfaces(harness.slateDir, 'a.json', [{ id: 'objective', headline: 'hijack' }])
     await harness.watcher.pollOnce()
 
-    expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1) // no second call
+    expect(harness.applyEpoch).toHaveBeenCalledTimes(1) // no second epoch
   })
 
   // The drop must not be SILENT: an author whose surface simply never appears has no
@@ -210,56 +298,80 @@ describe('SlateWatcher', () => {
 
     await harness.watcher.pollOnce()
 
-    const inputs = harness.applyRunSlateProjection.mock.calls[0]![1]
-    expect(inputs.map((p) => p.headline)).toEqual(['kept'])
+    expect(harness.headlines()).toEqual(['kept'])
+    expect(harness.last().unreadable).toEqual(['big.json'])
   })
 
-  it('clears when files are unlinked (R11)', async () => {
+  it('reports an EMPTY epoch when files are unlinked — the omission signal (R11)', async () => {
     writeSurfaces(harness.slateDir, 'a.json', [{ headline: 'present' }])
     await harness.watcher.pollOnce()
-    expect(harness.applyRunSlateProjection.mock.calls[0]![1]).toHaveLength(1)
+    expect(harness.epochs[0]!.entries).toHaveLength(1)
 
     rmSync(join(harness.slateDir, 'a.json'))
     await harness.watcher.pollOnce()
 
-    expect(harness.applyRunSlateProjection).toHaveBeenLastCalledWith(harness.runId, [])
+    // An epoch IS applied, with nothing in it and nothing unreadable — which is what
+    // lets the reconciler tell "the file went away" from "the file would not read".
+    expect(harness.last().entries).toEqual([])
+    expect(harness.last().unreadable).toEqual([])
   })
 
-  it('clears on an explicit empty array (R11)', async () => {
+  it('reports an empty epoch on an explicit empty array (R11)', async () => {
     writeSurfaces(harness.slateDir, 'a.json', [])
     await harness.watcher.pollOnce()
-    expect(harness.applyRunSlateProjection).toHaveBeenLastCalledWith(harness.runId, [])
+    expect(harness.last().entries).toEqual([])
+    expect(harness.last().unreadable).toEqual([])
   })
 
-  it('retains on a zero-byte file — a torn write is not a clear (R11)', async () => {
+  it('retains on a zero-byte file — a torn write is not an omission (R11)', async () => {
     writeSurfaces(harness.slateDir, 'a.json', [{ headline: 'present' }])
     await harness.watcher.pollOnce()
-    expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1)
+    expect(harness.applyEpoch).toHaveBeenCalledTimes(1)
 
     writeSurfaces(harness.slateDir, 'a.json', '') // zero-byte torn write
     await harness.watcher.pollOnce()
 
-    // Retained: the mutator was NOT called again (last-valid kept), NOT cleared with [].
-    expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1)
+    // Retained: no epoch at all, so nothing can be marked missing.
+    expect(harness.applyEpoch).toHaveBeenCalledTimes(1)
   })
 
-  it('coalesces a burst of fs.watch events into one projection', async () => {
+  it('coalesces a burst of fs.watch events into one epoch', async () => {
     writeSurfaces(harness.slateDir, 'a.json', [{ headline: 'x' }])
-    // First poll registers the watch (and does the poll-floor projection).
+    // First poll registers the watch (and does the poll-floor epoch).
     await harness.watcher.pollOnce()
-    harness.applyRunSlateProjection.mockClear()
+    harness.applyEpoch.mockClear()
 
     expect(harness.watchCbs.length).toBeGreaterThan(0)
     const onChange = harness.watchCbs[0]!
     // A storm of writes fires the watch many times before the debounce elapses.
     for (let i = 0; i < 8; i++) onChange()
-    expect(harness.applyRunSlateProjection).not.toHaveBeenCalled() // nothing yet — debounced
+    expect(harness.applyEpoch).not.toHaveBeenCalled() // nothing yet — debounced
 
     harness.fireDebounce() // one debounce flush
-    await vi.waitFor(() => expect(harness.applyRunSlateProjection).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(harness.applyEpoch).toHaveBeenCalledTimes(1))
   })
 
-  it('tears down the watch when a run is no longer live (no descriptor leak)', async () => {
+  // A rename arrives as {create, remove} or {remove, create} depending on platform
+  // and debounce boundary. Both collapse into ONE directory read, so the reconciler
+  // never sees the half-state where the entry only exists as a removal.
+  it('presents a rename as one epoch regardless of event order', async () => {
+    writeSurfaces(harness.slateDir, 'a.json', [{ id: 'ship', headline: 'Ship it?' }])
+    await harness.watcher.pollOnce()
+    expect(harness.last().entries[0]!.file).toBe('a.json')
+
+    rmSync(join(harness.slateDir, 'a.json'))
+    writeSurfaces(harness.slateDir, 'b.json', [{ id: 'ship', headline: 'Ship it?' }])
+    const onChange = harness.watchCbs[0]!
+    onChange() // remove
+    onChange() // create
+    harness.fireDebounce()
+
+    await vi.waitFor(() => expect(harness.applyEpoch).toHaveBeenCalledTimes(2))
+    expect(harness.last().entries).toHaveLength(1)
+    expect(harness.last().entries[0]).toMatchObject({ localId: 'ship', file: 'b.json' })
+  })
+
+  it('tears down the watch when a run is neither live nor bound (no descriptor leak)', async () => {
     await harness.watcher.pollOnce()
     expect(harness.getOpenWatches()).toBe(1)
 
@@ -278,43 +390,43 @@ describe('SlateWatcher', () => {
 
     await harness.watcher.pollOnce()
 
-    const inputs = harness.applyRunSlateProjection.mock.calls[0]![1]
-    expect(inputs.map((p) => p.headline)).toEqual(['real']) // symlink ignored
+    expect(harness.headlines()).toEqual(['real']) // symlink ignored
   })
 
-  // S4 — the workbench set id. `group` parses exactly like `refresh`: a non-empty
-  // string is carried verbatim; anything else is ignored rather than dropping the
-  // entry (a malformed group must never cost the user the question itself).
-  it('carries a string `group` through as a PointInput field (S4)', async () => {
+  // `anchor` and `group` are still PARSED (a malformed one still drops the entry, and
+  // both still ride the synthesized-id hash) but they no longer reach the canonical
+  // model: the author ruled that the card-vs-row distinction `anchor` encodes does
+  // not exist in the target model, and that grouping is a container Surface rather
+  // than a field. A grouped set therefore renders as ordinary rows after U2.
+  it('does not carry `group` or `anchor` into the canonical entry, and drops neither entry', async () => {
     writeSurfaces(harness.slateDir, 'a.json', [
       { id: 'q1', headline: 'Which path?', group: 'launch-qs' },
-      { id: 'q2', headline: 'Who owns it?', group: 'launch-qs' },
+      { id: 'q2', headline: 'Who owns it?', anchor: { kind: 'surface', ref: 'diagram' } },
     ])
 
     await harness.watcher.pollOnce()
 
-    const inputs = harness.applyRunSlateProjection.mock.calls[0]![1]
-    expect(inputs.map((p) => p.group)).toEqual(['launch-qs', 'launch-qs'])
+    const entries = harness.last().entries
+    expect(entries.map(e => e.localId)).toEqual(['q1', 'q2'])
+    expect(entries.every(e => !('group' in e) && !('anchor' in e))).toBe(true)
+    expect(entries.every(e => Object.keys(e.content).join() === 'headline')).toBe(true)
   })
 
-  it('ignores a non-string or empty `group` without dropping the entry (S4)', async () => {
+  it('still refuses a malformed `anchor` outright (the validation gate is unchanged)', async () => {
     writeSurfaces(harness.slateDir, 'a.json', [
-      { id: 'q1', headline: 'number group', group: 7 },
-      { id: 'q2', headline: 'empty group', group: '' },
-      { id: 'q3', headline: 'object group', group: { set: 'x' } },
+      { id: 'q1', headline: 'ok' },
+      { id: 'q2', headline: 'bad anchor', anchor: { kind: 'nonsense' } },
     ])
 
     await harness.watcher.pollOnce()
 
-    const inputs = harness.applyRunSlateProjection.mock.calls[0]![1]
-    expect(inputs.map((p) => p.id)).toEqual(['q1', 'q2', 'q3']) // none dropped
-    expect(inputs.every((p) => p.group === undefined)).toBe(true)
+    expect(harness.last().entries.map(e => e.localId)).toEqual(['q1'])
   })
 
   it('treats a missing slate dir as no error (ENOENT is normal)', async () => {
     rmSync(join(harness.workdir, '.tinstar'), { recursive: true, force: true })
     await expect(harness.watcher.pollOnce()).resolves.toBeUndefined()
-    // Missing dir → empty projection (clear), never a thrown error.
-    expect(harness.applyRunSlateProjection).toHaveBeenLastCalledWith(harness.runId, [])
+    // Missing dir → an empty epoch, never a thrown error.
+    expect(harness.last().entries).toEqual([])
   })
 })

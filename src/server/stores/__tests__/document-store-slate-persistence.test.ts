@@ -1,36 +1,48 @@
 // @vitest-environment node
 //
-// CHARACTERIZATION coverage for U1 (canonical Surface model and crash-safe
-// persistence). These tests pin the CURRENT behaviour of Slate points on the
-// DocumentStore's persistence path, so that when U1 moves canonical ownership
-// into a separate Surface store, any drift shows up here as a failure rather
-// than as a silently different docstore.json.
+// The LEGACY Slate points on the persistence path, after U2 retired them as a
+// write path.
 //
-// The existing Slate suites already characterize the PROJECTION half well
-// (document-store-slate-bridge.test.ts covers run.slate field mapping, group,
-// objective pinning, order, and clearSlateForRun; slate.test.ts covers the
-// store's merge-by-id and lifecycle). What none of them covered is the half U1
-// actually changes: the coupling between a Slate mutation and a core document
-// write.
+// `docstore.json` still carries a `slatePoints` array and still rehydrates it, and
+// that is now its whole job: KTD5 keeps legacy Slate data "in the existing document
+// snapshot as migration evidence but … no longer rewritten by canonical Surface
+// mutations". The boot migration adopts any point with no canonical counterpart yet;
+// nothing else reads it.
 //
-// U1's constraint is a pair that reads like a contradiction until you see the
-// seam it requires:
-//   · "keep `Run.slate` byte-equivalent through the existing bridge", and
-//   · "do not schedule a core document write for a canonical Surface mutation".
-// Both can hold only because `document-store.ts` wires EVERY `changes` emit to
-// `schedulePersist()` unconditionally, so U1 has to introduce a persist-exempt
-// emit for the derived projection. These tests capture the pre-U1 state of that
-// coupling: today a Slate mutation DOES write docstore.json, and points DO
-// round-trip through it. After U1, the legacy bridge must still round-trip
-// exactly as pinned here, while canonical Surface mutations take a different
-// path entirely.
+// So what these tests pin is the EVIDENCE contract — an existing snapshot on disk
+// still loads, whole, with threads and lifecycle stamps intact — plus the property
+// that makes retiring the write path safe: a canonical mutation does not schedule a
+// core document write, and `Run.slate` renders canonical records rather than these.
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DocumentStore } from '../document-store'
 import { OBJECTIVE_POINT_ID } from '../../../domain/types'
-import type { Run } from '../../../domain/types'
+import type { Point, Run } from '../../../domain/types'
+import { seedRunSlate } from './seedRunSlate'
+import { RunSlateBridge } from '../../surfaces/run-slate-bridge'
+import { SurfaceService } from '../../surfaces/surface-service'
+import type { SurfacePrincipalRef } from '../../../domain/types'
+
+const USER: SurfacePrincipalRef = { kind: 'human', id: 'actor-1' }
+
+/** One legacy point, as an existing `docstore.json` states it. */
+function legacyPoint(over: Partial<Point> = {}): Point {
+  return {
+    id: 'p1', runId: 'r1', author: 'agent', source: 'file',
+    headline: 'Which rollback path?', status: 'waiting',
+    replies: [{ id: 'rep1', author: 'user', text: 'roll forward', createdAt: 1_000 }],
+    createdAt: 1, amendedAt: 2, ...over,
+  }
+}
+
+/** Write a snapshot by hand — the only way to produce legacy points now that
+ *  nothing in the process writes them. Which is the point of the test: the file on
+ *  a user's disk predates U2, and it still has to load. */
+function writeSnapshot(file: string, data: Record<string, unknown>): void {
+  writeFileSync(file, JSON.stringify({ runs: [], slatePoints: [], ...data }))
+}
 
 function makeRun(overrides: Partial<Run> = {}): Run {
   return {
@@ -53,96 +65,91 @@ function withSnapshotFile(body: (file: string) => void): void {
   }
 }
 
-describe('DocumentStore — Slate points on the persistence path (pre-U1 characterization)', () => {
-  // The load side of the round trip is `data.slatePoints -> this.slate.loadPoints`.
-  // If U1 moves ownership without keeping this shape, existing snapshots on disk
-  // stop rehydrating and a user's Slate silently empties on restart.
-  it('round-trips a point through docstore.json with body, thread, status, and author intact', () => {
+describe('legacy Slate points are migration EVIDENCE, not a write path', () => {
+  it('rehydrates an existing snapshot whole — body, thread, status, and author intact', () => {
     withSnapshotFile((file) => {
+      writeSnapshot(file, {
+        runs: [makeRun()],
+        slatePoints: [legacyPoint({
+          content: { root: 'c', components: [{ id: 'c', component: 'Text', text: 'body text' }] } as never,
+        })],
+      })
+
       const store = new DocumentStore()
       store.enablePersistence(file)
-      store.upsertRun('r1', makeRun())
-      store.applyRunSlateProjection('r1', [
-        { id: 'p1', headline: 'Which rollback path?', author: 'agent', content: { root: 'c', components: [{ id: 'c', component: 'Text', text: 'body text' }] } as never },
-      ])
-      store.addSlateReply('r1', 'p1', { id: 'rep1', author: 'user', text: 'roll forward', createdAt: 1_000 })
-      store.flush()
 
-      const reloaded = new DocumentStore()
-      reloaded.enablePersistence(file)
-      const point = reloaded.getSlatePoint('r1', 'p1')
-      expect(point).toBeTruthy()
-      expect(point!.headline).toBe('Which rollback path?')
-      expect(point!.author).toBe('agent')
-      // The thread is store-owned and must survive the disk hop, not just the
-      // in-memory merge — a reply the user typed is the least recoverable thing
-      // on a point.
-      expect(point!.replies?.map(r => r.text)).toEqual(['roll forward'])
-      // Status is DERIVED from who spoke last; a user reply leaves it waiting.
-      expect(point!.status).toBe('waiting')
+      // Read off the LEGACY accessor. `getSlatePointsForRun` projects canonical
+      // records now, so it deliberately does NOT see these.
+      const points = store.getAllSlatePoints()
+      expect(points).toHaveLength(1)
+      expect(points[0]!.headline).toBe('Which rollback path?')
+      expect(points[0]!.author).toBe('agent')
+      // The thread is the least recoverable thing on a point and has to survive the
+      // disk hop, not just the in-memory merge.
+      expect(points[0]!.replies?.map(r => r.text)).toEqual(['roll forward'])
+      expect(points[0]!.status).toBe('waiting')
     })
   })
 
-  // THE COUPLING U1 BREAKS. `document-store.ts` subscribes persistence to the
-  // change stream unconditionally, so any Slate mutation reaches disk. U1 keeps
-  // this true for the legacy bridge while introducing a persist-exempt emit for
-  // canonical Surface mutations — so this test is the "before" half of that
-  // seam, and it should still pass after U1 lands.
-  it('a Slate mutation reaches docstore.json (the change->persist coupling U1 must preserve for the legacy bridge)', () => {
-    withSnapshotFile((file) => {
-      const store = new DocumentStore()
-      store.enablePersistence(file)
-      store.upsertRun('r1', makeRun())
-      store.applyRunSlateProjection('r1', [{ id: 'p1', headline: 'persisted?', author: 'agent' }])
-      store.flush()
-
-      const raw = JSON.parse(readFileSync(file, 'utf-8')) as { slatePoints?: unknown[] }
-      expect(Array.isArray(raw.slatePoints)).toBe(true)
-      expect(raw.slatePoints).toHaveLength(1)
-    })
-  })
-
-  // The Objective is the one point the user authors and the one U1's migration
-  // must not mangle: it is store-only (never file-projected) and carries the
-  // reserved id. If a restart loses it, the run loses its stated goal.
-  it('the user-authored Objective survives a persist/reload cycle as a user point', () => {
-    withSnapshotFile((file) => {
-      const store = new DocumentStore()
-      store.enablePersistence(file)
-      store.upsertRun('r1', makeRun())
-      store.addUserSlatePoint('r1', { id: OBJECTIVE_POINT_ID, headline: 'Ship U1 invisibly', author: 'user' })
-      store.flush()
-
-      const reloaded = new DocumentStore()
-      reloaded.enablePersistence(file)
-      const objective = reloaded.getSlatePoint('r1', OBJECTIVE_POINT_ID)
-      expect(objective).toBeTruthy()
-      expect(objective!.source).toBe('user')
-      // Projected as kind 'objective' only because source is user AND the id is
-      // reserved — the pairing U1's migration has to carry across.
-      const projected = reloaded.getRun('r1')!.slate!.find(s => s.id === OBJECTIVE_POINT_ID)
-      expect(projected!.kind).toBe('objective')
-    })
-  })
-
-  // Two runs may use the SAME local point id. Today they are disambiguated by
-  // run scoping alone. U1 replaces that with a global, non-reusable Surface id,
-  // so this pins the invariant it has to preserve: one run's point is never the
-  // other's, however the identity is derived.
   it('keeps same-id points in different runs distinct across a reload', () => {
     withSnapshotFile((file) => {
+      writeSnapshot(file, {
+        runs: [makeRun({ id: 'r1', sessionId: 'r1' }), makeRun({ id: 'r2', sessionId: 'r2' })],
+        slatePoints: [
+          legacyPoint({ id: 'shared-slug', runId: 'r1', headline: 'from r1' }),
+          legacyPoint({ id: 'shared-slug', runId: 'r2', headline: 'from r2' }),
+        ],
+      })
+
       const store = new DocumentStore()
       store.enablePersistence(file)
-      store.upsertRun('r1', makeRun({ id: 'r1', sessionId: 'r1' }))
-      store.upsertRun('r2', makeRun({ id: 'r2', sessionId: 'r2' }))
-      store.applyRunSlateProjection('r1', [{ id: 'shared-slug', headline: 'from r1', author: 'agent' }])
-      store.applyRunSlateProjection('r2', [{ id: 'shared-slug', headline: 'from r2', author: 'agent' }])
-      store.flush()
-
-      const reloaded = new DocumentStore()
-      reloaded.enablePersistence(file)
-      expect(reloaded.getSlatePoint('r1', 'shared-slug')!.headline).toBe('from r1')
-      expect(reloaded.getSlatePoint('r2', 'shared-slug')!.headline).toBe('from r2')
+      const byRun = new Map(store.getAllSlatePoints().map(p => [p.runId, p.headline]))
+      expect(byRun.get('r1')).toBe('from r1')
+      expect(byRun.get('r2')).toBe('from r2')
     })
+  })
+
+  it('does not render legacy points — Run.slate comes from canonical Surfaces', () => {
+    withSnapshotFile((file) => {
+      writeSnapshot(file, { runs: [makeRun()], slatePoints: [legacyPoint()] })
+      const store = new DocumentStore()
+      store.enablePersistence(file)
+
+      // Present as evidence, absent from the rendered channel: the boot migration
+      // is what turns one into the other, and it has not run here.
+      expect(store.getAllSlatePoints()).toHaveLength(1)
+      expect(store.getRun('r1')!.slate).toBeUndefined()
+    })
+  })
+
+  it('a canonical Slate mutation does NOT rewrite the legacy points in docstore.json', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'slate-persist-'))
+    try {
+      {
+        {
+          const file = join(dir, 'snapshot.json')
+          writeSnapshot(file, { runs: [makeRun()], slatePoints: [legacyPoint()] })
+          const store = new DocumentStore()
+          store.enablePersistence(file)
+
+          await seedRunSlate(store, 'r1', [{ id: 'canonical-1', headline: 'authored now' }])
+          await new RunSlateBridge(store, new SurfaceService(store))
+            .upsertUserPoint('r1', { id: OBJECTIVE_POINT_ID, headline: 'Ship U2' }, USER)
+          store.flush()
+
+          // The frozen evidence is byte-identical: canonical work goes to the Surface
+          // sidecar, and re-authoring this array from it would be the data loss the
+          // adopt-only migration exists to prevent.
+          const raw = JSON.parse(readFileSync(file, 'utf-8')) as { slatePoints?: Point[] }
+          expect(raw.slatePoints).toHaveLength(1)
+          expect(raw.slatePoints![0]!.id).toBe('p1')
+          // And the rendered Slate is the canonical work, not the evidence.
+          expect(store.getRun('r1')!.slate!.map(s => s.id).sort())
+            .toEqual([OBJECTIVE_POINT_ID, 'canonical-1'].sort())
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

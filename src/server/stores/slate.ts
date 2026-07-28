@@ -80,7 +80,7 @@ export function derivePointStatus(
  *  regenerated and where it is laid out, not which surface it is, so folding them in
  *  would re-id the point the moment an agent grouped it — orphaning the very thread
  *  this hash exists to preserve. */
-function synthesizeId(runId: string, input: PointInput): string {
+export function synthesizeId(runId: string, input: PointInput): string {
   const basis = JSON.stringify({
     runId,
     headline: input.headline,

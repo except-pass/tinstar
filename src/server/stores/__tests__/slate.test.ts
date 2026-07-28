@@ -9,6 +9,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { SlateStore, derivePointStatus, assignOrderSlots, type SlateChange, type PointInput } from '../slate'
 import { DocumentStore } from '../document-store'
+import { seedRunSlate } from './seedRunSlate'
+import { RunSlateBridge } from '../../surfaces/run-slate-bridge'
+import { SurfaceService } from '../../surfaces/surface-service'
 import type { Point, Run } from '../../../domain/types'
 import type { Reply } from '../../../domain/pinSet'
 
@@ -367,16 +370,25 @@ function makeRun(over: Partial<Run> = {}): Run {
   } as unknown as Run
 }
 
+/** One legacy point, as an existing `docstore.json` states it. After U2 nothing in
+ *  the process writes these — they are migration evidence — so a test that needs one
+ *  hydrates it. */
+function legacy(runId: string, id: string): Point {
+  return {
+    id, runId, author: 'agent', source: 'file', headline: id,
+    status: 'open', replies: [], createdAt: 100, amendedAt: 100,
+  }
+}
+
 describe('DocumentStore — Slate prune cascade', () => {
   it('deleteRun prunes the run\'s points via the direct key-match path', () => {
     const store = new DocumentStore()
     const run = makeRun({ id: 'run-1', sessionId: 'run-1' })
     store.upsertRun(run.id, run)
-    store.applyRunSlateProjection('run-1', [input('p1', 'a'), input('p2', 'b')], 100)
-    expect(store.getSlatePointsForRun('run-1')).toHaveLength(2)
+    store.loadSlatePoints([legacy('run-1', 'p1'), legacy('run-1', 'p2')])
+    expect(store.getAllSlatePoints()).toHaveLength(2)
 
     store.deleteRun('run-1') // direct key match
-    expect(store.getSlatePointsForRun('run-1')).toHaveLength(0)
     expect(store.getAllSlatePoints()).toHaveLength(0)
   })
 
@@ -385,17 +397,17 @@ describe('DocumentStore — Slate prune cascade', () => {
     // Simulator shape: keyed by run id R-xxx, deleted by session name CLD-xxx.
     const run = makeRun({ id: 'R-123', sessionId: 'CLD-abc' })
     store.upsertRun(run.id, run)
-    store.applyRunSlateProjection('R-123', [input('p1', 'a')], 100)
-    expect(store.getSlatePointsForRun('R-123')).toHaveLength(1)
+    store.loadSlatePoints([legacy('R-123', 'p1')])
+    expect(store.getAllSlatePoints()).toHaveLength(1)
 
     store.deleteRun('CLD-abc') // fallback: matched by sessionId
-    expect(store.getSlatePointsForRun('R-123')).toHaveLength(0)
+    expect(store.getAllSlatePoints()).toHaveLength(0)
   })
 
   it('deleteRun emits a retract (data:null) per pruned point', () => {
     const store = new DocumentStore()
     store.upsertRun('run-1', makeRun())
-    store.applyRunSlateProjection('run-1', [input('p1', 'a')], 100)
+    store.loadSlatePoints([legacy('run-1', 'p1')])
     const nulls: string[] = []
     store.changes.on('change', (e: SlateChange) => {
       if (e.entity === 'slatePoint' && e.data === null) nulls.push(e.id)
@@ -407,29 +419,29 @@ describe('DocumentStore — Slate prune cascade', () => {
   it('clear() drops all Slate points', () => {
     const store = new DocumentStore() // no active space → the inline clear branch
     store.upsertRun('run-1', makeRun())
-    store.applyRunSlateProjection('run-1', [input('p1', 'a')], 100)
+    store.loadSlatePoints([legacy('run-1', 'p1')])
     store.clear()
     expect(store.getAllSlatePoints()).toHaveLength(0)
   })
 
-  it('a projection through the store persists in snapshotAll and reloads', () => {
-    // Round-trips a point through disk to prove it rides persistence like notices.
+  it('legacy evidence persists in snapshotAll and reloads', () => {
+    // Round-trips a legacy point through disk to prove the evidence array still
+    // rides persistence. It is no longer written by any mutator — see
+    // `document-store-slate-persistence.test.ts` for the full evidence contract.
     const dir = mkdtempSync(join(tmpdir(), 'slate-persist-'))
     const file = join(dir, 'state.json')
     try {
       const a = new DocumentStore()
       a.enablePersistence(file)
       a.upsertRun('run-1', makeRun())
-      a.applyRunSlateProjection('run-1', [input('p1', 'a')], 100)
-      a.addSlateReply('run-1', 'p1', reply('user', 'q', 110))
+      a.loadSlatePoints([legacy('run-1', 'p1')])
+      // Nothing emits for a hydrate, so nudge the snapshot with an unrelated write.
+      a.upsertRun('run-1', makeRun({ rawLogs: 'x' }))
       a.flush()
 
       const b = new DocumentStore()
       b.enablePersistence(file)
-      const loaded = b.getSlatePointsForRun('run-1')
-      expect(loaded).toHaveLength(1)
-      expect(loaded[0]!.replies).toHaveLength(1)
-      expect(loaded[0]!.status).toBe('waiting')
+      expect(b.getAllSlatePoints().map(p => p.id)).toEqual(['p1'])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -470,13 +482,16 @@ describe('SlateStore — refresh recipe (U3 file-owned field)', () => {
     expect(store.getPoint(RUN, 'p1')!.refresh).toBeUndefined()
   })
 
-  it('projects `refresh` onto run.slate and a recipe-only change updates the surface', () => {
+  // The recipe's projection leg now runs off canonical Surfaces (`content.recipe`
+  // back out as `refresh`). Back out that spread in `slateSurfaceFromCanonical` and
+  // this fails — the field never reaches run.slate.
+  it('projects `refresh` onto run.slate and a recipe-only change updates the surface', async () => {
     const store = new DocumentStore()
     store.upsertRun('run-1', makeRun())
-    store.applyRunSlateProjection('run-1', [input('p1', 'body', { refresh: 'recipe A' })], 100)
+    await seedRunSlate(store, 'run-1', [{ id: 'p1', headline: 'body', recipe: 'recipe A' }], 100)
     expect(store.getRun('run-1')!.slate![0]!.refresh).toBe('recipe A')
 
-    store.applyRunSlateProjection('run-1', [input('p1', 'body', { refresh: 'recipe B' })], 200)
+    await seedRunSlate(store, 'run-1', [{ id: 'p1', headline: 'body', recipe: 'recipe B' }], 200)
     expect(store.getRun('run-1')!.slate![0]!.refresh).toBe('recipe B')
   })
 })
@@ -539,18 +554,15 @@ describe('SlateStore — workbench `group` (S4 file-owned field)', () => {
     expect(p.status).toBe('resolved')
   })
 
-  // BACK-OUT GUARD: drop the `...(p.group ? { group: p.group } : {})` spread in
-  // projectRunToSlate and this fails — the field never reaches run.slate.
-  it('projects `group` onto run.slate, and a group-only change updates the surface', () => {
+  // `group` NO LONGER REACHES run.slate. The author ruled that grouping in the
+  // canonical model is a container Surface with children — a shape, not a field — so
+  // the S4 workbench band does not survive U2 and a grouped set renders as ordinary
+  // rows. The legacy store still parses and holds the field (above) because existing
+  // snapshots carry it; nothing downstream reads it.
+  it('does NOT project `group` onto run.slate any more (canonical model has no such field)', async () => {
     const store = new DocumentStore()
     store.upsertRun('run-1', makeRun())
-    store.applyRunSlateProjection('run-1', [input('p1', 'body', { group: 'g1' })], 100)
-    expect(store.getRun('run-1')!.slate![0]!.group).toBe('g1')
-
-    store.applyRunSlateProjection('run-1', [input('p1', 'body', { group: 'g2' })], 200)
-    expect(store.getRun('run-1')!.slate![0]!.group).toBe('g2')
-
-    store.applyRunSlateProjection('run-1', [input('p1', 'body')], 300)
+    await seedRunSlate(store, 'run-1', [{ id: 'p1', headline: 'body' }], 100)
     expect(store.getRun('run-1')!.slate![0]!.group).toBeUndefined()
   })
 })
@@ -732,25 +744,20 @@ describe('SlateStore.reorderPoints (S6 U2)', () => {
   })
 })
 
-describe('DocumentStore.reorderSlatePoints — the projection leg (S6 U2)', () => {
-  it('re-projects run.slate in the new order, with createdAt as the fallback', () => {
+// SIBLING REORDER IS DEFERRED (author ruling on the recursive-surfaces plan):
+// `order` is set at creation and no mutation changes it. What remains assertable is
+// that the projection reads it — a Surface created with an explicit order keeps it,
+// and one without falls back to creation time.
+describe('run.slate ordering after the reorder primitive was deferred', () => {
+  it('projects creation order, with `order` as the sort key', async () => {
     const store = new DocumentStore()
     store.upsertRun('run-1', makeRun())
-    store.applyRunSlateProjection('run-1', [input('a', 'a')], 100)
-    store.applyRunSlateProjection('run-1', [input('a', 'a'), input('b', 'b')], 200)
+    await seedRunSlate(store, 'run-1', [{ id: 'a', headline: 'a' }], 100)
+    await seedRunSlate(store, 'run-1', [{ id: 'a', headline: 'a' }, { id: 'b', headline: 'b' }], 200)
 
-    // Before any reorder, surface.order IS createdAt — unchanged behavior.
-    const before = store.getRun('run-1')!.slate!
-    expect(before.map(s => s.id)).toEqual(['a', 'b'])
-    expect(before.map(s => s.order)).toEqual([100, 200])
-
-    store.reorderSlatePoints('run-1', ['b', 'a'])
-
-    // The third place: projectRunToSlate must read p.order, not p.createdAt. If it
-    // still read createdAt, run.slate would come back in the OLD order with no error.
-    const after = store.getRun('run-1')!.slate!
-    expect(after.map(s => s.id)).toEqual(['b', 'a'])
-    expect(after.map(s => s.order)).toEqual([100, 200])
+    const slate = store.getRun('run-1')!.slate!
+    expect(slate.map(s => s.id)).toEqual(['a', 'b'])
+    expect(slate.map(s => s.order)).toEqual([100, 200])
   })
 })
 
@@ -787,16 +794,18 @@ describe('SlateStore.deletePoint (S2 — clearing the Objective)', () => {
     expect(emit).not.toHaveBeenCalled()
   })
 
-  it('DocumentStore.deleteSlatePoint re-projects run.slate (and is inert when absent)', () => {
+  it('the run-slate bridge deletes through the alias (and is inert when absent)', async () => {
     const store = new DocumentStore()
     store.upsertRun('run-1', makeRun())
-    store.addUserSlatePoint('run-1', { id: 'objective', author: 'user', headline: 'the goal' })
+    const bridge = new RunSlateBridge(store, new SurfaceService(store))
+    const actor = { kind: 'human' as const, id: 'actor-1' }
+    await bridge.upsertUserPoint('run-1', { id: 'objective', headline: 'the goal' }, actor)
     expect(store.getRun('run-1')!.slate).toHaveLength(1)
 
-    expect(store.deleteSlatePoint('run-1', 'objective')).toBe(true)
+    expect(await bridge.deletePoint('run-1', 'objective', actor)).toBe(true)
     // An empty projection clears the field entirely (setRunSlate's own convention).
     expect(store.getRun('run-1')!.slate).toBeUndefined()
 
-    expect(store.deleteSlatePoint('run-1', 'objective')).toBe(false)
+    expect(await bridge.deletePoint('run-1', 'objective', actor)).toBe(false)
   })
 })

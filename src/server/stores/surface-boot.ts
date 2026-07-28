@@ -30,7 +30,7 @@
 
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
-import type { SurfaceHealthStatus } from '../../domain/types'
+import type { Point, SurfaceHealthStatus } from '../../domain/types'
 import type { DocumentStore } from './document-store'
 import { SurfaceSidecar, type SurfaceCommitResult, type SurfaceLoadOutcome } from './surface-persistence'
 import {
@@ -86,11 +86,26 @@ function frozenAt(path: string): string | undefined {
   }
 }
 
-/** Shape the DocumentStore's runs and Slate points into migration input. Runs
- *  with no id are skipped here rather than handed on: the migration quarantines
- *  them anyway, and reporting the same refusal twice makes the diagnostics dump
- *  read like two problems. */
+/**
+ * Shape the DocumentStore's runs and LEGACY Slate points into migration input.
+ *
+ * The points come from `getAllSlatePoints` — the legacy store — and NOT from
+ * `getSlatePointsForRun`, which after U2 projects the canonical records back out
+ * through their compatibility aliases. Feeding migration its own output would make
+ * every pass see zero unmigrated points and quietly stop adopting anything, with no
+ * error and a report that reads like a clean steady state.
+ *
+ * Runs with no id are skipped here rather than handed on: the migration quarantines
+ * them anyway, and reporting the same refusal twice makes the diagnostics dump read
+ * like two problems.
+ */
 export function legacyRunSnapshots(docStore: DocumentStore): LegacyRunSnapshot[] {
+  const byRun = new Map<string, Point[]>()
+  for (const point of docStore.getAllSlatePoints()) {
+    const bucket = byRun.get(point.runId)
+    if (bucket) bucket.push(point)
+    else byRun.set(point.runId, [point])
+  }
   const runs: LegacyRunSnapshot[] = []
   for (const run of docStore.getAllRuns()) {
     if (!run?.id) continue
@@ -98,7 +113,7 @@ export function legacyRunSnapshots(docStore: DocumentStore): LegacyRunSnapshot[]
       runId: run.id,
       ...(run.createdAt ? { createdAt: run.createdAt } : {}),
       ...(run.spaceId ? { spaceId: run.spaceId } : {}),
-      points: docStore.getSlatePointsForRun(run.id),
+      points: byRun.get(run.id) ?? [],
     })
   }
   return runs
@@ -137,6 +152,11 @@ export function bootSurfaces(docStore: DocumentStore, opts: SurfaceBootOptions):
   const { puts, report } = migrateLegacySlate({
     runs: legacyRunSnapshots(docStore),
     existing: outcome.records,
+    // ADOPT, do not re-author. After U2 the canonical records are the write path and
+    // the legacy snapshot is frozen evidence, so a pass that rebuilt an existing
+    // record from that snapshot would revert every reply and every reconciled body
+    // written since the freeze — on every boot, silently. See `adoptOnly`.
+    adoptOnly: true,
     ...(opts.now != null ? { now: opts.now } : {}),
   })
 

@@ -126,6 +126,25 @@ export interface SurfaceMigrationInput {
    * them either way.
    */
   existing?: readonly Surface[]
+  /**
+   * ADOPT, do not re-author (plan U2).
+   *
+   * Between U1 and U2 the legacy bridge was still the write path, so every pass had
+   * to carry legacy changes forward onto the canonical records — which is why
+   * {@link buildSurface} rebuilds content and thread from the legacy point.
+   *
+   * U2 ends that. Canonical Surfaces are the write path now, `Run.slate` derives
+   * from them, and the legacy snapshot is FROZEN evidence (KTD5). Re-authoring an
+   * existing record from that frozen copy on every boot is data loss, not
+   * re-entrancy: it would revert every reply typed since the freeze and every body
+   * the file reconciler has written, once per restart, silently. So a pass in this
+   * mode creates the canonical counterpart of a legacy point that has none and
+   * leaves every record that already exists exactly as it is.
+   *
+   * Defaulted OFF so the U1 semantics — and the tests that pin them — are unchanged
+   * for a caller that has not made the switch. `bootSurfaces` passes `true`.
+   */
+  adoptOnly?: boolean
   /** Override for {@link LEGACY_SPACELESS_SPACE_ID}. */
   fallbackSpaceId?: string
   /** Epoch ms stamped on the REPORT (never on a record). Injectable so a caller
@@ -407,6 +426,7 @@ function unchanged(prior: Surface, candidate: Surface): boolean {
  *  closures-over-locals so the reconcile step reads the same whether it is called
  *  for a run root or for a point — one code path, one set of collision rules. */
 interface PassState {
+  adoptOnly: boolean
   byId: Map<string, Surface>
   byAlias: Map<string, Surface>
   claimedIds: Set<string>
@@ -547,6 +567,16 @@ function reconcile(
     )
   }
 
+  // ADOPT-ONLY: a record that already exists is the authority and this pass has
+  // nothing to add to it. Counted as `unchanged` rather than as a separate outcome
+  // because from the report's side that is exactly what it is — the canonical store
+  // already holds this point and no write was needed.
+  if (prior && state.adoptOnly) {
+    state.claimedIds.add(params.id)
+    state.claimedAliases.add(key)
+    report.unchanged++
+    return true
+  }
   const candidate = buildSurface(params, prior)
   state.claimedIds.add(params.id)
   state.claimedAliases.add(key)
@@ -583,6 +613,7 @@ export function migrateLegacySlate(input: SurfaceMigrationInput): SurfaceMigrati
   // Indexes over what is already canonical. Built once: a per-candidate scan would
   // be quadratic on the record set, and this runs on every boot.
   const state: PassState = {
+    adoptOnly: input.adoptOnly === true,
     byId: new Map(),
     byAlias: new Map(),
     claimedIds: new Set(),

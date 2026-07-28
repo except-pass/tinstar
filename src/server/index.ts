@@ -29,6 +29,11 @@ import type { SessionStatus } from '../types'
 import { getGitDiffFiles } from './sessions/git-diff'
 import { StatusWatcher } from './sessions/status-watcher'
 import { SlateWatcher } from './sessions/slate-watcher'
+import { SurfaceService } from './surfaces/surface-service'
+import { slateSourceAdapters } from './surfaces/slate-source'
+import { boundSlateRuns, reconcileSlateEpoch } from './surfaces/source-reconciler'
+import { deriveRunIncarnation } from './stores/surfaces'
+import { deriveLegacyRunRootId, LEGACY_SPACELESS_SPACE_ID } from './stores/surface-migration'
 import { ReadyQueue } from './sessions/ReadyQueue'
 import { log } from './logger'
 import { reconcileGitHistory } from './commits'
@@ -515,11 +520,16 @@ export function initBackend(): RouteContext {
       }, 10_000)
 
       // The Slate watcher — mirrors the git-diff reconcile loop, but fs-watches each
-      // live run's `.tinstar/slate/` for latency and projects the validated surface
-      // files onto the run's store points (U4). The store mutator short-circuits on
-      // unchanged content, so the poll-floor backstop is cheap.
+      // watched run's `.tinstar/slate/` for latency and reconciles the validated
+      // directory into canonical Surfaces as one epoch (plan U2). A re-observation
+      // of unchanged content commits nothing, so the poll-floor backstop is cheap.
+      //
+      // Its own `SurfaceService` instance, with the same adapters the HTTP one gets.
+      // Sharing one would mean the watcher and a request could interleave inside a
+      // single object's state; they already serialize where it matters (the sidecar's
+      // transaction queue), and the service itself holds no per-call state.
+      const slateService = new SurfaceService(docStore, { sourceAdapters: slateSourceAdapters() })
       slateWatcher = new SlateWatcher({
-        docStore,
         listLiveRuns: () => {
           const runs: { runId: string; workdir: string }[] = []
           for (const run of docStore.getAllRuns()) {
@@ -529,6 +539,26 @@ export function initBackend(): RouteContext {
           }
           return runs
         },
+        // Runs whose canonical records still name a worktree, live session or not.
+        listBoundRuns: () => boundSlateRuns(docStore.getAllSurfaces()),
+        runContext: runId => {
+          const run = docStore.getRun(runId)
+          if (!run) return null
+          // The SAME derivation migration uses, so a file-authored entry lands on the
+          // Surface migration already adopted from its legacy point instead of minting
+          // a second identity. A run with no `createdAt` has no derivable incarnation
+          // and is skipped rather than given a substitute — see `deriveRunIncarnation`.
+          const incarnation = deriveRunIncarnation(runId, run.createdAt)
+          if (!incarnation) return null
+          return {
+            spaceId: run.spaceId || LEGACY_SPACELESS_SPACE_ID,
+            incarnation,
+            rootSurfaceId: deriveLegacyRunRootId(incarnation),
+          }
+        },
+        applyEpoch: epoch => reconcileSlateEpoch(slateService, epoch, {
+          actor: { kind: 'job', id: 'slate-watcher', label: 'Slate watcher' },
+        }),
       })
       slateWatcher.start()
     } catch (err) {

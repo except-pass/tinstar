@@ -39,6 +39,7 @@ import {
   type SurfaceServiceError,
 } from '../surfaces/surface-service'
 import type { SurfaceHostProbe } from '../surfaces/surface-context'
+import { slateSourceAdapters } from '../surfaces/slate-source'
 
 /** What this module needs from `RouteContext`. Narrowed deliberately: a handler
  *  that could reach NATS or the simulator would eventually be asked to. */
@@ -230,7 +231,10 @@ export async function handleSurfaceRoutes(
   const path = url.split('?')[0] ?? url
   if (path !== PREFIX && !path.startsWith(`${PREFIX}/`)) return false
 
-  const svc = new SurfaceService(ctx.docStore, { probe: hostProbe(ctx) })
+  // The `slate-file` adapter is registered HERE as well as on the watcher's
+  // service, so a source-bound content edit arriving over HTTP is carried into the
+  // file rather than refused for want of an adapter (KTD4).
+  const svc = new SurfaceService(ctx.docStore, { probe: hostProbe(ctx), sourceAdapters: slateSourceAdapters() })
   const reply = <T>(result: SurfaceResult<T>, okStatus = 200): true => respond(res, result, cors, okStatus)
   const refuse = (code: ErrorCode, message: string, status?: number): true =>
     fail(res, code, message, { headers: cors, ...(status ? { status } : {}) })

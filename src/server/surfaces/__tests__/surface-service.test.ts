@@ -1059,9 +1059,12 @@ describe('parity coverage', () => {
   it('has a service method for every operation in the union', () => {
     const methods: Record<SurfaceMutation['op'], keyof SurfaceService> = {
       'create': 'create',
+      'observe-source': 'observeSource',
+      'mark-source-missing': 'markSourceMissing',
       'update-content': 'updateContent',
       'transfer-content-authority': 'transferContentAuthority',
       'append-thread': 'appendThread',
+      'set-thread-disposition': 'setThreadDisposition',
       'group': 'group',
       'reparent': 'reparent',
       'ungroup': 'ungroup',

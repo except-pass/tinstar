@@ -62,6 +62,14 @@ import type {
   SurfaceTopologyPlan,
 } from '../stores/surfaces'
 import { newSurfaceId } from '../stores/surfaces'
+// The migration's placeholder adapter and reserved root alias id. Imported rather
+// than restated: `observeSource` decides whether a source adapter may take a binding
+// over by comparing against the exact string migration stamps, and two copies of it
+// would let a rename silently turn every takeover into a refusal.
+import {
+  LEGACY_RUN_ROOT_LOCAL_ID,
+  LEGACY_SLATE_ADAPTER as LEGACY_PLACEHOLDER_ADAPTER,
+} from '../stores/surface-migration'
 import {
   buildSurfaceContext,
   NO_HOST_PROBE,
@@ -75,9 +83,16 @@ import {
  *  union so a receipt, a log line, and a CLI subcommand cannot drift apart. */
 export type SurfaceOperation =
   | 'create'
+  /** U2's source INGRESS: one reconciled observation of an authoritative source. */
+  | 'observe-source'
+  /** U2's source ingress, negative case: an epoch that could see the source did
+   *  not find this binding in it. */
+  | 'mark-source-missing'
   | 'update-content'
   | 'transfer-content-authority'
   | 'append-thread'
+  /** The EXPLICIT half of thread status: resolve, reopen, dismiss (U2). */
+  | 'set-thread-disposition'
   | 'group'
   | 'reparent'
   | 'ungroup'
@@ -104,6 +119,8 @@ export type SurfaceErrorReason =
   | 'content-authority'
   /** A registered source adapter refused the write. */
   | 'source-write-failed'
+  /** A second source adapter tried to take over a binding another one owns (U2). */
+  | 'source-conflict'
   /** A refresh was requested for a Surface already queued for one. */
   | 'already-queued'
   /** A refresh was requested for a Surface already being refreshed. */
@@ -210,6 +227,38 @@ export interface SurfaceSourceAdapter {
     content: SurfaceContent
     expectedWatermark?: string
   }): Promise<{ ok: true; watermark: string } | { ok: false; message: string }>
+}
+
+/**
+ * One reconciled observation of an authoritative source, as {@link
+ * SurfaceService.observeSource} takes it.
+ *
+ * Everything identity-shaped here is DERIVED by the caller from stable inputs (the
+ * run incarnation and the entry's local id) rather than read out of the source. A
+ * source file that could name its own Surface id would be able to graft its content
+ * onto any other Surface's thread.
+ */
+export interface SurfaceSourceObservation {
+  /** The canonical id this binding resolves to. Host-derived, never source-supplied. */
+  id: string
+  spaceId: string
+  /** Home for a NEWLY created record. An existing one keeps whatever home it has,
+   *  including one it was promoted to. */
+  home: SurfaceHome
+  adapter: string
+  locator: string
+  /** The worktree the locator resolves against, persisted on the binding. */
+  worktree?: string
+  /** The compatibility alias a newly created record carries (KTD3). */
+  alias: SurfaceCompatAlias
+  provenance?: SurfaceProvenance
+  author: PointAuthor
+  content: SurfaceContent
+  /** Evidence for THIS observation. Compared for equality against the binding's
+   *  stored watermark to decide whether anything actually moved. */
+  watermark: string
+  order?: number
+  createdAt?: number
 }
 
 export interface SurfaceServiceOptions {
@@ -564,9 +613,19 @@ function parseSource(value: unknown): SurfaceSourceBinding | string | undefined 
     // source than it did, which is exactly the lie the generation exists to catch.
     return 'source.generation is host-owned and may not be supplied'
   }
+  // The reconciliation STATE (`state`, `missingSince`, `divergedWatermark`) is
+  // host-owned for the same reason and is simply not read here: a caller declaring
+  // its own source already missing, or already diverged, would be describing an
+  // observation no reconciler made.
+  if (raw.worktree !== undefined && (typeof raw.worktree !== 'string' || !raw.worktree)) {
+    return 'source.worktree must be a non-empty string'
+  }
+  const worktreeTooLong = oversize('source.worktree', typeof raw.worktree === 'string' ? raw.worktree : undefined, 1024)
+  if (worktreeTooLong) return worktreeTooLong
   return {
     adapter: raw.adapter,
     locator: raw.locator,
+    ...(typeof raw.worktree === 'string' ? { worktree: raw.worktree } : {}),
     generation: 0,
     ...(typeof raw.watermark === 'string' ? { watermark: raw.watermark } : {}),
   }
@@ -630,6 +689,28 @@ export class SurfaceService {
     })
     if (!built) return notFound(id)
     return { ok: true, data: built }
+  }
+
+  /**
+   * Every live Surface aliased to `runId` whose source binding belongs to
+   * `adapter`, paired with the run-local id its alias carries.
+   *
+   * The PRIOR half of an epoch comparison (plan U2). Scoped by adapter because a
+   * reconciler may only reason about its own bindings: the file reconciler must not
+   * see a `legacy-slate-point` binding and conclude its file is gone, when that
+   * binding never named a file at all.
+   *
+   * A Surface may carry several run aliases (KTD3). Only the one for `runId` is
+   * returned, because that is the id this run's epoch addresses it by.
+   */
+  sourceBindingsForRun(runId: string, adapter: string): { surface: Surface; localId: string }[] {
+    const out: { surface: Surface; localId: string }[] = []
+    for (const surface of this.docStore.getSurfacesForRunAlias(runId)) {
+      if (surface.source?.adapter !== adapter) continue
+      const alias = (surface.aliases ?? []).find(a => a.bucket.kind === 'run' && a.bucket.runId === runId)
+      if (alias) out.push({ surface, localId: alias.localId })
+    }
+    return out
   }
 
   contributors(id: string): SurfaceResult<{ id: string; contributors: SurfaceContributor[] }> {
@@ -944,13 +1025,287 @@ export class SurfaceService {
     if (prior.contentAuthority === to) {
       return { ok: false, error: { code: 'conflict', reason: 'no-change', message: `content authority is already ${to}`, current: [prior] } }
     }
+    // Taking authority does not by itself make the actor the AUTHOR — a user may
+    // freeze an agent's content without claiming to have written it, and flipping the
+    // byline for them would put the agent's words under the user's name. So the
+    // authorship claim is opt-in and separate. The Objective's takeover uses it: the
+    // headline it writes really is the user's, and rendering it as the agent's was
+    // the failure the legacy `claim` flag existed to prevent.
+    if (raw.claimAuthorship !== undefined && typeof raw.claimAuthorship !== 'boolean') {
+      return invalid('claimAuthorship must be a boolean')
+    }
+    if (raw.claimAuthorship === true && to !== 'canonical-direct') {
+      return invalid('claimAuthorship applies only when taking canonical-direct authority')
+    }
     const next: Surface = {
       ...prior,
       contentAuthority: to,
+      ...(raw.claimAuthorship === true ? { author: authorFor(ctx.actor) } : {}),
       rev: prior.rev + 1,
       amendedAt: ctx.at ?? Date.now(),
     }
     return this.commitContent('transfer-content-authority', prior, next, ctx, flight.fingerprint)
+  }
+
+  // --- Source ingress (plan U2) ---
+  //
+  // The counterpart to {@link SurfaceSourceAdapter}, which carries an API edit OUT
+  // to a source. These three carry a source observation IN. They are typed rather
+  // than `unknown`-and-whitelisted like the operations above, because the caller is
+  // the host's own reconciler and not a request body: there is no untrusted field
+  // to strip, and parsing a shape the server just built would be ceremony.
+  //
+  // WHAT THEY REFUSE TO DO IS THE POINT. None of them touches home, thread,
+  // lifecycle, owner, or per-user view state — a source may replace authored
+  // content and its own binding evidence, and nothing else (KTD4). None of them
+  // removes a record: an omission marks a binding missing, and a Surface only ever
+  // leaves the tree through the deletion service.
+
+  /**
+   * Reconcile ONE observation of a source binding.
+   *
+   * Creates the Surface when nothing holds its derived id, updates authored content
+   * when the binding is authoritative and the evidence moved, and records DIVERGENCE
+   * when authority has been transferred to the record (KTD4: "Canonical-direct
+   * content ignores later file changes except to report divergence").
+   *
+   * The generation advances only when the WATERMARK changes, which is what makes
+   * this safe to call on the poll floor: a re-observation of unchanged content is a
+   * no-op that never reaches the durable layer, so a three-second poll does not burn
+   * a revision per surface per tick. A rename — same evidence, new locator — rewrites
+   * the address without advancing the generation, because no new content was
+   * observed.
+   */
+  async observeSource(obs: SurfaceSourceObservation, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
+    const now = ctx.at ?? Date.now()
+    const prior = this.docStore.getSurface(obs.id)
+    if (!prior) {
+      const plan = this.docStore.planSurfaceCreate({
+        id: obs.id,
+        spaceId: obs.spaceId,
+        home: obs.home,
+        content: obs.content,
+        contentAuthority: 'source-binding',
+        author: obs.author,
+        source: {
+          adapter: obs.adapter,
+          locator: obs.locator,
+          ...(obs.worktree ? { worktree: obs.worktree } : {}),
+          generation: 1,
+          watermark: obs.watermark,
+          state: 'present',
+        },
+        ...(obs.provenance ? { provenance: obs.provenance } : {}),
+        ...(obs.order != null ? { order: obs.order } : {}),
+        ...(obs.createdAt != null ? { createdAt: obs.createdAt } : {}),
+        aliases: [obs.alias],
+        freshness: { phase: 'current', overdue: false, observedGeneration: 1, verifiedAt: now },
+      }, { at: now })
+      return this.commitPlan('observe-source', plan, ctx, [obs.id, ...homeIds(obs.home)])
+    }
+
+    const guard = this.guardLive(prior, 'reconciling its source')
+    if (guard) return guard
+
+    // An adapter may only be REPLACED when the prior one was the migration's
+    // placeholder. `legacy-slate-point` is a logical address into the legacy bridge
+    // with no file behind it, so a real file reconciler taking it over is the
+    // binding finally learning where it lives. Two real adapters claiming one
+    // Surface is a different thing entirely — whichever ran last would win every
+    // epoch — so it is refused rather than resolved.
+    const priorAdapter = prior.source?.adapter
+    if (priorAdapter && priorAdapter !== obs.adapter && priorAdapter !== LEGACY_PLACEHOLDER_ADAPTER) {
+      return {
+        ok: false,
+        error: {
+          code: 'conflict',
+          reason: 'source-conflict',
+          message:
+            `Surface ${obs.id} is already bound to source adapter "${priorAdapter}"; ` +
+            `"${obs.adapter}" may not take it over. Transfer content authority explicitly instead.`,
+          current: [prior],
+        },
+      }
+    }
+
+    const authoritative = prior.contentAuthority === 'source-binding'
+    const evidenceMoved = prior.source?.watermark !== obs.watermark
+    const binding: SurfaceSourceBinding = {
+      adapter: obs.adapter,
+      locator: obs.locator,
+      ...(obs.worktree ? { worktree: obs.worktree } : {}),
+      generation: (prior.source?.generation ?? 0) + (authoritative && evidenceMoved ? 1 : 0),
+      // The last-VALID watermark. Under canonical-direct authority the record's
+      // content still reflects the older observation, so overwriting the watermark
+      // would erase the very difference divergence is reported from.
+      watermark: authoritative ? obs.watermark : prior.source?.watermark,
+      state: 'present',
+      ...(!authoritative && evidenceMoved ? { divergedWatermark: obs.watermark } : {}),
+    }
+
+    const next: Surface = {
+      ...prior,
+      ...(authoritative ? { content: obs.content, author: obs.author } : {}),
+      source: binding,
+      ...(authoritative && evidenceMoved
+        ? {
+          freshness: {
+            ...prior.freshness,
+            phase: 'current',
+            observedGeneration: binding.generation,
+            verifiedAt: now,
+          },
+        }
+        : {}),
+      rev: prior.rev + 1,
+      amendedAt: now,
+    }
+    // `commitContent` reports a candidate that changes nothing as a `no-change`
+    // conflict. That is the RIGHT answer for an API caller and the WRONG one here:
+    // the poll floor re-observes every binding every few seconds, and the steady
+    // state is precisely "nothing moved". Short-circuited to a success so the
+    // reconciler's own counters stay meaningful.
+    if (this.docStore.checkSurfaceUpsert(next) === 'no-change') {
+      return this.unchanged('observe-source', prior)
+    }
+    return this.commitContent('observe-source', prior, next, ctx)
+  }
+
+  /**
+   * Record that an epoch which COULD see this binding's source did not find it.
+   *
+   * Content is retained verbatim — the last-valid body stays on screen — and the
+   * Surface is marked `possibly-stale`, which is the honest state: what it shows was
+   * true when the source was last read, and nothing has confirmed it since. It does
+   * NOT retract the record. Under KTD15 a Surface only leaves the tree through the
+   * deletion service, and letting a missing file delete one would mean an editor
+   * crash, a `git checkout`, or a stray `rm` silently destroying a thread.
+   *
+   * `adapter` is required and checked: a reconciler may only report on bindings it
+   * owns, so the file reconciler cannot mark a `legacy-slate-point` binding — whose
+   * locator names no file — missing for want of a file.
+   */
+  async markSourceMissing(
+    id: string, adapter: string, ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    const guard = this.guardLive(prior, 'marking its source missing')
+    if (guard) return guard
+    if (!prior.source) return invalid(`Surface ${id} has no source binding to mark missing`)
+    if (prior.source.adapter !== adapter) {
+      return invalid(
+        `Surface ${id} is bound to source adapter "${prior.source.adapter}", not "${adapter}"; ` +
+        'a reconciler may only report on the bindings it owns',
+      )
+    }
+    if (prior.source.state === 'missing') return this.unchanged('mark-source-missing', prior)
+
+    const now = ctx.at ?? Date.now()
+    const next: Surface = {
+      ...prior,
+      source: { ...prior.source, state: 'missing', missingSince: now },
+      freshness: { ...prior.freshness, phase: 'possibly-stale' },
+      rev: prior.rev + 1,
+      amendedAt: now,
+    }
+    return this.commitContent('mark-source-missing', prior, next, ctx)
+  }
+
+  /**
+   * Make sure a run's compatibility ROOT exists, so its reconciled entries have a
+   * home (KTD3).
+   *
+   * Migration creates one per run at boot. A run created AFTER boot has none, and
+   * without this its authored files would have nowhere to land until the next
+   * restart — the reconciler would either quarantine the whole run for hours or home
+   * its entries on the Canvas, which is exactly the "dump every legacy point onto
+   * the canvas" outcome the compatibility root exists to prevent.
+   *
+   * Idempotent and write-free when the root is already there, including when it has
+   * since been PROMOTED or rehomed: the check is on the id, not on the home.
+   */
+  async ensureRunRoot(
+    input: { id: string; spaceId: string; runId: string; createdAt: number },
+    ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const existing = this.docStore.getSurface(input.id)
+    if (existing) return this.unchanged('create', existing)
+    const now = ctx.at ?? Date.now()
+    const plan = this.docStore.planSurfaceCreate({
+      id: input.id,
+      spaceId: input.spaceId,
+      home: { kind: 'canvas', spaceId: input.spaceId },
+      // The run's own id, matching what migration builds. A decorated label would
+      // be the first thing to go stale when a run is renamed.
+      content: { headline: input.runId },
+      contentAuthority: 'canonical-direct',
+      author: 'agent',
+      provenance: { runId: input.runId },
+      aliases: [{ bucket: { kind: 'run', runId: input.runId }, localId: LEGACY_RUN_ROOT_LOCAL_ID, visible: false }],
+      compatibilityOnly: true,
+      createdAt: input.createdAt,
+    }, { at: now })
+    return this.commitPlan('create', plan, ctx, [input.id])
+  }
+
+  /**
+   * Mint a USER-authored Surface at a run's compatibility alias (KTD3).
+   *
+   * Separate from {@link create} because two host-derived things differ and neither
+   * may come from a request body: the Surface id (derived from the run incarnation
+   * and the local id, so it converges with whatever the boot migration would derive
+   * for the same point) and the alias's `localId` (the legacy point id, which
+   * `create` has no way to express — it aliases a Surface under its own id).
+   *
+   * Authority is `canonical-direct` and there is no source binding: this record IS
+   * the content, which is what makes it immune to a later file epoch claiming the
+   * same local id (that reports divergence instead — KTD4).
+   */
+  async createRunPoint(
+    input: {
+      id: string
+      spaceId: string
+      home: SurfaceHome
+      runId: string
+      localId: string
+      content: SurfaceContent
+      createdAt?: number
+    },
+    ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const now = ctx.at ?? Date.now()
+    const plan = this.docStore.planSurfaceCreate({
+      id: input.id,
+      spaceId: input.spaceId,
+      home: input.home,
+      content: input.content,
+      contentAuthority: 'canonical-direct',
+      author: authorFor(ctx.actor),
+      provenance: { runId: input.runId },
+      aliases: [{ bucket: { kind: 'run', runId: input.runId }, localId: input.localId, visible: true }],
+      ...(input.createdAt != null ? { createdAt: input.createdAt } : {}),
+    }, { at: now })
+    return this.commitPlan('create', plan, ctx, [input.id, ...homeIds(input.home)])
+  }
+
+  /** A successful no-op, shaped exactly like a mutation so a caller need not branch.
+   *  `replayed` is deliberately NOT set: nothing was replayed, and nothing was
+   *  written either — the revisions it reports are simply the current ones. */
+  private unchanged(op: SurfaceOperation, current: Surface): SurfaceResult<SurfaceMutation> {
+    const rev = this.docStore.getSurfaceTopologyRev(current.spaceId)
+    return {
+      ok: true,
+      data: {
+        op,
+        spaceId: current.spaceId,
+        baseTopologyRev: rev,
+        topologyRev: rev,
+        spaceTopologyRev: rev,
+        surfaces: [this.view(current)],
+        replayed: false,
+      },
+    }
   }
 
   /** Append one message to a Surface's thread. Persist-first: the message is
@@ -1000,6 +1355,57 @@ export class SurfaceService {
       amendedAt: now,
     }
     return this.commitContent('append-thread', prior, next, ctx, flight.fingerprint)
+  }
+
+  /**
+   * Resolve, reopen, or dismiss a Surface's discussion.
+   *
+   * The EXPLICIT half of thread status. `open`/`discussing`/`waiting` are derived
+   * from the replies; `resolved` and `dismissed` are decisions someone made, which
+   * is why they are stamps on the record rather than a function of the messages —
+   * and why a later source re-observation cannot undo one. The Slate never
+   * auto-resolves a point, and this operation is the only thing that resolves one.
+   *
+   * `reopen` clears both stamps and lets the derivation take over again.
+   */
+  async setThreadDisposition(
+    id: string, body: unknown, ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const flight = this.preflight('set-thread-disposition', id, body, ctx)
+    if (flight.done) return flight.done
+    const raw = asObject(body)
+    if (!raw) return invalid('body must be a JSON object')
+    const forbidden = forbiddenField(raw)
+    if (forbidden) return invalid(`${forbidden} is host-owned and may not be supplied on set-thread-disposition`)
+    const action = raw.action
+    if (action !== 'resolve' && action !== 'reopen' && action !== 'dismiss') {
+      return invalid("action must be 'resolve', 'reopen', or 'dismiss'")
+    }
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    const guard = this.guardLive(prior, 'setting its thread disposition')
+    if (guard) return guard
+    if (raw.expectedRev !== undefined) {
+      if (typeof raw.expectedRev !== 'number') return invalid('expectedRev must be a number')
+      if (raw.expectedRev !== prior.rev) return this.conflictOn([prior], 'stale-surface-revision')
+    }
+
+    const now = ctx.at ?? Date.now()
+    // Rebuilt rather than spread-with-undefined: an `undefined` property survives in
+    // memory and disappears across JSON, so a reopened record and its reload would
+    // not be the same object.
+    const thread = {
+      replies: prior.thread.replies,
+      ...(action === 'resolve' ? { resolvedAt: now } : {}),
+      ...(action === 'dismiss' ? { dismissedAt: now } : {}),
+    }
+    const next: Surface = {
+      ...prior,
+      thread: { ...thread, status: derivePointStatus(thread) },
+      rev: prior.rev + 1,
+      amendedAt: now,
+    }
+    return this.commitContent('set-thread-disposition', prior, next, ctx, flight.fingerprint)
   }
 
   /**
