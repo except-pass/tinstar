@@ -1226,6 +1226,12 @@ export class DocumentStore {
     return this.surfaces.getRoots(spaceId)
   }
 
+  /** Every live Surface carrying a compatibility alias for `runId` (plan KTD3) —
+   *  the lookup `Run.slate` and the U2 source reconciler both address through. */
+  getSurfacesForRunAlias(runId: string): Surface[] {
+    return this.surfaces.getSurfacesForRunAlias(runId)
+  }
+
   /** The roots of every deleted subtree in the space (plan KTD15). */
   getSurfaceRecoveryRoots(spaceId: string): Surface[] {
     return this.surfaces.getRecoveryRoots(spaceId)

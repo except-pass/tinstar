@@ -718,21 +718,60 @@ export interface SurfaceProvenance {
  *  authority the first time a source disappeared. */
 export type SurfaceContentAuthority = 'source-binding' | 'canonical-direct'
 
+/**
+ * Whether the adapter that owns a binding could still SEE its source at the last
+ * reconciliation epoch (U2).
+ *
+ * ABSENT IS A THIRD STATE, and the reason this is not a boolean: it means no
+ * reconciler has ever observed this binding. That is what the legacy migration's
+ * `legacy-slate-point` binding looks like — a logical `run:…/point:…` address into
+ * the legacy bridge with no file behind it to observe — and what any binding minted
+ * outside an epoch looks like. Only a binding that was once `present` can become
+ * `missing`, so "the source vanished" and "there was never a source to find" are
+ * distinguishable states rather than one shared absence.
+ */
+export type SurfaceSourceState = 'present' | 'missing'
+
 /** The external source a Surface's content is reconciled from (U2's adapters). */
 export interface SurfaceSourceBinding {
-  /** Which reconciler owns this source. `slate-file` is the only adapter the
-   *  legacy migration produces; left as an open string so a later adapter is a
-   *  registry entry rather than a schema migration. */
+  /** Which reconciler owns this source. `slate-file` is U2's file reconciler;
+   *  `legacy-slate-point` is what migration stamps on a point it adopted from the
+   *  legacy bridge, which has no path. Left as an open string so a later adapter is
+   *  a registry entry rather than a schema migration. */
   adapter: string
-  /** Adapter-scoped locator — for `slate-file`, the source path. */
+  /** Adapter-scoped locator — for `slate-file`, `file:<name>#<entry id>` relative
+   *  to {@link worktree}. */
   locator: string
+  /** The worktree the locator resolves against. Persisted rather than looked up
+   *  from the live session, so reconciliation survives the session retiring while
+   *  the path is still there (U2's decoupling requirement). */
+  worktree?: string
   /** HOST-owned monotonic observation generation (plan KTD10). The freshness
    *  barrier compares generations, never wall-clock time: content hashes, Git
    *  SHAs, and process ids are EVIDENCE and are never ordered as time. */
   generation: number
   /** Opaque adapter evidence for the observation that produced current content
-   *  (content hash, Git SHA, mtime). Compared for equality only. */
+   *  (content hash, Git SHA, mtime). Compared for equality only. Because it is only
+   *  advanced by a VALID read, it doubles as the last-valid watermark: a torn read
+   *  leaves it naming the last body that actually parsed. */
   watermark?: string
+  /** See {@link SurfaceSourceState}. */
+  state?: SurfaceSourceState
+  /** Epoch ms of the FIRST epoch that found the source gone, cleared when it
+   *  returns.
+   *
+   *  There is deliberately NO "last seen at" counterpart. The poll floor
+   *  re-observes every binding every few seconds, so a last-seen stamp would differ
+   *  on every tick and commit a revision per surface per tick forever — the exact
+   *  storm the store's bookkeeping-only short-circuit exists to prevent. Every other
+   *  field here changes only when the source does, which is what makes a steady
+   *  state genuinely free. */
+  missingSince?: number
+  /** Source evidence that DIFFERS from what the current content reflects — set only
+   *  while authority is `canonical-direct` (KTD4: "Canonical-direct content ignores
+   *  later file changes except to report divergence"). Cleared when the source comes
+   *  back into agreement, or when authority moves back to the binding. */
+  divergedWatermark?: string
 }
 
 /** The execution phase of a Surface's freshness lifecycle (R18). Kept SEPARATE

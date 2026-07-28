@@ -544,6 +544,33 @@ export class SurfaceStore {
     return out
   }
 
+  /**
+   * Every LIVE Surface carrying a compatibility alias for `runId`, in the sibling
+   * order the run's legacy presentation should render (plan KTD3).
+   *
+   * The `Run.slate` projection and the source reconciler both address Surfaces the
+   * way the legacy world does — by (run, local id) — and this is the one lookup
+   * that answers it. Deleted records are excluded: a Surface in the recovery store
+   * still holds its alias (that is what makes a restore put it back where it was),
+   * but it is not part of the run's Slate any more.
+   *
+   * A LINEAR SCAN, not an index, and deliberately: aliases can be rewritten by an
+   * ordinary content commit, which does not `reindex()`, so a cached alias map
+   * would need its own invalidation path and would be wrong exactly when a run was
+   * reborn (see the migration's incarnation retirement) — the one moment the
+   * mapping matters most. The record set is per-install small and the callers are
+   * per-run, not per-record.
+   */
+  getSurfacesForRunAlias(runId: string): Surface[] {
+    const out: Surface[] = []
+    for (const s of this.surfaces.values()) {
+      if (!(s.aliases ?? []).some(a => a.bucket.kind === 'run' && a.bucket.runId === runId)) continue
+      if (this.recoveryRootFor(s.id)) continue
+      out.push(s)
+    }
+    return out.sort(compareSiblings)
+  }
+
   /** The space's recovery store: the roots of every deleted subtree, in sibling
    *  order. What a "recently deleted" list renders and what `restore` picks from. */
   getRecoveryRoots(spaceId: string): Surface[] {

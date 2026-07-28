@@ -1,0 +1,387 @@
+// @vitest-environment node
+//
+// U2's reconciliation invariants: what one epoch of a run's watched directory does
+// to the canonical store. Runs the REAL service against a real in-memory
+// DocumentStore with nothing mocked between them — the seam under test is exactly
+// the one the watcher drives in production, minus the filesystem.
+import { describe, it, expect } from 'vitest'
+import { DocumentStore } from '../../stores/document-store'
+import { deriveLegacySurfaceId, deriveRunIncarnation } from '../../stores/surfaces'
+import { deriveLegacyRunRootId, LEGACY_SLATE_ADAPTER, legacyPointLocator } from '../../stores/surface-migration'
+import { SurfaceService, type SurfaceCallContext } from '../surface-service'
+import { reconcileSlateEpoch, type SlateSourceEpoch } from '../source-reconciler'
+import { slateEntryWatermark, slateFileLocator, SLATE_FILE_ADAPTER, type SlateSourceEntry } from '../slate-source'
+import type { Surface, SurfacePrincipalRef } from '../../../domain/types'
+
+const SPACE = 'spc-a'
+const RUN = 'run-a'
+const WORKTREE = '/tmp/wt-a'
+const HOST: SurfacePrincipalRef = { kind: 'job', id: 'slate-watcher' }
+const INCARNATION = deriveRunIncarnation(RUN, '2026-07-01T00:00:00.000Z')!
+const ROOT = deriveLegacyRunRootId(INCARNATION)
+
+function ctx(at = 1_000): SurfaceCallContext {
+  return { actor: HOST, at }
+}
+
+function entry(localId: string, headline: string, over: Partial<SlateSourceEntry> = {}): SlateSourceEntry {
+  const file = over.file ?? 'a.json'
+  return {
+    localId,
+    file,
+    content: { headline },
+    author: 'agent',
+    watermark: slateEntryWatermark({ headline, author: 'agent' }),
+    ...over,
+  }
+}
+
+function epoch(entries: SlateSourceEntry[], over: Partial<SlateSourceEpoch> = {}): SlateSourceEpoch {
+  return {
+    runId: RUN,
+    spaceId: SPACE,
+    incarnation: INCARNATION,
+    rootSurfaceId: ROOT,
+    worktree: WORKTREE,
+    at: 1_000,
+    entries,
+    unreadable: [],
+    ...over,
+  }
+}
+
+function harness() {
+  const docStore = new DocumentStore()
+  const svc = new SurfaceService(docStore)
+  return {
+    docStore,
+    svc,
+    // The epoch carries the clock (it is when the directory was READ), so the
+    // override has to land on both halves or the assertions read the default.
+    run: (e: SlateSourceEpoch, at = e.at) => reconcileSlateEpoch(svc, { ...e, at }, ctx(at)),
+    surface: (localId: string): Surface | undefined =>
+      docStore.getSurface(deriveLegacySurfaceId(INCARNATION, localId)),
+  }
+}
+
+describe('the happy path', () => {
+  it('creates a run root and one bound Surface per entry, homed on the root', async () => {
+    const h = harness()
+    const out = await h.run(epoch([entry('blockers', 'Two blockers'), entry('plan', 'The plan')]))
+
+    expect(out).toMatchObject({ observed: 2, created: 2, updated: 0, missing: 0 })
+    const root = h.docStore.getSurface(ROOT)!
+    expect(root.compatibilityOnly).toBe(true)
+    expect(root.home).toEqual({ kind: 'canvas', spaceId: SPACE })
+
+    const blockers = h.surface('blockers')!
+    expect(blockers.content.headline).toBe('Two blockers')
+    expect(blockers.home).toEqual({ kind: 'surface', surfaceId: ROOT })
+    expect(blockers.contentAuthority).toBe('source-binding')
+    expect(blockers.source).toMatchObject({
+      adapter: SLATE_FILE_ADAPTER,
+      locator: slateFileLocator('a.json', 'blockers'),
+      worktree: WORKTREE,
+      generation: 1,
+      state: 'present',
+    })
+    expect(blockers.aliases).toEqual([{ bucket: { kind: 'run', runId: RUN }, localId: 'blockers', visible: true }])
+    expect(blockers.freshness).toMatchObject({ phase: 'current', observedGeneration: 1 })
+  })
+
+  it('is a no-op on re-observation of unchanged content — no revision burned', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers')]))
+    const first = h.surface('blockers')!
+    const out = await h.run(epoch([entry('blockers', 'Two blockers')]), 2_000)
+
+    expect(out).toMatchObject({ observed: 1, created: 0, updated: 0 })
+    expect(h.surface('blockers')!.rev).toBe(first.rev)
+    expect(h.surface('blockers')!.source!.generation).toBe(1)
+  })
+
+  it('advances the observation generation only when the watermark moves', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers')]))
+    await h.run(epoch([entry('blockers', 'One blocker')]), 2_000)
+
+    const after = h.surface('blockers')!
+    expect(after.content.headline).toBe('One blocker')
+    expect(after.source!.generation).toBe(2)
+    expect(after.freshness.observedGeneration).toBe(2)
+    expect(after.freshness.verifiedAt).toBe(2_000)
+  })
+
+  it('preserves thread, identity, and home across a content update', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers')]))
+    const id = h.surface('blockers')!.id
+    await h.svc.appendThread(id, { text: 'which two?' }, ctx(1_500))
+    await h.run(epoch([entry('blockers', 'One blocker')]), 2_000)
+
+    const after = h.surface('blockers')!
+    expect(after.id).toBe(id)
+    expect(after.thread.replies).toHaveLength(1)
+    expect(after.thread.replies[0]!.text).toBe('which two?')
+    expect(after.home).toEqual({ kind: 'surface', surfaceId: ROOT })
+  })
+})
+
+describe('rename and identity', () => {
+  it('rebinds the same Surface when an entry moves file, in either event order', async () => {
+    // Both orderings collapse to the same epoch, which is the property: the watcher
+    // debounces create and remove into one directory read, so there is no ordering
+    // left to get wrong.
+    for (const [first, second] of [['a.json', 'b.json'], ['b.json', 'a.json']] as const) {
+      const h = harness()
+      await h.run(epoch([entry('blockers', 'Two blockers', { file: first })]))
+      const before = h.surface('blockers')!
+      await h.svc.appendThread(before.id, { text: 'noted' }, ctx(1_500))
+      await h.run(epoch([entry('blockers', 'Two blockers', { file: second })]), 2_000)
+
+      const after = h.surface('blockers')!
+      expect(after.id).toBe(before.id)
+      expect(after.thread.replies).toHaveLength(1)
+      expect(after.source!.locator).toBe(slateFileLocator(second, 'blockers'))
+      // A rename observed no new content, so the generation must not move — the
+      // surface is exactly as current as it was a moment ago.
+      expect(after.source!.generation).toBe(1)
+    }
+  })
+
+  it('rejects a duplicate local id observably and keeps the first occurrence', async () => {
+    const h = harness()
+    const out = await h.run(epoch([
+      entry('blockers', 'from a.json', { file: 'a.json' }),
+      entry('blockers', 'from b.json', { file: 'b.json' }),
+    ]))
+
+    expect(out.duplicates).toEqual(['blockers'])
+    expect(out.observed).toBe(1)
+    expect(h.surface('blockers')!.content.headline).toBe('from a.json')
+  })
+})
+
+describe('omission', () => {
+  it('marks only the omitted binding missing and retains its content', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers'), entry('plan', 'The plan')]))
+    const out = await h.run(epoch([entry('plan', 'The plan')]), 2_000)
+
+    expect(out.missing).toBe(1)
+    const gone = h.surface('blockers')!
+    expect(gone.content.headline).toBe('Two blockers')
+    expect(gone.source).toMatchObject({ state: 'missing', missingSince: 2_000 })
+    expect(gone.freshness.phase).toBe('possibly-stale')
+    // The surviving binding is untouched — one file's omission cannot reach another.
+    expect(h.surface('plan')!.source!.state).toBe('present')
+    expect(h.surface('plan')!.source!.missingSince).toBeUndefined()
+  })
+
+  it('distinguishes a vanished source from one that never existed', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers')]))
+    await h.run(epoch([]), 2_000)
+
+    // Vanished: state says so, and says when.
+    expect(h.surface('blockers')!.source).toMatchObject({ state: 'missing', missingSince: 2_000 })
+    // Never observed: the run root has no binding at all, so there is nothing to
+    // report missing about it.
+    expect(h.docStore.getSurface(ROOT)!.source).toBeUndefined()
+  })
+
+  it('marking missing is idempotent — a second empty epoch writes nothing', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'x')]))
+    await h.run(epoch([]), 2_000)
+    const marked = h.surface('blockers')!
+    const out = await h.run(epoch([]), 3_000)
+
+    expect(out.missing).toBe(0)
+    expect(h.surface('blockers')!.rev).toBe(marked.rev)
+    expect(h.surface('blockers')!.source!.missingSince).toBe(2_000)
+  })
+
+  it('does not mark a binding missing when its file was unreadable this epoch', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers', { file: 'a.json' })]))
+    const before = h.surface('blockers')!
+    const out = await h.run(epoch([], { unreadable: ['a.json'] }), 2_000)
+
+    expect(out.missing).toBe(0)
+    expect(h.surface('blockers')!.rev).toBe(before.rev)
+    expect(h.surface('blockers')!.source!.state).toBe('present')
+  })
+
+  it('restores a missing binding to present when the source comes back', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers')]))
+    await h.run(epoch([]), 2_000)
+    await h.run(epoch([entry('blockers', 'Two blockers')]), 3_000)
+
+    const back = h.surface('blockers')!
+    expect(back.source).toMatchObject({ state: 'present' })
+    expect(back.source!.missingSince).toBeUndefined()
+  })
+
+  it('mixed valid and invalid entries update the valid ones and leave the rest alone', async () => {
+    const h = harness()
+    await h.run(epoch([
+      entry('blockers', 'Two blockers', { file: 'a.json' }),
+      entry('plan', 'The plan', { file: 'b.json' }),
+    ]))
+    // `b.json` is torn this epoch; `a.json` read fine and its entry changed.
+    const out = await h.run(epoch(
+      [entry('blockers', 'One blocker', { file: 'a.json' })],
+      { unreadable: ['b.json'] },
+    ), 2_000)
+
+    expect(out).toMatchObject({ observed: 1, updated: 1, missing: 0 })
+    expect(h.surface('blockers')!.content.headline).toBe('One blocker')
+    expect(h.surface('plan')!.content.headline).toBe('The plan')
+    expect(h.surface('plan')!.source!.state).toBe('present')
+  })
+})
+
+describe('content authority', () => {
+  it('reports divergence without overwriting canonical-direct content', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers')]))
+    const id = h.surface('blockers')!.id
+    const taken = await h.svc.transferContentAuthority(id, { to: 'canonical-direct', expectedRev: h.surface('blockers')!.rev }, ctx(1_500))
+    expect(taken.ok).toBe(true)
+
+    await h.run(epoch([entry('blockers', 'the file disagrees')]), 2_000)
+
+    const after = h.surface('blockers')!
+    expect(after.content.headline).toBe('Two blockers')
+    expect(after.source!.divergedWatermark).toBe(slateEntryWatermark({ headline: 'the file disagrees', author: 'agent' }))
+    // The stored watermark still names the observation the CONTENT reflects, which
+    // is what the divergence is measured against.
+    expect(after.source!.watermark).toBe(slateEntryWatermark({ headline: 'Two blockers', author: 'agent' }))
+    expect(after.source!.generation).toBe(1)
+  })
+
+  it('resumes source authorship after authority is transferred back', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers')]))
+    const id = h.surface('blockers')!.id
+    await h.svc.transferContentAuthority(id, { to: 'canonical-direct', expectedRev: h.surface('blockers')!.rev }, ctx(1_500))
+    await h.run(epoch([entry('blockers', 'the file disagrees')]), 2_000)
+    await h.svc.transferContentAuthority(id, { to: 'source-binding', expectedRev: h.surface('blockers')!.rev }, ctx(2_500))
+    await h.run(epoch([entry('blockers', 'the file disagrees')]), 3_000)
+
+    expect(h.surface('blockers')!.content.headline).toBe('the file disagrees')
+  })
+})
+
+describe('legacy adapter interop', () => {
+  it('upgrades a migrated legacy-slate-point binding to the file reconciler', async () => {
+    const h = harness()
+    const id = deriveLegacySurfaceId(INCARNATION, 'blockers')
+    // Exactly the shape migration commits: a logical bridge locator with no path.
+    h.docStore.loadSurfaces([{
+      id,
+      spaceId: SPACE,
+      home: { kind: 'canvas', spaceId: SPACE },
+      content: { headline: 'adopted from legacy' },
+      contentAuthority: 'source-binding',
+      source: { adapter: LEGACY_SLATE_ADAPTER, locator: legacyPointLocator(RUN, 'blockers'), generation: 0 },
+      author: 'agent',
+      thread: { replies: [], status: 'open' },
+      freshness: { phase: 'current', overdue: false },
+      aliases: [{ bucket: { kind: 'run', runId: RUN }, localId: 'blockers', visible: true }],
+      rev: 1, homeRev: 1, createdAt: 1, amendedAt: 1,
+    }])
+
+    await h.run(epoch([entry('blockers', 'from the file')]))
+    const after = h.docStore.getSurface(id)!
+    expect(after.source!.adapter).toBe(SLATE_FILE_ADAPTER)
+    expect(after.source!.locator).toBe(slateFileLocator('a.json', 'blockers'))
+    expect(after.content.headline).toBe('from the file')
+    // Home was NOT reset to the run root: an existing record keeps whatever home it
+    // has, including one it was promoted to.
+    expect(after.home).toEqual({ kind: 'canvas', spaceId: SPACE })
+  })
+
+  it('never marks a legacy-slate-point binding missing for want of a file', async () => {
+    const h = harness()
+    const id = deriveLegacySurfaceId(INCARNATION, 'adopted')
+    h.docStore.loadSurfaces([{
+      id,
+      spaceId: SPACE,
+      home: { kind: 'canvas', spaceId: SPACE },
+      content: { headline: 'adopted from legacy' },
+      contentAuthority: 'source-binding',
+      source: { adapter: LEGACY_SLATE_ADAPTER, locator: legacyPointLocator(RUN, 'adopted'), generation: 0 },
+      author: 'agent',
+      thread: { replies: [], status: 'open' },
+      freshness: { phase: 'current', overdue: false },
+      aliases: [{ bucket: { kind: 'run', runId: RUN }, localId: 'adopted', visible: true }],
+      rev: 1, homeRev: 1, createdAt: 1, amendedAt: 1,
+    }])
+
+    const out = await h.run(epoch([]))
+    expect(out.missing).toBe(0)
+    expect(h.docStore.getSurface(id)!.source!.state).toBeUndefined()
+    expect(h.docStore.getSurface(id)!.rev).toBe(1)
+  })
+
+  it('refuses a second real adapter taking over a bound Surface', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers')]))
+    const id = h.surface('blockers')!.id
+    const r = await h.svc.observeSource({
+      id,
+      spaceId: SPACE,
+      home: { kind: 'surface', surfaceId: ROOT },
+      adapter: 'some-other-adapter',
+      locator: 'x:1',
+      alias: { bucket: { kind: 'run', runId: RUN }, localId: 'blockers', visible: true },
+      author: 'agent',
+      content: { headline: 'hijacked' },
+      watermark: 'w',
+    }, ctx(2_000))
+
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.error.reason).toBe('source-conflict')
+    expect(h.surface('blockers')!.content.headline).toBe('Two blockers')
+  })
+})
+
+describe('promotion and deletion', () => {
+  it('a promoted Surface keeps reconciling and survives its source going away', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers')]))
+    const before = h.surface('blockers')!
+    const promoted = await h.svc.reparent({
+      ids: [before.id], home: { kind: 'canvas', spaceId: SPACE },
+    }, ctx(1_500))
+    expect(promoted.ok).toBe(true)
+
+    await h.run(epoch([entry('blockers', 'One blocker')]), 2_000)
+    expect(h.surface('blockers')!.content.headline).toBe('One blocker')
+    expect(h.surface('blockers')!.home).toEqual({ kind: 'canvas', spaceId: SPACE })
+    // Its run alias survived promotion, which is what keeps it reachable from the
+    // legacy Run Workspace (KTD3).
+    expect(h.surface('blockers')!.aliases).toEqual([
+      { bucket: { kind: 'run', runId: RUN }, localId: 'blockers', visible: true },
+    ])
+
+    await h.run(epoch([]), 3_000)
+    expect(h.surface('blockers')).toBeDefined()
+    expect(h.surface('blockers')!.source!.state).toBe('missing')
+  })
+
+  it('leaves a deleted Surface in the recovery store rather than resurrecting it', async () => {
+    const h = harness()
+    await h.run(epoch([entry('blockers', 'Two blockers')]))
+    const id = h.surface('blockers')!.id
+    const del = await h.svc.delete(id, {}, ctx(1_500))
+    expect(del.ok).toBe(true)
+
+    const out = await h.run(epoch([entry('blockers', 'Two blockers')]), 2_000)
+    expect(out.refusals).toEqual([{ localId: 'blockers', reason: 'deleted' }])
+    expect(h.docStore.getSurface(id)!.home).toEqual({ kind: 'recovery', spaceId: SPACE })
+  })
+})
