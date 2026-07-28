@@ -23,6 +23,8 @@ import {
   tmuxBackend,
   getSession,
   updateSession,
+  interactivePortWindow,
+  refreshConfigProblem,
   type TinstarConfig,
 } from './sessions'
 import type { SessionStatus } from '../types'
@@ -241,6 +243,19 @@ export function initBackend(): RouteContext {
       sessionConfig = loadConfig()
       ensureDirs(sessionConfig)
 
+      // Port safety (plan U6). Registering the interactive window is what arms
+      // `findPort`'s overlap refusal: from here on, any OTHER window that reaches
+      // into the range user sessions draw from is rejected at the call rather than
+      // quietly competing for the same ports.
+      tmuxBackend.setInteractivePortWindow(interactivePortWindow(sessionConfig))
+      const portProblem = refreshConfigProblem(sessionConfig)
+      if (portProblem) {
+        // A user edit, not a code bug — so it degrades the refresh engine rather
+        // than stopping the boot. The coordinator reads the same predicate and
+        // stays in owner-delivery mode while it holds.
+        log.error('refresh', `refresh engine disabled — ${portProblem}`)
+      }
+
       // Enable file-backed persistence so data survives server restarts
       docStore.enablePersistence(join(sessionConfig.dirs.root, 'docstore.json'))
 
@@ -437,7 +452,7 @@ export function initBackend(): RouteContext {
         // Reattach ttyd for tmux sessions that survived a server crash
         for (const session of sessions) {
           if (session.state === 'stopped' || session.state === 'creating') continue
-          const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
+          const port = session.port ?? await tmuxBackend.findPort(interactivePortWindow(cfg))
           try {
             const result = await tmuxBackend.reattachTmuxSession(cfg, { session, port })
             updateSession(cfg.dirs.sessions, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })

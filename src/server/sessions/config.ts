@@ -8,6 +8,33 @@ import type { ErrorCode } from '../../domain/api'
 
 export type AdapterType = 'claude' | 'codex' | 'generic'
 
+/**
+ * A named, explicit range of ttyd ports (plan U6).
+ *
+ * Explicit rather than "100 from a start offset", because U6 gives autonomous
+ * refresh workers their OWN slice of the port space and the two slices have to be
+ * provably disjoint. A count baked into `findPort` could not express that: both
+ * callers would scan the same 100 ports, and a trigger fan-out could take the port
+ * a user's `POST /api/sessions` was about to claim.
+ *
+ * Declared here rather than beside `findPort` only to keep the import graph
+ * one-way — `tmux.ts` already imports this module, and the reverse would be a
+ * cycle.
+ */
+export interface PortWindow {
+  /** Stable name — what an overlap refusal names, and how `findPort` recognises
+   *  the interactive window without being handed its bounds a second time. */
+  label: string
+  start: number
+  /** How many consecutive ports the window covers. */
+  count: number
+}
+
+/** True when two windows share at least one port. */
+export function portWindowsOverlap(a: PortWindow, b: PortWindow): boolean {
+  return a.start <= b.start + b.count - 1 && b.start <= a.start + a.count - 1
+}
+
 export interface CliTemplate {
   name: string
   icon?: string
@@ -22,7 +49,11 @@ export interface TinstarConfig {
   sessions: { prefix: string }
   cliTemplates: CliTemplate[]
   editor: string
-  ports: { ttyd: number; hostStart: number }
+  /** ttyd port allocation. `hostStart`/`hostCount` is the window user-initiated
+   *  sessions draw from; `refreshStart`/`refreshCount` is the DISJOINT window
+   *  autonomous refresh workers draw from (plan U6). Keeping them apart is what
+   *  makes a user session unstarvable by background refresh work. */
+  ports: { ttyd: number; hostStart: number; hostCount: number; refreshStart: number; refreshCount: number }
   dirs: { root: string; secrets: string; sessions: string }
   files: { config: string; projects: string }
   git: {
@@ -104,6 +135,74 @@ export interface TinstarConfig {
       timeoutMs: number
     }
   }
+  /**
+   * The durable trigger and refresh engine (plan U6). Owns how many autonomous
+   * refresh workers may run at once, how long one may take, and how often the
+   * coordinator sweeps for due work.
+   */
+  refresh: {
+    /** Master kill switch (plan U6: "Keep a temporary kill switch that falls back
+     *  to owner delivery while rollout is incomplete"). False ⇒ the coordinator
+     *  still tracks freshness and queues jobs, but every dispatch goes to the
+     *  surface's OWNER session rather than launching a background worker. */
+    autonomousWorkers: boolean
+    /** Fleet-wide cap on CONCURRENTLY RUNNING background refresh workers. Jobs
+     *  beyond it stay `queued` and launch nothing.
+     *
+     *  THE INVARIANT (plan U6): this defaults comfortably below
+     *  `ports.refreshCount`, so workers cannot exhaust even their own port slice —
+     *  and since that slice is disjoint from the interactive one, an interactive
+     *  session is unstarvable at any trigger volume. A config that raises this
+     *  above the refresh window size is refused at boot. */
+    maxConcurrentWorkers: number
+    /** Hard wall-clock bound on one worker before the job is failed and its
+     *  session retired. */
+    workerTimeoutMs: number
+    /** How often the coordinator sweeps: launches due queued work, harvests
+     *  finished workers, and re-derives `overdue`. */
+    sweepMs: number
+    /** Default verification interval for a Surface whose author declared a policy
+     *  but no interval. `dueAt` is derived from the last successful verification
+     *  plus this. */
+    defaultIntervalMs: number
+  }
+}
+
+/** The ttyd port window user-initiated sessions draw from. */
+export function interactivePortWindow(cfg: TinstarConfig): PortWindow {
+  return { label: 'interactive', start: cfg.ports.hostStart, count: cfg.ports.hostCount }
+}
+
+/** The DISJOINT ttyd port window autonomous refresh workers draw from (plan U6). */
+export function refreshPortWindow(cfg: TinstarConfig): PortWindow {
+  return { label: 'refresh', start: cfg.ports.refreshStart, count: cfg.ports.refreshCount }
+}
+
+/**
+ * What is wrong with this config's refresh/port settings, or null.
+ *
+ * Two checks, and they are the two the plan names as the composed guard: the
+ * windows must not overlap, and the worker cap must stay below the refresh
+ * window's size. Reported rather than thrown so the caller decides whether a bad
+ * user edit degrades the feature or stops the boot.
+ */
+export function refreshConfigProblem(cfg: TinstarConfig): string | null {
+  const interactive = interactivePortWindow(cfg)
+  const refresh = refreshPortWindow(cfg)
+  if (refresh.count < 1 || interactive.count < 1) {
+    return `port windows must cover at least one port each (interactive=${interactive.count}, refresh=${refresh.count})`
+  }
+  if (portWindowsOverlap(interactive, refresh)) {
+    return `ports.refreshStart/refreshCount (${refresh.start}-${refresh.start + refresh.count - 1}) overlaps ` +
+      `ports.hostStart/hostCount (${interactive.start}-${interactive.start + interactive.count - 1}); ` +
+      'the interactive and refresh port windows must be disjoint'
+  }
+  if (cfg.refresh.maxConcurrentWorkers < 0) return 'refresh.maxConcurrentWorkers may not be negative'
+  if (cfg.refresh.maxConcurrentWorkers >= refresh.count) {
+    return `refresh.maxConcurrentWorkers (${cfg.refresh.maxConcurrentWorkers}) must stay below ports.refreshCount ` +
+      `(${refresh.count}) — the cap exists so workers cannot exhaust their own port slice`
+  }
+  return null
 }
 
 // --- Helpers ---
@@ -222,7 +321,14 @@ export const BASE_CONFIG = {
   },
   ports: {
     ttyd: 7681,
+    // Interactive sessions: 8681-8780, exactly the range findPort used to scan.
     hostStart: 8681,
+    hostCount: 100,
+    // Autonomous refresh workers: 8801-8840. Disjoint from the interactive window
+    // with a deliberate gap, so a hand-edited `hostCount` has to be badly wrong
+    // before the two touch — and `findPort` refuses it even then.
+    refreshStart: 8801,
+    refreshCount: 40,
   },
   git: {
     taskMarkerRegex: '#([A-Za-z0-9_-]+)',
@@ -271,6 +377,15 @@ export const BASE_CONFIG = {
       model: 'sonnet',
       timeoutMs: 5 * 60_000,
     },
+  },
+  refresh: {
+    autonomousWorkers: true,
+    // Four, against a 40-port refresh window: an order of magnitude of headroom,
+    // so the cap — not the port pool — is always what bounds the fleet.
+    maxConcurrentWorkers: 4,
+    workerTimeoutMs: 10 * 60_000,
+    sweepMs: 5_000,
+    defaultIntervalMs: 30 * 60_000,
   },
 }
 
@@ -354,6 +469,9 @@ export function loadConfig(overrides?: { _rootDir?: string }): TinstarConfig {
     },
     // deepMerge already folded any user `slate.author` overrides into merged.slate.
     slate: merged.slate,
+    // Same: `refresh` is a flat slice of scalars, so the deep merge is the whole
+    // override story. `refreshConfigProblem` is what validates the result.
+    refresh: merged.refresh,
   }
 
   return deepFreeze(config)

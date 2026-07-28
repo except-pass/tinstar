@@ -1,4 +1,20 @@
-// The Slate's one-shot surface author (feat: multi-agent Slate — the whole spike lives here).
+// The Slate's surface authors — the one-shot COMPOSE fast path, and U6's tracked
+// refresh worker that replaces it for autonomous refreshes.
+//
+// WHAT U6 CHANGED (KTD11). Autonomous refreshes no longer use the fire-and-forget
+// `claude -p` child below. That child is untracked, unretireable, invisible as a
+// contributor, and — the reason it had to go — indistinguishable from silence when
+// it fails, because "wrote nothing" and "never started" produce identical evidence.
+// `launchRefreshWorker` replaces it with a real managed background session in the
+// refresh port window, tracked as a Run, retired through the normal Graveyard path,
+// and reporting its result through a per-job staging artifact the coordinator's
+// barrier validates.
+//
+// `dispatchSurfaceAuthor` REMAINS for COMPOSE, deliberately. Compose creates a
+// Surface that does not exist yet, so there is no record to hold a job, no
+// generation to compare, and nothing for a barrier to supersede — the whole
+// apparatus U6 builds has no subject. Its output still arrives the way it always
+// did, through the file watcher.
 //
 // When a surface carries a self-contained `refresh` recipe (source-derived), refreshing it
 // spawns a fresh, headless `claude -p` child in the run's workdir that executes the recipe and
@@ -19,9 +35,11 @@
 // with the run's own permissions; a recipe planted by an untrusted branch/process is a
 // documented residual risk, not sandboxed here.
 import { spawn } from 'node:child_process'
-import { getSession } from './session'
+import { getSession, type CreateSessionOpts, type Session } from './session'
 import { guestEnv } from './guestEnv'
 import { log } from '../logger'
+import { refreshPortWindow, type PortWindow, type TinstarConfig } from './config'
+import { runLaunchSteps, type LaunchStage, type LaunchStep, type SessionIncarnation } from './session-launcher'
 
 /** The `slate.author` config slice (see TinstarConfig in config.ts). */
 export interface SlateAuthorConfig {
@@ -154,5 +172,198 @@ export function dispatchSurfaceAuthor(params: {
   } catch (err) {
     log.warn('slate-author', 'dispatch error', { runId, label, err: (err as Error).message })
     return { dispatched: false }
+  }
+}
+
+// --- U6: the tracked refresh worker ----------------------------------------
+
+/**
+ * The instruction file a refresh worker reads.
+ *
+ * HOW THE NO-SHELL PROPERTY IS PRESERVED — and strengthened. The one-shot author
+ * above passes its prompt as a SINGLE ARGV ELEMENT to `spawn()` with no shell, so
+ * a recipe containing `$(…)`, a backtick, or a `;` is data rather than syntax. A
+ * managed session cannot reuse that trick: it is launched by writing a command
+ * into a tmux pane, and every CLI template interpolates its prompt into that
+ * command line.
+ *
+ * So the recipe DOES NOT GO ON A COMMAND LINE AT ALL. It is written to this brief
+ * file, and the worker's launch prompt is a short HOST-AUTHORED string that names
+ * the file's path. The only untrusted bytes anywhere near a shell are the path,
+ * which the host generated from a job id it minted (`<staging>/<jobId>.brief.md`
+ * — job ids are `job_` plus hex from `shortId`). That is strictly stronger than
+ * argv isolation: the recipe never enters the process that would interpret it.
+ *
+ * The brief is written OUTSIDE the worktree for the same reason the staged result
+ * is: anything the host drops inside `.tinstar/slate` would be picked up by the
+ * watcher and projected as a Surface.
+ */
+export function refreshBriefText(input: {
+  recipe: string
+  headline: string
+  stagingPath: string
+}): string {
+  return [
+    'You are a one-shot Slate surface refresher. Do exactly what this file says and nothing else.',
+    '',
+    `SURFACE: ${input.headline}`,
+    '',
+    'RECIPE (re-run this against the current state of the repository you are in):',
+    input.recipe,
+    '',
+    'WHEN YOU ARE DONE, write your result as JSON to this exact path:',
+    input.stagingPath,
+    '',
+    'The file must be a single JSON object with ONE of these shapes:',
+    '  { "headline": "<one line>", "content": { …A2UI… }, "note": "<optional one line about what changed>" }',
+    '  { "note": "no change" }                        ← you looked and nothing needed updating',
+    '  { "error": "<one line saying what stopped you>" } ← you could NOT do the job',
+    '',
+    'Writing that file is how you finish. If you write nothing, the refresh is recorded as FAILED —',
+    'so report "no change" explicitly rather than exiting quietly.',
+    '',
+    'Do NOT write into .tinstar/slate — the host commits your result itself, after re-checking the',
+    'sources. Anything you leave there bypasses that check and will be treated as a separate surface.',
+    '',
+    SLATE_AUTHOR_CONTRACT,
+  ].join('\n')
+}
+
+/** What a refresh worker launch needs from the host. Injected so the launch
+ *  sequence is testable without tmux, a filesystem, or a document store. */
+export interface RefreshWorkerHost {
+  config: TinstarConfig
+  /** Absolute worktree the worker runs in. Already authorized by the caller. */
+  worktree: string
+  /** Session name to create. */
+  sessionName: string
+  /** Where to write the brief, and where the worker will stage its result. */
+  briefPath: string
+  stagingPath: string
+  /** The recipe and headline the brief is built from. */
+  recipe: string
+  headline: string
+  secrets: Record<string, string>
+  writeFile(path: string, data: string): void
+  removeFile(path: string): void
+  findPort(window: PortWindow): Promise<number>
+  releasePort(port: number): void
+  createSession(dir: string, opts: CreateSessionOpts): Session
+  deleteSession(dir: string, name: string): boolean
+  updateSession(dir: string, name: string, patch: Partial<Session>): Session | null
+  startSession(input: { session: Session & { initialPrompt?: string }; port: number; secrets: Record<string, string> }): Promise<{ port: number; ttydPid: number | undefined }>
+  stopSession(name: string): void
+  upsertRun(id: string, run: Record<string, unknown>): void
+  deleteRun(id: string): void
+  spaceId: string
+  onStage?: (stage: LaunchStage, detail?: string) => void
+}
+
+/**
+ * Launch a background managed session to service one refresh job (KTD11).
+ *
+ * Every step has an inverse, so a failure at any stage leaves nothing behind — no
+ * claimed port, no orphan session directory, no Run tile for a worker that never
+ * started. The session is `background: true` and `focusOnCreate: false`: a refresh
+ * the user did not ask to watch must never steal the camera.
+ */
+export async function launchRefreshWorker(
+  host: RefreshWorkerHost,
+): Promise<{ ok: true; incarnation: SessionIncarnation } | { ok: false; message: string }> {
+  const sessDir = host.config.dirs.sessions
+  let port = 0
+  let session: (Session & { initialPrompt?: string }) | null = null
+
+  const steps: LaunchStep[] = [
+    {
+      name: 'brief',
+      run: async () => {
+        host.writeFile(host.briefPath, refreshBriefText({
+          recipe: host.recipe, headline: host.headline, stagingPath: host.stagingPath,
+        }))
+      },
+      compensate: async () => host.removeFile(host.briefPath),
+    },
+    {
+      name: 'port',
+      run: async () => { port = await host.findPort(refreshPortWindow(host.config)) },
+      compensate: async () => { if (port) host.releasePort(port) },
+    },
+    {
+      name: 'session',
+      run: async () => {
+        session = host.createSession(sessDir, {
+          name: host.sessionName,
+          backend: 'tmux',
+          workspace: { path: host.worktree },
+          background: true,
+          oneshot: true,
+          skipPermissions: true,
+        })
+        // The ONLY untrusted-adjacent value that reaches the command line is this
+        // path, which the host built from its own job id. The recipe is in the file.
+        session.initialPrompt =
+          `Read ${host.briefPath} and do exactly what it says. Write your result to the path it names.`
+      },
+      compensate: async () => { host.deleteSession(sessDir, host.sessionName) },
+    },
+    {
+      name: 'tmux',
+      run: async () => {
+        const result = await host.startSession({ session: session!, port, secrets: host.secrets })
+        host.updateSession(sessDir, host.sessionName, {
+          port: result.port, ttydPid: result.ttydPid ?? null, state: 'running',
+        })
+        port = result.port
+      },
+      compensate: async () => { host.stopSession(host.sessionName) },
+    },
+    {
+      name: 'run',
+      run: async () => {
+        host.upsertRun(host.sessionName, {
+          id: host.sessionName,
+          name: `refresh: ${host.headline}`.slice(0, 80),
+          status: 'running',
+          // Backgrounded and focus-neutral: this is host bookkeeping the user can
+          // look at, not something that should take over their screen.
+          background: true,
+          focusOnCreate: false,
+          blocked: false,
+          sessionId: host.sessionName,
+          initiative: '', epic: '', task: '',
+          repo: '', worktree: host.worktree,
+          touchedFiles: [], recapEntries: [], rawLogs: '',
+          port, backend: 'tmux',
+          backendInfo: `tmux session: ${host.sessionName}`,
+          natsEnabled: false,
+          taskId: '', worktreeId: '',
+          createdAt: new Date().toISOString(),
+          spaceId: host.spaceId,
+        })
+      },
+      compensate: async () => host.deleteRun(host.sessionName),
+    },
+  ]
+
+  const outcome = await runLaunchSteps(steps, host.onStage)
+  if (!outcome.ok) {
+    const leaked = outcome.leaked.length
+      ? ` (could not release: ${outcome.leaked.map(l => l.step).join(', ')})`
+      : ''
+    return { ok: false, message: `refresh worker launch failed at "${outcome.failedAt}": ${outcome.message}${leaked}` }
+  }
+  return {
+    ok: true,
+    // The incarnation is returned ONLY here, past every step — which is what makes
+    // "the refresh job owns a worker only after ready" true rather than intended.
+    // A session with no conversation id has no stable incarnation, so it falls back
+    // to its creation stamp rather than to the name — matching on the name alone is
+    // exactly the adoption hazard the incarnation exists to close.
+    incarnation: {
+      name: host.sessionName,
+      incarnation: session!.conversation.id ?? session!.created,
+      port,
+    },
   }
 }

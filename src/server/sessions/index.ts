@@ -1,4 +1,9 @@
-export { loadConfig, loadSecrets, applyTokenOverride, validateSessionOverride, ensureDirs, loadActiveSpaceId, saveActiveSpaceId, type TinstarConfig } from './config'
+export {
+  loadConfig, loadSecrets, applyTokenOverride, validateSessionOverride, ensureDirs,
+  loadActiveSpaceId, saveActiveSpaceId,
+  interactivePortWindow, refreshPortWindow, refreshConfigProblem, portWindowsOverlap,
+  type TinstarConfig, type PortWindow,
+} from './config'
 export {
   createSession,
   getSession,

@@ -40,10 +40,12 @@ import type {
   SurfaceContext,
   SurfaceContributor,
   SurfaceDeleteDisposition,
+  SurfaceFreshness,
   SurfaceHome,
   SurfacePrincipalRef,
   SurfaceProvenance,
   SurfaceSourceBinding,
+  SurfaceStaleReason,
 } from '../../domain/types'
 import { createHash } from 'node:crypto'
 import type { DocumentStore } from '../stores/document-store'
@@ -97,6 +99,15 @@ export type SurfaceOperation =
   | 'reparent'
   | 'ungroup'
   | 'refresh-request'
+  /** U6's durable freshness lifecycle: a typed trigger advanced the host
+   *  observation generation; a job took the Surface; the barrier accepted or
+   *  refused its result; the sweep re-derived `dueAt`/`overdue`. */
+  | 'mark-possibly-stale'
+  | 'enqueue-refresh'
+  | 'begin-refresh'
+  | 'complete-refresh'
+  | 'fail-refresh'
+  | 'set-refresh-schedule'
   | 'delete'
   | 'restore'
   | 'purge'
@@ -127,6 +138,10 @@ export type SurfaceErrorReason =
   | 'already-refreshing'
   /** `ungroup` was asked to dissolve a Surface that holds nothing. */
   | 'not-a-group'
+  /** A refresh result was computed against an observation generation the host has
+   *  already moved past (KTD10). Not an error in the worker — the world changed
+   *  under it — and the Surface is left pending for one successor. */
+  | 'superseded'
 
 /** How a request failed, in the shape a caller can act on.
  *
@@ -464,6 +479,15 @@ function authorFor(actor: SurfacePrincipalRef): PointAuthor {
 /** The ids a home names, for a conflict's `current`. The Canvas names none. */
 function homeIds(home: SurfaceHome): string[] {
   return home.kind === 'surface' ? [home.surfaceId] : []
+}
+
+/** Freshness with the owning job dropped — `delete` rather than `undefined`,
+ *  because an `undefined` property survives in memory and disappears across JSON,
+ *  so a record and its reload would not be the same object. */
+function omitJob(freshness: SurfaceFreshness): SurfaceFreshness {
+  const next = { ...freshness }
+  delete next.jobId
+  return next
 }
 
 function asObject(body: unknown): Record<string, unknown> | null {
@@ -944,6 +968,11 @@ export class SurfaceService {
       headline: typeof headline === 'string' ? headline.trim() : prior.content.headline,
       ...(nextBody ? { body: nextBody } : {}),
       ...(recipe ? { recipe } : {}),
+      // Carried, not settable. The freshness declaration is authored alongside the
+      // recipe (U6) and this endpoint takes only CONTENT_PATCH_FIELDS, so omitting
+      // it here would make every headline edit silently delete the Surface's
+      // triggers and put it back on the host defaults.
+      ...(prior.content.refreshPolicy ? { refreshPolicy: prior.content.refreshPolicy } : {}),
     }
 
     // Source-bound content does not belong to the API (KTD4). Either an adapter
@@ -1453,6 +1482,316 @@ export class SurfaceService {
       amendedAt: ctx.at ?? Date.now(),
     }
     return this.commitContent('refresh-request', prior, next, ctx, flight.fingerprint)
+  }
+
+  // --- Freshness lifecycle (plan U6, KTD10) ----------------------------------
+  //
+  // These four are the durable half of the refresh engine. Like the source-ingress
+  // trio above they are TYPED rather than `unknown`-and-whitelisted, because the
+  // caller is the host's own coordinator and not a request body — and like them,
+  // what they refuse to do is the point: none of them touches home, thread,
+  // lifecycle, owner, or aliases.
+  //
+  // THE GENERATION IS THE CLOCK. `source.generation` counts host observations;
+  // `freshness.observedGeneration` records which one the CURRENT content reflects.
+  // Stale is `observedGeneration < source.generation` and nothing else — never a
+  // wall-clock age, never a comparison of content hashes or Git SHAs.
+
+  /**
+   * Record that a typed trigger says this Surface may no longer reflect its
+   * sources, and advance the host observation generation.
+   *
+   * IDEMPOTENT ON THE REASON KEY. An event whose key already sits on the record
+   * commits NOTHING — no revision, no generation, no SSE. That is what makes the
+   * poll floor free: it re-reports the same Git SHA every few seconds, and every
+   * repeat collapses onto the one it already recorded.
+   *
+   * A Surface already `queued` or `refreshing` KEEPS that phase. Demoting it to
+   * `possibly-stale` would lose the fact that work is in flight; the generation
+   * advance is what supersedes that work, and the barrier is where that is
+   * noticed.
+   */
+  async markPossiblyStale(
+    id: string, reason: Omit<SurfaceStaleReason, 'generation'>, ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    const guard = this.guardLive(prior, 'marking it possibly stale')
+    if (guard) return guard
+    if (prior.freshness.staleReason?.key === reason.key) {
+      return this.unchanged('mark-possibly-stale', prior)
+    }
+
+    const now = ctx.at ?? Date.now()
+    const generation = (prior.source?.generation ?? 0) + 1
+    const next: Surface = {
+      ...prior,
+      ...(prior.source ? { source: { ...prior.source, generation } } : {}),
+      freshness: {
+        ...prior.freshness,
+        phase: prior.freshness.phase === 'queued' || prior.freshness.phase === 'refreshing'
+          ? prior.freshness.phase
+          : 'possibly-stale',
+        staleReason: { ...reason, generation },
+      },
+      rev: prior.rev + 1,
+      amendedAt: now,
+    }
+    return this.commitContent('mark-possibly-stale', prior, next, ctx)
+  }
+
+  /**
+   * Take a Surface into `queued` and stamp the job that now owns it.
+   *
+   * `queued` MEANS "a durable job exists for this and has not launched yet" — it is
+   * what the concurrency cap is visible as. A Surface held back by the cap sits
+   * here, badged, for as long as the fleet is full, which is the honest answer to
+   * "why has nothing happened": the work is real and its turn has not come.
+   *
+   * Idempotent: a Surface already `queued` under the same job is unchanged, so the
+   * human path (which reaches `queued` through `refreshRequest` before the
+   * coordinator has minted a job) can adopt it without a second commit.
+   */
+  async enqueueRefresh(
+    id: string, input: { jobId: string }, ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    const guard = this.guardLive(prior, 'queueing its refresh')
+    if (guard) return guard
+    if (prior.freshness.phase === 'refreshing') {
+      return {
+        ok: false,
+        error: {
+          code: 'conflict',
+          reason: 'already-refreshing',
+          message: `Surface ${id} is already refreshing; one refresh runs per Surface`,
+          current: [prior],
+        },
+      }
+    }
+    if (prior.freshness.phase === 'queued' && prior.freshness.jobId === input.jobId) {
+      return this.unchanged('enqueue-refresh', prior)
+    }
+    const next: Surface = {
+      ...prior,
+      // `overdue`, `staleReason`, and `failure` all carry through: queueing is not
+      // an outcome, and clearing any of them here would make an unattended Surface
+      // look attended to (R18).
+      freshness: { ...prior.freshness, phase: 'queued', jobId: input.jobId },
+      rev: prior.rev + 1,
+      amendedAt: ctx.at ?? Date.now(),
+    }
+    return this.commitContent('enqueue-refresh', prior, next, ctx)
+  }
+
+  /**
+   * Move a Surface from `queued` to `refreshing` and stamp the owning job.
+   *
+   * `expectedRev` is a compare-and-swap and is REQUIRED: two coordinator sweeps,
+   * or a sweep racing a human request, must not both believe they own the same
+   * Surface. That is the "two workers cannot complete the same lease" invariant,
+   * enforced on the record rather than on the job table.
+   */
+  async beginRefresh(
+    id: string, input: { jobId: string; expectedRev: number }, ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    const guard = this.guardLive(prior, 'starting its refresh')
+    if (guard) return guard
+    if (input.expectedRev !== prior.rev) return this.conflictOn([prior], 'stale-surface-revision')
+    if (prior.freshness.phase !== 'queued') {
+      return {
+        ok: false,
+        error: {
+          code: 'conflict',
+          reason: prior.freshness.phase === 'refreshing' ? 'already-refreshing' : 'stale-surface-revision',
+          message: `Surface ${id} is ${prior.freshness.phase}, not queued; only a queued Surface may start refreshing`,
+          current: [prior],
+        },
+      }
+    }
+    const next: Surface = {
+      ...prior,
+      freshness: { ...prior.freshness, phase: 'refreshing', jobId: input.jobId },
+      rev: prior.rev + 1,
+      amendedAt: ctx.at ?? Date.now(),
+    }
+    return this.commitContent('begin-refresh', prior, next, ctx)
+  }
+
+  /**
+   * The observation barrier (KTD10). Commit a refresh result, or refuse it as
+   * superseded.
+   *
+   * `observedGeneration` is the generation the RESULT reflects — what the host had
+   * observed when the worker was dispatched. If the binding has moved past it, a
+   * newer observation arrived while the worker ran and this result describes a
+   * world that no longer exists: the Surface goes back to `possibly-stale` with its
+   * reason intact so one successor can consume the newest generation, and NOTHING
+   * about the stale result is written. That is the difference between "we finished"
+   * and "we are current", and conflating them is the failure this whole unit exists
+   * to prevent.
+   *
+   * When content is supplied and authority is the source binding, the write is
+   * carried into the SOURCE first and only the watermark the adapter returns is
+   * persisted — otherwise the next reconciliation epoch would revert the refresh
+   * and nobody would know why (the same rule `updateContent` obeys).
+   */
+  async completeRefresh(
+    id: string,
+    input: {
+      jobId: string
+      expectedRev: number
+      /** The generation this result was computed against. */
+      observedGeneration: number
+      /** Validated authored content, or absent for a verification that found
+       *  nothing to change (a byte-identical regeneration). */
+      content?: SurfaceContent
+    },
+    ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    const guard = this.guardLive(prior, 'completing its refresh')
+    if (guard) return guard
+    if (prior.freshness.phase !== 'refreshing') {
+      return this.conflictOn([prior], 'stale-surface-revision')
+    }
+    if (input.expectedRev !== prior.rev) return this.conflictOn([prior], 'stale-surface-revision')
+
+    const now = ctx.at ?? Date.now()
+    const hostGeneration = prior.source?.generation ?? 0
+    if (input.observedGeneration !== hostGeneration) {
+      // Superseded. Back to possibly-stale, reason and overdue retained, job
+      // cleared so exactly one successor is scheduled for the newer generation.
+      const superseded: Surface = {
+        ...prior,
+        freshness: { ...omitJob(prior.freshness), phase: 'possibly-stale' },
+        rev: prior.rev + 1,
+        amendedAt: now,
+      }
+      const committed = await this.commitContent('complete-refresh', prior, superseded, ctx)
+      if (!committed.ok) return committed
+      return {
+        ok: false,
+        error: {
+          code: 'conflict',
+          reason: 'superseded',
+          message:
+            `Surface ${id} moved to observation generation ${hostGeneration} while this refresh was running ` +
+            `(it was computed against ${input.observedGeneration}); the result cannot claim current`,
+          current: this.currentFor([id]),
+        },
+      }
+    }
+
+    let source = prior.source
+    let content = prior.content
+    if (input.content) {
+      content = input.content
+      if (prior.contentAuthority === 'source-binding') {
+        const adapter = prior.source ? this.adapters[prior.source.adapter] : undefined
+        if (!prior.source || !adapter) {
+          return {
+            ok: false,
+            error: {
+              code: 'conflict',
+              reason: 'content-authority',
+              message:
+                `content authority is the source binding "${prior.source?.adapter ?? 'unknown'}" and no adapter is ` +
+                'registered to carry a refresh result back to it',
+              current: [prior],
+            },
+          }
+        }
+        const written = await adapter.write({ surface: prior, content })
+        if (!written.ok) {
+          return { ok: false, error: { code: 'conflict', reason: 'source-write-failed', message: written.message, current: [prior] } }
+        }
+        source = { ...prior.source, watermark: written.watermark }
+      }
+    }
+
+    const next: Surface = {
+      ...prior,
+      content,
+      ...(source ? { source } : {}),
+      freshness: {
+        // Rebuilt rather than spread: `staleReason`, `failure`, and `jobId` are all
+        // ANSWERED by a successful barrier, and a spread would carry them forward
+        // as decoration on a Surface that is genuinely current.
+        phase: 'current',
+        overdue: false,
+        ...(prior.freshness.dueAt !== undefined ? { dueAt: prior.freshness.dueAt } : {}),
+        observedGeneration: hostGeneration,
+        verifiedAt: now,
+      },
+      rev: prior.rev + 1,
+      amendedAt: now,
+    }
+    return this.commitContent('complete-refresh', prior, next, ctx)
+  }
+
+  /**
+   * Record that a refresh could not produce a verified result.
+   *
+   * The Surface goes to `failed` and KEEPS its stale reason: the trigger that made
+   * it stale is still true, and clearing it would leave a failed Surface with no
+   * account of what it was trying to catch up to. `overdue` is likewise untouched —
+   * only a successful verification may clear it (R18).
+   */
+  async failRefresh(
+    id: string, input: { jobId: string; message: string }, ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    const guard = this.guardLive(prior, 'failing its refresh')
+    if (guard) return guard
+    const now = ctx.at ?? Date.now()
+    const next: Surface = {
+      ...prior,
+      freshness: {
+        ...omitJob(prior.freshness),
+        phase: 'failed',
+        failure: { message: input.message.slice(0, 400), at: now },
+      },
+      rev: prior.rev + 1,
+      amendedAt: now,
+    }
+    if (this.docStore.checkSurfaceUpsert(next) === 'no-change') return this.unchanged('fail-refresh', prior)
+    return this.commitContent('fail-refresh', prior, next, ctx)
+  }
+
+  /**
+   * Set the verification deadline and the derived `overdue` flag.
+   *
+   * Separate from the phase transitions because it is ORTHOGONAL to them (R18): a
+   * queued or refreshing Surface stays overdue until a verification actually
+   * succeeds, so a retry loop cannot make it look attended to. Writes nothing when
+   * neither value moved — this runs on every sweep, for every Surface.
+   */
+  async setSchedule(
+    id: string, input: { dueAt?: number; overdue: boolean }, ctx: SurfaceCallContext,
+  ): Promise<SurfaceResult<SurfaceMutation>> {
+    const prior = this.docStore.getSurface(id)
+    if (!prior) return notFound(id)
+    const guard = this.guardLive(prior, 'setting its refresh schedule')
+    if (guard) return guard
+    if (prior.freshness.dueAt === input.dueAt && prior.freshness.overdue === input.overdue) {
+      return this.unchanged('set-refresh-schedule', prior)
+    }
+    const freshness = { ...prior.freshness, overdue: input.overdue }
+    if (input.dueAt === undefined) delete freshness.dueAt
+    else freshness.dueAt = input.dueAt
+    const next: Surface = {
+      ...prior,
+      freshness,
+      rev: prior.rev + 1,
+      amendedAt: ctx.at ?? Date.now(),
+    }
+    return this.commitContent('set-refresh-schedule', prior, next, ctx)
   }
 
   // --- Topology ---

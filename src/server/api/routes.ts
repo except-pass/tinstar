@@ -71,7 +71,7 @@ import { OBJECTIVE_MAX, OBJECTIVE_POINT_ID } from '../../domain/types'
 import type { PointAuthor, SurfacePrincipalRef } from '../../domain/types'
 import type { A2uiContent, Point, PointAnchor } from '../../domain/types'
 import { normalizeRunName } from '../../domain/runName'
-import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig } from '../sessions/config'
+import { saveActiveSpaceId, deepMerge, loadConfigMerged, loadConfig, interactivePortWindow } from '../sessions/config'
 import { emptyGraph, addMember, addSnap, slotsForNode, nodesInSlot, migrateSnapEdges, type ConstellationSlot, type ConstellationGraph } from '../../domain/constellationGraph'
 import { isPinSet, addReply, mergePreservingReplies, type Reply } from '../../domain/pinSet'
 import { readBody } from './readBody'
@@ -650,7 +650,7 @@ async function createSessionInternal(
   // global secrets map for THIS launch only (spawn-time, never persisted). Inert
   // when unset — the global secrets map is returned unchanged (byte-identical env).
   const sec = applyTokenOverride(secrets(), tokenOverride)
-  const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+  const port = await tmuxBackend.findPort(interactivePortWindow(cfg))
   if (prompt) enriched.initialPrompt = prompt
 
   const result = await tmuxBackend.createTmuxSession(cfg, { session: enriched, secrets: sec, port, template: resolvedTemplate, agent: agent ?? null, appendSystemPrompt: appendSystemPrompt ?? null })
@@ -4325,7 +4325,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
           try {
             const sec = applyTokenOverride(secrets(), tokenOverride)
 
-            const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
+            const port = session.port ?? await tmuxBackend.findPort(interactivePortWindow(cfg))
             const resumeTemplate = session.cliTemplate
               ? cfg.cliTemplates.find(t => t.name === session.cliTemplate) ?? null
               : null
@@ -4603,7 +4603,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
                 setConversationId(sessDir, name, cid)
                 const session = getSession(sessDir, name)
                 if (!session) throw new Error(`revived session '${name}' vanished before resume`)
-                const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+                const port = await tmuxBackend.findPort(interactivePortWindow(cfg))
                 const startResult = await tmuxBackend.startTmuxSession(cfg, {
                   session, secrets: secrets(), port, template: null,
                   appendSystemPrompt: session.appendSystemPrompt, agent: session.agent,
@@ -5007,7 +5007,7 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
         : null
 
       try {
-        const port = await tmuxBackend.findPort(cfg.ports.hostStart)
+        const port = await tmuxBackend.findPort(interactivePortWindow(cfg))
         if (fullPrompt) enriched.initialPrompt = fullPrompt
 
         // Build hand system prompt pointing at the effective parent-child

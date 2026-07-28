@@ -3,7 +3,7 @@ import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import type { Session, SessionNats } from '../session'
-import type { TinstarConfig, CliTemplate } from '../config'
+import { portWindowsOverlap, type TinstarConfig, type CliTemplate, type PortWindow } from '../config'
 import { isCursorAgentTemplate, ensureCursorWorkspaceTrust } from '../cursor-trust'
 import { serializeByKey } from './serializeByKey'
 import { guestEnv, tmuxEnvRemovals, parseTmuxEnvNames, describeGuestEnvScoping } from '../guestEnv'
@@ -174,14 +174,51 @@ async function tryPort(port: number): Promise<boolean> {
   })
 }
 
-export async function findPort(start: number = 8681): Promise<number> {
-  for (let port = start; port < start + 100; port++) {
+/** The window interactive sessions draw from, registered once at boot. `findPort`
+ *  refuses any OTHER window that overlaps it — see {@link findPort}. Null until
+ *  registered, which is the case in unit tests that only exercise one window. */
+let interactiveWindow: PortWindow | null = null
+
+/** Declare which window belongs to user-initiated sessions. Called from server
+ *  boot with the resolved config; pass `null` to clear (tests). */
+export function setInteractivePortWindow(window: PortWindow | null): void {
+  interactiveWindow = window
+}
+
+export function interactivePortWindow(): PortWindow | null {
+  return interactiveWindow
+}
+
+/**
+ * Claim a free port from `window`.
+ *
+ * THE OVERLAP REFUSAL is the half of U6's port safety that code enforces rather
+ * than documents: any window whose label differs from the registered interactive
+ * one may not overlap it. A background refresh fleet therefore cannot reach a port
+ * an interactive session could have used, whatever the trigger volume — and a
+ * config edit that widened the refresh window into the interactive one fails loudly
+ * at the first launch instead of starving user sessions much later.
+ */
+export async function findPort(window: PortWindow): Promise<number> {
+  if (!Number.isInteger(window.start) || !Number.isInteger(window.count) || window.count < 1) {
+    throw new Error(`Invalid port window "${window.label}": start=${window.start} count=${window.count}`)
+  }
+  const last = window.start + window.count - 1
+  if (interactiveWindow && window.label !== interactiveWindow.label
+    && portWindowsOverlap(window, interactiveWindow)) {
+    const iLast = interactiveWindow.start + interactiveWindow.count - 1
+    throw new Error(
+      `Port window "${window.label}" (${window.start}-${last}) overlaps the interactive window ` +
+      `"${interactiveWindow.label}" (${interactiveWindow.start}-${iLast}); the two must be disjoint`,
+    )
+  }
+  for (let port = window.start; port <= last; port++) {
     if (await tryPort(port)) {
       claimedPorts.add(port)
       return port
     }
   }
-  throw new Error(`No available port found in range ${start}-${start + 99}`)
+  throw new Error(`No available port found in window "${window.label}" (${window.start}-${last})`)
 }
 
 export function releasePort(port: number): void {
