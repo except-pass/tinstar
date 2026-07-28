@@ -16,9 +16,9 @@ import {
   SurfaceRefreshCoordinator,
   type RefreshCoordinatorConfig,
   type RefreshCoordinatorDeps,
-  type StagedRefreshResult,
   type WorkerLaunch,
 } from '../surface-refresh-coordinator'
+import { parseStagedResult } from '../refresh-wiring'
 import type { Surface, SurfaceRefreshDeclaration } from '../../../domain/types'
 import type { SurfaceTriggerEvent } from '../surface-trigger-matcher'
 
@@ -43,7 +43,13 @@ interface Harness {
   clock: { now: number }
   cfg: RefreshCoordinatorConfig
   live: Set<string>
-  staged: Map<string, StagedRefreshResult>
+  /** Staging path → the RAW BYTES a worker wrote. Deliberately not a
+   *  `StagedRefreshResult`: every result a test stages must be a thing the real
+   *  worker contract can actually produce, and it reaches the barrier through the
+   *  real `parseStagedResult`. Hand-writing the parsed shape is how the barrier's
+   *  happy-path test came to stage a `recipe` no worker can emit, which is what hid
+   *  a refresh deleting the recipe from every Surface it touched. */
+  staged: Map<string, string>
   hidden: Set<string>
   launches: string[]
   retired: string[]
@@ -75,7 +81,7 @@ function harness(over: Partial<RefreshCoordinatorConfig> = {}): Harness {
   const h: Partial<Harness> = {
     docStore, svc, jobs, clock, cfg,
     live: new Set<string>(),
-    staged: new Map<string, StagedRefreshResult>(),
+    staged: new Map<string, string>(),
     hidden: new Set<string>(),
     launches: [],
     retired: [],
@@ -107,7 +113,14 @@ function harness(over: Partial<RefreshCoordinatorConfig> = {}): Harness {
       return outcome
     },
     retireWorker: async name => { h.retired!.push(name); h.live!.delete(name) },
-    readStaged: async path => h.staged!.get(path) ?? null,
+    // THROUGH THE REAL PARSER. `parseStagedResult` is the only thing that turns
+    // worker bytes into a `StagedRefreshResult` in production, so it is the only
+    // thing allowed to do it here: a test that hands the barrier a shape the parser
+    // cannot emit is testing a contract nothing upstream can satisfy.
+    readStaged: async path => {
+      const raw = h.staged!.get(path)
+      return raw === undefined ? null : parseStagedResult(raw)
+    },
     clearStaged: async path => { h.staged!.delete(path) },
     observeSources: s => h.observe!(s),
     buildPrompt: ({ surface, stagingPath }) =>
@@ -142,6 +155,18 @@ function harness(over: Partial<RefreshCoordinatorConfig> = {}): Harness {
   }
   h.jobFor = id => jobs.list().find(j => j.surfaceId === id)
   return h as Harness
+}
+
+/** The bytes a worker writes to its staging path. Only the three shapes
+ *  `refreshBriefText` actually asks for — `{headline,content?,note?}`,
+ *  `{note}`, `{error}` — because that is the whole contract a worker has. */
+function workerJson(result: {
+  headline?: string
+  content?: unknown
+  note?: string
+  error?: string
+}): string {
+  return JSON.stringify(result)
 }
 
 function gitEvent(over: Partial<SurfaceTriggerEvent> = {}): SurfaceTriggerEvent {
@@ -390,7 +415,7 @@ describe('the observation barrier', () => {
   it('commits a result computed against the current generation and clears the reason', async () => {
     const h = await dispatched()
     const job = h.jobFor('sf-1')!
-    h.staged.set(job.stagingPath, { content: { headline: 'Coverage 92%', recipe: 'Re-run coverage.' } })
+    h.staged.set(job.stagingPath, workerJson({ headline: 'Coverage 92%' }))
     h.clock.now = 30_000
     const report = await h.coord.sweep()
     expect(report.completed).toEqual([job.id])
@@ -401,9 +426,38 @@ describe('the observation barrier', () => {
     expect(s.freshness.staleReason).toBeUndefined()
     expect(s.freshness.jobId).toBeUndefined()
     expect(s.content.headline).toBe('Coverage 92%')
+    // AND THE INPUT SURVIVED THE OUTPUT. A worker restates neither the recipe nor
+    // the declaration — `parseStagedResult` cannot even express them — so a barrier
+    // that assigned the staged content wholesale deleted both on the FIRST success
+    // and left the Surface permanently unrefreshable. Asserted here rather than in
+    // a dedicated test because this is the ordinary path that destroyed them.
+    expect(s.content.recipe).toBe('Re-run coverage.')
+    expect(s.content.refreshPolicy).toEqual(AUTOMATIC)
     // The worker session was retired, and its staged artifact consumed.
     expect(h.retired).toEqual([`refresh-${job.id}`])
     expect(h.staged.size).toBe(0)
+  })
+
+  it('a SECOND refresh of the same Surface still has a recipe to run', async () => {
+    // The compounding form of the same defect: the first success is what deletes
+    // the recipe, so nothing before the second dispatch can notice. A Surface that
+    // can only ever be refreshed once looks perfectly healthy for one cycle.
+    const h = await dispatched()
+    const first = h.jobFor('sf-1')!
+    h.staged.set(first.stagingPath, workerJson({ headline: 'Coverage 92%' }))
+    h.clock.now = 30_000
+    await h.coord.sweep()
+    expect(h.get('sf-1').freshness.phase).toBe('current')
+
+    h.clock.now = 40_000
+    const report = await h.coord.note(gitEvent({ evidence: 'sha-2', at: 40_000 }))
+    // Not blocked for want of a recipe, which is what `authorizationProblem` would
+    // have said — and the dispatch prompt still carries one to run.
+    expect(report.queued).toHaveLength(1)
+    const second = await h.coord.sweep()
+    expect(second.blocked).toEqual([])
+    expect(second.dispatched).toHaveLength(1)
+    expect(h.jobs.list().find(j => j.id !== first.id)!.state).toBe('running')
   })
 
   it('a newer event DURING execution supersedes the result and keeps the Surface pending', async () => {
@@ -414,7 +468,7 @@ describe('the observation barrier', () => {
     await h.coord.note(gitEvent({ evidence: 'sha-2', at: 25_000 }))
     expect(h.get('sf-1').freshness.phase).toBe('refreshing')
 
-    h.staged.set(job.stagingPath, { content: { headline: 'Coverage 92%' } })
+    h.staged.set(job.stagingPath, workerJson({ headline: 'Coverage 92%' }))
     h.clock.now = 30_000
     const report = await h.coord.sweep()
     expect(report.superseded).toEqual([job.id])
@@ -443,7 +497,7 @@ describe('the observation barrier', () => {
         kind: 'source-content', key: 'late', detail: 'the source moved', evidence: 'hash-9', at: 29_000,
       }, ctx(29_000))
     }
-    h.staged.set(job.stagingPath, { content: { headline: 'Coverage 92%' } })
+    h.staged.set(job.stagingPath, workerJson({ headline: 'Coverage 92%' }))
     h.clock.now = 30_000
     const report = await h.coord.sweep()
     expect(report.superseded).toEqual([job.id])
@@ -457,7 +511,7 @@ describe('the observation barrier', () => {
     const before = h.get('sf-1').amendedAt
     // The worker looked and found nothing to change. That still has to COMPLETE:
     // "nothing changed" and "still running" look identical to a spinner.
-    h.staged.set(job.stagingPath, { note: 'no change since the last run' })
+    h.staged.set(job.stagingPath, workerJson({ note: 'no change since the last run' }))
     h.clock.now = 30_000
     const report = await h.coord.sweep()
     expect(report.completed).toEqual([job.id])
@@ -471,7 +525,7 @@ describe('the observation barrier', () => {
   it('a worker that reports an error fails the job and retires its session', async () => {
     const h = await dispatched()
     const job = h.jobFor('sf-1')!
-    h.staged.set(job.stagingPath, { error: 'the coverage tool is not installed' })
+    h.staged.set(job.stagingPath, workerJson({ error: 'the coverage tool is not installed' }))
     const report = await h.coord.sweep()
     expect(report.failed[0]?.reason).toMatch(/not installed/)
     expect(h.get('sf-1').freshness.phase).toBe('failed')
@@ -534,7 +588,7 @@ describe('the observation barrier', () => {
     const h = await dispatched()
     const job = h.jobFor('sf-1')!
     await h.svc.setSchedule('sf-1', { dueAt: 1_000, overdue: true }, ctx(20_500))
-    h.staged.set(job.stagingPath, { error: 'boom' })
+    h.staged.set(job.stagingPath, workerJson({ error: 'boom' }))
     await h.coord.sweep()
     const s = h.get('sf-1')
     expect(s.freshness.overdue).toBe(true)
@@ -708,7 +762,7 @@ describe('deadlines', () => {
     expect(h.get('sf-1').freshness.overdue).toBe(true)
 
     const job = h.jobFor('sf-1')!
-    h.staged.set(job.stagingPath, { content: { headline: 'Coverage 92%' } })
+    h.staged.set(job.stagingPath, workerJson({ headline: 'Coverage 92%' }))
     h.clock.now = 80_000
     await h.coord.sweep()
     expect(h.get('sf-1').freshness.overdue).toBe(false)
