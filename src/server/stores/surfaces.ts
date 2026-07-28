@@ -694,8 +694,13 @@ export class SurfaceStore {
   // Every mutation here is TWO halves: a `plan*` that validates against live state
   // and computes the resulting records without touching anything, and
   // {@link applyPlan}, which installs those records and emits one batch. The eager
-  // wrappers (`createSurface`, `reparent`, `group`) run both back to back and are
-  // what the single-writer boot and migration paths call. The mutation service
+  // wrappers (`createSurface`, `reparent`, `group`) run both back to back. They
+  // have NO production callers — boot only calls `load()` and migration builds
+  // records directly, committing them through the sidecar — so today they exist
+  // for tests and for a future single-writer path. Said plainly because the
+  // previous wording claimed boot and migration call them, which review found to
+  // be false, and a confident wrong comment stops the next reader checking. The
+  // mutation service
   // puts a durable commit BETWEEN the halves, which is the only way to satisfy
   // KTD7's "durably commits the candidate snapshot before replacing in-memory
   // state or acknowledging" — with one fused step, a failed write would already

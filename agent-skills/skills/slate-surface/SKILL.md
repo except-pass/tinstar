@@ -261,6 +261,15 @@ go through. Use it when the file path cannot express what you want:
   it, and whether the host thinks it is still current;
 - you are not in a worktree with a `.tinstar/slate/` directory at all.
 
+**Where a canonical Surface actually shows up, today.** Be honest with yourself
+about this before you reach for `create`: a Surface created through the API is
+real, persisted, and survives restart — but it is **not yet rendered anywhere the
+user can see**. The run card's Slate still projects from the file path, and the
+Canvas cannot draw Surfaces yet. So a canonical `create` today is a write to a
+store with no reader: no error, no card, nothing on screen. Until that lands, if
+you want the user to SEE something, write a file. Use the API for organising,
+lifecycle, and reading the tree — the things files cannot express.
+
 There is **no approval step**. You create, group, reparent and delete directly. What
 makes that safe is that **delete is a move, not an erase**: the subtree goes into a
 per-space recovery store and `restore` brings it back with its identity, thread, and
