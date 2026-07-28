@@ -1,6 +1,18 @@
-// The Slate watcher — reads `<workspace.path>/.tinstar/slate/*.json` per live run,
-// validates through the SAME `parseA2uiContent` funnel notices use, and projects the
-// result onto the run's store points via `docStore.applyRunSlateProjection`.
+// The Slate watcher — reads `<workspace.path>/.tinstar/slate/*.json` per watched
+// run, validates through the SAME `parseA2uiContent` funnel notices use, and hands
+// the whole directory to the canonical source reconciler as one EPOCH (plan U2).
+//
+// It used to project onto legacy Slate points via `docStore.applyRunSlateProjection`.
+// It no longer does, and that is U2's central change: canonical Surfaces are now the
+// write path, `Run.slate` is derived from them, and a second legacy copy of the same
+// file content would be a second writable copy of one canonical Surface — exactly
+// what R28 forbids. The legacy snapshot stays on disk as migration evidence and is
+// not rewritten from here (KTD5).
+//
+// ONE EPOCH, NOT ONE EVENT. `fs.watch` gives no ordering guarantee between the
+// create and the remove halves of a rename, so a per-event reconciler retracts on
+// the remove-first ordering. Debouncing to a whole-directory read makes both
+// orderings the same epoch — see `source-reconciler.ts` for what that buys.
 //
 // Structure mirrors `status-watcher.ts` (start/stop, a per-tick loop over live runs,
 // error isolation via try/catch + `log.warn`, never throw out of the loop), but adds
@@ -23,8 +35,9 @@
 //   - An ENTRY-level failure (a surface whose `content` fails `parseA2uiContent`, or a
 //     missing headline) DROPS that entry but keeps the valid ones.
 //   - Oversized files are skipped by `stat().size` BEFORE reading (never slurped).
-//   - Clear (R11): a dir with no files / an explicit empty array projects `[]` (retract).
-//     A torn file is NOT a clear — it retains.
+//   - An OMISSION is no longer a retract. A dir with no files marks every binding
+//     source-missing and possibly stale; the canonical records and their threads
+//     survive. A torn file is not even that — it retains.
 //
 // Path safety: only regular files directly inside the slate dir are read; `lstat`
 // (not `stat`) means a symlink resolves to `isFile() === false` and is ignored, so a
@@ -38,21 +51,39 @@ import { readdir, lstat, readFile } from 'node:fs/promises'
 import { basename, join, sep } from 'node:path'
 import { log } from '../logger'
 import { parseA2uiContent } from '../../a2ui/schema'
-import type { PointInput } from '../stores/slate'
+import { synthesizeId, type PointInput } from '../stores/slate'
+import { slateEntryWatermark, type SlateSourceEntry } from '../surfaces/slate-source'
+import type { SlateSourceEpoch } from '../surfaces/source-reconciler'
 import { OBJECTIVE_POINT_ID, type PointAnchor, type PointAuthor, type A2uiContent } from '../../domain/types'
 
-/** A live run and the worktree the watcher resolves its slate dir from. */
+/** A watched run and the worktree the watcher resolves its slate dir from. */
 export interface LiveRun {
   runId: string
   workdir: string
 }
 
+/** The canonical context a run's entries reconcile against. Resolved by the caller
+ *  (only it knows about runs, spaces, and incarnations) so the watcher stays a
+ *  filesystem component. */
+export interface SlateRunContext {
+  spaceId: string
+  /** The run INCARNATION — half the Surface identity basis. */
+  incarnation: string
+  /** The canonical id of the run's compatibility root. */
+  rootSurfaceId: string
+}
+
 /** Minimal store surface the watcher drives — never touches the store directly. */
 export interface SlateDocStore {
-  applyRunSlateProjection(runId: string, inputs: PointInput[], now?: number): void
   /** Server-side staleness backstop (plan R19): mark process-authored surfaces whose
    *  writer went silent as stalled. Optional so a minimal test double needn't provide
-   *  it; the watcher guards the call. */
+   *  it; the watcher guards the call.
+   *
+   *  NOTE what this reaches after U2. It marks LEGACY points, and `Run.slate` is no
+   *  longer derived from those, so the marker no longer reaches the rendered Slate —
+   *  `stalledAt` is one of the three legacy fields the canonical model deliberately
+   *  does not carry. The sweep is retained rather than deleted because retiring the
+   *  legacy store is its own change; it is evidence-only bookkeeping today. */
   markStalledSlatePoints?(now?: number, thresholdMs?: number): void
 }
 
@@ -81,8 +112,23 @@ export interface SlateTimers {
 
 export interface SlateWatcherOpts {
   docStore: SlateDocStore
-  /** List the currently-live runs + worktrees. Runs absent from a tick are torn down. */
+  /** List the currently-live runs + worktrees. */
   listLiveRuns: () => LiveRun[] | Promise<LiveRun[]>
+  /**
+   * Runs that still have a PERSISTED source binding, with the worktree that binding
+   * names. Unioned with the live set, which is what decouples source reconciliation
+   * from live-session membership: a Surface promoted onto the Canvas keeps
+   * reconciling after the session that authored it retires, for as long as the path
+   * is still there. Runs in neither list are torn down.
+   */
+  listBoundRuns?: () => LiveRun[] | Promise<LiveRun[]>
+  /** Resolve a run's canonical reconciliation context. `null` skips the run this
+   *  epoch — a run whose incarnation cannot be derived has no stable Surface
+   *  identity, and guessing one is unrecoverable (see `deriveRunIncarnation`). */
+  runContext: (runId: string) => SlateRunContext | null
+  /** Apply one reconciled epoch. Async; the watcher awaits it so a slow durable
+   *  commit cannot overlap the next epoch for the same run. */
+  applyEpoch: (epoch: SlateSourceEpoch) => Promise<unknown>
   /** Poll-floor cadence in ms (default 3000 — the status-watcher cadence). */
   intervalMs?: number
   /** Debounce window for coalescing fs.watch bursts in ms (default 100). */
@@ -98,6 +144,49 @@ export interface SlateWatcherOpts {
   timers?: SlateTimers
   /** Content validator — the notices funnel by default; injectable for tests. */
   parseContent?: (value: unknown) => A2uiContent | null
+}
+
+/** One directory read: what survived, and which files could not be trusted. */
+interface SlateDirRead {
+  entries: SlateSourceEntry[]
+  unreadable: string[]
+}
+
+/** A directory with nothing in it. Built fresh per call rather than shared: three
+ *  branches return it and the epoch it becomes is handed to a caller. */
+function emptyRead(): SlateDirRead {
+  return { entries: [], unreadable: [] }
+}
+
+/**
+ * One validated file entry as a source observation.
+ *
+ * The local id is the whole point. An entry that names its own `id` keeps it; one
+ * that does not gets the SAME synthesized content hash the legacy projection
+ * assigned it (`synthesizeId`), which is what lets an id-less entry keep the
+ * canonical Surface it already had across the U1→U2 upgrade instead of arriving as
+ * a stranger.
+ *
+ * `anchor` and `group` are read by `toPointInput` and dropped here: the canonical
+ * model has no card-vs-row distinction and expresses grouping as a container
+ * Surface. They still ride the id hash, because changing what an entry hashes to
+ * would re-identify every existing id-less surface exactly once, for nothing.
+ */
+function toSourceEntry(runId: string, file: string, input: PointInput): SlateSourceEntry {
+  const author: PointAuthor = input.author ?? 'agent'
+  const content = {
+    headline: input.headline,
+    ...(input.content ? { body: input.content } : {}),
+    ...(input.refresh ? { recipe: input.refresh } : {}),
+  }
+  return {
+    localId: input.id && input.id.length > 0 ? input.id : synthesizeId(runId, input),
+    file,
+    content,
+    author,
+    ...(input.createdAt != null ? { createdAt: input.createdAt } : {}),
+    watermark: slateEntryWatermark({ ...content, author }),
+  }
 }
 
 const DEFAULT_INTERVAL_MS = 3000
@@ -157,6 +246,10 @@ export class SlateWatcher {
    *  seconds, so the warn is log-once-per-file (same log-on-transition posture as
    *  {@link retained}) — a lingering bad file must not turn the log into a drum. */
   private readonly warnedReservedId = new Set<string>()
+  /** Runs with no resolvable canonical context, for log-once-on-transition. */
+  private readonly contextless = new Set<string>()
+  /** Per-run epoch complaints already logged (duplicate ids, refusals). */
+  private readonly warnedEpoch = new Set<string>()
 
   constructor(opts: SlateWatcherOpts) {
     this.opts = opts
@@ -200,6 +293,8 @@ export class SlateWatcher {
     this.dirty.clear()
     this.workdirs.clear()
     this.retained.clear()
+    this.contextless.clear()
+    this.warnedEpoch.clear()
   }
 
   /** Run one poll tick now — the backstop cadence exposed for tests / manual triggering. */
@@ -224,12 +319,21 @@ export class SlateWatcher {
    */
   private async tick(): Promise<void> {
     try {
-      const runs = await this.opts.listLiveRuns()
-      const live = new Set(runs.map((r) => r.runId))
+      // Live sessions FIRST so their worktree wins on a conflict: a persisted
+      // binding records the path as it was when the Surface was last reconciled,
+      // and the live session knows where the run is now.
+      const runs = [...await this.opts.listLiveRuns()]
+      const seen = new Set(runs.map(r => r.runId))
+      for (const bound of (await this.opts.listBoundRuns?.()) ?? []) {
+        if (seen.has(bound.runId)) continue
+        seen.add(bound.runId)
+        runs.push(bound)
+      }
 
-      // Tear down watches for runs no longer live (no descriptor leak).
+      // Tear down watches for runs that are neither live nor still bound (no
+      // descriptor leak).
       for (const runId of [...this.watches.keys()]) {
-        if (live.has(runId)) continue
+        if (seen.has(runId)) continue
         this.teardownRun(runId)
       }
 
@@ -268,9 +372,9 @@ export class SlateWatcher {
       const workdir = this.workdirs.get(runId)
       if (!workdir) continue // no longer live
       try {
-        await this.projectRun(runId, workdir)
+        await this.reconcileRun(runId, workdir)
       } catch (err) {
-        log.warn('slate-watcher', `${runId}: projection failed: ${(err as Error).message}`)
+        log.warn('slate-watcher', `${runId}: reconciliation failed: ${(err as Error).message}`)
       }
     }
   }
@@ -311,25 +415,76 @@ export class SlateWatcher {
     }
     this.dirty.delete(runId)
     this.retained.delete(runId)
+    this.contextless.delete(runId)
     this.workdirs.delete(runId)
   }
 
   /**
-   * Read + validate a run's slate dir and project. On a valid read (possibly empty →
-   * clear) call the mutator. On a torn read RETAIN (skip the mutator) and log once.
+   * Read + validate a run's slate dir and reconcile it as one epoch.
+   *
+   * Two things short-circuit before the reconciler is called, and both mean RETAIN:
+   * a run whose canonical context cannot be resolved (no derivable incarnation, so
+   * no stable identity to bind to), and a torn read (nothing valid survived and
+   * something tried to). Neither writes anything.
    */
-  private async projectRun(runId: string, workdir: string): Promise<void> {
-    const inputs = await this.readSlateDir(this.slateDir(workdir))
-    if (inputs === null) {
-      // Torn / all-invalid read — retain the last-valid projection (do NOT clear).
+  private async reconcileRun(runId: string, workdir: string): Promise<void> {
+    const context = this.opts.runContext(runId)
+    if (!context) {
+      if (!this.contextless.has(runId)) {
+        this.contextless.add(runId)
+        log.warn('slate-watcher', `${runId}: no canonical context (no derivable incarnation or space) — slate not reconciled`)
+      }
+      return
+    }
+    this.contextless.delete(runId)
+
+    const read = await this.readSlateDir(this.slateDir(workdir), runId)
+    if (read === null) {
+      // Torn / all-invalid read — retain every binding (do NOT mark any missing).
       if (!this.retained.has(runId)) {
         this.retained.add(runId)
-        log.warn('slate-watcher', `${runId}: slate read invalid — retaining last-valid projection`)
+        log.warn('slate-watcher', `${runId}: slate read invalid — retaining last-valid content`)
       }
       return
     }
     this.retained.delete(runId)
-    this.opts.docStore.applyRunSlateProjection(runId, inputs)
+
+    const outcome = await this.opts.applyEpoch({
+      runId,
+      spaceId: context.spaceId,
+      incarnation: context.incarnation,
+      rootSurfaceId: context.rootSurfaceId,
+      worktree: workdir,
+      at: Date.now(),
+      entries: read.entries,
+      unreadable: read.unreadable,
+    }) as { duplicates?: string[]; refusals?: { localId: string; reason: string }[] } | undefined
+    this.reportEpoch(runId, outcome)
+  }
+
+  /** Surface what an epoch refused, log-once-per-(run, id) so a lingering mistake
+   *  does not turn the log into a drum. Every refusal here is otherwise SILENT — a
+   *  surface that simply never appears, with no error and no exit code for its
+   *  author to find. */
+  private reportEpoch(
+    runId: string,
+    outcome: { duplicates?: string[]; refusals?: { localId: string; reason: string }[] } | undefined,
+  ): void {
+    const now = new Set<string>()
+    for (const localId of outcome?.duplicates ?? []) {
+      now.add(`${runId}\u0000dup\u0000${localId}`)
+      if (this.warnedEpoch.has(`${runId}\u0000dup\u0000${localId}`)) continue
+      log.warn('slate-watcher', `${runId}: duplicate entry id ${JSON.stringify(localId)} in this slate — the first occurrence wins and the rest were dropped`)
+    }
+    for (const refusal of outcome?.refusals ?? []) {
+      now.add(`${runId}\u0000ref\u0000${refusal.localId}`)
+      if (this.warnedEpoch.has(`${runId}\u0000ref\u0000${refusal.localId}`)) continue
+      log.warn('slate-watcher', `${runId}: entry ${JSON.stringify(refusal.localId)} was refused (${refusal.reason})`)
+    }
+    for (const key of [...this.warnedEpoch]) {
+      if (key.startsWith(`${runId}\u0000`) && !now.has(key)) this.warnedEpoch.delete(key)
+    }
+    for (const key of now) this.warnedEpoch.add(key)
   }
 
   private slateDir(workdir: string): string {
@@ -337,22 +492,34 @@ export class SlateWatcher {
   }
 
   /**
-   * Read all `*.json` in the slate dir (stable order: filename then array index),
-   * flatten to `PointInput[]`. Returns:
-   *   - `PointInput[]` (possibly empty) for a valid read — empty means CLEAR.
-   *   - `null` for a TORN read (a file-level failure with no usable entries) — RETAIN.
+   * Read all `*.json` in the slate dir (stable order: filename then array index) as
+   * ONE epoch. Returns:
+   *   - `{ entries, unreadable }` for a usable read — an empty `entries` is a
+   *     genuinely empty directory, which marks every binding source-missing;
+   *   - `null` for a TORN read (nothing valid survived and something tried to),
+   *     which retains everything and writes nothing.
    *
-   * A mix of valid + invalid keeps the valid ones. Only when ZERO valid entries survive
-   * do we distinguish clear (a genuinely-empty dir) from retain (something was torn).
+   * `unreadable` is the load-bearing half. Any file-level OR entry-level failure
+   * puts that FILENAME in it, and the reconciler leaves every binding addressed to
+   * one of those files completely alone. That is what makes "mixed valid and invalid
+   * entries update the valid Surfaces without erasing the invalid entry's last-valid
+   * record" true: the invalid entry is absent from `entries`, and only its filename
+   * keeps it from being read as an omission.
+   *
+   * It is deliberately conservative. An entry genuinely deleted from a file that
+   * ALSO holds an invalid entry is not marked missing until the invalid one is
+   * fixed. Retaining a surface too long is recoverable; marking a live one stale is
+   * noise, and the failure the strict version would produce is the one U2 exists to
+   * prevent.
    */
-  private async readSlateDir(slateDir: string): Promise<PointInput[] | null> {
-    if (!this.fs.existsSync(slateDir)) return [] // ENOENT is normal → no slate → clear
+  private async readSlateDir(slateDir: string, runId: string): Promise<SlateDirRead | null> {
+    if (!this.fs.existsSync(slateDir)) return emptyRead() // ENOENT is normal → no slate
 
     let names: string[]
     try {
       names = await this.fs.readdir(slateDir)
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [] // raced deletion → clear
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return emptyRead() // raced deletion
       return null // unexpected read error → torn → retain
     }
 
@@ -360,8 +527,13 @@ export class SlateWatcher {
       .filter((n) => n.endsWith('.json') && basename(n) === n) // no path separators
       .sort()
 
-    const inputs: PointInput[] = []
-    let sawUnusable = false // a file that INTENDED to contribute but couldn't
+    const entries: SlateSourceEntry[] = []
+    const unreadable: string[] = []
+    let sawUnusable = false // something INTENDED to contribute but couldn't
+    const unusable = (name: string) => {
+      sawUnusable = true
+      if (!unreadable.includes(name)) unreadable.push(name)
+    }
     // Files caught claiming the reserved objective id THIS pass — becomes the new
     // warn-once ledger below, so a file that stops offending can warn again if it
     // regresses, and one that keeps offending only ever logs once.
@@ -379,14 +551,14 @@ export class SlateWatcher {
         continue // vanished mid-scan — ignore
       }
       if (!stat.isFile) continue // dir / socket / symlink escape — ignore
-      if (stat.size > this.maxBytes) { sawUnusable = true; continue } // oversized — skip unread
-      if (stat.size === 0) { sawUnusable = true; continue } // zero-byte — torn write
+      if (stat.size > this.maxBytes) { unusable(name); continue } // oversized — skip unread
+      if (stat.size === 0) { unusable(name); continue } // zero-byte — torn write
 
       let raw: string
       try {
         raw = await this.fs.readFile(path)
       } catch {
-        sawUnusable = true // read failed — torn
+        unusable(name) // read failed — torn
         continue
       }
 
@@ -394,18 +566,18 @@ export class SlateWatcher {
       try {
         parsed = JSON.parse(raw)
       } catch {
-        sawUnusable = true // unparseable — torn
+        unusable(name) // unparseable — torn
         continue
       }
 
-      const entries = Array.isArray(parsed)
+      const rawEntries = Array.isArray(parsed)
         ? parsed
         : parsed && typeof parsed === 'object'
           ? [parsed]
           : null
-      if (entries === null) { sawUnusable = true; continue } // not an array/object — torn
+      if (rawEntries === null) { unusable(name); continue } // not an array/object — torn
 
-      for (const rawEntry of entries) {
+      for (const rawEntry of rawEntries) {
         // `toPointInput` drops the reserved objective id too (it is the validator, and
         // the guard belongs there). Detect it here as well, purely so the drop is not
         // SILENT: an author whose surface simply never appears otherwise has nothing to
@@ -421,12 +593,12 @@ export class SlateWatcher {
           // every file-owned point of the run because one entry used a bad id, turning a
           // typo into data loss. Retaining is the recoverable failure: fix the id and the
           // next poll re-projects. The warn above is what makes it findable.
-          sawUnusable = true
+          unusable(name)
           continue
         }
-        const entry = toPointInput(rawEntry, this.parseContent)
-        if (entry === null) { sawUnusable = true; continue } // schema-invalid entry — drop it
-        inputs.push(entry)
+        const input = toPointInput(rawEntry, this.parseContent)
+        if (input === null) { unusable(name); continue } // schema-invalid entry — drop it
+        entries.push(toSourceEntry(runId, name, input))
       }
     }
 
@@ -438,9 +610,10 @@ export class SlateWatcher {
     }
     for (const p of reservedNow) this.warnedReservedId.add(p)
 
-    if (inputs.length > 0) return inputs // keep the valid ones (mixed valid + invalid)
-    // Zero valid entries: retain if something was torn/dropped, else it's a genuine clear.
-    return sawUnusable ? null : []
+    if (entries.length > 0) return { entries, unreadable } // mixed valid + invalid
+    // Zero valid entries: retain if something was torn/dropped, else the directory is
+    // genuinely empty and every binding it used to hold is missing.
+    return sawUnusable ? null : { entries, unreadable }
   }
 }
 

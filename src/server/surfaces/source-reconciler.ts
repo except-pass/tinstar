@@ -22,7 +22,7 @@
 //
 // Server-only (rides the server esbuild bundle) and React-free.
 
-import type { SurfaceCompatAlias, SurfaceHome } from '../../domain/types'
+import type { Surface, SurfaceCompatAlias, SurfaceHome } from '../../domain/types'
 import { deriveLegacySurfaceId } from '../stores/surfaces'
 import { parseSlateFileLocator, slateFileLocator, SLATE_FILE_ADAPTER, type SlateSourceEntry } from './slate-source'
 import type { SurfaceCallContext, SurfaceService } from './surface-service'
@@ -65,6 +65,34 @@ export interface SlateSourceEpochOutcome {
   duplicates: string[]
   /** Anything the mutation service refused, with its reason. */
   refusals: { localId: string; reason: string }[]
+}
+
+/**
+ * Runs that still hold a persisted `slate-file` binding, with the worktree that
+ * binding names — the watcher's second run source (plan U2: "Decouple source
+ * watches from live-session membership when a promoted Surface still has a
+ * persisted worktree binding").
+ *
+ * Read off the RECORDS rather than off the session config, deliberately. The
+ * question is not "which runs are alive" — that is the other list — it is "which
+ * paths does the canonical store still expect to reconcile from", and only the
+ * records know that. `provenance.runId` is the alias-free answer: a Surface promoted
+ * onto the Canvas keeps its provenance whatever happens to its home.
+ *
+ * Runs a Surface still names but whose worktree is gone are still returned; the
+ * watcher's own `existsSync` check is what decides there is nothing to watch, and
+ * duplicating that judgement here would put two answers in the codebase.
+ */
+export function boundSlateRuns(surfaces: readonly Surface[]): { runId: string; workdir: string }[] {
+  const byRun = new Map<string, string>()
+  for (const s of surfaces) {
+    if (s.source?.adapter !== SLATE_FILE_ADAPTER) continue
+    const { worktree } = s.source
+    const runId = s.provenance?.runId
+    if (!worktree || !runId || byRun.has(runId)) continue
+    byRun.set(runId, worktree)
+  }
+  return [...byRun].map(([runId, workdir]) => ({ runId, workdir }))
 }
 
 /**

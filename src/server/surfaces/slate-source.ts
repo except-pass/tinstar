@@ -147,6 +147,14 @@ function authoredFieldsOf(raw: unknown): { headline: string; body?: A2uiContent;
   }
 }
 
+/** The adapter registry every `SurfaceService` in the process is built with. One
+ *  factory so the HTTP service and the watcher's service cannot end up with
+ *  different adapters registered — which would make a source-bound content edit
+ *  succeed or be refused depending on which entry point it arrived through. */
+export function slateSourceAdapters(): Record<string, SurfaceSourceAdapter> {
+  return { [SLATE_FILE_ADAPTER]: new SlateFileAdapter() }
+}
+
 /**
  * Carry an API content edit back into the source file that owns it (KTD4).
  *
