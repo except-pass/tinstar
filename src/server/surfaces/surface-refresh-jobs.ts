@@ -46,6 +46,12 @@ export interface SurfaceRefreshDispatch {
   kind: 'owner' | 'worker' | 'blocked'
   /** Session name for `owner`/`worker`; absent for `blocked`. */
   target?: string
+  /** The INCARNATION of `target` at dispatch — a `worker` launch's conversation id
+   *  (or creation stamp). Persisted so restart recovery can require that the session
+   *  it adopts is the one this job launched: a session name is reusable, and adopting
+   *  a stranger that shares it would attribute someone else's output to this job.
+   *  Absent on jobs written before this was recorded, and on owner dispatches. */
+  incarnation?: string
   reason?: string
   at: number
 }

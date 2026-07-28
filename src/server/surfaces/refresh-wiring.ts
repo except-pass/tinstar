@@ -13,7 +13,8 @@
 import { execFile } from 'node:child_process'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { promisify } from 'node:util'
-import type { Surface } from '../../domain/types'
+import type { SessionStatus, Surface } from '../../domain/types'
+import type { Session } from '../sessions/session'
 import { parseA2uiContent } from '../../a2ui/schema'
 import { shortId } from '../utils/shortId'
 import { log } from '../logger'
@@ -85,6 +86,73 @@ export function parseStagedResult(raw: string): StagedRefreshResult {
   return { content: { headline, body }, ...(note ? { note } : {}) }
 }
 
+/** Session states that mean a PROCESS is actually behind the record. `stopped` is
+ *  the one that is not: `reconcileSessionStates` sets it when tmux says the session
+ *  is gone and KEEPS the file, and only `deleteSession` ever removes one. */
+export const LIVE_SESSION_STATES: readonly SessionStatus[] = [
+  'creating', 'running', 'idle', 'needs_attention',
+]
+
+/**
+ * Is this session record backed by something still alive?
+ *
+ * This used to be `!!getSession(...)` — a `readFileSync` of a JSON record that
+ * OUTLIVES its process. Two things broke as a result. Harvest's vanished-worker
+ * branch never fired, so instead of failing promptly a job spun to the ten-minute
+ * timeout with its Surface badged `refreshing` and nothing behind it — precisely
+ * what that branch's own comment says it prevents. And `recover()` adopted a worker
+ * that died with the host and renewed its lease, contradicting the documented
+ * contract that a job whose worker did not survive the restart is failed.
+ *
+ * `creating` counts as live: a session mid-launch has no tmux process yet and
+ * failing its job for that would be a race, not a diagnosis.
+ */
+export function isLiveSessionRecord(session: Pick<Session, 'state'> | null | undefined): boolean {
+  return !!session && LIVE_SESSION_STATES.includes(session.state)
+}
+
+/**
+ * Take a finished refresh worker down and give back everything it held.
+ *
+ * RETIRE, NOT DELETE: the worker's transcript is evidence about a refresh that
+ * ran, and the normal Graveyard path is what keeps it reachable.
+ *
+ * THE PORT IS THE PART THAT WAS MISSING, and it is why this is a named function
+ * with seams rather than a closure. `tmuxBackend.claimedPorts` is an in-process Set
+ * that ONLY `releasePort` shrinks — stopping the ttyd and deleting the session do
+ * not touch it. So every SUCCESSFUL refresh permanently consumed one port from the
+ * refresh window, and after as many refreshes as the window is wide, every
+ * automatic refresh failed with "No available port found" until the backend was
+ * restarted. The only `releasePort` anywhere on this path was launch-failure
+ * compensation: a refresh that BROKE gave its port back and one that WORKED did
+ * not.
+ *
+ * ORDER IS LOAD-BEARING at one point only: the session record has to be read for
+ * its port BEFORE `deleteSession` removes it. Everything else is best-effort, and
+ * a step that throws must not strand the ones after it — half a retirement is how
+ * the leak looked in the first place.
+ */
+export async function retireRefreshWorker(input: {
+  name: string
+  getSession: () => { port: number | null } | null
+  stopTtyd: () => void
+  deleteTmux: (session: { port: number | null }) => Promise<void>
+  deleteRun: () => void
+  deleteSession: () => void
+  releasePort: (port: number) => void
+}): Promise<void> {
+  try { input.stopTtyd() } catch { /* already gone */ }
+  const session = input.getSession()
+  if (session) {
+    try { await input.deleteTmux(session) } catch { /* already gone */ }
+  }
+  try { input.deleteRun() } catch { /* already gone */ }
+  try { input.deleteSession() } catch { /* already gone */ }
+  if (session?.port) {
+    try { input.releasePort(session.port) } catch { /* best effort */ }
+  }
+}
+
 export interface RefreshWiringInput {
   cfg: TinstarConfig
   docStore: DocumentStore
@@ -131,7 +199,17 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
     },
 
     isLiveSession: name => {
-      try { return !!getSession(cfg.dirs.sessions, name) } catch { return false }
+      try { return isLiveSessionRecord(getSession(cfg.dirs.sessions, name)) } catch { return false }
+    },
+
+    sessionIncarnation: name => {
+      try {
+        const session = getSession(cfg.dirs.sessions, name)
+        // Exactly what `launchRefreshWorker` stamped, or the two disagree and every
+        // adoption fails. A session with no conversation id falls back to its
+        // creation stamp there, so it falls back to the same thing here.
+        return session ? session.conversation.id ?? session.created : undefined
+      } catch { return undefined }
     },
 
     launchWorker: async ({ job, surface }) => {
@@ -166,20 +244,27 @@ export function buildRefreshCoordinator(input: RefreshWiringInput): SurfaceRefre
         upsertRun: (id, run) => docStore.upsertRun(id, run as unknown as Parameters<DocumentStore['upsertRun']>[1]),
         deleteRun: id => docStore.deleteRun(id),
       })
-      return result.ok ? { ok: true, sessionName: result.incarnation.name } : { ok: false, message: result.message }
+      return result.ok
+        ? {
+          ok: true,
+          sessionName: result.incarnation.name,
+          // CARRIED, not discarded. The launcher has built this all along and this
+          // line threw it away, which left `recover()`'s documented "only if the
+          // incarnation it recorded is still live" implemented nowhere.
+          incarnation: result.incarnation.incarnation,
+        }
+        : { ok: false, message: result.message }
     },
 
-    retireWorker: async name => {
-      // Retire, not delete: the worker's transcript is evidence about a refresh
-      // that ran, and the normal Graveyard path is what keeps it reachable.
-      try { tmuxBackend.stopManagedTtyd(name) } catch { /* already gone */ }
-      const session = getSession(cfg.dirs.sessions, name)
-      if (session) {
-        try { await tmuxBackend.deleteTmuxSession(cfg, session) } catch { /* already gone */ }
-      }
-      docStore.deleteRun(name)
-      deleteSession(cfg.dirs.sessions, name)
-    },
+    retireWorker: name => retireRefreshWorker({
+      name,
+      getSession: () => getSession(cfg.dirs.sessions, name),
+      stopTtyd: () => tmuxBackend.stopManagedTtyd(name),
+      deleteTmux: session => tmuxBackend.deleteTmuxSession(cfg, session as Session),
+      deleteRun: () => docStore.deleteRun(name),
+      deleteSession: () => { deleteSession(cfg.dirs.sessions, name) },
+      releasePort: port => tmuxBackend.releasePort(port),
+    }),
 
     readStaged: async path => {
       let raw: string

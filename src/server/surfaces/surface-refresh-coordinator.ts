@@ -57,7 +57,15 @@ export interface StagedRefreshResult {
 
 /** What a launch attempt produced. */
 export type WorkerLaunch =
-  | { ok: true; sessionName: string }
+  | {
+    ok: true
+    sessionName: string
+    /** The launched session's INCARNATION — its conversation id, or its creation
+     *  stamp when it has none. Persisted onto the dispatch so restart recovery can
+     *  require that the session it adopts is the same incarnation this job
+     *  launched, not a later one that reused the name. */
+    incarnation?: string
+  }
   | { ok: false; message: string }
 
 export interface RefreshCoordinatorConfig {
@@ -83,8 +91,13 @@ export interface RefreshCoordinatorDeps {
   /** Hand serialized work to a live owner session. Resolves false when it did not
    *  land, which is not an error — the owner may simply be asleep. */
   deliverToOwner: (input: { sessionName: string; prompt: string; job: SurfaceRefreshJob }) => Promise<boolean>
-  /** Is this managed session alive right now? */
+  /** Is this managed session alive right now? Liveness must mean a PROCESS, not a
+   *  record: a session file outlives the tmux process it describes. */
   isLiveSession: (name: string) => boolean
+  /** The incarnation this session is currently on, or undefined when there is no
+   *  session. Compared against the one a dispatch recorded, so restart recovery
+   *  cannot adopt a different session that happens to share the name. */
+  sessionIncarnation: (name: string) => string | undefined
   /** Launch a background managed session that runs the recipe and writes
    *  `job.stagingPath`. Only called when `autonomousWorkers` is on. */
   launchWorker: (input: { job: SurfaceRefreshJob; surface: Surface; prompt: string }) => Promise<WorkerLaunch>
@@ -655,7 +668,12 @@ export class SurfaceRefreshCoordinator {
         continue
       }
       this.deps.jobs.update(job.id, {
-        dispatch: { kind: 'worker', target: launch.sessionName, at: now },
+        dispatch: {
+          kind: 'worker',
+          target: launch.sessionName,
+          ...(launch.incarnation ? { incarnation: launch.incarnation } : {}),
+          at: now,
+        },
       }, now)
       running++
       report.dispatched.push(job.id)
@@ -719,10 +737,19 @@ export class SurfaceRefreshCoordinator {
    *
    * WHAT THIS MAY NOT DO is the point: it may not declare anything current. A
    * `running` job whose worker survived the restart is adopted — but ONLY if the
-   * incarnation it recorded is still live, because a session name is reusable and
-   * adopting a stranger that happens to share it would attribute someone else's
-   * output to this job. Everything else is failed with a reason, which leaves its
-   * Surface visibly failed rather than quietly stale.
+   * session is genuinely LIVE and is still on the incarnation this job recorded,
+   * because a session name is reusable and adopting a stranger that happens to
+   * share it would attribute someone else's output to this job. Everything else is
+   * failed with a reason, which leaves its Surface visibly failed rather than
+   * quietly stale.
+   *
+   * BOTH HALVES OF THAT SENTENCE USED TO BE FALSE, which is why they are spelled
+   * out. `isLiveSession` was a `readFileSync` of a session record that outlives its
+   * tmux process, so a worker that died with the host was adopted and had its lease
+   * renewed. And no incarnation was persisted at all — the launcher built one and
+   * the wiring discarded it — so the match was on the NAME the docstring says is
+   * not enough. A job that recorded no incarnation (written before this) falls back
+   * to name plus liveness rather than being failed for the omission.
    *
    * `queued` jobs need no repair at all: they never launched anything, so the next
    * sweep dispatches them exactly as it would have.
@@ -742,8 +769,14 @@ export class SurfaceRefreshCoordinator {
       }
       if (job.state === 'queued') continue
 
-      const target = job.dispatch?.kind === 'worker' ? job.dispatch.target : undefined
-      if (target && this.deps.isLiveSession(target)) {
+      const dispatch = job.dispatch?.kind === 'worker' ? job.dispatch : undefined
+      const target = dispatch?.target
+      // A recorded incarnation must still match. Absent (an older job record) falls
+      // back to liveness alone rather than failing work that is genuinely still
+      // running for want of a field it never had.
+      const sameIncarnation = !dispatch?.incarnation
+        || dispatch.incarnation === this.deps.sessionIncarnation(dispatch.target ?? '')
+      if (target && this.deps.isLiveSession(target) && sameIncarnation) {
         // A live matching incarnation. Renew the lease and leave it to the sweep,
         // which will harvest it through the same barrier as any other worker.
         this.deps.jobs.update(job.id, {
@@ -754,7 +787,9 @@ export class SurfaceRefreshCoordinator {
       await this.failJob(
         job,
         target
-          ? `its refresh worker (${target}) did not survive the restart`
+          ? sameIncarnation
+            ? `its refresh worker (${target}) did not survive the restart`
+            : `session ${target} is live but is a different incarnation than this refresh launched`
           : 'the host restarted while this refresh was in flight',
         report,
       )

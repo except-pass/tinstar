@@ -43,6 +43,9 @@ interface Harness {
   clock: { now: number }
   cfg: RefreshCoordinatorConfig
   live: Set<string>
+  /** Session name → its current incarnation, as the real wiring reads it off the
+   *  session record. Only populated for sessions a launch actually minted. */
+  incarnations: Map<string, string>
   /** Staging path → the RAW BYTES a worker wrote. Deliberately not a
    *  `StagedRefreshResult`: every result a test stages must be a thing the real
    *  worker contract can actually produce, and it reaches the barrier through the
@@ -81,12 +84,13 @@ function harness(over: Partial<RefreshCoordinatorConfig> = {}): Harness {
   const h: Partial<Harness> = {
     docStore, svc, jobs, clock, cfg,
     live: new Set<string>(),
+    incarnations: new Map<string, string>(),
     staged: new Map<string, string>(),
     hidden: new Set<string>(),
     launches: [],
     retired: [],
     delivered: [],
-    launchOutcome: (job) => ({ ok: true, sessionName: `refresh-${job.id}` }),
+    launchOutcome: (job) => ({ ok: true, sessionName: `refresh-${job.id}`, incarnation: `conv-${job.id}` }),
     observe: async () => { /* the default barrier finds nothing new */ },
   }
   let n = 0
@@ -104,11 +108,13 @@ function harness(over: Partial<RefreshCoordinatorConfig> = {}): Harness {
       return h.live!.has(sessionName)
     },
     isLiveSession: name => h.live!.has(name),
+    sessionIncarnation: name => h.incarnations!.get(name),
     launchWorker: async ({ job }) => {
       const outcome = h.launchOutcome!(job)
       if (outcome.ok) {
         h.launches!.push(outcome.sessionName)
         h.live!.add(outcome.sessionName)
+        if (outcome.incarnation) h.incarnations!.set(outcome.sessionName, outcome.incarnation)
       }
       return outcome
     },
@@ -1038,6 +1044,43 @@ describe('restart', () => {
     expect(report.failed).toEqual([])
     expect(h.jobs.get(job.id)!.state).toBe('running')
     expect(h.get('sf-1').freshness.phase).toBe('refreshing')
+  })
+
+  it('refuses to adopt a session that is live but on a DIFFERENT incarnation', async () => {
+    // The hazard the docstring has always claimed to close, and which nothing
+    // implemented: a session name is reusable, so a live session sharing the name is
+    // not evidence that THIS job's worker survived. The launcher built an
+    // incarnation all along; the wiring discarded it, so the match was on the name.
+    const h = harness()
+    await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+    await h.coord.sweep()
+    const job = h.jobFor('sf-1')!
+    const target = job.dispatch!.target!
+    expect(job.dispatch?.incarnation).toBe(`conv-${job.id}`)
+
+    // The name is live — but it is somebody else now.
+    h.incarnations.set(target, 'conv-someone-else')
+    const report = await h.coord.recover()
+    expect(report.failed[0]?.reason).toMatch(/different incarnation/)
+    expect(h.jobs.get(job.id)!.state).toBe('failed')
+    expect(h.get('sf-1').freshness.phase).toBe('failed')
+    expect(h.get('sf-1').freshness.verifiedAt).toBe(5_000) // nothing was verified
+  })
+
+  it('still adopts a job that recorded no incarnation, on liveness alone', async () => {
+    // Jobs written before the incarnation was persisted must not be failed for
+    // want of a field they never had.
+    const h = harness()
+    h.launchOutcome = job => ({ ok: true, sessionName: `refresh-${job.id}` })
+    await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+    await h.coord.sweep()
+    const job = h.jobFor('sf-1')!
+    expect(job.dispatch?.incarnation).toBeUndefined()
+    const report = await h.coord.recover()
+    expect(report.failed).toEqual([])
+    expect(h.jobs.get(job.id)!.state).toBe('running')
   })
 
   it('cancels a job whose Surface is gone', async () => {

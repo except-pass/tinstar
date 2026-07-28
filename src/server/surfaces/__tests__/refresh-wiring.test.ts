@@ -12,7 +12,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseStagedResult, refreshDispatchPrompt } from '../refresh-wiring'
+import {
+  isLiveSessionRecord, LIVE_SESSION_STATES, parseStagedResult, refreshDispatchPrompt, retireRefreshWorker,
+} from '../refresh-wiring'
+import { findPort, releasePort } from '../../sessions/backends/tmux'
 import { launchRefreshWorker, refreshBriefText, type RefreshWorkerHost } from '../../sessions/surfaceAuthor'
 import { createSession, deleteSession, getSession, updateSession, type Session } from '../../sessions/session'
 import { BASE_CONFIG, type PortWindow, type TinstarConfig } from '../../sessions/config'
@@ -61,6 +64,106 @@ describe('parseStagedResult', () => {
   it('refuses a body with no headline rather than half-applying it', () => {
     expect(parseStagedResult(JSON.stringify({ content: { root: 'r', components: [] } })).error)
       .toMatch(/content but no headline/)
+  })
+})
+
+describe('isLiveSessionRecord', () => {
+  const record = (state: Session['state']): Pick<Session, 'state'> => ({ state })
+
+  it('a STOPPED session record is not live', () => {
+    // The whole point. `getSession` is a `readFileSync` of a JSON record that
+    // OUTLIVES its tmux process: `reconcileSessionStates` sets `stopped` and KEEPS
+    // the file, and only `deleteSession` removes it. Testing existence therefore
+    // reported a dead worker as live — so harvest's vanished-worker branch never
+    // fired (the job spun to the ten-minute timeout with the Surface badged
+    // `refreshing` and nothing behind it), and `recover()` adopted a worker that
+    // died with the host and renewed its lease.
+    expect(isLiveSessionRecord(record('stopped'))).toBe(false)
+  })
+
+  it('a missing record is not live', () => {
+    expect(isLiveSessionRecord(null)).toBe(false)
+    expect(isLiveSessionRecord(undefined)).toBe(false)
+  })
+
+  it.each(['creating', 'running', 'idle', 'needs_attention'] as const)('%s is live', state => {
+    // `creating` counts: a session mid-launch has no tmux process yet, and failing
+    // its job for that would be a race rather than a diagnosis.
+    expect(isLiveSessionRecord(record(state))).toBe(true)
+  })
+
+  it('every session state is classified, so a new one cannot default to live', () => {
+    const all: Session['state'][] = ['creating', 'running', 'idle', 'needs_attention', 'stopped']
+    expect(all.filter(s => isLiveSessionRecord(record(s)))).toEqual([...LIVE_SESSION_STATES])
+  })
+})
+
+describe('retireRefreshWorker', () => {
+  const WINDOW: PortWindow = { label: 'refresh-retire', start: 19_931, count: 3 }
+
+  function retire(name: string, port: number | null): Promise<void> {
+    const session = { port }
+    return retireRefreshWorker({
+      name,
+      getSession: () => session,
+      stopTtyd: () => { /* no ttyd in a unit test */ },
+      deleteTmux: async () => { /* no tmux in a unit test */ },
+      deleteRun: () => { /* no doc store in a unit test */ },
+      deleteSession: () => { /* the record is the fixture */ },
+      // The REAL one. The leak lives in `tmuxBackend`'s in-process claim set, so a
+      // stub here would test nothing.
+      releasePort: p => releasePort(p),
+    })
+  }
+
+  it('gives a retired worker its port back, so the window can be reclaimed', async () => {
+    // Claim the whole window, retire all three the way the coordinator does, then
+    // claim again. Before this, the third claim failed with "No available port
+    // found" and stayed failed until the backend restarted — so after as many
+    // SUCCESSFUL refreshes as the window is wide, automatic refresh was dead.
+    const claimed: number[] = []
+    for (let i = 0; i < WINDOW.count; i++) claimed.push(await findPort(WINDOW))
+    expect(claimed).toHaveLength(WINDOW.count)
+
+    for (const [i, port] of claimed.entries()) await retire(`refresh-job-${i}`, port)
+
+    const again = await findPort(WINDOW)
+    expect(claimed).toContain(again)
+    releasePort(again)
+  })
+
+  it('reads the port off the record BEFORE the record is deleted', async () => {
+    // The ordering trap: `deleteSession` removes the only place the port is written
+    // down, so a retirement that deletes first has nothing left to release.
+    const seen: string[] = []
+    let record: { port: number | null } | null = { port: 4242 }
+    const released: number[] = []
+    await retireRefreshWorker({
+      name: 'refresh-job-x',
+      getSession: () => { seen.push('read'); return record },
+      stopTtyd: () => { seen.push('stop-ttyd') },
+      deleteTmux: async () => { seen.push('delete-tmux') },
+      deleteRun: () => { seen.push('delete-run') },
+      deleteSession: () => { seen.push('delete-session'); record = null },
+      releasePort: p => { seen.push('release-port'); released.push(p) },
+    })
+    expect(released).toEqual([4242])
+    expect(seen.indexOf('read')).toBeLessThan(seen.indexOf('delete-session'))
+  })
+
+  it('a step that throws does not strand the ones after it', async () => {
+    // Half a retirement is how the leak looked to begin with.
+    const released: number[] = []
+    await retireRefreshWorker({
+      name: 'refresh-job-y',
+      getSession: () => ({ port: 5150 }),
+      stopTtyd: () => { throw new Error('no ttyd') },
+      deleteTmux: async () => { throw new Error('no tmux') },
+      deleteRun: () => { throw new Error('no run') },
+      deleteSession: () => { throw new Error('no record') },
+      releasePort: p => { released.push(p) },
+    })
+    expect(released).toEqual([5150])
   })
 })
 
