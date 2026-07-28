@@ -48,7 +48,13 @@ import type {
 import type { DocumentStore } from '../stores/document-store'
 import type { JsonValue, SurfaceCommitResult } from '../stores/surface-persistence'
 import { derivePointStatus } from '../stores/slate'
-import type { SurfaceDeleteOpts, SurfacePlanResult, SurfaceRejection, SurfaceTopologyOpts } from '../stores/surfaces'
+import type {
+  SurfaceDeleteOpts,
+  SurfacePlanResult,
+  SurfaceRejection,
+  SurfaceTopologyOpts,
+  SurfaceTopologyPlan,
+} from '../stores/surfaces'
 import { newSurfaceId } from '../stores/surfaces'
 import {
   buildSurfaceContext,
@@ -120,7 +126,11 @@ export interface SurfaceMutation {
   spaceId: string
   /** The space topology revision the mutation was computed against. */
   baseTopologyRev: number
-  /** The revision THIS operation produced. */
+  /** The revision THIS operation produced — ALLOCATED at commit time, so it is the
+   *  number the space actually reached and not the one planning proposed. Safe to
+   *  hold as the next `expectedTopologyRev` on a fresh commit, where it equals
+   *  `spaceTopologyRev`; on a replay it is the original transaction's and the world
+   *  has moved, so use `spaceTopologyRev`. */
   topologyRev: number
   /** The revision the space is at NOW. Equal to `topologyRev` for a fresh commit;
    *  on a replay it may be higher, because the caller lost a response rather than
@@ -832,20 +842,11 @@ export class SurfaceService {
       // Worth its own message: the generic conflict text would leave the caller
       // guessing whether it named too many descendants, too few, or forgot the
       // disposition entirely.
-      const actual = this.docStore.getSurfaceDescendants(id).map(s => s.id)
-      return {
-        ok: false,
-        error: {
-          code: 'conflict',
-          reason: 'descendant-mismatch',
-          message:
-            `deleting Surface ${id} requires the exact descendant set it currently has ` +
-            `(${actual.length}: ${actual.join(', ') || 'none'}) and a disposition of ` +
-            "'reparent-children' or 'delete-subtree'",
-          current: [target, ...this.docStore.getSurfaceDescendants(id)],
-          topologyRev: this.docStore.getSurfaceTopologyRev(target.spaceId),
-        },
-      }
+      return this.descendantMismatch(
+        target,
+        'deleting',
+        "and a disposition of 'reparent-children' or 'delete-subtree'",
+      )
     }
     return this.commitPlan('delete', plan, ctx)
   }
@@ -860,13 +861,39 @@ export class SurfaceService {
     return this.commitPlan('restore', plan, ctx)
   }
 
-  /** ERASE a deleted subtree. The one irreversible operation in this service, and
-   *  it refuses anything not already in the recovery store — purge is always the
-   *  second step of a decision, never the first. */
+  /**
+   * ERASE a deleted subtree. The one irreversible operation in this service, and it
+   * refuses anything not already in the recovery store — purge is always the second
+   * step of a decision, never the first.
+   *
+   * A subtree with descendants requires the EXACT set, exactly as `delete` does.
+   * The doomed set is computed from the tree as it is NOW, so without that check a
+   * purge could erase records that arrived under the subtree after the human read
+   * the recovery list — records nobody deleted, that were never shown as
+   * recoverable, and that no undo exists for. The irreversible operation must not
+   * be able to exceed the blast radius the caller named.
+   */
   async purge(id: string, body: unknown, ctx: SurfaceCallContext): Promise<SurfaceResult<SurfaceMutation>> {
     const raw = asObject(body) ?? {}
-    if (!this.docStore.getSurface(id)) return notFound(id)
-    const plan = this.docStore.planSurfacePurge(id, this.topologyOpts(raw, ctx))
+    const target = this.docStore.getSurface(id)
+    if (!target) return notFound(id)
+    let descendants: string[] | undefined
+    if (raw.descendants !== undefined) {
+      const parsed = parseIdList(raw.descendants, 'descendants')
+      if (typeof parsed === 'string') return invalid(parsed)
+      descendants = parsed
+    }
+    const plan = this.docStore.planSurfacePurge(id, {
+      ...this.topologyOpts(raw, ctx),
+      ...(descendants ? { descendants } : {}),
+    })
+    if (!plan.applied && plan.reason === 'descendant-mismatch') {
+      return this.descendantMismatch(
+        target,
+        'purging',
+        '— a purge ERASES every one of them, and there is no undo',
+      )
+    }
     return this.commitPlan('purge', plan, ctx)
   }
 
@@ -910,6 +937,27 @@ export class SurfaceService {
     }
   }
 
+  /** The "you named the wrong descendants" conflict, shared by `delete` and
+   *  `purge`. Both are compare-and-swaps on WHAT THE HUMAN WAS SHOWN, so both owe
+   *  the caller the set it should have named rather than a bare reason code. */
+  private descendantMismatch(
+    target: Surface, verb: string, tail: string,
+  ): { ok: false; error: SurfaceServiceError } {
+    const actual = this.docStore.getSurfaceDescendants(target.id)
+    return {
+      ok: false,
+      error: {
+        code: 'conflict',
+        reason: 'descendant-mismatch',
+        message:
+          `${verb} Surface ${target.id} requires the exact descendant set it currently has ` +
+          `(${actual.length}: ${actual.map(s => s.id).join(', ') || 'none'}) ${tail}`,
+        current: [target, ...actual],
+        topologyRev: this.docStore.getSurfaceTopologyRev(target.spaceId),
+      },
+    }
+  }
+
   private conflictOn(current: Surface[], reason: SurfaceRejection | string): { ok: false; error: SurfaceServiceError } {
     const spaceId = current[0]?.spaceId
     return {
@@ -924,11 +972,38 @@ export class SurfaceService {
     }
   }
 
-  /** One durable content write, in the KTD7 order. Content writes bump no topology
-   *  revision, so the batch's base and result are the same number. */
+  /**
+   * One durable content write, in the KTD7 order. Content writes bump no topology
+   * revision, so the batch's base and result are the same number.
+   *
+   * A candidate that changes NOTHING but `rev` and `amendedAt` never reaches the
+   * durable layer. The store's storm guard refuses to install one (correctly — it
+   * would wake every SSE subscriber for a frame nobody can see), so committing it
+   * anyway advanced the durable revision past the live one and left the record
+   * permanently unwritable. Refusing here, before the commit, is the fix; the same
+   * predicate is re-asserted inside the transaction queue as defence in depth.
+   *
+   * Reported as `conflict / no-change` rather than as a success, matching
+   * `transferContentAuthority` above and the store's own `no-change` rejection:
+   * "reported as not-applied so a caller cannot mistake a no-op for progress". A
+   * success carrying an unbumped revision would be worse than a refusal — the
+   * caller would record a revision the record never reached.
+   */
   private async commitContent(
     op: SurfaceOperation, prior: Surface, next: Surface, ctx: SurfaceCallContext,
   ): Promise<SurfaceResult<SurfaceMutation>> {
+    if (this.docStore.checkSurfaceUpsert(next) === 'no-change') {
+      return {
+        ok: false,
+        error: {
+          code: 'conflict',
+          reason: 'no-change',
+          message: `${op} would change nothing on Surface ${next.id}`,
+          current: [prior],
+          topologyRev: this.docStore.getSurfaceTopologyRev(next.spaceId),
+        },
+      }
+    }
     const rev = this.docStore.getSurfaceTopologyRev(next.spaceId)
     const receipt: SurfaceReceipt = {
       op, spaceId: next.spaceId, baseTopologyRev: rev, topologyRev: rev, revs: { [next.id]: next.rev },
@@ -955,19 +1030,25 @@ export class SurfaceService {
         },
       }
     }
-    const receipt: SurfaceReceipt = {
+    // Built FROM the plan rather than from THE plan: the durable half re-validates
+    // and re-computes before it writes, and the revision it allocates there — not
+    // the one planning proposed — is what the space ends up at. A receipt frozen at
+    // plan time would report `2 -> 3` for a mutation that produced `3 -> 4`, and
+    // `topologyRev` is documented as the revision this operation produced.
+    const receiptFor = (effective: SurfaceTopologyPlan): SurfaceReceipt => ({
       op,
-      spaceId: plan.plan.spaceId,
-      baseTopologyRev: plan.plan.baseTopologyRev,
-      topologyRev: plan.plan.topologyRev,
-      revs: Object.fromEntries(plan.plan.records.map(r => [r.id, r.rev])),
-      ...(plan.plan.purged.length > 0 ? { purged: plan.plan.purged } : {}),
-    }
+      spaceId: effective.spaceId,
+      baseTopologyRev: effective.baseTopologyRev,
+      topologyRev: effective.topologyRev,
+      revs: Object.fromEntries(effective.records.map(r => [r.id, r.rev])),
+      ...(effective.purged.length > 0 ? { purged: effective.purged } : {}),
+    })
+    const proposed = receiptFor(plan.plan)
     const commit = await this.docStore.commitSurfacePlan(plan.plan, {
       ...(ctx.idempotencyKey ? { idempotencyKey: ctx.idempotencyKey } : {}),
-      result: receiptJson(receipt),
+      result: effective => receiptJson(receiptFor(effective)),
     })
-    return this.fromCommit(op, commit, receipt, plan.plan.records)
+    return this.fromCommit(op, commit, proposed, plan.plan.records)
   }
 
   /**
@@ -985,6 +1066,26 @@ export class SurfaceService {
     fallback: Surface[],
   ): SurfaceResult<SurfaceMutation> {
     if (!commit.committed) {
+      // A re-validation refusal is reported as though the FIRST pass had refused —
+      // same code, same reason vocabulary, same sentence — because from the
+      // caller's side that is exactly what happened: the mutation was refused
+      // before anything changed, and the world it was refused against is the one
+      // `current` now describes. A distinct error shape would mean every client
+      // handling `stale-topology-revision` needed a second branch for the identical
+      // situation arriving a few milliseconds later.
+      if (commit.reason === 'precommit-refused') {
+        const reason = commit.detail as SurfaceRejection
+        return {
+          ok: false,
+          error: {
+            code: reason === 'unknown-surface' || reason === 'unknown-home' ? 'not-found' : 'conflict',
+            reason,
+            message: rejectionMessage(reason),
+            current: fallback.map(r => this.docStore.getSurface(r.id)).filter((s): s is Surface => !!s),
+            topologyRev: this.docStore.getSurfaceTopologyRev(receipt.spaceId),
+          },
+        }
+      }
       const code = commit.reason === 'faulted-read-only' ? 'faulted'
         : commit.reason === 'write-failed' ? 'write-failed'
           : commit.reason === 'unknown-record' ? 'not-found' : 'conflict'
@@ -999,7 +1100,11 @@ export class SurfaceService {
         },
       }
     }
-    const applied = commit.replayed && isReceipt(commit.result) ? commit.result : receipt
+    // The committed receipt, not the proposed one, whenever the durable half
+    // returned one — on a fresh commit it carries the revision re-validation
+    // actually allocated, and on a replay it is the ORIGINAL transaction's. The
+    // local `receipt` is only the fallback for the no-receipt paths.
+    const applied = isReceipt(commit.result) ? commit.result : receipt
     const ids = Object.keys(applied.revs)
     const surfaces = ids
       .map(id => this.docStore.getSurface(id))

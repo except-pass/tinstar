@@ -125,6 +125,10 @@ export interface SurfaceLoadOutcome {
    *  partly damaged: the readable records were kept, the rest are reported rather
    *  than silently discarded. */
   quarantined: number
+  /** spaceId → persisted topology revision. Empty for a snapshot written before
+   *  U3, which carried no counter; the store then starts from the floor its records
+   *  imply (see `buildTopologyIndex`). */
+  topologyRevs: Record<string, number>
   /** Present exactly when `health === 'faulted-read-only'`. */
   fault?: SurfaceStoreFault
 }
@@ -229,6 +233,10 @@ export type SurfaceCommitRejection =
   /** A record failed the shape guard, or the candidate did not survive a
    *  serialize/parse round trip. Caught BEFORE any file is touched. */
   | 'invalid-record'
+  /** The caller's own {@link SurfaceTransaction.precommit} re-validation refused,
+   *  from inside the queue and before any file was touched. `detail` carries the
+   *  caller's reason verbatim — this module deliberately does not interpret it. */
+  | 'precommit-refused'
   /** The durable write failed. Live state is unchanged — see `commit`. */
   | 'write-failed'
 
@@ -276,6 +284,34 @@ export interface SurfaceTransaction {
    *  never exist for a transaction whose records did not land, or vice versa. */
   result?: JsonValue
   /**
+   * Re-validate, from INSIDE the transaction queue, immediately before the durable
+   * write — and optionally replace what is written.
+   *
+   * This is the plan/apply seam's serialization point. The caller validates a
+   * candidate against ITS live state before calling `commit`; between that
+   * validation and this write, live state is free to move, and the whole-file
+   * rewrite this module performs is not a short window. Running the caller's own
+   * re-validation here puts it in the same serialized domain as the write without
+   * dragging the caller's planning into the queue — which would serialize every
+   * mutation in a space behind a file write and was rejected for that reason.
+   *
+   * Returning `ok: false` aborts with `precommit-refused` and touches nothing.
+   * Returning `puts`/`topologyRevs`/`result` replaces the transaction's own, which
+   * is how a caller allocates a revision at COMMIT time rather than at plan time —
+   * and then reports the revision it actually allocated rather than the one it
+   * proposed. The replacement goes through every check the originals would have:
+   * shape guard, `expectedRevs`, and the newer-revision rule.
+   *
+   * NOT called on a replayed retry: a replay applies nothing, so there is nothing
+   * to re-validate.
+   */
+  precommit?: () =>
+    | { ok: true; puts?: Surface[]; topologyRevs?: Record<string, number>; result?: JsonValue }
+    | { ok: false; reason: string }
+  /** spaceId → topology revision to persist with this transaction. Merged
+   *  monotonically into the stored counters — the sidecar never lowers one. */
+  topologyRevs?: Record<string, number>
+  /**
    * Invoked exactly once, AFTER the durable write and after the sidecar's own
    * record set is updated — the "install in memory, then emit one batch" half of
    * KTD7's ordering. Taking it as a callback is what lets this module enforce the
@@ -292,6 +328,19 @@ interface SidecarSnapshot {
   version: number
   records: Surface[]
   idempotency: IdempotencyEntry[]
+  /**
+   * spaceId → topology revision. PERSISTED rather than derived from the records,
+   * which is the KTD5 amendment U3 forced: `purge` erases records, so a revision
+   * reconstructed as `max(homeRev)` over the survivors runs backwards and stops
+   * being a usable compare-and-swap token.
+   *
+   * OPTIONAL on read, deliberately, and NOT a schema-version bump: a snapshot
+   * written by U1/U1e has no counter, and treating that as an unreadable version
+   * would fault an existing install into read-only on the strength of a field it
+   * predates. Absent, the store starts each space at the floor its records imply,
+   * which is exactly the old behaviour.
+   */
+  topologyRevs?: Record<string, number>
 }
 
 interface IdempotencyEntry {
@@ -334,8 +383,26 @@ function isUsableRecord(r: unknown): r is Surface {
 }
 
 type ReadResult =
-  | { ok: true; records: Surface[]; idempotency: IdempotencyEntry[]; quarantined: number }
+  | {
+      ok: true
+      records: Surface[]
+      idempotency: IdempotencyEntry[]
+      quarantined: number
+      topologyRevs: Record<string, number>
+    }
   | { ok: false; problem: SurfaceSnapshotProblem }
+
+/** Keep only finite numeric entries. A hand-edited snapshot is a ratified property
+ *  of the JSON sidecar, so a counter someone typed `"3"` into must not become the
+ *  space's revision — it would compare unequal to every real token forever. */
+function readTopologyRevs(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out: Record<string, number> = {}
+  for (const [spaceId, rev] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof rev === 'number' && Number.isFinite(rev)) out[spaceId] = rev
+  }
+  return out
+}
 
 /** Read and validate one snapshot file. Never repairs, never writes. */
 function readSnapshotFile(path: string): ReadResult {
@@ -389,7 +456,7 @@ function readSnapshotFile(path: string): ReadResult {
           !!e && typeof e === 'object' && typeof (e as IdempotencyEntry).key === 'string',
       )
     : []
-  return { ok: true, records, idempotency, quarantined }
+  return { ok: true, records, idempotency, quarantined, topologyRevs: readTopologyRevs(snap.topologyRevs) }
 }
 
 interface SidecarHydration {
@@ -409,7 +476,10 @@ function hydrateSidecarFiles(paths: SurfaceSidecarPaths): SidecarHydration {
   const primary = readSnapshotFile(paths.primary)
   if (primary.ok) {
     return {
-      outcome: { health: 'healthy', from: 'primary', records: primary.records, quarantined: primary.quarantined },
+      outcome: {
+        health: 'healthy', from: 'primary', records: primary.records,
+        quarantined: primary.quarantined, topologyRevs: primary.topologyRevs,
+      },
       idempotency: primary.idempotency,
       primaryIsKnownGood: true,
     }
@@ -420,7 +490,10 @@ function hydrateSidecarFiles(paths: SurfaceSidecarPaths): SidecarHydration {
     // Covers both "primary is corrupt" and "we crashed after rotation but before
     // the rename" — in either case the backup is the newest readable snapshot.
     return {
-      outcome: { health: 'recovered', from: 'backup', records: backup.records, quarantined: backup.quarantined },
+      outcome: {
+        health: 'recovered', from: 'backup', records: backup.records,
+        quarantined: backup.quarantined, topologyRevs: backup.topologyRevs,
+      },
       idempotency: backup.idempotency,
       primaryIsKnownGood: false,
       log: {
@@ -436,7 +509,7 @@ function hydrateSidecarFiles(paths: SurfaceSidecarPaths): SidecarHydration {
     // First boot. Not a fault: there is no evidence to preserve, so persistence
     // stays enabled and the first commit creates the file.
     return {
-      outcome: { health: 'healthy', from: 'empty', records: [], quarantined: 0 },
+      outcome: { health: 'healthy', from: 'empty', records: [], quarantined: 0, topologyRevs: {} },
       idempotency: [],
       primaryIsKnownGood: false,
     }
@@ -451,6 +524,7 @@ function hydrateSidecarFiles(paths: SurfaceSidecarPaths): SidecarHydration {
       from: 'none',
       records: [],
       quarantined: 0,
+      topologyRevs: {},
       fault: { primary: primary.problem, backup: backup.problem },
     },
     idempotency: [],
@@ -482,6 +556,9 @@ export class SurfaceSidecar {
 
   private records = new Map<string, Surface>()
   private idempotency = new Map<string, IdempotencyEntry>()
+  /** The persisted monotonic topology counters. Held here rather than derived from
+   *  `records` because `drops` erase records — see `SidecarSnapshot.topologyRevs`. */
+  private topologyRevs = new Map<string, number>()
 
   /** The serialized form of what is on disk, for the no-op short-circuit. */
   private lastSerialized: string | null = null
@@ -599,15 +676,20 @@ export class SurfaceSidecar {
     // short-circuit cannot mistake "we have never written" for "the file already
     // says this".
     if (h.outcome.from === 'primary' || h.outcome.from === 'backup') {
-      this.install(h.outcome.records, h.idempotency)
+      this.install(h.outcome.records, h.idempotency, h.outcome.topologyRevs)
     }
     this.primaryIsKnownGood = h.primaryIsKnownGood
     return h.outcome
   }
 
-  private install(records: Surface[], idempotency: IdempotencyEntry[]): void {
+  private install(
+    records: Surface[],
+    idempotency: IdempotencyEntry[],
+    topologyRevs: Record<string, number>,
+  ): void {
     this.records = new Map(records.map(r => [r.id, r]))
     this.idempotency = new Map(idempotency.map(e => [e.key, e]))
+    this.topologyRevs = new Map(Object.entries(topologyRevs))
     // Recomputed from the record maps rather than kept as the bytes we read: a
     // quarantined record or a legacy key order would make the file's bytes differ
     // from what we would write for identical state, and the no-op short-circuit
@@ -620,6 +702,7 @@ export class SurfaceSidecar {
       version: SURFACE_SIDECAR_SCHEMA_VERSION,
       records: [...this.records.values()],
       idempotency: [...this.idempotency.values()],
+      topologyRevs: Object.fromEntries(this.topologyRevs),
     }
   }
 
@@ -639,8 +722,22 @@ export class SurfaceSidecar {
       }
     }
 
-    const puts = tx.puts ?? []
+    // The caller's own re-validation, inside the queue and before anything is
+    // touched. Nothing between here and the durable write can install a competing
+    // transaction — they are all behind this same chain — so what it asserts is
+    // still true when the bytes land. See `SurfaceTransaction.precommit`.
+    const rechecked = tx.precommit?.()
+    if (rechecked && !rechecked.ok) {
+      return { committed: false, reason: 'precommit-refused', detail: rechecked.reason }
+    }
+
+    const puts = (rechecked?.ok ? rechecked.puts : undefined) ?? tx.puts ?? []
     const drops = tx.drops ?? []
+    const revisions = { ...tx.topologyRevs, ...(rechecked?.ok ? rechecked.topologyRevs : undefined) }
+    // The receipt describes what was ACTUALLY committed, so re-validation may
+    // replace it too — otherwise a response would report the revision the caller
+    // proposed rather than the one this transaction allocated.
+    const result = (rechecked?.ok ? rechecked.result : undefined) ?? tx.result
 
     for (const r of puts) {
       if (!isUsableRecord(r)) {
@@ -685,14 +782,24 @@ export class SurfaceSidecar {
         key: tx.idempotencyKey,
         at: Date.now(),
         ids: puts.map(r => r.id),
-        ...(tx.result !== undefined ? { result: tx.result } : {}),
+        ...(result !== undefined ? { result } : {}),
       })
+    }
+
+    // Monotonic merge, never assignment: the counters outlive the records they were
+    // allocated against (that is the point — a purge erases records), so a
+    // transaction may only ever raise one.
+    const nextTopologyRevs = new Map(this.topologyRevs)
+    for (const [spaceId, rev] of Object.entries(revisions)) {
+      if (typeof rev !== 'number' || !Number.isFinite(rev)) continue
+      if (rev > (nextTopologyRevs.get(spaceId) ?? 0)) nextTopologyRevs.set(spaceId, rev)
     }
 
     const candidate: SidecarSnapshot = {
       version: SURFACE_SIDECAR_SCHEMA_VERSION,
       records: [...next.values()],
       idempotency: evict([...nextIdempotency.values()]),
+      topologyRevs: Object.fromEntries(nextTopologyRevs),
     }
 
     let serialized: string
@@ -723,7 +830,7 @@ export class SurfaceSidecar {
     // a recovery the on-disk primary is corrupt, so an "identical" candidate still
     // has to be written to repair it.
     if (this.primaryIsKnownGood && serialized === this.lastSerialized) {
-      return { committed: true, replayed: false, wrote: false, records: written, ...(tx.result !== undefined ? { result: tx.result } : {}) }
+      return { committed: true, replayed: false, wrote: false, records: written, ...(result !== undefined ? { result } : {}) }
     }
 
     try {
@@ -738,6 +845,7 @@ export class SurfaceSidecar {
 
     this.records = next
     this.idempotency = new Map(candidate.idempotency.map(e => [e.key, e]))
+    this.topologyRevs = nextTopologyRevs
     this.lastSerialized = serialized
     this.primaryIsKnownGood = true
 
@@ -745,7 +853,7 @@ export class SurfaceSidecar {
     // the caller's; the transaction has committed and a restart will reload it.
     tx.onDurable?.(written)
 
-    return { committed: true, replayed: false, wrote: true, records: written, ...(tx.result !== undefined ? { result: tx.result } : {}) }
+    return { committed: true, replayed: false, wrote: true, records: written, ...(result !== undefined ? { result } : {}) }
   }
 
   /**
@@ -837,7 +945,10 @@ function readSnapshotFromString(raw: string): ReadResult {
       return { ok: false, problem: { path: '<candidate>', kind: 'malformed', detail: 'records is not an array' } }
     }
     const records = parsed.records.filter(isUsableRecord)
-    return { ok: true, records, idempotency: [], quarantined: parsed.records.length - records.length }
+    return {
+      ok: true, records, idempotency: [], topologyRevs: {},
+      quarantined: parsed.records.length - records.length,
+    }
   } catch (e) {
     return { ok: false, problem: { path: '<candidate>', kind: 'unparsable', detail: (e as Error).message } }
   }

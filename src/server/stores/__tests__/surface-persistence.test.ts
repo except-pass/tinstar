@@ -157,7 +157,7 @@ describe('sidecar layout', () => {
       const sc = open()
       await sc.commit({ puts: [rec('sf-a')], idempotencyKey: 'k1', result: { ok: true } })
       const parsed = JSON.parse(readFileSync(paths.primary, 'utf-8'))
-      expect(Object.keys(parsed).sort()).toEqual(['idempotency', 'records', 'version'])
+      expect(Object.keys(parsed).sort()).toEqual(['idempotency', 'records', 'topologyRevs', 'version'])
       expect(parsed.version).toBe(SURFACE_SIDECAR_SCHEMA_VERSION)
     })
   })
@@ -674,6 +674,102 @@ describe('snapshot reload', () => {
       // The home key a child indexes under survives verbatim — the index is keyed
       // by it, so a reload that changed it would silently orphan the subtree.
       expect(homeKey(rebuilt.getSurface(child.id)!.home)).toBe(homeKey(live.getSurface(child.id)!.home))
+    })
+  })
+
+  it('carries the topology counter across a restart, above the floor the records imply', async () => {
+    await withConfigRoot(async ({ open }) => {
+      const a: Surface = rec('a')
+      const sc = open()
+      // A counter well ahead of any record's `homeRev` — which is the state a
+      // purge leaves behind, since a purge advances the revision and erases the
+      // records that held the high-water mark.
+      expect(await sc.commit({ puts: [a], topologyRevs: { [SPACE]: 9 } })).toMatchObject({ committed: true })
+
+      const restarted = open()
+      expect(restarted.outcome.topologyRevs).toEqual({ [SPACE]: 9 })
+      const rebuilt = new SurfaceStore(() => {})
+      rebuilt.load(restarted.outcome.records, restarted.outcome.topologyRevs)
+      // Not 1 (the floor `max(homeRev)` implies). A restart that dropped back to
+      // the floor would hand a client a revision it had already moved past.
+      expect(rebuilt.getTopologyRev(SPACE)).toBe(9)
+    })
+  })
+
+  it('never lowers a persisted counter, whatever a transaction asks for', async () => {
+    await withConfigRoot(async ({ open }) => {
+      const sc = open()
+      await sc.commit({ puts: [rec('a')], topologyRevs: { [SPACE]: 5 } })
+      await sc.commit({ puts: [{ ...rec('b'), rev: 1 }], topologyRevs: { [SPACE]: 2 } })
+      expect(open().outcome.topologyRevs).toEqual({ [SPACE]: 5 })
+    })
+  })
+
+  it('reads a pre-U3 snapshot, which has no counter at all, without faulting', async () => {
+    await withConfigRoot(async ({ paths, open }) => {
+      // Exactly what U1/U1e wrote. Adding the counter is deliberately NOT a schema
+      // version bump: treating an older file as an unknown version would fault a
+      // real install into read-only over a field it predates.
+      writeFileSync(paths.primary, JSON.stringify({
+        version: SURFACE_SIDECAR_SCHEMA_VERSION,
+        records: [rec('a')],
+        idempotency: [],
+      }))
+      const sc = open()
+      expect(sc.health).toBe('healthy')
+      expect(sc.outcome.topologyRevs).toEqual({})
+      expect(sc.outcome.records).toHaveLength(1)
+    })
+  })
+})
+
+describe('the pre-commit re-validation hook', () => {
+  it('refuses inside the queue, before any file is touched', async () => {
+    await withConfigRoot(async ({ paths, open }) => {
+      const sc = open()
+      await sc.commit({ puts: [rec('a')] })
+      const before = readFileSync(paths.primary, 'utf-8')
+
+      const res = await sc.commit({
+        puts: [{ ...rec('a'), rev: 2, content: { headline: 'changed' } }],
+        precommit: () => ({ ok: false, reason: 'stale-topology-revision' }),
+      })
+      expect(res).toEqual({ committed: false, reason: 'precommit-refused', detail: 'stale-topology-revision' })
+      // Nothing written, nothing installed — the same "failure before durable
+      // commit changes nothing" guarantee every other rejection gives.
+      expect(readFileSync(paths.primary, 'utf-8')).toBe(before)
+      expect(sc.durableRecords()[0]!.content.headline).toBe('a')
+    })
+  })
+
+  it('persists the records the hook substituted, not the ones it was handed', async () => {
+    await withConfigRoot(async ({ open }) => {
+      const sc = open()
+      // How a caller allocates the topology revision at COMMIT time: it re-plans
+      // inside the queue and hands back the recomputed records.
+      const res = await sc.commit({
+        puts: [{ ...rec('a'), homeRev: 1 }],
+        precommit: () => ({
+          ok: true,
+          puts: [{ ...rec('a'), homeRev: 7 }],
+          topologyRevs: { [SPACE]: 7 },
+          result: { allocated: 7 },
+        }),
+      })
+      expect(res).toMatchObject({ committed: true, result: { allocated: 7 } })
+      expect(sc.durableRecords()[0]!.homeRev).toBe(7)
+      expect(open().outcome.topologyRevs).toEqual({ [SPACE]: 7 })
+    })
+  })
+
+  it('is not run on a replayed retry, because a replay applies nothing', async () => {
+    await withConfigRoot(async ({ open }) => {
+      const sc = open()
+      await sc.commit({ puts: [rec('a')], idempotencyKey: 'k' })
+      const precommit = vi.fn(() => ({ ok: true as const }))
+      const replay = await sc.commit({ puts: [rec('a')], idempotencyKey: 'k', precommit })
+      expect(replay).toMatchObject({ committed: true, replayed: true })
+      expect(precommit).not.toHaveBeenCalled()
     })
   })
 })

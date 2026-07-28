@@ -166,7 +166,40 @@ export interface SurfaceTopologyPlan {
   /** Expected revisions for the durable compare-and-swap, keyed by id. `0` states
    *  "this record should not exist yet", which is how a create declares itself. */
   expectedRevs: Record<string, number>
+  /**
+   * RE-ASSERT every precondition this plan was built on, against live state, and
+   * return a plan recomputed against it.
+   *
+   * This is the plan/apply seam's safety property and the reason a plan is not
+   * plain data. Planning runs OUTSIDE the durable transaction queue (deliberately
+   * — putting it inside would serialize every mutation in a space behind a whole
+   * file rewrite), so live state is free to move between validation and install.
+   * The durable half calls this immediately before it writes, from inside the
+   * queue, and refuses the transaction if anything moved.
+   *
+   * It is EXHAUSTIVE by construction rather than by discipline: it re-runs the
+   * very same planning routine that produced this plan, with the very same
+   * arguments, and then compares the two outcomes. There is no second list of
+   * checks to keep in step with the first — adding a check to a `plan*` method
+   * adds it here in the same edit.
+   *
+   * The recomputed plan is what the caller should install: the topology revision
+   * is allocated HERE, at commit time, so two mutations planned against the same
+   * base cannot claim the same number.
+   */
+  revalidate: () => SurfacePlanResult
 }
+
+/** A plan without its {@link SurfaceTopologyPlan.revalidate} closure — what the
+ *  `compute*` routines build. `planned` attaches the closure so that every plan,
+ *  from every mutation, is re-assertable the same way. */
+type PlanCore = Omit<SurfaceTopologyPlan, 'revalidate'>
+
+type PlanOutcome =
+  | { applied: true; plan: PlanCore }
+  | { applied: false; reason: SurfaceRejection; topologyRev: number }
+
+type PlanComputation = () => PlanOutcome
 
 export type SurfacePlanResult =
   | { applied: true; plan: SurfaceTopologyPlan }
@@ -319,13 +352,22 @@ function compareSiblings(a: Surface, b: Surface): number {
  * Rebuild the derived topology from a flat record list: parent→children indexes
  * and the per-space topology revision.
  *
- * PURE and exported because it is the whole reload contract. A snapshot persists
- * records and nothing else; if the indexes could not be reconstructed exactly from
- * those records, the sidecar would need a second, separately-maintained copy of the
- * tree — and the two would eventually disagree. The topology revision reconstructs
- * as the maximum `homeRev` in the space, which holds because a Surface is never
- * erased (KTD15 makes deletion a move), so no record that carried the high-water
- * mark can vanish and let the revision run backwards.
+ * PURE and exported because parent→children indexes ARE the reload contract: if
+ * they could not be reconstructed exactly from the records, the sidecar would need
+ * a second, separately-maintained copy of the tree — and the two would eventually
+ * disagree.
+ *
+ * `topologyRevs` IS NOT THAT. It is a FLOOR, not the revision. KTD5 originally had
+ * the space topology revision reconstruct as `max(homeRev)` over the records, on
+ * the premise that no record is ever erased (KTD15 made deletion a move). `purge`,
+ * added in U3 under KTD15, erases — so the premise expired, and a derived revision
+ * runs BACKWARDS across a purge, which makes `expectedTopologyRev` fail the two
+ * properties a compare-and-swap token needs (monotonicity and per-mutation
+ * uniqueness). The revision is now a PERSISTED monotonic per-space counter owned by
+ * {@link SurfaceStore}; what this function returns is only the lower bound a
+ * snapshot with no stored counter must start from, so an older snapshot still
+ * reloads into a revision no smaller than any record's `homeRev`. See the KTD5
+ * amendment in the plan.
  */
 export function buildTopologyIndex(records: Iterable<Surface>): {
   children: Map<string, string[]>
@@ -373,6 +415,26 @@ function expectedFrom(records: Surface[]): Record<string, number> {
   return out
 }
 
+/**
+ * The part of a plan that must not move between planning and installing.
+ *
+ * Everything a mutation DECIDES is in here: which records are written, what they
+ * are written to, which ids are erased, and what durable revisions the transaction
+ * asserts. Two fields are deliberately out:
+ *   · `homeRev`, because the topology revision is ALLOCATED at commit time now —
+ *     re-deriving a different one is the correction, not a conflict;
+ *   · the two plan-level revisions, for the same reason.
+ * Timestamps are not excluded and do not need to be: a plan freezes its `at` stamp
+ * when it is first computed and the re-computation reuses it, so a re-run differs
+ * from the original in `homeRev` and in nothing else unless the world moved.
+ */
+function planFingerprint(plan: PlanCore): string {
+  return JSON.stringify({
+    records: plan.records.map(r => ({ ...r, homeRev: 0 })),
+    purged: [...plan.purged].sort(),
+  })
+}
+
 /** Set equality over ids, order-independent and duplicate-tolerant. A caller that
  *  listed the same descendant twice still described the same set, and refusing it
  *  would be pedantry rather than safety. */
@@ -406,7 +468,16 @@ export class SurfaceStore {
    *  same records cannot drift apart. */
   private childIndex = new Map<string, string[]>()
 
-  /** DERIVED: spaceId → topology revision (max `homeRev` in the space). */
+  /**
+   * spaceId → topology revision. AUTHORITATIVE and MONOTONIC, not derived.
+   *
+   * It is allocated here, persisted in the sidecar snapshot alongside the records,
+   * and only ever raised — {@link reindex} may lift it to the floor a rebuild
+   * implies but can never lower it. That is what makes `expectedTopologyRev` an
+   * actual compare-and-swap token: `purge` erases records, so a revision derived
+   * from the surviving records would run backwards and let a stale expectation
+   * match a topology it never saw (ABA). See {@link buildTopologyIndex}.
+   */
   private topologyRevs = new Map<string, number>()
 
   constructor(private readonly emit: EmitFn) {}
@@ -504,6 +575,13 @@ export class SurfaceStore {
     return this.topologyRevs.get(spaceId) ?? 0
   }
 
+  /** Every space's topology revision, for the durable snapshot. The counter is no
+   *  longer derivable from the records (see {@link buildTopologyIndex}), so it has
+   *  to be persisted; this is what the sidecar stores. */
+  topologyRevSnapshot(): Record<string, number> {
+    return Object.fromEntries(this.topologyRevs)
+  }
+
   /**
    * Seed records from a persisted snapshot. HYDRATION, NOT A MUTATION: it emits
    * nothing (there is no client yet to tell) and does not bump any revision — the
@@ -513,11 +591,20 @@ export class SurfaceStore {
    * installed, mirroring `SlateStore.loadPoints`: a record with no id or no home
    * cannot be indexed, addressed, or repaired, and admitting it would corrupt the
    * derived indexes for every well-formed record around it.
+   *
+   * `topologyRevs` is the persisted monotonic counter from the same snapshot. It is
+   * OPTIONAL because a snapshot written before U3 does not carry one: absent, the
+   * counter starts at the floor {@link buildTopologyIndex} derives, which is
+   * exactly the old behaviour and never smaller than any record's `homeRev`.
    */
-  load(records: Surface[]): void {
+  load(records: Surface[], topologyRevs?: Record<string, number>): void {
     for (const s of records) {
       if (!s || !s.id || !s.spaceId || !s.home) continue
       this.surfaces.set(s.id, s)
+    }
+    for (const [spaceId, rev] of Object.entries(topologyRevs ?? {})) {
+      if (typeof rev !== 'number' || !Number.isFinite(rev)) continue
+      this.raiseTopologyRev(spaceId, rev)
     }
     this.reindex()
   }
@@ -548,20 +635,58 @@ export class SurfaceStore {
    *     {@link onlyBookkeepingChanged}) — the storm guard.
    */
   upsertSurface(next: Surface): boolean {
-    const prior = this.surfaces.get(next.id)
-    if (!prior) return false
-    if (next.spaceId !== prior.spaceId) return false
-    if (!sameHome(next.home, prior.home)) return false
-    if (next.homeRev !== prior.homeRev) return false
-    if (next.order !== prior.order) return false
-    if (next.rev <= prior.rev) return false
-    if (onlyBookkeepingChanged(prior, next)) return false
+    if (this.checkUpsert(next)) return false
+    const prior = this.surfaces.get(next.id)!
     this.surfaces.set(next.id, next)
     // No reindex needed, and that is a guarantee rather than an optimisation: the
     // four topology fields are all rejected above, so neither sibling membership
     // nor sibling order can have moved.
     this.emitBatch(prior.spaceId, [next])
     return true
+  }
+
+  /**
+   * Would {@link upsertSurface} accept this candidate? The reason it would refuse,
+   * or `undefined`.
+   *
+   * Extracted so the DURABLE half can re-assert the same predicates inside its
+   * transaction queue immediately before it writes, rather than re-deriving them.
+   * `upsertSurface` is this function plus the install, so the two cannot drift.
+   *
+   * The bookkeeping-only case is the one that mattered: a content write whose
+   * candidate differs from the stored record ONLY in `rev`/`amendedAt` is refused
+   * by the storm guard, and a durable layer that wrote it anyway would leave the
+   * durable revision ahead of the live one — permanently refusing every later write
+   * to that record. It is a rejection, not a silent no-op, precisely so no caller
+   * can commit it.
+   */
+  checkUpsert(next: Surface): SurfaceRejection | undefined {
+    const prior = this.surfaces.get(next.id)
+    if (!prior) return 'unknown-surface'
+    if (next.spaceId !== prior.spaceId) return 'cross-space'
+    if (!sameHome(next.home, prior.home)) return 'recovery-home'
+    if (next.homeRev !== prior.homeRev) return 'stale-topology-revision'
+    if (next.order !== prior.order) return 'stale-surface-revision'
+    if (next.rev <= prior.rev) return 'stale-surface-revision'
+    if (onlyBookkeepingChanged(prior, next)) return 'no-change'
+    return undefined
+  }
+
+  /**
+   * Force a durably-committed record into memory and tell every client.
+   *
+   * The repair path for a corrupted invariant, and nothing else. A record that is
+   * on disk but not in memory is not a no-op — it is a store that will refuse every
+   * subsequent write to that id forever, because the durable revision has moved
+   * past the live one and re-reading returns the stale copy. When the durable half
+   * discovers that state it makes memory agree with disk here (disk is the
+   * authority) and THEN raises, so the divergence is repaired and loud rather than
+   * silently absorbed.
+   */
+  reconcileDurable(next: Surface): void {
+    this.surfaces.set(next.id, next)
+    this.reindex()
+    this.emitBatch(next.spaceId, [next])
   }
 
   // --- Topology mutation ---
@@ -575,6 +700,26 @@ export class SurfaceStore {
   // KTD7's "durably commits the candidate snapshot before replacing in-memory
   // state or acknowledging" — with one fused step, a failed write would already
   // have been broadcast.
+  //
+  // THE GAP THAT LEAVES, AND HOW IT IS CLOSED. Because planning happens outside the
+  // durable transaction queue, live state is free to move while the commit is in
+  // flight — and the sidecar's whole-file rewrite is not a short window (U1's own
+  // measurement: p95 259ms at ~10 MiB, queued, so N concurrent mutations make it
+  // N x that). Work created or moved into a subtree during a delete's commit used
+  // to be swallowed into the recovery store with no deletion marker: invisible to
+  // `list()`, absent from the recovery roots, and then erased by a later `purge`
+  // the human agreed to for a different, smaller subtree.
+  //
+  // The fix is NOT to move planning inside the queue — that would serialize every
+  // mutation in a space behind a whole-file write, and it was rejected for that
+  // reason. Instead every plan carries {@link SurfaceTopologyPlan.revalidate},
+  // which re-runs THE SAME computation against live state from inside the queue,
+  // immediately before the durable write. One routine, invoked twice; there is no
+  // second list of checks that could fall behind the first.
+  //
+  // Each `plan*` below therefore does two things before computing anything: it
+  // FREEZES the inputs that would otherwise differ between the two runs (the `at`
+  // stamp, and a minted id), and it hands the computation to `planned`.
 
   /**
    * Mint a Surface at a home. A create IS a topology change — it adds a node to the
@@ -586,20 +731,37 @@ export class SurfaceStore {
   }
 
   planCreate(init: SurfaceInit, opts: SurfaceTopologyOpts = {}): SurfacePlanResult {
+    // Frozen so a re-computation is comparable: a fresh id or a fresh clock would
+    // make every re-run differ from the original for reasons that are not conflicts.
+    const seeded: SurfaceInit = { ...init, id: init.id ?? newSurfaceId() }
+    const frozen = this.freeze(opts)
+    return this.planned(() => this.computeCreate(seeded, frozen))
+  }
+
+  private computeCreate(init: SurfaceInit, opts: SurfaceTopologyOpts): PlanOutcome {
     const spaceId = init.spaceId
     const rev = this.getTopologyRev(spaceId)
-    const id = init.id ?? newSurfaceId()
+    const id = init.id!
     if (this.surfaces.has(id)) return { applied: false, reason: 'duplicate-id', topologyRev: rev }
     const homeCheck = this.checkHome(init.home, spaceId, new Set([id]))
     if (homeCheck) return { applied: false, reason: homeCheck, topologyRev: rev }
     if (opts.expectedTopologyRev !== undefined && opts.expectedTopologyRev !== rev) {
       return { applied: false, reason: 'stale-topology-revision', topologyRev: rev }
     }
-    const now = opts.at ?? Date.now()
+    const now = opts.at!
     const created = this.materialize(id, init, now, rev + 1)
     // `0` states "this record should not exist yet" — the durable half's way of
-    // making a create a compare-and-swap rather than a blind write.
-    return { applied: true, plan: this.makePlan(spaceId, rev, rev + 1, [created], [], { [id]: 0 }) }
+    // making a create a compare-and-swap rather than a blind write. The DESTINATION
+    // carries its own expectation alongside it: without one, a create into a home
+    // that is being deleted passes a durable compare-and-swap over a disjoint record
+    // set and lands the new Surface inside the recovery store.
+    return {
+      applied: true,
+      plan: this.makePlan(spaceId, rev, rev + 1, [created], [], {
+        [id]: 0,
+        ...this.expectedHome(init.home),
+      }),
+    }
   }
 
   /** Move ONE Surface to a new home. Thin alias over {@link reparent} — a single
@@ -624,6 +786,11 @@ export class SurfaceStore {
   }
 
   planReparent(ids: string[], home: SurfaceHome, opts: SurfaceTopologyOpts = {}): SurfacePlanResult {
+    const frozen = this.freeze(opts)
+    return this.planned(() => this.computeReparent(ids, home, frozen))
+  }
+
+  private computeReparent(ids: string[], home: SurfaceHome, opts: SurfaceTopologyOpts): PlanOutcome {
     const unique = [...new Set(ids)]
     const moving: Surface[] = []
     for (const id of unique) {
@@ -658,10 +825,20 @@ export class SurfaceStore {
     const changed = moving.filter(s => !sameHome(s.home, home))
     if (changed.length === 0) return { applied: false, reason: 'no-change', topologyRev: rev }
 
-    const now = opts.at ?? Date.now()
+    const now = opts.at!
     const nextRev = rev + 1
     const written = changed.map(prior => this.rehome(prior, home, nextRev, now))
-    return { applied: true, plan: this.makePlan(spaceId, rev, nextRev, written, [], expectedFrom(changed)) }
+    // The DESTINATION carries an expectation too. Without one, a reparent into a
+    // home deleted during the commit window passes its durable compare-and-swap
+    // (the two record sets are disjoint) and leaves a live subtree inside the
+    // recovery store with no deletion marker on it.
+    return {
+      applied: true,
+      plan: this.makePlan(spaceId, rev, nextRev, written, [], {
+        ...expectedFrom(changed),
+        ...this.expectedHome(home),
+      }),
+    }
   }
 
   /**
@@ -688,6 +865,16 @@ export class SurfaceStore {
     parent: Omit<SurfaceInit, 'spaceId' | 'home' | 'id'> & { id?: string },
     opts: SurfaceTopologyOpts = {},
   ): SurfacePlanResult {
+    const seeded = { ...parent, id: parent.id ?? newSurfaceId() }
+    const frozen = this.freeze(opts)
+    return this.planned(() => this.computeGroup(childIds, seeded, frozen))
+  }
+
+  private computeGroup(
+    childIds: string[],
+    parent: Omit<SurfaceInit, 'spaceId' | 'home' | 'id'> & { id: string },
+    opts: SurfaceTopologyOpts,
+  ): PlanOutcome {
     const unique = [...new Set(childIds)]
     const children: Surface[] = []
     for (const id of unique) {
@@ -714,14 +901,14 @@ export class SurfaceStore {
     if (home.kind === 'recovery' || children.some(s => this.recoveryRootFor(s.id))) {
       return { applied: false, reason: 'deleted', topologyRev: rev }
     }
-    const parentId = parent.id ?? newSurfaceId()
+    const parentId = parent.id
     if (this.surfaces.has(parentId)) {
       return { applied: false, reason: 'duplicate-id', topologyRev: rev }
     }
     const gate = this.checkRevisions(children, spaceId, opts)
     if (gate) return { applied: false, reason: gate, topologyRev: rev }
 
-    const now = opts.at ?? Date.now()
+    const now = opts.at!
     const nextRev = rev + 1
     const created = this.materialize(parentId, { ...parent, id: parentId, spaceId, home }, now, nextRev)
     const newHome: SurfaceHome = { kind: 'surface', surfaceId: parentId }
@@ -733,6 +920,9 @@ export class SurfaceStore {
       plan: this.makePlan(spaceId, rev, nextRev, [created, ...moved], [], {
         [parentId]: 0,
         ...expectedFrom(children),
+        // The shared home gains the new parent and loses the children, so it is a
+        // destination like any other and carries its own expectation.
+        ...this.expectedHome(home),
       }),
     }
   }
@@ -763,6 +953,11 @@ export class SurfaceStore {
    * added must not silently take that child with it.
    */
   planDelete(id: string, opts: SurfaceDeleteOpts = {}): SurfacePlanResult {
+    const frozen: SurfaceDeleteOpts = { ...opts, at: opts.at ?? Date.now() }
+    return this.planned(() => this.computeDelete(id, frozen))
+  }
+
+  private computeDelete(id: string, opts: SurfaceDeleteOpts): PlanOutcome {
     const target = this.surfaces.get(id)
     if (!target) return { applied: false, reason: 'unknown-surface', topologyRev: 0 }
     const spaceId = target.spaceId
@@ -785,7 +980,7 @@ export class SurfaceStore {
     const gate = this.checkRevisions(affected, spaceId, opts)
     if (gate) return { applied: false, reason: gate, topologyRev: rev }
 
-    const now = opts.at ?? Date.now()
+    const now = opts.at!
     const nextRev = rev + 1
     // Children first, then the root: an ordered consumer sees them re-homed onto
     // the grandparent before the root leaves the tree, never orphaned in between.
@@ -803,7 +998,16 @@ export class SurfaceStore {
         disposition,
       },
     })
-    return { applied: true, plan: this.makePlan(spaceId, rev, nextRev, written, [], expectedFrom(affected)) }
+    return {
+      applied: true,
+      plan: this.makePlan(spaceId, rev, nextRev, written, [], {
+        ...expectedFrom(affected),
+        // The home the target is leaving — and, under `reparent-children`, the home
+        // the promoted children are landing on. Same record either way, and it is a
+        // destination like any other.
+        ...this.expectedHome(target.home),
+      }),
+    }
   }
 
   /**
@@ -818,6 +1022,11 @@ export class SurfaceStore {
    * exists to prevent.
    */
   planRestore(id: string, opts: SurfaceTopologyOpts = {}): SurfacePlanResult {
+    const frozen = this.freeze(opts)
+    return this.planned(() => this.computeRestore(id, frozen))
+  }
+
+  private computeRestore(id: string, opts: SurfaceTopologyOpts): PlanOutcome {
     const target = this.surfaces.get(id)
     if (!target) return { applied: false, reason: 'unknown-surface', topologyRev: 0 }
     const spaceId = target.spaceId
@@ -832,7 +1041,7 @@ export class SurfaceStore {
     const homeUsable = this.checkHome(former, spaceId, new Set([id])) === undefined
     const home: SurfaceHome = homeUsable ? former : { kind: 'canvas', spaceId }
 
-    const now = opts.at ?? Date.now()
+    const now = opts.at!
     const nextRev = rev + 1
     // Destructure the deletion marker OFF rather than setting it undefined: an
     // `undefined` property survives in memory and disappears across JSON, so the
@@ -848,15 +1057,35 @@ export class SurfaceStore {
     }
     return {
       applied: true,
-      plan: this.makePlan(spaceId, rev, nextRev, [restored], [], expectedFrom([target])),
+      plan: this.makePlan(spaceId, rev, nextRev, [restored], [], {
+        ...expectedFrom([target]),
+        // The home it is going back to. A restore into a home that is being deleted
+        // would otherwise land the rescued Surface INSIDE the recovery store with
+        // its own marker stripped — strictly less reachable than while it was
+        // deleted, and the caller was told `ok`.
+        ...this.expectedHome(home),
+      }),
     }
   }
 
-  /** ERASE a recovery-store root and everything under it. The single irreversible
-   *  operation in the model, which is why it refuses anything that is not already
-   *  in the recovery store: purge is the second step of a decision, never the
-   *  first. */
-  planPurge(id: string, opts: SurfaceTopologyOpts = {}): SurfacePlanResult {
+  /**
+   * ERASE a recovery-store root and everything under it. The single irreversible
+   * operation in the model, which is why it refuses anything that is not already in
+   * the recovery store: purge is the second step of a decision, never the first.
+   *
+   * And why it demands the descendant set, exactly as `planDelete` does. The doomed
+   * set is computed from the CURRENT tree, so anything that arrived under the
+   * subtree after the human read the recovery list would be erased by a purge they
+   * agreed to for a smaller blast radius. Naming the set makes that a refusal
+   * instead of a silent loss — the irreversible operation must not be able to
+   * exceed what the caller named.
+   */
+  planPurge(id: string, opts: SurfaceDeleteOpts = {}): SurfacePlanResult {
+    const frozen: SurfaceDeleteOpts = { ...opts, at: opts.at ?? Date.now() }
+    return this.planned(() => this.computePurge(id, frozen))
+  }
+
+  private computePurge(id: string, opts: SurfaceDeleteOpts): PlanOutcome {
     const target = this.surfaces.get(id)
     if (!target) return { applied: false, reason: 'unknown-surface', topologyRev: 0 }
     const spaceId = target.spaceId
@@ -867,32 +1096,44 @@ export class SurfaceStore {
     const gate = this.checkRevisions([target], spaceId, opts)
     if (gate) return { applied: false, reason: gate, topologyRev: rev }
 
-    const doomed = [target, ...this.getDescendants(id)]
-    // A purge bumps NO topology revision, because it re-homes nothing: every
-    // surviving record's `home` is exactly what it was. The space's revision is
-    // recomputed from the survivors on apply, and note the consequence — erasing
-    // the record that happened to hold the space's high-water `homeRev` LOWERS the
-    // revision. Live state and a reload of the same records still agree exactly
-    // (that is the contract `buildTopologyIndex` guarantees), but the counter is
-    // not monotonic across a purge. See the report accompanying U3.
+    const descendants = this.getDescendants(id)
+    if (descendants.length > 0 && opts.descendants === undefined) {
+      return { applied: false, reason: 'descendant-mismatch', topologyRev: rev }
+    }
+    if (opts.descendants !== undefined && !sameIdSet(opts.descendants, descendants.map(s => s.id))) {
+      return { applied: false, reason: 'descendant-mismatch', topologyRev: rev }
+    }
+
+    const doomed = [target, ...descendants]
+    // A purge DOES advance the space's topology revision, even though it re-homes
+    // nothing: records left the tree, so a client holding the previous revision no
+    // longer describes the space. It can advance it because the revision is a
+    // persisted monotonic counter rather than `max(homeRev)` over the survivors —
+    // under the old derivation a purge LOWERED the number, which is what let a
+    // stale `expectedTopologyRev` match a topology it had never seen. See the KTD5
+    // amendment in the plan.
     return {
       applied: true,
-      plan: this.makePlan(spaceId, rev, rev, [], doomed.map(s => s.id), expectedFrom([target])),
+      plan: this.makePlan(spaceId, rev, rev + 1, [], doomed.map(s => s.id), expectedFrom([target])),
     }
   }
 
   /**
    * Install a plan and emit its one batch.
    *
-   * Separated from planning so a durable commit can sit between them. The emitted
-   * `topologyRev` is READ BACK from the rebuilt index rather than copied off the
-   * plan, so what clients are told is what the store actually holds — which
-   * matters for purge, the one operation whose resulting revision is not simply
-   * `base + 1`.
+   * Separated from planning so a durable commit can sit between them. The plan's
+   * `topologyRev` is INSTALLED as the space's counter (never lowering it), and the
+   * emitted number is read back from the store afterwards, so what clients are told
+   * is what the store actually holds.
+   *
+   * A plan should be {@link SurfaceTopologyPlan.revalidate}d against live state
+   * before it reaches here whenever anything could have moved since it was computed
+   * — which is every path except the single-writer boot and migration ones.
    */
   applyPlan(plan: SurfaceTopologyPlan): Surface[] {
     for (const record of plan.records) this.surfaces.set(record.id, record)
     for (const id of plan.purged) this.surfaces.delete(id)
+    this.raiseTopologyRev(plan.spaceId, plan.topologyRev)
     this.reindex()
     this.emit({
       spaceId: plan.spaceId,
@@ -912,9 +1153,11 @@ export class SurfaceStore {
     for (const [id, s] of this.surfaces) {
       if (s.spaceId === spaceId) this.surfaces.delete(id)
     }
-    // The cleared space's topology revision falls back to 0 because `reindex`
-    // rebuilds every revision from the surviving records — correct here precisely
-    // because nothing of that space survives to be confused by the reset.
+    // The counter is NOT reset. Monotonic means monotonic: a space whose records
+    // were cascaded away can be repopulated (a run recreated under the same space),
+    // and restarting its revision at 0 would hand a client that still holds an old
+    // token a number it could match against a topology it never saw. One integer
+    // per space is not worth the ABA window.
     this.reindex()
   }
 
@@ -930,7 +1173,10 @@ export class SurfaceStore {
     if (removed) this.reindex()
   }
 
-  /** Silent clear of everything, for the no-active-space `clear()` branch. */
+  /** Silent clear of everything, for the no-active-space `clear()` branch. The one
+   *  place the topology counters DO reset, because this is a total reset of the
+   *  store — equivalent to booting against an empty snapshot, which is a state the
+   *  revision contract already has to survive. */
   clearAll(): void {
     this.surfaces.clear()
     this.childIndex.clear()
@@ -938,6 +1184,80 @@ export class SurfaceStore {
   }
 
   // --- Internals ---
+
+  /**
+   * Attach {@link SurfaceTopologyPlan.revalidate} to a computed plan.
+   *
+   * ONE routine, invoked twice. The closure re-runs the very computation that
+   * produced the plan — same method, same frozen arguments — so a check added to a
+   * `plan*` is re-asserted at commit time in the same edit that adds it. A second,
+   * hand-written list of preconditions is exactly how the fifth of five checks goes
+   * missing six months later, and a re-validation that covers four of five is worse
+   * than none because the fifth becomes a bug nobody looks for again.
+   */
+  private planned(compute: PlanComputation): SurfacePlanResult {
+    const first = compute()
+    if (!first.applied) return first
+    const plan: SurfaceTopologyPlan = {
+      ...first.plan,
+      revalidate: () => this.recheck(compute, plan),
+    }
+    return { applied: true, plan }
+  }
+
+  /**
+   * Re-run a plan's computation against live state and report whether the decision
+   * still holds.
+   *
+   * Three outcomes, and the third is the interesting one:
+   *   · the recomputation is REFUSED — the world moved enough that the mutation is
+   *     no longer legal at all (the home was deleted, the descendant set changed,
+   *     the caller's expected revision is stale). Its own reason is returned;
+   *   · the recomputation DECIDES SOMETHING ELSE — same legality, different effect
+   *     (a restore whose former home vanished now lands on the Canvas). Refused as
+   *     a conflict, because the caller was answered about the first decision;
+   *   · it agrees. The FRESH plan is returned, not the original, because the
+   *     topology revision is allocated here — at commit time — so two mutations
+   *     planned against the same base cannot both claim `base + 1`.
+   */
+  private recheck(compute: PlanComputation, original: SurfaceTopologyPlan): SurfacePlanResult {
+    const fresh = compute()
+    if (!fresh.applied) return fresh
+    const rev = this.getTopologyRev(original.spaceId)
+    // Split before the whole-plan comparison purely so the caller gets the accurate
+    // reason: a moved record revision is a per-record conflict, everything else is
+    // the space's topology having moved underneath the plan.
+    if (JSON.stringify(fresh.plan.expectedRevs) !== JSON.stringify(original.expectedRevs)) {
+      return { applied: false, reason: 'stale-surface-revision', topologyRev: rev }
+    }
+    if (planFingerprint(fresh.plan) !== planFingerprint(original)) {
+      return { applied: false, reason: 'stale-topology-revision', topologyRev: rev }
+    }
+    return { applied: true, plan: { ...fresh.plan, revalidate: original.revalidate } }
+  }
+
+  /** Pin the wall clock at planning time so a re-computation differs from the
+   *  original only where the world moved, never because `Date.now()` did. */
+  private freeze<T extends SurfaceTopologyOpts>(opts: T): T {
+    return { ...opts, at: opts.at ?? Date.now() }
+  }
+
+  /** The durable expectation for a home that is gaining or losing a child. Empty
+   *  for the Canvas and the recovery store, which are homes rather than records and
+   *  so have no revision to compare — and empty for a home that is not there, which
+   *  the plan's own `checkHome` has already refused for every path that cares. */
+  private expectedHome(home: SurfaceHome): Record<string, number> {
+    if (home.kind !== 'surface') return {}
+    const parent = this.surfaces.get(home.surfaceId)
+    return parent ? { [parent.id]: parent.rev } : {}
+  }
+
+  /** Raise a space's topology revision. Never lowers it — that is the whole point
+   *  of the counter (see {@link topologyRevs}). */
+  private raiseTopologyRev(spaceId: string, rev: number): void {
+    const current = this.topologyRevs.get(spaceId) ?? 0
+    if (rev > current) this.topologyRevs.set(spaceId, rev)
+  }
 
   /** Build the stored record from an init. Host-assigned fields (identity, both
    *  revisions, timestamps, derived thread status) are set HERE and never read off
@@ -1053,7 +1373,7 @@ export class SurfaceStore {
     records: Surface[],
     purged: string[],
     expectedRevs: Record<string, number>,
-  ): SurfaceTopologyPlan {
+  ): PlanCore {
     return { spaceId, baseTopologyRev, topologyRev, records, purged, expectedRevs }
   }
 
@@ -1088,7 +1408,10 @@ export class SurfaceStore {
   private reindex(): void {
     const { children, topologyRevs } = buildTopologyIndex(this.surfaces.values())
     this.childIndex = children
-    this.topologyRevs = topologyRevs
+    // The rebuilt revisions are a FLOOR, not the answer. Assigning them outright is
+    // what used to make `purge` — the one operation that erases records — drive the
+    // counter backwards, past a token some client was still holding.
+    for (const [spaceId, floor] of topologyRevs) this.raiseTopologyRev(spaceId, floor)
   }
 
   private resolveChildren(key: string): Surface[] {

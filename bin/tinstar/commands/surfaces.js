@@ -37,7 +37,8 @@ const USAGE = `usage: tinstar surfaces <command>
 
   delete <id> [--descendants <a,b>] [--disposition <reparent-children|delete-subtree>]
   restore <id>                           undo a delete
-  purge <id>                             ERASE a deleted subtree. Irreversible.
+  purge <id> [--descendants <a,b>]       ERASE a deleted subtree. Irreversible;
+                                         a subtree with descendants must name them.
 
   --json                                 print the raw response envelope
   --idempotency-key <k>                  make a retry safe after a lost response`
@@ -205,9 +206,17 @@ export function buildRequest(argv) {
     case 'restore':
       if (!first) throw new Error('surfaces restore: <id> is required')
       return { method: 'POST', path: `/api/surfaces/${enc(first)}/restore`, body: {} }
-    case 'purge':
+    case 'purge': {
       if (!first) throw new Error('surfaces purge: <id> is required')
-      return { method: 'DELETE', path: `/api/surfaces/${enc(first)}/purge`, body: {} }
+      // Same compare-and-swap `delete` takes, and required for the same reason —
+      // more so, since a purge has no undo. The server refuses a subtree whose
+      // descendants the caller did not name.
+      const body = {}
+      if (typeof flags.descendants === 'string') {
+        body.descendants = flags.descendants.split(',').map(s => s.trim()).filter(Boolean)
+      }
+      return { method: 'DELETE', path: `/api/surfaces/${enc(first)}/purge`, body }
+    }
 
     default:
       throw new Error(USAGE)

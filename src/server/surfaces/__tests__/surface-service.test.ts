@@ -557,7 +557,10 @@ describe('recoverable deletion (KTD15)', () => {
     expect(err(await h.svc.purge('sf-1', {}, ctx())).reason).toBe('not-deleted')
     unwrap(await h.svc.delete('sf-1', { descendants: ['sf-2', 'sf-3'], disposition: 'delete-subtree' }, ctx()))
     h.batches.length = 0
-    const r = unwrap(await h.svc.purge('sf-1', {}, ctx()))
+    // Naming the descendant set is REQUIRED: purge is irreversible, so it must not
+    // be able to erase more than the caller agreed to.
+    expect(err(await h.svc.purge('sf-1', {}, ctx())).reason).toBe('descendant-mismatch')
+    const r = unwrap(await h.svc.purge('sf-1', { descendants: ['sf-2', 'sf-3'] }, ctx()))
     expect(r.purged).toEqual(['sf-1', 'sf-2', 'sf-3'])
     expect(h.docStore.getAllSurfaces()).toHaveLength(0)
     expect(h.batches[0]!.deletes).toEqual(['sf-1', 'sf-2', 'sf-3'])
@@ -731,7 +734,7 @@ describe('durable integration', () => {
   function live() {
     const docStore = new DocumentStore()
     const sidecar = SurfaceSidecar.open({ dir, lockPath: join(dir, 'server.lock') })
-    docStore.loadSurfaces(sidecar.durableRecords())
+    docStore.loadSurfaces(sidecar.outcome.records, sidecar.outcome.topologyRevs)
     docStore.enableSurfacePersistence(sidecar)
     docStore.activeSpaceId = SPACE
     const sse = new SSEBroadcaster(docStore)
@@ -822,6 +825,181 @@ describe('durable integration', () => {
     expect(second.replayed).toBe(true)
     expect(h.docStore.getAllSurfaces()).toHaveLength(2)
     expect(second.surfaces.map(s => s.surface.id)).toEqual(first.surfaces.map(s => s.surface.id))
+    h.sse.destroy()
+  })
+
+  // --- The plan/apply seam ---------------------------------------------------
+  //
+  // Planning validates against live memory; the durable commit that follows is a
+  // whole-file rewrite behind a queue. Everything below lands work INSIDE that
+  // window, which is why each one uses the real sidecar rather than the in-memory
+  // harness — with no sidecar there is no window to land in.
+  //
+  // The pattern these pin: whichever of the two mutations commits second must be
+  // REFUSED. Never "both succeeded and one of them silently swallowed the other's
+  // work into the recovery store", which is what used to happen, and never a
+  // record that is neither in `list()` nor reachable from a recovery root.
+
+  /** Every visible Surface reachable from `rootIds`, every non-visible one from a
+   *  `recoveryIds` root. The invariant that actually broke: a swallowed record was
+   *  in neither list, so nothing rendered it and nothing offered to restore it —
+   *  and then `purge` erased it. */
+  function assertListingIsComplete(h: ReturnType<typeof live>) {
+    const listing = unwrap(h.svc.list({ spaceId: SPACE, includeDeleted: true }))
+    const visible = unwrap(h.svc.list({ spaceId: SPACE }))
+    const visibleIds = new Set(visible.surfaces.map(v => v.surface.id))
+
+    const reachable = new Set<string>()
+    const walk = (ids: string[]) => {
+      for (const id of ids) {
+        if (reachable.has(id)) continue
+        reachable.add(id)
+        walk(h.docStore.getSurfaceChildren(id).map(s => s.id))
+      }
+    }
+    walk(listing.rootIds)
+    const fromRoots = new Set(reachable)
+    walk(listing.recoveryIds)
+
+    for (const view of listing.surfaces) {
+      const id = view.surface.id
+      expect(reachable.has(id), `${id} is in no tree at all`).toBe(true)
+      expect(
+        fromRoots.has(id),
+        `${id} is ${visibleIds.has(id) ? 'visible' : 'hidden'} but ${fromRoots.has(id) ? 'under a root' : 'under a recovery root'}`,
+      ).toBe(visibleIds.has(id))
+    }
+  }
+
+  it('refuses a create landing inside a subtree being deleted', async () => {
+    const h = live()
+    await h.svc.create({ spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'P' } }, ctx())
+    const [del, kid] = await Promise.all([
+      // A fully correct compare-and-swap: the human was shown a childless Surface.
+      h.svc.delete('sf-1', {
+        expectedTopologyRev: h.docStore.getSurfaceTopologyRev(SPACE),
+        descendants: [],
+        disposition: 'delete-subtree',
+      }, ctx()),
+      h.svc.create({ spaceId: SPACE, home: { kind: 'surface', surfaceId: 'sf-1' }, content: { headline: 'kid' } }, ctx()),
+    ])
+    expect([del.ok, kid.ok]).toContain(false)
+    expect([del.ok, kid.ok]).toContain(true)
+    assertListingIsComplete(h)
+    h.sse.destroy()
+  })
+
+  it('refuses a reparent into a home being deleted, rather than burying it', async () => {
+    const h = live()
+    await h.svc.create({ spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'DEST' } }, ctx())
+    await h.svc.create({ spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'MOVER' } }, ctx())
+    const [move, del] = await Promise.all([
+      h.svc.reparent({ ids: ['sf-2'], home: { kind: 'surface', surfaceId: 'sf-1' } }, ctx()),
+      h.svc.delete('sf-1', {}, ctx()),
+    ])
+    expect([move.ok, del.ok]).toContain(false)
+    // Whichever won, MOVER is never inside the recovery store: if the delete won,
+    // the reparent was refused and MOVER is still on the Canvas; if the reparent
+    // won, the delete was refused. The state that used to happen — a live record
+    // with no deletion marker, homed under a deleted parent, in neither list —
+    // is unreachable from either order.
+    expect(h.docStore.surfaceRecoveryRootFor('sf-2')).toBeUndefined()
+    expect(h.docStore.getSurface('sf-2')!.deleted).toBeUndefined()
+    assertListingIsComplete(h)
+    h.sse.destroy()
+  })
+
+  it('refuses a restore into a home being deleted', async () => {
+    const h = live()
+    await h.svc.create({ spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'P' } }, ctx())
+    await h.svc.create({ spaceId: SPACE, home: { kind: 'surface', surfaceId: 'sf-1' }, content: { headline: 'C' } }, ctx())
+    unwrap(await h.svc.delete('sf-2', {}, ctx()))
+    const [back, del] = await Promise.all([
+      h.svc.restore('sf-2', {}, ctx()),
+      h.svc.delete('sf-1', {}, ctx()),
+    ])
+    expect([back.ok, del.ok]).toContain(false)
+    // The failure mode: C restored INTO the recovery store with its marker
+    // stripped — strictly less reachable than while it was deleted, and reported
+    // `ok`. C must be either genuinely restored or still a properly marked
+    // recovery root; there is no third state.
+    const c = h.docStore.getSurface('sf-2')!
+    const root = h.docStore.surfaceRecoveryRootFor('sf-2')
+    if (root) {
+      expect(root.id).toBe('sf-2')
+      expect(c.deleted).toBeDefined()
+    } else {
+      expect(c.deleted).toBeUndefined()
+    }
+    assertListingIsComplete(h)
+    h.sse.destroy()
+  })
+
+  it('gives two concurrent topology mutations two different revisions', async () => {
+    const h = live()
+    await h.svc.create({ spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'a' } }, ctx())
+    await h.svc.create({ spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'b' } }, ctx())
+    const base = h.docStore.getSurfaceTopologyRev(SPACE)
+    const [x, y] = await Promise.all([
+      h.svc.create({ spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'X' } }, ctx()),
+      h.svc.create({ spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'Y' } }, ctx()),
+    ])
+    const produced = [x, y].filter(r => r.ok).map(r => unwrap(r).topologyRev)
+    // Both are allowed to succeed — they touch disjoint records — but they may not
+    // both claim `base + 1`. The revision is allocated at COMMIT time, so the space
+    // advances once per mutation and a batch header identifies its own mutation.
+    expect(produced.length).toBeGreaterThan(0)
+    expect(new Set(produced).size).toBe(produced.length)
+    expect([...produced].sort((a, b) => a - b))
+      .toEqual(produced.map((_, i) => base + 1 + i))
+    expect(h.docStore.getSurfaceTopologyRev(SPACE)).toBe(base + produced.length)
+    // Each response's own base is the revision the one before it produced, so an
+    // ordered consumer can chain the batches instead of full-resyncing on the
+    // second of every colliding pair.
+    for (const r of [x, y]) {
+      if (r.ok) expect(r.data.topologyRev).toBe(r.data.baseTopologyRev + 1)
+    }
+    h.sse.destroy()
+  })
+
+  it('a purge cannot erase more than the caller named', async () => {
+    const h = live()
+    await h.svc.create({ spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'P' } }, ctx())
+    unwrap(await h.svc.delete('sf-1', {}, ctx()))
+    // A child arrives under the deleted root after the human read the recovery
+    // list. The purge they authorised was for one record.
+    h.docStore.loadSurfaces([{
+      ...h.docStore.getSurface('sf-1')!,
+      id: 'sf-late', home: { kind: 'surface', surfaceId: 'sf-1' }, rev: 1, homeRev: 9,
+    }])
+    const refused = await h.svc.purge('sf-1', { descendants: [] }, ctx())
+    expect(err(refused).reason).toBe('descendant-mismatch')
+    expect(h.docStore.getSurface('sf-late')).toBeDefined()
+    h.sse.destroy()
+  })
+
+  it('a content update that changes nothing leaves live and durable in agreement', async () => {
+    const h = live()
+    await h.svc.create({ spaceId: SPACE, home: { kind: 'canvas', spaceId: SPACE }, content: { headline: 'hello' } }, ctx())
+
+    // The cheapest request in the API: a form saved unchanged. It used to advance
+    // the DURABLE revision while the in-memory storm guard refused the install,
+    // after which every write to the record failed its compare-and-swap forever
+    // and re-reading (the documented recovery) returned the same stale revision.
+    const noop = await h.svc.updateContent('sf-1', { expectedRev: 1, headline: 'hello' }, ctx())
+    expect(err(noop).reason).toBe('no-change')
+
+    const live1 = h.docStore.getSurface('sf-1')!
+    const durable1 = h.sidecar.durableRecords().find(r => r.id === 'sf-1')!
+    expect(live1.rev).toBe(durable1.rev)
+
+    // And the record is still writable — the property the divergence destroyed.
+    const real = unwrap(await h.svc.updateContent('sf-1', { expectedRev: live1.rev, headline: 'goodbye' }, ctx()))
+    expect(real.surfaces[0]!.surface.content.headline).toBe('goodbye')
+    const appended = unwrap(await h.svc.appendThread('sf-1', { text: 'still works' }, ctx()))
+    expect(appended.surfaces[0]!.surface.thread.replies).toHaveLength(1)
+    expect(h.docStore.getSurface('sf-1')!.rev)
+      .toBe(h.sidecar.durableRecords().find(r => r.id === 'sf-1')!.rev)
     h.sse.destroy()
   })
 

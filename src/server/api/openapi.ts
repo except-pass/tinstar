@@ -725,9 +725,24 @@ export const spec = {
       delete: {
         tags: ['Surfaces'],
         summary: 'ERASE a deleted subtree. Irreversible.',
-        description: 'The only irreversible operation on a Surface. Refused for anything not already in the recovery store, so a purge is always the second step of a decision.',
+        description: 'The only irreversible operation on a Surface. Refused for anything not already in the recovery store, so a purge is always the second step of a decision. '
+          + 'A subtree with descendants requires the EXACT descendant set the caller was shown, exactly as delete does — a purge computes its doomed set from the tree as it is NOW, '
+          + 'so without that check it would erase records that arrived after the human read the recovery list, and there is no undo.',
         parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
-        responses: { 200: { description: 'Erased' }, 409: { description: 'Not a deleted subtree root' } },
+        requestBody: { content: { 'application/json': { schema: {
+          type: 'object',
+          properties: {
+            descendants: {
+              type: 'array', items: { type: 'string' },
+              description: 'The exact transitive descendant set, at every depth. Required when the subtree has any.',
+            },
+            expectedTopologyRev: { type: 'integer', description: 'The space topology revision the caller believes it read.' },
+          },
+        } } } },
+        responses: {
+          200: { description: 'Erased' },
+          409: { description: 'Not a deleted subtree root, or the named descendant set does not match' },
+        },
       },
     },
 

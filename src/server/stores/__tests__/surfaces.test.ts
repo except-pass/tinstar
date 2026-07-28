@@ -617,7 +617,10 @@ describe('lifecycle cascade', () => {
     store.clearSpaceSilently(SPACE)
     expect(batches).toHaveLength(0)
     expect(store.getSurfacesForSpace(SPACE)).toEqual([])
-    expect(store.getTopologyRev(SPACE)).toBe(0)
+    // The counter is NOT reset with the records. It is monotonic: a cascaded space
+    // can be repopulated, and restarting its revision at 0 would let a token some
+    // client is still holding match a topology it never saw.
+    expect(store.getTopologyRev(SPACE)).toBe(1)
     expect(store.getAllSurfaces().map(s => s.id)).toEqual([there.id])
     expect(store.getTopologyRev('space-2')).toBe(1)
   })
@@ -660,8 +663,12 @@ describe('the plan/apply seam (KTD7)', () => {
     expect(store.getTopologyRev(SPACE)).toBe(2)
     expect(move.plan.baseTopologyRev).toBe(2)
     expect(move.plan.topologyRev).toBe(3)
-    // The compare-and-swap the durable half will run, at the PRE-bump revision.
-    expect(move.plan.expectedRevs).toEqual({ [a.id]: 1 })
+    // The compare-and-swap the durable half will run, at the PRE-bump revision —
+    // the moving record AND the destination it is landing on. Without the
+    // destination, a reparent into a home deleted during the commit window passes
+    // its durable CAS (the two record sets are disjoint) and buries a live subtree
+    // inside the recovery store.
+    expect(move.plan.expectedRevs).toEqual({ [a.id]: 1, [b.id]: 1 })
 
     const written = store.applyPlan(move.plan)
     expect(written.map(s => s.id)).toEqual([a.id])
@@ -785,7 +792,10 @@ describe('recoverable deletion in the store (KTD15)', () => {
     store.applyPlan(del.plan)
     batches.length = 0
 
-    const purge = store.planPurge(root.id)
+    // The descendant set is required, exactly as it is for a delete: purge is the
+    // irreversible operation and must not exceed the blast radius the caller named.
+    expect(store.planPurge(root.id)).toMatchObject({ applied: false, reason: 'descendant-mismatch' })
+    const purge = store.planPurge(root.id, { descendants: [kid.id, grand.id] })
     if (!purge.applied) throw new Error(`purge rejected: ${purge.reason}`)
     expect(purge.plan.records).toEqual([])
     expect(purge.plan.purged.sort()).toEqual([grand.id, kid.id, root.id].sort())
@@ -795,14 +805,14 @@ describe('recoverable deletion in the store (KTD15)', () => {
     expect(batches[0]!.deletes!.sort()).toEqual([grand.id, kid.id, root.id].sort())
   })
 
-  it('a purge can LOWER the space topology revision, and live state still equals a reload', () => {
-    // Documented rather than asserted-away: `buildTopologyIndex` derives the
-    // revision as the maximum `homeRev` among surviving records, and purge is the
-    // one operation that erases records. Erasing the high-water record therefore
-    // moves the counter backwards. The property that must NOT break is that live
-    // state and a reload of the same records agree exactly — that is the reload
-    // contract everything else depends on. The non-monotonicity is a real, narrow
-    // ABA window and it is disclosed in the U3 report rather than papered over.
+  it('a purge RAISES the space topology revision and can never lower it', () => {
+    // The regression this pins. The revision used to be derived as `max(homeRev)`
+    // over the surviving records, so `purge` — the one operation that erases
+    // records — drove it BACKWARDS past values clients were still holding. Five
+    // ordinary operations and no timing luck reproduced an ABA: read 3, delete (4),
+    // purge (2), group (3), and a stale `expectedTopologyRev: 3` was accepted
+    // against a completely different topology. The counter is now persisted and
+    // monotonic, and a purge advances it like any other topology change.
     const { store } = makeStore()
     const a = create(store, init('a'))
     const b = create(store, init('b'))
@@ -816,10 +826,51 @@ describe('recoverable deletion in the store (KTD15)', () => {
     if (!purge.applied) throw new Error('setup purge rejected')
     store.applyPlan(purge.plan)
 
-    expect(store.getTopologyRev(SPACE)).toBeLessThan(high)
+    expect(store.getTopologyRev(SPACE)).toBe(high + 1)
+    // A reload of the same records carries the counter forward — it is persisted
+    // alongside them now, because it is no longer derivable from them.
     const reloaded = new SurfaceStore(() => {})
-    reloaded.load(store.getAllSurfaces())
+    reloaded.load(store.getAllSurfaces(), store.topologyRevSnapshot())
     expect(reloaded.getTopologyRev(SPACE)).toBe(store.getTopologyRev(SPACE))
     expect(reloaded.getRoots(SPACE).map(s => s.id)).toEqual([a.id])
+  })
+
+  it('refuses a stale expectedTopologyRev after delete -> purge -> create (the ABA)', () => {
+    // The executed attack, end to end, at store level.
+    const { store } = makeStore()
+    const p = create(store, init('P'))
+    const q = create(store, init('Q'))
+    const r = create(store, init('R'))
+    const readRev = store.getTopologyRev(SPACE)
+    expect(readRev).toBe(3)
+
+    const del = store.planDelete(r.id)
+    if (!del.applied) throw new Error('setup delete rejected')
+    store.applyPlan(del.plan)
+    const purge = store.planPurge(r.id)
+    if (!purge.applied) throw new Error('setup purge rejected')
+    store.applyPlan(purge.plan)
+    // Never back down to (or below) the number the client is holding.
+    expect(store.getTopologyRev(SPACE)).toBeGreaterThan(readRev)
+
+    const grouped = store.group([p.id, q.id], { content: { headline: 'G' } })
+    expect(grouped.applied).toBe(true)
+
+    const late = store.planReparent([p.id], { kind: 'surface', surfaceId: q.id }, {
+      expectedTopologyRev: readRev,
+    })
+    expect(late).toMatchObject({ applied: false, reason: 'stale-topology-revision' })
+  })
+
+  it('reloads a pre-U3 snapshot at the floor its records imply', () => {
+    // Backwards compatibility for a snapshot written before the counter existed:
+    // no stored revisions, so `max(homeRev)` is the starting point — exactly the
+    // old behaviour, and never lower than any record's own `homeRev`.
+    const { store } = makeStore()
+    create(store, init('a'))
+    create(store, init('b'))
+    const reloaded = new SurfaceStore(() => {})
+    reloaded.load(store.getAllSurfaces())
+    expect(reloaded.getTopologyRev(SPACE)).toBe(2)
   })
 })
