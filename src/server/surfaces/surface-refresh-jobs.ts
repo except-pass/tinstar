@@ -67,8 +67,19 @@ export interface SurfaceRefreshJob {
   /** Why the Surface was scheduled. Carried on the job so a completed job still
    *  explains itself after the Surface's own reason has been cleared. */
   reason: SurfaceStaleReason
-  /** The Surface revision this job was created against. */
+  /** The Surface revision this job was created against.
+   *
+   *  BOOKKEEPING ONLY — do not reach for it as a compare-and-swap. The
+   *  coordinator's own `setSchedule`, `markPossiblyStale`, and `beginRefresh`
+   *  commits all bump `rev` inside the refresh window, so comparing it at the
+   *  barrier would refuse every result the engine ever produced. The guard that
+   *  actually protects a concurrent edit is `baseContentDigest`. */
   baseRev: number
+  /** {@link surfaceContentDigest} of the authored content this job's worker was
+   *  told to replace, snapshotted at `beginRefresh` and handed back to the barrier
+   *  as `expectedContentDigest`. Content is the right axis precisely because
+   *  everything else on the record legitimately moves while a refresh runs. */
+  baseContentDigest?: string
   /** The host observation generation the Surface stood at when the job was
    *  created. */
   startGeneration: number

@@ -732,6 +732,107 @@ describe('the observation barrier', () => {
     expect(h.get('sf-1').content.headline).toBe('Coverage')
   })
 
+  it('a concurrent content edit is NOT overwritten by the result it raced', async () => {
+    // The guard the record could not previously express. The generation catches
+    // SOURCE movement; `updateContent` — the path an agent's Slate write and a
+    // user's edit both take — bumps `rev` but writes the adapter's new watermark
+    // straight onto the binding, so `observeSource` sees no evidence move and the
+    // generation sees nothing. And the revision compare-and-swap is unreachable
+    // from harvest, which re-reads `rev` on the line above the call.
+    //
+    // Executed against this branch before the fix: a user's "DO NOT TOUCH, I am
+    // mid-triage" headline was destroyed, the phase committed `current`, and there
+    // was no conflict and no trace.
+    const h = await dispatched()
+    const job = h.jobFor('sf-1')!
+    expect(job.baseContentDigest).toBeDefined()
+
+    // The user edits mid-flight. Legitimately: the Surface is `refreshing`, and
+    // `guardLive` only blocks recovery-store records, so nothing stops this.
+    const edited = await h.svc.updateContent('sf-1', {
+      headline: 'Coverage — DO NOT TOUCH, I am mid-triage',
+      expectedRev: h.get('sf-1').rev,
+    }, ctx(25_000))
+    expect(edited.ok).toBe(true)
+
+    h.staged.set(job.stagingPath, workerJson({ headline: 'Coverage 91%' }))
+    h.clock.now = 30_000
+    const report = await h.coord.sweep()
+
+    expect(report.completed).toEqual([])
+    expect(report.superseded).toEqual([job.id])
+    expect(h.get('sf-1').content.headline).toBe('Coverage — DO NOT TOUCH, I am mid-triage')
+    // And the edit did not merely survive by luck — the Surface did not claim it
+    // had been verified, and one successor was scheduled to redo the work.
+    expect(h.get('sf-1').freshness.phase).not.toBe('current')
+    expect(h.jobs.list().filter(j => j.id !== job.id)).toHaveLength(1)
+  })
+
+  it('a thread reply during a refresh does NOT supersede the result', async () => {
+    // The other side of the same line. Content is the axis on purpose: a reply, a
+    // schedule change, or an ownership transfer must not throw away a result that
+    // is still perfectly valid for the content it replaces. A `baseRev` comparison
+    // would have refused all of them — including the coordinator's own commits.
+    const h = await dispatched()
+    const job = h.jobFor('sf-1')!
+    await h.svc.appendThread('sf-1', { text: 'still true?' }, ctx(25_000))
+
+    h.staged.set(job.stagingPath, workerJson({ headline: 'Coverage 91%' }))
+    h.clock.now = 30_000
+    const report = await h.coord.sweep()
+    expect(report.completed).toEqual([job.id])
+    expect(h.get('sf-1').content.headline).toBe('Coverage 91%')
+    expect(h.get('sf-1').thread.replies).toHaveLength(1)
+  })
+
+  it('a watcher observation that ends the refresh is a SUPERSESSION, not a failure', async () => {
+    // `observeSource` sets `phase: 'current'` whenever the binding is authoritative
+    // and the watermark moved — including while `refreshing`, and without clearing
+    // `jobId`. So an ordinary agent write during a refresh takes the Surface out of
+    // `refreshing` under the job's feet.
+    //
+    // The barrier then checked the PHASE first and answered
+    // `stale-surface-revision`, which the coordinator's supersession branch does not
+    // match — so it fell through to `failJob`. Net: a Surface the watcher had just
+    // made current was committed as `failed`, no successor was scheduled, and the
+    // badge read "The last refresh failed: mutation refused: stale-surface-revision".
+    // Both the state and the message were wrong.
+    const h = harness()
+    await h.seed({ ...withPolicy(AUTOMATIC), contentAuthority: 'source-binding' })
+    await h.coord.note(gitEvent())
+    await h.coord.sweep()
+    const job = h.jobFor('sf-1')!
+    expect(h.get('sf-1').freshness.phase).toBe('refreshing')
+
+    // The watcher lands the agent's file write during the barrier's re-observation.
+    h.observe = async surface => {
+      await h.svc.observeSource({
+        id: surface.id,
+        spaceId: SPACE,
+        home: surface.home,
+        adapter: 'slate-file',
+        locator: 'file:cov.json#cov',
+        worktree: WORKTREE,
+        alias: { bucket: { kind: 'run', runId: RUN }, localId: 'cov', visible: true },
+        author: 'agent',
+        content: { headline: 'Coverage 90% (agent)', recipe: 'Re-run coverage.', refreshPolicy: AUTOMATIC },
+        watermark: 'sha256:moved',
+      }, ctx(29_000))
+    }
+    // A "nothing to change" result, so the outcome turns on the phase and not on
+    // whether an adapter is registered to carry content back.
+    h.staged.set(job.stagingPath, workerJson({ note: 'no change' }))
+    h.clock.now = 30_000
+    const report = await h.coord.sweep()
+
+    expect(report.superseded).toEqual([job.id])
+    expect(report.failed).toEqual([])
+    expect(h.get('sf-1').freshness.phase).not.toBe('failed')
+    expect(h.get('sf-1').freshness.failure).toBeUndefined()
+    // Exactly one successor, for the generation the observation moved to.
+    expect(h.jobs.list().filter(j => j.id !== job.id)).toHaveLength(1)
+  })
+
   it('a byte-identical regeneration completes explicitly rather than spinning forever', async () => {
     const h = await dispatched()
     const job = h.jobFor('sf-1')!

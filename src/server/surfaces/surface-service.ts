@@ -391,6 +391,33 @@ export function requestFingerprint(op: SurfaceOperation, target: string | undefi
   return `${op}:${target ?? '-'}:${digest}`
 }
 
+/**
+ * A digest of a Surface's AUTHORED CONTENT — the axis a refresh result competes on.
+ *
+ * The refresh barrier needs to know "did the content I am about to replace change
+ * while I was computing my replacement", and neither of the two things already on
+ * the record can answer it.
+ *
+ * NOT THE REVISION. `beginRefresh`, `setSchedule`, and `markPossiblyStale` are the
+ * coordinator's OWN commits and they all bump `rev` during the refresh window, so a
+ * job comparing the revision it started at would refuse every result it ever
+ * produced. (The `expectedRev` the coordinator passes is re-read on the line above
+ * the call, with no await between, so on a single-threaded event loop it can never
+ * disagree — the guard exists but is unreachable from its only caller.)
+ *
+ * NOT THE GENERATION. `updateContent` — the path an agent's Slate write and a
+ * user's edit both take — bumps `rev` but does NOT advance `source.generation`: it
+ * writes the adapter's new watermark straight onto the binding, so the next
+ * `observeSource` sees no evidence move and the barrier sees nothing to supersede.
+ *
+ * Content, and only content. A thread reply, a schedule change, or an ownership
+ * transfer must not supersede a result that is still perfectly valid for the
+ * content it replaces.
+ */
+export function surfaceContentDigest(content: SurfaceContent): string {
+  return createHash('sha256').update(canonicalJson(content)).digest('hex').slice(0, 16)
+}
+
 /** The human half of a fingerprint, for an error message. */
 function fingerprintDescription(fingerprint: string): string {
   const [op, target] = fingerprint.split(':')
@@ -1658,6 +1685,12 @@ export class SurfaceService {
       expectedRev: number
       /** The generation this result was computed against. */
       observedGeneration: number
+      /** {@link surfaceContentDigest} of the content this result was computed to
+       *  REPLACE, snapshotted at `beginRefresh`. A mismatch means somebody rewrote
+       *  the content while the worker ran, and the result is superseded rather
+       *  than allowed to overwrite them. Optional so a caller that genuinely holds
+       *  no baseline (a recovery-path completion) is not forced to invent one. */
+      expectedContentDigest?: string
       /** Validated authored content, or absent for a verification that found
        *  nothing to change (a byte-identical regeneration). */
       content?: SurfaceContent
@@ -1669,15 +1702,44 @@ export class SurfaceService {
     const guard = this.guardLive(prior, 'completing its refresh')
     if (guard) return guard
     if (prior.freshness.phase !== 'refreshing') {
-      return this.conflictOn([prior], 'stale-surface-revision')
+      // THE SURFACE LEFT THE REFRESH THIS RESULT BELONGS TO. That is a
+      // SUPERSESSION, not a stale revision, and the distinction is the difference
+      // between one successor and a Surface committed as `failed` for no reason.
+      //
+      // The ordinary way it happens: `observeSource` sets `phase: 'current'`
+      // whenever its binding is authoritative and the watermark moved — including
+      // mid-refresh — so an ordinary agent write during a refresh takes the Surface
+      // out of `refreshing`. Harvest then arrived here, got `stale-surface-revision`,
+      // and the coordinator's supersession branch did not match it, so it fell
+      // through to `failJob`. Net: a Surface the watcher had just made current was
+      // committed as `failed`, no successor was scheduled, and the badge read "The
+      // last refresh failed: mutation refused: stale-surface-revision". Both the
+      // state and the message were wrong.
+      //
+      // NOTHING IS WRITTEN HERE, deliberately — unlike the generation branch below,
+      // which owns the Surface and puts it back to `possibly-stale`. This job does
+      // not own it any more: whatever moved it (a watcher observation, a failure, a
+      // newer job) is a more recent and better-informed statement than a result
+      // computed before any of that.
+      return {
+        ok: false,
+        error: {
+          code: 'conflict',
+          reason: 'superseded',
+          message:
+            `Surface ${id} is ${prior.freshness.phase}, not refreshing — it left the refresh this result ` +
+            'belongs to, so the result cannot claim current',
+          current: [prior],
+        },
+      }
     }
     if (input.expectedRev !== prior.rev) return this.conflictOn([prior], 'stale-surface-revision')
 
     const now = ctx.at ?? Date.now()
     const hostGeneration = prior.source?.generation ?? 0
-    if (input.observedGeneration !== hostGeneration) {
-      // Superseded. Back to possibly-stale, reason and overdue retained, job
-      // cleared so exactly one successor is scheduled for the newer generation.
+    const supersede = async (message: string): Promise<SurfaceResult<SurfaceMutation>> => {
+      // Back to possibly-stale, reason and overdue retained, job cleared so exactly
+      // one successor is scheduled for whatever moved past this result.
       const superseded: Surface = {
         ...prior,
         freshness: { ...omitJob(prior.freshness), phase: 'possibly-stale' },
@@ -1688,15 +1750,43 @@ export class SurfaceService {
       if (!committed.ok) return committed
       return {
         ok: false,
-        error: {
-          code: 'conflict',
-          reason: 'superseded',
-          message:
-            `Surface ${id} moved to observation generation ${hostGeneration} while this refresh was running ` +
-            `(it was computed against ${input.observedGeneration}); the result cannot claim current`,
-          current: this.currentFor([id]),
-        },
+        error: { code: 'conflict', reason: 'superseded', message, current: this.currentFor([id]) },
       }
+    }
+
+    if (input.observedGeneration !== hostGeneration) {
+      return supersede(
+        `Surface ${id} moved to observation generation ${hostGeneration} while this refresh was running ` +
+        `(it was computed against ${input.observedGeneration}); the result cannot claim current`,
+      )
+    }
+
+    // THE CONTENT COMPARE-AND-SWAP. The generation catches SOURCE movement and
+    // nothing else, and the two things that write authored content mid-refresh do
+    // not move it: `updateContent` — the path an agent's Slate write and a user's
+    // edit both take — bumps `rev` but writes the adapter's new watermark straight
+    // onto the binding, so `observeSource` sees no evidence move and there is
+    // nothing for the generation to notice.
+    //
+    // What that cost, executed against this branch: a run's agent posted a point
+    // update while a refresh of that point was running; the barrier's revision check
+    // could not fire (see `surfaceContentDigest`); and `content = input.content`
+    // replaced the agent's headline and body. Phase committed `current`. No
+    // conflict, no trace, and the Surface asserting it had been verified. A user
+    // edit reading "DO NOT TOUCH, I am mid-triage" was destroyed the same way.
+    //
+    // Compared against the digest snapshotted at `beginRefresh` rather than against
+    // `job.baseRev`, because the coordinator's own `setSchedule`/`markPossiblyStale`/
+    // `beginRefresh` commits all bump `rev` inside the refresh window — a revision
+    // comparison would refuse every result the engine ever produced.
+    if (
+      input.expectedContentDigest !== undefined
+      && surfaceContentDigest(prior.content) !== input.expectedContentDigest
+    ) {
+      return supersede(
+        `Surface ${id}'s content was rewritten while this refresh was running; the result would have ` +
+        'overwritten that edit, so it cannot claim current',
+      )
     }
 
     let source = prior.source

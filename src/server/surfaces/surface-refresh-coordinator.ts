@@ -28,7 +28,7 @@ import type {
 } from '../../domain/types'
 import { log } from '../logger'
 import { serializeByKey } from '../sessions/backends/serializeByKey'
-import type { SurfaceCallContext, SurfaceService } from './surface-service'
+import { surfaceContentDigest, type SurfaceCallContext, type SurfaceService } from './surface-service'
 import {
   ACTIVE_JOB_STATES,
   type SurfaceRefreshJob,
@@ -525,10 +525,18 @@ export class SurfaceRefreshCoordinator {
         continue
       }
 
+      // `expectedRev` is re-read on the line above and `completeRefresh` re-reads it
+      // synchronously on entry, so on a single-threaded event loop the two can never
+      // disagree — that guard is unreachable from here and is kept only for callers
+      // that genuinely hold an older read. `expectedContentDigest` is the one that
+      // bites: it is the baseline `begin` snapshotted, and comparing it is what stops
+      // a concurrent edit being silently overwritten by this result.
+      const live = this.deps.jobs.get(job.id) ?? job
       const completed = await this.deps.service.completeRefresh(observed.id, {
         jobId: job.id,
         expectedRev: observed.rev,
         observedGeneration: job.targetGeneration,
+        ...(live.baseContentDigest ? { expectedContentDigest: live.baseContentDigest } : {}),
         ...(staged.content ? { content: staged.content } : {}),
       }, this.ctx(this.deps.now()))
 
@@ -700,6 +708,13 @@ export class SurfaceRefreshCoordinator {
       state: 'running',
       attempts: job.attempts + 1,
       baseRev: surface.rev,
+      // Snapshotted HERE, and safe to take from the Surface we read rather than
+      // re-reading: `beginRefresh` just compare-and-swapped on `surface.rev`, so if
+      // it returned ok this content is exactly what the record holds. This is the
+      // baseline the barrier compares against, and it is the only thing standing
+      // between a worker's result and a concurrent edit it would otherwise silently
+      // overwrite.
+      baseContentDigest: surfaceContentDigest(surface.content),
       lease: { owner: COORDINATOR_PRINCIPAL.id, until: now + LEASE_MS },
     }, now)
     return true
