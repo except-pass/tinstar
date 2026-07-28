@@ -23,6 +23,8 @@ import {
   tmuxBackend,
   getSession,
   updateSession,
+  interactivePortWindow,
+  refreshConfigProblem,
   type TinstarConfig,
 } from './sessions'
 import type { SessionStatus } from '../types'
@@ -30,6 +32,8 @@ import { getGitDiffFiles } from './sessions/git-diff'
 import { StatusWatcher } from './sessions/status-watcher'
 import { SlateWatcher } from './sessions/slate-watcher'
 import { SurfaceService } from './surfaces/surface-service'
+import type { SurfaceRefreshCoordinator } from './surfaces/surface-refresh-coordinator'
+import { buildRefreshCoordinator, headRevision } from './surfaces/refresh-wiring'
 import { slateSourceAdapters } from './surfaces/slate-source'
 import { boundSlateRuns, reconcileSlateEpoch } from './surfaces/source-reconciler'
 import { deriveRunIncarnation } from './stores/surfaces'
@@ -118,6 +122,7 @@ export function initBackend(): RouteContext {
   let natsTraffic: NatsTrafficBridge | undefined
   let natsHealth: NatsHealthMonitor | undefined
   let slateWatcher: SlateWatcher | undefined
+  let refreshCoordinator: SurfaceRefreshCoordinator | undefined
 
   if (!shutdownRegistered) {
     shutdownRegistered = true
@@ -240,6 +245,19 @@ export function initBackend(): RouteContext {
       // TINSTAR_CONFIG_HOME (preferred) and TINSTAR_DATA_DIR (legacy alias).
       sessionConfig = loadConfig()
       ensureDirs(sessionConfig)
+
+      // Port safety (plan U6). Registering the interactive window is what arms
+      // `findPort`'s overlap refusal: from here on, any OTHER window that reaches
+      // into the range user sessions draw from is rejected at the call rather than
+      // quietly competing for the same ports.
+      tmuxBackend.setInteractivePortWindow(interactivePortWindow(sessionConfig))
+      const portProblem = refreshConfigProblem(sessionConfig)
+      if (portProblem) {
+        // A user edit, not a code bug — so it degrades the refresh engine rather
+        // than stopping the boot. The coordinator reads the same predicate and
+        // stays in owner-delivery mode while it holds.
+        log.error('refresh', `refresh engine disabled — ${portProblem}`)
+      }
 
       // Enable file-backed persistence so data survives server restarts
       docStore.enablePersistence(join(sessionConfig.dirs.root, 'docstore.json'))
@@ -437,7 +455,7 @@ export function initBackend(): RouteContext {
         // Reattach ttyd for tmux sessions that survived a server crash
         for (const session of sessions) {
           if (session.state === 'stopped' || session.state === 'creating') continue
-          const port = session.port ?? await tmuxBackend.findPort(cfg.ports.hostStart)
+          const port = session.port ?? await tmuxBackend.findPort(interactivePortWindow(cfg))
           try {
             const result = await tmuxBackend.reattachTmuxSession(cfg, { session, port })
             updateSession(cfg.dirs.sessions, session.name, { port: result.port, ttydPid: result.ttydPid ?? null })
@@ -561,6 +579,60 @@ export function initBackend(): RouteContext {
         }),
       })
       slateWatcher.start()
+
+      // The durable refresh engine (plan U6). Its own SurfaceService for the same
+      // reason the watcher has one: no per-call state to share, and no interleaving
+      // inside one object between a sweep and a request.
+      refreshCoordinator = buildRefreshCoordinator({
+        cfg,
+        docStore,
+        service: new SurfaceService(docStore, { sourceAdapters: slateSourceAdapters() }),
+        // The watcher's reconciler IS the barrier's re-observation for `slate-file`
+        // bindings. Reusing it rather than writing a second reader is what makes
+        // "the barrier sees exactly what the watcher would have seen" true by
+        // construction instead of by two implementations agreeing today.
+        reobserveRun: runId => slateWatcher!.reconcileNow(runId),
+      })
+      // Reconstruct in-flight work BEFORE the first sweep, so a job whose worker
+      // died with the last process is failed rather than silently re-dispatched
+      // alongside a worker that may still be writing to its staging path.
+      void refreshCoordinator.recover()
+        .then(r => {
+          if (r.failed.length) log.info('refresh', `restart failed ${r.failed.length} in-flight refresh job(s)`)
+        })
+        .catch(err => log.warn('refresh', `restart recovery failed: ${(err as Error).message}`))
+
+      // One sweep loop: deadlines, harvest, dispatch. Guarded against overlap —
+      // a sweep that outruns its interval would double-dispatch, and the compare-
+      // and-swap would merely make that noisy rather than harmless.
+      let sweeping = false
+      setInterval(() => {
+        if (sweeping || !refreshCoordinator) return
+        sweeping = true
+        void refreshCoordinator.sweep()
+          .catch(err => log.warn('refresh', `sweep failed: ${(err as Error).message}`))
+          .finally(() => { sweeping = false })
+      }, cfg.refresh.sweepMs)
+
+      // The `git-revision` trigger source. Rides the same cadence as the git-diff
+      // reconcile above rather than adding a third timer, and reports the HEAD it
+      // read as EVIDENCE — the coordinator dedupes on it and never orders it.
+      setInterval(() => {
+        if (!refreshCoordinator) return
+        const seen = new Set<string>()
+        for (const run of docStore.getAllRuns()) {
+          const workdir = getSession(cfg.dirs.sessions, run.id)?.workspace?.path
+          if (!workdir || seen.has(workdir)) continue
+          seen.add(workdir)
+          void headRevision(workdir).then(sha => {
+            if (!sha || !refreshCoordinator) return
+            return refreshCoordinator.note({
+              kind: 'git-revision', sourceId: workdir, worktree: workdir,
+              evidence: sha, runId: run.id, at: Date.now(),
+            })
+          }).catch(err => log.warn('refresh', `git trigger failed for ${run.id}: ${(err as Error).message}`))
+        }
+      }, 15_000)
     } catch (err) {
       log.error('server', 'session initialization failed', { error: (err as Error).message })
       if (fastSim) {
@@ -580,7 +652,7 @@ export function initBackend(): RouteContext {
 
   const ctx: RouteContext = {
     docStore, otelStore, sse, bus, startSimulator, resetSimulator,
-    sessionConfig, readyQueue, telemetryRoutes, ccQuotaService,
+    sessionConfig, readyQueue, telemetryRoutes, ccQuotaService, refreshCoordinator,
     slashRegistry, slashUsage, otlpExporter,
     get natsTraffic() { return natsTraffic },
     get natsHealth() { return natsHealth },

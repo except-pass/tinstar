@@ -567,6 +567,11 @@ export interface SlateSurface {
    *  surface has gone stale (its wrapper stopped updating). The renderer styles it
    *  as "stalled/unknown" instead of a live spinner. */
   stalledAt?: number
+  /** The canonical Surface's freshness lifecycle (plan U6, R18), projected onto the
+   *  legacy shape so the Run Workspace Slate can render current / possibly-stale /
+   *  queued / refreshing / failed / overdue without waiting for the recursive
+   *  Canvas. Absent for a surface with no canonical record behind it. */
+  freshness?: SurfaceFreshness
   createdAt: number
   amendedAt: number
 }
@@ -774,10 +779,80 @@ export interface SurfaceSourceBinding {
   divergedWatermark?: string
 }
 
+/**
+ * The CLOSED trigger vocabulary (R14, plan U6).
+ *
+ * Closed on purpose. The plan's test scenario is that "trigger matching ignores
+ * arbitrary NATS payload strings and unsupported executable watcher declarations"
+ * — an open string would make every unparsed message a potential trigger, and an
+ * `exec:`-shaped declaration would turn a file an agent wrote into a command the
+ * host runs.
+ */
+export type SurfaceTriggerKind =
+  /** A source the Surface DECLARES it derives from changed. Not the Surface's own
+   *  binding: that path is `observeSource`, which makes it current rather than
+   *  stale. */
+  | 'source-content'
+  /** The bound worktree's Git revision moved. */
+  | 'git-revision'
+  /** A tracked local process completed or failed. */
+  | 'process-exit'
+  /** A managed session started, ended, or was retired. */
+  | 'session-lifecycle'
+  /** A human asked for it — the ⟳ button, or an agent relaying a user request. */
+  | 'human-intent'
+  /** An explicit named signal an agent published. Matched against the Surface's
+   *  own declared signal names, never against free text. */
+  | 'semantic-signal'
+  /** The time-safety sweep: `dueAt` passed. */
+  | 'periodic'
+
+/** How aggressively a Surface is kept current (R15). `automatic` refreshes without
+ *  asking (bounded by the coordinator's cap); `mark-stale` only badges it and waits
+ *  for a human; `manual` does neither — nothing but an explicit refresh moves it. */
+export type SurfaceRefreshPolicy = 'automatic' | 'mark-stale' | 'manual'
+
+/** An author's declarative freshness contract for one Surface (R13/R14). Lives on
+ *  authored content because it is exactly what KTD4 lets a source replace: the
+ *  recipe and its trigger declarations travel together or they disagree. */
+export interface SurfaceRefreshDeclaration {
+  policy: SurfaceRefreshPolicy
+  /** Which trigger kinds this Surface listens to. Unknown names are dropped at
+   *  parse time rather than stored, so a persisted record only ever holds
+   *  vocabulary the host implements. */
+  triggers: SurfaceTriggerKind[]
+  /** Verification interval (ms) — what `dueAt` is derived from. Absent falls back
+   *  to the host default. */
+  intervalMs?: number
+  /** Source identifiers this Surface derives FROM, for `source-content` matching.
+   *  Adapter-scoped strings, compared for equality. */
+  sources?: string[]
+  /** Named signals this Surface listens for, for `semantic-signal` matching. */
+  signals?: string[]
+}
+
 /** The execution phase of a Surface's freshness lifecycle (R18). Kept SEPARATE
  *  from {@link PointStatus}: a resolved discussion says nothing about whether the
  *  content still reflects its source. */
 export type SurfaceFreshnessPhase = 'current' | 'possibly-stale' | 'queued' | 'refreshing' | 'failed'
+
+/** Why the host believes a Surface may no longer reflect its sources (R15). */
+export interface SurfaceStaleReason {
+  kind: SurfaceTriggerKind
+  /** What two observations must SHARE to count as the same one. Persisted so
+   *  "repeated equivalent events create one queued job" survives a restart: an
+   *  event whose key already sits here advances nothing and commits nothing. */
+  key: string
+  /** One sentence, safe to render. */
+  detail: string
+  /** Opaque adapter evidence for the observation — a content hash, a Git SHA, an
+   *  exit code. Compared for EQUALITY only and never ordered as time (KTD10); the
+   *  host generation below is the only ordering. */
+  evidence?: string
+  /** The host observation generation this reason was recorded at. */
+  generation: number
+  at: number
+}
 
 /** What the host knows about whether a Surface still reflects its source. */
 export interface SurfaceFreshness {
@@ -794,6 +869,39 @@ export interface SurfaceFreshness {
   observedGeneration?: number
   /** Epoch ms of the last successful verification. */
   verifiedAt?: number
+  /** Why this Surface left `current`. Retained through `queued` and `refreshing`
+   *  so the reason a refresh is happening survives into the UI, and cleared only
+   *  by a successful verification barrier. */
+  staleReason?: SurfaceStaleReason
+  /** The last dedupe key recorded PER TRIGGER KIND — the memory that makes
+   *  "repeated equivalent events commit nothing" actually true.
+   *
+   *  `staleReason` alone cannot do it: it is ONE slot, so two live triggers
+   *  overwrite each other's key and each then reads the other's as "new". With the
+   *  host defaults (`git-revision` + `periodic`) that is the ordinary case, and it
+   *  ping-ponged forever on an IDLE repo — a revision and a generation burned every
+   *  few seconds, every refresh superseded by the churn its own supersession caused,
+   *  so `verifiedAt` never advanced, so `overdue` never cleared, and every cycle
+   *  launched a real background agent in the user's worktree.
+   *
+   *  Keyed by kind rather than kept as a ring of recent keys on purpose: the
+   *  vocabulary is closed and small (bounded by construction, no eviction policy),
+   *  and a key is only ever compared against the LAST one of its own kind — so
+   *  returning to an earlier Git SHA is correctly seen as a move, which a
+   *  remembers-everything set would have swallowed.
+   *
+   *  Deliberately NOT cleared by a successful barrier. Clearing it is what let the
+   *  very next poll of an unchanged SHA re-stale a Surface that had just been
+   *  verified against exactly that SHA. */
+  lastReasonKeys?: Partial<Record<SurfaceTriggerKind, string>>
+  /** Why the last refresh attempt did not produce a verified result. Present in
+   *  `failed`, and deliberately RETAINED into a subsequent `queued`/`refreshing`
+   *  so a retry does not erase the explanation before the retry has earned it. */
+  failure?: { message: string; at: number }
+  /** The refresh job currently responsible for this Surface, if any. Advisory —
+   *  the job record is separate bookkeeping and the barrier never trusts it over
+   *  the record's own revision and generation. */
+  jobId?: string
 }
 
 /** A Surface's authored content — the part an authority may replace (KTD4). */
@@ -807,6 +915,10 @@ export interface SurfaceContent {
   /** Author-declared refresh recipe (R13): the self-contained instruction that
    *  rebuilds this Surface. Absent means refresh degrades to a bare nudge. */
   recipe?: string
+  /** Author-declared freshness contract (R13/R14, plan U6). Absent means the host
+   *  applies its defaults — see `effectiveDeclaration` in
+   *  `src/server/surfaces/surface-trigger-matcher.ts`. */
+  refreshPolicy?: SurfaceRefreshDeclaration
 }
 
 /** View-independent discussion state (R5/R8). Shared, never per-user: a thread is

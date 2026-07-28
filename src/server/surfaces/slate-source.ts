@@ -26,7 +26,8 @@
 import { createHash } from 'node:crypto'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { basename, join, sep } from 'node:path'
-import type { A2uiContent, PointAuthor, SurfaceContent } from '../../domain/types'
+import type { A2uiContent, PointAuthor, SurfaceContent, SurfaceRefreshDeclaration } from '../../domain/types'
+import { parseRefreshDeclaration } from './surface-trigger-matcher'
 import type { SurfaceSourceAdapter } from './surface-service'
 
 /** The adapter name stamped on a Surface reconciled from a Slate source file. */
@@ -95,12 +96,18 @@ export function slateEntryWatermark(fields: {
   headline: string
   body?: A2uiContent
   recipe?: string
+  refreshPolicy?: SurfaceRefreshDeclaration
   author: PointAuthor
 }): string {
   const basis = JSON.stringify({
     headline: fields.headline,
     body: fields.body ?? null,
     recipe: fields.recipe ?? null,
+    // U6's declaration is part of the basis: it decides WHEN the host rebuilds this
+    // surface, so an author who edits only the policy has genuinely changed the
+    // entry. Leaving it out would mean the reconciler saw an unchanged watermark,
+    // committed nothing, and quietly kept enforcing the old triggers.
+    refreshPolicy: fields.refreshPolicy ?? null,
     author: fields.author,
   })
   return 'sha256:' + createHash('sha256').update(basis).digest('hex').slice(0, 32)
@@ -134,15 +141,23 @@ const DEFAULT_FS: SlateSourceFs = {
  *  an entry at all. Used by the egress adapter to compute the CURRENT watermark of
  *  the entry it is about to replace — the ingress side computes the same value from
  *  the same fields through {@link slateEntryWatermark}. */
-function authoredFieldsOf(raw: unknown): { headline: string; body?: A2uiContent; recipe?: string; author: PointAuthor } | null {
+function authoredFieldsOf(raw: unknown): {
+  headline: string; body?: A2uiContent; recipe?: string
+  refreshPolicy?: SurfaceRefreshDeclaration; author: PointAuthor
+} | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const r = raw as Record<string, unknown>
   if (typeof r.headline !== 'string' || !r.headline) return null
   const author: PointAuthor = r.author === 'user' || r.author === 'process' ? r.author : 'agent'
+  const declaration = parseRefreshDeclaration(r.refreshPolicy)
   return {
     headline: r.headline,
     ...(r.content !== undefined ? { body: r.content as A2uiContent } : {}),
     ...(typeof r.refresh === 'string' && r.refresh ? { recipe: r.refresh } : {}),
+    // Parsed rather than passed through, so the watermark this computes matches the
+    // one INGRESS computes from the same file. Hashing the raw declaration would let
+    // a field the parser drops move the watermark on every epoch, forever.
+    ...(declaration ? { refreshPolicy: declaration } : {}),
     author,
   }
 }
@@ -175,7 +190,7 @@ export class SlateFileAdapter implements SurfaceSourceAdapter {
     surface: { source?: { locator: string; worktree?: string } }
     content: SurfaceContent
     expectedWatermark?: string
-  }): Promise<{ ok: true; watermark: string } | { ok: false; message: string }> {
+  }): Promise<{ ok: true; watermark: string } | { ok: false; stale?: true; message: string }> {
     const binding = input.surface.source
     const parsed = binding ? parseSlateFileLocator(binding.locator) : null
     if (!binding || !parsed) {
@@ -208,7 +223,13 @@ export class SlateFileAdapter implements SurfaceSourceAdapter {
     const current = authoredFieldsOf(entries[index])
     if (!current) return { ok: false, message: `entry ${parsed.localId} in ${parsed.file} is not a usable surface entry` }
     if (input.expectedWatermark !== undefined && slateEntryWatermark(current) !== input.expectedWatermark) {
-      return { ok: false, message: `entry ${parsed.localId} in ${parsed.file} changed since it was read; re-read and retry` }
+      // STALE, not broken. The caller can retry against the newer entry; a refresh
+      // result is superseded and gets a successor rather than failing the Surface.
+      return {
+        ok: false,
+        stale: true,
+        message: `entry ${parsed.localId} in ${parsed.file} changed since it was read; re-read and retry`,
+      }
     }
 
     // Every field the file carries that is NOT authored content is preserved by
@@ -220,6 +241,11 @@ export class SlateFileAdapter implements SurfaceSourceAdapter {
     else next.content = input.content.body
     if (input.content.recipe === undefined) delete next.refresh
     else next.refresh = input.content.recipe
+    // The declaration travels with the recipe (U6): they are one contract, and
+    // writing back a recipe without the triggers that fire it would leave the file
+    // describing a surface the host refreshes on different terms.
+    if (input.content.refreshPolicy === undefined) delete next.refreshPolicy
+    else next.refreshPolicy = input.content.refreshPolicy as unknown as Record<string, unknown>
     entries[index] = next
 
     const serialized = JSON.stringify(array ? entries : entries[0], null, 2) + '\n'
