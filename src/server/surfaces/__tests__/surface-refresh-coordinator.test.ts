@@ -314,10 +314,67 @@ describe('dispatch', () => {
     await h.seed(withPolicy(AUTOMATIC))
     await h.coord.note(gitEvent())
     const [a, b] = await Promise.all([h.coord.sweep(), h.coord.sweep()])
-    // Exactly one dispatch across both passes: `beginRefresh` is a compare-and-swap
-    // on the Surface revision, so the loser finds it no longer queued.
     expect(a.dispatched.length + b.dispatched.length).toBe(1)
     expect(h.launches).toHaveLength(1)
+  })
+
+  it('two takers of one lease: the SECOND is refused at the record, not at the table', async () => {
+    // The test above passes even with the compare-and-swap removed, because the job
+    // table's own state filter happens to serialize two in-process sweeps. That is
+    // not the invariant — the invariant is that the RECORD refuses a second taker,
+    // which is what protects a restart-adopted job or a second backend from
+    // completing work another worker already owns. So it is asserted directly.
+    const h = harness()
+    const seeded = await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+    const queued = h.get(seeded.id)
+    expect(queued.freshness.phase).toBe('queued')
+
+    const first = await h.svc.beginRefresh(seeded.id, { jobId: 'job-a', expectedRev: queued.rev }, ctx(21_000))
+    expect(first.ok).toBe(true)
+
+    // Same expectedRev, a different job: the world moved, so this must lose.
+    const second = await h.svc.beginRefresh(seeded.id, { jobId: 'job-b', expectedRev: queued.rev }, ctx(21_001))
+    expect(second.ok).toBe(false)
+    expect(h.get(seeded.id).freshness.jobId).toBe('job-a')
+
+    // And even at the CURRENT revision it loses, because the Surface is no longer
+    // queued — the phase check and the revision check are separate guards.
+    const third = await h.svc.beginRefresh(
+      seeded.id, { jobId: 'job-b', expectedRev: h.get(seeded.id).rev }, ctx(21_002),
+    )
+    expect(third.ok).toBe(false)
+    if (!third.ok) expect(third.error.reason).toBe('already-refreshing')
+    expect(h.get(seeded.id).freshness.jobId).toBe('job-a')
+  })
+
+  it('a Surface that moved while STILL queued refuses a sweep holding the older revision', async () => {
+    // The case the phase check cannot catch, and therefore the only one that
+    // proves the revision compare-and-swap is load-bearing rather than decorative:
+    // a trigger arriving between a sweep reading the Surface and taking it leaves
+    // the phase at `queued` and moves the revision. Letting the sweep through would
+    // dispatch a worker against a generation the host has already moved past —
+    // guaranteeing a supersession, and a wasted managed session with it.
+    const h = harness()
+    const seeded = await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+    const asRead = h.get(seeded.id)
+    expect(asRead.freshness.phase).toBe('queued')
+
+    // A newer trigger. The phase stays `queued`; only the revision and the
+    // generation move.
+    await h.coord.note(gitEvent({ evidence: 'sha-2', at: 21_000 }))
+    const moved = h.get(seeded.id)
+    expect(moved.freshness.phase).toBe('queued')
+    expect(moved.rev).toBeGreaterThan(asRead.rev)
+
+    const stale = await h.svc.beginRefresh(
+      seeded.id, { jobId: 'job-stale', expectedRev: asRead.rev }, ctx(21_500),
+    )
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) expect(stale.error.reason).toBe('stale-surface-revision')
+    expect(h.get(seeded.id).freshness.phase).toBe('queued')
+    expect(h.get(seeded.id).freshness.jobId).not.toBe('job-stale')
   })
 })
 
@@ -421,6 +478,40 @@ describe('the observation barrier', () => {
     expect(h.retired).toEqual([`refresh-${job.id}`])
   })
 
+  it('an OWNER that exits mid-refresh fails the job rather than spinning to the timeout', async () => {
+    // The owner-delivery counterpart of the vanished-worker case. An owner that
+    // exited is exactly as incapable of writing the result as a dead worker, and
+    // waiting out the timeout would leave the Surface refreshing for minutes with
+    // nothing behind it.
+    const h = harness({ maxConcurrentWorkers: 0 })
+    await h.seed({ ...withPolicy(AUTOMATIC), owner: { kind: 'session', id: RUN } })
+    h.live.add(RUN)
+    await h.coord.note(gitEvent())
+    await h.coord.sweep()
+    expect(h.jobFor('sf-1')!.dispatch?.kind).toBe('owner')
+
+    h.live.delete(RUN)
+    h.clock.now = 21_000 // well inside workerTimeoutMs
+    const report = await h.coord.sweep()
+    expect(report.failed[0]?.reason).toMatch(/owner session .* exited without writing a result/)
+    expect(h.get('sf-1').freshness.phase).toBe('failed')
+  })
+
+  it('a QUEUED job whose owner exits before dispatch transfers to a worker, once', async () => {
+    const h = harness({ maxConcurrentWorkers: 1 })
+    await h.seed({ ...withPolicy(AUTOMATIC), owner: { kind: 'session', id: RUN } })
+    // The owner was never live, so the first dispatch goes to a background worker.
+    await h.coord.note(gitEvent())
+    const first = await h.coord.sweep()
+    expect(first.dispatched).toHaveLength(1)
+    expect(h.delivered).toEqual([])
+    expect(h.launches).toHaveLength(1)
+    // And only once: a second sweep finds the job running, not queued.
+    const second = await h.coord.sweep()
+    expect(second.dispatched).toEqual([])
+    expect(h.launches).toHaveLength(1)
+  })
+
   it('a worker that vanishes without writing a result fails before the timeout elapses', async () => {
     const h = await dispatched()
     const job = h.jobFor('sf-1')!
@@ -448,6 +539,104 @@ describe('the observation barrier', () => {
     const s = h.get('sf-1')
     expect(s.freshness.overdue).toBe(true)
     expect(s.freshness.staleReason?.kind).toBe('git-revision')
+  })
+})
+
+describe('freshness transitions the coordinator relies on', () => {
+  // These three guards are REACHABLE only from outside the coordinator's happy
+  // path — a second backend, a restart-adopted job, a hand-edited sidecar. The
+  // coordinator's own sequencing masks them, so backing one out breaks nothing in
+  // the flow tests above. They are asserted directly, because what they protect is
+  // a Surface claiming current on work nobody can vouch for.
+
+  it('refuses to queue a Surface that is already refreshing', async () => {
+    const h = harness()
+    const seeded = await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+    await h.svc.beginRefresh(seeded.id, { jobId: 'job-a', expectedRev: h.get(seeded.id).rev }, ctx(21_000))
+    expect(h.get(seeded.id).freshness.phase).toBe('refreshing')
+
+    const requeued = await h.svc.enqueueRefresh(seeded.id, { jobId: 'job-b' }, ctx(22_000))
+    expect(requeued.ok).toBe(false)
+    if (!requeued.ok) expect(requeued.error.reason).toBe('already-refreshing')
+    // The in-flight job still owns it — re-queueing would orphan a running worker
+    // whose result then had nothing to complete.
+    expect(h.get(seeded.id).freshness.phase).toBe('refreshing')
+    expect(h.get(seeded.id).freshness.jobId).toBe('job-a')
+  })
+
+  it('refuses to complete a Surface that is not refreshing', async () => {
+    const h = harness()
+    const seeded = await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+    const queued = h.get(seeded.id)
+    expect(queued.freshness.phase).toBe('queued')
+
+    // A result for work that was never started. Accepting it would mark the Surface
+    // verified on the strength of a job the host never dispatched.
+    const completed = await h.svc.completeRefresh(seeded.id, {
+      jobId: 'job-ghost',
+      expectedRev: queued.rev,
+      observedGeneration: queued.source!.generation,
+      content: { headline: 'Ghost result' },
+    }, ctx(23_000))
+    expect(completed.ok).toBe(false)
+    expect(h.get(seeded.id).content.headline).toBe('Coverage')
+    expect(h.get(seeded.id).freshness.phase).toBe('queued')
+  })
+
+  it('refuses a result whose record moved for a reason the generation cannot see', async () => {
+    // The generation catches SOURCE movement. It cannot see a concurrent edit to
+    // the record itself — a thread reply, a headline the user just fixed — because
+    // none of those touch a source binding. `completeRefresh` writes `content`
+    // wholesale, so without the revision compare-and-swap a refresh that started
+    // before the user's edit would silently overwrite it.
+    const h = harness()
+    const seeded = await h.seed(withPolicy(AUTOMATIC))
+    await h.coord.note(gitEvent())
+    const queued = h.get(seeded.id)
+    await h.svc.beginRefresh(seeded.id, { jobId: 'job-a', expectedRev: queued.rev }, ctx(21_000))
+    const dispatchedAt = h.get(seeded.id)
+
+    // A human replies on the thread while the worker runs. Same generation, newer
+    // revision.
+    const replied = await h.svc.appendThread(seeded.id, { text: 'still true?' }, ctx(21_500))
+    expect(replied.ok).toBe(true)
+    expect(h.get(seeded.id).source!.generation).toBe(dispatchedAt.source!.generation)
+
+    const completed = await h.svc.completeRefresh(seeded.id, {
+      jobId: 'job-a',
+      expectedRev: dispatchedAt.rev,
+      observedGeneration: dispatchedAt.source!.generation,
+      content: { headline: 'Coverage 92%' },
+    }, ctx(22_000))
+    expect(completed.ok).toBe(false)
+    // The reply survives, and the stale-based rewrite did not land.
+    expect(h.get(seeded.id).thread.replies).toHaveLength(1)
+    expect(h.get(seeded.id).content.headline).toBe('Coverage')
+  })
+
+  it('an unchanged schedule is a SUCCESS, so an already-overdue Surface is still picked up', async () => {
+    // The restart case. A Surface persisted as overdue has nothing for `setSchedule`
+    // to change; if that came back as a conflict the sweep would skip it, and a
+    // Surface that went overdue before the process died would never be refreshed
+    // again.
+    const h = harness()
+    await h.seed({
+      content: {
+        headline: 'Coverage', recipe: 'Re-run coverage.',
+        refreshPolicy: { policy: 'automatic', triggers: ['periodic'], intervalMs: 60_000 },
+      },
+      // Exactly what the sweep will derive: verifiedAt 5,000 + 60,000 = 65,000.
+      freshness: { phase: 'possibly-stale', overdue: true, dueAt: 65_000, observedGeneration: 1, verifiedAt: 5_000 },
+    })
+    const unchanged = await h.svc.setSchedule('sf-1', { dueAt: 65_000, overdue: true }, ctx(70_000))
+    expect(unchanged.ok).toBe(true)
+
+    h.clock.now = 70_000
+    const report = await h.coord.sweep()
+    expect(report.queued).toHaveLength(1)
+    expect(h.get('sf-1').freshness.overdue).toBe(true)
   })
 })
 

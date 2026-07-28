@@ -341,14 +341,19 @@ export class SurfaceRefreshCoordinator {
       // an overdue Surface look attended to: entering queued or refreshing changes
       // nothing here.
       const overdue = surface.freshness.overdue || (dueAt !== undefined && now >= dueAt)
+      // An unchanged schedule is a SUCCESS, not a conflict — that is what
+      // `setSchedule`'s short-circuit buys, and it is load-bearing on the first
+      // sweep after a restart: a Surface that was ALREADY overdue when the process
+      // died has nothing to change here, and treating that as a failure would skip
+      // it on every sweep forever.
       const set = await this.deps.service.setSchedule(surface.id, { dueAt, overdue }, this.ctx(now))
       if (!set.ok) continue
-      const moved = set.data.surfaces[0]?.surface
-      if (!moved || !overdue || dueAt === undefined) continue
-      // A newly-overdue Surface raises one periodic trigger. The reason key embeds
-      // the deadline it missed, so the same missed deadline never raises a second.
-      if (moved.freshness.staleReason?.key === `periodic ${surface.id} ${dueAt}`) continue
+      if (!overdue || dueAt === undefined) continue
       if (decl.policy === 'manual') continue
+      // One periodic trigger per missed deadline. The dedupe lives on the REASON
+      // KEY, which embeds the deadline — `markPossiblyStale` refuses a repeat of a
+      // key it already holds, so a re-check here would be a second implementation
+      // of the same rule.
       const marked = await this.deps.service.markPossiblyStale(surface.id, {
         kind: 'periodic',
         key: `periodic ${surface.id} ${dueAt}`,
@@ -392,12 +397,20 @@ export class SurfaceRefreshCoordinator {
       }
 
       if (!staged) {
-        // A worker whose managed session has VANISHED is finished whatever the
-        // clock says — waiting out the timeout on a session that is already gone
-        // would leave the Surface spinning for minutes with nothing behind it.
-        const target = job.dispatch?.kind === 'worker' ? job.dispatch.target : undefined
+        // A session that has VANISHED is finished whatever the clock says — waiting
+        // out the timeout on a session that is already gone would leave the Surface
+        // spinning for minutes with nothing behind it. Applies to an OWNER dispatch
+        // as well as to a worker: an owner that exited mid-turn is exactly as
+        // incapable of writing the result as a dead worker.
+        const target = job.dispatch?.kind === 'blocked' ? undefined : job.dispatch?.target
         if (target && !this.deps.isLiveSession(target)) {
-          await this.failJob(job, 'its refresh worker exited without writing a result', report)
+          await this.failJob(
+            job,
+            job.dispatch?.kind === 'owner'
+              ? `its owner session (${target}) exited without writing a result`
+              : 'its refresh worker exited without writing a result',
+            report,
+          )
           continue
         }
         if (job.dispatch && now - job.dispatch.at > cfg.workerTimeoutMs) {
