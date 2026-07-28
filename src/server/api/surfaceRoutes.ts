@@ -22,6 +22,7 @@
 // asked to move to the recovery store, return 200, and look like it worked.
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { join, resolve, sep } from 'node:path'
 import type { ErrorCode } from '../../domain/api'
 import type { SurfacePrincipalRef } from '../../domain/types'
 import { ok, fail } from './envelope'
@@ -31,6 +32,7 @@ import { getSession } from '../sessions'
 import { hasGraveyardSnapshot } from '../sessions/graveyard-snapshot'
 import type { TinstarConfig } from '../sessions/config'
 import {
+  isSafePrincipalId,
   SurfaceService,
   type SurfaceCallContext,
   type SurfaceResult,
@@ -121,15 +123,39 @@ function respond<T>(
   })
 }
 
-/** Parse a JSON body, tolerating an empty one. Several primitives (`restore`,
- *  `purge`, a leaf `delete`) have nothing to say, and demanding `{}` from them
- *  would be ceremony a `curl` author trips over. */
-async function body(req: IncomingMessage): Promise<unknown | typeof BAD_BODY> {
-  const raw = await readBody(req)
-  if (!raw.trim()) return {}
-  try { return JSON.parse(raw) } catch { return BAD_BODY }
+/** A parsed body, or the refusal to send instead of one. */
+type BodyOutcome =
+  | { ok: true; value: unknown }
+  | { ok: false; code: ErrorCode; message: string; status?: number }
+
+/**
+ * Parse a JSON body, tolerating an empty one. Several primitives (`restore`,
+ * `purge`, a leaf `delete`) have nothing to say, and demanding `{}` from them
+ * would be ceremony a `curl` author trips over.
+ *
+ * `readBody` REJECTS on an oversize (>1 MB) or slow (>5 s) request rather than
+ * resolving, and an unhandled rejection here surfaced to the caller as a generic
+ * 500 — "the server broke", for two conditions that are entirely the request's
+ * doing and that a client should handle differently from each other. Both are
+ * caught and named.
+ */
+async function body(req: IncomingMessage): Promise<BodyOutcome> {
+  let raw: string
+  try {
+    raw = await readBody(req)
+  } catch (e) {
+    const message = (e as Error).message
+    return message === 'body too large'
+      // 413 and the same phrasing the notices and Slate size caps use, so one
+      // client branch covers "you sent too much" wherever it happened.
+      ? { ok: false, code: 'BAD_REQUEST', message: 'request body exceeds the 1 MB limit', status: 413 }
+      : { ok: false, code: 'INVALID_PARAMS', message: `request body could not be read: ${message}` }
+  }
+  if (!raw.trim()) return { ok: true, value: {} }
+  try { return { ok: true, value: JSON.parse(raw) } } catch {
+    return { ok: false, code: 'BAD_REQUEST', message: 'Invalid request body' }
+  }
 }
-const BAD_BODY = Symbol('bad-body')
 
 /** The live-session and Graveyard predicates, wired to the real session layer.
  *
@@ -142,11 +168,21 @@ export function hostProbe(ctx: SurfaceRouteContext): SurfaceHostProbe {
     isLiveSession(name) {
       const dir = ctx.sessionConfig?.dirs.sessions
       if (!dir) return false
+      // The SECOND half of the traversal fix. `SurfaceService` rejects an unsafe
+      // principal id at the write boundary, but `name` here comes off a PERSISTED
+      // record — one written before that check existed, or hand-edited into the
+      // sidecar, which is a ratified property of the JSON store. A record that is
+      // already on disk must not be able to keep re-triggering the read, so the
+      // charset is asserted again on the way out, and the resolved path is
+      // required to stay inside the sessions directory.
+      if (!isSafePrincipalId(name)) return false
+      if (!withinDir(dir, join(dir, name))) return false
       try { return !!getSession(dir, name) } catch { return false }
     },
     hasGraveyardRecord(name) {
       const root = ctx.sessionConfig?.dirs.root
       if (!root) return false
+      if (!isSafePrincipalId(name)) return false
       const tomb = ctx.docStore.getAllTombstones().find(t => t.sessionName === name)
       if (!tomb) return false
       try { return hasGraveyardSnapshot(root, tomb.convId) } catch { return false }
@@ -154,15 +190,33 @@ export function hostProbe(ctx: SurfaceRouteContext): SurfaceHostProbe {
   }
 }
 
+/** True when `target` resolves inside `dir`. The boundary check that makes the
+ *  charset guard belt-and-braces rather than the only line of defence. */
+function withinDir(dir: string, target: string): boolean {
+  const root = resolve(dir)
+  const full = resolve(target)
+  return full === root || full.startsWith(root + sep)
+}
+
 const PREFIX = '/api/surfaces'
 
-/** Match `/api/surfaces/<id>[/<sub>]` and return the decoded id. */
+/**
+ * Match `/api/surfaces/<id>[/<sub>]` and return the decoded id.
+ *
+ * `decodeURIComponent` THROWS on a malformed percent-escape (`/api/surfaces/%zz`),
+ * which turned a bad URL into a 500 — the server reporting its own failure for a
+ * request that was simply wrong. A segment that will not decode is kept as
+ * written: it still names no Surface, so the caller gets the 404 it deserves
+ * instead of an alarm.
+ */
 function matchId(path: string, sub?: string): string | null {
   const pattern = sub
     ? new RegExp(`^/api/surfaces/([^/]+)/${sub}$`)
     : /^\/api\/surfaces\/([^/]+)$/
   const m = pattern.exec(path)
-  return m?.[1] ? decodeURIComponent(m[1]) : null
+  const raw = m?.[1]
+  if (!raw) return null
+  try { return decodeURIComponent(raw) } catch { return raw }
 }
 
 export async function handleSurfaceRoutes(
@@ -180,6 +234,13 @@ export async function handleSurfaceRoutes(
   const reply = <T>(result: SurfaceResult<T>, okStatus = 200): true => respond(res, result, cors, okStatus)
   const refuse = (code: ErrorCode, message: string, status?: number): true =>
     fail(res, code, message, { headers: cors, ...(status ? { status } : {}) })
+  /** Read the body or answer with the refusal it earned. */
+  const readOrRefuse = async (): Promise<{ value: unknown } | null> => {
+    const parsed = await body(req)
+    if (parsed.ok) return { value: parsed.value }
+    refuse(parsed.code, parsed.message, parsed.status)
+    return null
+  }
 
   // --- Collection reads ---
 
@@ -197,19 +258,19 @@ export async function handleSurfaceRoutes(
   // --- Collection-level verbs. FIRST, so neither is read as a Surface id. ---
 
   if (method === 'POST' && (path === `${PREFIX}/group` || path === `${PREFIX}/reparent`)) {
-    const parsed = await body(req)
-    if (parsed === BAD_BODY) { refuse('BAD_REQUEST', 'Invalid request body'); return true }
+    const parsed = await readOrRefuse()
+    if (!parsed) return true
     const call = callContext(req)
     reply(path.endsWith('/group')
-      ? await svc.group(parsed, call)
-      : await svc.reparent(parsed, call))
+      ? await svc.group(parsed.value, call)
+      : await svc.reparent(parsed.value, call))
     return true
   }
 
   if (method === 'POST' && path === PREFIX) {
-    const parsed = await body(req)
-    if (parsed === BAD_BODY) { refuse('BAD_REQUEST', 'Invalid request body'); return true }
-    reply(await svc.create(parsed, callContext(req)), 201)
+    const parsed = await readOrRefuse()
+    if (!parsed) return true
+    reply(await svc.create(parsed.value, callContext(req)), 201)
     return true
   }
 
@@ -223,9 +284,9 @@ export async function handleSurfaceRoutes(
 
   const purgeId = method === 'DELETE' ? matchId(path, 'purge') : null
   if (purgeId) {
-    const parsed = await body(req)
-    if (parsed === BAD_BODY) { refuse('BAD_REQUEST', 'Invalid request body'); return true }
-    reply(await svc.purge(purgeId, parsed, callContext(req)))
+    const parsed = await readOrRefuse()
+    if (!parsed) return true
+    reply(await svc.purge(purgeId, parsed.value, callContext(req)))
     return true
   }
 
@@ -248,9 +309,9 @@ export async function handleSurfaceRoutes(
         refuse('BAD_REQUEST', `use ${expected} for /api/surfaces/:id/${sub}`, 405)
         return true
       }
-      const parsed = await body(req)
-      if (parsed === BAD_BODY) { refuse('BAD_REQUEST', 'Invalid request body'); return true }
-      reply(await run(id, parsed, callContext(req)))
+      const parsed = await readOrRefuse()
+      if (!parsed) return true
+      reply(await run(id, parsed.value, callContext(req)))
       return true
     }
   }
@@ -260,9 +321,9 @@ export async function handleSurfaceRoutes(
   const id = matchId(path)
   if (id && method === 'GET') { reply(svc.get(id)); return true }
   if (id && method === 'DELETE') {
-    const parsed = await body(req)
-    if (parsed === BAD_BODY) { refuse('BAD_REQUEST', 'Invalid request body'); return true }
-    reply(await svc.delete(id, parsed, callContext(req)))
+    const parsed = await readOrRefuse()
+    if (!parsed) return true
+    reply(await svc.delete(id, parsed.value, callContext(req)))
     return true
   }
 

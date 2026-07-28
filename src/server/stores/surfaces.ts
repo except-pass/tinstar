@@ -910,7 +910,20 @@ export class SurfaceStore {
 
     const now = opts.at!
     const nextRev = rev + 1
-    const created = this.materialize(parentId, { ...parent, id: parentId, spaceId, home }, now, nextRev)
+    // The new parent takes the EARLIEST rank its children held, which is what
+    // makes the docstring above true: "the group appears exactly where the
+    // children were". Without it the parent falls back to `createdAt` — always
+    // `now`, always later than every sibling — so a group folded from the first
+    // two Surfaces on the Canvas materialised at the BOTTOM, and the user's
+    // arrangement silently reordered itself around the box they just made.
+    //
+    // This is not the deferred reorder primitive and does not become one. It is
+    // the deferral that makes getting this right load-bearing: with no way to move
+    // a Surface among its siblings, where a group lands is where it stays.
+    const order = Math.min(...children.map(c => c.order ?? c.createdAt))
+    const created = this.materialize(
+      parentId, { ...parent, id: parentId, spaceId, home, order }, now, nextRev,
+    )
     const newHome: SurfaceHome = { kind: 'surface', surfaceId: parentId }
     const moved = children.map(prior => this.rehome(prior, newHome, nextRev, now))
     // Parent first in the batch so an ordered consumer never sees a child pointing

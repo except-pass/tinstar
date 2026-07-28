@@ -121,8 +121,20 @@ export function surfaceCapabilities(surface: Surface, inputs: CapabilityInputs):
   // still be nudged (R13 is explicit that refresh then "degrades to a bare
   // nudge"), while one with a recipe can be rebuilt without a human. Two booleans,
   // both honest.
-  const refresh = !inputs.deleted
-  if (!refresh) blocked.refresh = 'the Surface is in the recovery store; restore it first'
+  //
+  // "Will be accepted" means EXACTLY what `SurfaceService.refreshRequest` accepts,
+  // and that includes the freshness phase: the state machine has no
+  // refreshing→queued edge for a human request, so a Surface already `queued` or
+  // `refreshing` is refused. Reporting `refresh: true` there advertised a button
+  // whose only outcome was a conflict — and a capability that lies is worse than
+  // an absent one, because the caller has no reason to check.
+  const busy = surface.freshness.phase === 'queued' || surface.freshness.phase === 'refreshing'
+  const refresh = !inputs.deleted && !busy
+  if (!refresh) {
+    blocked.refresh = inputs.deleted
+      ? 'the Surface is in the recovery store; restore it first'
+      : `a refresh is already ${surface.freshness.phase}; one refresh runs per Surface`
+  }
   const refreshRecipe = !!surface.content.recipe
 
   return {
