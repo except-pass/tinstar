@@ -16,24 +16,29 @@
 // apparatus U6 builds has no subject. Its output still arrives the way it always
 // did, through the file watcher.
 //
-// When a surface carries a self-contained `refresh` recipe (source-derived), refreshing it
-// spawns a fresh, headless `claude -p` child in the run's workdir that executes the recipe and
-// writes the .tinstar/slate/<slug>.json file. The SlateWatcher then projects it like any other
-// write. The run's main agent is NEVER involved — that's the whole point.
+// THE COMPOSE FAST PATH (`dispatchSurfaceAuthor`, below). A compose request spawns a fresh,
+// headless `claude -p` child in the run's workdir that authors a NEW
+// .tinstar/slate/<slug>.json. The SlateWatcher then projects it like any other write. The run's
+// main agent is never involved — that is the point of the path.
 //
-// Deliberately ISOLATED and KILL-SWITCHABLE (the feature is one file behind one seam):
-//   - The refresh/compose route calls the single seam `dispatchSurfaceAuthor`.
-//   - `slate.author.enabled: false` disables the path entirely — the caller falls back to the
+// Deliberately ISOLATED and KILL-SWITCHABLE (one file behind one seam):
+//   - The compose route calls the single seam `dispatchSurfaceAuthor`.
+//   - `slate.author.enabled: false` disables it entirely — the caller falls back to the
 //     main-agent `deliverSlatePrompt` — with no code revert.
-//   - Fire-and-forget: we do NOT await the child. Completion = the file appears (the watcher
-//     projects it; `amendedAt` advances; the client's bounded refresh spinner clears). A
-//     wandering/hung author is bounded by a hard timeout and stays VISIBLE to the client via
-//     that spinner timing out — no new server-owned state (KTD4).
+//   - Fire-and-forget: we do NOT await the child. Completion = the file appears. A wandering
+//     child is bounded by a hard timeout.
 //
-// SECURITY (KTD6, semi-trusted): the recipe is file-authored, so the delivered prompt is framed
-// by `slateRefreshPromptText`'s standing GUARDRAIL + `oneLine()` sanitization. The child runs
-// with the run's own permissions; a recipe planted by an untrusted branch/process is a
-// documented residual risk, not sandboxed here.
+// The REFRESH path no longer uses any of that. It is `launchRefreshWorker` at the bottom of
+// this file, and its kill switch is `refresh.autonomousWorkers` — which falls back to OWNER
+// delivery rather than to a fire-and-forget child, because a durable job that reached nobody is
+// still a durable job the sweep will retry.
+//
+// SECURITY (KTD6, semi-trusted). Both paths carry file-authored text. Compose frames it with
+// `slateComposePromptText`'s standing GUARDRAIL + `oneLine()` sanitization and passes it as a
+// single argv element to `spawn()` with NO shell. Refresh does better: the recipe goes in a
+// brief FILE and only its path reaches a command line (see `refreshBriefText`). Neither
+// sandboxes the child — a recipe planted by an untrusted branch or process runs with the run's
+// own permissions, and that remains a documented residual risk.
 import { spawn } from 'node:child_process'
 import { getSession, type CreateSessionOpts, type Session } from './session'
 import { guestEnv } from './guestEnv'
@@ -67,7 +72,17 @@ export const SLATE_AUTHOR_CONTRACT = [
   '                                  // workbench, one question per column, each answered on its own. Omit it for a',
   '                                  // normal row. One question per entry — never bundle several questions into one',
   '                                  // entry, or they share a single answer box.',
-  '  "refresh": "<optional self-contained instruction to regenerate this FROM SOURCE — never say \'this session\'>" }',
+  '  "refresh": "<optional self-contained instruction to regenerate this FROM SOURCE — never say \'this session\'>",',
+  '  "refreshPolicy": {   // OPTIONAL (plan U6). Absent = the host decides: a surface WITH a recipe is',
+  '                       // refreshed automatically when its worktree moves; one without is only badged.',
+  '    "policy": "automatic" | "mark-stale" | "manual",   // automatic rebuilds it; mark-stale only badges it;',
+  '                                                        // manual does neither until a human asks',
+  '    "triggers": ["git-revision", "periodic", "source-content", "process-exit",',
+  '                 "session-lifecycle", "human-intent", "semantic-signal"],  // CLOSED list; anything else is dropped',
+  '    "intervalMs": 1800000,          // for "periodic" — floor is 60000',
+  '    "sources": ["file:budget.csv"], // for "source-content" — sources this surface DERIVES FROM',
+  '    "signals": ["deploy-finished"]  // for "semantic-signal" — named signals it listens for',
+  '  } }',
   '',
   'A2UI `content` is a FLAT list of components referenced BY ID from one `root`. This is the COMPLETE set — nothing else renders:',
   '- Text:    { id, component:"Text", text, variant? }   variant one of: h1 h2 h3 h4 h5 | caption | body',

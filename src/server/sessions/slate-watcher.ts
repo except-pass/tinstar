@@ -54,6 +54,7 @@ import { parseA2uiContent } from '../../a2ui/schema'
 import { synthesizeId, type PointInput } from '../stores/slate'
 import { slateEntryWatermark, type SlateSourceEntry } from '../surfaces/slate-source'
 import type { SlateSourceEpoch } from '../surfaces/source-reconciler'
+import { parseRefreshDeclaration } from '../surfaces/surface-trigger-matcher'
 import { OBJECTIVE_POINT_ID, type PointAnchor, type PointAuthor, type A2uiContent } from '../../domain/types'
 
 /** A watched run and the worktree the watcher resolves its slate dir from. */
@@ -158,6 +159,7 @@ function toSourceEntry(runId: string, file: string, input: PointInput): SlateSou
     headline: input.headline,
     ...(input.content ? { body: input.content } : {}),
     ...(input.refresh ? { recipe: input.refresh } : {}),
+    ...(input.refreshPolicy ? { refreshPolicy: input.refreshPolicy } : {}),
   }
   return {
     localId: input.id && input.id.length > 0 ? input.id : synthesizeId(runId, input),
@@ -265,6 +267,25 @@ export class SlateWatcher {
   /** Run one poll tick now — the backstop cadence exposed for tests / manual triggering. */
   async pollOnce(): Promise<void> {
     await this.tick()
+  }
+
+  /**
+   * Reconcile ONE run's watched directory right now, and await it (plan U6).
+   *
+   * This is the refresh barrier's re-observation. It has to be the SAME reader the
+   * watcher uses — a second implementation of "what does this directory say" would
+   * eventually disagree with the one that actually projects, and the disagreement
+   * would show up as a refresh that claimed current against a file the watcher was
+   * about to project differently.
+   *
+   * Silently does nothing for a run this watcher does not know about; that is the
+   * honest outcome for a Surface whose worktree has gone, and the barrier's
+   * generation comparison is what stops it claiming current anyway.
+   */
+  async reconcileNow(runId: string): Promise<void> {
+    const workdir = this.workdirs.get(runId)
+    if (!workdir) return
+    await this.reconcileRun(runId, workdir)
   }
 
   /**
@@ -623,6 +644,13 @@ export function toPointInput(
   // File-owned refresh recipe (plan U3): carried through verbatim. A non-string or
   // empty recipe is simply dropped (the surface still refreshes via the bare nudge).
   if (typeof r.refresh === 'string' && r.refresh.length > 0) out.refresh = r.refresh
+
+  // File-owned freshness declaration (plan U6). Same posture as `refresh`: an
+  // unusable value yields NO declaration rather than an error, so the surface falls
+  // back to the host defaults instead of failing to project. The parser is what
+  // enforces the closed vocabulary — see `parseRefreshDeclaration`.
+  const declaration = parseRefreshDeclaration(r.refreshPolicy)
+  if (declaration) out.refreshPolicy = declaration
 
   // File-owned workbench set id (S4): points sharing a non-empty `group` render
   // side-by-side as one multi-question workbench. A non-string or empty value is

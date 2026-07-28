@@ -77,6 +77,13 @@ export function slateSurfaceFromCanonical(s: Surface, localId: string): SlateSur
     headline: s.content.headline,
     status: s.thread.status,
     ...(s.thread.replies.length > 0 ? { thread: s.thread.replies } : {}),
+    // U6's freshness, carried whole rather than flattened to a badge string. The
+    // panel needs the phase, the reason, the deadline, AND `overdue` — which is
+    // orthogonal to the phase — and a pre-rendered label would have to pick one.
+    // The Objective is excluded: it is the user's own prose with no source to be
+    // stale against, and an amber "unverified" on a goal the user just typed would
+    // be nonsense.
+    ...(objective ? {} : { freshness: s.freshness }),
     createdAt: s.createdAt,
     amendedAt: s.amendedAt,
   }

@@ -567,6 +567,11 @@ export interface SlateSurface {
    *  surface has gone stale (its wrapper stopped updating). The renderer styles it
    *  as "stalled/unknown" instead of a live spinner. */
   stalledAt?: number
+  /** The canonical Surface's freshness lifecycle (plan U6, R18), projected onto the
+   *  legacy shape so the Run Workspace Slate can render current / possibly-stale /
+   *  queued / refreshing / failed / overdue without waiting for the recursive
+   *  Canvas. Absent for a surface with no canonical record behind it. */
+  freshness?: SurfaceFreshness
   createdAt: number
   amendedAt: number
 }

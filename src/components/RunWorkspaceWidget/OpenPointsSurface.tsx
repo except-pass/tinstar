@@ -25,6 +25,7 @@ import { SurfaceThread } from './SurfaceThread'
 import { RefreshButton } from './slateRefresh'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
+import { FreshnessBadge } from './FreshnessBadge'
 import { moveItem } from './reorderUtil'
 import { usePointAnswerForm } from './usePointAnswerForm'
 import { WorkbenchSurface, partitionWorkbenches } from './WorkbenchSurface'
@@ -309,6 +310,10 @@ function OpenPointRow({ runId, surface, hidden = false, onHide, onUnhide, refres
             {/* ⚡ — this point self-refreshes from a recipe (fast path, off the main
                 agent). */}
             {surface.refresh && <FastPathBadge className="text-[10px]" />}
+            {/* The host's freshness verdict (U6). Beside the status pill rather
+                than in the footer: a row is one line, and "the repo moved under
+                this" belongs next to what the point CLAIMS, not below it. */}
+            <FreshnessBadge freshness={surface.freshness} />
             <span
               className={`flex-1 truncate font-sans text-[13px] font-medium leading-snug text-ink-high ${resolved ? 'line-through text-ink-low' : ''}`}
             >

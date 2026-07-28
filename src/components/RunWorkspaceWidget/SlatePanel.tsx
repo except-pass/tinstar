@@ -44,6 +44,7 @@ import { SlateCleanButton } from './SlateCleanButton'
 import { SurfaceDegradedBanner } from './SurfaceDegradedBanner'
 import { SurfaceAge } from './SurfaceAge'
 import { FastPathBadge } from './FastPathBadge'
+import { FreshnessBadge } from './FreshnessBadge'
 import { useNow } from '../../hooks/useNow'
 import { SLATE_HOTKEYS, keyToSlateAction } from './slateHotkeys'
 import { surfaceHaystack } from './slateSearch'
@@ -708,6 +709,10 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           // A ⚡ leads it when the surface self-refreshes from a recipe (fast path).
           const footer = (
             <div className="mt-1 flex items-center justify-end gap-1.5">
+              {/* The host's own verdict sits LEFT of the age, because it outranks
+                  it: "the repo moved under this" is evidence, "updated 8m ago" is
+                  a guess. Renders nothing when the surface is verified. */}
+              <FreshnessBadge freshness={surface.freshness} />
               {surface.refresh && <FastPathBadge className="text-[10px]" />}
               <SurfaceAge amendedAt={surface.amendedAt} now={now} />
             </div>
@@ -723,10 +728,24 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
           // and it never collides with the refresh pulse — that lives on the border
           // and the shadow, this on the ring.
           const isFocused = focusedSurfaceId === surface.id
+          // The SERVER's phase, alongside the client's optimistic spinner. The two
+          // are different claims and both belong: `isRefreshing` means "your click
+          // was sent", `phase` means "the host has a worker on it". A click on an
+          // asleep run shows the first and never the second, which is exactly the
+          // distinction the old bounded-spinner had no way to draw.
+          const phase = surface.freshness?.phase
+          const live = isRefreshing || phase === 'refreshing'
+          const edgeClass = live
+            ? 'border-primary/40 slate-surface-refreshing'
+            : phase === 'failed'
+              ? 'border-rose-400/40'
+              : phase === 'possibly-stale' || phase === 'queued' || surface.freshness?.overdue
+                ? 'border-amber-400/30'
+                : 'border-hairline'
           const shellClass = [
-            'relative rounded border min-w-0 transition-shadow',
+            'relative rounded border min-w-0 transition-shadow bg-surface-raised',
             isMinimized ? 'px-[14px] py-2' : 'p-[14px]',
-            isRefreshing ? 'border-primary/40 bg-surface-raised slate-surface-refreshing' : 'border-hairline bg-surface-raised',
+            edgeClass,
             isFocused ? 'ring-1 ring-primary/70' : '',
             isHidden ? 'opacity-50' : '',
           ].join(' ')
@@ -745,6 +764,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                 data-testid={`slate-surface-${surface.id}`}
                 data-minimized="true"
                 data-refreshing={isRefreshing ? 'true' : undefined}
+                data-freshness={phase}
                 data-focused={isFocused ? 'true' : undefined}
                 className={shellClass}
               >
@@ -770,6 +790,9 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
                     {surface.headline ?? surface.id}
                   </span>
                   <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                    {/* A collapsed card still has to say whether what it hides is
+                        trustworthy — that is most of what a title row is for. */}
+                    <FreshnessBadge freshness={surface.freshness} />
                     {surface.refresh && <FastPathBadge className="text-[10px]" />}
                     <SurfaceAge amendedAt={surface.amendedAt} now={now} />
                   </span>
@@ -783,6 +806,7 @@ export const SlatePanel = forwardRef<SlatePanelHandle, Props>(function SlatePane
               key={surface.id}
               data-testid={`slate-surface-${surface.id}`}
               data-refreshing={isRefreshing ? 'true' : undefined}
+              data-freshness={phase}
               data-focused={isFocused ? 'true' : undefined}
               className={shellClass}
             >

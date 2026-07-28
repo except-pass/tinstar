@@ -20,7 +20,7 @@
 // guard. It is server-only (rides the server esbuild bundle) and React-free.
 
 import { createHash, randomUUID } from 'node:crypto'
-import type { A2uiContent, Point, PointAnchor, PointAuthor, PointStatus } from '../../domain/types'
+import type { A2uiContent, Point, PointAnchor, PointAuthor, PointStatus, SurfaceRefreshDeclaration } from '../../domain/types'
 import type { Reply } from '../../domain/pinSet'
 
 /** The file-owned subset of a Point that a projection carries. Everything not here
@@ -41,6 +41,12 @@ export interface PointInput {
    *  side-by-side as one multi-question workbench. Rides the same file→store→bridge
    *  path as `refresh` — overwritten on projection, cleared when the file omits it. */
   group?: string
+  /** File-owned freshness declaration (plan U6/R13-R14): the policy and trigger
+   *  vocabulary that decide when the host rebuilds this surface on its own. Parsed
+   *  through `parseRefreshDeclaration`, which drops anything outside the closed
+   *  vocabulary — so a persisted value only ever holds triggers the host implements.
+   *  Rides the same file→store→bridge path as `refresh`. */
+  refreshPolicy?: SurfaceRefreshDeclaration
   /** Server stamps `createdAt` on first projection; a file may seed it. */
   createdAt?: number
 }

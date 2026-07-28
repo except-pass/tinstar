@@ -62,6 +62,8 @@ import { followUpPromptText } from '../../notices/followUpPrompt'
 import { answerPromptText } from '../../notices/answerPrompt'
 import { slateReplyPromptText, slateAnswerPromptText, slateRefreshPromptText, slateComposePromptText, slateExplainPromptText, slateObjectivePromptText } from '../../slate/slatePrompt'
 import { dispatchSurfaceAuthor } from '../sessions/surfaceAuthor'
+import type { SurfaceRefreshCoordinator } from '../surfaces/surface-refresh-coordinator'
+import { resolveActor, statusFor } from './surfaceRoutes'
 import { deleteSlateFiles } from '../sessions/slate-clean'
 import { RunSlateBridge } from '../surfaces/run-slate-bridge'
 import { SurfaceService } from '../surfaces/surface-service'
@@ -740,6 +742,9 @@ export interface RouteContext {
   slashRegistry?: SlashCommandRegistry
   slashUsage?: SlashUsage
   otlpExporter?: OtlpExporter
+  /** The durable refresh engine (plan U6). Absent when sessions are disabled, in
+   *  which case the run-scoped refresh route falls back to the legacy nudge. */
+  refreshCoordinator?: SurfaceRefreshCoordinator
 }
 
 function moduleJson(res: ServerResponse, data: unknown, status = 200, corsHeaders?: Record<string, string>): true {
@@ -3699,6 +3704,43 @@ export async function handleRequest(ctx: RouteContext, req: IncomingMessage, res
     const pid = decodeURIComponent(segs[3] ?? '')
     const point = ctx.docStore.getSlatePoint(runId, pid)
     if (!point || point.runId !== runId) { fail(res, 'NOT_FOUND', `Point ${pid} not found`); return true }
+
+    // U6: the durable path. When the refresh engine is running and this point has a
+    // canonical Surface behind it, the request becomes a JOB rather than a prompt —
+    // it survives the owner exiting and a server restart, it is bounded by the
+    // worker cap, and its result has to pass the observation barrier before the
+    // Surface may claim current.
+    //
+    // The legacy nudge below is the fallback, not the plan's "temporary kill
+    // switch" — that is `refresh.autonomousWorkers`, which lives inside the
+    // coordinator and still produces a durable job. This branch is only for a run
+    // with no canonical record at all.
+    const coordinator = ctx.refreshCoordinator
+    const canonical = ctx.docStore.surfaceForRunAlias(runId, pid)
+    if (coordinator && canonical) {
+      const service = new SurfaceService(ctx.docStore, { sourceAdapters: slateSourceAdapters() })
+      const call = { actor: resolveActor(req) }
+      // U3 owns current → queued; U6 owns the job that services it. A Surface
+      // already queued or refreshing is left alone by `refreshRequest`, and asking
+      // for a job anyway is right: the coordinator adopts the existing one rather
+      // than making a second.
+      const requested = await service.refreshRequest(canonical.id, {}, call)
+      const alreadyWorking = !requested.ok
+        && (requested.error.reason === 'already-queued' || requested.error.reason === 'already-refreshing')
+      if (!requested.ok && !alreadyWorking) {
+        fail(res, statusFor(requested.error), requested.error.message, {
+          details: requested.error.reason ? { reason: requested.error.reason } : undefined,
+        })
+        return true
+      }
+      const job = await coordinator.requestFor(canonical.id)
+      // `delivered` is reported alongside so the existing client spinner keeps its
+      // contract: a queued job IS delivery — the host has taken responsibility for
+      // it — and the freshness badge now carries the detail the spinner could not.
+      ok(res, { delivered: true, queued: !!job, jobId: job?.id, surfaceId: canonical.id })
+      return true
+    }
+
     // Source-derived (carries a self-contained recipe) → spawn a fresh one-shot author OFF
     // the main agent's path (feat: multi-agent Slate). Recipe-less / session-derived surfaces
     // fall through to the unchanged main-agent nudge below — which also covers the backlog.
