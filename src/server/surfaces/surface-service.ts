@@ -1690,7 +1690,24 @@ export class SurfaceService {
     let source = prior.source
     let content = prior.content
     if (input.content) {
-      content = input.content
+      // A refresh result replaces authored OUTPUT. The recipe and the freshness
+      // declaration are authored INPUT — a worker restates neither, and
+      // `parseStagedResult` cannot even express them (it emits `headline` or
+      // `headline` + `body`, nothing else). Assigning `input.content` wholesale
+      // therefore DELETED both on the first successful refresh: from the record,
+      // and — because canonical Slate Surfaces are `source-binding` — from the
+      // author's own `.tinstar/slate/*.json`, since the adapter treats an absent
+      // recipe as an instruction to drop it. The Surface was then unrefreshable
+      // forever, having destroyed the thing that made it refreshable. Carried
+      // here for the same reason `updateContent` carries them two hundred lines
+      // above, where the identical hazard is already documented.
+      content = {
+        ...input.content,
+        ...(input.content.recipe ?? prior.content.recipe
+          ? { recipe: input.content.recipe ?? prior.content.recipe }
+          : {}),
+        ...(prior.content.refreshPolicy ? { refreshPolicy: prior.content.refreshPolicy } : {}),
+      }
       if (prior.contentAuthority === 'source-binding') {
         const adapter = prior.source ? this.adapters[prior.source.adapter] : undefined
         if (!prior.source || !adapter) {
