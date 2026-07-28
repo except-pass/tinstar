@@ -388,6 +388,37 @@ describe('dispatch', () => {
     expect(h.jobFor('sf-1')!.dispatch?.kind).toBe('owner')
   })
 
+  it('an in-flight OWNER delivery does not consume a worker slot on the NEXT sweep', async () => {
+    // The cap bounds managed sessions and their ttyd ports; an owner delivery claims
+    // neither. Counting `running` by STATE could not see the difference, so the
+    // invariant the dispatch path documents held for exactly the sweep that
+    // dispatched it — and every cap test ran a single sweep, which is why this
+    // passed. With `maxConcurrentWorkers: 1`, one in-flight owner delivery blocked
+    // the whole background fleet until the worker timeout.
+    const h = harness({ maxConcurrentWorkers: 1 })
+    await h.seed({ id: 'sf-owned', ...withPolicy(AUTOMATIC), owner: { kind: 'session', id: RUN } })
+    h.live.add(RUN)
+    await h.coord.note(gitEvent())
+    await h.coord.sweep()
+    const owned = h.jobFor('sf-owned')!
+    expect(owned.dispatch?.kind).toBe('owner')
+    expect(owned.state).toBe('running')
+
+    // A second Surface goes stale, in a run whose session is NOT live, so it can
+    // only be serviced by a background worker. On the NEXT sweep — the owner job
+    // still running — that worker must still launch.
+    await h.seed({
+      id: 'sf-plain', ...withPolicy(AUTOMATIC),
+      provenance: { runId: 'run-b', worktreeId: WORKTREE },
+    })
+    h.clock.now = 25_000
+    await h.coord.note(gitEvent({ evidence: 'sha-2', at: 25_000 }))
+    const second = await h.coord.sweep()
+    expect(second.heldByCap).toEqual([])
+    expect(h.launches).toHaveLength(1)
+    expect(h.jobFor('sf-plain')!.dispatch?.kind).toBe('worker')
+  })
+
   it('the kill switch holds jobs queued and launches nothing', async () => {
     const h = harness({ autonomousWorkers: false })
     await h.seed(withPolicy(AUTOMATIC))

@@ -564,7 +564,10 @@ export class SurfaceRefreshCoordinator {
       .filter(j => j.state === 'queued')
       .sort((a, b) => a.createdAt - b.createdAt)
 
-    let running = this.deps.jobs.activeCount('running')
+    // WORKERS, not running jobs. See `SurfaceRefreshJobStore.runningWorkerCount`:
+    // counting by state alone made an owner delivery consume a cap slot on every
+    // sweep after the one that dispatched it, silently starving the background fleet.
+    let running = this.deps.jobs.runningWorkerCount()
     for (const job of queued) {
       const now = this.deps.now()
       const surface = this.surface(job.surfaceId)

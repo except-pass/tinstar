@@ -191,6 +191,28 @@ export class SurfaceRefreshJobStore {
     return undefined
   }
 
+  /**
+   * Running jobs that hold a BACKGROUND WORKER.
+   *
+   * The fleet cap bounds managed sessions and the ttyd ports they claim, and an
+   * OWNER delivery claims neither — it is a prompt handed to a session that already
+   * exists. `activeCount('running')` cannot tell the two apart, so it counted owner
+   * deliveries against the cap from the sweep AFTER the one that dispatched them.
+   * The invariant the dispatch path documents ("this costs no port and no session,
+   * so it is NOT counted against the cap") therefore held for exactly one pass, and
+   * with `maxConcurrentWorkers: 4`, four in-flight owner deliveries — claiming zero
+   * ports — blocked the entire background fleet for up to the worker timeout. Owner
+   * delivery is the preferred path whenever the run's session is live, so that was
+   * the common case, not the corner.
+   */
+  runningWorkerCount(): number {
+    let n = 0
+    for (const job of this.jobs.values()) {
+      if (job.state === 'running' && job.dispatch?.kind === 'worker') n++
+    }
+    return n
+  }
+
   activeCount(state?: SurfaceRefreshJobState): number {
     let n = 0
     for (const job of this.jobs.values()) {
